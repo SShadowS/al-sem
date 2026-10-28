@@ -127,6 +127,7 @@ mod cli_query_differential;
 mod cli_s6_consumers;
 mod cli_sarif_rule_catalog;
 mod cli_snapshot_schema4;
+mod cli_source_dependencies;
 mod cli_split_object_readers;
 mod cli_stderr_logger;
 mod cli_step5_coverage_fold;

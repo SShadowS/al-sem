@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dependencies given as source folders** (G4). A workspace can name dependency
+  apps that exist only as source, a folder with its own `app.json` and `.al` files
+  and no `.app` (e.g. a BC.History checkout of Base Application), in
+  `al-sem.dependencies.json` at its root: `{ "sources": ["../deps/Base Application"] }`,
+  relative to the workspace or absolute. Each folder's `.al` files are read without
+  nested apps, so a test app under it (its own `app.json`, like BC's
+  `System Application/Test`) is not part of it; an app with no `.al` file (BC's
+  umbrella `Application`) still counts through its `app.json`. A configured folder
+  always supplies its app: a `.app` of the same id is not loaded. The folders are
+  read once into `WorkspaceInputs` (`program::source_deps`), become dependency units
+  of tier `LocalSourceApproximate` (dependency listings: `localApproximate`), and are
+  inputs wherever inputs matter: a `dep-source` fingerprint row per folder (hashed
+  over its `app.json`, file paths and texts), the incremental L4 host's reuse key,
+  `alsem batch`'s write check (a job writing into a folder is refused), and the LSP
+  watcher (an edit there, or to the list, rebuilds the dependencies; a changed list
+  is watched from the next start). A config that cannot be honoured (unreadable or
+  unknown keys, a missing folder, no or invalid `app.json`, a folder inside the
+  workspace, two folders with one app id, the workspace app itself) fails the build
+  with the reason. Measured on Continia DO 29.0 with BC.History w1-29 (Base
+  Application, System Application, Business Foundation, Application):
+  `primaryScoped` unknown edges 726 → 283 (real-unknown rate 3.46 % → 1.35 %);
+  `alsem analyze` 1.9 s / 0.7 GB peak → 21.5 s / 3.5 GB peak. Their tiers are not
+  shared through the dependency cache (no `.app` stamp), so an LSP root rebuild parses
+  them again.
+
 - **Runtime (`.NEA`) `.app` packages are read, not reported as encrypted** (branch
   `continai-gaps`, Continia's public 29.0 release as the sample set). These are BC
   runtime packages — the same `.NEA` form BC has shipped for years, scrambled with a

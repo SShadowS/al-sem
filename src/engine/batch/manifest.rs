@@ -77,6 +77,7 @@ const WORKSPACE_FILES: &[&str] = &[
     "al-sem.coverage.yaml",
     "al-sem.policy.yaml",
     "al-sem.policy.yml",
+    crate::program::source_deps::CONFIG_FILE,
 ];
 
 /// `p` against `cwd` with `.` and `..` folded as the OS takes them: a `..`
@@ -152,6 +153,8 @@ struct WorkspaceRead {
     root: PathBuf,
     scope: crate::dependencies::CacheScope,
     taken: Taken,
+    /// The source-folder dependencies the read also takes (G4), resolved.
+    source_roots: Vec<PathBuf>,
 }
 
 impl WorkspaceRead {
@@ -165,6 +168,10 @@ impl WorkspaceRead {
                 walked_dirs: vec![],
             },
             taken: taken_files(cwd, ws),
+            source_roots: crate::program::source_deps::configured_roots(&fold(cwd, ws))
+                .iter()
+                .map(|r| resolve(cwd, r))
+                .collect(),
         }
     }
 
@@ -176,6 +183,7 @@ impl WorkspaceRead {
             || cache_scope_role(&self.scope, f) == Some(Role::AppFile)
             || self.taken.files.contains(f)
             || self.taken.linked_dirs.iter().any(|d| under(d))
+            || self.source_roots.iter().any(|d| under(d))
     }
 }
 

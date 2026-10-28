@@ -66,6 +66,11 @@ pub fn recommended_backend() -> BackendFactory {
 pub struct WatchScope {
     pub root: PathBuf,
     pub cache: CacheScope,
+    /// The source-folder dependencies `al-sem.dependencies.json` names (G4),
+    /// watched recursively: they are outside the root by rule. A change to the
+    /// list itself rebuilds with the new list, but the watched folders stay
+    /// those of the start until the server restarts.
+    pub source_roots: Vec<PathBuf>,
 }
 
 impl WatchScope {
@@ -73,6 +78,7 @@ impl WatchScope {
         WatchScope {
             root: root.to_path_buf(),
             cache: package_cache_scope(root),
+            source_roots: al_sem::program::source_deps::configured_roots(root),
         }
     }
 
@@ -131,6 +137,21 @@ pub fn map_event(scope: &WatchScope, event: &Event) -> Vec<ChangeEvent> {
         let rel_is = |name: &str| rel_n.as_deref() == Some(Path::new(name));
         if rel_is(".al-sem.json") || rel_is(".al-call-hierarchy.json") {
             out.push(ChangeEvent::ConfigChanged);
+            continue;
+        }
+        // G4: the source-folder dependency list, and any source or `app.json`
+        // under a listed folder, change the dependency apps: a full rebuild.
+        if rel_is(al_sem::program::source_deps::CONFIG_FILE) {
+            out.push(ChangeEvent::DepsChanged);
+            continue;
+        }
+        if let Some(sub) = scope.source_roots.iter().find_map(|r| rel_under_root(r, p)) {
+            let is_input = crate::source_text::has_al_extension(p)
+                || p.file_name()
+                    .is_some_and(|n| n.eq_ignore_ascii_case("app.json"));
+            if !sub.components().any(|c| c.as_os_str() == ".git") && (is_input || structural) {
+                out.push(ChangeEvent::DepsChanged);
+            }
             continue;
         }
         match cache_scope_role(&scope.cache, p) {
@@ -204,6 +225,9 @@ impl WatchState {
         self.register(backend, &root, RecursiveMode::Recursive);
         for d in self.scope.cache.walked_dirs.clone() {
             self.register(backend, &d, RecursiveMode::NonRecursive);
+        }
+        for d in self.scope.source_roots.clone() {
+            self.register(backend, &d, RecursiveMode::Recursive);
         }
         self.resync(backend);
     }
@@ -505,6 +529,7 @@ mod tests {
                 walked_dirs: vec![PathBuf::from("/p")],
             },
             root,
+            source_roots: vec![],
         }
     }
 
@@ -516,6 +541,50 @@ mod tests {
 
     fn changed(p: &str) -> ChangeEvent {
         ChangeEvent::PathChanged(PathBuf::from(p))
+    }
+
+    /// G4: the source-folder dependency list and the source under a listed
+    /// folder (outside the root) rebuild the dependencies; anything else there
+    /// (a data write to a non-input file, `.git`) is dropped.
+    #[test]
+    fn t10_source_folder_dependencies_are_deps_changed() {
+        let mut scope = t10_scope();
+        scope.source_roots = vec![PathBuf::from("/deps/Base Application")];
+        let data = EventKind::Modify(ModifyKind::Data(DataChange::Content));
+        let map_on = |kind: EventKind, p: &str| map_event(&scope, &ev(kind, &[Path::new(p)]));
+        assert_eq!(
+            map_on(data, "/p/ws/al-sem.dependencies.json"),
+            vec![ChangeEvent::DepsChanged],
+            "the list"
+        );
+        assert_eq!(
+            map_on(data, "/deps/Base Application/src/Sales.Codeunit.al"),
+            vec![ChangeEvent::DepsChanged],
+            "a dependency's source"
+        );
+        assert_eq!(
+            map_on(data, "/deps/Base Application/app.json"),
+            vec![ChangeEvent::DepsChanged],
+            "a dependency's app.json"
+        );
+        assert_eq!(
+            map_on(data, "/deps/Base Application/README.md"),
+            vec![],
+            "a data write to a non-input file"
+        );
+        assert_eq!(
+            map_on(
+                EventKind::Create(CreateKind::File),
+                "/deps/Base Application/.git/index.lock"
+            ),
+            vec![],
+            "git's own files"
+        );
+        assert_eq!(
+            map_on(data, "/deps/Other/x.al"),
+            vec![],
+            "a folder the list does not name"
+        );
     }
 
     #[test]
@@ -662,6 +731,7 @@ mod tests {
                 walked_dirs: vec![],
             },
             root,
+            source_roots: vec![],
         };
         let raw = PathBuf::from(r"C:\Users\Me\ws\Src\A.al");
         let e = ev(EventKind::Create(CreateKind::File), &[&raw]);
@@ -683,6 +753,7 @@ mod tests {
                 walked_dirs: vec![],
             },
             root,
+            source_roots: vec![],
         };
         let kind = EventKind::Modify(ModifyKind::Data(DataChange::Content));
         let app = ev(kind, &[Path::new(r"C:\Users\Me\ws\APP.JSON")]);
@@ -885,6 +956,7 @@ mod tests {
                 walked_dirs: vec![parent],
             },
             root: root.clone(),
+            source_roots: vec![],
         };
         let mut fake = FakeBackend::default();
         let mut st = WatchState::new(scope);
@@ -989,6 +1061,7 @@ mod tests {
                 walked_dirs: vec![r.parent.clone()],
             },
             root: r.ws.clone(),
+            source_roots: vec![],
         };
         let mut st = WatchState::new(scope);
         st.start(&mut r.fake);
