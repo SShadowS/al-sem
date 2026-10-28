@@ -60,6 +60,18 @@ codeunit 50152 "G15 Shapes"
     begin
         T.Code := 'X';
     end;
+
+    // G18: an Error is `throws-error`'s, not interactive UI.
+    procedure ErrorOnly()
+    begin
+        Error('Not allowed');
+    end;
+
+    [TryFunction]
+    procedure TryCaught()
+    begin
+        Error('');
+    end;
 }
 page 50153 "G15 FactBox"
 {
@@ -162,5 +174,26 @@ fn every_ui_opening_call_reaches_ui() {
     assert_eq!(
         control["obligations"]["coverageComplete"], true,
         "precondition: the control's cone is complete, so `no` is a real answer"
+    );
+
+    // G18: an Error, raised or caught by a TryFunction, is no interactive UI;
+    // it stays `throws-error`'s.
+    for routine in ["ErrorOnly", "TryCaught"] {
+        let r = prove(routine);
+        assert_eq!(r["answer"], "no", "{routine}: an Error is not UI: {r}");
+    }
+    let throws = alsem(
+        t.path(),
+        &[
+            "prove",
+            "ws",
+            &id_of("ErrorOnly"),
+            "throws-error",
+            "--deterministic",
+        ],
+    );
+    assert_eq!(
+        throws["payload"]["result"]["answer"], "yes",
+        "precondition: the Error is seen, as throws-error: {throws}"
     );
 }

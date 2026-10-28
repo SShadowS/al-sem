@@ -10,6 +10,8 @@
 //!
 //! MAY-questions (may-commit, writes-table, publishes-event, reaches-ui, throws-error):
 //!   yes     = ≥1 matching effect (blockers irrelevant for yes).
+//!   (`reaches-ui` is interactive UI only: Message, Confirm, StrMenu, a page or
+//!   report run, Hyperlink. An `Error` is `throws-error`'s, never UI's.)
 //!   no      = zero matches AND ALL obligations clear.
 //!   unknown = zero matches + ≥1 obligation failure.
 //!
@@ -298,17 +300,15 @@ fn sort_blockers(mut blockers: Vec<ProveBlocker>) -> Vec<ProveBlocker> {
 // ---------------------------------------------------------------------------
 
 const DB_WRITE_TYPES: &[&str] = &["DB_INSERT", "DB_MODIFY", "DB_DELETE"];
-/// What `reaches-ui` counts as UI (G15): every UI effect type the digest emits.
-/// `UI_WINDOW_OPEN` (`Page.Run`/`RunModal`, `Report.Run`/`RunModal`, `StrMenu`)
-/// was missing, so a routine opening a page answered `no` with full coverage
-/// claimed, the worst kind of wrong answer for a verifier.
-const UI_TYPES: &[&str] = &[
-    "UI_MESSAGE",
-    "UI_CONFIRM",
-    "UI_ERROR",
-    "UI_WINDOW_OPEN",
-    "UI_HYPERLINK",
-];
+/// What `reaches-ui` counts as UI: INTERACTIVE UI, a dialog or window a user
+/// must see or answer (`Message`, `Confirm`, `StrMenu`, `Page`/`Report`
+/// `Run`/`RunModal`, `Hyperlink`). `UI_WINDOW_OPEN` was missing (G15), so a
+/// routine opening a page answered `no` with full coverage claimed.
+///
+/// An `Error` is not counted (G18): it is `throws-error`'s question, and as UI
+/// it was wrong where it never surfaces, e.g. an `Error('')` caught by a
+/// `[TryFunction]`. The two questions no longer overlap.
+const UI_TYPES: &[&str] = &["UI_MESSAGE", "UI_CONFIRM", "UI_WINDOW_OPEN", "UI_HYPERLINK"];
 
 /// Case-insensitive match of `query` against the resourceDisplay or the
 /// trailing segment of the resourceId (after the last '/').

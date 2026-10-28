@@ -97,6 +97,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--diff-root` with only file inputs used to fail (exit 3) and now works. A
   `--diff-root` with no diff and no file input (alone, or with `--routine` only) is still
   exit 3, now with `--diff-root needs a diff or file inputs (--diff, --file or --changed)`.
+- **`prove … reaches-ui` asks about interactive UI only** (G18). An `Error` counted as
+  UI, which overlapped `throws-error` and was wrong where the error never surfaces:
+  Continia DO's `TryGetTerminalField`, a `[TryFunction]`, raises `Error('')` to fail
+  softly, and its callers answered `reaches-ui = yes`. `reaches-ui` now means a dialog
+  or window a user must see or answer (`Message`, `Confirm`, `StrMenu`, a page or
+  report `Run`/`RunModal`, `Hyperlink`); errors are `throws-error`'s question. Stated
+  in `alsem prove --help` and the module doc. Test: `cli_prove_reaches_ui` (an
+  `Error`-only routine and a `[TryFunction]` answer `no`; `throws-error` still sees
+  the error). No golden moved.
 
 ### Fixed
 
