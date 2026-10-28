@@ -26,8 +26,9 @@ pub fn cache_dir() -> PathBuf {
 /// `.app` changes (2: AL synthesized from transpiled C#; its own changes too;
 /// 3: synthesized routines carry their `[MethodId(n)]`; 4: the id is quoted,
 /// since a negative one made the file `Recovered`; 5: generic types split no
-/// local, and a call keeps its receiver's member path).
-pub const EXTRACTION_SCHEME: u32 = 5;
+/// local, and a call keeps its receiver's member path; 6: a property-backed
+/// global `δx` is `x`).
+pub const EXTRACTION_SCHEME: u32 = 6;
 
 /// Return embedded AL source for `app_path`, using the content-addressed
 /// on-disk cache when available.

@@ -263,6 +263,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A synthesized global the C# exposes as a property is declared and called by
+  its AL name.** The runtime stores such a global in a backing field `δx` and
+  reads it as `this.x`, so the global was declared `"δx"` and every call on it
+  stayed `__alsem_untranslated('untyped …')` (98 Continia Core files; its
+  `processingWindow.Open`). `ALFieldExists` is `RecordRef.FieldExist`. Extraction
+  scheme 6. Continia DO's dependency-body unknown call edges: 44 → 41 (Continia
+  Core: 0). Test `keeps_generic_types_and_member_paths`.
 - **G28 closes a dependency's internal interfaces too.** An interface declared
   `Access = Internal` in any app with source closes its dispatch when every friend
   that app's manifest lists is loaded; before, only the workspace's own did.

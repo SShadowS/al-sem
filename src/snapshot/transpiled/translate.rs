@@ -329,7 +329,10 @@ pub(crate) fn class_globals(class: &Class) -> HashMap<String, VarType> {
             if let Some((h, id, temp)) = handle_init(init) {
                 narrow(&mut v, &h, id, temp);
             }
-            out.insert(name.clone(), v);
+            // A global the C# exposes as a property is stored in a backing
+            // field `δx`; the code reads it as `this.x`.
+            let name = name.strip_prefix('δ').unwrap_or(name);
+            out.insert(name.to_string(), v);
         }
     }
     for m in class.methods() {
@@ -1018,11 +1021,12 @@ impl Tx<'_> {
                                 self.untranslated(&format!("member chain .{method}"), line);
                                 return;
                             };
-                            // The runtime's name for `HttpContent.WriteFrom`.
-                            let al = if al == "LoadFrom" {
-                                "WriteFrom".into()
-                            } else {
-                                al
+                            // Runtime names that differ from AL's:
+                            // `HttpContent.WriteFrom`, `RecordRef.FieldExist`.
+                            let al = match al.as_str() {
+                                "LoadFrom" => "WriteFrom".into(),
+                                "FieldExists" => "FieldExist".into(),
+                                _ => al,
                             };
                             let target = std::iter::once(name)
                                 .chain(path)
@@ -1452,12 +1456,16 @@ public sealed class Codeunit50100 : NavCodeunit
         const SRC: &str = r#"
 public sealed class Codeunit50102 : NavCodeunit
 {
+    private NavDialog δwin;
+
     [NavName("Send")]
     [MethodId(5)]
     public async ValueTask Send()
     {
-        ALMethodScope<(NavDictionary<NavText, NavText> dict, NavHttpClient client, NavHttpContent content, NavHttpResponseMessage resp, NavText body, NavOption kind)> γscope = default;
-        γscope = new ALMethodScope<(NavDictionary<NavText, NavText> dict, NavHttpClient client, NavHttpContent content, NavHttpResponseMessage resp, NavText body, NavOption kind)>(this, "Send", MethodScopeFlags.None, 5);
+        ALMethodScope<(NavDictionary<NavText, NavText> dict, NavHttpClient client, NavHttpContent content, NavHttpResponseMessage resp, NavText body, NavOption kind, NavRecordRef rr)> γscope = default;
+        γscope = new ALMethodScope<(NavDictionary<NavText, NavText> dict, NavHttpClient client, NavHttpContent content, NavHttpResponseMessage resp, NavText body, NavOption kind, NavRecordRef rr)>(this, "Send", MethodScopeFlags.None, 5);
+        γscope.Target.rr.ALFieldExists(51);
+        await this.win.ALOpenAsync<NavValue>(System.Guid.Parse("7cdc0a34-000b-0003-0507-0b0d1113171d"), msg);
         γscope.Target.kind.Value.ALNames.ALIndexOf(new NavText(γscope.Target.body));
         γscope.Target.dict.ALAdd(DataError.ThrowError, new NavText("a"), γscope.Target.body);
         γscope.Target.content.ALLoadFrom(γscope.Target.body);
@@ -1479,6 +1487,8 @@ public sealed class Codeunit50102 : NavCodeunit
         assert_eq!(
             text,
             [
+                "\"rr\".FieldExist(51);",
+                "\"win\".Open(0);",
                 "\"dict\".Add('', \"body\");",
                 "\"content\".WriteFrom(\"body\");",
                 "\"client\".DefaultRequestHeaders().Add('', '');",
