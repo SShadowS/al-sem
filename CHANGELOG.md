@@ -13,10 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   apps that exist only as source, a folder with its own `app.json` and `.al` files
   and no `.app` (e.g. a BC.History checkout of Base Application), in
   `al-sem.dependencies.json` at its root: `{ "sources": ["../deps/Base Application"] }`,
-  relative to the workspace or absolute. Each folder's `.al` files are read without
-  nested apps, so a test app under it (its own `app.json`, like BC's
-  `System Application/Test`) is not part of it; an app with no `.al` file (BC's
-  umbrella `Application`) still counts through its `app.json`. A configured folder
+  relative to the workspace or absolute. Each folder's `.al` files are all read,
+  including folders under it with an `app.json` of their own: in BC.History those
+  are the app's modules (110 in System Application, 39 in Base Application), and its
+  test apps live beside the app's folder (`System Application/Test/…`), so naming the
+  app's folder leaves them out. An app with no `.al` file (BC's umbrella
+  `Application`) still counts through its `app.json`. A configured folder
   always supplies its app: a `.app` of the same id is not loaded. The folders are
   read once into `WorkspaceInputs` (`program::source_deps`), become dependency units
   of tier `LocalSourceApproximate` (dependency listings: `localApproximate`), and are
@@ -98,6 +100,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A source-folder dependency includes its module folders** (G21). G4 first read a
+  folder without the folders under it that hold their own `app.json`, to keep nested
+  test apps out. In BC.History those are the app's modules, so most of Base and System
+  Application was missing: calls such as `ConfirmManagement.GetResponseOrDefault`,
+  `NoSeries.GetNextNo` and `FeatureTelemetry.LogUsage` stayed `objectNotInGraph`. The
+  folder is now walked whole, like the workspace; test apps sit beside the app's
+  folder. On Continia DO with the four BC.History roots, `primaryScoped` unknown edges
+  283 → 19 (real-unknown rate 1.35 % → 0.09 %; 726 with no sources). Test:
+  `cli_source_dependencies::a_source_folder_dependency_resolves_with_its_modules_not_its_tests`
+  (BC.History's layout: a module inside the app folder, a test app beside it), which
+  fails with the old walk.
 - **`alsem batch` with many `prove`/`digest` jobs no longer grows per job** (G16).
   Every tree job on a view composed its own tree in the view's one `prepare`, and
   each tree is a whole-program snapshot: a derive per job, and each job's result

@@ -8,10 +8,15 @@
 //! ```
 //!
 //! A relative path is relative to the workspace root. Each folder must hold an
-//! `app.json`; its `.al` files are read with [`NestedApps::Skip`], so a test app
-//! nested under it (its own `app.json`, e.g. BC's `System Application/Test`) is
-//! not part of it. An app with no `.al` file (an umbrella app such as BC's
-//! `Application`) is kept: its `app.json` still declares dependencies.
+//! `app.json`; ALL its `.al` files are read ([`NestedApps::Walk`], as the
+//! workspace's own walk), including folders under it with an `app.json` of their
+//! own: in BC.History those are the app's modules (110 in System Application, 39
+//! in Base Application), compiled into the one app. A test app is a separate
+//! folder (BC.History: `System Application/Test/…`, beside the app's
+//! `Source/…`), so naming the app's own folder leaves it out (G21: skipping the
+//! nested folders, as G4 first did, dropped most of Base and System Application).
+//! An app with no `.al` file (an umbrella app such as BC's `Application`) is
+//! kept: its `app.json` still declares dependencies.
 //!
 //! A configured folder always supplies its app: a `.app` of the same app id in
 //! the package cache is not loaded (`SnapshotBuilder`). The user named the
@@ -148,7 +153,7 @@ fn read_one(workspace: &Path, spelled: &str) -> Result<SourceDependency, String>
     {
         return Err(format!("{} has no \"id\"", app_json_path.display()));
     }
-    let found = discover_al_files(&root, NestedApps::Skip)
+    let found = discover_al_files(&root, NestedApps::Walk)
         .map_err(|e| format!("walking {}: {e}", root.display()))?;
     let mut files = Vec::with_capacity(found.len());
     let mut hasher = blake3::Hasher::new();
