@@ -553,6 +553,16 @@ fn writes_caller_dependent(eff: &DigestEffectFull) -> bool {
             .all(|s| *s == "known(true)" || s.starts_with("parameter-dependent"))
 }
 
+/// A reachable table write that names no table (no resource, no boundary
+/// group's resources) and is not known to write a temporary record.
+fn writes_unknown_table(eff: &DigestEffectFull) -> bool {
+    DB_WRITE_TYPES.contains(&eff.effect_type.as_str())
+        && !eff.literal_unreachable
+        && !eff.detail.iter().any(|(k, _)| k == "resourceId")
+        && eff.group_resources.is_empty()
+        && !writes_only_temporary(eff)
+}
+
 /// `writes-table`'s table and write kind, temp state aside.
 fn is_table_write(eff: &DigestEffectFull, table: &str) -> bool {
     DB_WRITE_TYPES.contains(&eff.effect_type.as_str()) && effect_resource_matches(eff, table)
@@ -641,8 +651,33 @@ fn evaluate_may_question(
             .collect(),
         _ => Vec::new(),
     };
+    // A write whose table is not known (a RecordRef opened on a computed
+    // number, a record type that did not resolve) may write the asked table:
+    // it rules out `no`. It was no match, so the answer was `no`.
+    let unknown_table: Vec<ProveBlocker> = match question {
+        ProveQuestion::WritesTable { .. } => entry
+            .effects
+            .iter()
+            .filter(|e| writes_unknown_table(e))
+            .map(|e| ProveBlocker {
+                kind: "unknown-table-write",
+                detail: format!("{} on a table that is not known", e.effect_type),
+                anchor: Some(BlockerAnchor {
+                    source_kind: e.evidence.source_kind.to_string(),
+                    file: e.evidence.file.clone(),
+                    line: e.evidence.line,
+                    column: e.evidence.column,
+                    excerpt: e.evidence.excerpt.clone(),
+                }),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
 
-    if caller_dependent.is_empty() && obligations_clear(&oblg, witness_truncated) {
+    if caller_dependent.is_empty()
+        && unknown_table.is_empty()
+        && obligations_clear(&oblg, witness_truncated)
+    {
         return ProveResult {
             answer: ProveAnswer::No,
             evidence: None,
@@ -653,6 +688,7 @@ fn evaluate_may_question(
 
     let mut blockers = build_obligation_blockers(entry, &oblg, witness_truncated);
     blockers.extend(caller_dependent);
+    blockers.extend(unknown_table);
     ProveResult {
         answer: ProveAnswer::Unknown,
         evidence: None,

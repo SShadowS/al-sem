@@ -1278,7 +1278,33 @@ pub(crate) fn digest_effects_each(
         .collect::<BTreeSet<String>>()
         .into_iter()
         .collect();
-    let mut all_entries = compute_digest_effects_cli(tree, model, Some(&all), include_reads);
+    // G31: a root INSIDE a dependency. Rule B (spec 2026-10-23 §14.3.5) ends a
+    // witness on entering dependency code and groups what lies beyond, which
+    // is right for a workspace root (it bounds digest's cost) but leaves a
+    // dependency root nothing: it starts past its own boundary, so every fact
+    // ended at the root and none was an effect. Such a root is asked with rule
+    // B off, so its witness paths follow the code that reaches each effect,
+    // in every app.
+    let is_dependency_root = |r: &String| {
+        tree.boundary
+            .as_ref()
+            .is_some_and(|b| b.dependency_app.contains_key(r))
+    };
+    let (dependency_roots, workspace_roots): (Vec<String>, Vec<String>) =
+        all.iter().cloned().partition(is_dependency_root);
+    let mut all_entries =
+        compute_digest_effects_cli(tree, model, Some(&workspace_roots), include_reads);
+    if !dependency_roots.is_empty() {
+        let rule_b = tree.boundary.take();
+        all_entries.extend(compute_digest_effects_cli(
+            tree,
+            model,
+            Some(&dependency_roots),
+            include_reads,
+        ));
+        tree.boundary = rule_b;
+        all_entries.sort_by(|a, b| a.routine_id.cmp(&b.routine_id));
+    }
     // G23, prove's read only: effects a root cannot reach once literal Boolean
     // arguments are followed through recursive SCCs, where the cone drops guards.
     if gaps_in_cone {

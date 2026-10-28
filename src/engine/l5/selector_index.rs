@@ -75,6 +75,10 @@ pub(crate) struct SelectorIndexes {
     /// normalizeDisplayKey(display) → [stableId...], buckets in insertion order;
     /// keys also in first-insertion order (Vec of (key, ids)).
     display_to_stable_ids: Vec<(String, Vec<String>)>,
+    /// The routine ids of the loaded DEPENDENCY code. Only the exact-id form
+    /// selects one (a display name stays the workspace's), so `prove` and
+    /// `digest` can start inside a dependency.
+    dependency_routine_ids: std::collections::HashSet<String>,
 }
 
 /// `primary_app_guid`: keep only that app's routines (a stable id starts with
@@ -92,12 +96,16 @@ pub(crate) fn build_selector_indexes(
     let mut routine_display_by_id: HashMap<String, String> = HashMap::new();
     let mut display_to_stable_ids: Vec<(String, Vec<String>)> = Vec::new();
     let mut key_pos: HashMap<String, usize> = HashMap::new();
+    let mut dependency_routine_ids = std::collections::HashSet::new();
 
     for i in 0..identities.stable_ids.len() {
         let id = identities.stable_ids.get(i).cloned().unwrap_or_default();
         let display = identities.display_names.get(i).cloned().unwrap_or_default();
         if id.is_empty() {
             continue;
+        }
+        if id.contains(ROUTINE_ID_SEPARATOR) && !is_primary(&id) {
+            dependency_routine_ids.insert(id.clone());
         }
         if id.contains(ROUTINE_ID_SEPARATOR) && is_primary(&id) {
             routine_display_by_id.insert(id.clone(), display.clone());
@@ -114,6 +122,7 @@ pub(crate) fn build_selector_indexes(
     SelectorIndexes {
         routine_display_by_id,
         display_to_stable_ids,
+        dependency_routine_ids,
     }
 }
 
@@ -261,7 +270,9 @@ fn cascade(
     idx: &SelectorIndexes,
 ) -> (Vec<String>, &'static str, Option<OwnerPart>) {
     // Form 1: exact StableRoutineId (case-sensitive).
-    if idx.routine_display_by_id.contains_key(selector) {
+    if idx.routine_display_by_id.contains_key(selector)
+        || idx.dependency_routine_ids.contains(selector)
+    {
         return (vec![selector.to_string()], "stable-routine-id", None);
     }
     let sep = last_separator(selector);
@@ -611,7 +622,8 @@ mod tests {
 
     /// #66: a cross-app snapshot holds dependency routines too. With the primary
     /// app given, a bare name shared with a dependency routine resolves to the
-    /// workspace's alone; a dependency stable id is not selectable at all.
+    /// workspace's alone. G31: a dependency's exact stable id selects it (it
+    /// was not selectable at all).
     #[test]
     fn selector_primary_filter_drops_dependency_routines() {
         let snap = snap_with_identities(&[
@@ -624,11 +636,9 @@ mod tests {
             resolve_selector("OnRun", &idx).0.ids,
             vec!["aaaa:Codeunit:1#ws".to_string()]
         );
-        assert!(
-            resolve_selector("bbbb:Codeunit:2#dep", &idx)
-                .0
-                .ids
-                .is_empty()
+        assert_eq!(
+            resolve_selector("bbbb:Codeunit:2#dep", &idx).0.ids,
+            vec!["bbbb:Codeunit:2#dep".to_string()]
         );
         let all = build_selector_indexes(&snap, None);
         assert_eq!(resolve_selector("OnRun", &all).0.ids.len(), 3);

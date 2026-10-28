@@ -35,6 +35,7 @@ use crate::program::body::node_util::strip_quotes;
 ///   `Record "Sales Line"`   → `Sales Line`
 ///   `Record Customer`       → `Customer`
 ///   `Record "X" temporary`  → `X`
+///   `Record Ns.Sub."X"`     → `X`
 ///
 /// Returns `None` for non-record types (e.g. `Integer`, `Codeunit "Foo"`).
 /// Strips a trailing ` temporary` modifier, then unquotes the remaining name.
@@ -55,7 +56,12 @@ pub fn record_table_name_of(declared_type: &str) -> Option<String> {
     let mut rest = rest_bytes.trim().to_string();
     // Strip a trailing ` temporary` modifier (case-insensitive, with leading ws).
     rest = strip_trailing_temporary(&rest);
-    let rest = rest.trim();
+    // The table of a namespace-qualified type (`Record Microsoft.Manufacturing.
+    // Capacity."Capacity Ledger Entry"`, as Base Application declares them) is
+    // its last segment, as receiver typing reads it. The whole dotted path was
+    // taken as the name: no table resolved, and the record's writes named no
+    // table at all.
+    let rest = crate::program::resolve::receiver::strip_namespace(rest.trim());
     if rest.is_empty() {
         return None;
     }

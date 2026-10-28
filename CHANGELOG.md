@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`prove` and `digest` start inside a dependency** (G31). A dependency routine named
+  by its StableRoutineId is a root (a display name still selects only the
+  workspace's). Rule B (spec 2026-10-23 §14.3.5) ends a workspace root's witness at
+  the first dependency routine and groups what lies beyond, which bounds digest's
+  cost; a dependency root starts past that boundary, so it is read with rule B off,
+  and its witness paths follow the code to each effect of every kind (writes,
+  commits, events, …) in every app. It got no effect at all: the reportable roots
+  leave every dependency routine out (`digest::reportable_roots`), and rule B ended
+  every fact at the root. On Continia DO, from `Sales-Calc. Discount.OnRun`, the
+  `Cust. Ledger Entry` write runs through `ApprovalsMgmt` → the workflow engine's
+  `ExecuteResponse` (every response) → `GenJournalLine.ClearCustVendApplnEntry`.
+  Test `cli_dependency_roots`.
 - **An interface held in a codeunit global, set only from codeunit variables, is a
   closed dispatch site** (G30). An interface call on an object global of a workspace
   codeunit dispatches over the codeunits the global can hold when the codeunit itself
@@ -234,6 +246,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A record of a namespace-qualified type writes its table, and a write to a table
+  that is not known rules out `writes-table`'s `no`.** The model's record-type parse
+  (`record_types::record_table_name_of`) took a qualified type's whole dotted path as
+  the table name (`Record Microsoft.Manufacturing.Capacity."Capacity Ledger Entry"`,
+  as Base Application 29 declares records throughout), so no table resolved and the
+  record's writes named none; receiver typing already read the last segment. And a
+  write that names no table was no match for any table, so `writes-table:T` answered
+  `no` past it: unsound for the qualified record and for a RecordRef opened on a
+  computed number. Such a write now blocks `no` (`unknown-table-write`), unless it is
+  known to write a temporary record. Test `cli_prove_table_writes`.
 - **A page, report or XMLport run reaches its whole lifecycle, and a run with none
   runs no AL code.** A run followed one entry trigger (`OnOpenPage`, `OnPreReport`,
   `OnPreXmlPort`), so a `no` could miss a write or Commit in `OnAfterGetRecord`,

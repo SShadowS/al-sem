@@ -4817,6 +4817,24 @@ pub fn compute_digest_effects_cli(
     if let Some(only) = only {
         let only: std::collections::HashSet<&str> = only.iter().map(String::as_str).collect();
         roots.retain(|r| only.contains(r.as_str()));
+        // G31: a DEPENDENCY routine named as a root is one too: the reportable
+        // roots leave every dependency routine out (no finding keeps one), not
+        // one a caller asks for by id.
+        roots.extend(
+            resolved
+                .workspace
+                .routines
+                .iter()
+                .filter(|r| {
+                    only.contains(r.stable_routine_id.as_str())
+                        && resolved.routine_role(r) == crate::program::model::role::Role::Dependency
+                        && r.body_available
+                        && !r.parse_incomplete
+                })
+                .map(|r| r.stable_routine_id.clone()),
+        );
+        roots.sort();
+        roots.dedup();
     }
     let isolated = crate::program::model::events::isolated_event_ids(&resolved.workspace.routines);
     let isolated_opt = if isolated.is_empty() {
