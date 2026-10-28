@@ -90,6 +90,51 @@ fn a_dependency_root_follows_the_dependency_code() {
     );
 }
 
+/// A run of a dependency codeunit that declares no `OnRun` runs no AL code:
+/// no blocker, whether the dependency's code is read from the workspace or
+/// from inside the dependency.
+#[test]
+fn a_run_of_a_dependency_codeunit_without_onrun_blocks_nothing() {
+    let lib = r#"codeunit 10 "Dep Lib"
+{
+    procedure Outer()
+    var
+        Reader: Codeunit "Dep Reader";
+    begin
+        Reader.Run();
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnDepEvent()
+    begin
+    end;
+}
+
+codeunit 13 "Dep Reader"
+{
+    procedure GetName(): Text
+    begin
+        exit('x');
+    end;
+}
+"#;
+    let t = tempfile::tempdir().unwrap();
+    dd::write_own_lib(t.path(), "", lib);
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("prove")
+        .arg(t.path())
+        .args(["CallChain", "may-commit", "--deterministic"])
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    let r: serde_json::Value =
+        serde_json::from_slice::<serde_json::Value>(&out.stdout)
+            .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)))["payload"]
+            ["result"]
+            .clone();
+    assert_eq!(r["answer"], "no", "{r}");
+}
+
 /// A dependency root's L4 summary holds no rows, so its writes' `tempState`
 /// is read off the cone fact's own class: a write to a temporary record is no
 /// table write (it read `writes-table: yes` with no temp state at all).
