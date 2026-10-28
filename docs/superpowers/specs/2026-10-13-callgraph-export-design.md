@@ -473,9 +473,10 @@ arrives with Stage C.
 | `objectName` | string | as declared |
 | `memberName` | string | routine name as declared (`ApplyDecay`, `OnValidate`); not on `Object`/`Hub` |
 | `member` | string | enclosing field/action/dataitem/control, when there is one |
+| `stableRoutineId` | string | (added 2026-10-28, G13) the StableRoutineId `prove`/`digest`/`fingerprint` use, on a routine with source; omitted for symbol-only and synthetic nodes |
 | `arity` | number | parameter count |
 | `sourcePath` | string | relative to the node's own app source root; omitted for symbol-only nodes, objects and hubs |
-| `line`, `endLine` | number | 1-based; `line` = declaration keyword or access modifier row, attributes excluded |
+| `line`, `endLine` | number | 1-based (`meta.lineBase: 1`, added 2026-10-28); `line` = declaration keyword or access modifier row, attributes excluded |
 | `dependency` | bool | app is not the workspace app |
 | `symbolOnly` | bool | no source (its body is opaque) |
 | `test` | bool | present and `true` on `[Test]` methods |

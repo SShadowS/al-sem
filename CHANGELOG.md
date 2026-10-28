@@ -185,6 +185,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One routine id and declared line bases across `graph`, `fingerprint` and
+  `prove`** (G13), so a consumer can join their outputs.
+  - `alsem graph` nodes carry `stableRoutineId`, the id the other commands use, on
+    every routine with source. It is minted from the graph's own declaration data
+    (the same `RoutineDecl` fields the model mints it from), so the export builds no
+    model. It matches the model's id for all 5488 routines of Continia DO. Omitted on
+    symbol-only and synthetic nodes; the 5 `OnOpenPageEvent` nodes with no
+    `sourcePath` are platform publishers the engine synthesizes (`synthetic: true`),
+    so they have no declaration and no location by design.
+  - `routineInventory` rows carry `arity` and `sourceAnchor`, the same anchor `prove`
+    reports as `routine.anchor`.
+  - Each document states its line base: graph `meta.lineBase: 1` (as its schema
+    always said), prove and fingerprint-inventory `payload.lineBase: 0`. A graph
+    node's `line` is the inventory anchor's line + 1.
+
+  These are additive; the graph schema doc lists the new fields. The three
+  base-minted goldens that are never regenerated (`single-app/inventory.dd.json`,
+  `cross-app/inventory.two-onruns.json`, `single-app/prove.dd.CallChain.may-commit
+  .json`) were updated after checking that each differs from its old content only by
+  these keys. Test: `cli_ids_and_line_bases` (overloads and a field trigger; it fails
+  with the graph's member discriminator off).
 - **`fingerprint --inventory-only` without `--format` emits json** (G12). Its help
   says it implies `--format=json`, but an omitted format resolved to `human`, and the
   command failed with "--inventory-only requires --format=json (got Human)".

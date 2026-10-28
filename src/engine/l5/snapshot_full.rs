@@ -1521,6 +1521,19 @@ fn build_inventory_doc(
                 "stableRoutineId".into(),
                 CborValue::Text(r.stable_routine_id.clone()),
             );
+            // G13: the declaration's anchor (prove's `routine.anchor` shape,
+            // 0-based line and column) and the parameter count.
+            m.insert(
+                "arity".into(),
+                CborValue::Int(i64::try_from(r.parameters.len()).unwrap_or(i64::MAX)),
+            );
+            let a = &r.source_anchor;
+            let mut anchor: IndexMap<String, CborValue> = IndexMap::new();
+            anchor.insert("column".into(), CborValue::Int(i64::from(a.start_column)));
+            anchor.insert("file".into(), CborValue::Text(a.source_unit_id.clone()));
+            anchor.insert("line".into(), CborValue::Int(i64::from(a.start_line)));
+            anchor.insert("sourceKind".into(), CborValue::Text("source".into()));
+            m.insert("sourceAnchor".into(), CborValue::Map(anchor));
             (
                 r.stable_routine_id.clone(),
                 r.enclosing_member.clone(),
@@ -1541,6 +1554,8 @@ fn build_inventory_doc(
     payload.insert("apps".into(), apps);
     payload.insert("identities".into(), identities);
     payload.insert("routineInventory".into(), routine_inventory);
+    // G13: `routineInventory[].sourceAnchor.line` is 0-based, as in `prove`.
+    payload.insert("lineBase".into(), CborValue::Int(0));
     payload.insert("coverage".into(), coverage);
     payload.insert("rootClassifications".into(), root_classifications);
 

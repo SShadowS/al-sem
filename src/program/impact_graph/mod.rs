@@ -117,6 +117,12 @@ pub struct Node {
     pub member_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member: Option<String>,
+    /// G13: the routine's StableRoutineId, the id `prove`, `digest` and
+    /// `fingerprint` use, for a routine with source (a symbol-only routine has
+    /// none here). Minted from the same declaration fields the model mints it
+    /// from ([`stable_routine_id`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stable_routine_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arity: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -314,6 +320,8 @@ fn export_as(program: &ResolvedProgram, workspace: &Path) -> Result<ImpactGraph,
         },
         "apps": apps,
         "assumptions": ["opaqueCodeRunsNoObjectsById", "platformEntryPointsNotModelled"],
+        // G13: node `line`/`endLine` are 1-based (prove/fingerprint anchors: 0).
+        "lineBase": 1,
         "recoveredFiles": pm.recovered_files,
         "coverageHolds": crate::program::resolve::full::coverage_holds(&pm.coverage_contract),
         "counts": {
@@ -439,6 +447,43 @@ pub(crate) fn key_id(key: &Key, graph: &ProgramGraph) -> String {
 }
 
 /// A node row.
+/// A source routine's StableRoutineId, minted as the model mints it
+/// (`workspace.rs`'s routine loop): the stable object id, then the normalized
+/// signature hash over the declared name, each parameter's type text and `var`
+/// flag, and the return type, discriminated by the unescaped enclosing member.
+/// `meta` and `node` carry those `RoutineDecl` fields verbatim.
+pub(crate) fn stable_routine_id(
+    graph: &crate::program::graph::ProgramGraph,
+    r: &crate::program::node::RoutineNodeId,
+    node: &crate::program::node_extract::RoutineNode,
+    meta: &crate::program::resolve::decl_surface::RoutineMeta,
+) -> String {
+    let specs: Vec<crate::engine::ids::ParamSpec> = meta
+        .params
+        .iter()
+        .map(|p| crate::engine::ids::ParamSpec {
+            type_text: p.ty.as_deref().unwrap_or_default().to_string(),
+            is_var: p.by_ref,
+        })
+        .collect();
+    let hash = crate::engine::ids::normalized_signature_hash(
+        &meta.name,
+        &specs,
+        node.return_type.as_deref(),
+    );
+    let member = meta
+        .enclosing_member
+        .as_deref()
+        .map(crate::program::body::scope::unescape_al_identifier);
+    crate::engine::ids::to_stable_routine_id_from_parts(
+        &crate::engine::ids::to_stable_object_id(&crate::program::model::model_object_id(
+            graph, &r.object,
+        )),
+        &hash,
+        member.as_deref(),
+    )
+}
+
 pub(crate) fn render_node(
     key: &Key,
     id: &str,
@@ -455,6 +500,7 @@ pub(crate) fn render_node(
         object_name: None,
         member_name: None,
         member: None,
+        stable_routine_id: None,
         arity: None,
         source_path: None,
         line: None,
@@ -522,6 +568,11 @@ pub(crate) fn render_node(
             n.member = meta
                 .and_then(|(m, _)| m.enclosing_member.as_ref().map(|s| s.to_string()))
                 .or_else(|| r.enclosing_member_lc.as_ref().map(|s| s.to_string()));
+            if let (Some((m, _)), Some(node)) = (meta, node)
+                && n.symbol_only != Some(true)
+            {
+                n.stable_routine_id = Some(stable_routine_id(graph, r, node, m));
+            }
             if let Some((m, path)) = meta
                 && n.symbol_only != Some(true)
             {

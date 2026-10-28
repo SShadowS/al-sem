@@ -1003,6 +1003,9 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     // payload
     let mut payload = serde_json::Map::new();
     payload.insert("question".into(), question.into());
+    // G13: every `line` in this document (anchors, evidence, via-path hops) is
+    // 0-based; `alsem graph`'s are 1-based (its `meta.lineBase`).
+    payload.insert("lineBase".into(), 0.into());
     payload.insert("result".into(), serde_json::Value::Object(result_obj));
     payload.insert("routine".into(), serde_json::Value::Object(routine_ref));
     payload.insert("workspaceFingerprint".into(), workspace_fp.into());
