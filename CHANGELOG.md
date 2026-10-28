@@ -109,6 +109,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`prove … writes-table` resolves a caller-dependent write through the callers**
+  (G25). A write to a `var` record parameter, or a table method's own `Rec`, whose
+  temporariness is the caller's (G17b) answered `unknown`. It is now asked in the
+  frames of the routine's callers in the loaded world (the same L4 temp-state join,
+  for the caller's id), climbing up to 6 levels while it stays caller-dependent: a
+  caller that passes a record not known temporary makes it `yes`, and the evidence
+  names that caller (`viaCaller: {stableId, display}`). With no caller, or when every
+  caller passes a temporary record, it stays `unknown` with
+  `temp-state-depends-on-caller`: the routine may still be called from outside the
+  world. On Continia DO, 5 of the 14 claims this blocked are now `yes` via a named
+  caller; the other 9 are three methods of obsolete tables that nothing calls and a
+  `ZipFiles` whose only caller passes a temporary record. Test:
+  `cli_prove_temp_writes` (a `var` parameter, a table method on its own `Rec`, a
+  callee only ever given a temporary record), which fails with the walk off.
 - **A truncated witness no longer blocks a decided `prove` answer** (G22). Any effect
   whose via paths were capped (or whose evidence anchor was unavailable) made every
   question `unknown` with `witness-truncated`. Truncation caps how many paths an

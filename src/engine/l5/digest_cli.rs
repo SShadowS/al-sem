@@ -940,6 +940,11 @@ pub struct DigestEffectFull {
     /// A boundary group's full `(resource id, display)` set (#160 step 9
     /// D2 (6)); `detail` lists at most 10. Not serialized; empty off a group.
     pub group_resources: Vec<(String, String)>,
+    /// The operations the effect originates from, and its class's "known
+    /// temporary" flag: what [`DbTempStates`] joins on, so `prove` can ask the
+    /// same write in a CALLER's frame (G25). Not serialized.
+    pub origin_operation_ids: Vec<String>,
+    pub effect_is_kt: bool,
 }
 
 pub struct FullAnchor {
@@ -1100,7 +1105,12 @@ impl<'a> DbTempStates<'a> {
 
     /// The root's L4 rows for these originating operations, joined for an effect
     /// of class `effect_is_kt` (a root L4 does not know has no rows).
-    fn for_effect(&self, root_stable: &str, op_ids: &[String], effect_is_kt: bool) -> TempJoin {
+    pub(crate) fn for_effect(
+        &self,
+        root_stable: &str,
+        op_ids: &[String],
+        effect_is_kt: bool,
+    ) -> TempJoin {
         let rows: Vec<(&str, TempStateKind)> = self
             .ix_by_stable
             .get(root_stable)
@@ -1500,6 +1510,8 @@ pub fn run_digest_query_full_from_entries(
                     fact_id: eff.fact_id.clone(),
                     scoped_guarantees: eff.scoped_guarantees.clone(),
                     group_resources: std::mem::take(&mut eff.group_resources),
+                    origin_operation_ids: eff.origin_operation_ids.clone(),
+                    effect_is_kt: is_known_temp_state(eff.temp_state.as_ref()),
                 });
             }
         }

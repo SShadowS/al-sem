@@ -36,6 +36,7 @@ use crate::engine::l5::digest_cli::{
     primary_guid_of, resolve_changed_roots, run_digest_query_full_from_entries,
 };
 use crate::engine::session::{Cell, prove_plan};
+use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // ProveQuestion
@@ -436,12 +437,14 @@ fn evaluate_may_question(
     oblg: ProveObligations,
     question: &ProveQuestion,
     witness_truncated: bool,
+    via_callers: &HashMap<usize, CallerRef>,
 ) -> ProveResult {
+    // A caller-dependent write a caller resolves to a real table counts (G25).
     let matching: Vec<usize> = entry
         .effects
         .iter()
         .enumerate()
-        .filter(|(_, e)| effect_matches(e, question))
+        .filter(|(i, e)| effect_matches(e, question) || via_callers.contains_key(i))
         .map(|(i, _)| i)
         .collect();
 
@@ -598,10 +601,125 @@ fn evaluate_must_question(
 // prove — main tristate evaluation
 // ---------------------------------------------------------------------------
 
+/// The caller through which a caller-dependent write resolves (G25).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallerRef {
+    pub stable_id: String,
+    pub display: String,
+}
+
+/// How many caller levels G25 climbs while a write stays caller-dependent.
+const CALLER_DEPTH: usize = 6;
+
+/// G25: `writes-table`'s caller-dependent writes (G17b), asked in the frames of
+/// the routine's callers in the loaded world. A write that a caller's frame
+/// resolves to anything but a temporary record (`known(false)`, `unknown`)
+/// is a table write the routine MAY make, through that caller; one that is
+/// still `parameter-dependent` there climbs to that caller's callers, up to
+/// [`CALLER_DEPTH`] levels. Returns, per effect index of `entry`, the first
+/// such caller (callers in model order, breadth first). A write every caller
+/// passes a temporary record to, or no caller at all, is not resolved: the
+/// routine can still be called from outside the world.
+pub(crate) fn resolve_caller_dependent_writes(
+    model: &crate::program::model::workspace::Model,
+    temp_states: &crate::engine::l5::digest_cli::DbTempStates,
+    root_stable: &str,
+    entry: &DigestEntryFull,
+    question: &ProveQuestion,
+) -> HashMap<usize, CallerRef> {
+    use crate::engine::l4::effect_lattice::TempStateKind;
+    let ProveQuestion::WritesTable { table } = question else {
+        return HashMap::new();
+    };
+    let routines = &model.workspace.routines;
+    let stable_of: HashMap<&str, (&str, &str)> = routines
+        .iter()
+        .map(|r| {
+            (
+                r.id.as_str(),
+                (r.stable_routine_id.as_str(), r.name.as_str()),
+            )
+        })
+        .collect();
+    let Some(root_id) = routines
+        .iter()
+        .find(|r| r.stable_routine_id == root_stable)
+        .map(|r| r.id.as_str())
+    else {
+        return HashMap::new();
+    };
+    let mut callers_of: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in &model.calls.edges {
+        if let Some(to) = e.to.as_deref() {
+            callers_of.entry(to).or_default().push(e.from.as_str());
+        }
+    }
+    let mut out = HashMap::new();
+    for (i, eff) in entry.effects.iter().enumerate() {
+        if !(is_table_write(eff, table) && writes_caller_dependent(eff)) {
+            continue;
+        }
+        let mut visited: HashSet<&str> = HashSet::from([root_id]);
+        let mut frontier = vec![root_id];
+        'climb: for _ in 0..CALLER_DEPTH {
+            let mut next = Vec::new();
+            for callee in frontier {
+                for &caller in callers_of.get(callee).into_iter().flatten() {
+                    if !visited.insert(caller) {
+                        continue;
+                    }
+                    let Some(&(stable, name)) = stable_of.get(caller) else {
+                        continue;
+                    };
+                    let join =
+                        temp_states.for_effect(stable, &eff.origin_operation_ids, eff.effect_is_kt);
+                    let persistent = join
+                        .states
+                        .iter()
+                        .any(|s| matches!(s, TempStateKind::Known(false) | TempStateKind::Unknown));
+                    if persistent {
+                        out.insert(
+                            i,
+                            CallerRef {
+                                stable_id: stable.to_string(),
+                                display: name.to_string(),
+                            },
+                        );
+                        break 'climb;
+                    }
+                    if join
+                        .states
+                        .iter()
+                        .any(|s| matches!(s, TempStateKind::ParameterDependent(_)))
+                    {
+                        next.push(caller);
+                    }
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            frontier = next;
+        }
+    }
+    out
+}
+
 pub fn prove(
     entry: &DigestEntryFull,
     gaps_in_cone_count: usize,
     question: &ProveQuestion,
+) -> ProveResult {
+    prove_with_callers(entry, gaps_in_cone_count, question, &HashMap::new())
+}
+
+/// [`prove`] with the caller-dependent writes resolved through callers
+/// ([`resolve_caller_dependent_writes`]): those effects count as matches (G25).
+pub fn prove_with_callers(
+    entry: &DigestEntryFull,
+    gaps_in_cone_count: usize,
+    question: &ProveQuestion,
+    via_callers: &HashMap<usize, CallerRef>,
 ) -> ProveResult {
     let oblg = compute_obligations(entry, gaps_in_cone_count);
 
@@ -620,7 +738,7 @@ pub fn prove(
                 .any(|e| e.effect_type == "COMMIT" && e.via_paths_truncated);
             evaluate_must_question(entry, oblg, commit_paths_truncated)
         }
-        _ => evaluate_may_question(entry, oblg, question, false),
+        _ => evaluate_may_question(entry, oblg, question, false, via_callers),
     }
 }
 
@@ -695,6 +813,9 @@ pub struct ProveDocumentArgs<'a> {
     pub question: &'a str,
     pub prove_result: &'a ProveResult,
     pub effects: &'a [DigestEffectFull],
+    /// Evidence effects resolved through a caller (G25): their evidence entry
+    /// carries `viaCaller` ({stableId, display}).
+    pub via_callers: &'a HashMap<usize, CallerRef>,
     pub diagnostics_json: serde_json::Value,
     pub alsem_ver: &'a str,
     pub deterministic: bool,
@@ -712,6 +833,7 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
         question,
         prove_result,
         effects,
+        via_callers,
         diagnostics_json,
         alsem_ver,
         deterministic,
@@ -725,10 +847,20 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     if let Some(ref indices) = prove_result.evidence
         && !indices.is_empty()
     {
-        // Re-use digest effect_to_value to produce the same DigestEffectContract shape.
+        // Re-use digest effect_to_value to produce the same DigestEffectContract
+        // shape; a write resolved through a caller says which (G25).
         let ev: Vec<serde_json::Value> = indices
             .iter()
-            .map(|&i| crate::engine::l5::digest_cli::effect_to_value(&effects[i]))
+            .map(|&i| {
+                let mut v = crate::engine::l5::digest_cli::effect_to_value(&effects[i]);
+                if let (Some(c), Some(obj)) = (via_callers.get(&i), v.as_object_mut()) {
+                    obj.insert(
+                        "viaCaller".into(),
+                        serde_json::json!({"stableId": c.stable_id, "display": c.display}),
+                    );
+                }
+                v
+            })
             .collect();
         result_obj.insert("evidence".into(), serde_json::Value::Array(ev));
     }
@@ -1116,6 +1248,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             question: question_text,
             prove_result: &dummy_result,
             effects: &[],
+            via_callers: &HashMap::new(),
             diagnostics_json,
             alsem_ver,
             deterministic,
@@ -1158,6 +1291,23 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         &changed_roots,
         &owners,
     );
+    // Parse question (already validated at CLI layer, but re-check cleanly)
+    let parsed_question = parse_question(question_text)
+        .ok_or_else(|| format!("prove: unknown question '{}'", question_text))?;
+    // G25: caller-dependent writes asked in the callers' frames, while the
+    // bundle is alive.
+    let via_callers = query_full
+        .entries
+        .first()
+        .map_or_else(HashMap::new, |entry| {
+            resolve_caller_dependent_writes(
+                resolved,
+                &temp_states,
+                root_id,
+                entry,
+                &parsed_question,
+            )
+        });
     // The bundle's only borrower is dead: release `l4`.
     drop(temp_states);
     drop(owners);
@@ -1171,12 +1321,9 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
 
     let entry = &query_full.entries[0];
 
-    // Parse question (already validated at CLI layer, but re-check cleanly)
-    let parsed_question = parse_question(question_text)
-        .ok_or_else(|| format!("prove: unknown question '{}'", question_text))?;
-
     // Run tristate evaluation
-    let prove_result = prove(entry, gaps_in_cone_count, &parsed_question);
+    let prove_result =
+        prove_with_callers(entry, gaps_in_cone_count, &parsed_question, &via_callers);
 
     // Project document
     cx.view().census_output();
@@ -1189,6 +1336,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         question: question_text,
         prove_result: &prove_result,
         effects: &entry.effects,
+        via_callers: &via_callers,
         diagnostics_json,
         alsem_ver,
         deterministic,
@@ -1660,6 +1808,8 @@ mod tests {
             fact_id: "abcdef1234567890".to_string(),
             scoped_guarantees: vec![],
             group_resources: vec![],
+            origin_operation_ids: vec![],
+            effect_is_kt: false,
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::MayCommit);
@@ -1690,6 +1840,8 @@ mod tests {
             fact_id: "abcdef1234567890".to_string(),
             scoped_guarantees: vec![],
             group_resources: vec![],
+            origin_operation_ids: vec![],
+            effect_is_kt: false,
         };
         let entry = minimal_entry("complete", vec![], vec![commit], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::CommitsOnSuccessPath);
@@ -1820,6 +1972,8 @@ mod tests {
             fact_id: "1234567890abcdef".to_string(),
             scoped_guarantees: vec![],
             group_resources: vec![],
+            origin_operation_ids: vec![],
+            effect_is_kt: false,
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::CommitsOnSuccessPath);
@@ -1867,6 +2021,8 @@ mod tests {
             fact_id: "fedcba0987654321".to_string(),
             scoped_guarantees: vec![],
             group_resources: vec![],
+            origin_operation_ids: vec![],
+            effect_is_kt: false,
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::CommitsOnSuccessPath);

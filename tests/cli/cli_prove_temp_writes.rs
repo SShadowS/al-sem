@@ -18,6 +18,13 @@ const SOURCE: &str = r#"table 50170 "G17 T"
 {
     fields { field(1; Code; Code[20]) { } }
     keys { key(PK; Code) { } }
+
+    // G25: a table method writing its own Rec; its caller's variable decides.
+    procedure SetCode(NewCode: Code[20])
+    begin
+        Code := NewCode;
+        Modify();
+    end;
 }
 page 50171 "G17 Temp Page"
 {
@@ -56,6 +63,27 @@ codeunit 50172 "G17 Writes"
         T: Record "G17 T";
     begin
         ParamWrite(T);
+    end;
+
+    // G25: its only caller passes a temporary record.
+    procedure ParamWriteTempOnly(var T: Record "G17 T")
+    begin
+        T.Insert();
+    end;
+
+    procedure OnlyCallerPassesTemporary()
+    var
+        TempT: Record "G17 T" temporary;
+    begin
+        ParamWriteTempOnly(TempT);
+    end;
+
+    procedure CallsSetCodeOnPersistent()
+    var
+        T: Record "G17 T";
+    begin
+        T.Get('A');
+        T.SetCode('B');
     end;
 
     procedure Persistent()
@@ -160,11 +188,32 @@ fn writes_table_skips_temporary_records() {
             "{routine} writes only a temporary record: {r}"
         );
     }
-    // The callee: it depends on the caller.
-    let r = prove("ParamWrite");
+    // G25: a callee whose write depends on its caller is resolved through the
+    // callers in the world. One of ParamWrite's callers passes a persistent
+    // record, so it may write the table, through that caller; so does the
+    // table method SetCode, called on a persistent variable.
+    for (routine, caller) in [
+        ("ParamWrite", "CallerPassesPersistent"),
+        ("SetCode", "CallsSetCodeOnPersistent"),
+    ] {
+        let r = prove(routine);
+        assert_eq!(r["answer"], "yes", "{routine}, through {caller}: {r}");
+        let via: Vec<&str> = r["evidence"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{routine}: no evidence: {r}"))
+            .iter()
+            .filter_map(|e| e["viaCaller"]["display"].as_str())
+            .collect();
+        assert!(
+            via.contains(&caller),
+            "{routine}: the evidence must name {caller} as viaCaller: {via:?}"
+        );
+    }
+    // Its only caller passes a temporary record: still the caller's question.
+    let r = prove("ParamWriteTempOnly");
     assert_eq!(
         r["answer"], "unknown",
-        "the callee depends on its caller: {r}"
+        "every caller passes a temporary record: {r}"
     );
     let kinds: Vec<&str> = r["blockedBy"]
         .as_array()
