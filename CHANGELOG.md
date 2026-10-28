@@ -263,6 +263,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Variant's type tests resolve.** `V.IsRecord()`, `V.IsGuid()` and the other `Is…`
+  methods of the AL `Variant` type are platform built-ins with no AL code behind
+  them, whatever the Variant holds; a Variant receiver made every member call an open
+  dynamic site, so `prove` blocked on them (Continia DO: `RecVariant.IsRecord`,
+  `ReferenceVariant.IsGuid`, … across 7 claims). They are now catalog members
+  (`resolver::VARIANT_TYPE_TESTS`); any other member stays dynamic. Test
+  `cli_variant_type_tests`.
 - **`publishes-event` evidence cites the publish call** (G32). An event publication is
   the publisher routine's own fact, with no operation to cite, so its evidence read
   `sourceKind: unavailable` (35 proven answers on Continia DO had no file or line).

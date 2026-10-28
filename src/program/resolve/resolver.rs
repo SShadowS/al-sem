@@ -2621,6 +2621,64 @@ fn member_unknown_route_with_tier(
     )
 }
 
+/// A Variant's type tests (the AL `Variant` data type's `Is…` methods), folded.
+/// Each answers whether the Variant holds a value of one type; none runs AL
+/// code. Any other member of a Variant stays dynamic.
+const VARIANT_TYPE_TESTS: &[&str] = &[
+    "isaction",
+    "isautomation",
+    "isbiginteger",
+    "isbinary",
+    "isboolean",
+    "isbyte",
+    "ischar",
+    "isclienttype",
+    "iscode",
+    "iscodeunit",
+    "isdataclassification",
+    "isdataclassificationtype",
+    "isdate",
+    "isdateformula",
+    "isdatetime",
+    "isdecimal",
+    "isdefaultlayout",
+    "isdictionary",
+    "isdotnet",
+    "isduration",
+    "isexecutionmode",
+    "isfieldref",
+    "isfile",
+    "isfilterpagebuilder",
+    "isguid",
+    "isinstream",
+    "isinteger",
+    "isjsonarray",
+    "isjsonobject",
+    "isjsontoken",
+    "isjsonvalue",
+    "iskeyref",
+    "islist",
+    "isnotification",
+    "isobjecttype",
+    "isoption",
+    "isoutstream",
+    "ispromptmode",
+    "isrecord",
+    "isrecordid",
+    "isrecordref",
+    "isreportformat",
+    "issecurityfiltering",
+    "istableconnectiontype",
+    "istestpermissions",
+    "istext",
+    "istextbuilder",
+    "istextconstant",
+    "istextencoding",
+    "istime",
+    "istransactiontype",
+    "iswidechar",
+];
+
 /// Build a `(DynamicOpen, [Unknown blocker])` outcome for Dynamic receivers —
 /// the receiver's static type is genuinely untracked (a runtime Variant), so
 /// the single fixed reason is always [`UnknownReason::UntrackedReceiver`].
@@ -3242,6 +3300,11 @@ pub(crate) fn resolve_member_with_args(
         ReceiverType::Primitive => {
             // Non-catalog type — honest Unknown (not a false resolution gap).
             member_unknown_route(UnknownReason::CatalogMiss)
+        }
+        ReceiverType::Dynamic if VARIANT_TYPE_TESTS.contains(&method_lc) => {
+            // A Variant's own type test (`V.IsRecord()`): a platform built-in
+            // with no AL code behind it, whatever the Variant holds.
+            member_catalog_route(BuiltinId(format!("Variant::{method_lc}")))
         }
         ReceiverType::Dynamic => {
             // Variant-typed receiver — genuinely dynamic, not a resolution hole.
