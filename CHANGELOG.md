@@ -185,6 +185,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`fingerprint --inventory-only` without `--format` emits json** (G12). Its help
+  says it implies `--format=json`, but an omitted format resolved to `human`, and the
+  command failed with "--inventory-only requires --format=json (got Human)".
+  `default_format` now takes `inventory_only`: omitted means json, while an explicit
+  non-json format is still refused. Test: `cli_fingerprint_inventory_format` (the real
+  binary, both cases).
 - **`prove` evidence lists no witness path that cannot run** (G23 follow-up). The
   witness search took the shortest path to an effect. Through a recursive SCC that
   could be one dead under a literal argument (Continia DO's `DocSave` →

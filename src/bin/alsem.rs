@@ -1278,7 +1278,7 @@ fn job_kind(command: &Commands) -> Option<JobKind> {
 /// Whether a fingerprint job's view is single-app. Read only for a job that
 /// passed its validation (FR-14), so its format resolves.
 fn fingerprint_single_app(f: &FingerprintCli) -> bool {
-    default_format(f.format.as_deref(), f.shard.is_some()).is_ok_and(|format| {
+    default_format(f.format.as_deref(), f.shard.is_some(), f.inventory_only).is_ok_and(|format| {
         reads_single_app(
             &format,
             f.shard.is_some(),
@@ -2001,7 +2001,7 @@ fn plan_fingerprint(f: FingerprintCli) -> Planned {
     let specified = fingerprint_flags(&f);
 
     // defaultFormat (fingerprint.ts:140) + rejectIllegalCombos (fingerprint.ts:110).
-    let format = match default_format(f.format.as_deref(), shard_mode.is_some()) {
+    let format = match default_format(f.format.as_deref(), shard_mode.is_some(), f.inventory_only) {
         Ok(fmt) => fmt,
         Err(msg) => return failed(msg, 1, 1),
     };
