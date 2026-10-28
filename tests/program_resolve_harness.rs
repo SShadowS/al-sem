@@ -5313,6 +5313,13 @@ fn synthesized_calls_bind_by_method_id() {
 {
     fields { field(1; K; Integer) { } }
     keys { key(PK; K) { } }
+
+    procedure IsValid(): Boolean begin end;
+
+    procedure ByIdOwnTable()
+    begin
+        "__alsem_mid_-117753573"();
+    end;
 }
 
 codeunit 50182 "MI Target"
@@ -5347,6 +5354,13 @@ codeunit 50183 "MI Caller"
     begin
         T."__alsem_mid_12345"();
     end;
+
+    procedure ByIdTableMethod()
+    var
+        R: Record "MI T";
+    begin
+        R."__alsem_mid_-117753573"();
+    end;
 }
 "#,
     )
@@ -5355,6 +5369,10 @@ codeunit 50183 "MI Caller"
     // The argument is an Integer, yet the id names the Text overload.
     assert_binds_param(&report, tmp.path(), "byidtext", "x: text");
     assert_binds_param(&report, tmp.path(), "byidrecord", "record \"mi t\"");
+    // A table method by id (`IsValid(): Boolean` is -117753573): on a record
+    // variable, and bare from inside the table.
+    assert_binds_param(&report, tmp.path(), "byidtablemethod", "isvalid");
+    assert_binds_param(&report, tmp.path(), "byidowntable", "isvalid");
     let edge = &outer_call_edge(&report, "byidnone").edge;
     assert!(
         matches!(edge.routes.as_slice(), [r] if matches!(r.evidence, Evidence::Unknown(_))),

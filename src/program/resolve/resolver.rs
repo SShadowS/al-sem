@@ -1262,6 +1262,29 @@ fn resolve_in_extendable_scope(
     // Deterministic ordering (candidate vectors sorted by stable ObjectNodeId).
     scope.sort_by(|(a, _), (b, _)| a.cmp(b));
 
+    // A synthesized call by method id: the one object of the scope (the base or
+    // an extension) with a routine of that id, never a name match.
+    if let Some(n) = crate::program::resolve::method_id::synthesized_call_id(name_lc) {
+        let hits: Vec<&(ObjectNodeId, TrustTier)> = scope
+            .iter()
+            .filter(|(oid, _)| {
+                graph.routines.run_by(|r| r.id.object.cmp(oid)).any(|r| {
+                    !r.is_trigger && routine_method_id(r, graph, index, surface) == Some(n)
+                })
+            })
+            .collect();
+        return match hits.as_slice() {
+            [(oid, tier)] => {
+                let (shape, routes) = resolve_by_method_id(oid, *tier, n, graph, index, surface);
+                TableScopeOutcome::Resolved(shape, routes)
+            }
+            [] => TableScopeOutcome::NotVisible {
+                access_excluded: Some(UnknownReason::IndexIntegrationGap),
+            },
+            _ => TableScopeOutcome::Ambiguous,
+        };
+    }
+
     let mut candidate_objects = scope.iter().filter(|(oid, tier)| {
         object_has_visible_member_candidate(
             oid,

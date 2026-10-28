@@ -9,6 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **AL synthesized for runtime packages that ship no AL** (phases 2–4 of transpiled
+  runtime bodies, spec `docs/superpowers/specs/2026-10-28-transpiled-runtime-bodies-design.md`,
+  route A). A `.app` with no `.al` but with BC's transpiled C# (`bin/*.cs`) and its
+  `SymbolReference.json` used to be symbol-only: every routine bodyless, its cones
+  `opaque-dependency`, the app a `symbol-only-boundary` analysis gap. Extraction now
+  synthesizes AL for it (`snapshot::transpiled`), one file per object at
+  `transpiled/<KIND><id>.al`, read like any embedded source:
+  - declarations come from the symbols: ids, names, namespaces, table fields (type,
+    class, `CalcFormula`, option members) and keys, enum values and implementations,
+    page source tables, extension targets, routine signatures and event attributes;
+  - bodies come from the C# (`cs`: a reader for the transpiler's output; `translate`):
+    each AL-runtime call becomes the AL call it came from, on a variable of the matching
+    AL type, so the existing extractors classify it as real AL. `rec.Target.ALModifyAsync`
+    is `"rec".Modify()`, `TrapError` keeps the Boolean consumed, and a record's table
+    and temporariness come from its `new NavRecordHandle(…)`. Calls into AL code are
+    bound by method id, and record arguments pass through. Control flow is kept, every
+    condition an opaque Boolean, so an effect is conditional where the AL was;
+  - triggers are placed by `NavName` (`OnRun`, `<Field> - OnValidate`,
+    `<Action> - OnAction`), and event subscribers are declared from the C#
+    `[NavEventSubscriber]`;
+  - every statement carries `// cs <line>`, its C# line. Soundness: a C# call the
+    translator cannot place becomes `"__alsem_untranslated"('<shape>')`, an unresolved
+    call naming its shape, and a symbol routine with no C# body gets one such call,
+    never an empty body.
+
+  A table method called by id on a record variable binds too
+  (`resolve_in_extendable_scope`, by id across the table and its extensions). The
+  embedded-source cache file is now `<hash>.s<EXTRACTION_SCHEME>.json` (scheme 2), so
+  an earlier "no source" entry is not reused. On Continia's Core 29.0 (230 C# files,
+  1727 symbol routines): 291 files, 3293 routines, all parse clean, 3 statements
+  untranslated. On Continia DO: `unknown` edges 19 → 7 (`realUnknownRate` 0.091% →
+  0.033%); the 84 calls into Core's ABI now resolve to its synthesized source; prove
+  claims 318 → 321 proven, and 336 of 408 with `--closed-world` (15 labelled), with no
+  new contradiction. Tests: the `cs`, `translate` and `synth` units (hand-written C# in
+  the transpiler's shape), the extraction hook (`a_package_with_only_transpiled_cs_
+  yields_synthesized_al`, which fails with the hook off; shipped `.al` wins), and the
+  table-method case of `synthesized_calls_bind_by_method_id` (which failed before the
+  fix). Real-package checks are gated on `TRANSPILED_CS_DIR` / `TRANSPILED_SYMBOLS`
+  (a package's own files are never committed).
 - **AL method ids, and calls bound by them** (phase 1 of transpiled runtime bodies,
   spec `docs/superpowers/specs/2026-10-28-transpiled-runtime-bodies-design.md`). The
   new `program::resolve::method_id` computes the id the AL compiler gives a routine
