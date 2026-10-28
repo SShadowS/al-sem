@@ -9,6 +9,9 @@
     "question": "may-commit",
     "result": {
       "answer": "no",
+      "assumptions": [
+        "loaded-subscribers"
+      ],
       "obligations": {
         "analysisGaps": 0,
         "coneTruncated": false,

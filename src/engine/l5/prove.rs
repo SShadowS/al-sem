@@ -147,27 +147,78 @@ pub struct ProveObligations {
     /// The world the obligations were counted in, the open-world interface
     /// rows it waived because the cone already follows every loaded
     /// implementation ([`world_waives`]), and whether coverage counted as
-    /// complete only by that assumption. 0/false in the open world.
+    /// complete only by that assumption. 0/false in the strict world.
     pub world: World,
     pub waived_rows: usize,
     pub coverage_closed_by_assumption: bool,
-    /// The answer holds only in `world`: the open world answers differently
+    /// The answer holds only in `world`: the strict world answers differently
     /// ([`prove_with_callers`]). The [`World::label`] label.
     pub answer_relies_on_world: bool,
+    /// The answer is a `no` whose cone raises an event an app outside the
+    /// program may subscribe to ([`relies_on_loaded_subscribers`]): it holds
+    /// only if no subscriber beyond the loaded ones exists. The
+    /// `loaded-subscribers` label, when no stronger world's label applies.
+    pub relies_on_loaded_subscribers: bool,
+}
+
+impl ProveObligations {
+    /// The answer's `assumptions` label: the weakest world it holds in, one
+    /// tier (a closed-world answer assumes loaded subscribers too).
+    #[must_use]
+    pub fn assumption(&self) -> Option<&'static str> {
+        if self.answer_relies_on_world {
+            self.world.label()
+        } else if self.relies_on_loaded_subscribers {
+            World::LoadedSubscribers.label()
+        } else {
+            None
+        }
+    }
+}
+
+/// Effects that raise an event any app may subscribe to: an explicit event
+/// publication, and opening a page (the platform page events). Table events
+/// are read off the cone's record operations
+/// (`UnresolvedCone::fires_table_events`): a `Validate` is no effect.
+const SUBSCRIBABLE_EFFECTS: &[&str] = &["EVENT_PUBLISH", "UI_WINDOW_OPEN"];
+
+/// Q6: the cone follows the LOADED subscribers of every event it raises, so
+/// an event is closed over them, unlike an interface, which is open. A `yes`
+/// stands on its witness whatever else subscribes; a `no` (MAY: no matching
+/// effect; MUST: not on every success path) could be overturned by a
+/// subscriber in an app that is not loaded, as soon as the cone raises an
+/// event: a table write or `Validate` (the platform table events, raised for
+/// temporary records and with `RunTrigger = false` too), an explicit
+/// publisher, or a page opened. Over-approximates: an internal publisher only
+/// the declaring app's friends can subscribe to counts as well.
+fn relies_on_loaded_subscribers(
+    result: &ProveResult,
+    entry: &DigestEntryFull,
+    fires_table_events: bool,
+) -> bool {
+    result.answer == ProveAnswer::No
+        && (fires_table_events
+            || entry.effects.iter().any(|e| {
+                !e.literal_unreachable && SUBSCRIBABLE_EFFECTS.contains(&e.effect_type.as_str())
+            }))
 }
 
 /// What a prove run assumes about code outside the loaded program, weakest
-/// first. Each world waives the open-world rows of the one before it and more.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+/// first: strict < loaded-subscribers < closed-world. Each world waives the
+/// open-world rows of the one before it and more.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum World {
-    /// Nothing: an interface site may reach an implementer not loaded.
-    #[default]
-    Open,
-    /// `--caller-publishers-loaded` (G29): every app whose publisher is on the
-    /// call stack is loaded, so a publisher-scoped interface site
-    /// (`Telemetry Logger`) reaches only loaded implementers.
-    CallerPublishers,
-    /// `--closed-world` (G24): no implementer exists beyond the loaded ones.
+    /// Nothing: an interface site may reach an implementer not loaded, an
+    /// event a subscriber not loaded.
+    Strict,
+    /// The default (Q6, G29): no subscriber exists beyond the loaded ones. The
+    /// cone already follows only loaded subscribers. A publisher-scoped
+    /// interface site (`Telemetry Logger`) falls under it too: a logger exists
+    /// only through an `OnRegisterTelemetryLogger` subscriber that registers
+    /// it, so an unloaded app's logger is an unloaded subscriber.
+    LoadedSubscribers,
+    /// `--closed-world` (G24): no interface implementer exists beyond the
+    /// loaded ones either.
     Closed,
 }
 
@@ -176,37 +227,35 @@ impl World {
     #[must_use]
     pub fn label(self) -> Option<&'static str> {
         match self {
-            World::Open => None,
-            World::CallerPublishers => Some("caller-publishers-loaded"),
+            World::Strict => None,
+            World::LoadedSubscribers => Some("loaded-subscribers"),
             World::Closed => Some("closed-world"),
         }
     }
 
-    /// The world a prove run's flags ask for: `--closed-world` assumes more
-    /// than `--caller-publishers-loaded`, so it wins.
+    /// The world a prove run's flags ask for.
     #[must_use]
-    pub fn of_flags(closed_world: bool, caller_publishers_loaded: bool) -> World {
+    pub fn of_flags(closed_world: bool) -> World {
         if closed_world {
             World::Closed
-        } else if caller_publishers_loaded {
-            World::CallerPublishers
         } else {
-            World::Open
+            World::LoadedSubscribers
         }
     }
 }
 
-/// G24/G29: in a world beyond the open one, an open-world interface site whose
-/// every implementer is in the model is no obligation when the world assumes no
-/// other implementer exists: the cone follows each loaded implementation. The
-/// closed world assumes it of every site, the caller-publishers world of a
-/// publisher-scoped site only. A site with an implementer outside the model (a
-/// body not loaded, an enum value mapped to a codeunit that is not loaded, an
-/// implementer no route reached) is still open, in every world.
+/// G24/G29: in a world beyond the strict one, an open-world interface site
+/// whose every implementer is in the model is no obligation when the world
+/// assumes no other implementer exists: the cone follows each loaded
+/// implementation. The closed world assumes it of every site, the
+/// loaded-subscribers world of a publisher-scoped site only. A site with an
+/// implementer outside the model (a body not loaded, an enum value mapped to a
+/// codeunit that is not loaded, an implementer no route reached) is still
+/// open, in every world.
 fn world_waives(item: &UnresolvedConeItem, world: World) -> bool {
     let assumed = match world {
-        World::Open => false,
-        World::CallerPublishers => item.publisher_scoped,
+        World::Strict => false,
+        World::LoadedSubscribers => item.publisher_scoped,
         World::Closed => true,
     };
     assumed && item.open_world == Some(true) && item.closed_world_followable
@@ -255,7 +304,7 @@ fn compute_obligations(
     // with no site here to waive stays partial).
     let complete = entry.coverage_status == "complete";
     let coverage_closed_by_assumption = !complete
-        && world != World::Open
+        && world != World::Strict
         && waived_rows > 0
         && open_world_rows == 0
         && entry.coverage_status == "partial"
@@ -275,6 +324,7 @@ fn compute_obligations(
         waived_rows,
         coverage_closed_by_assumption,
         answer_relies_on_world: false,
+        relies_on_loaded_subscribers: false,
     }
 }
 
@@ -824,7 +874,7 @@ pub fn prove(
         gaps_in_cone_count,
         question,
         &HashMap::new(),
-        World::Open,
+        World::Strict,
     )
 }
 
@@ -833,10 +883,10 @@ pub fn prove(
 /// `world` waives the open-world rows [`world_waives`] (G24, G29).
 ///
 /// An answer is labelled with the WEAKEST world, up to `world`, whose answer
-/// DIFFERS from the open-world one: it holds only under that world's
-/// assumption ([`World::label`]). A decided answer the open world gives too (a
-/// `yes` with its witness) rests on no assumption: the open-world result,
-/// unlabelled. When every world stays `unknown`, the result of `world`,
+/// DIFFERS from the strict one: it holds only under that world's assumption
+/// ([`World::label`]). A decided answer the strict world gives too (a `yes`
+/// with its witness) rests on no world's assumption: the strict result,
+/// unlabelled here. When every world stays `unknown`, the result of `world`,
 /// unlabelled: its blockers are what is left once the assumption is made, so
 /// a verifier sees what to fix next.
 pub fn prove_with_callers(
@@ -847,14 +897,14 @@ pub fn prove_with_callers(
     world: World,
 ) -> ProveResult {
     let run = |w| prove_in_world(entry, gaps_in_cone_count, question, via_callers, w);
-    let open = run(World::Open);
+    let strict = run(World::Strict);
     let mut last = None;
-    for w in [World::CallerPublishers, World::Closed] {
+    for w in [World::LoadedSubscribers, World::Closed] {
         if w > world {
             break;
         }
         let mut assumed = run(w);
-        if assumed.answer != open.answer {
+        if assumed.answer != strict.answer {
             assumed.obligations.answer_relies_on_world = true;
             return assumed;
         }
@@ -862,7 +912,7 @@ pub fn prove_with_callers(
     }
     match last {
         Some(assumed) if assumed.answer == ProveAnswer::Unknown => assumed,
-        _ => open,
+        _ => strict,
     }
 }
 
@@ -949,10 +999,12 @@ fn obligations_to_value(o: &ProveObligations) -> serde_json::Value {
         "unresolvedCallsites".into(),
         (o.unresolved_callsites as u64).into(),
     );
-    // G24/G29: only beyond the open world, so an open-world document is unchanged.
+    // G24: under `--closed-world` only. G29: the default world names its
+    // waived rows only when it waived one, so a document no publisher-scoped
+    // site touched is unchanged.
     let waived_key = match o.world {
-        World::Open => None,
-        World::CallerPublishers => Some("callerPublishersRows"),
+        World::Strict => None,
+        World::LoadedSubscribers => (o.waived_rows > 0).then_some("loadedSubscribersRows"),
         World::Closed => Some("closedWorldRows"),
     };
     if let Some(key) = waived_key {
@@ -1040,9 +1092,8 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     );
     // G24/G29: the label a KB needs for an answer that holds only in a world
     // beyond the open one.
-    if prove_result.obligations.answer_relies_on_world
-        && let Some(label) = prove_result.obligations.world.label()
-    {
+    let o = &prove_result.obligations;
+    if let Some(label) = o.assumption() {
         result_obj.insert("assumptions".into(), serde_json::json!([label]));
     }
 
@@ -1248,7 +1299,6 @@ pub(crate) fn prove_pipeline_with(
         deterministic,
         single_app,
         closed_world: false,
-        caller_publishers_loaded: false,
         human: false,
         out: None,
     };
@@ -1281,7 +1331,6 @@ pub(crate) fn prove_on_target(
             crate::engine::gate::run::AnalysisTarget::SingleApp(_)
         ),
         closed_world: false,
-        caller_publishers_loaded: false,
         human: false,
         out: None,
     };
@@ -1309,9 +1358,6 @@ pub struct ProveJob<'a> {
     /// `--closed-world` (G24): an interface call dispatches only to the loaded
     /// implementations.
     pub closed_world: bool,
-    /// `--caller-publishers-loaded` (G29): a publisher-scoped interface call
-    /// (`Telemetry Logger`) dispatches only to the loaded implementations.
-    pub caller_publishers_loaded: bool,
     /// `--format human`: the human text, else the JSON.
     pub human: bool,
     pub out: Option<&'a str>,
@@ -1390,7 +1436,6 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         alsem_ver,
         deterministic,
         closed_world,
-        caller_publishers_loaded,
         ..
     } = *job;
     // The roots `resolve` resolved off the model, before the composition.
@@ -1409,10 +1454,11 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             analysis_gaps: 0,
             coverage_complete: false,
             cone_truncated: false,
-            world: World::Open,
+            world: World::Strict,
             waived_rows: 0,
             coverage_closed_by_assumption: false,
             answer_relies_on_world: false,
+            relies_on_loaded_subscribers: false,
         };
         let dummy_result = ProveResult {
             answer: ProveAnswer::Unknown,
@@ -1457,12 +1503,16 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     // (5) The root's S4 entry, unresolved cone and gap count, read off the
     // view's tree inside `prepare` (the tree is gone).
     let mut effects = cx.take_effects();
-    let gaps_in_cone_count = effects
+    let cone = effects
         .unresolved
         .get(root_id)
-        .ok_or_else(|| "prove: internal error — no unresolved cone for the root".to_string())?
+        .ok_or_else(|| "prove: internal error — no unresolved cone for the root".to_string())?;
+    let gaps_in_cone_count = cone
         .gaps_in_cone
         .expect("prove's plan counts the gaps in the cone");
+    let fires_table_events = cone
+        .fires_table_events
+        .expect("prove's plan reads the cone's table events");
     let resolved = cx.view().model();
 
     // The L4 db-effect store, for DB_* `detail.tempState` (#65): the view's `l4`.
@@ -1509,13 +1559,15 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     let entry = &query_full.entries[0];
 
     // Run tristate evaluation
-    let prove_result = prove_with_callers(
+    let mut prove_result = prove_with_callers(
         entry,
         gaps_in_cone_count,
         &parsed_question,
         &via_callers,
-        World::of_flags(closed_world, caller_publishers_loaded),
+        World::of_flags(closed_world),
     );
+    prove_result.obligations.relies_on_loaded_subscribers =
+        relies_on_loaded_subscribers(&prove_result, entry, fires_table_events);
 
     // Project document
     cx.view().census_output();

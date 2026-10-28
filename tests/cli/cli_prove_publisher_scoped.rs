@@ -1,13 +1,14 @@
-//! G29: `alsem prove … --caller-publishers-loaded` assumes every app whose
-//! publisher is on the call stack is loaded. System Application's `Telemetry
-//! Logger` logs only through the loggers those publishers registered, so a
-//! call on it then dispatches only to the loaded implementations. On Continia
-//! DO this was the sole blocker of 8 claims (`TelemetryLogger.LogMessage`).
+//! G29: System Application's `Telemetry Logger` logs only through loggers
+//! registered by `OnRegisterTelemetryLogger` subscribers, so an unloaded app's
+//! logger is an unloaded subscriber. prove's default world assumes no
+//! subscriber beyond the loaded ones, so a call on it dispatches only to the
+//! loaded implementations. On Continia DO this was the sole blocker of 8
+//! claims (`TelemetryLogger.LogMessage`).
 //!
 //! The assumption must be visible and narrow:
 //! - an answer that holds only under it carries
-//!   `assumptions: ["caller-publishers-loaded"]` and
-//!   `obligations.callerPublishersRows`;
+//!   `assumptions: ["loaded-subscribers"]` and
+//!   `obligations.loadedSubscribersRows`;
 //! - it waives no other interface (that takes `--closed-world`);
 //! - it keys on the declaring app, not the name: a `Telemetry Logger` of
 //!   another app stays open;
@@ -125,44 +126,42 @@ fn blocks_on_dispatch(r: &serde_json::Value) -> bool {
     })
 }
 
-const CPL: &str = "--caller-publishers-loaded";
-
 #[test]
-fn caller_publishers_loaded_waives_only_publisher_scoped_sites() {
+fn the_default_world_waives_only_publisher_scoped_sites() {
+    // Precondition: the same source in another app blocks on the interface
+    // (the next test), so the waiver below is the catalog's.
     let ws = Ws::new(SYSTEM_APPLICATION);
 
-    // Precondition: the open world blocks on the Telemetry Logger.
-    let open = ws.prove("UseTelemetry", &[]);
-    assert_eq!(open["answer"], "unknown", "precondition: {open}");
-    assert!(blocks_on_dispatch(&open), "precondition: {open}");
-    assert!(open.get("assumptions").is_none(), "{open}");
-
-    // Under the assumption: `no`, labelled, the waived row counted.
-    let cpl = ws.prove("UseTelemetry", &[CPL]);
-    assert_eq!(cpl["answer"], "no", "{cpl}");
+    // `no`, labelled, the waived row counted.
+    let r = ws.prove("UseTelemetry", &[]);
+    assert_eq!(r["answer"], "no", "{r}");
     assert_eq!(
-        cpl["assumptions"],
-        serde_json::json!(["caller-publishers-loaded"]),
-        "{cpl}"
+        r["assumptions"],
+        serde_json::json!(["loaded-subscribers"]),
+        "{r}"
     );
-    assert_eq!(cpl["obligations"]["callerPublishersRows"], 1, "{cpl}");
-    assert_eq!(cpl["obligations"]["openWorldRows"], 0, "{cpl}");
-    assert!(cpl["obligations"].get("closedWorldRows").is_none(), "{cpl}");
+    assert_eq!(r["obligations"]["loadedSubscribersRows"], 1, "{r}");
+    assert_eq!(r["obligations"]["openWorldRows"], 0, "{r}");
+    assert!(r["obligations"].get("closedWorldRows").is_none(), "{r}");
 
     // `--closed-world` implies it; the narrower label wins.
     let closed = ws.prove("UseTelemetry", &["--closed-world"]);
     assert_eq!(closed["answer"], "no", "{closed}");
     assert_eq!(
         closed["assumptions"],
-        serde_json::json!(["caller-publishers-loaded"]),
+        serde_json::json!(["loaded-subscribers"]),
         "{closed}"
     );
 
-    // Any other interface: the assumption does not reach it.
-    let other = ws.prove("UseOther", &[CPL]);
+    // Any other interface: the default world does not reach it.
+    let other = ws.prove("UseOther", &[]);
     assert_eq!(other["answer"], "unknown", "{other}");
     assert!(blocks_on_dispatch(&other), "{other}");
     assert!(other.get("assumptions").is_none(), "{other}");
+    assert!(
+        other["obligations"].get("loadedSubscribersRows").is_none(),
+        "no row waived, no key: {other}"
+    );
     let other_closed = ws.prove("UseOther", &["--closed-world"]);
     assert_eq!(other_closed["answer"], "no", "{other_closed}");
     assert_eq!(
@@ -175,7 +174,7 @@ fn caller_publishers_loaded_waives_only_publisher_scoped_sites() {
 #[test]
 fn a_telemetry_logger_of_another_app_is_not_publisher_scoped() {
     let ws = Ws::new("29292929-0000-4000-8000-000000000029");
-    let r = ws.prove("UseTelemetry", &[CPL]);
+    let r = ws.prove("UseTelemetry", &[]);
     assert_eq!(r["answer"], "unknown", "{r}");
     assert!(blocks_on_dispatch(&r), "{r}");
     assert!(r.get("assumptions").is_none(), "{r}");

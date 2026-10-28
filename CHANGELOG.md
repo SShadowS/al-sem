@@ -9,18 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`alsem prove --caller-publishers-loaded`** (G29): a narrower assumption than
-  `--closed-world`. System Application's `Telemetry Logger` is publisher-scoped:
-  `Telemetry Impl.` logs only through the loggers registered (in
-  `OnRegisterTelemetryLogger`) by apps whose publisher is on the call stack. Assuming
-  every such app is loaded, a call on it reaches only the loaded implementations, so
-  its open-world row stops blocking when the cone already follows them all. The
-  catalog (`calls::PUBLISHER_SCOPED_INTERFACES`) keys on the declaring app's GUID, not
-  the name. An answer that holds only under it carries
-  `assumptions: ["caller-publishers-loaded"]` and `obligations.callerPublishersRows`.
-  `--closed-world` implies it, and an answer is labelled with the WEAKEST assumption
-  that gives it (`prove::World`). On Continia DO the Telemetry Logger was the sole
-  blocker of 8 claims. Test `cli_prove_caller_publishers`.
+- **`prove` labels the answers that assume no subscriber beyond the loaded ones**
+  (Q6, G29). The cone follows the LOADED subscribers of every event, so events are
+  closed over them while interfaces are open; that was unlabelled. prove now has
+  three worlds, weakest first (`prove::World`): strict (nothing assumed) <
+  loaded-subscribers (the default) < closed-world (`--closed-world`). An answer
+  carries ONE label, the weakest world that gives it:
+  - `assumptions: ["loaded-subscribers"]` on a `no` whose cone raises an event any
+    app may subscribe to: a table write or `Validate` (the platform table events,
+    raised for temporary records too; read off the cone's record operations,
+    `UnresolvedCone::fires_table_events`), an explicit event publication, or a page
+    opened. A `yes` stands on its witness and carries none. Over-approximates: an
+    internal publisher only friends can subscribe to counts too.
+  - System Application's `Telemetry Logger` falls under the same assumption: its
+    loggers exist only through `OnRegisterTelemetryLogger` subscribers that register
+    them, so an unloaded app's logger is an unloaded subscriber. In the default world
+    a call on it reaches only the loaded implementations, and its open-world row
+    stops blocking when the cone already follows them all (counted in
+    `obligations.loadedSubscribersRows`). The catalog
+    (`calls::PUBLISHER_SCOPED_INTERFACES`) keys on the declaring app's GUID, not the
+    name.
+
+  On Continia DO: 340 → 348 proven (the 8 claims the Telemetry Logger alone
+  blocked); 57 of the 148 proven `no` answers carry the label, 91 raise no
+  subscribable event. Tests `cli_prove_loaded_subscribers`, `cli_prove_publisher_scoped`.
 - **An internal interface with every friend loaded is a closed dispatch site** (G28).
   Only the declaring app and the apps its manifest lists in `internalsVisibleTo` can
   implement an interface declared `Access = Internal`. When every such friend is a

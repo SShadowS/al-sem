@@ -43,8 +43,9 @@ pub struct DispatchMeta {
 /// that `Telemetry Loggers.GetTelemetryLogger(Publisher, …)` and
 /// `GetRelevantTelemetryLoggers` return, the ones registered (in the
 /// `OnRegisterTelemetryLogger` event) by an app of a publisher on the call
-/// stack. When every such app is loaded, the loaded implementers are all a
-/// call can reach: the `caller-publishers-loaded` assumption.
+/// stack. A logger exists only through such a subscriber, so when no
+/// subscriber exists beyond the loaded ones the loaded implementers are all a
+/// call can reach: prove's `loaded-subscribers` assumption.
 pub const PUBLISHER_SCOPED_INTERFACES: &[(&str, &str)] =
     &[("63ca2fa4-4f03-4f2b-a480-172fef340d3f", "telemetry logger")];
 

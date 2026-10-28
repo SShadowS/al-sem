@@ -1155,6 +1155,12 @@ pub struct UnresolvedCone {
     /// step 9 D2 (5)): prove's `analysisGaps` obligation. `None` off prove's
     /// plan: digest never reads it, so it never counts it (final panel C1).
     pub gaps_in_cone: Option<usize>,
+    /// The cone visits a routine with a record operation that raises the
+    /// platform table events (`Insert`, `Modify`, `Delete`, `ModifyAll`,
+    /// `DeleteAll`, `Rename`, `Validate`), which any app may subscribe to:
+    /// prove's `loaded-subscribers` label. `None` off prove's plan, as
+    /// `gaps_in_cone`.
+    pub fires_table_events: Option<bool>,
 }
 
 /// Count analysis gaps whose subject intersects the visited cone.
@@ -1245,6 +1251,22 @@ pub(crate) fn digest_effects_each(
         .filter(|r| crate::program::model::platform_natives::pure_native(r).is_some())
         .map(|r| r.stable_routine_id.as_str())
         .collect();
+    // Routines that raise platform table events (prove's `loaded-subscribers`).
+    let fires: std::collections::HashSet<&str> = if gaps_in_cone {
+        model
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| {
+                r.record_operations.iter().any(|op| {
+                    crate::program::resolve::full::can_fire_trigger(&op.op.to_ascii_lowercase())
+                })
+            })
+            .map(|r| r.stable_routine_id.as_str())
+            .collect()
+    } else {
+        Default::default()
+    };
     // One query over every reader's roots: the per-root work is independent
     // (one worker per root), and the per-call work (the tree's indexes, the
     // reportable roots) is whole-program, so a call per reader repeated it
@@ -1297,6 +1319,8 @@ pub(crate) fn digest_effects_each(
                             gaps_in_cone: gaps_in_cone.then(|| {
                                 count_gaps_in_cone(&gap_subjects, &c.visited_ids, &natives)
                             }),
+                            fires_table_events: gaps_in_cone
+                                .then(|| c.visited_ids.iter().any(|v| fires.contains(v.as_str()))),
                             items: c.items,
                             traversal: c.traversal,
                         },
