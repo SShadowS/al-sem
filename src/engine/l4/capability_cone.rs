@@ -992,8 +992,9 @@ pub(crate) fn direct_facts_for_routine(
     }
 
     // ── ui-window-open family (al-sem ui-window-open.ts) ───────────────────
-    // Bare StrMenu; Page.Run / Report.Run (object-run); Page/Report.RunModal
-    // (static keyword receiver OR a Page/Report-typed variable receiver).
+    // Bare StrMenu; Page.Run / Report.Run (object-run); Run / RunModal on the
+    // static keyword receiver OR a Page/Report-typed variable receiver (`Run` on
+    // a variable was missed, G15).
     for cs in &call_sites {
         let matched = match &cs.callee {
             PCallee::Bare { name } => name.to_lowercase() == "strmenu",
@@ -1001,7 +1002,8 @@ pub(crate) fn direct_facts_for_routine(
                 object_kind == "Page" || object_kind == "Report"
             }
             PCallee::Member { receiver, method } => {
-                if method.to_lowercase() != "runmodal" {
+                let method = method.to_lowercase();
+                if method != "runmodal" && method != "run" {
                     false
                 } else {
                     let r = receiver.to_lowercase();

@@ -298,7 +298,17 @@ fn sort_blockers(mut blockers: Vec<ProveBlocker>) -> Vec<ProveBlocker> {
 // ---------------------------------------------------------------------------
 
 const DB_WRITE_TYPES: &[&str] = &["DB_INSERT", "DB_MODIFY", "DB_DELETE"];
-const UI_TYPES: &[&str] = &["UI_MESSAGE", "UI_CONFIRM", "UI_ERROR"];
+/// What `reaches-ui` counts as UI (G15): every UI effect type the digest emits.
+/// `UI_WINDOW_OPEN` (`Page.Run`/`RunModal`, `Report.Run`/`RunModal`, `StrMenu`)
+/// was missing, so a routine opening a page answered `no` with full coverage
+/// claimed, the worst kind of wrong answer for a verifier.
+const UI_TYPES: &[&str] = &[
+    "UI_MESSAGE",
+    "UI_CONFIRM",
+    "UI_ERROR",
+    "UI_WINDOW_OPEN",
+    "UI_HYPERLINK",
+];
 
 /// Case-insensitive match of `query` against the resourceDisplay or the
 /// trailing segment of the resourceId (after the last '/').

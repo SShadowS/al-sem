@@ -4,8 +4,8 @@
 //! - `extract_ui` — bare `Confirm`/`Message`/`Error` → ui-confirm/ui-message/
 //!   ui-error (presence facts, static, no resourceArgSource).
 //! - `extract_ui_window_open` — `StrMenu` (bare), `Page.Run`/`Report.Run`
-//!   (object-run), `Page.RunModal`/`Report.RunModal` (static keyword OR a
-//!   Page/Report-typed variable) → ui-window-open.
+//!   (object-run), `Run`/`RunModal` on the static keyword OR a Page/Report-typed
+//!   variable → ui-window-open.
 //! - `extract_events` — a routine with an `[EventSubscriber(...)]` attribute →
 //!   one `subscribe` fact (EventExtra eventClass=Integration). Publisher-decorated
 //!   routines emit NOTHING (publish is L4-injected).
@@ -81,7 +81,9 @@ pub fn extract_ui_window_open(
             PCallee::Member { receiver, method } => {
                 let method_lc = method.to_lowercase();
                 let receiver_lc = receiver.to_lowercase();
-                if method_lc == "runmodal" {
+                // `Run` too (G15): `MyPage.Run()` opens the page as `RunModal`
+                // does, only without waiting; it was missed.
+                if method_lc == "runmodal" || method_lc == "run" {
                     if receiver_lc == "page" || receiver_lc == "report" {
                         true
                     } else {

@@ -80,7 +80,15 @@ fn map_op(op: &str) -> Option<&'static str> {
 /// We read straight off the composed snapshot (no re-projection).
 type Fact = crate::engine::l5::snapshot::SnapshotCapabilityFact;
 
+/// An effect's type: [`map_op`] of its op, except a `Hyperlink(url)`, whose op is
+/// the file family's `open` but whose resource kind is `ui` (G15): it opens the
+/// URL in the user's browser, which is UI, not file I/O. It is `UI_HYPERLINK`, so
+/// `prove … reaches-ui` counts it and the ordering engine no longer grades it as
+/// file I/O inside a transaction (it is not in `ORDERING_RELEVANT`).
 fn effect_type_of(fact: &Fact) -> Option<&'static str> {
+    if fact.op == "open" && fact.resource_kind == "ui" {
+        return Some("UI_HYPERLINK");
+    }
     map_op(&fact.op)
 }
 
@@ -4739,7 +4747,8 @@ pub(crate) fn ordering_kept_roots(
     let mut ui_sink: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut db_write: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for f in &snap.capability_facts {
-        match map_op(&f.op) {
+        // `effect_type_of`, not `map_op`: the same type the engine grades (G15).
+        match effect_type_of(f) {
             Some("HTTP") | Some("FILE") => {
                 ext_io.insert(f.subject.as_str());
             }

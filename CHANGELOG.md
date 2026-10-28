@@ -98,6 +98,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`prove … reaches-ui` sees pages and reports opening, and `Hyperlink`** (G15). It
+  counted only `UI_MESSAGE`, `UI_CONFIRM` and `UI_ERROR`, so the `UI_WINDOW_OPEN` the
+  digest already had for `Page.Run`/`RunModal`, `Report.Run`/`RunModal` and `StrMenu`
+  was ignored: Continia DO's `CDO Signature FactBox` field trigger `OnDrillDown`
+  (`Page.Run(Page::"CDO E-Mail Signature List", Signature)`) answered `no` with
+  complete coverage claimed. `Run()` on a Page- or Report-typed variable produced no
+  UI fact at all (only `RunModal` did), in both the cone's and the body's extractor.
+  And `Hyperlink(url)` (op `open`, resource kind `ui`) was typed `FILE` by op alone,
+  so it read as file I/O; it is now `UI_HYPERLINK`, which `reaches-ui` counts and the
+  ordering engine does not grade (the ordering prefilter `ordering_kept_roots` reads
+  the same type). No golden and no DO finding moved. Test:
+  `cli_prove_reaches_ui::every_ui_opening_call_reaches_ui` (a no-UI control keeps
+  `no`); each of the three fixes, removed alone, fails it.
 - **`[InternalEvent]` routines are event publishers** (G10). Both routine-kind rules
   (`ir_walk::ir_routine_kind`, which the model uses, and `engine::snapshot`'s
   `classify_kind_ir`) and the `.app`-symbols side (`symbol_reference::parse_method`,
