@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`prove` follows the table a record argument holds into `case RecRef.Number`**
+  (G33). A routine that takes a record as a `Variant`, reads its table with
+  `RecRef.GetTable(Variant)` and branches on `case RecRef.Number of
+  Database::"T": …` runs a branch only for the table its caller passes. G23's
+  per-root reachability (`literal_reach`) now carries, next to literal Booleans, the
+  table of each such parameter: a call binds it from a record variable of known table
+  (the implicit `Rec` included) or forwards the caller's own, and a branch (an `else`
+  for a table no branch names) whose table contradicts it cannot run. The `case` and
+  its branches are marked in the control-flow tree (`PCFNNode::table_case`). Sound
+  limits: a local RecordRef only, bound by one `GetTable` of a by-value `Variant`
+  nothing assigns; a call passing either on must sit inside that `case`, which must
+  be in no loop. Dependency writes grouped at a boundary drop a resource whose every
+  originating operation cannot run (`dead_group_resources`). On Continia DO,
+  `ApprovalsMgmt.PreventDeletingRecordWithOpenApprovalEntry`'s `Gen. Journal Batch`
+  branch no longer reaches the workflow engine from a Requisition Line delete; its
+  `Requisition Wksh. Name` branch, which that caller does pass, still does, so the
+  claims' answers do not move. Test `cli_prove_table_branches`.
 - **`prove` and `digest` start inside a dependency** (G31). A dependency routine named
   by its StableRoutineId is a root (a display name still selects only the
   workspace's). Rule B (spec 2026-10-23 §14.3.5) ends a workspace root's witness at

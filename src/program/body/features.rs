@@ -39,6 +39,7 @@
 //!   - `PCFNNode.is_case_else`
 //!   - `PCFNNode.source_range`
 //!   - `PCFNNode.path_hint`
+//!   - `PCFNNode.table_case`
 
 use super::operation_order::{OperationOrder, ScopeFrame};
 use serde::{Deserialize, Serialize};
@@ -637,6 +638,20 @@ pub struct PCFNNode {
     /// say ([`PathHint`]). EXCLUDED from `PartialEq`.
     #[serde(skip, default)]
     pub path_hint: Option<PathHint>,
+    /// In-memory ONLY (G33): a `case` on a RecordRef's table number, or one of
+    /// its branches' tables ([`TableCase`]). EXCLUDED from `PartialEq`.
+    #[serde(skip, default)]
+    pub table_case: Option<TableCase>,
+}
+
+/// G33: what a `case R.Number of Database::"T": …` says about the tables.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TableCase {
+    /// On the `case`: `R`, folded (`R.Number`, `R.Number()`, parenthesized).
+    On(String),
+    /// On a `case-branch` whose every pattern is `Database::"T"`: the tables'
+    /// logical names, folded. A branch with any other pattern has none.
+    Tables(Vec<String>),
 }
 
 /// In-memory-only facts on a [`PCFNNode`] for path walks (#343,
@@ -838,7 +853,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 12, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 13, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

@@ -3247,6 +3247,13 @@ pub struct DigestEffectResult {
     /// order (#160 step 9 D2 (6)): `detail` lists at most 10, prove matches
     /// every member. Not serialized; empty off a group.
     pub group_resources: Vec<(String, String)>,
+    /// G33: per group resource, its facts' originating operations (`None`
+    /// when one fact names none). Not serialized; empty off a group.
+    pub group_resource_ops: Vec<(String, Option<Vec<String>>)>,
+    /// G33: the group resources the root cannot reach once literal and table
+    /// arguments are followed ([`crate::engine::l5::literal_reach`]): prove
+    /// matches none of them. Set only for `prove`'s read; not serialized.
+    pub dead_group_resources: Vec<String>,
     /// G23: the root cannot reach the effect once literal Boolean arguments
     /// are followed ([`crate::engine::l5::literal_reach`]). Set only for
     /// `prove`'s read; not serialized.
@@ -3868,6 +3875,9 @@ fn digest_one_root<'i>(
             /// Rule B (spec §14.3.5 item 3): a grouped boundary effect, its
             /// boundary and its resources (resource id → display or id).
             group: Option<(Rc<BoundaryEnd>, BTreeMap<String, String>)>,
+            /// G33: a group's facts' originating operations per resource;
+            /// `None` once one of its facts names no operation.
+            group_ops: BTreeMap<String, Option<BTreeSet<String>>>,
         }
         let mut effect_map: Vec<(String, AccumulatedEffect)> = Vec::new();
         // O(1) key → position index over effect_map (same keys, same positions —
@@ -4085,6 +4095,17 @@ fn digest_one_root<'i>(
                             resource_display_of(fact, &idx.stable_id_to_display)
                                 .unwrap_or_else(|| r.clone())
                         });
+                        let ops = acc
+                            .group_ops
+                            .entry(r.clone())
+                            .or_insert_with(|| Some(BTreeSet::new()));
+                        match (&fact.witness_operation_id, ops.as_mut()) {
+                            (Some(op), Some(set)) => {
+                                set.insert(op.clone());
+                            }
+                            (None, _) => *ops = None,
+                            _ => {}
+                        }
                     }
                 };
 
@@ -4124,6 +4145,7 @@ fn digest_one_root<'i>(
                             fact.witness_operation_id.iter().cloned().collect()
                         },
                         group: bnd.clone().map(|b| (b, BTreeMap::new())),
+                        group_ops: BTreeMap::new(),
                     };
                     merge(&mut acc);
                     effect_map.push((key, acc));
@@ -4272,7 +4294,13 @@ fn digest_one_root<'i>(
                 origin_operation_ids: acc.origin_operation_ids.into_iter().collect(),
                 scoped_guarantees: Vec::new(),
                 group_resources,
+                group_resource_ops: acc
+                    .group_ops
+                    .into_iter()
+                    .map(|(r, ops)| (r, ops.map(|s| s.into_iter().collect())))
+                    .collect(),
                 literal_unreachable: false,
+                dead_group_resources: Vec::new(),
             });
         }
 

@@ -2423,6 +2423,7 @@ mod walk_paths_tests {
             is_case_else: false,
             source_range: None,
             path_hint: None,
+            table_case: None,
         }
     }
     fn call(id: &str) -> PCFNNode {

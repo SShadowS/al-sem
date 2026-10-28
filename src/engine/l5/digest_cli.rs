@@ -1310,9 +1310,14 @@ pub(crate) fn digest_effects_each(
     if gaps_in_cone {
         let reach = crate::engine::l5::literal_reach::LiteralReach::new(&tree.typed_edges, model);
         for entry in &mut all_entries {
-            let dead = reach.unreachable_effects(&entry.routine_id, &entry.effects);
+            let (dead, dead_resources) =
+                reach.unreachable_effects(&entry.routine_id, &entry.effects);
             for i in dead {
                 entry.effects[i].literal_unreachable = true;
+            }
+            // G33: a group's resources reached only through code that cannot run.
+            for (i, resources) in dead_resources {
+                entry.effects[i].dead_group_resources = resources;
             }
             // A listed witness path that cannot run is not evidence: drop it.
             // When none is left for a still-reachable effect, a live path exists
@@ -1621,7 +1626,12 @@ pub fn run_digest_query_full_from_entries(
                     guarantees,
                     fact_id: eff.fact_id.clone(),
                     scoped_guarantees: eff.scoped_guarantees.clone(),
-                    group_resources: std::mem::take(&mut eff.group_resources),
+                    // G33: a resource the root cannot reach is no member prove
+                    // matches (`literal_reach`).
+                    group_resources: std::mem::take(&mut eff.group_resources)
+                        .into_iter()
+                        .filter(|(id, _)| !eff.dead_group_resources.contains(id))
+                        .collect(),
                     origin_operation_ids: eff.origin_operation_ids.clone(),
                     effect_is_kt: is_known_temp_state(eff.temp_state.as_ref()),
                     literal_unreachable: eff.literal_unreachable,

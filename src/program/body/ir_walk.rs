@@ -1399,6 +1399,7 @@ fn cfn_node(kind: &str) -> PCFNNode {
         is_case_else: false,
         source_range: None,
         path_hint: None,
+        table_case: None,
     }
 }
 
@@ -1594,6 +1595,46 @@ impl<'a> IrCfn<'a> {
         leaf
     }
 
+    /// G33: `R` (folded) when `e` is `R.Number` (`R.Number()` too), parentheses
+    /// removed.
+    fn number_receiver(&self, mut e: ExprId) -> Option<String> {
+        use ExprKind::*;
+        while let Parenthesized(x) = &self.ir().expr(e).kind {
+            e = *x;
+        }
+        let member = match &self.ir().expr(e).kind {
+            Call { function, args } if args.is_empty() => *function,
+            _ => e,
+        };
+        match &self.ir().expr(member).kind {
+            Member { object, member, .. } if member.eq_ignore_ascii_case("number") => {
+                match &self.ir().expr(*object).kind {
+                    Identifier(n) | QuotedIdentifier(n) => Some(n.to_ascii_lowercase()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// G33: the logical table name (folded) of a `Database::"T"` / `Database::T`
+    /// pattern, or `None` for any other pattern (a number included).
+    fn database_table(&self, e: ExprId) -> Option<String> {
+        let ExprKind::DatabaseReference(text) = &self.ir().expr(e).kind else {
+            return None;
+        };
+        let (kw, name) = text.split_once("::")?;
+        if !kw.trim().eq_ignore_ascii_case("database") {
+            return None;
+        }
+        let name = name.trim();
+        if name.parse::<i64>().is_ok() {
+            return None;
+        }
+        let logical = super::scope::unescape_al_identifier(&strip_quote_chars(name));
+        Some(logical.to_lowercase())
+    }
+
     fn simple_guard(&self, cond: ExprId) -> Option<PConditionGuard> {
         use ExprKind::*;
         let e = self.ir().expr(cond);
@@ -1709,10 +1750,19 @@ impl<'a> IrCfn<'a> {
                 else_block,
             } => {
                 let mut branch_cfns = Vec::new();
+                let on_number = self.number_receiver(*scrutinee);
                 for br in branches {
                     let mut b = cfn_node("case-branch");
                     b.source_range = self.range_of(&br.origin);
                     b.children = Some(vec![self.build_block(br.body)]);
+                    if on_number.is_some() {
+                        b.table_case = br
+                            .patterns
+                            .iter()
+                            .map(|&p| self.database_table(p))
+                            .collect::<Option<Vec<_>>>()
+                            .map(super::features::TableCase::Tables);
+                    }
                     branch_cfns.push(b);
                 }
                 if let Some(eb) = else_block {
@@ -1725,6 +1775,7 @@ impl<'a> IrCfn<'a> {
                 let mut n = cfn_node("case");
                 n.children = Some(branch_cfns);
                 n.condition_leaves = some_if(self.harvest_vec(*scrutinee));
+                n.table_case = on_number.map(super::features::TableCase::On);
                 n
             }
             While { cond, body } => {

@@ -553,13 +553,17 @@ fn writes_caller_dependent(eff: &DigestEffectFull) -> bool {
             .all(|s| *s == "known(true)" || s.starts_with("parameter-dependent"))
 }
 
-/// A reachable table write that names no table (no resource, no boundary
-/// group's resources) and is not known to write a temporary record.
+/// A reachable table write that names no table (no resource, not a boundary
+/// group, which names its resources) and is not known to write a temporary
+/// record. A group whose every resource cannot run (G33) names none any more,
+/// and is no unknown write.
 fn writes_unknown_table(eff: &DigestEffectFull) -> bool {
     DB_WRITE_TYPES.contains(&eff.effect_type.as_str())
         && !eff.literal_unreachable
-        && !eff.detail.iter().any(|(k, _)| k == "resourceId")
-        && eff.group_resources.is_empty()
+        && !eff
+            .detail
+            .iter()
+            .any(|(k, _)| k == "resourceId" || k == "boundary")
         && !writes_only_temporary(eff)
 }
 

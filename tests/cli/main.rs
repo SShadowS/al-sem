@@ -136,6 +136,7 @@ mod cli_prove_loaded_subscribers;
 mod cli_prove_platform_natives;
 mod cli_prove_publisher_scoped;
 mod cli_prove_reaches_ui;
+mod cli_prove_table_branches;
 mod cli_prove_table_writes;
 mod cli_prove_temp_writes;
 mod cli_prove_throws_error;
