@@ -2157,6 +2157,62 @@ fn entry_trigger_name(kind: ObjectKind) -> &'static str {
     }
 }
 
+/// The triggers a run of a page, report or XMLport reaches with no user acting
+/// on a control, as (object-level names, member-level names), folded; `None`
+/// for a codeunit (its `OnRun` alone, [`entry_trigger_name`]).
+///
+/// A run is the object's whole lifecycle, not one trigger: a page's
+/// `OnAfterGetRecord` or `OnQueryClosePage` runs in every `RunModal`, and a
+/// report's dataitem triggers in every run. Only `OnOpenPage` was followed, so
+/// a `no` could miss a write in `OnAfterGetRecord`, and a page declaring only
+/// `OnQueryClosePage` (Continia DO's `CDO To Language PromptDialog`) left the
+/// run unresolved. Triggers a user's action runs (`OnAction`, a field's
+/// `OnValidate`, `OnInsertRecord`/`OnModifyRecord`/`OnDeleteRecord`) are not
+/// followed: platform entry points are not modelled (the call graph's
+/// `platformEntryPointsNotModelled` assumption). A page part's triggers are
+/// not followed either.
+fn run_triggers(kind: ObjectKind) -> Option<(&'static [&'static str], &'static [&'static str])> {
+    match kind {
+        ObjectKind::Page => Some((
+            &[
+                "oninit",
+                "onopenpage",
+                "onfindrecord",
+                "onnextrecord",
+                "onaftergetrecord",
+                "onaftergetcurrrecord",
+                "onnewrecord",
+                "onqueryclosepage",
+                "onclosepage",
+                "onpagebackgroundtaskcompleted",
+                "onpagebackgroundtaskerror",
+            ],
+            &[],
+        )),
+        ObjectKind::Report => Some((
+            &["oninitreport", "onprereport", "onpostreport"],
+            &["onpredataitem", "onaftergetrecord", "onpostdataitem"],
+        )),
+        ObjectKind::XmlPort => Some((
+            &["oninitxmlport", "onprexmlport", "onpostxmlport"],
+            &[
+                "onbeforepassvariable",
+                "onbeforepassfield",
+                "onafterassignvariable",
+                "onafterassignfield",
+                "onafterinitrecord",
+                "onbeforeinsertrecord",
+                "onafterinsertrecord",
+                "onbeforemodifyrecord",
+                "onaftermodifyrecord",
+                "onprexmlitem",
+                "onaftergetrecord",
+            ],
+        )),
+        _ => None,
+    }
+}
+
 /// Build a single Opaque boundary route (target exists but is not in our source).
 fn opaque_boundary_route(key: AbiRoutineKey) -> Route {
     Route {
@@ -2196,14 +2252,35 @@ fn dispatch_entry_trigger(
     surface: &DeclSurface,
 ) -> (DispatchShape, SetCompleteness, Vec<Route>) {
     let trigger_name = entry_trigger_name(object_kind);
-    // The object-level trigger of `object` (`enclosing_member_lc == None`),
-    // else any routine of that name.
-    let entry_of = |object: &ObjectNodeId| -> Option<&RoutineNodeId> {
-        let candidates = index.routines_in_object(graph, object, trigger_name);
-        candidates
-            .clone()
-            .find(|r| r.enclosing_member_lc.is_none())
-            .or_else(|| candidates.clone().next())
+    // Every trigger of `object` a run reaches ([`run_triggers`]); for a
+    // codeunit, the object-level `OnRun` (`enclosing_member_lc == None`), else
+    // any routine of that name.
+    let entries_of = |object: &ObjectNodeId| -> Vec<&RoutineNodeId> {
+        let Some((object_level, member_level)) = run_triggers(object_kind) else {
+            let candidates = index.routines_in_object(graph, object, trigger_name);
+            return candidates
+                .clone()
+                .find(|r| r.enclosing_member_lc.is_none())
+                .or_else(|| candidates.clone().next())
+                .into_iter()
+                .collect();
+        };
+        let mut out: Vec<&RoutineNodeId> = Vec::new();
+        for name in object_level {
+            out.extend(
+                index
+                    .routines_in_object(graph, object, name)
+                    .filter(|r| r.enclosing_member_lc.is_none()),
+            );
+        }
+        for name in member_level {
+            out.extend(
+                index
+                    .routines_in_object(graph, object, name)
+                    .filter(|r| r.enclosing_member_lc.is_some()),
+            );
+        }
+        out
     };
     // COLLAPSE-MARKER GUARD (Task 2 review fix): this lookup bypasses
     // `resolve_in_object`'s name+arity selection entirely (it picks by ROLE —
@@ -2219,13 +2296,11 @@ fn dispatch_entry_trigger(
     };
 
     let mut routes = Vec::new();
-    match entry_of(target_id) {
-        Some(rid) => routes.push(route_to(rid, target_tier)),
-        None if target_tier == TrustTier::SymbolOnly => {
-            routes.push(opaque_entry_route(target_id, trigger_name))
-        }
-        None => {}
+    let entries = entries_of(target_id);
+    if entries.is_empty() && target_tier == TrustTier::SymbolOnly {
+        routes.push(opaque_entry_route(target_id, trigger_name));
     }
+    routes.extend(entries.into_iter().map(|rid| route_to(rid, target_tier)));
 
     let extensions: &[ObjectNodeId] = match object_kind {
         ObjectKind::Page | ObjectKind::Report => {
@@ -2255,9 +2330,11 @@ fn dispatch_entry_trigger(
             .iter()
             .find(|o| &o.id == ext_id)
             .map_or(TrustTier::Workspace, |o| o.tier);
-        if let Some(rid) = entry_of(ext_id) {
-            routes.push(route_to(rid, ext_tier));
-        }
+        routes.extend(
+            entries_of(ext_id)
+                .into_iter()
+                .map(|rid| route_to(rid, ext_tier)),
+        );
     }
     (
         DispatchShape::Multicast,

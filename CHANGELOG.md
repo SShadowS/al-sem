@@ -234,6 +234,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A page, report or XMLport run reaches its whole lifecycle, and a run with none
+  runs no AL code.** A run followed one entry trigger (`OnOpenPage`, `OnPreReport`,
+  `OnPreXmlPort`), so a `no` could miss a write or Commit in `OnAfterGetRecord`,
+  `OnQueryClosePage` or a report's dataitem triggers (d35's filed limit D3a). It now
+  reaches every trigger a run runs with no user acting on a control
+  (`resolver::run_triggers`): a page's `OnInit`, `OnOpenPage`, `OnFindRecord`,
+  `OnNextRecord`, `OnAfterGetRecord`, `OnAfterGetCurrRecord`, `OnNewRecord`,
+  `OnQueryClosePage`, `OnClosePage` and background-task triggers; a report's
+  `OnInitReport`/`OnPreReport`/`OnPostReport` and its dataitems'
+  `OnPreDataItem`/`OnAfterGetRecord`/`OnPostDataItem`; an XMLport's object and
+  element triggers. A user's action (`OnAction`, a field's `OnValidate`, record
+  edits) stays under `platformEntryPointsNotModelled`, as do page parts. A run of an
+  object whose source is loaded and declares none of these runs no AL code: the
+  model's edge is `Builtin`, still naming the object (it was `Opaque`, an unresolved
+  run that `prove` and every cone blocked on). Continia DO: `ImportLines.RunModal`,
+  `DialogLanguage.RunModal` (a PromptDialog declaring only `OnQueryClosePage`).
+- **A computed `Page.RunModal(<n>)` (keyword member form) makes the cone partial.**
+  The combined graph turned only the `Codeunit.Run(<n>)` callee shape into an
+  unresolved object run; `Page.RunModal(<n>)`, `Report.Run(<n>)` were skipped, so a
+  cone through one counted as complete and d35 reported nothing
+  (`combined_graph::keyword_run_kind`). `prove` already blocked on it. Tests
+  `cli_d35_unknown_commit` V6, V7.
 - **A `this.Global` argument is typed, so the overload it picks resolves.** Argument
   typing (`arg_dispatch::type_one_arg`) read a bare identifier, a literal and
   `Rec.Field`, but not `this.X`, which names an object global only. A call

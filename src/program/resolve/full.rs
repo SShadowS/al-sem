@@ -3218,8 +3218,13 @@ mod tests {
             })
             .collect();
         got.sort();
+        // Each run reaches the XMLport's whole run: its `OnPreXmlPort` and the
+        // element trigger `OnBeforePassVariable` (`resolver::run_triggers`).
         let want: Vec<(String, String)> = [
             ("onbeforepassvariable", "XmlPortInstance::skip"),
+            ("p", "onbeforepassvariable"),
+            ("p", "onbeforepassvariable"),
+            ("p", "onbeforepassvariable"),
             ("p", "onprexmlport"),
             ("p", "onprexmlport"),
             ("p", "onprexmlport"),

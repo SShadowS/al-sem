@@ -1699,7 +1699,27 @@ impl<'a> Converter<'a> {
                     .site_facts
                     .get(&ce.obligation_id)
                     .and_then(|f| f.run_target.as_ref());
+                // A run of an object whose SOURCE is loaded and declares no
+                // trigger the run reaches (`resolver::run_triggers`) runs no
+                // AL code: the platform shows the page or runs the object,
+                // nothing is unknown. Was `Opaque`, which `prove` blocks on.
+                let source_loaded = target.and_then(|t| self.graph.object(t)).is_some_and(|o| {
+                    o.tier != crate::snapshot::TrustTier::SymbolOnly && !o.parse_incomplete
+                });
                 match target {
+                    // The edge keeps naming the object it runs.
+                    Some(t) if source_loaded => {
+                        if t.app == self.primary {
+                            c.adapter_workspace_run_no_entry += 1;
+                            e.dispatch_kind = object_run_dispatch_kind(match t.kind {
+                                ObjectKind::Page => "Page",
+                                ObjectKind::Report => "Report",
+                                _ => "Codeunit",
+                            });
+                        }
+                        e.resolution = Resolution::Builtin;
+                        e.external_type_ref = self.type_ref(&object_key(t));
+                    }
                     Some(t) if t.app != self.primary => {
                         e.resolution = external;
                         e.external_type_ref = self.type_ref(&object_key(t));

@@ -196,8 +196,7 @@ table 50100 "Repro Order"
 }
 "#;
 
-/// No `OnOpenPage`: a run of this page reaches no routine, which the analyze path
-/// records as `object-run-unresolved`, so the subscriber's commit answer is UNKNOWN.
+/// The page the subscriber's helper names; the run itself is dynamic (below).
 const D35_PAGE: &str = r#"
 page 50100 "Reason Dialog"
 {
@@ -216,11 +215,12 @@ codeunit 50100 "Delete Governor"
             PromptForReason();
     end;
 
+    // A run whose target is computed: `object-run-unresolved`, so the
+    // subscriber's commit answer is UNKNOWN. (A run of a page declaring no
+    // trigger runs no AL code, so it no longer makes the answer unknown.)
     local procedure PromptForReason()
-    var
-        ReasonPage: Page "Reason Dialog";
     begin
-        if ReasonPage.RunModal() <> Action::OK then
+        if Page.RunModal(Random(50100)) <> Action::OK then
             Error('Canceled.');
     end;
 }

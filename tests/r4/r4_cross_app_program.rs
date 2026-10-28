@@ -1721,12 +1721,14 @@ fn a_local_event_raised_with_temporary_records_has_temporary_subscribers() {
     assert!(wrong.is_empty(), "cases {wrong:?}");
 }
 
-/// S9.0d: a run of a DEPENDENCY page whose source declares no `OnOpenPage`
-/// reaches no routine (the resolver no longer invents an Opaque trigger), and
-/// the model still sees the dependency callee it saw before: an external
-/// callee naming that page, `PageRun` for `Page.Run(..)` and a method call for
-/// `PageVar.RunModal()`. Without the run target the adapter would turn both
-/// into the workspace shape (`PageRun`, no external type).
+/// S9.0d: a run of a DEPENDENCY page whose source declares no trigger a run
+/// reaches (`resolver::run_triggers`) reaches no routine (the resolver invents
+/// no Opaque trigger), and the model still names the page it runs: `PageRun`
+/// for `Page.Run(..)` and a method call for `PageVar.RunModal()`, each with the
+/// page as its external type. Its source is loaded, so the run is known to run
+/// no AL code: `Builtin`, no unknown (it was `ExternalTarget`/`Opaque`, which
+/// `prove` blocked on). Without the run target the adapter would turn both
+/// into the workspace shape (`PageRun`).
 #[test]
 fn a_run_of_a_dependency_page_without_entry_trigger_names_the_page() {
     use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
@@ -1781,8 +1783,8 @@ fn a_run_of_a_dependency_page_without_entry_trigger_names_the_page() {
     assert_eq!(
         got,
         vec![
-            r#"Method ExternalTarget to=false ext=Some(("Page", "Dep Page"))"#.to_string(),
-            r#"PageRun Opaque to=false ext=Some(("Page", "Dep Page"))"#.to_string(),
+            r#"Method Builtin to=false ext=Some(("Page", "Dep Page"))"#.to_string(),
+            r#"PageRun Builtin to=false ext=Some(("Page", "Dep Page"))"#.to_string(),
         ]
     );
 }

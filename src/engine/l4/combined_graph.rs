@@ -569,6 +569,19 @@ fn simple_uncertainty_op(kind: &str, operation_id: &str) -> Uncertainty {
 // al-sem's `buildTypedEdges`. SourceAnchors are NOT carried (dropped at R3a-1).
 // ---------------------------------------------------------------------------
 
+/// The object kind (`"Page"`, …) of a keyword run in member form
+/// (`Page.RunModal(..)`, `Codeunit.Run(..)`), or `None` for any other member call.
+fn keyword_run_kind(receiver: &str, method: &str) -> Option<String> {
+    let kind = match receiver.to_ascii_lowercase().as_str() {
+        "page" => "Page",
+        "codeunit" => "Codeunit",
+        "report" => "Report",
+        "xmlport" => "XmlPort",
+        _ => return None,
+    };
+    matches!(method.to_ascii_lowercase().as_str(), "run" | "runmodal").then(|| kind.to_string())
+}
+
 /// Build a ValueSource for an object-run callsite's target id (al-sem
 /// `objectRunTargetIdSource`).
 fn object_run_target_id_source(callee: &PCallee) -> ValueSource {
@@ -820,8 +833,11 @@ fn build_typed_edges(
             }
             // method unresolved / interface non-maybe etc. — skip
         } else {
-            // Unresolved edges
-            if is_object_run_kind(ce.dispatch_kind.as_str()) {
+            // Unresolved edges. A run of a source object that declares no
+            // trigger the run reaches is `Builtin` (`program_calls`): it runs no
+            // AL code, so it is no unresolved run.
+            if is_object_run_kind(ce.dispatch_kind.as_str()) && ce.resolution != Resolution::Builtin
+            {
                 let Some(object_type) = dispatch_kind_to_object_type(ce.dispatch_kind.as_str())
                 else {
                     continue;
@@ -845,8 +861,16 @@ fn build_typed_edges(
                     fires: None,
                 });
             } else if ce.dispatch_kind == DispatchKind::Dynamic {
-                // Dynamic dispatch — objectType from the callee when it's object-run.
-                if let PCallee::ObjectRun { object_kind, .. } = &call_site.callee {
+                // Dynamic dispatch — objectType from the callee when it's object-run:
+                // `Codeunit.Run(<dynamic>)`, or the keyword member form
+                // `Page.RunModal(<dynamic>)` (it was skipped, so its cone counted
+                // as complete).
+                let object_kind = match &call_site.callee {
+                    PCallee::ObjectRun { object_kind, .. } => Some(object_kind.clone()),
+                    PCallee::Member { receiver, method } => keyword_run_kind(receiver, method),
+                    _ => None,
+                };
+                if let Some(object_kind) = object_kind {
                     let target_id_source = object_run_target_id_source(&call_site.callee);
                     typed_edges.push(TypedEdge {
                         kind: "object-run-unresolved".to_string(),
@@ -859,7 +883,7 @@ fn build_typed_edges(
                         interface_name: None,
                         candidate_count: None,
                         target_object: None,
-                        object_type: Some(object_kind.clone()),
+                        object_type: Some(object_kind),
                         target_id_source: Some(target_id_source),
                         trigger_kind: None,
                         fires: None,
