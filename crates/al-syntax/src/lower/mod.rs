@@ -268,11 +268,13 @@ fn lower_object(
     // Report dataitems and XmlPort table elements (name, source-table) — the name is
     // in scope as a record var across all the object's routines. Empty otherwise.
     let mut dataitems = Vec::new();
+    let mut temporary_dataitems = Vec::new();
     if matches!(
         kind,
         ObjectKind::Report | ObjectKind::ReportExtension | ObjectKind::XmlPort
     ) {
         collect_dataitems(node, source, &mut dataitems);
+        collect_temporary_dataitems(node, source, &mut temporary_dataitems);
     }
     let mut query_columns = Vec::new();
     if kind == ObjectKind::Query {
@@ -345,6 +347,7 @@ fn lower_object(
         protected_globals,
         properties,
         dataitems,
+        temporary_dataitems,
         query_columns,
         extends_target,
         implements,
@@ -770,6 +773,47 @@ fn collect_dataitems(node: RawNode, source: &str, out: &mut Vec<(String, String)
         // no dataitems so the extra recursion is harmless.
         collect_dataitems(child, source, out);
     }
+}
+
+/// The names (as declared) of the report dataitems and XmlPort table elements
+/// under `node` whose own properties set `UseTemporary = true`.
+fn collect_temporary_dataitems(node: RawNode, source: &str, out: &mut Vec<String>) {
+    for child in node.named_children() {
+        let is_item = child.kind() == RawKind::ReportDataitem
+            || (child.kind() == RawKind::XmlportElement
+                && child
+                    .field(FieldName::ElementType)
+                    .is_some_and(|t| t.kind() == RawKind::TableelementKeyword));
+        if is_item && own_use_temporary(child, source) {
+            let name = child
+                .field(FieldName::Name)
+                .map(|n| ident_text(n, source))
+                .unwrap_or_default();
+            if !name.is_empty() {
+                out.push(name);
+            }
+        }
+        collect_temporary_dataitems(child, source, out);
+    }
+}
+
+/// Whether `item`'s OWN properties (not a nested dataitem's or element's, not
+/// a trigger's) include `UseTemporary = true`.
+fn own_use_temporary(item: RawNode, source: &str) -> bool {
+    item.named_children().into_iter().any(|c| match c.kind() {
+        RawKind::ReportDataitem
+        | RawKind::XmlportElement
+        | RawKind::Procedure
+        | RawKind::TriggerDeclaration => false,
+        RawKind::Property => {
+            let mut props = Vec::new();
+            lower_property(c, source, &mut props);
+            props
+                .iter()
+                .any(|p| p.name == "usetemporary" && p.value.trim().eq_ignore_ascii_case("true"))
+        }
+        _ => own_use_temporary(c, source),
+    })
 }
 
 /// Lower a `property` node (`name = value`) into `out`. Name lowercased; value is the

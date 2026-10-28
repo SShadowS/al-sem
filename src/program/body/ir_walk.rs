@@ -204,11 +204,27 @@ fn build_scope(
     source_table_name: Option<&str>,
 ) -> (Scope, bool) {
     let o = &file.objects[object_idx];
+    let object_procedure_names: HashSet<String> = o
+        .routines
+        .iter()
+        .map(|r| r.name.to_ascii_lowercase())
+        .collect();
+    // A report/xmlport dataitem is a record variable in every routine of the
+    // object (`ObjectDecl::dataitems`): `"Job Ledger Entry".Modify()` from a
+    // nested dataitem's trigger is a record op (Base Application's Update Job
+    // Item Cost). A name a procedure also has stays out (the resolver's
+    // dataitem lookup declines it the same way).
+    let dataitems = o
+        .dataitems
+        .iter()
+        .map(|(name, _)| name.to_ascii_lowercase())
+        .filter(|n| !object_procedure_names.contains(n));
     let mut globals: HashSet<String> = o
         .globals
         .iter()
         .filter(|v| is_record_ty(v))
         .map(|v| v.name.to_ascii_lowercase())
+        .chain(dataitems.clone())
         .collect();
     // Rec/xRec are record receivers by name convention regardless of object type.
     globals.insert("rec".to_string());
@@ -218,6 +234,7 @@ fn build_scope(
         .iter()
         .filter(|v| is_record_ty(v))
         .map(|v| v.name.to_ascii_lowercase())
+        .chain(dataitems)
         .collect();
     let implicit_rec = has_implicit_rec(o, source_table_name);
 
@@ -242,11 +259,6 @@ fn build_scope(
         frvars.insert("rec".to_string());
     }
     frvars.extend(params_locals);
-    let object_procedure_names: HashSet<String> = o
-        .routines
-        .iter()
-        .map(|r| r.name.to_ascii_lowercase())
-        .collect();
     (
         Scope {
             rvars,
@@ -2326,7 +2338,13 @@ pub fn ir_record_variables(
                 name: di_name.clone(),
                 // The IR keeps a `""`; the model stores the LOGICAL name (#240).
                 table_name: Some(super::scope::unescape_al_identifier(di_table)),
-                temp_state: ts_known(false),
+                // Physical unless the dataitem or table element declares
+                // `UseTemporary = true`.
+                temp_state: ts_known(
+                    o.temporary_dataitems
+                        .iter()
+                        .any(|t| t.eq_ignore_ascii_case(di_name)),
+                ),
                 is_parameter: false,
                 parameter_index: None,
                 scope: None,

@@ -263,6 +263,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A report dataitem or xmlport table element named as a receiver is a record
+  operation.** The body pass took only globals, parameters and locals as record
+  receivers, so `"Job Ledger Entry".Modify()` from a nested dataitem's trigger, or
+  `ICOutboxTrans.Insert()` on a table element, became a call the model could not
+  type: `digest` listed it `unresolved-receiver-type` and `prove` blocked on it
+  (Base Application's Update Job Item Cost; IC Outbox Imp/Exp: 25 such rows on one
+  Continia DO claim, now 0). A dataitem's `UseTemporary = true` is now read
+  (`ObjectDecl::temporary_dataitems`), so its record is temporary. A quoted
+  receiver (`"My Rec".Insert()`) missed its record variable in the record typing,
+  which compared the raw text with the logical name, so its table and temp state
+  stayed unknown. Test `dataitem_record_ops_are_record_operations`.
 - **A synthesized global the C# exposes as a property is declared and called by
   its AL name.** The runtime stores such a global in a backing field `δx` and
   reads it as `this.x`, so the global was declared `"δx"` and every call on it

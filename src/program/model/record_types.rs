@@ -30,6 +30,15 @@ use al_syntax::IdentifierFoldExt;
 
 use crate::program::body::node_util::strip_quotes;
 
+/// An operation's receiver as a variable-name key: the body pass keeps the
+/// receiver's raw text, so a quoted name (`"Job Ledger Entry".Modify()`) is
+/// matched LOGICAL (quotes stripped, `""` one `"`), lowercased, as variable
+/// names are stored. A quoted receiver missed its variable, so its table and
+/// temp state stayed unknown.
+fn op_variable_lc(raw: &str) -> String {
+    strip_quotes(raw).replace("\"\"", "\"").to_lowercase()
+}
+
 /// Extract the TABLE NAME from a record variable's `declaredType` string.
 ///
 ///   `Record "Sales Line"`   → `Sales Line`
@@ -168,7 +177,7 @@ pub fn resolve_routine_record_types(
     // because shadowed globals were never added) record var — honoring AL
     // shadowing without needing first-wins.
     for op in routine.record_operations.iter_mut() {
-        if let Some(&vi) = var_index_by_name.get(&op.record_variable_name.to_lowercase()) {
+        if let Some(&vi) = var_index_by_name.get(&op_variable_lc(&op.record_variable_name)) {
             let variable = &routine.record_variables[vi];
             op.record_variable_id = Some(variable.id.clone());
             if let Some(tid) = &variable.table_id {
@@ -197,7 +206,8 @@ pub fn resolve_routine_record_types(
         if op.table_id.is_some() {
             continue;
         }
-        let Some(decl) = variable_decl_by_name.get(&op.record_variable_name.to_lowercase()) else {
+        let Some(decl) = variable_decl_by_name.get(&op_variable_lc(&op.record_variable_name))
+        else {
             continue;
         };
         let Some(table_name) = record_table_name_of(decl) else {
@@ -364,7 +374,7 @@ pub fn resolve_routine_record_types(
 
             // Apply derived temp states to matching record ops.
             for op in routine.record_operations.iter_mut() {
-                let var_lc = op.record_variable_name.to_lowercase();
+                let var_lc = op_variable_lc(&op.record_variable_name);
                 if let Some(ts) = recref_temp.get(&var_lc) {
                     op.temp_state = Some(ts.clone());
                 }
@@ -437,7 +447,7 @@ pub fn resolve_routine_record_types(
             .collect();
         if !always_temp.is_empty() {
             for op in routine.record_operations.iter_mut() {
-                if always_temp.contains(&op.record_variable_name.to_lowercase()) {
+                if always_temp.contains(&op_variable_lc(&op.record_variable_name)) {
                     op.temp_state = Some(crate::program::body::scope::ts_known(true));
                 }
             }
