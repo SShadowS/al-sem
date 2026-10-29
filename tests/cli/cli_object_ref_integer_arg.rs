@@ -28,6 +28,14 @@ codeunit 50423 "DR Lib"
     procedure Check(var Rec: Record "DR T")
     begin
     end;
+
+    procedure Show(Kind: Option General,Fault)
+    begin
+    end;
+
+    procedure Show(Kind: Enum "DR E")
+    begin
+    end;
 }
 codeunit 50424 "DR Caller"
 {
@@ -43,6 +51,8 @@ codeunit 50424 "DR Caller"
         Lib.Add(1, E.AsInteger());
         // A value of the field's enum, never a variable.
         Lib.Check(T."Doc Type"::A);
+        // An enum type's `FromInteger` is a value of that enum: the exact match.
+        Lib.Show("DR E".FromInteger(0));
     end;
 }
 "#;
@@ -71,6 +81,6 @@ fn object_references_and_as_integer_are_integer_arguments() {
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stats JSON");
     let s = &v["primaryScoped"];
-    assert_eq!(s["resolvedSource"], 5, "{s}");
+    assert_eq!(s["resolvedSource"], 6, "{s}");
     assert_eq!(s["ambiguousResolved"], 0, "{s}");
 }

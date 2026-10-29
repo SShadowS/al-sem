@@ -1559,6 +1559,33 @@ fn type_call_result_arg_member(
                     };
                 }
                 CallerScopeSymbol::Found(Some(t)) => t,
+                // `"Enum Name".FromInteger(i)` on an enum type (no variable
+                // of that name): a value of that enum. Base Application's
+                // `ShowComments("Service Comment Line Type".FromInteger(Type))`
+                // over `(Option …)` / `(Enum …)` stayed ambiguous.
+                CallerScopeSymbol::NotFound
+                    if inner_arity == 1
+                        && unquote_identifier(member).fold_identifier() == "frominteger" =>
+                {
+                    let oref = ObjectRef::Name {
+                        raw: n.clone(),
+                        normalized_lc: n.fold_identifier(),
+                    };
+                    return match index.resolve_object_ref(
+                        graph,
+                        from.clone(),
+                        ObjectKind::Enum,
+                        &oref,
+                    ) {
+                        ObjectRefResolution::Unique(id) => ArgDispatchInfo {
+                            canonical: Some(CanonicalArgType::Object(id)),
+                            exact_text: Some(normalize_type_text(&format!("Enum \"{n}\""))),
+                            literal_kind: None,
+                            var_passable: false,
+                        },
+                        _ => ArgDispatchInfo::untyped(),
+                    };
+                }
                 _ => return ArgDispatchInfo::untyped(),
             }
         }
