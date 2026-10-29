@@ -597,8 +597,7 @@ impl<'a> LiteralReach<'a> {
         // (G33's included, where it knows more), and of its instance's globals.
         if let (Some(c), Some(fi)) = (ci, self.flow.index_of(caller)) {
             for &j in rel_params.into_iter().flatten() {
-                let atoms = self.flow.arg_atoms(fi, cs, j);
-                if let Some(set) = eval(&atoms, &b.tables, &b.globals) {
+                if let Some(set) = self.flow.arg_tables(fi, cs, j, &b.tables, &b.globals) {
                     out.tables.retain(|(k, _)| *k != j);
                     out.tables.push((j, set));
                 }

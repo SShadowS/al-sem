@@ -169,6 +169,108 @@ codeunit 50406 "RG Pages"
 }
 "#;
 
+/// G35: Base Application's workflow loop (`ExecuteResponses`) passes one
+/// Variant to every response by `var`. `ReleaseDocument` swaps it for the
+/// approved record only in its `Database::"Approval Entry"` branch, and
+/// `PostDocument` posts only a document. From a requisition batch neither
+/// branch can run, however often the loop goes round.
+const LOOP_SOURCE: &str = r#"table 50410 "CF Batch"
+{
+    fields { field(1; Code; Code[20]) { } }
+    keys { key(PK; Code) { } }
+}
+table 50411 "CF Approval"
+{
+    fields { field(1; Code; Code[20]) { } }
+    keys { key(PK; Code) { } }
+}
+table 50412 "CF Doc"
+{
+    fields { field(1; Code; Code[20]) { } }
+    keys { key(PK; Code) { } }
+}
+table 50413 "CF Log"
+{
+    fields { field(1; Code; Code[20]) { } }
+    keys { key(PK; Code) { } }
+}
+codeunit 50414 "CF Responses"
+{
+    procedure Responses(Variant: Variant)
+    var
+        Variant1: Variant;
+        i: Integer;
+    begin
+        Variant1 := Variant;
+        for i := 1 to 3 do
+            Execute(Variant1);
+    end;
+
+    local procedure Execute(var Variant: Variant)
+    begin
+        Inspect(Variant);
+        Release(Variant);
+        Post(Variant);
+    end;
+
+    local procedure Inspect(Variant: Variant)
+    var
+        Approval: Record "CF Approval";
+    begin
+        // Its own copy: the caller's Variant keeps what it held.
+        Variant := Approval;
+    end;
+
+    local procedure Release(var Variant: Variant)
+    var
+        Approval: Record "CF Approval";
+        RecRef: RecordRef;
+        TargetRecRef: RecordRef;
+    begin
+        RecRef.GetTable(Variant);
+        case RecRef.Number of
+            Database::"CF Approval":
+                begin
+                    Approval := Variant;
+                    TargetRecRef.Open(Database::"CF Doc");
+                    Variant := TargetRecRef;
+                end;
+        end;
+    end;
+
+    local procedure Post(Variant: Variant)
+    var
+        Log: Record "CF Log";
+        RecRef: RecordRef;
+    begin
+        RecRef.GetTable(Variant);
+        case RecRef.Number of
+            Database::"CF Doc":
+                begin
+                    Log.Code := 'X';
+                    Log.Insert();
+                end;
+        end;
+    end;
+}
+codeunit 50415 "CF Roots"
+{
+    procedure FromBatch(var Batch: Record "CF Batch")
+    var
+        Responses: Codeunit "CF Responses";
+    begin
+        Responses.Responses(Batch);
+    end;
+
+    procedure FromApproval(var Approval: Record "CF Approval")
+    var
+        Responses: Codeunit "CF Responses";
+    begin
+        Responses.Responses(Approval);
+    end;
+}
+"#;
+
 fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
     let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
         .args(args)
@@ -241,4 +343,46 @@ fn a_recordref_number_guard_reads_the_table_the_root_put_in() {
     // it before the guard.
     let event = prove("PrintEntryViaEvent");
     assert_eq!(event["answer"], "yes", "{event}");
+}
+
+#[test]
+fn a_branch_on_the_variants_table_rebinds_it_only_for_that_table() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"35353535-0000-4000-8000-000000000035","name":"CF","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(ws.join("src/a.al"), LOOP_SOURCE).unwrap();
+    let inv = alsem(
+        t.path(),
+        &["fingerprint", "ws", "--inventory-only", "--format", "json"],
+    );
+    let prove = |name: &str| -> serde_json::Value {
+        let id = inv["payload"]["routineInventory"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["routineName"] == name)
+            .unwrap_or_else(|| panic!("precondition: {name} is in the inventory"))
+            ["stableRoutineId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        alsem(
+            t.path(),
+            &["prove", "ws", &id, "writes-table:CF Log", "--deterministic"],
+        )["payload"]["result"]
+            .clone()
+    };
+    // Precondition: an approval is swapped for a document on one round of
+    // the loop and posted on the next.
+    let approval = prove("FromApproval");
+    assert_eq!(approval["answer"], "yes", "precondition: {approval}");
+
+    // A batch takes neither branch on any round: the log is not written.
+    let batch = prove("FromBatch");
+    assert_eq!(batch["answer"], "no", "{batch}");
 }

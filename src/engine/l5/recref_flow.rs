@@ -41,8 +41,10 @@
 //! the atoms under the parameter tables and globals one search state knows.
 
 use crate::engine::l5::snapshot::SnapshotGraphEdge;
-use crate::program::body::features::{PCFNNode, PCallSite, PCallee};
+use crate::program::body::features::{PCFNNode, PCallSite, PCallee, TableCase};
+use crate::program::model::workspace::ModelParameter;
 use crate::program::model::workspace::{Model, ModelRoutine};
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
@@ -97,19 +99,39 @@ fn top() -> Atoms {
     Atoms::from([Atom::Top])
 }
 
+/// Adds atoms; `Top` does not absorb the others, so what a value depends on
+/// (its parameters and globals) stays readable for [`RecRefFlow::relevance`].
 fn add(into: &mut Atoms, from: impl IntoIterator<Item = Atom>) -> bool {
-    if into.contains(&Atom::Top) {
-        return false;
-    }
     let before = into.len();
-    for a in from {
-        if a == Atom::Top {
-            *into = top();
-            return true;
-        }
-        into.insert(a);
-    }
+    into.extend(from);
     into.len() != before
+}
+
+/// G35: a condition a fact runs under: the RecordRef variable, whether its
+/// table must be IN the tables (else NOT in them), the folded tables.
+type Cond = (String, bool, Arc<[String]>);
+
+/// A source region `[from, to)` whose code runs only under a condition.
+type CondRegion = ((u32, u32), (u32, u32), Cond);
+
+/// A fact: the variable, what it may take on, and where it sits.
+type FixedFact = (String, Part, Option<(u32, u32)>);
+
+/// A value under known inputs: the tables, or `None` for anything.
+pub(crate) type Val = Option<TSet>;
+
+fn union_val(a: &Val, b: &Val) -> Val {
+    match (a, b) {
+        (Some(x), Some(y)) => {
+            let s: BTreeSet<Arc<str>> = x.iter().chain(y.iter()).cloned().collect();
+            Some(s.into_iter().collect())
+        }
+        _ => None,
+    }
+}
+
+fn empty_val() -> Val {
+    Some(Arc::from([]))
 }
 
 /// A tracked variable of one routine.
@@ -132,10 +154,16 @@ enum Part {
 #[derive(Debug, Default)]
 struct Facts {
     tracked: HashMap<String, VarKind>,
-    /// Facts that do not depend on other routines.
-    fixed: Vec<(String, Part)>,
+    /// Facts that do not depend on other routines, with where they sit.
+    fixed: Vec<FixedFact>,
     /// (call site index, argument position, variable): the variable passed there.
     passed: Vec<(usize, usize, String)>,
+    /// G35: the conditions each fact runs under (parallel to `fixed`/`passed`).
+    fixed_conds: Vec<Vec<Cond>>,
+    passed_conds: Vec<Vec<Cond>>,
+    /// Variables an alias rebinding reaches (a by-value Variant parameter in
+    /// it may hand a changed RecordRef back).
+    alias_shared: HashSet<String>,
 }
 
 /// Per routine: the atoms of each tracked own variable, and of each global it
@@ -168,7 +196,35 @@ pub(crate) struct RecRefFlow<'a> {
     /// Objects whose instance escapes (`this`/`CurrCodeunit` passed on).
     self_escapes: HashSet<&'a str>,
     converged: bool,
+    /// G35: per routine, whether it is evaluated under its inputs.
+    sensitive: Vec<bool>,
+    eval: RefCell<EvalState>,
 }
+
+/// One evaluation's key: the routine, its tracked parameters' input tables,
+/// its instance's globals.
+type EvalKey = (usize, Vec<(u32, Val)>, Vec<(Arc<str>, Val)>);
+
+/// G35: memoized evaluations of sensitive routines under concrete inputs
+/// (a least fixpoint, by chaotic iteration over recursive calls).
+#[derive(Default)]
+struct EvalState {
+    memo: HashMap<EvalKey, HashMap<String, Val>>,
+    /// Keys whose value is final (computed in an iteration that changed
+    /// nothing).
+    done: HashSet<EvalKey>,
+    in_progress: HashSet<EvalKey>,
+    /// An in-progress value was read, or a memo value grew, this iteration.
+    read_partial: bool,
+    grew: bool,
+    /// Evaluations left before everything is `None` (anything).
+    budget: usize,
+}
+
+/// Evaluations one `RecRefFlow` may run in all.
+const EVAL_BUDGET: usize = 200_000;
+/// The deepest chain of calls one evaluation follows.
+const EVAL_DEPTH: usize = 48;
 
 impl<'a> RecRefFlow<'a> {
     pub(crate) fn new(model: &'a Model, edges: &'a [SnapshotGraphEdge]) -> Self {
@@ -312,12 +368,510 @@ impl<'a> RecRefFlow<'a> {
             closure: HashMap::new(),
             self_escapes,
             converged: false,
+            sensitive: Vec::new(),
+            eval: RefCell::new(EvalState {
+                budget: EVAL_BUDGET,
+                ..Default::default()
+            }),
         };
+        flow.solve_alias_reach();
         flow.solve();
         if flow.converged {
             flow.solve_closures();
+            flow.solve_sensitive();
         }
         flow
+    }
+
+    /// G35: a variable reaches an alias rebinding when its routine rebinds an
+    /// alias of it, or passes it on to a call that may (an open or unresolved
+    /// call, or a parameter that reaches one). Only such a by-value Variant
+    /// parameter can hand a changed RecordRef back ([`keeps_by_value`]).
+    fn solve_alias_reach(&mut self) {
+        loop {
+            let mut grown: Vec<(usize, String)> = Vec::new();
+            for (i, f) in self.facts.iter().enumerate() {
+                let r = &self.routines[i];
+                for (ci, k, v) in &f.passed {
+                    if f.alias_shared.contains(v) {
+                        continue;
+                    }
+                    let cs = &r.call_sites[*ci];
+                    let reaches = if self.open_sites.contains(cs.id.as_str()) {
+                        true
+                    } else if let Some(ts) = self.targets.get(cs.id.as_str()) {
+                        ts.iter().any(|&t| {
+                            let callees: Vec<(usize, Option<&ModelParameter>)> =
+                                if is_publisher(&self.routines[t]) {
+                                    let name = self.routines[t]
+                                        .parameters
+                                        .iter()
+                                        .find(|p| p.index == *k as u32)
+                                        .map(|p| lc(&p.name));
+                                    self.subscribers
+                                        .get(&t)
+                                        .into_iter()
+                                        .flatten()
+                                        .map(|&s| {
+                                            (
+                                                s,
+                                                self.routines[s].parameters.iter().find(|p| {
+                                                    name.as_deref() == Some(lc(&p.name).as_str())
+                                                }),
+                                            )
+                                        })
+                                        .collect()
+                                } else {
+                                    vec![(
+                                        t,
+                                        self.routines[t]
+                                            .parameters
+                                            .iter()
+                                            .find(|p| p.index == *k as u32),
+                                    )]
+                                };
+                            callees.into_iter().any(|(c, p)| match p {
+                                Some(p) => self.facts[c].alias_shared.contains(&lc(&p.name)),
+                                None => !is_publisher(&self.routines[t]),
+                            })
+                        })
+                    } else {
+                        writes_arguments(cs)
+                            || !(self.builtin_sites.contains(cs.id.as_str())
+                                || keeps_unresolved(r, cs))
+                    };
+                    if reaches {
+                        grown.push((i, v.clone()));
+                    }
+                }
+            }
+            if grown.is_empty() {
+                return;
+            }
+            for (i, v) in grown {
+                self.facts[i].alias_shared.insert(v);
+            }
+        }
+    }
+
+    /// G35: a routine is SENSITIVE when one of its facts runs under a
+    /// condition, or a call it passes a tracked variable to reaches one: its
+    /// values then depend on the inputs beyond what a summary keeps, and
+    /// [`Self::arg_tables`] evaluates it under them.
+    fn solve_sensitive(&mut self) {
+        let n = self.routines.len();
+        let mut s: Vec<bool> = self
+            .facts
+            .iter()
+            .map(|f| {
+                f.fixed_conds.iter().any(|c| !c.is_empty())
+                    || f.passed_conds.iter().any(|c| !c.is_empty())
+            })
+            .collect();
+        loop {
+            let mut changed = false;
+            for i in 0..n {
+                if s[i] {
+                    continue;
+                }
+                let r = &self.routines[i];
+                let hit = self.facts[i].passed.iter().any(|(ci, _, _)| {
+                    self.targets
+                        .get(r.call_sites[*ci].id.as_str())
+                        .into_iter()
+                        .flatten()
+                        .any(|&t| {
+                            s[t] || self
+                                .subscribers
+                                .get(&t)
+                                .into_iter()
+                                .flatten()
+                                .any(|&x| s[x])
+                        })
+                });
+                if hit {
+                    s[i] = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        self.sensitive = s;
+    }
+
+    /// The tables the argument at position `k` of call site `cs` of `i` may
+    /// hold when `i` runs with these parameter tables and globals. A
+    /// sensitive routine is evaluated under them (G35); any other reads its
+    /// summary.
+    pub(crate) fn arg_tables(
+        &self,
+        i: usize,
+        cs: &PCallSite,
+        k: u32,
+        params: &[(u32, TSet)],
+        globals: &[(Arc<str>, TSet)],
+    ) -> Val {
+        let summary = eval(&self.arg_atoms(i, cs, k), params, globals);
+        // The evaluation adds what the summary cannot know (it may also give
+        // up); both over-approximate, so either answer is sound.
+        if summary.is_some() || !self.sensitive.get(i).copied().unwrap_or(false) {
+            return summary;
+        }
+        self.evaluate_arg(i, cs, k, params, globals)
+    }
+
+    /// `arg_tables` by evaluating `i` under its inputs.
+    fn evaluate_arg(
+        &self,
+        i: usize,
+        cs: &PCallSite,
+        k: u32,
+        params: &[(u32, TSet)],
+        globals: &[(Arc<str>, TSet)],
+    ) -> Val {
+        let arg = cs.argument_texts.get(k as usize)?;
+        let mut inputs: Vec<(u32, Val)> = self.facts[i]
+            .tracked
+            .values()
+            .filter_map(|v| match v {
+                VarKind::Param(p) => Some((
+                    *p,
+                    params
+                        .iter()
+                        .find(|(j, _)| j == p)
+                        .map(|(_, s)| Arc::clone(s)),
+                )),
+                _ => None,
+            })
+            .collect();
+        inputs.sort();
+        let globals: Vec<(Arc<str>, Val)> = globals
+            .iter()
+            .map(|(g, s)| (Arc::clone(g), Some(Arc::clone(s))))
+            .collect();
+        let vals = self.evaluate(i, inputs, globals.clone())?;
+        self.val_of_text(i, &vals, &globals, arg)
+    }
+
+    /// Evaluates `i` under its inputs to a fixpoint over recursive calls:
+    /// repeats while an iteration read a value still being computed and some
+    /// value grew. `None` when it does not settle.
+    fn evaluate(
+        &self,
+        i: usize,
+        inputs: Vec<(u32, Val)>,
+        globals: Vec<(Arc<str>, Val)>,
+    ) -> Option<HashMap<String, Val>> {
+        for _ in 0..12 {
+            let mut touched = HashSet::new();
+            {
+                let mut st = self.eval.borrow_mut();
+                st.read_partial = false;
+                st.grew = false;
+            }
+            let vals = self.eval_routine(i, &inputs, &globals, 0, &mut touched);
+            let mut st = self.eval.borrow_mut();
+            if !(st.read_partial && st.grew) {
+                st.done.extend(touched);
+                return Some(vals);
+            }
+        }
+        None
+    }
+
+    /// The starting values of `i`'s tracked own variables: a parameter its
+    /// input, a local no table.
+    fn initial_vals(&self, i: usize, inputs: &[(u32, Val)]) -> HashMap<String, Val> {
+        self.facts[i]
+            .tracked
+            .iter()
+            .filter_map(|(name, k)| match k {
+                VarKind::Param(p) => Some((
+                    name.clone(),
+                    inputs
+                        .iter()
+                        .find(|(j, _)| j == p)
+                        .and_then(|(_, v)| v.clone()),
+                )),
+                VarKind::Local => Some((name.clone(), Some(Arc::from([Arc::from("")])))),
+                VarKind::Global => None,
+            })
+            .collect()
+    }
+
+    fn eval_routine(
+        &self,
+        i: usize,
+        inputs: &[(u32, Val)],
+        globals: &[(Arc<str>, Val)],
+        depth: usize,
+        touched: &mut HashSet<EvalKey>,
+    ) -> HashMap<String, Val> {
+        // A routine that is not sensitive reads its summary: no memo, no budget.
+        if !self.sensitive[i] {
+            let mut vals = self.initial_vals(i, inputs);
+            for (v, atoms) in &self.summaries[i].vars {
+                vals.insert(v.clone(), eval_val(atoms, inputs, globals));
+            }
+            return vals;
+        }
+        let key: EvalKey = (i, inputs.to_vec(), globals.to_vec());
+        let all_top = || -> HashMap<String, Val> {
+            self.facts[i]
+                .tracked
+                .keys()
+                .map(|k| (k.clone(), None))
+                .collect()
+        };
+        {
+            let mut st = self.eval.borrow_mut();
+            if st.done.contains(&key) {
+                return st.memo[&key].clone();
+            }
+            if st.in_progress.contains(&key) {
+                st.read_partial = true;
+                return st
+                    .memo
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| self.initial_vals(i, inputs));
+            }
+            if depth > EVAL_DEPTH || st.budget == 0 {
+                return all_top();
+            }
+            st.budget -= 1;
+            st.in_progress.insert(key.clone());
+        }
+        touched.insert(key.clone());
+        let mut vals = self.initial_vals(i, inputs);
+        if let Some(prev) = self.eval.borrow().memo.get(&key) {
+            for (k, v) in prev {
+                let cur = vals.entry(k.clone()).or_insert_with(empty_val);
+                *cur = union_val(cur, v);
+            }
+        }
+        let f = &self.facts[i];
+        if !self.sensitive[i] {
+            for (v, atoms) in &self.summaries[i].vars {
+                vals.insert(v.clone(), eval_val(atoms, inputs, globals));
+            }
+        } else {
+            loop {
+                let mut changed = false;
+                let mut merge = |vals: &mut HashMap<String, Val>, v: &str, add: Val| {
+                    if matches!(f.tracked.get(v), None | Some(VarKind::Global)) {
+                        return;
+                    }
+                    let cur = vals.entry(v.to_string()).or_insert_with(empty_val);
+                    let new = union_val(cur, &add);
+                    if new != *cur {
+                        *cur = new;
+                        changed = true;
+                    }
+                };
+                for (n, (v, part, _)) in f.fixed.iter().enumerate() {
+                    if !self.conds_hold(i, &f.fixed_conds[n], &vals, globals) {
+                        continue;
+                    }
+                    let add = match part {
+                        Part::Copy(w) => self.val_of_text(i, &vals, globals, w),
+                        Part::Atoms(a) => eval_val(a, inputs, globals),
+                    };
+                    merge(&mut vals, v, add);
+                }
+                for (n, (ci, k, v)) in f.passed.iter().enumerate() {
+                    if !self.conds_hold(i, &f.passed_conds[n], &vals, globals) {
+                        continue;
+                    }
+                    if let Some(add) =
+                        self.out_val(i, &vals, globals, *ci, *k as u32, depth, touched)
+                    {
+                        merge(&mut vals, v, add);
+                    }
+                }
+                if !changed {
+                    break;
+                }
+            }
+        }
+        let mut st = self.eval.borrow_mut();
+        st.in_progress.remove(&key);
+        let before = st
+            .memo
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| self.initial_vals(i, inputs));
+        if before != vals {
+            st.grew = true;
+        }
+        st.memo.insert(key, vals.clone());
+        vals
+    }
+
+    /// What `text` (an argument or a value) holds in `i` under `vals`.
+    fn val_of_text(
+        &self,
+        i: usize,
+        vals: &HashMap<String, Val>,
+        globals: &[(Arc<str>, Val)],
+        text: &str,
+    ) -> Val {
+        let name = lc(text);
+        match self.facts[i].tracked.get(&name) {
+            Some(VarKind::Global) => {
+                return globals
+                    .iter()
+                    .find(|(g, _)| **g == *name)
+                    .and_then(|(_, v)| v.clone());
+            }
+            Some(_) => return vals.get(&name).cloned().unwrap_or(None),
+            None => {}
+        }
+        match self.atoms_of(i, &HashMap::new(), &name).into_iter().next() {
+            Some(Atom::Table(t)) => Some(Arc::from([t])),
+            _ => None,
+        }
+    }
+
+    fn conds_hold(
+        &self,
+        i: usize,
+        conds: &[Cond],
+        vals: &HashMap<String, Val>,
+        globals: &[(Arc<str>, Val)],
+    ) -> bool {
+        conds.iter().all(
+            |(rv, must_in, tables)| match self.val_of_text(i, vals, globals, rv) {
+                None => true,
+                Some(held) => held
+                    .iter()
+                    .any(|t| tables.iter().any(|x| x.as_str() == &**t) == *must_in),
+            },
+        )
+    }
+
+    /// What the variable passed at position `k` of call site `ci` of `i` may
+    /// hold after the call, under `vals`; `None` when the call keeps it.
+    #[allow(clippy::too_many_arguments)]
+    fn out_val(
+        &self,
+        i: usize,
+        vals: &HashMap<String, Val>,
+        globals: &[(Arc<str>, Val)],
+        ci: usize,
+        k: u32,
+        depth: usize,
+        touched: &mut HashSet<EvalKey>,
+    ) -> Option<Val> {
+        let r = &self.routines[i];
+        let cs = &r.call_sites[ci];
+        if self.open_sites.contains(cs.id.as_str()) {
+            return Some(None);
+        }
+        let Some(ts) = self.targets.get(cs.id.as_str()) else {
+            let keeps = !writes_arguments(cs)
+                && (self.builtin_sites.contains(cs.id.as_str()) || keeps_unresolved(r, cs));
+            return (!keeps).then_some(None);
+        };
+        let mut out = empty_val();
+        for &t in ts {
+            let callee = &self.routines[t];
+            if is_publisher(callee) {
+                let Some(pname) = callee
+                    .parameters
+                    .iter()
+                    .find(|p| p.index == k)
+                    .map(|p| lc(&p.name))
+                else {
+                    return Some(None);
+                };
+                for &s in self.subscribers.get(&t).into_iter().flatten() {
+                    if let Some(sp) = self.routines[s]
+                        .parameters
+                        .iter()
+                        .find(|p| lc(&p.name) == pname)
+                        && let Some(o) = self.callee_out(
+                            i,
+                            vals,
+                            globals,
+                            cs,
+                            s,
+                            sp,
+                            Some(callee),
+                            depth,
+                            touched,
+                        )
+                    {
+                        out = union_val(&out, &o);
+                    }
+                }
+                continue;
+            }
+            let Some(p) = callee.parameters.iter().find(|p| p.index == k) else {
+                return Some(None);
+            };
+            if let Some(o) = self.callee_out(i, vals, globals, cs, t, p, None, depth, touched) {
+                out = union_val(&out, &o);
+            }
+        }
+        Some(out)
+    }
+
+    /// What callee `t` may leave in its parameter `p`, run with the arguments
+    /// of `cs` under `vals` (for a subscriber, `publisher`'s positions);
+    /// `None` when it keeps the caller's value.
+    #[allow(clippy::too_many_arguments)]
+    fn callee_out(
+        &self,
+        i: usize,
+        vals: &HashMap<String, Val>,
+        globals: &[(Arc<str>, Val)],
+        cs: &PCallSite,
+        t: usize,
+        p: &ModelParameter,
+        publisher: Option<&ModelRoutine>,
+        depth: usize,
+        touched: &mut HashSet<EvalKey>,
+    ) -> Option<Val> {
+        let callee = &self.routines[t];
+        if !callee.body_available || callee.parse_incomplete {
+            return Some(None);
+        }
+        let pname = lc(&p.name);
+        if !self.facts[t].tracked.contains_key(&pname) {
+            return (!p.is_record).then_some(None);
+        }
+        if keeps_by_value(callee, &self.facts[t], p) {
+            return None;
+        }
+        let mut inputs: Vec<(u32, Val)> = Vec::new();
+        for (name, kind) in &self.facts[t].tracked {
+            let VarKind::Param(j) = kind else { continue };
+            let pos = match publisher {
+                None => Some(*j),
+                Some(pb) => pb
+                    .parameters
+                    .iter()
+                    .find(|y| lc(&y.name) == *name)
+                    .map(|y| y.index),
+            };
+            let v = pos
+                .and_then(|pos| cs.argument_texts.get(pos as usize))
+                .and_then(|a| self.val_of_text(i, vals, globals, a));
+            inputs.push((*j, v));
+        }
+        inputs.sort();
+        let g: Vec<(Arc<str>, Val)> =
+            if publisher.is_none() && on_self(cs) && callee.object_id == self.routines[i].object_id
+            {
+                globals.to_vec()
+            } else {
+                Vec::new()
+            };
+        let res = self.eval_routine(t, &inputs, &g, depth + 1, touched);
+        Some(res.get(&pname).cloned().unwrap_or(None))
     }
 
     /// Whether the summaries reached a fixpoint (else nothing is tracked).
@@ -433,6 +987,9 @@ impl<'a> RecRefFlow<'a> {
             // keeps it. Any other type may hand anything back.
             return if p.is_record { Atoms::new() } else { top() };
         };
+        if keeps_by_value(callee, &self.facts[t], p) {
+            return Atoms::new();
+        }
         let self_call =
             publisher.is_none() && on_self(cs) && callee.object_id == self.routines[i].object_id;
         let mut out = Atoms::new();
@@ -505,7 +1062,11 @@ impl<'a> RecRefFlow<'a> {
         let f = &self.facts[i];
         let mut s = initial_summary(f);
         // Parts that may read other routines' summaries, resolved once per round.
-        let mut parts: Vec<(String, Part)> = f.fixed.clone();
+        let mut parts: Vec<(String, Part)> = f
+            .fixed
+            .iter()
+            .map(|(v, p, _)| (v.clone(), p.clone()))
+            .collect();
         for (ci, k, v) in &f.passed {
             let cs = &r.call_sites[*ci];
             if let Some(atoms) = self.passed_atoms(i, &self.summaries[i].vars, cs, *k as u32) {
@@ -850,6 +1411,19 @@ pub(crate) fn eval(
     Some(out.into_iter().collect())
 }
 
+/// [`eval`] with inputs that may themselves be anything.
+fn eval_val(atoms: &Atoms, inputs: &[(u32, Val)], globals: &[(Arc<str>, Val)]) -> Val {
+    let params: Vec<(u32, TSet)> = inputs
+        .iter()
+        .filter_map(|(j, v)| v.as_ref().map(|s| (*j, Arc::clone(s))))
+        .collect();
+    let globals: Vec<(Arc<str>, TSet)> = globals
+        .iter()
+        .filter_map(|(g, v)| v.as_ref().map(|s| (Arc::clone(g), Arc::clone(s))))
+        .collect();
+    eval(atoms, &params, &globals)
+}
+
 fn initial_summary(f: &Facts) -> Summary {
     let mut s = Summary::default();
     for (name, kind) in &f.tracked {
@@ -1189,7 +1763,8 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
             (None, Some((w, m))) if m == "duplicate" => Part::Copy(lc(w)),
             _ => Part::Atoms(top()),
         };
-        f.fixed.push((l, part));
+        let at = (a.source_anchor.start_line, a.source_anchor.start_column);
+        f.fixed.push((l, part, Some(at)));
     }
     if !alias_at.is_empty() {
         let names: Vec<String> = class.keys().cloned().collect();
@@ -1205,10 +1780,10 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
                 .map(|(_, p)| *p)
                 .collect();
             // What a rebinding that may run after an alias assignment binds.
-            let mut shared: Vec<Part> = Vec::new();
+            let mut shared: Vec<(Part, Option<(u32, u32)>)> = Vec::new();
             for m in &members {
                 if f.tracked.get(*m) == Some(&VarKind::Global) && obj_in_place.contains(*m) {
-                    shared.push(Part::Atoms(top()));
+                    shared.push((Part::Atoms(top()), None));
                 }
                 for (s, part) in in_place.get(*m).into_iter().flatten() {
                     let may_follow = assigns.iter().any(|&p| {
@@ -1217,25 +1792,29 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
                             .is_some_and(|t| exclusive(t, p, *s))
                     });
                     if may_follow {
-                        shared.push(part.clone());
+                        shared.push((part.clone(), Some(*s)));
                     }
                 }
             }
             for m in members {
-                for part in &shared {
-                    f.fixed.push((m.clone(), part.clone()));
+                if !shared.is_empty() {
+                    f.alias_shared.insert(m.clone());
+                }
+                for (part, at) in &shared {
+                    f.fixed.push((m.clone(), part.clone(), *at));
                 }
             }
         }
     }
     for (ci, cs) in r.call_sites.iter().enumerate() {
+        let at = Some((cs.source_anchor.start_line, cs.source_anchor.start_column));
         if let PCallee::Member { receiver, .. } = &cs.callee {
             let v = lc(receiver);
             if f.tracked.contains_key(&v) {
                 if let Some(part) = in_place_part(r, cs, &v)
                     && !rebinds_to_guarded(r, &guards, cs, &v, &part)
                 {
-                    f.fixed.push((v, part));
+                    f.fixed.push((v, part, at));
                 }
                 continue;
             }
@@ -1246,7 +1825,8 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
                     if let Some(v) = cs.argument_texts.first().map(|a| lc(a))
                         && f.tracked.contains_key(&v)
                     {
-                        f.fixed.push((v, Part::Atoms(Atoms::from([Atom::Unset]))));
+                        f.fixed
+                            .push((v, Part::Atoms(Atoms::from([Atom::Unset])), at));
                     }
                     continue;
                 }
@@ -1254,7 +1834,7 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
                     for (v, k) in &f.tracked {
                         if *k == VarKind::Global {
                             f.fixed
-                                .push((v.clone(), Part::Atoms(Atoms::from([Atom::Unset]))));
+                                .push((v.clone(), Part::Atoms(Atoms::from([Atom::Unset])), at));
                         }
                     }
                     continue;
@@ -1269,7 +1849,104 @@ fn facts_of(r: &ModelRoutine, obj_in_place: &HashSet<String>) -> Facts {
             }
         }
     }
+    // G35: the conditions each fact runs under.
+    let regions = cond_regions(r, &f.tracked);
+    let conds_at = |at: Option<(u32, u32)>| -> Vec<Cond> {
+        let Some(p) = at else {
+            return Vec::new();
+        };
+        regions
+            .iter()
+            .filter(|(from, to, _)| *from <= p && p < *to)
+            .map(|(_, _, c)| c.clone())
+            .collect()
+    };
+    f.fixed_conds = f.fixed.iter().map(|(_, _, at)| conds_at(*at)).collect();
+    f.passed_conds = f
+        .passed
+        .iter()
+        .map(|(ci, _, _)| {
+            let a = &r.call_sites[*ci].source_anchor;
+            conds_at(Some((a.start_line, a.start_column)))
+        })
+        .collect();
     f
+}
+
+/// G35: the regions of `r` that run only under a condition on a tracked
+/// RecordRef's table: each branch of a `case R.Number of Database::"T": …`
+/// (an `else` for the tables no branch names, when every branch names
+/// tables), and what follows a top-level `if R.Number <> Database::"T" then
+/// exit;`. The condition is on the table `R` holds when the `case` or the
+/// guard runs, which is one of the tables `R` may hold at all.
+fn cond_regions(r: &ModelRoutine, tracked: &HashMap<String, VarKind>) -> Vec<CondRegion> {
+    let mut out = Vec::new();
+    let Some(tree) = r.statement_tree.as_ref() else {
+        return out;
+    };
+    fn walk(n: &PCFNNode, tracked: &HashMap<String, VarKind>, out: &mut Vec<CondRegion>) {
+        if n.kind == "case"
+            && let Some(TableCase::On(rv)) = &n.table_case
+            && tracked.contains_key(rv)
+        {
+            let branches: Vec<&PCFNNode> = n.children.iter().flatten().collect();
+            let mut listed: Vec<String> = Vec::new();
+            let mut all_named = true;
+            for b in &branches {
+                match &b.table_case {
+                    Some(TableCase::Tables(t)) => listed.extend(t.iter().cloned()),
+                    _ if b.is_case_else => {}
+                    _ => all_named = false,
+                }
+            }
+            let listed: Arc<[String]> = listed.into();
+            for b in &branches {
+                let Some((sl, sc, el, ec)) = b.source_range else {
+                    continue;
+                };
+                let cond = match &b.table_case {
+                    Some(TableCase::Tables(t)) => Some((rv.clone(), true, t.clone().into())),
+                    _ if b.is_case_else && all_named => {
+                        Some((rv.clone(), false, Arc::clone(&listed)))
+                    }
+                    _ => None,
+                };
+                if let Some(c) = cond {
+                    out.push(((sl, sc), (el, ec), c));
+                }
+            }
+        }
+        for c in n.children.iter().chain(&n.else_children).flatten() {
+            walk(c, tracked, out);
+        }
+    }
+    walk(tree, tracked, &mut out);
+    let top: &[PCFNNode] = match tree.kind.as_str() {
+        "block" => tree.children.as_deref().unwrap_or_default(),
+        _ => std::slice::from_ref(tree),
+    };
+    for stmt in top {
+        if let (Some((rv, tables)), Some((_, _, el, ec))) =
+            (&stmt.table_exit_guard, stmt.source_range)
+            && tracked.contains_key(rv)
+        {
+            out.push((
+                (el, ec),
+                (u32::MAX, u32::MAX),
+                (rv.clone(), true, tables.clone().into()),
+            ));
+        }
+    }
+    out
+}
+
+/// G35: a by-value Variant parameter is the callee's own copy: rebinding it
+/// does not reach the caller, unless an alias rebinding of a RecordRef it
+/// holds does (`R := Variant; R.Open(…)`).
+fn keeps_by_value(_callee: &ModelRoutine, f: &Facts, p: &ModelParameter) -> bool {
+    !p.is_var
+        && p.type_text.trim().eq_ignore_ascii_case("variant")
+        && !f.alias_shared.contains(&lc(&p.name))
 }
 
 /// `R.Get(Id)` keeps `R`'s table when `Id` is a local whose every assignment

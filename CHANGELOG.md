@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The RecordRef value flow reads a `case R.Number` branch under the tables
+  passed in** (G35, extending G34's `recref_flow`). Base Application's
+  workflow loop (`Workflow Management.ExecuteResponses`) passes one Variant by
+  `var` to every response. `ReleaseDocument`/`OpenDocument` swap it for
+  `RecordRef.Get("Record ID to Approve")` only in their `Database::"Approval
+  Entry"` branch, and `PostDocument` runs Sales-Post only for a Sales Header.
+  - A fact inside a `case R.Number` branch (or past an `if R.Number <> … then
+    exit;`) now records that condition. A routine with such facts, or one
+    that passes a RecordRef or Variant into one, is evaluated under its actual
+    input tables: a least fixpoint over its facts and its callees, memoized
+    and bounded (`EVAL_BUDGET`, `EVAL_DEPTH`; giving up means "anything").
+    It is used only where the summary alone answers "anything".
+  - A by-value Variant parameter is the callee's own copy, so reassigning it
+    does not reach the caller. The exception is a callee that rebinds a
+    RecordRef the Variant holds through an alias, directly or further down
+    (`alias_shared`).
+  On Continia DO the requisition-batch route the HandledState triage traced
+  for HAND-SALE-009.c2 and EMAIL-TPLM-011.c9 is now cut. Both claims still
+  answer `yes`, through the customer-credit-limit workflow event, which hands
+  `PostDocument` the Sales Header itself. Whether that runs depends on
+  workflow setup data and on Sales-Post refusing a quote: a stated limit.
+  Test `cli_prove_recref_guard::a_branch_on_the_variants_table_rebinds_it_only_for_that_table`.
+
 - **`prove` follows the table a RecordRef holds into `if R.Number <>
   Database::"T" then exit;`** (G34), through `GetTable`, `Duplicate()`,
   parameters and a codeunit global. Continia DO's `VendorLedgerPrint` puts a
