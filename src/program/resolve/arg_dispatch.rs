@@ -1480,6 +1480,28 @@ fn type_call_result_arg_member(
                         var_passable: false,
                     };
                 }
+                // A collection's `Get(key)` / `Get(index)`: its declared value
+                // type (`Dictionary of [Text, Text]` → Text). System
+                // Application's `HttpContent.SetHeader(HeaderKey,
+                // AdditionalHeaders.Get(HeaderKey))` over `(Text, Text)` /
+                // `(Text, SecretText)` stayed ambiguous.
+                CallerScopeSymbol::Found(Some(t))
+                    if inner_arity == 1
+                        && unquote_identifier(member).fold_identifier() == "get"
+                        && let Some((base, targs)) = generic_type_args(t)
+                        && let Some(value) = match (base.as_str(), targs.as_slice()) {
+                            ("dictionary", [_, v]) => Some(*v),
+                            ("list", [v]) => Some(*v),
+                            _ => None,
+                        } =>
+                {
+                    return ArgDispatchInfo {
+                        canonical: dispatch_canonical_type_text(value, from, graph, index),
+                        exact_text: Some(normalize_type_text(value)),
+                        literal_kind: None,
+                        var_passable: false,
+                    };
+                }
                 CallerScopeSymbol::Found(Some(t)) => t,
                 _ => return ArgDispatchInfo::untyped(),
             }

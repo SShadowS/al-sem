@@ -21,14 +21,26 @@ codeunit 50431 "ST Lib"
     procedure SetSigningKey(Key: Codeunit "ST Key")
     begin
     end;
+
+    procedure SetHeader(Name: Text; Value: Text)
+    begin
+    end;
+
+    procedure SetHeader(Name: Text; Value: SecretText)
+    begin
+    end;
 }
 codeunit 50432 "ST Caller"
 {
     procedure Go(XmlString: Text)
     var
         Lib: Codeunit "ST Lib";
+        Headers: Dictionary of [Text, Text];
+        HeaderKey: Text;
     begin
         Lib.SetSigningKey(XmlString);
+        // A Dictionary's `Get(key)` is its value type, Text: the exact match.
+        Lib.SetHeader(HeaderKey, Headers.Get(HeaderKey));
     end;
 }
 "#;
@@ -57,6 +69,6 @@ fn a_text_argument_binds_the_secrettext_overload() {
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stats JSON");
     let s = &v["primaryScoped"];
-    assert_eq!(s["resolvedSource"], 1, "{s}");
+    assert_eq!(s["resolvedSource"], 2, "{s}");
     assert_eq!(s["ambiguousResolved"], 0, "{s}");
 }

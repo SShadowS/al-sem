@@ -300,7 +300,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   over `(SecretText)` / `(Codeunit "Signature Key")` (now bound to the
   SecretText one), and it picked `AddHeader(Label, Label)`'s `(Text, Text)`
   overload over `(Text, SecretText)` on that false proof (now ambiguous: which
-  conversion the compiler prefers is not proven). Test `cli_secrettext_arg`.
+  conversion the compiler prefers is not proven). A `Dictionary`'s / `List`'s
+  `Get(..)` argument now types as its declared value type
+  (`HttpContent.SetHeader(Key, Headers.Get(Key))` over `(Text, Text)` / `(Text,
+  SecretText)`). Continia DO's dependency-body `ambiguousResolved`: 21 → 19.
+  Test `cli_secrettext_arg`.
 
 - **A RecordRef write behind `if not R.FieldExist(N) then exit;` writes only a
   table that has field `N`** (G36). Continia DO's `UpdateHandledFields(var
