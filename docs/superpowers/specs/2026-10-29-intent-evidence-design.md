@@ -1,4 +1,10 @@
-# Intent evidence for agents: design (rev 1, 2026-10-29)
+# Intent evidence for agents: design (rev 2, 2026-10-29)
+
+Rev 2 drops rev 1's `BuildProfile::INTENT` preset, which was described as a
+"superset of `FULL`" and so broke the §4 rule that `FULL` keeps everything. The text
+is now a per-fact profile field (`intent_text`), and rules are a detector substrate
+bit (`RULES`). Each tool declares what it needs, the same way the rest of the engine
+works (4.1b).
 
 Every claim about current code below was checked against master `bb04cc0`
 (2026-10-28) and tree-sitter-al `main` at the time of writing.
@@ -96,10 +102,74 @@ All changes are in `crates/al-syntax`, the only crate that reads the parse tree.
    `doc: Option<String>` on `RoutineDecl` / `FieldDecl` / `ActionDecl`, and as a
    comment on the check (4.2). Free comments elsewhere are not kept.
 
-Memory: label text is small, but captions across a full CDO closure are not free.
-Per the build-profile rule, the new text is kept only under a profile that asks for
-it (`BuildProfile::INTENT`, a superset of `FULL`). The LSP and `analyze` profiles do
-not pay for it. Measure the closure cost on CDO before and after (open question 1).
+### 4.1b Declared needs: who pays for the text and the rules
+
+The engine already builds only what a tool declares, at two levels. This spec uses
+both and adds no named preset of its own.
+
+**Level 1: a build-profile field** (`src/program/profile.rs`, compact-graph spec §4).
+`BuildProfile` gets one new field:
+
+```rust
+pub enum IntentText {
+    /// Not lowered. `VarDecl::label`, `FieldDecl::caption`/`tooltip`, `doc` stay `None`.
+    Skip,
+    /// Lowered for workspace files only. Dependency summaries carry none.
+    Workspace,
+    /// Lowered for workspace files AND kept in dependency summaries (`PackedFile`),
+    /// so a rule inherited from dependency source has its message.
+    All,
+}
+pub struct BuildProfile { pub dependency_bodies: DependencyBodies, pub intent_text: IntentText }
+```
+
+| Field | `LIGHT` | `FULL` |
+|---|---|---|
+| `intent_text` | `Skip` | `All` |
+
+- The skip happens in the lowerer, not afterwards: a new
+  `al_syntax::parse_with(source, LowerOptions { intent_text: bool })` sits beside
+  today's `parse(source)` (`crates/al-syntax/src/parse.rs:10`), which keeps its
+  meaning as `intent_text: false`. A `Skip` build never allocates the strings.
+  The LSP server (`LIGHT`) pays nothing.
+- `Skip` leaves the fields `None` and changes no other fact. That keeps the §4 rule
+  that a smaller profile may skip a fact but never change one. The existing
+  LIGHT-against-FULL comparison test gets these fields in its "skipped" list, and must
+  still show every other fact identical.
+- `intent_text` changes what the dependency tier stores, so it joins the shared-cache
+  key (`DepKey`), and the `PackedFile` format grows an optional text block.
+- Reading a text field from a `Skip` build fails loudly in debug builds and tests (the
+  pattern from the 2026-10-04 ordering-facts fix). `None` must never be read as "this
+  label has no text".
+
+**Level 2: a detector substrate bit** (`src/engine/l5/registry.rs`). Rules (Part B)
+are a derived fact, like transaction spans, so they become a substrate:
+
+```rust
+/// Per-routine rules (`ctx.rules_by_routine`) and the per-field writer index d65 reads.
+/// Needs a build with `intent_text` of at least `Workspace` (message text); the
+/// conditions alone need nothing extra.
+pub const RULES: u32 = 1 << 7;
+```
+
+- `d65-guard-bypass` declares `requires: substrate::RULES`. `RULES` follows the
+  `ORDERING_FACTS` precedent: it stays **out of** `substrate::ALL`, so the many
+  `build_detector_context(.., substrate::ALL)` callers (gap tests, `census-probe`)
+  neither pay for rules nor need a text-bearing build. The parity test's full context
+  (`tests/gap/gap_detector_substrate_parity.rs:115`, today
+  `ALL | ORDERING_FACTS`) adds `| RULES` in the same change. That avoids the
+  inverted-comparison trap described on `DB_EFFECT_REVERSE_INDEX`.
+- `alsem analyze` picks its build profile from the union of the selected detectors'
+  `requires`: `intent_text: Workspace` (or `All` when cross-app) only when `RULES` is
+  in the union, `Skip` otherwise. A default `analyze` run (d65 is opt-in) builds no
+  text and no rules, so it costs exactly what it costs today.
+- `alsem explain` builds a `View` demanding `RULES` with `intent_text: All`.
+- A context built with `RULES` from a `Skip` profile panics in debug builds and tests.
+  The `every_detector_alone_declares_what_it_reads` registry test then catches a
+  missing declaration.
+
+Open question 1 is the size of `All` on the CDO closure. It decides whether `All` is
+worth keeping, or whether explain should read dependency text one object at a time.
 
 ### 4.2 Part B: rules (body facts)
 
@@ -180,8 +250,8 @@ re-anchors it.
 
 ### 4.4 Part C: the evidence card
 
-`alsem explain` builds the model with the `INTENT` profile and emits one card per
-routine. JSON schema `al-sem.explain` v1:
+`alsem explain` builds the model with `intent_text: All` and the `RULES` substrate
+(4.1b), and emits one card per routine. JSON schema `al-sem.explain` v1:
 
 ```jsonc
 {
@@ -300,9 +370,9 @@ Following CLAUDE.md:
 
 | Step | Content | Goldens moved |
 |---|---|---|
-| 1 | Part A.1: label and TextConst text on `VarDecl`; share the label lookup with #288 | none expected (new field, not serialised in existing projections). Prove it with `check-goldens` |
-| 2 | Part A.2 and A.3: captions, tooltips, actions, doc comments; `BuildProfile::INTENT` | l2 snapshot only if actions join the projection |
-| 3 | Part B: `PRule` for own rules; `TestField` gets a rule as well as its `StateOnly` class | l2, r4 via the new fixture |
+| 1 | `BuildProfile::intent_text` and `LowerOptions`; Part A.1: label and TextConst text on `VarDecl`; share the label lookup with #288 | none expected (`FULL` gains a field no projection serialises yet). Prove it with `check-goldens` |
+| 2 | Part A.2 and A.3: captions, tooltips, actions, doc comments; `PackedFile` text block and `DepKey` | l2 snapshot only if actions join the projection |
+| 3 | Part B: `PRule` for own rules behind `substrate::RULES`; `TestField` gets a rule as well as its `StateOnly` class | l2, r4 via the new fixture |
 | 4 | Part C: `alsem explain --routine` and `--diff`, own rules plus existing effects, tests and events | new `cli-explain` family |
 | 5 | Part B2: inherited and caller rules | cli-explain |
 | 6 | Part D: `d65-guard-bypass`, opt-in, then the CDO triage | r4 |
@@ -313,8 +383,9 @@ about to change. Steps 5–6 make the card trustworthy across calls and add the 
 
 ## 8. Open questions
 
-1. Memory cost of the `INTENT` profile on the full CDO closure: measure, do not guess.
-   If it is large, load dependency text lazily per object instead.
+1. Memory cost of `intent_text: All` on the full CDO closure: measure, do not guess.
+   If it is large, drop `All` and have explain read dependency text one object at a
+   time.
 2. Does `SymbolReference.json` carry field `Caption` / `ToolTip` for symbol-only apps?
    Check on a real `.app` before promising captions for them.
 3. Should `explain --diff` be a flag on `digest` (`digest --diff p --explain`) rather
