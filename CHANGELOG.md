@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The test runners refuse a zero `RLIMIT_RTTIME`** (`scripts/require-rttime`, called by
+  `ci-steps` test/task-affected/perf-bounds, `check-goldens` (so the pre-commit hook)
+  and `cdo-gate`). Under a zero realtime timeout the kernel SIGKILLs ordinary test
+  processes at random and logs nothing; on 2026-10-27 that read as flaky tests (6 of 8
+  full nextest runs lost one to five tests, a different set each time). Cause on that
+  Omarchy desktop: rtkit was not installed, so the portal gave PipeWire's `module-rt`
+  in the desktop shell a zero budget, applied as a hard limit to everything launched
+  from it. Confirmed by bpftrace (`SI_KERNEL` from `posix_cpu_timers_work`) and by
+  raising the limit: 0 kills in 9 runs. The script names the cause and the fix. A
+  system without `/proc/self/limits` is not checked.
+
 ### Changed
 
 - **Grammar: tree-sitter-al v4.5.0** (`91a5db62`, the release tag and `main`; was `main` at
@@ -33,6 +46,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exit 3, now with `--diff-root needs a diff or file inputs (--diff, --file or --changed)`.
 
 ### Fixed
+
+- **A UTF-8 BOM in `app.json` no longer empties the program.** VS Code on Windows
+  often writes one and the AL compiler accepts it, but `serde_json` rejected it: the
+  root `app.json` failed to parse, the snapshot build returned nothing, and
+  `--analyze` said only "the program snapshot could not be built" (Continia DO 29.0's
+  `app.json` has a BOM). Every `app.json` read now goes through
+  `source_text::parse_app_json`, which drops a leading BOM: the workspace inputs, the
+  root app id, the model instance id's version, the dependency list
+  (`dependencies::parse_app_json`), the compiler golden's `preprocessorSymbols` and
+  `mint-goldens`' workspace id.
+- **Two batch test helpers no longer fail on a closed stdin pipe.** They write the
+  diff text to every command they start, and a command that never reads its stdin
+  can exit before the write lands; the write then failed with `BrokenPipe` and
+  `cli_batch_contract::batch_equals_standalone` failed at random. A closed pipe is now
+  ignored there (any other write error still fails). Proven with a 3 s delay before
+  the write: the old code fails with exactly that panic, the new code passes.
 
 - **Digest `--file` and `--changed a.al,…` read paths like `--diff`** (#339). A file
   path may now be relative to the git top level (automatic mode, as #77 reads diff

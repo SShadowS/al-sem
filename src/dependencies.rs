@@ -227,7 +227,8 @@ pub fn parse_app_json(path: &Path) -> Result<Vec<AppDependency>> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
 
-    let app_json: AppJson = serde_json::from_str(&content)
+    let app_json: AppJson = crate::source_text::parse_app_json(&content)
+        .and_then(serde_json::from_value)
         .with_context(|| format!("Failed to parse {}", path.display()))?;
 
     Ok(app_json.dependencies)
@@ -1628,6 +1629,20 @@ mod tests {
         std::fs::write(dir.path().join("app.json"), r#"{"dependencies": []}"#).unwrap();
         let result = resolve_all(dir.path()).unwrap();
         assert!(result.is_empty(), "Empty dependencies should return empty");
+    }
+
+    #[test]
+    fn test_parse_app_json_accepts_a_bom() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("app.json");
+        std::fs::write(
+            &path,
+            "\u{feff}{\"dependencies\": [{\"name\": \"Test\", \"publisher\": \"Pub\", \"version\": \"1.0.0.0\"}]}",
+        )
+        .unwrap();
+        let deps = parse_app_json(&path).expect("a BOM must not fail the parse");
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].name, "Test");
     }
 
     #[test]

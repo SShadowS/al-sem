@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# scripts/require-rttime — refuse to run tests under a zero RLIMIT_RTTIME.
+#
+# Found 2026-10-27 on an Omarchy (Arch, kernel 7.2) desktop: with rtkit not
+# installed, the shell's PipeWire realtime module got a zero realtime budget
+# from the desktop portal and applied it as a HARD RLIMIT_RTTIME of 0. Every
+# program launched from the shell inherits it (terminal, multiplexer, Claude
+# Code, cargo, every test). Under that limit the kernel's CPU-timer code
+# SIGKILLs ordinary (not realtime) test processes at random, logging nothing:
+# 6 of 8 full nextest runs lost one to five tests, a different set each time
+# (bpftrace: SI_KERNEL from posix_cpu_timers_work, RLIMIT_CPU unlimited). With
+# the limit raised, 0 kills in 9 runs. The random SIGKILLs read as flaky tests,
+# so this check fails the gate up front with the cause instead.
+#
+# A soft limit of 0 is refused too: at the soft limit the kernel sends SIGXCPU,
+# whose default action also ends the process.
+#
+# No /proc/self/limits (Windows, macOS): nothing to check.
+set -uo pipefail
+
+limits=/proc/self/limits
+[ -r "$limits" ] || exit 0
+
+line="$(grep '^Max realtime timeout' "$limits")" || exit 0
+read -r soft hard < <(awk '{print $4, $5}' <<<"$line")
+if [ "$soft" != 0 ] && [ "$hard" != 0 ]; then
+    exit 0
+fi
+
+cat >&2 <<EOF
+require-rttime: RLIMIT_RTTIME is ${soft}/${hard} us (soft/hard) in this shell.
+  Under a zero realtime timeout the kernel SIGKILLs test processes at random,
+  with nothing in the journal, so the test run would fail as flaky tests.
+  Usual cause: rtkit is not installed, so the desktop portal reports a zero
+  realtime budget to PipeWire's module-rt, which applies it as this limit to the
+  desktop shell and everything launched from it.
+  Fix at the source: install rtkit, restart xdg-desktop-portal and the desktop
+  shell, then open a new terminal.
+  For this shell only: sudo prlimit --pid \$\$ --rttime=unlimited:unlimited
+EOF
+exit 1

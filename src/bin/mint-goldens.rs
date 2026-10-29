@@ -210,7 +210,7 @@ fn main() -> ExitCode {
 /// The workspace app's id from `app.json`, lower-case.
 fn workspace_guid(workspace_root: &Path) -> Option<String> {
     let text = std::fs::read_to_string(workspace_root.join("app.json")).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let v = al_sem::source_text::parse_app_json(&text).ok()?;
     Some(v.get("id")?.as_str()?.to_ascii_lowercase())
 }
 

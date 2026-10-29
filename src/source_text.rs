@@ -123,12 +123,19 @@ pub fn read_al_source(path: &Path) -> std::io::Result<String> {
     Ok(decode_al_source(&std::fs::read(path)?))
 }
 
+/// Parse `app.json` text, ignoring a leading UTF-8 BOM. The AL compiler
+/// accepts one and VS Code on Windows often writes one; `serde_json` rejects
+/// it, which used to empty the whole snapshot without saying why.
+pub fn parse_app_json(text: &str) -> serde_json::Result<serde_json::Value> {
+    serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(text))
+}
+
 /// Read the workspace ROOT's `app.json` `id` field VERBATIM when it is a
 /// non-empty string. Mirrors `providers/workspace.ts` (GAP 2). (Moved here from
 /// `program::body::l2_workspace` in engine-switch S1.)
 pub fn read_root_app_guid(workspace: &Path) -> Option<String> {
     let text = std::fs::read_to_string(workspace.join("app.json")).ok()?;
-    let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    let value = parse_app_json(&text).ok()?;
     let id = value.get("id")?.as_str()?;
     if id.is_empty() {
         None
