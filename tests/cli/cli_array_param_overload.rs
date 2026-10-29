@@ -21,6 +21,14 @@ codeunit 50332 "AR Lib"
     procedure Fmt(var A: Record "AR A"; var B: Record "AR B")
     begin
     end;
+
+    procedure AddHeader(Name: Text; Value: Text)
+    begin
+    end;
+
+    procedure AddHeader(Name: Text; Value: SecretText)
+    begin
+    end;
 }
 codeunit 50333 "AR Caller"
 {
@@ -40,6 +48,15 @@ codeunit 50333 "AR Caller"
         Lib: Codeunit "AR Lib";
     begin
         Lib.Fmt(A, B);
+    end;
+
+    procedure ToHeader()
+    var
+        Lib: Codeunit "AR Lib";
+        Headers: array[2, 2] of Text;
+    begin
+        // An array element is its element type, Text: the exact match.
+        Lib.AddHeader(Headers[1, 1], Headers[1, 2]);
     end;
 }
 "#;
@@ -68,6 +85,6 @@ fn an_array_parameter_takes_part_in_overload_selection() {
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stats JSON");
     let s = &v["primaryScoped"];
-    assert_eq!(s["resolvedSource"], 2, "{s}");
+    assert_eq!(s["resolvedSource"], 3, "{s}");
     assert_eq!(s["ambiguousResolved"], 0, "{s}");
 }

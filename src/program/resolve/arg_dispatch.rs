@@ -910,6 +910,34 @@ fn type_one_arg(
                 }
             }
         }
+        // An element of a declared array (`RequestHeaders[i, 1]`): the
+        // array's element type, and a variable (it binds a `var` parameter).
+        // Continia's `Http.AddRequestHeader(RequestHeaders[i, 1],
+        // RequestHeaders[i, 2])` over `(Text, Text)` / `(Text, SecretText)`
+        // stayed ambiguous. Indexing anything else (a Text's Char) stays
+        // untyped.
+        ExprKind::Index { base, .. } => {
+            let declared = match &file.ir.expr(*base).kind {
+                ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n)
+                    if with_state == WithState::NoWithProven =>
+                {
+                    match caller_scope_symbol(n, routine, object_globals) {
+                        CallerScopeSymbol::Found(Some(t)) => Some(t),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            match declared.map(split_array_type) {
+                Some(ArrayShape::Array { elem, .. }) => ArgDispatchInfo {
+                    canonical: dispatch_canonical_type_text(elem, from, graph, index),
+                    exact_text: Some(normalize_type_text(elem)),
+                    literal_kind: None,
+                    var_passable: true,
+                },
+                _ => ArgDispatchInfo::untyped(),
+            }
+        }
         // An object-id reference (`Database::Contact`, `Page::"…"`) is the
         // object's number, an Integer: Base Application's
         // `GetIntegrationTableMapping(Mapping, DATABASE::Contact)` over

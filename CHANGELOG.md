@@ -303,8 +303,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conversion the compiler prefers is not proven). A `Dictionary`'s / `List`'s
   `Get(..)` argument now types as its declared value type
   (`HttpContent.SetHeader(Key, Headers.Get(Key))` over `(Text, Text)` / `(Text,
-  SecretText)`). Continia DO's dependency-body `ambiguousResolved`: 21 → 19.
-  Test `cli_secrettext_arg`.
+  SecretText)`), and an element of a declared array as the element type
+  (Continia's `Http.AddRequestHeader(RequestHeaders[i, 1], RequestHeaders[i,
+  2])`). Continia DO's dependency-body `ambiguousResolved`: 21 → 17. Tests
+  `cli_secrettext_arg`, `cli_array_param_overload`.
 
 - **A RecordRef write behind `if not R.FieldExist(N) then exit;` writes only a
   table that has field `N`** (G36). Continia DO's `UpdateHandledFields(var
