@@ -200,6 +200,14 @@ pub struct ObjectNode {
     /// symbol-only table. `Page.Run(0, Rec)` runs that page
     /// ([`crate::program::graph::ProgramGraph::lookup_pages`]).
     pub lookup_pages: Vec<SharedStr>,
+    /// A SOURCE object declared `ObsoleteState = Moved` or `Removed`: no code
+    /// binds to it while another object of its name or number is visible
+    /// (`ResolveIndex::build`). Base Application keeps `table 308 "No.
+    /// Series"` as a `Moved` stub (`MovedTo` Business Foundation) under `#if
+    /// not CLEANSCHEMA27`, so the name was two-way ambiguous for every app
+    /// seeing both, and Base Application's own references bound to the stub.
+    /// `false` for a symbol-only object.
+    pub obsolete_gone: bool,
 }
 
 /// One retained ABI parameter's dispatch-relevant metadata (Task 2, roadmap-
@@ -963,6 +971,13 @@ pub fn extract_nodes(
             } else {
                 Vec::new()
             },
+            obsolete_gone: obj.properties.iter().any(|p| {
+                p.name.eq_ignore_ascii_case("obsoletestate")
+                    && matches!(
+                        p.value.trim().to_ascii_lowercase().as_str(),
+                        "moved" | "removed"
+                    )
+            }),
             internal: obj.properties.iter().any(|p| {
                 p.name.eq_ignore_ascii_case("access")
                     && p.value.trim().eq_ignore_ascii_case("internal")
@@ -1144,6 +1159,7 @@ pub(crate) mod test_fixtures {
             closed_enum: true,
             enum_impls: vec![("icustominterface".into(), ObjectRef::Id(50101))],
             lookup_pages: vec!["\"Demo Lookup\"".into()],
+            obsolete_gone: true,
             internal: true,
         }
     }

@@ -1570,6 +1570,7 @@ mod tests {
             internal: false,
             enum_impls: Vec::new(),
             lookup_pages: Vec::new(),
+            obsolete_gone: false,
         }
     }
 

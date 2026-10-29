@@ -20,7 +20,7 @@
 //! runtime parameter, making the scoping visible and compiler-checkable at
 //! each call site.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::ObjectKind;
@@ -638,6 +638,33 @@ impl ResolveIndex {
                     }
                 }
             }
+        }
+
+        // An object declared `ObsoleteState = Moved`/`Removed` binds no
+        // reference while another of its name or number exists
+        // (`ObjectNode::obsolete_gone`): Base Application's `Moved` stub of
+        // `No. Series` gives way to Business Foundation's table, for its own
+        // code (the own-app shadow) and for every app that sees both.
+        let gone: HashSet<&ObjectNodeId> = graph
+            .objects
+            .iter()
+            .filter(|o| o.obsolete_gone)
+            .map(|o| &o.id)
+            .collect();
+        if !gone.is_empty() {
+            let prune = |ids: &mut Vec<ObjectNodeId>| {
+                if ids.iter().any(|id| !gone.contains(id)) {
+                    ids.retain(|id| !gone.contains(id));
+                }
+            };
+            objects_by_name.values_mut().for_each(prune);
+            objects_by_id.values_mut().for_each(prune);
+            objs_by_number.retain(|&(_, kind, n), id| {
+                !gone.contains(&*id)
+                    || !objects_by_id
+                        .get(&(kind, n))
+                        .is_some_and(|ids| ids.iter().any(|o| !gone.contains(o)))
+            });
         }
 
         ResolveIndex {
@@ -1527,6 +1554,7 @@ mod tests {
             internal: false,
             enum_impls: Vec::new(),
             lookup_pages: Vec::new(),
+            obsolete_gone: false,
         }
     }
 

@@ -666,6 +666,8 @@ fn ingest_abi_objects(
             enum_impls: Vec::new(),
             // Symbol-only tables' `LookupPageID` is not read (yet).
             lookup_pages: Vec::new(),
+            // Symbol-only objects' `ObsoleteState` is not read (yet).
+            obsolete_gone: false,
         });
 
         for routine in &abi_obj.routines {

@@ -4986,6 +4986,7 @@ pageextension 52911 "ExtA" extends BasePage
                 internal: false,
                 enum_impls: Vec::new(),
                 lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
             ObjectNode {
                 id: base_obj_id.clone(),
@@ -5007,6 +5008,7 @@ pageextension 52911 "ExtA" extends BasePage
                 internal: false,
                 enum_impls: Vec::new(),
                 lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
         ];
 
@@ -5163,6 +5165,7 @@ pageextension 52911 "ExtA" extends BasePage
                 internal: false,
                 enum_impls: Vec::new(),
                 lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
             ObjectNode {
                 id: dep_obj_id.clone(),
@@ -5184,6 +5187,7 @@ pageextension 52911 "ExtA" extends BasePage
                 internal: false,
                 enum_impls: Vec::new(),
                 lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
         ];
 
@@ -5367,6 +5371,7 @@ pageextension 52911 "ExtA" extends BasePage
                 internal: false,
                 enum_impls: Vec::new(),
                 lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
             ObjectNode {
                 id: dep_obj_id.clone(),
@@ -5388,6 +5393,7 @@ pageextension 52911 "ExtA" extends BasePage
                 internal: false,
                 enum_impls: Vec::new(),
                 lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
         ];
 
@@ -5768,6 +5774,7 @@ codeunit 50612 "MixedCU2"
                 internal: false,
                 enum_impls: Vec::new(),
                 lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
             ObjectNode {
                 id: dep_obj_id.clone(),
@@ -5789,6 +5796,7 @@ codeunit 50612 "MixedCU2"
                 internal: false,
                 enum_impls: Vec::new(),
                 lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
         ];
 
@@ -6010,6 +6018,7 @@ codeunit 50612 "MixedCU2"
             internal: false,
             enum_impls: Vec::new(),
             lookup_pages: Vec::new(),
+            obsolete_gone: false,
         }];
 
         let routines = vec![RoutineNode {
@@ -6163,6 +6172,7 @@ codeunit 50612 "MixedCU2"
                 internal: false,
                 enum_impls: Vec::new(),
                 lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
             ObjectNode {
                 id: sub_obj_id.clone(),
@@ -6184,6 +6194,7 @@ codeunit 50612 "MixedCU2"
                 internal: false,
                 enum_impls: Vec::new(),
                 lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
         ];
 
@@ -6766,6 +6777,7 @@ codeunit 50203 "NoTriggerCU"
             internal: false,
             enum_impls: Vec::new(),
             lookup_pages: Vec::new(),
+            obsolete_gone: false,
         }];
         let mut topology = DependencyGraph::default();
         topology.add_dependency(ws_ref, dep_ref);
@@ -7067,6 +7079,7 @@ codeunit 50300 "OverloadCU"
             internal: false,
             enum_impls: Vec::new(),
             lookup_pages: Vec::new(),
+            obsolete_gone: false,
         };
         (graph, index, surface, from_obj)
     }
@@ -11341,6 +11354,7 @@ codeunit 50000 "Caller"
             internal: false,
             enum_impls: Vec::new(),
             lookup_pages: Vec::new(),
+            obsolete_gone: false,
         });
 
         // Event-publisher routine: abi_routine_kind=EventPublisher, abi_event_kind=Integration.
@@ -13616,6 +13630,7 @@ codeunit 53971 "OverloadNCaller"
                 internal: false,
                 enum_impls: Vec::new(),
                 lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
             ObjectNode {
                 id: target_obj_id.clone(),
@@ -13637,6 +13652,7 @@ codeunit 53971 "OverloadNCaller"
                 internal: false,
                 enum_impls: Vec::new(),
                 lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
         ];
 
@@ -14015,6 +14031,7 @@ codeunit 53975 "Overload3Caller"
                 internal: false,
                 enum_impls: Vec::new(),
                 lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
             ObjectNode {
                 id: dep_obj_id.clone(),
@@ -14036,6 +14053,7 @@ codeunit 53975 "Overload3Caller"
                 internal: false,
                 enum_impls: Vec::new(),
                 lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
         ];
 
@@ -14218,6 +14236,7 @@ codeunit 53975 "Overload3Caller"
                 internal: false,
                 enum_impls: Vec::new(),
                 lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
             ObjectNode {
                 id: target_obj_id.clone(),
@@ -14239,6 +14258,7 @@ codeunit 53975 "Overload3Caller"
                 internal: false,
                 enum_impls: Vec::new(),
                 lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
         ];
 

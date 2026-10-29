@@ -128,6 +128,7 @@ mod cli_inputs_frozen;
 mod cli_inventory_cross_app;
 mod cli_lookup_page_run;
 mod cli_loose_fingerprint;
+mod cli_moved_table_resolution;
 mod cli_numberless_object_ids;
 mod cli_object_display;
 mod cli_object_ref_integer_arg;

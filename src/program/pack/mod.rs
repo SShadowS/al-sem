@@ -73,7 +73,8 @@ use crate::program::resolve::decl_surface::RoutineMeta;
 /// 9: `ObjectNode::internal`.
 /// 10: `AbiParamRetained::array_dims`.
 /// 11: `ObjectNode::lookup_pages`.
-pub const PACK_SCHEMA: u32 = 11;
+/// 12: `ObjectNode::obsolete_gone`.
+pub const PACK_SCHEMA: u32 = 12;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PackedFile {
@@ -540,13 +541,14 @@ mod tests {
     /// Stated precondition: set by assignment, whatever the fixture holds.
     #[test]
     fn pack_round_trips_method_ids() {
-        assert_eq!(PACK_SCHEMA, 11);
+        assert_eq!(PACK_SCHEMA, 12);
         let mut pack = sample_pack();
         pack.files[0].routines[0].abi_method_id = Some(-42);
         let meta = &mut pack.files[0].routine_meta[0].1;
         (meta.method_id, meta.try_function) = (Some(-7), true);
         pack.files[0].objects[0].internal = true;
         pack.files[0].objects[0].lookup_pages = vec!["\"Demo List\"".into()];
+        pack.files[0].objects[0].obsolete_gone = true;
         pack.self_hash = compute_self_hash(&pack);
         let back = decode(&encode(&pack).expect("encode")).expect("decode");
         assert_eq!(back.files[0].routines[0].abi_method_id, Some(-42));
@@ -560,6 +562,10 @@ mod tests {
             back.files[0].objects[0].lookup_pages,
             [crate::program::str_pool::SharedStr::from("\"Demo List\"")],
             "schema 11: ObjectNode::lookup_pages"
+        );
+        assert!(
+            back.files[0].objects[0].obsolete_gone,
+            "schema 12: ObjectNode::obsolete_gone"
         );
     }
 

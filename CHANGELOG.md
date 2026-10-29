@@ -274,6 +274,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An object declared `ObsoleteState = Moved` (or `Removed`) binds no reference
+  while another of its name or number is visible.** Base Application keeps
+  `table 308 "No. Series"` (and `No. Series Line`, `Source Code Setup`,
+  `Reason Code`, …: 8 tables) as `Moved` stubs pointing to Business Foundation,
+  under `#if not CLEANSCHEMA27`. For every app seeing both, the name resolved
+  to two tables, ambiguous, so `Record "No. Series"` had no table; and Base
+  Application's own references bound to its stub through the own-app shadow.
+  The index now drops such an object wherever an alternative exists
+  (`ObjectNode::obsolete_gone`, pack schema 12; a symbol-only object's state is
+  not read yet). Continia DO's dependency-body `ambiguousResolved`: 17 → 15
+  (CDN's `InvalidCharsInNoSeries(NoSeriesRec)`). Test
+  `cli_moved_table_resolution`.
+
 - **Overload selection: a DotNet argument picks the DotNet `var` overload, and
   framework methods' Integer results type.** Every DotNet type canonicalizes to
   `dotnet`, and the `var` exact-text rule called a `DotNet XmlElement` against
