@@ -286,9 +286,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RecordID.TableNo())`). An untyped argument no longer stops the pick when
   the typed ones prove every other candidate unable (rule (B) holds without
   it): `XMLDOMMgt.FindNode(DotNetDoc.DocumentElement, Path, Found)`, whose
-  first argument is an untyped DotNet member. Continia DO's dependency-body
-  `ambiguousResolved`: 59 → 33. Tests `cli_dotnet_var_overload`,
-  `cli_record_integer_builtin_arg`.
+  first argument is an untyped DotNet member. An object-id reference
+  (`Database::Contact`, `Page::"…"`, `Codeunit::"…"`) and an enum value's
+  `AsInteger()` type as Integer (`GetIntegrationTableMapping(Mapping,
+  DATABASE::Contact)`, `IsValidConnector(Connector.AsInteger())`). Continia DO's
+  dependency-body `ambiguousResolved`: 59 → 21. Tests
+  `cli_dotnet_var_overload`, `cli_record_integer_builtin_arg`,
+  `cli_object_ref_integer_arg`.
 
 - **A RecordRef write behind `if not R.FieldExist(N) then exit;` writes only a
   table that has field `N`** (G36). Continia DO's `UpdateHandledFields(var

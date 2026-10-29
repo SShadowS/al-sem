@@ -910,6 +910,28 @@ fn type_one_arg(
                 }
             }
         }
+        // An object-id reference (`Database::Contact`, `Page::"…"`) is the
+        // object's number, an Integer: Base Application's
+        // `GetIntegrationTableMapping(Mapping, DATABASE::Contact)` over
+        // `(…, RecordId)` / `(…, Integer)` stayed ambiguous.
+        ExprKind::DatabaseReference(text) => {
+            let keyword = text.split("::").next().unwrap_or("").trim();
+            if [
+                "database", "table", "page", "codeunit", "report", "query", "xmlport",
+            ]
+            .iter()
+            .any(|k| keyword.eq_ignore_ascii_case(k))
+            {
+                ArgDispatchInfo {
+                    canonical: Some(CanonicalArgType::Base("integer".to_string())),
+                    exact_text: Some("integer".to_string()),
+                    literal_kind: None,
+                    var_passable: false,
+                }
+            } else {
+                ArgDispatchInfo::untyped()
+            }
+        }
         ExprKind::Literal(lit) => match literal_canonical(lit) {
             Some((canonical, kind)) => {
                 let text = match &canonical {
@@ -1444,6 +1466,20 @@ fn type_call_result_arg_member(
     let base_ty_text = match &file.ir.expr(base_expr).kind {
         ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => {
             match caller_scope_symbol(n, routine, object_globals) {
+                // An enum value's `AsInteger()`: its ordinal (System
+                // Application's `IsValidConnector(Connector.AsInteger())`).
+                CallerScopeSymbol::Found(Some(t))
+                    if inner_arity == 0
+                        && unquote_identifier(member).fold_identifier() == "asinteger"
+                        && t.trim_start().to_ascii_lowercase().starts_with("enum ") =>
+                {
+                    return ArgDispatchInfo {
+                        canonical: Some(CanonicalArgType::Base("integer".to_string())),
+                        exact_text: Some("integer".to_string()),
+                        literal_kind: None,
+                        var_passable: false,
+                    };
+                }
                 CallerScopeSymbol::Found(Some(t)) => t,
                 _ => return ArgDispatchInfo::untyped(),
             }

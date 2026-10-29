@@ -130,6 +130,7 @@ mod cli_lookup_page_run;
 mod cli_loose_fingerprint;
 mod cli_numberless_object_ids;
 mod cli_object_display;
+mod cli_object_ref_integer_arg;
 mod cli_p1_enclosing_member;
 mod cli_p1_inventory;
 mod cli_parameterless_symbol_method;
