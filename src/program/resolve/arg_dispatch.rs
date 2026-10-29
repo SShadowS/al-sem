@@ -880,6 +880,26 @@ fn type_one_arg(
                     let Some(o) = object_by_id(graph, from) else {
                         return ArgDispatchInfo::untyped();
                     };
+                    // A report's / XmlPort's dataitem by name: a record of its
+                    // source table (Base Application's `ReservMgt.
+                    // SetReservSource("Prod. Order Component")` in Replan
+                    // Production Order over `(Variant)` / `(RecordRef)`).
+                    if let Some(d) = o.dataitems.iter().find(|d| d.name_lc == field_lc.as_str()) {
+                        return match index.resolve_object_ref(
+                            graph,
+                            from.clone(),
+                            ObjectKind::Table,
+                            &d.source_table,
+                        ) {
+                            ObjectRefResolution::Unique(id) => ArgDispatchInfo {
+                                canonical: Some(CanonicalArgType::Object(id)),
+                                exact_text: None,
+                                literal_kind: None,
+                                var_passable: true,
+                            },
+                            _ => ArgDispatchInfo::untyped(),
+                        };
+                    }
                     let ReceiverType::Record { table: Some(id) } =
                         infer_implicit_rec(routine, o, graph, index)
                     else {

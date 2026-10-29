@@ -323,9 +323,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GenJournalLine."Document Type"::Payment, true)` over `(…; Enum …; …)` /
   `(…; var Record …; …)`), and an enum type's `FromInteger(i)` as that enum
   (`ShowComments("Service Comment Line Type".FromInteger(Type))` over `(Option
-  …)` / `(Enum …)`). Continia DO's dependency-body `ambiguousResolved`: 21 → 17
-  (→ 13 with the Moved-object fix). Tests `cli_secrettext_arg`,
-  `cli_array_param_overload`, `cli_object_ref_integer_arg`.
+  …)` / `(Enum …)`), and a report's dataitem passed by name as a record of
+  its source table (`ReservMgt.SetReservSource("Prod. Order Component")` over
+  `(Variant)` / `(RecordRef)`). Continia DO's dependency-body
+  `ambiguousResolved`: 21 → 17 (→ 12 with the Moved-object fix). Tests
+  `cli_secrettext_arg`, `cli_array_param_overload`,
+  `cli_object_ref_integer_arg`, `cli_dataitem_name_arg`.
 
 - **A RecordRef write behind `if not R.FieldExist(N) then exit;` writes only a
   table that has field `N`** (G36). Continia DO's `UpdateHandledFields(var

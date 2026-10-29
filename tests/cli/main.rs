@@ -99,6 +99,7 @@ mod cli_caller_owned_rec;
 mod cli_d35_unknown_commit;
 mod cli_d39_dependency_page;
 mod cli_d39_helper_persists;
+mod cli_dataitem_name_arg;
 mod cli_dataitem_record_ops;
 mod cli_decision7_precedence;
 mod cli_dependency_diagnostics;
