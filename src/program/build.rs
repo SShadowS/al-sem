@@ -1,13 +1,15 @@
 //! Builds a `ProgramGraph` from an `AppSetSnapshot`.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
+
+use al_syntax::ir::ObjectKind;
 
 use crate::program::abi_ingest::AbiCache;
 use crate::program::dep_cache::{DepCache, DepKey, DepNodes};
 use crate::program::dep_summary::{BuildParse, DepUnitSummary, summarize_file};
 use crate::program::graph::{AbiIngestError, ObjectIndex, ProgramGraph};
-use crate::program::node::{AppRef, AppRegistry, RoutineNodeId};
+use crate::program::node::{AppRef, AppRegistry, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::{AbiParams, Access, ObjectNode, RoutineNode, extract_nodes};
 use crate::program::node_set::NodeSet;
 use crate::program::profile::BuildProfile;
@@ -219,8 +221,34 @@ fn build_dep_nodes(
         .map(|unit| crate::program::abi_ingest::abi_node_counts(unit, abi_cache))
         .fold((0, 0), |(o, r), (uo, ur)| (o + uo, r + ur));
     let source_files = || summaries.iter().flat_map(|unit| &unit.files);
-    let object_total = abi_object_total + source_files().map(|f| f.objects.len()).sum::<usize>();
-    let routine_total = abi_routine_total + source_files().map(|f| f.routines.len()).sum::<usize>();
+    // Step 2c's nodes, built here so the reservation counts them: the control
+    // add-ins a dependency with source declares only in its symbols (see
+    // `source_app_symbol_control_addins`).
+    let in_source: std::collections::HashSet<&ObjectNodeId> = source_files()
+        .flat_map(|f| f.objects.iter().map(|o| &o.id))
+        .collect();
+    let symbol_addins: Vec<(Vec<ObjectNode>, Vec<RoutineNode>)> = snap
+        .apps
+        .iter()
+        .filter(|unit| unit.source.is_some() && unit.id != snap.workspace_app)
+        .map(|unit| {
+            crate::program::abi_ingest::source_app_symbol_control_addins(
+                unit,
+                apps.intern(&unit.id),
+                abi_cache,
+                |id| in_source.contains(id),
+            )
+        })
+        .collect();
+    let (addin_object_total, addin_routine_total) = symbol_addins
+        .iter()
+        .fold((0, 0), |(o, r), (uo, ur)| (o + uo.len(), r + ur.len()));
+    let object_total = abi_object_total
+        + addin_object_total
+        + source_files().map(|f| f.objects.len()).sum::<usize>();
+    let routine_total = abi_routine_total
+        + addin_routine_total
+        + source_files().map(|f| f.routines.len()).sum::<usize>();
     let meta_total = source_files().map(|f| f.routine_meta.len()).sum();
     let mut pool = StrPool::default();
     let mut objects: Vec<ObjectNode> = Vec::with_capacity(object_total);
@@ -232,10 +260,14 @@ fn build_dep_nodes(
     // dedup unions event facts per source file only.
     let mut source_unit = 1u32..;
     for unit in summaries {
+        let method_ids = symbol_method_ids(snap, &unit.app, apps, abi_cache);
         for mut file in unit.files {
             let file_unit = source_unit.next().and_then(std::num::NonZeroU32::new);
+            let meta: HashMap<&RoutineNodeId, &RoutineMeta> =
+                file.routine_meta.iter().map(|(id, m)| (id, m)).collect();
             for r in &mut file.routines {
                 r.source_unit = file_unit;
+                r.abi_method_id = source_method_id(&method_ids, r, meta.get(&r.id).copied());
             }
             file.objects.share_strings(&mut pool);
             file.routines.share_strings(&mut pool);
@@ -282,7 +314,15 @@ fn build_dep_nodes(
         routines.extend(abi_routines);
     }
 
-    // The count-first contract: steps 2 and 2b filled exactly the counted
+    // ── Step 2c: a source dependency's symbol-only control add-ins ───────────
+    for (mut addin_objects, mut addin_routines) in symbol_addins {
+        addin_objects.share_strings(&mut pool);
+        addin_routines.share_strings(&mut pool);
+        objects.extend(addin_objects);
+        routines.extend(addin_routines);
+    }
+
+    // The count-first contract: steps 2, 2b and 2c filled exactly the counted
     // totals, and no list grew past its single reservation. `dep_meta` is
     // reserved exactly too: step 2 extends it with `meta_total` entries.
     debug_assert_eq!(
@@ -320,6 +360,47 @@ fn build_dep_nodes(
         lsp: Default::default(),
         lsp_events: Default::default(),
     }
+}
+
+/// The method ids dependency `app`'s symbols declare
+/// (`abi_ingest::symbol_method_ids`), for that app's source routines: the
+/// runtime's id a compiled caller invokes them by, which a signature cannot
+/// always give (a `Dictionary of [Text, Text]` parameter). Empty when the app
+/// has no symbols.
+type SymbolMethodIds = HashMap<
+    (ObjectNodeId, crate::program::node::SharedStr, usize),
+    Vec<crate::program::abi_ingest::SymbolOverload>,
+>;
+
+fn symbol_method_ids(
+    snap: &AppSetSnapshot,
+    app: &crate::snapshot::identity::AppId,
+    apps: &mut AppRegistry,
+    abi_cache: &AbiCache,
+) -> SymbolMethodIds {
+    let Some(unit) = snap.apps.iter().find(|u| &u.id == app) else {
+        return HashMap::new();
+    };
+    crate::program::abi_ingest::symbol_method_ids(unit, apps.intern(app), abi_cache)
+}
+
+/// Source routine `r`'s method id in its app's symbols (`meta`: its declared
+/// parameters). A trigger or member routine has none there.
+fn source_method_id(
+    ids: &SymbolMethodIds,
+    r: &RoutineNode,
+    meta: Option<&RoutineMeta>,
+) -> Option<i32> {
+    if r.is_trigger || r.id.enclosing_member_lc.is_some() {
+        return None;
+    }
+    let overloads = ids.get(&(r.id.object.clone(), r.id.name_lc.clone(), r.id.params_count))?;
+    let params: Vec<(bool, Option<&str>)> = meta?
+        .params
+        .iter()
+        .map(|p| (p.by_ref, p.ty.as_deref()))
+        .collect();
+    crate::program::abi_ingest::symbol_method_id_of(overloads, &params)
 }
 
 /// Merge a [`DepLayer`] with a freshly-extracted PRIMARY (workspace)
@@ -383,9 +464,18 @@ pub fn assemble_program_graph(
         routines,
         obj_index,
         friends: dep.friends.clone(),
+        closed_internal_interfaces: HashSet::new(),
+        workspace_friendless: snap
+            .apps
+            .iter()
+            .find(|u| u.id == snap.workspace_app)
+            .is_some_and(|u| u.internals_visible_to.is_empty()),
+        lookup_pages: HashMap::new(),
         abi_ingest_errors: dep.abi_ingest_errors.clone(),
         workspace_rows,
     };
+    graph.lookup_pages = source_lookup_pages(&graph);
+    graph.closed_internal_interfaces = closed_internal_interfaces(&graph, snap);
 
     // ── Inject synthetic platform-event publishers ───────────────────────────
     // Binds subscribers to the table's implicit DB-trigger / validate events,
@@ -524,38 +614,99 @@ fn wire_friend_authorizations(
     for (i, unit) in snap.apps.iter().enumerate() {
         let exposing_ref = app_refs[i];
         for friend in &unit.internals_visible_to {
-            // Same GUID-first, name+publisher-fallback resolution as the
-            // dependency wiring above — a `<Module>` friend entry carries no
-            // version, so the fallback compares publisher instead.
-            let by_guid = (!friend.app_id.is_empty())
-                .then(|| {
-                    snap.apps
-                        .iter()
-                        .zip(app_refs.iter())
-                        .find(|(u, _)| {
-                            !u.id.guid.is_empty() && u.id.guid.eq_ignore_ascii_case(&friend.app_id)
-                        })
-                        .map(|(_, r)| *r)
-                })
-                .flatten();
-            let friend_ref = by_guid.or_else(|| {
-                snap.apps
-                    .iter()
-                    .zip(app_refs.iter())
-                    .find(|(u, _)| {
-                        u.id.name.eq_ignore_ascii_case(&friend.name)
-                            && u.id.publisher.eq_ignore_ascii_case(&friend.publisher)
-                    })
-                    .map(|(_, r)| *r)
-            });
-
-            if let Some(friend_ref) = friend_ref {
-                friends.entry(exposing_ref).or_default().insert(friend_ref);
+            if let Some(f) = loaded_friend(snap, friend) {
+                friends.entry(exposing_ref).or_default().insert(app_refs[f]);
             }
             // Friends not present in the snapshot are silently skipped (open-world).
         }
     }
     friends
+}
+
+/// The index in `snap.apps` of the loaded app a friend entry names, or `None`
+/// when no loaded app matches. Same GUID-first, name+publisher-fallback
+/// resolution as the dependency wiring above — a `<Module>` friend entry
+/// carries no version, so the fallback compares publisher instead.
+fn loaded_friend(snap: &AppSetSnapshot, friend: &crate::app_package::FriendApp) -> Option<usize> {
+    let by_guid = (!friend.app_id.is_empty())
+        .then(|| {
+            snap.apps.iter().position(|u| {
+                !u.id.guid.is_empty() && u.id.guid.eq_ignore_ascii_case(&friend.app_id)
+            })
+        })
+        .flatten();
+    by_guid.or_else(|| {
+        snap.apps.iter().position(|u| {
+            u.id.name.eq_ignore_ascii_case(&friend.name)
+                && u.id.publisher.eq_ignore_ascii_case(&friend.publisher)
+        })
+    })
+}
+
+/// [`ProgramGraph::lookup_pages`]: every table with source, in any app, with
+/// the `LookupPageId` values it and the loaded table extensions of it declare
+/// (`ObjectNode::lookup_pages`). An extension whose base table does not
+/// resolve to a table with source adds nothing. A dependency's table counts
+/// as the workspace's does: Continia DO's `Page.Run(0, TempServDocLog)` on
+/// Base Application's `Service Document Log` (`LookupPageID = "Service
+/// Document Log"`) was an unresolved dynamic run.
+fn source_lookup_pages(graph: &ProgramGraph) -> HashMap<ObjectNodeId, Vec<String>> {
+    let pages =
+        |o: &ObjectNode| -> Vec<String> { o.lookup_pages.iter().map(|p| p.to_string()).collect() };
+    let mut out: HashMap<ObjectNodeId, Vec<String>> = graph
+        .objects
+        .iter()
+        .filter(|o| o.id.kind == ObjectKind::Table && o.tier != TrustTier::SymbolOnly)
+        .map(|o| (o.id.clone(), pages(o)))
+        .collect();
+    for ext in graph
+        .objects
+        .iter()
+        .filter(|o| o.id.kind == ObjectKind::TableExtension && o.tier != TrustTier::SymbolOnly)
+    {
+        let Some(base) = ext
+            .extends_target
+            .as_deref()
+            .and_then(|t| graph.resolve_object(ext.id.app, ObjectKind::Table, t))
+        else {
+            continue;
+        };
+        if let Some(found) = out.get_mut(&base.id) {
+            found.extend(pages(ext));
+        }
+    }
+    out
+}
+
+/// G28: the interfaces declared `Access = Internal` whose every implementer is
+/// loaded, in any app with source. Only the declaring app and its
+/// `internalsVisibleTo` friends can name an internal interface, so once every
+/// friend that app's manifest declares is a loaded app, no app outside the
+/// program can implement it. An app with a friend not loaded closes none
+/// (open-world). A dependency's interface closes too: Continia CDN's internal
+/// `IEndpointCreator` (CDN's friends all loaded) was dispatched open-world.
+fn closed_internal_interfaces(
+    graph: &ProgramGraph,
+    snap: &AppSetSnapshot,
+) -> HashSet<ObjectNodeId> {
+    let closed_apps: HashSet<AppRef> = snap
+        .apps
+        .iter()
+        .filter(|u| u.source.is_some() || u.id == snap.workspace_app)
+        .filter(|u| {
+            u.internals_visible_to
+                .iter()
+                .all(|f| loaded_friend(snap, f).is_some())
+        })
+        .filter_map(|u| graph.apps.find(&u.id))
+        .collect();
+    graph
+        .objects
+        .iter()
+        .filter(|o| o.id.kind == ObjectKind::Interface && o.internal)
+        .filter(|o| closed_apps.contains(&o.id.app))
+        .map(|o| o.id.clone())
+        .collect()
 }
 
 /// Synthetic platform-publisher arity: a generous upper bound so the resolve
@@ -654,6 +805,7 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
                 // Synthesized, not ingested from any `SymbolReference.json`
                 // — no ABI parameter metadata exists to retain.
                 abi_params: AbiParams::Missing,
+                abi_method_id: None,
             });
         }
     }
@@ -1582,6 +1734,7 @@ codeunit 50100 "Ws2 Cu"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }
     }
 
@@ -1625,6 +1778,7 @@ codeunit 50100 "Ws2 Cu"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }
     }
 

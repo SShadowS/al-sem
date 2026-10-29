@@ -522,6 +522,29 @@ pub(crate) fn direct_facts_for_routine(
     routine: &ModelRoutine,
     publisher_events: &[&EventSymbol],
 ) -> (Vec<CapabilityFact>, String, Vec<String>) {
+    // A cataloged platform native: known behaviour, no AL body needed.
+    if let Some(n) = crate::program::model::platform_natives::pure_native(routine) {
+        let facts = if n.may_error {
+            vec![CapabilityFact {
+                subject: routine.id.clone(),
+                op: "error-implicit",
+                resource_kind: "error",
+                resource_id: None,
+                resource_arg_source: None,
+                confidence: "static",
+                provenance: "direct",
+                via: "self",
+                witness_operation_id: None,
+                witness_callsite_id: None,
+                witness_first_hop_operation_id: None,
+                witness_first_hop_event_id: None,
+                extra: None,
+            }]
+        } else {
+            Vec::new()
+        };
+        return (facts, "complete".to_string(), Vec::new());
+    }
     if !routine.body_available {
         return (
             Vec::new(),
@@ -992,8 +1015,9 @@ pub(crate) fn direct_facts_for_routine(
     }
 
     // ── ui-window-open family (al-sem ui-window-open.ts) ───────────────────
-    // Bare StrMenu; Page.Run / Report.Run (object-run); Page/Report.RunModal
-    // (static keyword receiver OR a Page/Report-typed variable receiver).
+    // Bare StrMenu; Page.Run / Report.Run (object-run); Run / RunModal on the
+    // static keyword receiver OR a Page/Report-typed variable receiver (`Run` on
+    // a variable was missed, G15).
     for cs in &call_sites {
         let matched = match &cs.callee {
             PCallee::Bare { name } => name.to_lowercase() == "strmenu",
@@ -1001,7 +1025,8 @@ pub(crate) fn direct_facts_for_routine(
                 object_kind == "Page" || object_kind == "Report"
             }
             PCallee::Member { receiver, method } => {
-                if method.to_lowercase() != "runmodal" {
+                let method = method.to_lowercase();
+                if method != "runmodal" && method != "run" {
                     false
                 } else {
                     let r = receiver.to_lowercase();
@@ -1021,6 +1046,33 @@ pub(crate) fn direct_facts_for_routine(
         facts.push(CapabilityFact {
             subject: routine.id.clone(),
             op: "ui-window-open",
+            resource_kind: "ui",
+            resource_id: None,
+            resource_arg_source: None,
+            confidence: "static",
+            provenance: "direct",
+            via: "self",
+            witness_operation_id: None,
+            witness_callsite_id: Some(cs.id.clone()),
+            witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
+            extra: None,
+        });
+    }
+
+    // ── client dialogs (G26) ────────────────────────────────────────────────
+    // File pickers / download prompts and progress windows: the body
+    // extractor's own classifier, so the two cannot drift.
+    for cs in &call_sites {
+        let Some(op) = crate::program::body::capability::ui_events_error::ui_dialog_call(
+            &cs.callee,
+            &receiver_type_of,
+        ) else {
+            continue;
+        };
+        facts.push(CapabilityFact {
+            subject: routine.id.clone(),
+            op,
             resource_kind: "ui",
             resource_id: None,
             resource_arg_source: None,
@@ -1081,6 +1133,45 @@ pub(crate) fn direct_facts_for_routine(
                 witness_first_hop_event_id: None,
                 extra: None,
             });
+        }
+    }
+
+    // ── implicit runtime errors (G20) ───────────────────────────────────────
+    // A record lookup in statement position (its Boolean discarded) raises an
+    // error when no record matches; TestField and FieldError may always raise
+    // one. Their own op, not `error-throw`: the ordering engine and the
+    // detectors read `error-throw` as an explicit `Error`, and every unguarded
+    // `Get` is not that. `prove … throws-error` counts both. No resource id (a
+    // resource id is an identity, the snapshot's closure rule): like
+    // `error-throw`, the evidence's excerpt names the call.
+    {
+        use crate::program::body::capability::ui_events_error::{
+            implicit_error_call, implicit_error_record_op,
+        };
+        let implicit = |op: Option<String>, cs: Option<String>| CapabilityFact {
+            subject: routine.id.clone(),
+            op: "error-implicit",
+            resource_kind: "error",
+            resource_id: None,
+            resource_arg_source: None,
+            confidence: "static",
+            provenance: "direct",
+            via: "self",
+            witness_operation_id: op,
+            witness_callsite_id: cs,
+            witness_first_hop_operation_id: None,
+            witness_first_hop_event_id: None,
+            extra: None,
+        };
+        for op in &record_ops {
+            if implicit_error_record_op(&op.op, op.in_statement_position).is_some() {
+                facts.push(implicit(Some(op.id.clone()), None));
+            }
+        }
+        for cs in &call_sites {
+            if implicit_error_call(&cs.callee, &receiver_type_of).is_some() {
+                facts.push(implicit(None, Some(cs.id.clone())));
+            }
         }
     }
 

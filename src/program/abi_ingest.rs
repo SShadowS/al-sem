@@ -111,6 +111,7 @@ fn retain_abi_params(routine: &AbiRoutine) -> AbiParams {
                 subtype_id: p.subtype_id,
                 subtype_raw_name: p.subtype_raw_name.as_deref().map(SharedStr::from),
                 subtype_tag: p.subtype_tag,
+                array_dims: p.array_dims.as_deref().map(SharedStr::from),
             })
             .collect(),
     )
@@ -330,7 +331,9 @@ fn abi_routine_kind_from_str(
                     (AbiEventKind::Integration, Some(PublisherKind::Integration))
                 }
                 SrAbiEventKind::Business => (AbiEventKind::Business, Some(PublisherKind::Business)),
-                SrAbiEventKind::Unknown => (AbiEventKind::Internal, Some(PublisherKind::Internal)),
+                SrAbiEventKind::Internal | SrAbiEventKind::Unknown => {
+                    (AbiEventKind::Internal, Some(PublisherKind::Internal))
+                }
             };
             (AbiRoutineKind::EventPublisher, abi_ek, pk)
         }
@@ -452,6 +455,84 @@ fn load_abi(unit: &AppUnit, cache: &AbiCache) -> Option<Arc<SymbolReferenceAbi>>
     }
 }
 
+/// One symbol entry's parameters, `(var, folded type text)`, and method id.
+pub(crate) type SymbolOverload = (Vec<(bool, String)>, i32);
+
+/// The method ids `unit`'s symbols declare, by (object, folded name, arity),
+/// each with the parameters it was declared with. A source routine's node id
+/// fingerprints its parameters differently from an ABI one's, so a
+/// dependency's source routine is matched on this key and, among overloads,
+/// on its parameter types ([`symbol_method_id_of`]).
+pub(crate) fn symbol_method_ids(
+    unit: &AppUnit,
+    app: AppRef,
+    cache: &AbiCache,
+) -> std::collections::HashMap<(ObjectNodeId, SharedStr, usize), Vec<SymbolOverload>> {
+    let mut out: std::collections::HashMap<_, Vec<SymbolOverload>> =
+        std::collections::HashMap::new();
+    let Some(abi) = load_abi(unit, cache) else {
+        return out;
+    };
+    for abi_obj in &abi.objects {
+        let obj_id = abi_object_node_id(app, abi_obj);
+        for routine in &abi_obj.routines {
+            let Some(id) = routine.method_id.filter(|_| routine.parameters_known) else {
+                continue;
+            };
+            let params = routine
+                .parameters
+                .iter()
+                .map(|p| (p.is_var, fold_type_text(&p.type_text)))
+                .collect();
+            out.entry((
+                obj_id.clone(),
+                routine.name.fold_identifier().into(),
+                routine.parameters.len(),
+            ))
+            .or_default()
+            .push((params, id));
+        }
+    }
+    out
+}
+
+/// The symbols' method id of a source routine with `params` (`(var, type
+/// text)`), among `overloads` of its name and arity: the one entry, or the one
+/// whose parameter types match. `None` when no entry or several fit.
+pub(crate) fn symbol_method_id_of(
+    overloads: &[SymbolOverload],
+    params: &[(bool, Option<&str>)],
+) -> Option<i32> {
+    if let [(_, id)] = overloads {
+        return Some(*id);
+    }
+    // The symbols' text of a generic type is its bare keyword (`dictionary`):
+    // it matches the source type's leading keyword.
+    let same_type = |abi: &str, src: &str| {
+        let src = fold_type_text(src);
+        src == abi || (!abi.contains(' ') && src.split(' ').next() == Some(abi))
+    };
+    let mut fitting = overloads.iter().filter(|(abi, _)| {
+        abi.iter()
+            .zip(params)
+            .all(|((v, t), (sv, st))| v == sv && st.is_some_and(|st| same_type(t, st)))
+    });
+    match (fitting.next(), fitting.next()) {
+        (Some((_, id)), None) => Some(*id),
+        _ => None,
+    }
+}
+
+/// A type text folded for comparison: lowercase, quotes dropped, whitespace
+/// collapsed.
+fn fold_type_text(t: &str) -> String {
+    t.replace('"', "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
 /// `(objects, routines)` that [`ingest_abi`] builds from `abi`: one
 /// `ObjectNode` per ABI object and one `RoutineNode` per ABI routine, with
 /// no filtering.
@@ -478,6 +559,35 @@ pub(crate) fn abi_node_counts(unit: &AppUnit, cache: &AbiCache) -> (usize, usize
 /// (H-3's `error` field covers the latter). Local and internal routines are
 /// no longer skipped (H-1) — see the loop-entry doc below.
 pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestResult {
+    ingest_abi_objects(unit, app, cache, |_| true)
+}
+
+/// The control add-ins a dependency WITH source declares only in its symbols:
+/// the nodes [`ingest_abi`] gives for each `ControlAddIn` whose id
+/// `in_source` does not hold. A package need not embed a `controladdin`'s
+/// `.al` (Continia's CDN embeds the page with `usercontrol(RefreshTimer;
+/// "CTS-CDN Refresh Timer")` but not the add-in), and an add-in has no AL body,
+/// so its symbols say all source would: its procedures and events. Without it,
+/// `CurrPage.RefreshTimer.Schedule(..)` had no add-in to resolve against.
+pub(crate) fn source_app_symbol_control_addins(
+    unit: &AppUnit,
+    app: AppRef,
+    cache: &AbiCache,
+    in_source: impl Fn(&ObjectNodeId) -> bool,
+) -> (Vec<ObjectNode>, Vec<RoutineNode>) {
+    let result = ingest_abi_objects(unit, app, cache, |id| {
+        id.kind == ObjectKind::ControlAddIn && !in_source(id)
+    });
+    (result.objects, result.routines)
+}
+
+/// [`ingest_abi`] over the ABI objects whose node id `keep` holds.
+fn ingest_abi_objects(
+    unit: &AppUnit,
+    app: AppRef,
+    cache: &AbiCache,
+    keep: impl Fn(&ObjectNodeId) -> bool,
+) -> AbiIngestResult {
     let Some(abi) = load_abi(unit, cache) else {
         return AbiIngestResult {
             objects: vec![],
@@ -488,12 +598,20 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
 
     // Presized to the exact counts `abi_node_counts` reports (issue #84), so
     // no app's vectors carry growth-by-doubling slack.
-    let (object_count, routine_count) = node_counts(&abi);
-    let mut objects: Vec<ObjectNode> = Vec::with_capacity(object_count);
+    let kept: Vec<(
+        &crate::engine::deps::symbol_reference::AbiObject,
+        ObjectNodeId,
+    )> = abi
+        .objects
+        .iter()
+        .map(|o| (o, abi_object_node_id(app, o)))
+        .filter(|(_, id)| keep(id))
+        .collect();
+    let routine_count = kept.iter().map(|(o, _)| o.routines.len()).sum();
+    let mut objects: Vec<ObjectNode> = Vec::with_capacity(kept.len());
     let mut routines: Vec<RoutineNode> = Vec::with_capacity(routine_count);
 
-    for abi_obj in &abi.objects {
-        let obj_id = abi_object_node_id(app, abi_obj);
+    for (abi_obj, obj_id) in kept {
         let kind = obj_id.kind;
 
         // Table fields (Task 3) — Table/TableExtension only. The physical
@@ -544,7 +662,12 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
             // A symbol-only enum stays open: symbol extensibility and value
             // mappings are not modelled (#264, Discovery D1).
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
+            // Symbol-only tables' `LookupPageID` is not read (yet).
+            lookup_pages: Vec::new(),
+            // Symbol-only objects' `ObsoleteState` is not read (yet).
+            obsolete_gone: false,
         });
 
         for routine in &abi_obj.routines {
@@ -664,6 +787,7 @@ pub fn ingest_abi(unit: &AppUnit, app: AppRef, cache: &AbiCache) -> AbiIngestRes
                 // folding yet — same rationale as `abi_overload_collapsed`
                 // above).
                 abi_params: retain_abi_params(routine),
+                abi_method_id: routine.method_id,
             });
         }
     }
@@ -756,6 +880,7 @@ mod tests {
                                 subtype_id: None,
                                 subtype_raw_name: None,
                                 subtype_tag: SubtypeTag::NoSubtype,
+                                array_dims: None,
                             },
                             AbiParameter {
                                 name: "p2".into(),
@@ -765,6 +890,7 @@ mod tests {
                                 subtype_id: None,
                                 subtype_raw_name: None,
                                 subtype_tag: SubtypeTag::NoSubtype,
+                                array_dims: None,
                             },
                         ],
                         return_type_text: None,
@@ -773,6 +899,7 @@ mod tests {
                         is_internal: false,
                         is_protected: false,
                         parameters_known: true,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -788,6 +915,7 @@ mod tests {
                             subtype_id: None,
                             subtype_raw_name: None,
                             subtype_tag: SubtypeTag::NoSubtype,
+                            array_dims: None,
                         }],
                         return_type_text: None,
                         return_type_id: None,
@@ -795,6 +923,7 @@ mod tests {
                         is_internal: false,
                         is_protected: false,
                         parameters_known: true,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -810,6 +939,7 @@ mod tests {
                             subtype_id: None,
                             subtype_raw_name: None,
                             subtype_tag: SubtypeTag::NoSubtype,
+                            array_dims: None,
                         }],
                         return_type_text: None,
                         return_type_id: None,
@@ -817,6 +947,7 @@ mod tests {
                         is_internal: false,
                         is_protected: false,
                         parameters_known: true,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -832,6 +963,7 @@ mod tests {
                             subtype_id: None,
                             subtype_raw_name: None,
                             subtype_tag: SubtypeTag::NoSubtype,
+                            array_dims: None,
                         }],
                         return_type_text: None,
                         return_type_id: None,
@@ -839,6 +971,7 @@ mod tests {
                         is_internal: false,
                         is_protected: false,
                         parameters_known: true,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -1020,6 +1153,7 @@ mod tests {
                         is_internal: false,
                         is_protected: false,
                         parameters_known: true,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -1034,6 +1168,7 @@ mod tests {
                         is_internal: false,
                         is_protected: false,
                         parameters_known: true,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -1048,6 +1183,7 @@ mod tests {
                         is_internal: true,
                         is_protected: false,
                         parameters_known: true,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -1065,6 +1201,7 @@ mod tests {
                         is_internal: false,
                         is_protected: true,
                         parameters_known: true,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -1181,6 +1318,7 @@ mod tests {
                     is_internal: false,
                     is_protected: false,
                     parameters_known: true,
+                    method_id: None,
                     attributes: vec![],
                     attributes_parsed: vec![],
                 }],
@@ -1299,6 +1437,7 @@ codeunit 50900 "Subscriber CU"
                     is_internal: true,
                     is_protected: false,
                     parameters_known: true,
+                    method_id: None,
                     attributes: vec![],
                     attributes_parsed: vec![],
                 }],
@@ -1585,6 +1724,7 @@ codeunit 50900 "Subscriber CU"
                         is_internal: false,
                         is_protected: false,
                         parameters_known: true,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -1599,6 +1739,7 @@ codeunit 50900 "Subscriber CU"
                         is_internal: false,
                         is_protected: false,
                         parameters_known: false,
+                        method_id: None,
                         attributes: vec![],
                         attributes_parsed: vec![],
                     },
@@ -1681,6 +1822,7 @@ codeunit 50900 "Subscriber CU"
                     is_internal: false,
                     is_protected: false,
                     parameters_known: true,
+                    method_id: None,
                     attributes: vec![],
                     attributes_parsed: vec![],
                 }],
@@ -1744,6 +1886,7 @@ codeunit 50900 "Subscriber CU"
             subtype_id,
             subtype_raw_name: subtype_raw_name.map(String::from),
             subtype_tag,
+            array_dims: None,
         }
     }
 
@@ -2090,6 +2233,7 @@ codeunit 50900 "Subscriber CU"
             event_kind: SrAbiEventKind::Unknown,
             parameters: vec![],
             parameters_known: false,
+            method_id: None,
             return_type_text: None,
             return_type_id: None,
             is_local: false,

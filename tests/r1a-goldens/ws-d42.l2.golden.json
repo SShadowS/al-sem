@@ -194,6 +194,14 @@
             },
             "opSubtype": "FindFirst"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/094165181057b3bc92b154adb48e8fb4489f94109f4ddc283d6fae63d7340f36/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -447,6 +455,14 @@
             },
             "opSubtype": "FindFirst"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/e6d6c2b142558b42d430ae866e8c6843b68e0d32bdc183dd036c89219840a2ee/op1"
         }
       ],
       "capabilityStatus": "complete",
@@ -857,6 +873,14 @@
           "provenance": "direct",
           "via": "self",
           "witnessCallsiteId": "r0/4032d182944bd7fbb902ebb020c8009aea2c02d85675d0eacbd65393e028c55e/cs0"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/4032d182944bd7fbb902ebb020c8009aea2c02d85675d0eacbd65393e028c55e/op1"
         }
       ],
       "capabilityStatus": "complete",
@@ -1117,6 +1141,14 @@
             },
             "opSubtype": "FindFirst"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/0200416bdd9289be3aa66d9a2c51961d5b87116e907a090d4e506180d7beac03/op1"
         }
       ],
       "capabilityStatus": "complete",
@@ -1370,6 +1402,14 @@
             },
             "opSubtype": "FindFirst"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/07fa2222ef019839c126028159b2171af12ba0a92df638c172d6ff665dcfb423/op1"
         }
       ],
       "capabilityStatus": "complete",

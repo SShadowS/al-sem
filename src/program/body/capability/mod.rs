@@ -382,6 +382,7 @@ pub fn extract_capabilities(routine: &PRoutine) -> CapabilityExtractionResult {
     run(dispatch_background::extract_background(&ctx, routine));
     run(ui_events_error::extract_ui(&ctx, routine));
     run(ui_events_error::extract_ui_window_open(&ctx, routine));
+    run(ui_events_error::extract_ui_dialog(&ctx, routine));
     run(ui_events_error::extract_events(&ctx, routine));
     run(ui_events_error::extract_error(&ctx, routine));
 

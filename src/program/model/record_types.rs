@@ -30,11 +30,21 @@ use al_syntax::IdentifierFoldExt;
 
 use crate::program::body::node_util::strip_quotes;
 
+/// An operation's receiver as a variable-name key: the body pass keeps the
+/// receiver's raw text, so a quoted name (`"Job Ledger Entry".Modify()`) is
+/// matched LOGICAL (quotes stripped, `""` one `"`), lowercased, as variable
+/// names are stored. A quoted receiver missed its variable, so its table and
+/// temp state stayed unknown.
+fn op_variable_lc(raw: &str) -> String {
+    strip_quotes(raw).replace("\"\"", "\"").to_lowercase()
+}
+
 /// Extract the TABLE NAME from a record variable's `declaredType` string.
 ///
 ///   `Record "Sales Line"`   → `Sales Line`
 ///   `Record Customer`       → `Customer`
 ///   `Record "X" temporary`  → `X`
+///   `Record Ns.Sub."X"`     → `X`
 ///
 /// Returns `None` for non-record types (e.g. `Integer`, `Codeunit "Foo"`).
 /// Strips a trailing ` temporary` modifier, then unquotes the remaining name.
@@ -55,7 +65,12 @@ pub fn record_table_name_of(declared_type: &str) -> Option<String> {
     let mut rest = rest_bytes.trim().to_string();
     // Strip a trailing ` temporary` modifier (case-insensitive, with leading ws).
     rest = strip_trailing_temporary(&rest);
-    let rest = rest.trim();
+    // The table of a namespace-qualified type (`Record Microsoft.Manufacturing.
+    // Capacity."Capacity Ledger Entry"`, as Base Application declares them) is
+    // its last segment, as receiver typing reads it. The whole dotted path was
+    // taken as the name: no table resolved, and the record's writes named no
+    // table at all.
+    let rest = crate::program::resolve::receiver::strip_namespace(rest.trim());
     if rest.is_empty() {
         return None;
     }
@@ -162,7 +177,7 @@ pub fn resolve_routine_record_types(
     // because shadowed globals were never added) record var — honoring AL
     // shadowing without needing first-wins.
     for op in routine.record_operations.iter_mut() {
-        if let Some(&vi) = var_index_by_name.get(&op.record_variable_name.to_lowercase()) {
+        if let Some(&vi) = var_index_by_name.get(&op_variable_lc(&op.record_variable_name)) {
             let variable = &routine.record_variables[vi];
             op.record_variable_id = Some(variable.id.clone());
             if let Some(tid) = &variable.table_id {
@@ -191,7 +206,8 @@ pub fn resolve_routine_record_types(
         if op.table_id.is_some() {
             continue;
         }
-        let Some(decl) = variable_decl_by_name.get(&op.record_variable_name.to_lowercase()) else {
+        let Some(decl) = variable_decl_by_name.get(&op_variable_lc(&op.record_variable_name))
+        else {
             continue;
         };
         let Some(table_name) = record_table_name_of(decl) else {
@@ -358,9 +374,81 @@ pub fn resolve_routine_record_types(
 
             // Apply derived temp states to matching record ops.
             for op in routine.record_operations.iter_mut() {
-                let var_lc = op.record_variable_name.to_lowercase();
+                let var_lc = op_variable_lc(&op.record_variable_name);
                 if let Some(ts) = recref_temp.get(&var_lc) {
                     op.temp_state = Some(ts.clone());
+                }
+            }
+        }
+    }
+
+    // --- pass: a LOCAL RecordRef only ever opened temporary, with branching ----
+    //
+    // The pass above needs a routine with no branching, since it reads one Open
+    // per variable. A local RecordRef whose EVERY `Open` is `Open(_, true)` holds
+    // a temporary table on every path, branches or not: an op before any Open is a
+    // runtime error, not a write. Only when nothing else can bind it: no
+    // `GetTable`/`Copy`, no assignment to it, and never passed as an argument
+    // (a callee could open it otherwise). Continia DO's `TryMatchTypedFilter`
+    // opens `CDO Typed Value Buffer` temporary under a `case`; its
+    // `RecRef.Insert` was a write to an unknown, possibly persistent, table.
+    if routine.has_branching {
+        let locals: Vec<String> = routine
+            .variables
+            .iter()
+            .filter(|v| {
+                v.declared_type.trim().eq_ignore_ascii_case("recordref")
+                    && !v.is_parameter
+                    && v.scope.as_deref() == Some("local")
+            })
+            .map(|v| v.name.to_lowercase())
+            .collect();
+        let always_temp: std::collections::HashSet<String> = locals
+            .into_iter()
+            .filter(|v_lc| {
+                let mut opened = false;
+                for cs in &routine.call_sites {
+                    if cs
+                        .argument_texts
+                        .iter()
+                        .any(|a| a.trim().to_lowercase() == *v_lc)
+                    {
+                        return false;
+                    }
+                    let crate::program::body::features::PCallee::Member { receiver, method } =
+                        &cs.callee
+                    else {
+                        continue;
+                    };
+                    if receiver.to_lowercase() != *v_lc {
+                        continue;
+                    }
+                    match method.to_lowercase().as_str() {
+                        "open" => {
+                            let temp = cs
+                                .argument_texts
+                                .get(1)
+                                .is_some_and(|t| t.trim().eq_ignore_ascii_case("true"));
+                            if !temp {
+                                return false;
+                            }
+                            opened = true;
+                        }
+                        "gettable" | "copy" => return false,
+                        _ => {}
+                    }
+                }
+                opened
+                    && !routine
+                        .var_assignments
+                        .iter()
+                        .any(|a| a.lhs_name.trim().to_lowercase() == *v_lc)
+            })
+            .collect();
+        if !always_temp.is_empty() {
+            for op in routine.record_operations.iter_mut() {
+                if always_temp.contains(&op_variable_lc(&op.record_variable_name)) {
+                    op.temp_state = Some(crate::program::body::scope::ts_known(true));
                 }
             }
         }
@@ -561,6 +649,7 @@ mod tests {
             loop_stack: Vec::new(),
             field_argument_infos: None,
             in_until_condition: false,
+            in_statement_position: false,
             run_trigger: None,
         };
         let temp = Some(ts_known(true));

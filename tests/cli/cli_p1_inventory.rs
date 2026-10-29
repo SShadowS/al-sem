@@ -249,7 +249,7 @@ fn inventory_only_cbor_rejected() {
         SpecifiedFlags, default_format, reject_illegal_combos,
     };
     // Simulate: --inventory-only --format cbor (no query flags).
-    let fmt = default_format(Some("cbor"), false).expect("cbor is a valid format");
+    let fmt = default_format(Some("cbor"), false, true).expect("cbor is a valid format");
     let specified = SpecifiedFlags::default();
     // rejectIllegalCombos must not reject for cbor alone (existing behavior),
     // but the CLI layer must reject --inventory-only + cbor.

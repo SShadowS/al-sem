@@ -806,6 +806,10 @@ pub struct SnapshotCallsiteResolution {
     pub result_consumed: Option<bool>,
     #[serde(rename = "underAsserterror", skip_serializing_if = "Option::is_none")]
     pub under_asserterror: Option<bool>,
+    /// G29: an interface site whose implementations the call stack's publishers
+    /// select (`DispatchMeta::publisher_scoped`). Not serialized.
+    #[serde(skip)]
+    pub publisher_scoped: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1477,6 +1481,8 @@ pub(crate) fn compose_tree(
         .filter(|r| {
             !r.body_available
                 && model.routine_role(r) == crate::program::model::role::Role::Dependency
+                // A cataloged platform native has known behaviour (no unfetched body).
+                && crate::program::model::platform_natives::pure_native(r).is_none()
         })
         .map(|r| r.id.as_str())
         .collect();
@@ -2595,6 +2601,10 @@ fn derive_callsite_resolutions(
                 },
                 result_consumed: rc,
                 under_asserterror: if ua { Some(true) } else { None },
+                publisher_scoped: representative
+                    .dispatch_meta
+                    .as_ref()
+                    .is_some_and(|dm| dm.publisher_scoped),
             });
             continue;
         }
@@ -2657,6 +2667,7 @@ fn derive_callsite_resolutions(
             unresolved_candidates: None,
             result_consumed: None,
             under_asserterror: None,
+            publisher_scoped: false,
         });
     }
 
@@ -2697,6 +2708,7 @@ fn classify_resolution(
             unresolved_candidates: None,
             result_consumed,
             under_asserterror: ua,
+            publisher_scoped: false,
         }
     };
 
@@ -2810,6 +2822,7 @@ fn derive_analysis_gaps(resolved: &Model, base: &TreeInputs<'_>) -> Vec<Snapshot
         if !r.body_available
             && !r.parse_incomplete
             && is_dependency_role(r)
+            && crate::program::model::platform_natives::pure_native(r).is_none()
             && let Some(guid) = object_id_app_guid(&r.object_id)
             && source_less(guid)
         {
@@ -2831,7 +2844,9 @@ fn derive_analysis_gaps(resolved: &Model, base: &TreeInputs<'_>) -> Vec<Snapshot
         if r.body_available || r.parse_incomplete {
             continue;
         }
-        if !is_dependency_role(r) {
+        if !is_dependency_role(r)
+            || crate::program::model::platform_natives::pure_native(r).is_some()
+        {
             continue;
         }
         if object_id_app_guid(&r.object_id).is_some_and(|g| opaque_apps.contains(g)) {

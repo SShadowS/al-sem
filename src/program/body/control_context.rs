@@ -340,6 +340,9 @@ fn walk_loop_node(node: &PCFNNode, ambient: ControlContext, result: &mut WalkRes
             is_case_else: false,
             source_range: None,
             path_hint: None,
+            table_case: None,
+            field_exit_guard: None,
+            table_exit_guard: None,
         };
         walk_block(&synthetic, body_ctx, result);
         return;

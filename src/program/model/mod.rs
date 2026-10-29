@@ -18,6 +18,7 @@ pub mod event_param_temp;
 pub mod events;
 pub mod extension_fields;
 pub mod ix;
+pub mod platform_natives;
 pub mod program_calls;
 pub mod projection;
 pub mod record_types;

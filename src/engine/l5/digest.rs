@@ -59,7 +59,10 @@ fn map_op(op: &str) -> Option<&'static str> {
     match op {
         "commit" => Some("COMMIT"),
         "insert" => Some("DB_INSERT"),
-        "modify" => Some("DB_MODIFY"),
+        // `Rename` changes a row's primary key: a modify of the row (G19: with no
+        // entry it was no effect at all, so `writes-table` never saw it). The
+        // evidence excerpt keeps the `.Rename`.
+        "modify" | "rename" => Some("DB_MODIFY"),
         "delete" => Some("DB_DELETE"),
         "publish" => Some("EVENT_PUBLISH"),
         "send" => Some("HTTP"),
@@ -71,7 +74,15 @@ fn map_op(op: &str) -> Option<&'static str> {
         "ui-confirm" => Some("UI_CONFIRM"),
         "ui-error" => Some("UI_ERROR"),
         "ui-window-open" => Some("UI_WINDOW_OPEN"),
+        // G26: a client file picker / download prompt, and a progress window.
+        // Their own types, so the ordering engine's UI_WINDOW_OPEN grading is
+        // unchanged; `prove … reaches-ui` counts both.
+        "ui-file-dialog" => Some("UI_FILE_DIALOG"),
+        "ui-progress" => Some("UI_PROGRESS"),
         "error-throw" => Some("ERROR_THROW"),
+        // G20: a record lookup whose Boolean is discarded, TestField, FieldError.
+        // Not ERROR_THROW: the ordering engine grades that as an explicit Error.
+        "error-implicit" => Some("ERROR_IMPLICIT"),
         _ => None,
     }
 }
@@ -80,7 +91,15 @@ fn map_op(op: &str) -> Option<&'static str> {
 /// We read straight off the composed snapshot (no re-projection).
 type Fact = crate::engine::l5::snapshot::SnapshotCapabilityFact;
 
+/// An effect's type: [`map_op`] of its op, except a `Hyperlink(url)`, whose op is
+/// the file family's `open` but whose resource kind is `ui` (G15): it opens the
+/// URL in the user's browser, which is UI, not file I/O. It is `UI_HYPERLINK`, so
+/// `prove … reaches-ui` counts it and the ordering engine no longer grades it as
+/// file I/O inside a transaction (it is not in `ORDERING_RELEVANT`).
 fn effect_type_of(fact: &Fact) -> Option<&'static str> {
+    if fact.op == "open" && fact.resource_kind == "ui" {
+        return Some("UI_HYPERLINK");
+    }
     map_op(&fact.op)
 }
 
@@ -893,7 +912,16 @@ fn is_pd_snap(d: &Fact) -> bool {
 /// witnessed by [`enumerate_proofs`] instead; arena states are never BFS
 /// carriers (a state's class holds only in its own routine's frame).
 fn is_bfs_carrier(d: &Fact, f: &Fact) -> bool {
-    !is_pd_snap(d) && is_known_temp_snap(d) == is_known_temp_snap(f) && fact_equivalent(d, f)
+    !is_pd_snap(d)
+        && is_known_temp_snap(d) == is_known_temp_snap(f)
+        && fact_equivalent(d, f)
+        // An ORDINARY fact with no resource stays one at every caller (only the
+        // producer solve binds one, and a producer is no carrier), so it never
+        // carries a fact that names a resource. `fact_equivalent`'s one-sided
+        // leniency made one the witness of every same-op fact: Continia DO's
+        // temporary `RecRef.Insert` was shown writing 156 tables that a
+        // dependency boundary below it writes.
+        && !(f.resource_id.is_some() && d.resource_id.is_none())
 }
 
 /// What [`enumerate_proofs`] found.
@@ -1021,6 +1049,11 @@ fn enumerate_proofs<'i>(
             !st.seed
                 && (st.temp_state == TempStateKind::Known(true)) == kt
                 && fact_equivalent(&idx.capability_facts[st.producer_fact], f)
+                // As `is_bfs_carrier`: a producer naming a resource never
+                // witnesses a fact with none (an unresolved write was shown at
+                // a typed producer's operation), nor the other way round.
+                && idx.capability_facts[st.producer_fact].resource_id.is_some()
+                    == f.resource_id.is_some()
         })
         .map(|&s| Node {
             state: s,
@@ -3219,6 +3252,21 @@ pub struct DigestEffectResult {
     /// order (#160 step 9 D2 (6)): `detail` lists at most 10, prove matches
     /// every member. Not serialized; empty off a group.
     pub group_resources: Vec<(String, String)>,
+    /// G33: per group resource, its facts' originating operations (`None`
+    /// when one fact names none). Not serialized; empty off a group.
+    pub group_resource_ops: Vec<(String, Option<Vec<String>>)>,
+    /// G33: the group resources the root cannot reach once literal and table
+    /// arguments are followed ([`crate::engine::l5::literal_reach`]): prove
+    /// matches none of them. Set only for `prove`'s read; not serialized.
+    pub dead_group_resources: Vec<String>,
+    /// G35: per group resource, one example path inside the dependency
+    /// ([`crate::engine::l5::group_path`]). Set only for `prove`'s read; not
+    /// serialized.
+    pub group_resource_paths: Vec<(String, Vec<String>)>,
+    /// G23: the root cannot reach the effect once literal Boolean arguments
+    /// are followed ([`crate::engine::l5::literal_reach`]). Set only for
+    /// `prove`'s read; not serialized.
+    pub literal_unreachable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -3836,6 +3884,13 @@ fn digest_one_root<'i>(
             /// Rule B (spec §14.3.5 item 3): a grouped boundary effect, its
             /// boundary and its resources (resource id → display or id).
             group: Option<(Rc<BoundaryEnd>, BTreeMap<String, String>)>,
+            /// G33: a group's facts' originating operations per resource;
+            /// `None` once one of its facts names no operation.
+            group_ops: BTreeMap<String, Option<BTreeSet<String>>>,
+            /// A group's facts that name no resource (an unresolved table
+            /// write in the dependency): the group's resource list is then
+            /// not the whole of what it writes.
+            group_unresolved: usize,
         }
         let mut effect_map: Vec<(String, AccumulatedEffect)> = Vec::new();
         // O(1) key → position index over effect_map (same keys, same positions —
@@ -4048,11 +4103,25 @@ fn digest_one_root<'i>(
                         acc.via.fold_cond(c);
                     }
                     acc.via.truncated |= input_truncated;
+                    if acc.group.is_some() && fact.resource_id.is_none() {
+                        acc.group_unresolved += 1;
+                    }
                     if let (Some((_, resources)), Some(r)) = (&mut acc.group, &fact.resource_id) {
                         resources.entry(r.clone()).or_insert_with(|| {
                             resource_display_of(fact, &idx.stable_id_to_display)
                                 .unwrap_or_else(|| r.clone())
                         });
+                        let ops = acc
+                            .group_ops
+                            .entry(r.clone())
+                            .or_insert_with(|| Some(BTreeSet::new()));
+                        match (&fact.witness_operation_id, ops.as_mut()) {
+                            (Some(op), Some(set)) => {
+                                set.insert(op.clone());
+                            }
+                            (None, _) => *ops = None,
+                            _ => {}
+                        }
                     }
                 };
 
@@ -4092,6 +4161,8 @@ fn digest_one_root<'i>(
                             fact.witness_operation_id.iter().cloned().collect()
                         },
                         group: bnd.clone().map(|b| (b, BTreeMap::new())),
+                        group_ops: BTreeMap::new(),
+                        group_unresolved: 0,
                     };
                     merge(&mut acc);
                     effect_map.push((key, acc));
@@ -4156,19 +4227,30 @@ fn digest_one_root<'i>(
             // enters, its distinct resources' count and the first 10 of them,
             // in resource-id order. Values stay strings.
             let detail = match &acc.group {
-                Some((b, resources)) => vec![
-                    ("boundary".to_string(), b.display.clone()),
-                    ("resourceCount".to_string(), resources.len().to_string()),
-                    (
-                        "resources".to_string(),
-                        resources
-                            .values()
-                            .take(10)
-                            .map(String::as_str)
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                    ),
-                ],
+                Some((b, resources)) => {
+                    let mut d = vec![
+                        ("boundary".to_string(), b.display.clone()),
+                        ("resourceCount".to_string(), resources.len().to_string()),
+                        (
+                            "resources".to_string(),
+                            resources
+                                .values()
+                                .take(10)
+                                .map(String::as_str)
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        ),
+                    ];
+                    // Writes beyond the boundary whose table is not known: the
+                    // resources above are not all the group writes.
+                    if acc.group_unresolved > 0 {
+                        d.push((
+                            "unresolvedResources".to_string(),
+                            acc.group_unresolved.to_string(),
+                        ));
+                    }
+                    d
+                }
                 None => acc.detail,
             };
 
@@ -4182,8 +4264,9 @@ fn digest_one_root<'i>(
                 acc.effect_type.to_string()
             };
             // #246 G-1: a DB_READ key also names its table, so reads of two
-            // tables witnessed at one operation (a resource-less RecordRef
-            // carrier) keep distinct ids. Write keys stay as they are.
+            // tables witnessed at one operation keep distinct ids. (The case
+            // that showed it, a resource-less RecordRef carrier, is no witness
+            // any more: `is_bfs_carrier`.) Write keys stay as they are.
             if acc.effect_type == "DB_READ"
                 && let Some((_, r)) = detail.iter().find(|(k, _)| k == "resourceId")
             {
@@ -4239,6 +4322,14 @@ fn digest_one_root<'i>(
                 origin_operation_ids: acc.origin_operation_ids.into_iter().collect(),
                 scoped_guarantees: Vec::new(),
                 group_resources,
+                group_resource_ops: acc
+                    .group_ops
+                    .into_iter()
+                    .map(|(r, ops)| (r, ops.map(|s| s.into_iter().collect())))
+                    .collect(),
+                literal_unreachable: false,
+                dead_group_resources: Vec::new(),
+                group_resource_paths: Vec::new(),
             });
         }
 
@@ -4739,7 +4830,8 @@ pub(crate) fn ordering_kept_roots(
     let mut ui_sink: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut db_write: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for f in &snap.capability_facts {
-        match map_op(&f.op) {
+        // `effect_type_of`, not `map_op`: the same type the engine grades (G15).
+        match effect_type_of(f) {
             Some("HTTP") | Some("FILE") => {
                 ext_io.insert(f.subject.as_str());
             }
@@ -4782,6 +4874,24 @@ pub fn compute_digest_effects_cli(
     if let Some(only) = only {
         let only: std::collections::HashSet<&str> = only.iter().map(String::as_str).collect();
         roots.retain(|r| only.contains(r.as_str()));
+        // G31: a DEPENDENCY routine named as a root is one too: the reportable
+        // roots leave every dependency routine out (no finding keeps one), not
+        // one a caller asks for by id.
+        roots.extend(
+            resolved
+                .workspace
+                .routines
+                .iter()
+                .filter(|r| {
+                    only.contains(r.stable_routine_id.as_str())
+                        && resolved.routine_role(r) == crate::program::model::role::Role::Dependency
+                        && r.body_available
+                        && !r.parse_incomplete
+                })
+                .map(|r| r.stable_routine_id.clone()),
+        );
+        roots.sort();
+        roots.dedup();
     }
     let isolated = crate::program::model::events::isolated_event_ids(&resolved.workspace.routines);
     let isolated_opt = if isolated.is_empty() {

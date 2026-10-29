@@ -4,6 +4,14 @@
 			"routineId": "11111111-0000-0000-0000-00000000d180:Codeunit:50400#720401aef598722f4fae0da9b7f6b73840f96edb90796ea4a132139bf62150fa",
 			"capabilityFactsDirect": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-00000000d180:Codeunit:50400#720401aef598722f4fae0da9b7f6b73840f96edb90796ea4a132139bf62150fa/op1"
+				},
+				{
 					"op": "read",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -34,6 +42,14 @@
 		{
 			"routineId": "11111111-0000-0000-0000-00000000d180:Codeunit:50400#7783bc552d4ef85c27734f9c7478d4f57e7730fce9c7aa4f0941cece2d26f3a4",
 			"capabilityFactsDirect": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-00000000d180:Codeunit:50400#7783bc552d4ef85c27734f9c7478d4f57e7730fce9c7aa4f0941cece2d26f3a4/op1"
+				},
 				{
 					"op": "read",
 					"resourceKind": "table",
@@ -66,6 +82,14 @@
 			"routineId": "11111111-0000-0000-0000-00000000d180:Codeunit:50400#7a74230810f532595961b5376d0973c4e6b25f52af0d951c3fc18cb13de9957b",
 			"capabilityFactsDirect": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-00000000d180:Codeunit:50400#7a74230810f532595961b5376d0973c4e6b25f52af0d951c3fc18cb13de9957b/op1"
+				},
+				{
 					"op": "read",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -96,6 +120,14 @@
 		{
 			"routineId": "11111111-0000-0000-0000-00000000d180:Codeunit:50400#896010174b9d011f506419160db2ccd1c0c7ca97e48b0537621c01405b10baf7",
 			"capabilityFactsDirect": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-00000000d180:Codeunit:50400#896010174b9d011f506419160db2ccd1c0c7ca97e48b0537621c01405b10baf7/op1"
+				},
 				{
 					"op": "read",
 					"resourceKind": "table",

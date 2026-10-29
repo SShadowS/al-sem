@@ -416,6 +416,7 @@ mod tests {
             is_internal: false,
             is_protected: false,
             parameters_known: true,
+            method_id: None,
             attributes: vec![],
             attributes_parsed: vec![],
         }
@@ -441,6 +442,7 @@ mod tests {
                 subtype_id: None,
                 subtype_raw_name: None,
                 subtype_tag: SubtypeTag::NoSubtype,
+                array_dims: None,
             }],
             Some("Integer"),
         );

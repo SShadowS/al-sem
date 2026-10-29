@@ -126,6 +126,17 @@ pub fn write_dependency(app_path: &Path, revision: u32) {
 
 /// [`write_dependency`] with `Lib.al` = `lib_al`.
 fn write_dependency_lib(app_path: &Path, revision: u32, lib_al: &str) {
+    write_dependency_lib_manifest(app_path, revision, lib_al, "");
+}
+
+/// [`write_dependency_lib`] with `manifest_extra` after the manifest's `<App>`
+/// (`<InternalsVisibleTo>`, …).
+fn write_dependency_lib_manifest(
+    app_path: &Path,
+    revision: u32,
+    lib_al: &str,
+    manifest_extra: &str,
+) {
     let symbols = format!(
         r#"{{"RuntimeVersion":"13.0","Tables":[{{"Id":18,"Name":"Customer","Fields":[{{"Id":1,"Name":"No.","TypeDefinition":{{"Name":"Code"}}}}]}}],"Codeunits":[{{"Id":10,"Name":"Dep Lib","Methods":[{{"Name":"Outer","Parameters":[]}},{{"Name":"Inner","Parameters":[]}},{{"Name":"OnDepEvent","Parameters":[],"Attributes":[{{"Name":"IntegrationEvent","Arguments":[{{"Value":"False"}},{{"Value":"False"}}]}}]}}]}},{{"Id":11,"Name":"Dep Sub","Methods":[]}}],"AppId":"{DEP_GUID}","Name":"XBase","Publisher":"probe","Version":"1.0.0.0"}}"#
     );
@@ -137,7 +148,7 @@ fn write_dependency_lib(app_path: &Path, revision: u32, lib_al: &str) {
         "1.0.0.0",
         &symbols,
         &[("src/Customer.al", CUSTOMER_AL), ("src/Lib.al", &lib)],
-        "",
+        manifest_extra,
     );
 }
 
@@ -155,8 +166,26 @@ pub fn write_own(dir: &Path, extra_al: &str) {
 pub fn write_own_inner(dir: &Path, extra_al: &str, inner: &str) {
     let lib = DEP_LIB_AL.replacen("Cust.Insert();\n        Commit();", inner, 1);
     assert_ne!(lib, DEP_LIB_AL, "fixture: Inner's insert is replaced");
+    write_own_lib(dir, extra_al, &lib);
+}
+
+/// [`write_own`] with `lib` as the dependency's `Lib.al` (it must keep
+/// `Dep Lib.Outer`, which the workspace calls).
+pub fn write_own_lib(dir: &Path, extra_al: &str, lib: &str) {
     write_workspace(dir, extra_al);
-    write_dependency_lib(&dir.join(".alpackages").join(DEP_APP_FILE), 0, &lib);
+    write_dependency_lib(&dir.join(".alpackages").join(DEP_APP_FILE), 0, lib);
+}
+
+/// [`write_own_lib`] with `manifest_extra` in the dependency's manifest.
+#[allow(dead_code)]
+pub fn write_own_lib_manifest(dir: &Path, extra_al: &str, lib: &str, manifest_extra: &str) {
+    write_workspace(dir, extra_al);
+    write_dependency_lib_manifest(
+        &dir.join(".alpackages").join(DEP_APP_FILE),
+        0,
+        lib,
+        manifest_extra,
+    );
 }
 
 /// #161's text: [`write_own`] whose `Inner` does `Cust.Modify()` instead of

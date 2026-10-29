@@ -186,7 +186,20 @@
 		},
 		{
 			"routineId": "f00dcafe-0000-4000-ca11-5715e55beef0:Codeunit:70000#fb03a86d7bbacf6d6292aed0f74ec3315c49e05895738470fd4c29b1f58dc058",
-			"capabilityFactsDirect": [],
+			"capabilityFactsDirect": [
+				{
+					"op": "publish",
+					"resourceKind": "event",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"resourceId": "f00dcafe-0000-4000-ca11-5715e55beef0:Codeunit:70000::OnInternalSignal::fb03a86d7bbacf6d6292aed0f74ec3315c49e05895738470fd4c29b1f58dc058",
+					"extra": {
+						"eventClass": "Internal",
+						"kind": "event"
+					}
+				}
+			],
 			"capabilityFactsInherited": [],
 			"coverage": {
 				"subject": "f00dcafe-0000-4000-ca11-5715e55beef0:Codeunit:70000#fb03a86d7bbacf6d6292aed0f74ec3315c49e05895738470fd4c29b1f58dc058",

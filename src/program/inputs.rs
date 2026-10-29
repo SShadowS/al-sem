@@ -53,6 +53,10 @@ pub struct WorkspaceInputs {
     pub coverage_yaml: Option<Vec<u8>>,
     /// The dependency closure the loader reads (`dependencies::discover_app_files`).
     pub closure: ClosureEntries,
+    /// The source-folder dependencies `al-sem.dependencies.json` names
+    /// ([`crate::program::source_deps`]), read even under `build_only`: the
+    /// snapshot build loads them. `Err` = the reason the build fails closed.
+    pub source_dependencies: crate::program::source_deps::SourceDependencies,
     /// The snapshot's reproducibility input rows (`derive_inputs_from_parts`),
     /// present only when [`WorkspaceNeeds::fingerprint_rows`] was asked for.
     pub snapshot_inputs: Option<Vec<SnapshotInput>>,
@@ -347,6 +351,7 @@ impl WorkspaceInputs {
 
         let (files, unreadable) = crate::dependencies::discover_app_files(workspace);
         let closure = ClosureEntries { files, unreadable };
+        let source_dependencies = crate::program::source_deps::read(workspace);
 
         let mut set = WorkspaceInputs {
             workspace: workspace.to_path_buf(),
@@ -356,6 +361,7 @@ impl WorkspaceInputs {
             roots_config,
             coverage_yaml,
             closure,
+            source_dependencies,
             snapshot_inputs: None,
             al_walk,
             al_files,
@@ -455,6 +461,29 @@ impl WorkspaceInputs {
             .unreadable
             .iter()
             .for_each(|(p, _)| path(&mut t, p));
+        match &self.source_dependencies {
+            Ok(deps) => {
+                t.buf::<crate::program::source_deps::SourceDependency>(deps.len());
+                for d in deps {
+                    t.strs([&d.spelled, &d.content_hash]);
+                    path(&mut t, &d.root);
+                    json(&mut t, &d.app_json);
+                    t.buf::<u8>(d.app_json_bytes.len());
+                    // The files' `Arc`: the snapshot's source root shares it.
+                    t.arc::<Vec<crate::snapshot::embedded::SourceFile>>();
+                    t.buf::<crate::snapshot::embedded::SourceFile>(d.files.len());
+                    for f in d.files.iter() {
+                        t.strs([&f.virtual_path]);
+                        t.bytes += (2 * std::mem::size_of::<usize>() + f.text.len())
+                            .next_multiple_of(std::mem::align_of::<usize>());
+                        t.allocs += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                t.strs([e]);
+            }
+        }
         if let Some(rows) = &self.snapshot_inputs {
             t.buf::<SnapshotInput>(rows.len());
             for r in rows {
@@ -530,6 +559,7 @@ impl WorkspaceInputs {
             closure,
             roots,
             self.coverage_yaml.as_deref(),
+            &self.source_dependencies,
         )
     }
 }

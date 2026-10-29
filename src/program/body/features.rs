@@ -30,14 +30,19 @@
 //!   - `PCallSite.in_statement_position`
 //!   - `PCallSite.receiver_temp_state`
 //!   - `PRecordOperation.in_until_condition`
+//!   - `PRecordOperation.in_statement_position`
 //!   - `PRecordOperation.run_trigger`
 //!   - `PLoop.exhausting_advance`
 //!   - `PRecordVariable.is_receiver`
 //!   - `PFieldAccess.access`
 //!   - `PVarAssignment.rhs_identifier`
+//!   - `PVarAssignment.rhs_member`
 //!   - `PCFNNode.is_case_else`
 //!   - `PCFNNode.source_range`
 //!   - `PCFNNode.path_hint`
+//!   - `PCFNNode.table_case`
+//!   - `PCFNNode.field_exit_guard`
+//!   - `PCFNNode.table_exit_guard`
 
 use super::operation_order::{OperationOrder, ScopeFrame};
 use serde::{Deserialize, Serialize};
@@ -347,6 +352,13 @@ pub struct PRecordOperation {
     /// safe: an exact structural proof, anything else keeps firing).
     #[serde(skip)]
     pub in_until_condition: bool,
+    /// True iff the op is the outermost expression of a bare call statement, so
+    /// a lookup's Boolean is discarded (`PCallSite.in_statement_position`'s twin).
+    /// G20: an unguarded `Get`/`FindFirst`/`FindLast`/`FindSet` raises an error
+    /// when no record matches. INTERNAL-ONLY like `in_until_condition`
+    /// (`serde(skip)`, excluded from `PartialEq`).
+    #[serde(skip)]
+    pub in_statement_position: bool,
     /// Detector-audit d29 FP-1: the literal `RunTrigger` argument of a mutating
     /// op — `Insert([RunTrigger])` / `Modify([RunTrigger])` / `Delete([RunTrigger])` /
     /// `DeleteAll([RunTrigger])` (arg 0) and `ModifyAll(Field, Value[, RunTrigger])`
@@ -540,6 +552,12 @@ pub struct PVarAssignment {
     /// golden stays byte-identical; deserialized goldens default it to `None`.
     #[serde(skip)]
     pub rhs_identifier: Option<String>,
+    /// G34: `(X, M)` folded, set ONLY when the target is a bare identifier and
+    /// the value is `X.M` or `X.M()` on a bare identifier `X` (`R :=
+    /// Other.Duplicate()`, `Id := R.RecordId`). INTERNAL-ONLY like
+    /// `rhs_identifier`, and excluded from `PartialEq` for the same reason.
+    #[serde(skip)]
+    pub rhs_member: Option<(String, String)>,
 }
 
 /// MANUAL PartialEq: compares exactly the SERIALIZED L2 contract surface.
@@ -629,6 +647,32 @@ pub struct PCFNNode {
     /// say ([`PathHint`]). EXCLUDED from `PartialEq`.
     #[serde(skip, default)]
     pub path_hint: Option<PathHint>,
+    /// In-memory ONLY (G33): a `case` on a RecordRef's table number, or one of
+    /// its branches' tables ([`TableCase`]). EXCLUDED from `PartialEq`.
+    #[serde(skip, default)]
+    pub table_case: Option<TableCase>,
+    /// In-memory ONLY (G36): on an `if` with no `else` whose condition is
+    /// `not R.FieldExist(N)` and whose then-branch is only `exit`: `(R folded,
+    /// N)`. Past it, `R` holds a table that has field `N`. EXCLUDED from
+    /// `PartialEq`.
+    #[serde(skip, default)]
+    pub field_exit_guard: Option<(String, i64)>,
+    /// In-memory ONLY (G34): on an `if` with no `else` whose condition is
+    /// `R.Number <> Database::"T"` (either side, through parentheses) and whose
+    /// then-branch is only `exit`: `(R folded, [T folded])`. Past it, `R` holds
+    /// table `T`. EXCLUDED from `PartialEq`.
+    #[serde(skip, default)]
+    pub table_exit_guard: Option<(String, Vec<String>)>,
+}
+
+/// G33: what a `case R.Number of Database::"T": …` says about the tables.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TableCase {
+    /// On the `case`: `R`, folded (`R.Number`, `R.Number()`, parenthesized).
+    On(String),
+    /// On a `case-branch` whose every pattern is `Database::"T"`: the tables'
+    /// logical names, folded. A branch with any other pattern has none.
+    Tables(Vec<String>),
 }
 
 /// In-memory-only facts on a [`PCFNNode`] for path walks (#343,
@@ -830,7 +874,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 11, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 16, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

@@ -303,10 +303,34 @@ impl SnapshotBuilder {
         // ------------------------------------------------------------------
         let (resolved_deps, dropped_dep_versions) = load_all_apps_from(ws, &inputs.closure, cache)?;
 
-        let mut apps: Vec<AppUnit> = Vec::with_capacity(1 + resolved_deps.len());
+        // Source-folder dependencies (G4, `crate::program::source_deps`): a
+        // configured folder supplies its app, so a package of that app id is
+        // not loaded below. A bad configuration fails the build with its reason.
+        let source_deps = inputs
+            .source_dependencies
+            .as_ref()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        if let Some(d) = source_deps
+            .iter()
+            .find(|d| d.guid() == workspace_app.guid.to_ascii_lowercase())
+        {
+            anyhow::bail!(
+                "{}: source \"{}\" is the workspace app itself",
+                crate::program::source_deps::CONFIG_FILE,
+                d.spelled
+            );
+        }
+        let from_source: std::collections::HashSet<String> =
+            source_deps.iter().map(|d| d.guid()).collect();
+
+        let mut apps: Vec<AppUnit> =
+            Vec::with_capacity(1 + resolved_deps.len() + source_deps.len());
         apps.push(ws_unit);
 
         for rd in resolved_deps {
+            if from_source.contains(&rd.package.metadata.app_id.to_ascii_lowercase()) {
+                continue;
+            }
             // Identity from the `.app`'s own NavxManifest (authoritative) — the
             // GUID is the only globally-unique id. Fall back to the app.json dep
             // entry for any field the manifest left blank.
@@ -409,6 +433,55 @@ impl SnapshotBuilder {
                 abi: Some(rd.package),
                 app_path: Some(rd.app_path.clone()),
                 app_stamp: rd.stamp,
+            });
+        }
+
+        // One unit per source folder: identity, compilation basis, declared
+        // dependencies and friends from its own `app.json`, as the workspace
+        // unit's come from the workspace's. No `.app`, so no ABI, path or stamp
+        // (the dependency cache then never shares its tier: correct, unshared).
+        for d in source_deps {
+            let id = AppId {
+                guid: d.str_field("id"),
+                name: d.str_field("name"),
+                publisher: d.str_field("publisher"),
+                version: d.str_field("version"),
+            };
+            let compilation = context_from_app_json(&d.app_json);
+            let mut declared: Vec<crate::dependencies::AppDependency> = d
+                .app_json
+                .get("dependencies")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            crate::dependencies::append_implicit_ms_tier_deps(
+                &mut declared,
+                &id.guid,
+                compilation.application.as_deref(),
+                compilation.platform.as_deref(),
+            );
+            // No `.al` file (an umbrella app): no source, like a symbol-only
+            // app with an empty ABI. Never `Some(empty)`: that reads as
+            // deferred text (`has_deferred_dependency_text`).
+            let source = (!d.files.is_empty()).then(|| SourceRoot {
+                files: Arc::clone(&d.files),
+                tier: TrustTier::LocalSourceApproximate,
+                content_hash: d.content_hash.clone(),
+            });
+            let tier = source.as_ref().map_or(TrustTier::SymbolOnly, |s| s.tier);
+            apps.push(AppUnit {
+                provenance: Provenance {
+                    app: id.clone(),
+                    tier,
+                    content_hash: d.content_hash.clone(),
+                },
+                id,
+                source,
+                compilation,
+                declared_deps: declared,
+                internals_visible_to: workspace_friend_apps(&d.app_json),
+                abi: None,
+                app_path: None,
+                app_stamp: None,
             });
         }
 

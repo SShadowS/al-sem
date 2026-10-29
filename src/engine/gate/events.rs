@@ -58,8 +58,11 @@ use crate::engine::gate::ordered_json::{Jv, serialize_jv};
 // ---------------------------------------------------------------------------
 
 fn fanout_entry_to_jv(e: &crate::engine::l5::event_flow::FanoutEntry) -> Jv {
-    Jv::Obj(vec![
-        ("publisher".to_string(), Jv::s(&e.publisher)),
+    let mut pairs = vec![("publisher".to_string(), Jv::s(&e.publisher))];
+    if let Some(stable) = &e.publisher_stable_routine_id {
+        pairs.push(("publisherStableRoutineId".to_string(), Jv::s(stable)));
+    }
+    pairs.extend([
         ("eventId".to_string(), Jv::s(&e.event_id)),
         ("eventName".to_string(), Jv::s(&e.event_name)),
         ("eventKind".to_string(), Jv::s(e.event_kind)),
@@ -84,7 +87,8 @@ fn fanout_entry_to_jv(e: &crate::engine::l5::event_flow::FanoutEntry) -> Jv {
                 ),
             ]),
         ),
-    ])
+    ]);
+    Jv::Obj(pairs)
 }
 
 // ---------------------------------------------------------------------------
@@ -553,6 +557,19 @@ fn fanout_report(
         &det.summaries,
         opts.scope,
     );
+    // G13: each publisher's `stableRoutineId`, the key `graph`, `fingerprint`
+    // and `prove` share, next to the event graph's own routine id.
+    let stable: std::collections::HashMap<&str, &str> = cx
+        .view()
+        .model()
+        .workspace
+        .routines
+        .iter()
+        .map(|r| (r.id.as_str(), r.stable_routine_id.as_str()))
+        .collect();
+    for e in &mut report.entries {
+        e.publisher_stable_routine_id = stable.get(e.publisher.as_str()).map(|s| s.to_string());
+    }
     release_cells(cx);
 
     // --- --coverage-policy application (fanout only; chains validates but no-ops) ---

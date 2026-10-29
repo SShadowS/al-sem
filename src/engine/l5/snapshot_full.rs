@@ -1139,7 +1139,11 @@ pub struct SnapshotInput {
 ///   `.alpackages`) → "dep-package", keyed `.alpackages/x.app` /
 ///   `../.alpackages/y.app`; a closure entry that cannot be listed or read →
 ///   "dep-package-unreadable"; roots.config.json (only when it loads and
-///   validates) → "roots-config"; al-sem.coverage.yaml (if present) → "policy".
+///   validates) → "roots-config"; al-sem.coverage.yaml (if present) → "policy";
+///   every source-folder dependency of `al-sem.dependencies.json` (G4) →
+///   "dep-source", keyed by its path as the config spells it, hashed by its
+///   content hash (its `app.json`, every file path and text); a config that
+///   does not load → one "dep-source-unreadable".
 /// `None` = no row. The closure `.app` files are hashed here. Paths
 /// workspace-relative, forward-slash normalized. Sorted by (kind|path).
 pub(crate) fn derive_inputs_from_parts(
@@ -1148,6 +1152,7 @@ pub(crate) fn derive_inputs_from_parts(
     closure: crate::program::resolve::semantic_golden::ClosureEntries,
     roots_config: Option<&[u8]>,
     coverage_yaml: Option<&[u8]>,
+    source_deps: &crate::program::source_deps::SourceDependencies,
 ) -> Vec<SnapshotInput> {
     let mut out: Vec<SnapshotInput> = Vec::new();
     let row = |kind: &str, name: &str, bytes: &[u8]| SnapshotInput {
@@ -1192,6 +1197,20 @@ pub(crate) fn derive_inputs_from_parts(
     // al-sem.coverage.yaml → "policy".
     if let Some(bytes) = coverage_yaml {
         out.push(row("policy", "al-sem.coverage.yaml", bytes));
+    }
+    // Source-folder dependencies (G4). A config that does not load fingerprints
+    // by a fixed category, never its message (which can carry OS text).
+    match source_deps {
+        Ok(deps) => out.extend(deps.iter().map(|d| SnapshotInput {
+            kind: "dep-source".into(),
+            path: d.spelled.replace('\\', "/"),
+            content_hash: d.content_hash.clone(),
+        })),
+        Err(_) => out.push(SnapshotInput {
+            kind: "dep-source-unreadable".into(),
+            path: crate::program::source_deps::CONFIG_FILE.into(),
+            content_hash: crate::engine::ids::sha256_bytes_hex(b"invalid"),
+        }),
     }
 
     // al-sem `deriveInputs`: `.sort((a,b) => `${a.kind}|${a.path}`.localeCompare(…))`.
@@ -1502,6 +1521,19 @@ fn build_inventory_doc(
                 "stableRoutineId".into(),
                 CborValue::Text(r.stable_routine_id.clone()),
             );
+            // G13: the declaration's anchor (prove's `routine.anchor` shape,
+            // 0-based line and column) and the parameter count.
+            m.insert(
+                "arity".into(),
+                CborValue::Int(i64::try_from(r.parameters.len()).unwrap_or(i64::MAX)),
+            );
+            let a = &r.source_anchor;
+            let mut anchor: IndexMap<String, CborValue> = IndexMap::new();
+            anchor.insert("column".into(), CborValue::Int(i64::from(a.start_column)));
+            anchor.insert("file".into(), CborValue::Text(a.source_unit_id.clone()));
+            anchor.insert("line".into(), CborValue::Int(i64::from(a.start_line)));
+            anchor.insert("sourceKind".into(), CborValue::Text("source".into()));
+            m.insert("sourceAnchor".into(), CborValue::Map(anchor));
             (
                 r.stable_routine_id.clone(),
                 r.enclosing_member.clone(),
@@ -1522,6 +1554,8 @@ fn build_inventory_doc(
     payload.insert("apps".into(), apps);
     payload.insert("identities".into(), identities);
     payload.insert("routineInventory".into(), routine_inventory);
+    // G13: `routineInventory[].sourceAnchor.line` is 0-based, as in `prove`.
+    payload.insert("lineBase".into(), CborValue::Int(0));
     payload.insert("coverage".into(), coverage);
     payload.insert("rootClassifications".into(), root_classifications);
 
@@ -3377,6 +3411,7 @@ page 50818 "T5 I-3 Wizard Alpha"
             }]),
             result_consumed: Some(true),
             under_asserterror: Some(true),
+            publisher_scoped: false,
         };
         let mut frame = frames().remove(1);
         frame.branch_always_terminates = Some(true);

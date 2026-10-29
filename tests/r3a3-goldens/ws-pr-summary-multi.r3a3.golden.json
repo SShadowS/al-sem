@@ -4,6 +4,14 @@
 			"routineId": "22222222-0000-0000-0000-000000pr0001:Codeunit:50200#afbd4d21cd130a0310f3053cdb1624182dade39345a728046cb409622a883fcf",
 			"capabilityFactsDirect": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "22222222-0000-0000-0000-000000pr0001:Codeunit:50200#afbd4d21cd130a0310f3053cdb1624182dade39345a728046cb409622a883fcf/op0"
+				},
+				{
 					"op": "modify",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -51,15 +59,15 @@
 					},
 					"witnessCallsiteId": "22222222-0000-0000-0000-000000pr0001:Codeunit:50200#afbd4d21cd130a0310f3053cdb1624182dade39345a728046cb409622a883fcf/cs0",
 					"extra": {
-						"kind": "http",
-						"method": "Get",
 						"bodyArgSource": {
-							"kind": "constant-var",
-							"varName": "resp",
 							"initializer": {
 								"kind": "unknown"
-							}
-						}
+							},
+							"kind": "constant-var",
+							"varName": "resp"
+						},
+						"kind": "http",
+						"method": "Get"
 					}
 				}
 			],
@@ -120,15 +128,15 @@
 					},
 					"witnessCallsiteId": "22222222-0000-0000-0000-000000pr0001:Codeunit:50202#e873c69003694178cf7e0206071a110ef0bc7328fdac4e7d93fe4f52653ac1e2/cs0",
 					"extra": {
-						"kind": "http",
-						"method": "Get",
 						"bodyArgSource": {
-							"kind": "constant-var",
-							"varName": "resp",
 							"initializer": {
 								"kind": "unknown"
-							}
-						}
+							},
+							"kind": "constant-var",
+							"varName": "resp"
+						},
+						"kind": "http",
+						"method": "Get"
 					}
 				}
 			],

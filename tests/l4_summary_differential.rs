@@ -1363,6 +1363,7 @@ mod fixtures {
             loop_stack: Vec::new(),
             field_argument_infos: None,
             in_until_condition: false,
+            in_statement_position: false,
             run_trigger: None,
         }
     }

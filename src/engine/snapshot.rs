@@ -82,12 +82,14 @@ fn object_type_label_ir(kind: ObjectKind) -> Option<&'static str> {
     })
 }
 
-/// Routine kind label, mirroring al-sem `classifyAndCollectAttributes` (kind only):
-/// base is "trigger" / "procedure"; the FIRST event attribute (closest sibling to
-/// the routine — i.e. last in source order) wins: `eventsubscriber` →
-/// "event-subscriber", `integrationevent`|`businessevent` → "event-publisher".
-/// `internalevent` (and all other attributes) leave the kind unchanged — matching
-/// AL-SEM, NOT the LSP parser (which treats InternalEvent as a publisher).
+/// Routine kind label: base is "trigger" / "procedure"; the FIRST event attribute
+/// (closest sibling to the routine — i.e. last in source order) wins:
+/// `eventsubscriber` → "event-subscriber", `integrationevent` | `businessevent` |
+/// `internalevent` → "event-publisher". An internal event is a publisher like the
+/// other two, only its subscribers must be in the same module (G10: it used to
+/// stay a "procedure", after the retired al-sem reference, so `events fanout`
+/// left it out and d19 judged its parameters as unused). Other attributes leave
+/// the kind unchanged.
 fn classify_kind_ir(r: &RoutineDecl) -> String {
     let mut kind = match r.kind {
         RoutineKind::Trigger => "trigger",
@@ -100,7 +102,7 @@ fn classify_kind_ir(r: &RoutineDecl) -> String {
                 kind = "event-subscriber";
                 break;
             }
-            "integrationevent" | "businessevent" => {
+            "integrationevent" | "businessevent" | "internalevent" => {
                 kind = "event-publisher";
                 break;
             }

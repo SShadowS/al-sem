@@ -185,11 +185,29 @@ pub struct ObjectNode {
     /// ([`enum_closure`], #264). `false` for every other object, and for every
     /// symbol-only enum (ABI extensibility is not modelled).
     pub closed_enum: bool,
+    /// A SOURCE object declared `Access = Internal`: only its app and that
+    /// app's `internalsVisibleTo` friends can name it (G28 closes such an
+    /// interface's dispatch once every friend is loaded,
+    /// `build::closed_internal_interfaces`). `false` for a symbol-only object.
+    pub internal: bool,
     /// `(interface name folded, implementing codeunit)` for every value's
     /// `Implementation` pair, every `DefaultImplementation` and every
     /// `UnknownValueImplementation`, union over `#if` arms, document order, no
     /// duplicates. Empty unless [`Self::closed_enum`].
     pub enum_impls: Vec<(SharedStr, ObjectRef)>,
+    /// A Table's or TableExtension's `LookupPageId` values (raw property
+    /// text, union over `#if` arms); empty for every other kind and for a
+    /// symbol-only table. `Page.Run(0, Rec)` runs that page
+    /// ([`crate::program::graph::ProgramGraph::lookup_pages`]).
+    pub lookup_pages: Vec<SharedStr>,
+    /// A SOURCE object declared `ObsoleteState = Moved` or `Removed`: no code
+    /// binds to it while another object of its name or number is visible
+    /// (`ResolveIndex::build`). Base Application keeps `table 308 "No.
+    /// Series"` as a `Moved` stub (`MovedTo` Business Foundation) under `#if
+    /// not CLEANSCHEMA27`, so the name was two-way ambiguous for every app
+    /// seeing both, and Base Application's own references bound to the stub.
+    /// `false` for a symbol-only object.
+    pub obsolete_gone: bool,
 }
 
 /// One retained ABI parameter's dispatch-relevant metadata (Task 2, roadmap-
@@ -219,6 +237,10 @@ pub struct AbiParamRetained {
     pub subtype_id: Option<i64>,
     pub subtype_raw_name: Option<SharedStr>,
     pub subtype_tag: SubtypeTag,
+    /// An array parameter's dimensions (`"8"`, `"2,3"`); `type_text` is then
+    /// its element type. See
+    /// [`crate::engine::deps::symbol_reference::AbiParameter::array_dims`].
+    pub array_dims: Option<SharedStr>,
 }
 
 /// The STRUCTURAL guard over a [`RoutineNode`]'s retained ABI parameter
@@ -436,6 +458,12 @@ pub struct RoutineNode {
     /// that field's doc), so reading it for arg-type dispatch must be
     /// structurally impossible, not merely convention-guarded.
     pub abi_params: AbiParams,
+    /// The method id the app's symbols declare for this routine
+    /// (`AbiRoutine::method_id`): set at ingestion for a `SymbolOnly`
+    /// routine, and for a dependency's source routine by its node id
+    /// (`build::attach_symbol_method_ids`). `None` for the workspace, and when
+    /// the symbols give none or the node id matches no symbol entry.
+    pub abi_method_id: Option<i32>,
 }
 
 impl ShareStrings for ObjectNode {
@@ -467,6 +495,9 @@ impl ShareStrings for ObjectNode {
         }
         for (iface, _) in &mut self.enum_impls {
             pool.share(iface);
+        }
+        for page in &mut self.lookup_pages {
+            pool.share(page);
         }
     }
 }
@@ -931,6 +962,26 @@ pub fn extract_nodes(
             parse_incomplete,
             closed_enum,
             enum_impls,
+            lookup_pages: if matches!(obj.kind, ObjectKind::Table | ObjectKind::TableExtension) {
+                obj.properties
+                    .iter()
+                    .filter(|p| p.name.eq_ignore_ascii_case("lookuppageid"))
+                    .map(|p| p.value.trim().into())
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            obsolete_gone: obj.properties.iter().any(|p| {
+                p.name.eq_ignore_ascii_case("obsoletestate")
+                    && matches!(
+                        p.value.trim().to_ascii_lowercase().as_str(),
+                        "moved" | "removed"
+                    )
+            }),
+            internal: obj.properties.iter().any(|p| {
+                p.name.eq_ignore_ascii_case("access")
+                    && p.value.trim().eq_ignore_ascii_case("internal")
+            }),
         });
         // Computed once per object — same value for every routine in the object.
         let subscriber_instance_manual = read_event_subscriber_instance(obj);
@@ -975,6 +1026,9 @@ pub fn extract_nodes(
                 // lives in `DeclSurface`/`RoutineMeta`, never here — see
                 // `RoutineNode::abi_params`'s doc.
                 abi_params: AbiParams::Missing,
+                // Attached from the app's symbols, when it has them
+                // (`build::attach_symbol_method_ids`).
+                abi_method_id: None,
             });
         }
     }
@@ -1056,7 +1110,9 @@ pub(crate) mod test_fixtures {
                 subtype_id: Some(18),
                 subtype_raw_name: Some("Customer".into()),
                 subtype_tag: SubtypeTag::Full,
+                array_dims: None,
             }]),
+            abi_method_id: Some(-42),
         }
     }
 
@@ -1102,6 +1158,9 @@ pub(crate) mod test_fixtures {
             // Maximal, not realistic: a Page carries no closure fact.
             closed_enum: true,
             enum_impls: vec![("icustominterface".into(), ObjectRef::Id(50101))],
+            lookup_pages: vec!["\"Demo Lookup\"".into()],
+            obsolete_gone: true,
+            internal: true,
         }
     }
 }

@@ -408,6 +408,7 @@ fn interface_with_workspace_and_dependency_implementers() {
         unresolved_impls: Vec::new(),
         enum_implementers: Vec::new(),
         closed_over: Vec::new(),
+        publisher_scoped: false,
     });
     let mut dep = edge(
         a.routine("Caller"),
@@ -491,23 +492,28 @@ fn interface_implementer_outside_l3_is_unknown() {
     );
 }
 
-/// Minor 4: a run into a WORKSPACE object with no entry trigger is
-/// `Opaque` with no `external_type_ref` (the program route is an ABI
-/// symbol in our own app; there is no external type to name).
+/// The one edge of a run at `cs` into a source object that declares no
+/// trigger the run reaches: `kind`, `Builtin` (it runs no AL code), no `to`,
+/// and the object it runs named as its external type (`name`).
+fn assert_builtin_run(a: &Adapted, cs: &PCallSite, kind: DispatchKind, name: &str) {
+    let got = a.edges(&cs.id);
+    assert_eq!(got.len(), 1, "{got:?}");
+    let ext = got[0].external_type_ref.as_ref().expect("names the object");
+    assert_eq!(ext.name, name, "{got:?}");
+    let mut want = edge(a.routine("Caller"), cs, None, kind, Resolution::Builtin);
+    want.external_type_ref = got[0].external_type_ref.clone();
+    assert_eq!(got, vec![want]);
+}
+
+/// Minor 4: a run into a WORKSPACE object with no entry trigger runs no AL
+/// code: `Builtin`, naming the object (it was `Opaque`, an unresolved run).
 #[test]
 fn run_into_workspace_object_without_entry_trigger() {
     let cu = "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    begin\n        Codeunit.Run(Codeunit::\"Empty\");\n    end;\n}\n";
     let empty = "codeunit 50102 \"Empty\"\n{\n}\n";
     let a = adapt(&[("src/w.al", cu), ("src/e.al", empty)], None);
     let cs = a.site("Caller", "Codeunit.Run");
-    let want = edge(
-        a.routine("Caller"),
-        cs,
-        None,
-        DispatchKind::CodeunitRun,
-        Resolution::Opaque,
-    );
-    assert_eq!(a.edges(&cs.id), vec![want]);
+    assert_builtin_run(&a, cs, DispatchKind::CodeunitRun, "Empty");
 }
 
 /// S9.0d: a page run reaches the page's `OnOpenPage` AND each page
@@ -537,21 +543,14 @@ fn page_run_reaches_the_base_and_extension_entry_triggers() {
 
 /// A run through a page VARIABLE on a workspace page with no entry
 /// trigger is the same shape as `Page.Run(Page::X)` on it: `PageRun`,
-/// `Opaque`, no external type (the object is ours, not external).
+/// `Builtin`, naming the page.
 #[test]
 fn page_variable_run_into_workspace_object_without_entry_trigger() {
     let cu = "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    var\n        P: Page \"Empty\";\n    begin\n        P.RunModal();\n    end;\n}\n";
     let empty = "page 50102 \"Empty\"\n{\n}\n";
     let a = adapt(&[("src/w.al", cu), ("src/e.al", empty)], None);
     let cs = a.site("Caller", "P.RunModal");
-    let want = edge(
-        a.routine("Caller"),
-        cs,
-        None,
-        DispatchKind::PageRun,
-        Resolution::Opaque,
-    );
-    assert_eq!(a.edges(&cs.id), vec![want]);
+    assert_builtin_run(&a, cs, DispatchKind::PageRun, "Empty");
     assert_eq!(
         a.census.adapter_external_object_receiver, 0,
         "{:#?}",
@@ -566,8 +565,8 @@ fn page_variable_run_into_workspace_object_without_entry_trigger() {
 
 /// The same arm for a codeunit VARIABLE and a report VARIABLE (review
 /// Minor 7): `CuVar.Run()` on a codeunit with no `OnRun` and `RepVar.Run()`
-/// on a report with no trigger are `Opaque` runs of their own kind, with no
-/// external type, and both are counted.
+/// on a report with no trigger are `Builtin` runs of their own kind, naming
+/// the object, and both are counted.
 #[test]
 fn codeunit_and_report_variable_run_into_workspace_object_without_entry_trigger() {
     let cu = "codeunit 50101 \"W\"\n{\n    procedure Caller()\n    var\n        C: Codeunit \"EmptyCu\";\n        R: Report \"EmptyRep\";\n    begin\n        C.Run();\n        R.Run();\n    end;\n}\n";
@@ -581,13 +580,12 @@ fn codeunit_and_report_variable_run_into_workspace_object_without_entry_trigger(
         ],
         None,
     );
-    for (callee, kind) in [
-        ("C.Run", DispatchKind::CodeunitRun),
-        ("R.Run", DispatchKind::ReportRun),
+    for (callee, kind, name) in [
+        ("C.Run", DispatchKind::CodeunitRun, "EmptyCu"),
+        ("R.Run", DispatchKind::ReportRun, "EmptyRep"),
     ] {
         let cs = a.site("Caller", callee);
-        let want = edge(a.routine("Caller"), cs, None, kind, Resolution::Opaque);
-        assert_eq!(a.edges(&cs.id), vec![want], "{callee}");
+        assert_builtin_run(&a, cs, kind, name);
     }
     assert_eq!(
         (

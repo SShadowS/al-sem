@@ -10,6 +10,8 @@
 //!
 //! MAY-questions (may-commit, writes-table, publishes-event, reaches-ui, throws-error):
 //!   yes     = ≥1 matching effect (blockers irrelevant for yes).
+//!   (`reaches-ui` is interactive UI only: Message, Confirm, StrMenu, a page or
+//!   report run, Hyperlink. An `Error` is `throws-error`'s, never UI's.)
 //!   no      = zero matches AND ALL obligations clear.
 //!   unknown = zero matches + ≥1 obligation failure.
 //!
@@ -33,7 +35,9 @@ use crate::engine::l5::digest_cli::{
     ChangedInput, DbTempStates, DigestEffectFull, DigestEntryFull, FullAnchor, finish_default_run,
     primary_guid_of, resolve_changed_roots, run_digest_query_full_from_entries,
 };
+use crate::engine::l5::unresolved_cone::UnresolvedConeItem;
 use crate::engine::session::{Cell, prove_plan};
+use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // ProveQuestion
@@ -140,7 +144,125 @@ pub struct ProveObligations {
     pub analysis_gaps: usize,
     pub coverage_complete: bool,
     pub cone_truncated: bool,
+    /// The world the obligations were counted in, the open-world interface
+    /// rows it waived because the cone already follows every loaded
+    /// implementation ([`world_waives`]), and whether coverage counted as
+    /// complete only by that assumption. 0/false in the strict world.
+    pub world: World,
+    pub waived_rows: usize,
+    pub coverage_closed_by_assumption: bool,
+    /// The answer holds only in `world`: the strict world answers differently
+    /// ([`prove_with_callers`]). The [`World::label`] label.
+    pub answer_relies_on_world: bool,
+    /// The answer is a `no` whose cone raises an event an app outside the
+    /// program may subscribe to ([`relies_on_loaded_subscribers`]): it holds
+    /// only if no subscriber beyond the loaded ones exists. The
+    /// `loaded-subscribers` label, when no stronger world's label applies.
+    pub relies_on_loaded_subscribers: bool,
 }
+
+impl ProveObligations {
+    /// The answer's `assumptions` label: the weakest world it holds in, one
+    /// tier (a closed-world answer assumes loaded subscribers too).
+    #[must_use]
+    pub fn assumption(&self) -> Option<&'static str> {
+        if self.answer_relies_on_world {
+            self.world.label()
+        } else if self.relies_on_loaded_subscribers {
+            World::LoadedSubscribers.label()
+        } else {
+            None
+        }
+    }
+}
+
+/// Effects that raise an event any app may subscribe to: an explicit event
+/// publication, and opening a page (the platform page events). Table events
+/// are read off the cone's record operations
+/// (`UnresolvedCone::fires_table_events`): a `Validate` is no effect.
+const SUBSCRIBABLE_EFFECTS: &[&str] = &["EVENT_PUBLISH", "UI_WINDOW_OPEN"];
+
+/// Q6: the cone follows the LOADED subscribers of every event it raises, so
+/// an event is closed over them, unlike an interface, which is open. A `yes`
+/// stands on its witness whatever else subscribes; a `no` (MAY: no matching
+/// effect; MUST: not on every success path) could be overturned by a
+/// subscriber in an app that is not loaded, as soon as the cone raises an
+/// event: a table write or `Validate` (the platform table events, raised for
+/// temporary records and with `RunTrigger = false` too), an explicit
+/// publisher, or a page opened. Over-approximates: an internal publisher only
+/// the declaring app's friends can subscribe to counts as well.
+fn relies_on_loaded_subscribers(
+    result: &ProveResult,
+    entry: &DigestEntryFull,
+    fires_table_events: bool,
+) -> bool {
+    result.answer == ProveAnswer::No
+        && (fires_table_events
+            || entry.effects.iter().any(|e| {
+                !e.literal_unreachable && SUBSCRIBABLE_EFFECTS.contains(&e.effect_type.as_str())
+            }))
+}
+
+/// What a prove run assumes about code outside the loaded program, weakest
+/// first: strict < loaded-subscribers < closed-world. Each world waives the
+/// open-world rows of the one before it and more.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum World {
+    /// Nothing: an interface site may reach an implementer not loaded, an
+    /// event a subscriber not loaded.
+    Strict,
+    /// The default (Q6, G29): no subscriber exists beyond the loaded ones. The
+    /// cone already follows only loaded subscribers. A publisher-scoped
+    /// interface site (`Telemetry Logger`) falls under it too: a logger exists
+    /// only through an `OnRegisterTelemetryLogger` subscriber that registers
+    /// it, so an unloaded app's logger is an unloaded subscriber.
+    LoadedSubscribers,
+    /// `--closed-world` (G24): no interface implementer exists beyond the
+    /// loaded ones either.
+    Closed,
+}
+
+impl World {
+    /// The `assumptions` label of an answer that holds only in this world.
+    #[must_use]
+    pub fn label(self) -> Option<&'static str> {
+        match self {
+            World::Strict => None,
+            World::LoadedSubscribers => Some("loaded-subscribers"),
+            World::Closed => Some("closed-world"),
+        }
+    }
+
+    /// The world a prove run's flags ask for.
+    #[must_use]
+    pub fn of_flags(closed_world: bool) -> World {
+        if closed_world {
+            World::Closed
+        } else {
+            World::LoadedSubscribers
+        }
+    }
+}
+
+/// G24/G29: in a world beyond the strict one, an open-world interface site
+/// whose every implementer is in the model is no obligation when the world
+/// assumes no other implementer exists: the cone follows each loaded
+/// implementation. The closed world assumes it of every site, the
+/// loaded-subscribers world of a publisher-scoped site only. A site with an
+/// implementer outside the model (a body not loaded, an enum value mapped to a
+/// codeunit that is not loaded, an implementer no route reached) is still
+/// open, in every world.
+fn world_waives(item: &UnresolvedConeItem, world: World) -> bool {
+    let assumed = match world {
+        World::Strict => false,
+        World::LoadedSubscribers => item.publisher_scoped,
+        World::Closed => true,
+    };
+    assumed && item.open_world == Some(true) && item.closed_world_followable
+}
+
+/// The coverage reason an open-world interface site gives the routine.
+const INTERFACE_OPEN_WORLD: &str = "interface-open-world";
 
 #[derive(Debug, Clone)]
 pub struct ProveResult {
@@ -156,12 +278,19 @@ pub struct ProveResult {
 // (the gaps-in-cone count is `digest_cli::count_gaps_in_cone`, #160 step 9)
 // ---------------------------------------------------------------------------
 
-fn compute_obligations(entry: &DigestEntryFull, gaps_in_cone_count: usize) -> ProveObligations {
+fn compute_obligations(
+    entry: &DigestEntryFull,
+    gaps_in_cone_count: usize,
+    world: World,
+) -> ProveObligations {
     let mut unresolved_callsites = 0usize;
     let mut open_world_rows = 0usize;
+    let mut waived_rows = 0usize;
 
     for item in &entry.unresolved {
-        if item.open_world == Some(true) {
+        if world_waives(item, world) {
+            waived_rows += 1;
+        } else if item.open_world == Some(true) {
             open_world_rows += 1;
         } else {
             // Both "polymorphic" (without openWorld) and non-polymorphic non-openWorld
@@ -170,12 +299,32 @@ fn compute_obligations(entry: &DigestEntryFull, gaps_in_cone_count: usize) -> Pr
         }
     }
 
+    // Coverage that is partial ONLY through interface open world is complete
+    // in a world that waived every open-world site (at least one: a reason
+    // with no site here to waive stays partial).
+    let complete = entry.coverage_status == "complete";
+    let coverage_closed_by_assumption = !complete
+        && world != World::Strict
+        && waived_rows > 0
+        && open_world_rows == 0
+        && entry.coverage_status == "partial"
+        && !entry.coverage_reasons.is_empty()
+        && entry
+            .coverage_reasons
+            .iter()
+            .all(|r| r == INTERFACE_OPEN_WORLD);
+
     ProveObligations {
         unresolved_callsites,
         open_world_rows,
         analysis_gaps: gaps_in_cone_count,
-        coverage_complete: entry.coverage_status == "complete",
+        coverage_complete: complete || coverage_closed_by_assumption,
         cone_truncated: entry.unresolved_traversal.truncated,
+        world,
+        waived_rows,
+        coverage_closed_by_assumption,
+        answer_relies_on_world: false,
+        relies_on_loaded_subscribers: false,
     }
 }
 
@@ -214,9 +363,9 @@ fn build_obligation_blockers(
         });
     }
 
-    // Open-world dispatch rows
+    // Open-world dispatch rows (less the ones a closed world waived)
     for item in &entry.unresolved {
-        if item.open_world != Some(true) {
+        if item.open_world != Some(true) || world_waives(item, oblg.world) {
             continue;
         }
         let anchor = item.callsite_file.as_ref().map(|f| BlockerAnchor {
@@ -298,7 +447,25 @@ fn sort_blockers(mut blockers: Vec<ProveBlocker>) -> Vec<ProveBlocker> {
 // ---------------------------------------------------------------------------
 
 const DB_WRITE_TYPES: &[&str] = &["DB_INSERT", "DB_MODIFY", "DB_DELETE"];
-const UI_TYPES: &[&str] = &["UI_MESSAGE", "UI_CONFIRM", "UI_ERROR"];
+/// What `reaches-ui` counts as UI: INTERACTIVE UI, a dialog or window a user
+/// must see or answer (`Message`, `Confirm`, `StrMenu`, `Page`/`Report`
+/// `Run`/`RunModal`, `Hyperlink`, a client file dialog, a progress window).
+/// `UI_WINDOW_OPEN` was missing (G15), so a routine opening a page answered
+/// `no` with full coverage claimed; file dialogs and progress windows had no
+/// effect at all (G26), and routines reaching one answered `yes` only through
+/// an `Error` on the same path until G18.
+///
+/// An `Error` is not counted (G18): it is `throws-error`'s question, and as UI
+/// it was wrong where it never surfaces, e.g. an `Error('')` caught by a
+/// `[TryFunction]`. The two questions no longer overlap.
+const UI_TYPES: &[&str] = &[
+    "UI_MESSAGE",
+    "UI_CONFIRM",
+    "UI_WINDOW_OPEN",
+    "UI_HYPERLINK",
+    "UI_FILE_DIALOG",
+    "UI_PROGRESS",
+];
 
 /// Case-insensitive match of `query` against the resourceDisplay or the
 /// trailing segment of the resourceId (after the last '/').
@@ -357,15 +524,64 @@ fn effect_resource_matches(eff: &DigestEffectFull, query: &str) -> bool {
             .any(|(id, display)| name_or_id_matches(Some(display), Some(id), query))
 }
 
+/// The record temp states a DB effect's `tempState` detail lists (several when
+/// its originating operations disagree), e.g. `["known(true)"]`; empty when the
+/// detail is absent.
+fn temp_states(eff: &DigestEffectFull) -> Vec<&str> {
+    eff.detail
+        .iter()
+        .find(|(k, _)| k == "tempState")
+        .map(|(_, v)| v.split(',').map(str::trim).collect())
+        .unwrap_or_default()
+}
+
+/// G17: the write is to a temporary record on every path: no table is written.
+fn writes_only_temporary(eff: &DigestEffectFull) -> bool {
+    let states = temp_states(eff);
+    !states.is_empty() && states.iter().all(|s| *s == "known(true)")
+}
+
+/// G17b: the write is to a record parameter whose temporariness is the
+/// caller's (`parameter-dependent(i)`), and to nothing known to be persistent.
+/// Asked of the routine itself the answer depends on its callers; a caller's
+/// own frame resolves it (known(true) for a temporary argument).
+fn writes_caller_dependent(eff: &DigestEffectFull) -> bool {
+    let states = temp_states(eff);
+    states.iter().any(|s| s.starts_with("parameter-dependent"))
+        && states
+            .iter()
+            .all(|s| *s == "known(true)" || s.starts_with("parameter-dependent"))
+}
+
+/// A reachable table write that names no table (no resource, not a boundary
+/// group, which names its resources) and is not known to write a temporary
+/// record. A group whose every resource cannot run (G33) names none any more,
+/// and is no unknown write. A group that also holds writes whose table is not
+/// known (`unresolvedResources`) is one: its resource list is not all it
+/// writes.
+pub(crate) fn writes_unknown_table(eff: &DigestEffectFull) -> bool {
+    let has = |key: &str| eff.detail.iter().any(|(k, _)| k == key);
+    DB_WRITE_TYPES.contains(&eff.effect_type.as_str())
+        && !eff.literal_unreachable
+        && (!(has("resourceId") || has("boundary")) || has("unresolvedResources"))
+        && !writes_only_temporary(eff)
+}
+
+/// `writes-table`'s table and write kind, temp state aside.
+fn is_table_write(eff: &DigestEffectFull, table: &str) -> bool {
+    DB_WRITE_TYPES.contains(&eff.effect_type.as_str()) && effect_resource_matches(eff, table)
+}
+
 fn effect_matches(eff: &DigestEffectFull, question: &ProveQuestion) -> bool {
     match question {
         ProveQuestion::MayCommit => eff.effect_type == "COMMIT",
         ProveQuestion::CommitsOnSuccessPath => eff.effect_type == "COMMIT",
         ProveQuestion::WritesTable { table } => {
-            if !DB_WRITE_TYPES.contains(&eff.effect_type.as_str()) {
-                return false;
-            }
-            effect_resource_matches(eff, table)
+            // A temporary record is no table write (G17); a caller-dependent
+            // one is decided below, as neither a yes nor a no (G17b).
+            is_table_write(eff, table)
+                && !writes_only_temporary(eff)
+                && !writes_caller_dependent(eff)
         }
         ProveQuestion::PublishesEvent { event } => {
             if eff.effect_type != "EVENT_PUBLISH" {
@@ -374,7 +590,11 @@ fn effect_matches(eff: &DigestEffectFull, question: &ProveQuestion) -> bool {
             effect_resource_matches(eff, event)
         }
         ProveQuestion::ReachesUi => UI_TYPES.contains(&eff.effect_type.as_str()),
-        ProveQuestion::ThrowsError => eff.effect_type == "ERROR_THROW",
+        // An explicit Error, or an implicit runtime error (G20: an unguarded
+        // Get/FindFirst/FindLast/FindSet, TestField, FieldError).
+        ProveQuestion::ThrowsError => {
+            eff.effect_type == "ERROR_THROW" || eff.effect_type == "ERROR_IMPLICIT"
+        }
     }
 }
 
@@ -387,12 +607,22 @@ fn evaluate_may_question(
     oblg: ProveObligations,
     question: &ProveQuestion,
     witness_truncated: bool,
+    via_callers: &HashMap<usize, CallerRef>,
+    field_guarded: &HashMap<usize, bool>,
 ) -> ProveResult {
+    // A caller-dependent write a caller resolves to a real table counts (G25),
+    // as does a field-guarded write the asked table has the field of (G36).
     let matching: Vec<usize> = entry
         .effects
         .iter()
         .enumerate()
-        .filter(|(_, e)| effect_matches(e, question))
+        // G23: an effect the root cannot reach under literal arguments does not.
+        .filter(|(i, e)| {
+            (effect_matches(e, question)
+                || via_callers.contains_key(i)
+                || field_guarded.get(i) == Some(&true))
+                && !e.literal_unreachable
+        })
         .map(|(i, _)| i)
         .collect();
 
@@ -405,7 +635,61 @@ fn evaluate_may_question(
         };
     }
 
-    if obligations_clear(&oblg, witness_truncated) {
+    // G17b: writes whose table is real only if the caller passes a persistent
+    // record. They rule out `no`, but they are no `yes` either.
+    let caller_dependent: Vec<ProveBlocker> = match question {
+        ProveQuestion::WritesTable { table } => entry
+            .effects
+            .iter()
+            .filter(|e| is_table_write(e, table) && writes_caller_dependent(e))
+            .map(|e| ProveBlocker {
+                kind: "temp-state-depends-on-caller",
+                detail: format!(
+                    "{} on a record parameter: a table write only if the caller passes \
+                     a record that is not temporary",
+                    e.effect_type
+                ),
+                anchor: Some(BlockerAnchor {
+                    source_kind: e.evidence.source_kind.to_string(),
+                    file: e.evidence.file.clone(),
+                    line: e.evidence.line,
+                    column: e.evidence.column,
+                    excerpt: e.evidence.excerpt.clone(),
+                }),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    // A write whose table is not known (a RecordRef opened on a computed
+    // number, a record type that did not resolve) may write the asked table:
+    // it rules out `no`. It was no match, so the answer was `no`. One whose
+    // field guard the asked table cannot pass does not (G36).
+    let unknown_table: Vec<ProveBlocker> = match question {
+        ProveQuestion::WritesTable { .. } => entry
+            .effects
+            .iter()
+            .enumerate()
+            .filter(|(i, e)| writes_unknown_table(e) && field_guarded.get(i) != Some(&false))
+            .map(|(_, e)| e)
+            .map(|e| ProveBlocker {
+                kind: "unknown-table-write",
+                detail: format!("{} on a table that is not known", e.effect_type),
+                anchor: Some(BlockerAnchor {
+                    source_kind: e.evidence.source_kind.to_string(),
+                    file: e.evidence.file.clone(),
+                    line: e.evidence.line,
+                    column: e.evidence.column,
+                    excerpt: e.evidence.excerpt.clone(),
+                }),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    if caller_dependent.is_empty()
+        && unknown_table.is_empty()
+        && obligations_clear(&oblg, witness_truncated)
+    {
         return ProveResult {
             answer: ProveAnswer::No,
             evidence: None,
@@ -414,7 +698,9 @@ fn evaluate_may_question(
         };
     }
 
-    let blockers = build_obligation_blockers(entry, &oblg, witness_truncated);
+    let mut blockers = build_obligation_blockers(entry, &oblg, witness_truncated);
+    blockers.extend(caller_dependent);
+    blockers.extend(unknown_table);
     ProveResult {
         answer: ProveAnswer::Unknown,
         evidence: None,
@@ -522,24 +808,202 @@ fn evaluate_must_question(
 // prove — main tristate evaluation
 // ---------------------------------------------------------------------------
 
+/// The caller through which a caller-dependent write resolves (G25).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallerRef {
+    pub stable_id: String,
+    pub display: String,
+}
+
+/// How many caller levels G25 climbs while a write stays caller-dependent.
+const CALLER_DEPTH: usize = 6;
+
+/// G25: `writes-table`'s caller-dependent writes (G17b), asked in the frames of
+/// the routine's callers in the loaded world. A write that a caller's frame
+/// resolves to anything but a temporary record (`known(false)`, `unknown`)
+/// is a table write the routine MAY make, through that caller; one that is
+/// still `parameter-dependent` there climbs to that caller's callers, up to
+/// [`CALLER_DEPTH`] levels. Returns, per effect index of `entry`, the first
+/// such caller (callers in model order, breadth first). A write every caller
+/// passes a temporary record to, or no caller at all, is not resolved: the
+/// routine can still be called from outside the world.
+pub(crate) fn resolve_caller_dependent_writes(
+    model: &crate::program::model::workspace::Model,
+    temp_states: &crate::engine::l5::digest_cli::DbTempStates,
+    root_stable: &str,
+    entry: &DigestEntryFull,
+    question: &ProveQuestion,
+) -> HashMap<usize, CallerRef> {
+    use crate::engine::l4::effect_lattice::TempStateKind;
+    let ProveQuestion::WritesTable { table } = question else {
+        return HashMap::new();
+    };
+    let routines = &model.workspace.routines;
+    let stable_of: HashMap<&str, (&str, &str)> = routines
+        .iter()
+        .map(|r| {
+            (
+                r.id.as_str(),
+                (r.stable_routine_id.as_str(), r.name.as_str()),
+            )
+        })
+        .collect();
+    let Some(root_id) = routines
+        .iter()
+        .find(|r| r.stable_routine_id == root_stable)
+        .map(|r| r.id.as_str())
+    else {
+        return HashMap::new();
+    };
+    let mut callers_of: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in &model.calls.edges {
+        if let Some(to) = e.to.as_deref() {
+            callers_of.entry(to).or_default().push(e.from.as_str());
+        }
+    }
+    let mut out = HashMap::new();
+    for (i, eff) in entry.effects.iter().enumerate() {
+        if !(is_table_write(eff, table) && writes_caller_dependent(eff)) {
+            continue;
+        }
+        let mut visited: HashSet<&str> = HashSet::from([root_id]);
+        let mut frontier = vec![root_id];
+        'climb: for _ in 0..CALLER_DEPTH {
+            let mut next = Vec::new();
+            for callee in frontier {
+                for &caller in callers_of.get(callee).into_iter().flatten() {
+                    if !visited.insert(caller) {
+                        continue;
+                    }
+                    let Some(&(stable, name)) = stable_of.get(caller) else {
+                        continue;
+                    };
+                    let join =
+                        temp_states.for_effect(stable, &eff.origin_operation_ids, eff.effect_is_kt);
+                    let persistent = join
+                        .states
+                        .iter()
+                        .any(|s| matches!(s, TempStateKind::Known(false) | TempStateKind::Unknown));
+                    if persistent {
+                        out.insert(
+                            i,
+                            CallerRef {
+                                stable_id: stable.to_string(),
+                                display: name.to_string(),
+                            },
+                        );
+                        break 'climb;
+                    }
+                    if join
+                        .states
+                        .iter()
+                        .any(|s| matches!(s, TempStateKind::ParameterDependent(_)))
+                    {
+                        next.push(caller);
+                    }
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            frontier = next;
+        }
+    }
+    out
+}
+
 pub fn prove(
     entry: &DigestEntryFull,
     gaps_in_cone_count: usize,
     question: &ProveQuestion,
 ) -> ProveResult {
-    let oblg = compute_obligations(entry, gaps_in_cone_count);
+    prove_with_callers(
+        entry,
+        gaps_in_cone_count,
+        question,
+        &HashMap::new(),
+        &HashMap::new(),
+        World::Strict,
+    )
+}
 
-    let witness_truncated = entry.effects.iter().any(|e| e.via_paths_truncated)
-        || entry
-            .entry_diagnostics
-            .iter()
-            .any(|d| d.kind == "evidence-unavailable");
+/// [`prove`] with the caller-dependent writes resolved through callers
+/// ([`resolve_caller_dependent_writes`]): those effects count as matches (G25);
+/// `field_guarded` says which field-guarded writes of unknown table may write
+/// the asked table and which cannot
+/// ([`crate::engine::l5::field_guard::resolve_field_guarded_writes`], G36);
+/// `world` waives the open-world rows [`world_waives`] (G24, G29).
+///
+/// An answer is labelled with the WEAKEST world, up to `world`, whose answer
+/// DIFFERS from the strict one: it holds only under that world's assumption
+/// ([`World::label`]). A decided answer the strict world gives too (a `yes`
+/// with its witness) rests on no world's assumption: the strict result,
+/// unlabelled here. When every world stays `unknown`, the result of `world`,
+/// unlabelled: its blockers are what is left once the assumption is made, so
+/// a verifier sees what to fix next.
+pub fn prove_with_callers(
+    entry: &DigestEntryFull,
+    gaps_in_cone_count: usize,
+    question: &ProveQuestion,
+    via_callers: &HashMap<usize, CallerRef>,
+    field_guarded: &HashMap<usize, bool>,
+    world: World,
+) -> ProveResult {
+    let run = |w| {
+        prove_in_world(
+            entry,
+            gaps_in_cone_count,
+            question,
+            via_callers,
+            field_guarded,
+            w,
+        )
+    };
+    let strict = run(World::Strict);
+    let mut last = None;
+    for w in [World::LoadedSubscribers, World::Closed] {
+        if w > world {
+            break;
+        }
+        let mut assumed = run(w);
+        if assumed.answer != strict.answer {
+            assumed.obligations.answer_relies_on_world = true;
+            return assumed;
+        }
+        last = Some(assumed);
+    }
+    match last {
+        Some(assumed) if assumed.answer == ProveAnswer::Unknown => assumed,
+        _ => strict,
+    }
+}
 
+fn prove_in_world(
+    entry: &DigestEntryFull,
+    gaps_in_cone_count: usize,
+    question: &ProveQuestion,
+    via_callers: &HashMap<usize, CallerRef>,
+    field_guarded: &HashMap<usize, bool>,
+    world: World,
+) -> ProveResult {
+    let oblg = compute_obligations(entry, gaps_in_cone_count, world);
+
+    // G22: a truncated witness caps how many via paths an effect lists, and an
+    // unavailable evidence anchor loses where it sits; the effect itself stays
+    // in `entry.effects` either way. A MAY question decides on which effects
+    // exist, so neither can hide a match: a `no` stands. The MUST question
+    // judges "unconditional" over a COMMIT's paths, so a COMMIT whose paths
+    // were cut short still blocks it. (It blocked every question on any
+    // effect's truncation: 49 of Continia DO's undecided claims.)
     match question {
         ProveQuestion::CommitsOnSuccessPath => {
-            evaluate_must_question(entry, oblg, witness_truncated)
+            let commit_paths_truncated = entry
+                .effects
+                .iter()
+                .any(|e| e.effect_type == "COMMIT" && e.via_paths_truncated);
+            evaluate_must_question(entry, oblg, commit_paths_truncated)
         }
-        _ => evaluate_may_question(entry, oblg, question, witness_truncated),
+        _ => evaluate_may_question(entry, oblg, question, false, via_callers, field_guarded),
     }
 }
 
@@ -598,6 +1062,17 @@ fn obligations_to_value(o: &ProveObligations) -> serde_json::Value {
         "unresolvedCallsites".into(),
         (o.unresolved_callsites as u64).into(),
     );
+    // G24: under `--closed-world` only. G29: the default world names its
+    // waived rows only when it waived one, so a document no publisher-scoped
+    // site touched is unchanged.
+    let waived_key = match o.world {
+        World::Strict => None,
+        World::LoadedSubscribers => (o.waived_rows > 0).then_some("loadedSubscribersRows"),
+        World::Closed => Some("closedWorldRows"),
+    };
+    if let Some(key) = waived_key {
+        m.insert(key.into(), (o.waived_rows as u64).into());
+    }
     serde_json::Value::Object(m)
 }
 
@@ -614,6 +1089,9 @@ pub struct ProveDocumentArgs<'a> {
     pub question: &'a str,
     pub prove_result: &'a ProveResult,
     pub effects: &'a [DigestEffectFull],
+    /// Evidence effects resolved through a caller (G25): their evidence entry
+    /// carries `viaCaller` ({stableId, display}).
+    pub via_callers: &'a HashMap<usize, CallerRef>,
     pub diagnostics_json: serde_json::Value,
     pub alsem_ver: &'a str,
     pub deterministic: bool,
@@ -631,6 +1109,7 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
         question,
         prove_result,
         effects,
+        via_callers,
         diagnostics_json,
         alsem_ver,
         deterministic,
@@ -644,10 +1123,41 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     if let Some(ref indices) = prove_result.evidence
         && !indices.is_empty()
     {
-        // Re-use digest effect_to_value to produce the same DigestEffectContract shape.
+        // Re-use digest effect_to_value to produce the same DigestEffectContract
+        // shape; a write resolved through a caller says which (G25).
         let ev: Vec<serde_json::Value> = indices
             .iter()
-            .map(|&i| crate::engine::l5::digest_cli::effect_to_value(&effects[i]))
+            .map(|&i| {
+                let mut v = crate::engine::l5::digest_cli::effect_to_value(&effects[i]);
+                if let (Some(c), Some(obj)) = (via_callers.get(&i), v.as_object_mut()) {
+                    obj.insert(
+                        "viaCaller".into(),
+                        serde_json::json!({"stableId": c.stable_id, "display": c.display}),
+                    );
+                }
+                // G35: a group matched on the asked table shows how its code
+                // reaches that table.
+                if let (Some(ProveQuestion::WritesTable { table }), Some(obj)) =
+                    (parse_question(question), v.as_object_mut())
+                {
+                    let eff = &effects[i];
+                    let hit = eff.group_resource_paths.iter().find_map(|(id, hops)| {
+                        let display = eff
+                            .group_resources
+                            .iter()
+                            .find(|(r, _)| r == id)
+                            .map(|(_, d)| d.as_str());
+                        name_or_id_matches(display, Some(id), &table).then_some((display, hops))
+                    });
+                    if let Some((display, hops)) = hit {
+                        obj.insert(
+                            "groupPath".into(),
+                            serde_json::json!({"resource": display.unwrap_or_default(), "hops": hops}),
+                        );
+                    }
+                }
+                v
+            })
             .collect();
         result_obj.insert("evidence".into(), serde_json::Value::Array(ev));
     }
@@ -664,6 +1174,12 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
         "obligations".into(),
         obligations_to_value(&prove_result.obligations),
     );
+    // G24/G29: the label a KB needs for an answer that holds only in a world
+    // beyond the open one.
+    let o = &prove_result.obligations;
+    if let Some(label) = o.assumption() {
+        result_obj.insert("assumptions".into(), serde_json::json!([label]));
+    }
 
     // routine ref
     let mut routine_ref = serde_json::Map::new();
@@ -684,6 +1200,9 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     // payload
     let mut payload = serde_json::Map::new();
     payload.insert("question".into(), question.into());
+    // G13: every `line` in this document (anchors, evidence, via-path hops) is
+    // 0-based; `alsem graph`'s are 1-based (its `meta.lineBase`).
+    payload.insert("lineBase".into(), 0.into());
     payload.insert("result".into(), serde_json::Value::Object(result_obj));
     payload.insert("routine".into(), serde_json::Value::Object(routine_ref));
     payload.insert("workspaceFingerprint".into(), workspace_fp.into());
@@ -863,6 +1382,7 @@ pub(crate) fn prove_pipeline_with(
         alsem_ver,
         deterministic,
         single_app,
+        closed_world: false,
         human: false,
         out: None,
     };
@@ -894,6 +1414,7 @@ pub(crate) fn prove_on_target(
             target,
             crate::engine::gate::run::AnalysisTarget::SingleApp(_)
         ),
+        closed_world: false,
         human: false,
         out: None,
     };
@@ -918,6 +1439,9 @@ pub struct ProveJob<'a> {
     pub deterministic: bool,
     /// `--single-app`: the workspace alone.
     pub single_app: bool,
+    /// `--closed-world` (G24): an interface call dispatches only to the loaded
+    /// implementations.
+    pub closed_world: bool,
     /// `--format human`: the human text, else the JSON.
     pub human: bool,
     pub out: Option<&'a str>,
@@ -995,6 +1519,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         question_text,
         alsem_ver,
         deterministic,
+        closed_world,
         ..
     } = *job;
     // The roots `resolve` resolved off the model, before the composition.
@@ -1013,6 +1538,11 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             analysis_gaps: 0,
             coverage_complete: false,
             cone_truncated: false,
+            world: World::Strict,
+            waived_rows: 0,
+            coverage_closed_by_assumption: false,
+            answer_relies_on_world: false,
+            relies_on_loaded_subscribers: false,
         };
         let dummy_result = ProveResult {
             answer: ProveAnswer::Unknown,
@@ -1035,6 +1565,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             question: question_text,
             prove_result: &dummy_result,
             effects: &[],
+            via_callers: &HashMap::new(),
             diagnostics_json,
             alsem_ver,
             deterministic,
@@ -1056,12 +1587,16 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     // (5) The root's S4 entry, unresolved cone and gap count, read off the
     // view's tree inside `prepare` (the tree is gone).
     let mut effects = cx.take_effects();
-    let gaps_in_cone_count = effects
+    let cone = effects
         .unresolved
         .get(root_id)
-        .ok_or_else(|| "prove: internal error — no unresolved cone for the root".to_string())?
+        .ok_or_else(|| "prove: internal error — no unresolved cone for the root".to_string())?;
+    let gaps_in_cone_count = cone
         .gaps_in_cone
         .expect("prove's plan counts the gaps in the cone");
+    let fires_table_events = cone
+        .fires_table_events
+        .expect("prove's plan reads the cone's table events");
     let resolved = cx.view().model();
 
     // The L4 db-effect store, for DB_* `detail.tempState` (#65): the view's `l4`.
@@ -1077,6 +1612,35 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         &changed_roots,
         &owners,
     );
+    // Parse question (already validated at CLI layer, but re-check cleanly)
+    let parsed_question = parse_question(question_text)
+        .ok_or_else(|| format!("prove: unknown question '{}'", question_text))?;
+    // G25: caller-dependent writes asked in the callers' frames, while the
+    // bundle is alive.
+    let via_callers = query_full
+        .entries
+        .first()
+        .map_or_else(HashMap::new, |entry| {
+            resolve_caller_dependent_writes(
+                resolved,
+                &temp_states,
+                root_id,
+                entry,
+                &parsed_question,
+            )
+        });
+    // G36: field-guarded RecordRef writes, judged against the asked table.
+    let field_guarded = match (&parsed_question, query_full.entries.first()) {
+        (ProveQuestion::WritesTable { table }, Some(entry)) => {
+            crate::engine::l5::field_guard::resolve_field_guarded_writes(
+                resolved,
+                crate::engine::l5::digest_cli::primary_guid_of(resolved).unwrap_or(""),
+                entry,
+                table,
+            )
+        }
+        _ => HashMap::new(),
+    };
     // The bundle's only borrower is dead: release `l4`.
     drop(temp_states);
     drop(owners);
@@ -1090,12 +1654,17 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
 
     let entry = &query_full.entries[0];
 
-    // Parse question (already validated at CLI layer, but re-check cleanly)
-    let parsed_question = parse_question(question_text)
-        .ok_or_else(|| format!("prove: unknown question '{}'", question_text))?;
-
     // Run tristate evaluation
-    let prove_result = prove(entry, gaps_in_cone_count, &parsed_question);
+    let mut prove_result = prove_with_callers(
+        entry,
+        gaps_in_cone_count,
+        &parsed_question,
+        &via_callers,
+        &field_guarded,
+        World::of_flags(closed_world),
+    );
+    prove_result.obligations.relies_on_loaded_subscribers =
+        relies_on_loaded_subscribers(&prove_result, entry, fires_table_events);
 
     // Project document
     cx.view().census_output();
@@ -1108,6 +1677,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         question: question_text,
         prove_result: &prove_result,
         effects: &entry.effects,
+        via_callers: &via_callers,
         diagnostics_json,
         alsem_ver,
         deterministic,
@@ -1466,6 +2036,8 @@ mod tests {
             },
             candidates: None,
             open_world,
+            closed_world_followable: false,
+            publisher_scoped: false,
             owning_routine: "test-routine".to_string(),
             owning_routine_display: "TestRoutine".to_string(),
         }
@@ -1553,10 +2125,12 @@ mod tests {
 
     // -- witness-truncated oracle -------------------------------------------
 
-    /// An effect with viaPathsTruncated=true → witness-truncated blocker
-    /// (even though there is NO matching effect, so it's unknown, not yes).
+    /// G22: another effect's truncated via paths do not block a MAY `no`: the
+    /// effect is still listed, only its paths are capped, so it cannot hide a
+    /// match. The MUST question still blocks on a COMMIT whose paths were cut
+    /// short ([`a_truncated_commit_still_blocks_the_must_question`]).
     #[test]
-    fn witness_truncated_via_paths_truncated() {
+    fn a_truncated_witness_does_not_block_a_may_no() {
         use crate::engine::l5::conditionality::UNKNOWN;
         let effect = DigestEffectFull {
             effect_type: "EVENT_PUBLISH".to_string(),
@@ -1577,23 +2151,60 @@ mod tests {
             fact_id: "abcdef1234567890".to_string(),
             scoped_guarantees: vec![],
             group_resources: vec![],
+            group_resource_paths: vec![],
+            origin_operation_ids: vec![],
+            effect_is_kt: false,
+            literal_unreachable: false,
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::MayCommit);
+        assert_eq!(result.answer, ProveAnswer::No, "{:?}", result.blocked_by);
+        assert!(result.blocked_by.is_none());
+    }
+
+    /// The MUST question judges "unconditional" over a COMMIT's paths, so a
+    /// COMMIT with truncated paths blocks it with `witness-truncated`.
+    #[test]
+    fn a_truncated_commit_still_blocks_the_must_question() {
+        let commit = DigestEffectFull {
+            effect_type: "COMMIT".to_string(),
+            detail: vec![],
+            provenance: "direct",
+            evidence: FullAnchor {
+                source_kind: "source",
+                file: Some("ws:src/Test.al".to_string()),
+                line: Some(5),
+                column: Some(4),
+                excerpt: None,
+            },
+            via_paths: vec![],
+            via_paths_truncated: true,
+            conditionality: crate::engine::l5::conditionality::UNCONDITIONAL,
+            transaction_context: "unknown",
+            guarantees: vec![],
+            fact_id: "abcdef1234567890".to_string(),
+            scoped_guarantees: vec![],
+            group_resources: vec![],
+            group_resource_paths: vec![],
+            origin_operation_ids: vec![],
+            effect_is_kt: false,
+            literal_unreachable: false,
+        };
+        let entry = minimal_entry("complete", vec![], vec![commit], vec![], false);
+        let result = prove(&entry, 0, &ProveQuestion::CommitsOnSuccessPath);
         assert_eq!(result.answer, ProveAnswer::Unknown);
         let blockers = result.blocked_by.as_deref().unwrap_or(&[]);
-        let wt = blockers.iter().find(|b| b.kind == "witness-truncated");
         assert!(
-            wt.is_some(),
+            blockers.iter().any(|b| b.kind == "witness-truncated"),
             "expected witness-truncated blocker; got: {:?}",
             blockers.iter().map(|b| b.kind).collect::<Vec<_>>()
         );
     }
 
-    /// An entry diagnostic with kind "evidence-unavailable" also sets
-    /// witness_truncated and produces a witness-truncated blocker.
+    /// G22: an unavailable evidence anchor does not block a MAY `no` either: the
+    /// effect it belongs to is still listed.
     #[test]
-    fn witness_truncated_via_evidence_unavailable_diagnostic() {
+    fn evidence_unavailable_does_not_block_a_may_no() {
         let entry = minimal_entry(
             "complete",
             vec![],
@@ -1609,14 +2220,8 @@ mod tests {
             false,
         );
         let result = prove(&entry, 0, &ProveQuestion::MayCommit);
-        assert_eq!(result.answer, ProveAnswer::Unknown);
-        let blockers = result.blocked_by.as_deref().unwrap_or(&[]);
-        let wt = blockers.iter().find(|b| b.kind == "witness-truncated");
-        assert!(
-            wt.is_some(),
-            "expected witness-truncated blocker; got: {:?}",
-            blockers.iter().map(|b| b.kind).collect::<Vec<_>>()
-        );
+        assert_eq!(result.answer, ProveAnswer::No, "{:?}", result.blocked_by);
+        assert!(result.blocked_by.is_none());
     }
 
     // -- Blocker sort oracle ------------------------------------------------
@@ -1714,6 +2319,10 @@ mod tests {
             fact_id: "1234567890abcdef".to_string(),
             scoped_guarantees: vec![],
             group_resources: vec![],
+            group_resource_paths: vec![],
+            origin_operation_ids: vec![],
+            effect_is_kt: false,
+            literal_unreachable: false,
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::CommitsOnSuccessPath);
@@ -1761,6 +2370,10 @@ mod tests {
             fact_id: "fedcba0987654321".to_string(),
             scoped_guarantees: vec![],
             group_resources: vec![],
+            group_resource_paths: vec![],
+            origin_operation_ids: vec![],
+            effect_is_kt: false,
+            literal_unreachable: false,
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::CommitsOnSuccessPath);

@@ -342,7 +342,10 @@ mod tests {
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
+            lookup_pages: Vec::new(),
+            obsolete_gone: false,
         }
     }
 
@@ -373,6 +376,7 @@ mod tests {
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }
     }
 
@@ -426,6 +430,9 @@ mod tests {
             routines: routines.into(),
             obj_index,
             friends: Default::default(),
+            closed_internal_interfaces: Default::default(),
+            workspace_friendless: false,
+            lookup_pages: Default::default(),
             abi_ingest_errors: Default::default(),
             workspace_rows: Default::default(),
         };

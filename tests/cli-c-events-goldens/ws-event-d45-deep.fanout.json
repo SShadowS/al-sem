@@ -29,6 +29,7 @@
   "entries": [
     {
       "publisher": "920729537d4cb08f/5bb994ddbc480751ae3d89df05a0ee3a22f66901520dbd052f6dca38d10e53ca",
+      "publisherStableRoutineId": "cccccccc-cccc-cccc-cccc-cccccccccccc:Codeunit:50000#1c58acf3ea0c1a66759126b3534dd147b9c9c8060a8c54f2e798f209343bf88e",
       "eventId": "cccccccc-cccc-cccc-cccc-cccccccccccc/Codeunit/50000/event/onaftersales",
       "eventName": "OnAfterSales",
       "eventKind": "integration",
@@ -41,6 +42,7 @@
     },
     {
       "publisher": "920729537d4cb08f/b803e1b083798099b85066a831d6f27688e2721ab4621892b65f6191e46e7948",
+      "publisherStableRoutineId": "cccccccc-cccc-cccc-cccc-cccccccccccc:Codeunit:50001#0f92409aa92b3688515a86ba6104ef0389daa0871ae2a6fa4aeb5e9b7317654f",
       "eventId": "cccccccc-cccc-cccc-cccc-cccccccccccc/Codeunit/50001/event/onnotifycomplete",
       "eventName": "OnNotifyComplete",
       "eventKind": "integration",

@@ -2,7 +2,7 @@
 //! each job's `argv` is parsed by the binary's own clap `Cli`, so every flag,
 //! default and message is the standalone one.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -77,6 +77,7 @@ const WORKSPACE_FILES: &[&str] = &[
     "al-sem.coverage.yaml",
     "al-sem.policy.yaml",
     "al-sem.policy.yml",
+    crate::program::source_deps::CONFIG_FILE,
 ];
 
 /// `p` against `cwd` with `.` and `..` folded as the OS takes them: a `..`
@@ -143,18 +144,47 @@ fn resolve(cwd: &Path, p: &Path) -> PathBuf {
 /// loader's (R10-5): it can refuse a write where no real clash exists, but
 /// it never misses one. `taken`: the workspace's [`taken_files`], which
 /// holds the targets of the links a read follows.
-fn read_by_workspace(cwd: &Path, ws: &Path, f: &Path, taken: &Taken) -> bool {
-    use crate::dependencies::{CacheScope, Role, cache_scope_role, package_cache_scope};
-    let under = |root: &Path| f.starts_with(root) && is_input_name(f);
-    let spelled = package_cache_scope(&fold(cwd, ws));
-    let scope = CacheScope {
-        candidates: spelled.candidates.iter().map(|c| resolve(cwd, c)).collect(),
-        walked_dirs: vec![],
-    };
-    under(&resolve(cwd, ws))
-        || cache_scope_role(&scope, f) == Some(Role::AppFile)
-        || taken.files.contains(f)
-        || taken.linked_dirs.iter().any(|d| under(d))
+///
+/// Everything that depends on the workspace alone is computed once, in
+/// [`WorkspaceRead::new`]: it resolves paths through the file system, and
+/// redoing it for every pair of a job and a write made a manifest of n jobs
+/// cost n² of those calls (G14: 800 jobs 30 s, 5,488 over ten minutes).
+struct WorkspaceRead {
+    root: PathBuf,
+    scope: crate::dependencies::CacheScope,
+    taken: Taken,
+    /// The source-folder dependencies the read also takes (G4), resolved.
+    source_roots: Vec<PathBuf>,
+}
+
+impl WorkspaceRead {
+    fn new(cwd: &Path, ws: &Path) -> WorkspaceRead {
+        use crate::dependencies::{CacheScope, package_cache_scope};
+        let spelled = package_cache_scope(&fold(cwd, ws));
+        WorkspaceRead {
+            root: resolve(cwd, ws),
+            scope: CacheScope {
+                candidates: spelled.candidates.iter().map(|c| resolve(cwd, c)).collect(),
+                walked_dirs: vec![],
+            },
+            taken: taken_files(cwd, ws),
+            source_roots: crate::program::source_deps::configured_roots(&fold(cwd, ws))
+                .iter()
+                .map(|r| resolve(cwd, r))
+                .collect(),
+        }
+    }
+
+    /// Whether the read takes the resolved file `f`.
+    fn takes(&self, f: &Path) -> bool {
+        use crate::dependencies::{Role, cache_scope_role};
+        let under = |root: &Path| f.starts_with(root) && is_input_name(f);
+        under(&self.root)
+            || cache_scope_role(&self.scope, f) == Some(Role::AppFile)
+            || self.taken.files.contains(f)
+            || self.taken.linked_dirs.iter().any(|d| under(d))
+            || self.source_roots.iter().any(|d| under(d))
+    }
 }
 
 /// An `.al` or `.app` file or one of [`WORKSPACE_FILES`] (any case, as the
@@ -238,57 +268,117 @@ pub fn check_write_sets(jobs: &[(String, JobPaths)], cwd: &Path) -> Result<(), S
         })
         .collect();
     let name = |j: usize| &jobs[j].0;
-    for (i, (a, ta)) in writes.iter().enumerate() {
-        for (b, tb) in &writes[i + 1..] {
-            let clash = match (ta, tb) {
-                (Target::File(x), Target::File(y)) => {
-                    (x == y).then(|| format!("both write {}", x.display()))
-                }
-                (Target::File(f), Target::Dir(d)) | (Target::Dir(d), Target::File(f)) => f
-                    .starts_with(d)
-                    .then(|| format!("{} is inside the directory {}", f.display(), d.display())),
-                (Target::Dir(x), Target::Dir(y)) => (x.starts_with(y) || y.starts_with(x))
-                    .then(|| format!("the directories {} and {} nest", x.display(), y.display())),
-            };
-            if let Some(why) = clash {
-                return fail(format!("{} and {}: {why}", name(*a), name(*b)));
-            }
+    // Where each written file sits in `writes`, and every directory target
+    // (few: `--out-dir`-style targets). Each check below asks these instead of
+    // scanning every pair, which made a manifest of n jobs O(n²) (G14). The
+    // answers, and the first clash reported, are those of the pair scan.
+    let mut files: HashMap<&Path, Vec<usize>> = HashMap::new();
+    let mut dirs: Vec<usize> = Vec::new();
+    for (pos, (_, t)) in writes.iter().enumerate() {
+        match t {
+            Target::File(f) => files.entry(f.as_path()).or_default().push(pos),
+            Target::Dir(_) => dirs.push(pos),
         }
     }
-    let mut taken = std::collections::BTreeMap::new();
+    // Two targets that clash: the first write with a later partner, then its
+    // first such partner.
+    for (i, (a, ta)) in writes.iter().enumerate() {
+        let mut first: Option<(usize, String)> = None;
+        let mut consider = |j: usize, why: String| {
+            if j > i && first.as_ref().is_none_or(|(k, _)| j < *k) {
+                first = Some((j, why));
+            }
+        };
+        match ta {
+            Target::File(x) => {
+                if let Some(&j) = files[x.as_path()].iter().find(|&&j| j > i) {
+                    consider(j, format!("both write {}", x.display()));
+                }
+                for &j in &dirs {
+                    if let Target::Dir(d) = &writes[j].1
+                        && x.starts_with(d)
+                    {
+                        consider(
+                            j,
+                            format!("{} is inside the directory {}", x.display(), d.display()),
+                        );
+                    }
+                }
+            }
+            Target::Dir(x) => {
+                let partner = writes
+                    .iter()
+                    .enumerate()
+                    .skip(i + 1)
+                    .find_map(|(j, (_, tb))| {
+                        let why = match tb {
+                            Target::File(f) => f.starts_with(x).then(|| {
+                                format!("{} is inside the directory {}", f.display(), x.display())
+                            }),
+                            Target::Dir(y) => (x.starts_with(y) || y.starts_with(x)).then(|| {
+                                format!("the directories {} and {} nest", x.display(), y.display())
+                            }),
+                        };
+                        why.map(|why| (j, why))
+                    });
+                if let Some((j, why)) = partner {
+                    consider(j, why);
+                }
+            }
+        }
+        if let Some((j, why)) = first {
+            return fail(format!("{} and {}: {why}", name(*a), name(writes[j].0)));
+        }
+    }
+    // Per distinct workspace: the writes (positions in `writes`, in order) its
+    // read takes. Whether a read takes a file does not depend on which job
+    // reads, so each pair of a workspace and a write is asked once.
+    let mut taken: BTreeMap<&PathBuf, Vec<usize>> = BTreeMap::new();
     for (r, (_, paths)) in jobs.iter().enumerate() {
         for read in &paths.reads {
             let read = resolve(cwd, read);
-            for (w, t) in writes.iter().filter(|(w, _)| *w != r) {
-                let hit = match t {
-                    Target::File(f) => *f == read,
-                    Target::Dir(d) => read.starts_with(d),
-                };
-                if hit {
-                    return fail(format!(
-                        "{} reads {}, which {} writes",
-                        name(r),
-                        read.display(),
-                        name(*w)
-                    ));
-                }
+            let in_dir = dirs
+                .iter()
+                .copied()
+                .filter(|&j| matches!(&writes[j].1, Target::Dir(d) if read.starts_with(d)));
+            let hit = files
+                .get(read.as_path())
+                .into_iter()
+                .flatten()
+                .copied()
+                .chain(in_dir)
+                .filter(|&w| writes[w].0 != r)
+                .min();
+            if let Some(w) = hit {
+                return fail(format!(
+                    "{} reads {}, which {} writes",
+                    name(r),
+                    read.display(),
+                    name(writes[w].0)
+                ));
             }
         }
         for ws in &paths.workspaces {
-            let taken = taken
-                .entry(ws.clone())
-                .or_insert_with(|| taken_files(cwd, ws));
-            for (w, t) in writes.iter().filter(|(w, _)| *w != r) {
-                let Target::File(f) = t else { continue };
-                if read_by_workspace(cwd, ws, f, taken) {
-                    return fail(format!(
-                        "{} reads the workspace {}, where {} writes {}",
-                        name(r),
-                        resolve(cwd, ws).display(),
-                        name(*w),
-                        f.display()
-                    ));
-                }
+            let hits = taken.entry(ws).or_insert_with(|| {
+                let read = WorkspaceRead::new(cwd, ws);
+                writes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, (_, t))| matches!(t, Target::File(f) if read.takes(f)))
+                    .map(|(w, _)| w)
+                    .collect()
+            });
+            if let Some(&w) = hits.iter().find(|&&w| writes[w].0 != r) {
+                let Target::File(f) = &writes[w].1 else {
+                    unreachable!("only file targets are kept")
+                };
+                return fail(format!(
+                    "{} reads the workspace {}, where {} writes {}",
+                    name(r),
+                    resolve(cwd, ws).display(),
+                    name(writes[w].0),
+                    f.display()
+                ));
             }
         }
     }

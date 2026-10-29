@@ -147,6 +147,14 @@
             },
             "opSubtype": "Get"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/2bd8139ea3e68be14b6a2bac5f71688dfa94bd6e00ac4456a99ffcb7a7023280/op0"
         }
       ],
       "capabilityStatus": "complete",

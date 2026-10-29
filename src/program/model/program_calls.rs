@@ -1699,7 +1699,29 @@ impl<'a> Converter<'a> {
                     .site_facts
                     .get(&ce.obligation_id)
                     .and_then(|f| f.run_target.as_ref());
+                // A run of an object whose SOURCE is loaded and declares no
+                // trigger the run reaches (`resolver::run_triggers`) runs no
+                // AL code: the platform shows the page or runs the object,
+                // nothing is unknown. Was `Opaque`, which `prove` blocks on.
+                let source_loaded = target.and_then(|t| self.graph.object(t)).is_some_and(|o| {
+                    o.tier != crate::snapshot::TrustTier::SymbolOnly && !o.parse_incomplete
+                });
                 match target {
+                    // The edge keeps naming the object it runs.
+                    Some(t) if source_loaded => {
+                        if t.app == self.primary {
+                            c.adapter_workspace_run_no_entry += 1;
+                            e.dispatch_kind = object_run_dispatch_kind(match t.kind {
+                                // A table: `Page.Run(0, Rec)` of a table with
+                                // no lookup page (`resolve::full`).
+                                ObjectKind::Page | ObjectKind::Table => "Page",
+                                ObjectKind::Report => "Report",
+                                _ => "Codeunit",
+                            });
+                        }
+                        e.resolution = Resolution::Builtin;
+                        e.external_type_ref = self.type_ref(&object_key(t));
+                    }
                     Some(t) if t.app != self.primary => {
                         e.resolution = external;
                         e.external_type_ref = self.type_ref(&object_key(t));
@@ -2103,6 +2125,20 @@ impl<'a> Converter<'a> {
             .filter(|o| o.id.kind == ObjectKind::Interface && o.name.fold_identifier() == name_lc)
             .min_by_key(|o| o.id.app != self.primary)
             .map_or_else(|| name_lc.clone(), |o| o.name.to_string());
+        // G29: every interface of this name is the cataloged one.
+        let mut named = self
+            .graph
+            .objects
+            .iter()
+            .filter(|o| o.id.kind == ObjectKind::Interface && o.name.fold_identifier() == name_lc)
+            .peekable();
+        let publisher_scoped = named.peek().is_some()
+            && named.all(|o| {
+                let guid = &self.graph.apps.resolve(o.id.app).guid;
+                crate::program::model::calls::PUBLISHER_SCOPED_INTERFACES
+                    .iter()
+                    .any(|(g, n)| guid.eq_ignore_ascii_case(g) && *n == name_lc)
+            });
         let implements = |kinds: &[ObjectKind]| -> Vec<&ObjectNode> {
             let mut v: Vec<&ObjectNode> = self
                 .graph
@@ -2121,10 +2157,29 @@ impl<'a> Converter<'a> {
             let object_id = self.model_object_id(&o.id);
             callees.iter().any(|t| t.object_id == object_id) || dependency.contains(&o.id)
         };
+        // G24: also a closed enum mapping a value to a codeunit outside the
+        // program: that value dispatches to code no route reaches.
+        // G30: a site closed over the codeunits an object global can hold
+        // dropped its routes to every other implementer on purpose: those are
+        // not unreached.
+        let holder_closed = facts.is_some_and(|f| {
+            !f.interface_closed_over.is_empty()
+                && f.interface_closed_over
+                    .iter()
+                    .all(|o| o.kind == ObjectKind::Codeunit)
+        });
         let unresolved_impls: Vec<(String, String)> = impls
             .iter()
-            .filter(|o| !reached(o))
+            .filter(|o| !holder_closed && !reached(o))
             .map(|o| (self.model_object_id(&o.id), "not-found".to_string()))
+            .chain(facts.into_iter().flat_map(|f| {
+                f.interface_unmapped_enums.iter().map(|e| {
+                    (
+                        self.model_object_id(e),
+                        "enum-implementation-not-found".to_string(),
+                    )
+                })
+            }))
             .collect();
         // #264 (spec §5): closed only when every candidate is in the model, the
         // rule `test_coverage` applies, so every MODEL reader (combined graph,
@@ -2151,6 +2206,7 @@ impl<'a> Converter<'a> {
                 .map(|o| self.model_object_id(&o.id))
                 .collect(),
             closed_over,
+            publisher_scoped,
         };
         let base = || {
             let mut e = CallEdge::base(ix, &r.id, &cs.id, &cs.operation_id);

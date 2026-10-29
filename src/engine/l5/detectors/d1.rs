@@ -2363,6 +2363,7 @@ mod memo_tests {
             loop_stack: vec!["D/loop0".to_string()], // local_loop_depth = 1
             field_argument_infos: None,
             in_until_condition: false,
+            in_statement_position: false,
             run_trigger: None,
         };
 

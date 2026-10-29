@@ -131,6 +131,14 @@
 			"routineId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66101#2c61bb4341cccaf1a3eff57ee712cdfde0ca74c33f6548301453cfffb33c050b",
 			"capabilityFactsDirect": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66101#2c61bb4341cccaf1a3eff57ee712cdfde0ca74c33f6548301453cfffb33c050b/op0"
+				},
+				{
 					"op": "read",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -161,6 +169,14 @@
 		{
 			"routineId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66101#7df2741a7e11e50ddc0a862bce6dd980f1307cfe0b57266c1fd7e8e5093c7d9f",
 			"capabilityFactsDirect": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66101#7df2741a7e11e50ddc0a862bce6dd980f1307cfe0b57266c1fd7e8e5093c7d9f/op1"
+				},
 				{
 					"op": "read",
 					"resourceKind": "table",
@@ -193,6 +209,15 @@
 			"routineId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66101#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc",
 			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "call",
+					"witnessOperationId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66101#7df2741a7e11e50ddc0a862bce6dd980f1307cfe0b57266c1fd7e8e5093c7d9f/op1",
+					"witnessCallsiteId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66101#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc/cs1"
+				},
 				{
 					"op": "publish",
 					"resourceKind": "event",
@@ -264,6 +289,15 @@
 			],
 			"capabilityFactsInherited": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "event-dispatch",
+					"witnessOperationId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66102#da57b1541781f8c20c098c6e7dbd0eeb7506d4cac67358df94731723e13e06ac/op0",
+					"witnessFirstHopEventId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66101::OnAfterRunIteration::ef416bae2295a822d663d04fe57150340b961d83fed90753e0ed3c6494773c5a"
+				},
+				{
 					"op": "read",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -307,6 +341,15 @@
 			"routineId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66101#fa4c5bace0489dffc44cb7e147b3c8399e939479b70ebc672127d0ca24a9d455",
 			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "call",
+					"witnessOperationId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66101#2c61bb4341cccaf1a3eff57ee712cdfde0ca74c33f6548301453cfffb33c050b/op0",
+					"witnessCallsiteId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66101#fa4c5bace0489dffc44cb7e147b3c8399e939479b70ebc672127d0ca24a9d455/cs0"
+				},
 				{
 					"op": "publish",
 					"resourceKind": "event",
@@ -363,6 +406,14 @@
 		{
 			"routineId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66102#da57b1541781f8c20c098c6e7dbd0eeb7506d4cac67358df94731723e13e06ac",
 			"capabilityFactsDirect": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:66102#da57b1541781f8c20c098c6e7dbd0eeb7506d4cac67358df94731723e13e06ac/op0"
+				},
 				{
 					"op": "read",
 					"resourceKind": "table",

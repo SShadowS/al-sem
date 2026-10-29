@@ -525,6 +525,7 @@ fn coverage_policy_native_oracle() {
 
     let partial = FanoutEntry {
         publisher: "P1".to_string(),
+        publisher_stable_routine_id: None,
         event_id: "EVT-PARTIAL".to_string(),
         event_name: "OnPartial".to_string(),
         event_kind: "integration",
@@ -537,6 +538,7 @@ fn coverage_policy_native_oracle() {
     };
     let complete = FanoutEntry {
         publisher: "P2".to_string(),
+        publisher_stable_routine_id: None,
         event_id: "EVT-OK".to_string(),
         event_name: "OnOk".to_string(),
         event_kind: "integration",

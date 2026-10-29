@@ -3,29 +3,27 @@
 //!
 //! The reporter's repro: an event subscriber calls a helper that runs a modal
 //! page (`ReasonPage.RunModal()`). `RunModal` is not a commit, in the engine or in
-//! Business Central. The page declares no `OnOpenPage`, so the run reaches no
-//! routine and the analyze adapter records it as `object-run-unresolved`. The
-//! subscriber's cone is then `partial`, and `mayCommit` answers UNKNOWN, not YES.
-//! d35 still reports it (an unproven-absent commit is worth surfacing), but in its
-//! own words: "may be reachable", naming the coverage reasons.
+//! Business Central. The page declares no trigger, so the run reaches no
+//! routine. It was recorded as `object-run-unresolved`, which made the cone
+//! `partial` and `mayCommit` UNKNOWN; the run now runs no AL code (the model's
+//! `Builtin` run), so V1 has no finding. The UNKNOWN wording ("may be
+//! reachable", naming the coverage reasons) is pinned on a dynamic run (V7).
 //!
 //! Five #148 variants run the REAL gate `analyze` pipeline (`run_analyze_with_exit`,
 //! `--format json --with-evidence`) on inline tempdir workspaces (no r0-corpus
 //! fixture, so no golden family):
-//!   V1 the repro: one d35 finding with the UNKNOWN wording, at `possible` capped by
-//!      `unresolved-call`, under the default selection AND `--detector d35` alone;
+//!   V1 the repro: no finding, under the default selection AND `--detector d35`;
 //!   V2 `Commit()` instead of RunModal: the unchanged YES wording;
 //!   V3 RunModal removed: no finding;
-//!   V4 the page's source declares an entry trigger (an empty `OnOpenPage`): the
-//!      cone is complete and d35 reports nothing. Known limit: a page run reaches
-//!      only the entry trigger, so a Commit in another page trigger (e.g.
-//!      `OnQueryClosePage`) is not seen — filed as a discovery (ledger D3a);
-//!   V5 `Commit()` AND the RunModal: one finding, YES wording (yes beats unknown).
+//!   V4 the page's source declares an empty `OnOpenPage`: no finding;
+//!   V5 `Commit()` AND the RunModal: one finding, YES wording;
+//!   V6 a Commit in the page's `OnQueryClosePage`: the YES finding (ledger D3a,
+//!      fixed: a run reaches the page's whole lifecycle).
 //!
 //! #256 (ledger `.agent/issue-256/ledger.md`, Design §Tests): the UNKNOWN answer
 //! is reported at `medium`, the direct and via-callee answers stay `high`. Pinned
-//! on V1 (finding + exact `bySeverity` + `--fail-on`), on a subscriber whose only
-//! callee is a symbol-only dependency method, and on CentralGauge's reproduction
+//! on V7 (finding + exact `bySeverity`), on a subscriber whose only callee is a
+//! symbol-only dependency method (+ `--fail-on`), and on CentralGauge's reproduction
 //! (the interface call in a helper, and made directly in the subscriber).
 //!
 //! #264 (spec `docs/superpowers/specs/2026-10-24-issue-264-closed-enum-interface-dispatch-design.md`,
@@ -245,7 +243,7 @@ fn assert_unknown_finding(findings: &[Value], label: &str) {
     );
     assert_eq!(
         f["confidence"],
-        json!({"level": "possible", "cappedBy": ["unresolved-call"]}),
+        json!({"level": "possible", "cappedBy": ["dynamic-dispatch"]}),
         "{label}: confidence"
     );
     // #256: an unknown answer is not a found Commit.
@@ -302,23 +300,30 @@ fn assert_yes_finding_for(findings: &[Value], subscriber: &str, label: &str) {
     assert_eq!(f["fixHint"]["description"], YES_FIX, "{label}: fixHint");
 }
 
+/// The repro: the page's source declares no trigger a run reaches, so the run
+/// runs no AL code (the model's `Builtin` run). The cone is complete and d35
+/// reports nothing, as for V4's empty `OnOpenPage` (it reported an UNKNOWN
+/// commit while the run was `object-run-unresolved`).
 #[test]
-fn v1_runmodal_without_entry_trigger_reports_unknown_honestly() {
+fn v1_runmodal_of_a_page_without_triggers_has_no_finding() {
     let all = run_variant("v1-all", RUNMODAL, PAGE_NO_TRIGGER, None);
-    assert_unknown_finding(&all, "V1 default selection");
-    let (_tmp, ws) = write_workspace("v1-d35", RUNMODAL, PAGE_NO_TRIGGER);
-    let report = analyze(&ws, Some(D35));
-    assert_unknown_finding(&d35_findings(&report), "V1 --detector d35");
-    // #256: counted under medium only — no `high` key at all.
-    assert_eq!(by_severity(&report), &json!({"medium": 1}), "V1 bySeverity");
+    assert!(all.is_empty(), "V1: expected no d35 finding, got {all:#?}");
+    let d35 = run_variant("v1-d35", RUNMODAL, PAGE_NO_TRIGGER, Some(D35));
+    assert!(d35.is_empty(), "V1 --detector d35: got {d35:#?}");
 }
 
 /// #256: an unknown-only d35 run no longer trips `--fail-on high`; `--fail-on
-/// medium` still does.
+/// medium` still does. On the symbol-only callee's workspace (its one finding is
+/// the unknown arm, [`symbol_only_callee_is_unknown_at_medium`]).
 #[test]
-fn v1_unknown_only_passes_fail_on_high_and_fails_fail_on_medium() {
-    let (_tmp, ws) = write_workspace("v1-failon", RUNMODAL, PAGE_NO_TRIGGER);
-    let (_, high) = analyze_with(&ws, Some(D35), Some("high"));
+fn unknown_only_passes_fail_on_high_and_fails_fail_on_medium() {
+    let (_tmp, ws) = sym_workspace("failon");
+    let (report, high) = analyze_with(&ws, Some(D35), Some("high"));
+    assert_eq!(
+        by_severity(&report),
+        &json!({"medium": 1}),
+        "precondition: one unknown finding, at medium"
+    );
     assert_eq!(high, 0, "--fail-on high on an unknown-only run");
     let (_, medium) = analyze_with(&ws, Some(D35), Some("medium"));
     assert_eq!(medium, 1, "--fail-on medium on an unknown-only run");
@@ -326,10 +331,8 @@ fn v1_unknown_only_passes_fail_on_high_and_fails_fail_on_medium() {
 
 const SYM_GUID: &str = "25625625-0000-0000-0000-000000000256";
 
-/// #256: a subscriber whose ONLY call is to a symbol-only dependency method (no
-/// body to read) and no Commit anywhere in source → the unknown arm, `medium`.
-#[test]
-fn symbol_only_callee_is_unknown_at_medium() {
+/// A subscriber whose ONLY call is to a symbol-only dependency method.
+fn sym_workspace(tag: &str) -> (tempfile::TempDir, PathBuf) {
     let app_json = format!(
         r#"{{"id":"25625625-0000-0000-0000-000000000001","name":"Ws256","publisher":"probe","version":"1.0.0.0","runtime":"13.0","dependencies":[{{"id":"{SYM_GUID}","name":"SymLib","publisher":"probe","version":"1.0.0.0"}}]}}"#
     );
@@ -344,8 +347,8 @@ fn symbol_only_callee_is_unknown_at_medium() {
     end;
 }
 "#;
-    let (_tmp, ws) = write_files(
-        "sym",
+    let (tmp, ws) = write_files(
+        &format!("sym-{tag}"),
         &[
             ("app.json", &app_json),
             ("src/ReproOrder.Table.al", TABLE),
@@ -362,6 +365,14 @@ fn symbol_only_callee_is_unknown_at_medium() {
         "1.0.0.0",
         &symbols,
     );
+    (tmp, ws)
+}
+
+/// #256: a subscriber whose ONLY call is to a symbol-only dependency method (no
+/// body to read) and no Commit anywhere in source → the unknown arm, `medium`.
+#[test]
+fn symbol_only_callee_is_unknown_at_medium() {
+    let (_tmp, ws) = sym_workspace("sym");
     let findings = d35_findings(&analyze(&ws, None));
     assert_eq!(
         findings.len(),
@@ -696,14 +707,51 @@ fn v3_no_runmodal_no_finding() {
     assert!(f.is_empty(), "V3: expected no d35 finding, got {f:#?}");
 }
 
-/// Pins only this: a page whose source declares an entry trigger yields a
-/// complete cone and no d35 finding. It does NOT show that every page trigger is
-/// analysed: a page run reaches only the entry trigger, so a Commit in, say,
-/// `OnQueryClosePage` is not seen (a filed discovery, ledger D3a).
+/// A page whose source declares an empty entry trigger yields a complete cone
+/// and no d35 finding.
 #[test]
 fn v4_page_with_entry_trigger_has_no_finding() {
     let f = run_variant("v4", RUNMODAL, PAGE_WITH_TRIGGER, None);
     assert!(f.is_empty(), "V4: expected no d35 finding, got {f:#?}");
+}
+
+/// V6, ledger D3a: a run reaches every trigger of the page's lifecycle
+/// (`resolver::run_triggers`), not only `OnOpenPage`, so a Commit in
+/// `OnQueryClosePage` is the YES finding. It was not seen.
+#[test]
+fn v6_commit_in_onqueryclosepage_is_found() {
+    let page = r#"page 50100 "Reason Dialog"
+{
+    PageType = StandardDialog;
+    layout
+    {
+        area(Content) { }
+    }
+    trigger OnQueryClosePage(CloseAction: Action): Boolean
+    begin
+        Commit();
+        exit(true);
+    end;
+}
+"#;
+    assert_yes_finding(&run_variant("v6", RUNMODAL, page, None), "V6");
+}
+
+/// V7: a run whose target is computed (`Page.RunModal(Random(50100))`) is
+/// dynamic: `object-run-unresolved`, the UNKNOWN wording at `possible` capped by
+/// `dynamic-dispatch`, under the default selection AND `--detector d35` alone,
+/// counted under `medium` only. The keyword member form was no unresolved run
+/// at all (`combined_graph::keyword_run_kind`): its cone counted as complete
+/// and d35 reported nothing.
+#[test]
+fn v7_dynamic_page_run_reports_unknown_honestly() {
+    let body = "        if Page.RunModal(Random(50100)) <> Action::OK then\n            Error('Canceled.');";
+    let all = run_variant("v7-all", body, PAGE_NO_TRIGGER, None);
+    assert_unknown_finding(&all, "V7 default selection");
+    let (_tmp, ws) = write_workspace("v7-d35", body, PAGE_NO_TRIGGER);
+    let report = analyze(&ws, Some(D35));
+    assert_unknown_finding(&d35_findings(&report), "V7 --detector d35");
+    assert_eq!(by_severity(&report), &json!({"medium": 1}), "V7 bySeverity");
 }
 
 #[test]

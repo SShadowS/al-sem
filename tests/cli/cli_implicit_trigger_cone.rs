@@ -698,17 +698,34 @@ fn a3_temporary_receiver_stays_non_physical() {
         }
     }
 
-    for routine in ["TempValidate", "TempInsert"] {
-        let mods = prove_trig_row_modifies(&prove(routine, "writes-table:Trig Row"));
-        if mods.is_empty() {
+    // prove reads the same temp state (G17): the trigger's modify through a
+    // temporary receiver writes no table, so `writes-table` answers `no` with no
+    // evidence; through a persistent receiver it answers `yes` with a physical
+    // DB_MODIFY as evidence.
+    for (routine, writes) in [
+        ("TempValidate", false),
+        ("TempInsert", false),
+        ("ValidateIt", true),
+        ("InsertTrue", true),
+    ] {
+        let doc = prove(routine, "writes-table:Trig Row");
+        let answer = doc["payload"]["result"]["answer"].as_str().unwrap_or("");
+        let want = if writes { "yes" } else { "no" };
+        if answer != want {
             f.push(format!(
-                "prove {routine}: no DB_MODIFY on Trig Row reported"
+                "prove {routine}: writes-table:Trig Row answered {answer}, want {want}"
             ));
         }
-        for x in &mods {
-            if is_physical(x) {
+        let mods = prove_trig_row_modifies(&doc);
+        if writes && !mods.iter().any(is_physical) {
+            f.push(format!(
+                "prove {routine}: no physical DB_MODIFY on Trig Row as evidence"
+            ));
+        }
+        if !writes {
+            for x in &mods {
                 f.push(format!(
-                    "prove {routine}: physical DB_MODIFY on Trig Row ({})",
+                    "prove {routine}: a temporary DB_MODIFY on Trig Row reported ({})",
                     temp_state(x)
                 ));
             }

@@ -11,6 +11,7 @@ pub mod parse;
 pub mod provider;
 #[allow(clippy::module_inception)]
 pub mod snapshot;
+pub mod transpiled;
 pub mod verify;
 
 pub use identity::{AppId, Provenance, TrustTier};

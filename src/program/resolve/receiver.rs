@@ -2268,7 +2268,7 @@ fn infer_cross_object_chain_receiver(
 /// than-one same-arity candidate is declared (defensive — a single interface
 /// declaration should never itself be arity-ambiguous, but this never
 /// guesses).
-fn interface_own_routine_node<'g>(
+pub(crate) fn interface_own_routine_node<'g>(
     name_lc: &str,
     member_lc: &str,
     arity: usize,
@@ -3793,7 +3793,10 @@ mod tests {
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             };
 
         let mut objects = vec![
@@ -3921,7 +3924,10 @@ mod tests {
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
+            lookup_pages: Vec::new(),
+            obsolete_gone: false,
         }
     }
 
@@ -7020,6 +7026,7 @@ mod tests {
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }
     }
 
@@ -8865,6 +8872,7 @@ codeunit 50100 "C"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }
     }
 

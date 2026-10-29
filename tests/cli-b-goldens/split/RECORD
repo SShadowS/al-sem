@@ -1,0 +1,10 @@
+Base-binary records for cli_full_snapshot_split (#160 step 9 T18). Minted by the BASE code
+(70c3b743, the unsplit compose_full_snapshot), so REGEN_TEMP_GOLDENS never rewrites them: they
+prove the split wrote the bytes the unsplit function wrote. When the document's CONTENT changes on
+purpose, they are re-minted from the current code with `REMINT_SPLIT_RECORDS=1 cargo test --test cli
+cli_full_snapshot_split`, after checking the diff holds only that change.
+
+Re-mints:
+- 2026-10-28 (G20): full-snapshot.r5b.cross-app.{json,cbor}. The capability facts gained
+  `error-implicit` facts (unguarded record lookups, TestField, FieldError). The json diff holds only
+  those facts and the counts and hashes that follow from them.

@@ -135,12 +135,12 @@ pub(crate) fn closed_enum_sources(
 }
 
 /// Whether two half-open byte ranges share a byte.
-fn overlaps(a: &std::ops::Range<usize>, b: &std::ops::Range<usize>) -> bool {
+pub(super) fn overlaps(a: &std::ops::Range<usize>, b: &std::ops::Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
 }
 
 /// The folded name of `e` when it is a (quoted) identifier, parentheses removed.
-fn name_of(ir: &Ir, e: ExprId) -> Option<String> {
+pub(super) fn name_of(ir: &Ir, e: ExprId) -> Option<String> {
     match &ir.expr(unparen(ir, e)).kind {
         ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => Some(n.fold_identifier()),
         _ => None,
@@ -166,13 +166,20 @@ fn is_interface_local(cx: &ClosedEnumCx, v_lc: &str, interface_lc: &str) -> bool
 /// one), or `None` when any occurrence is not admitted, the body holds a
 /// `with`, or the lowerer left a statement or expression unmodelled.
 fn allowlisted_writes(ir: &Ir, body: BlockId, v_lc: &str) -> Option<Vec<ExprId>> {
+    let writes = admitted_writes(ir, body, v_lc)?;
+    (!writes.is_empty()).then_some(writes)
+}
+
+/// [`allowlisted_writes`] that admits a body with no write (G30: one routine
+/// of several that may write an object global).
+pub(super) fn admitted_writes(ir: &Ir, body: BlockId, v_lc: &str) -> Option<Vec<ExprId>> {
     let mut walk = Occurrences {
         ir,
         v_lc,
         writes: Vec::new(),
     };
     walk.block(body)?;
-    (!walk.writes.is_empty()).then_some(walk.writes)
+    Some(walk.writes)
 }
 
 /// The rule-3 walk: every block (every `#if` branch), statement and expression.
@@ -324,6 +331,7 @@ fn enum_identity(cx: &ClosedEnumCx, value: ExprId, interface_lc: &str) -> Option
 ///   only warns): X from the object that declares the field;
 /// - `Enum::"X"::V`, `"X"::V` (no variable named X in scope) and
 ///   `Enum::"X".FromInteger(n)`: X from the calling object;
+/// - `K::V` with `K` a variable declared `Enum X` (G27): X, as the bare `K`;
 /// - a bare call `F(..)` where no variable is named F (an array `F` makes
 ///   `F(1)` an index) and `resolve_bare` gives exactly one source routine: its
 ///   declared `Enum X` return type, X from that routine's object.
@@ -342,6 +350,13 @@ fn value_enum(cx: &ClosedEnumCx, e: ExprId) -> Option<ObjectNodeId> {
                     && !implicit_rec_may_have_field(cx, &x.fold_identifier()) =>
             {
                 enum_by_name(cx, x, from)
+            }
+            // G27: `K::V` with `K` a variable declared `Enum X` is a value of
+            // X, as the bare `K` is (an Option `K` is no enum: `None`).
+            ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x)
+                if in_scope(cx, &x.fold_identifier()) =>
+            {
+                declared_enum(cx, declared_type(cx, &x.fold_identifier())?, from)
             }
             _ => None,
         },
@@ -547,7 +562,7 @@ fn in_scope(cx: &ClosedEnumCx, name_lc: &str) -> bool {
 }
 
 /// `e` with parentheses removed.
-fn unparen(ir: &Ir, mut e: ExprId) -> ExprId {
+pub(super) fn unparen(ir: &Ir, mut e: ExprId) -> ExprId {
     while let ExprKind::Parenthesized(inner) = &ir.expr(e).kind {
         e = *inner;
     }
@@ -1235,6 +1250,13 @@ enum 50106 "Other Kind" implements "Other Strategy"
                 "",
                 "",
                 "        S := Enum::\"Demo Kind\"::Standard;",
+            ),
+            // G27: an enum variable qualifies a value of its enum.
+            (
+                "FromVariableQualifier",
+                "",
+                "        K: Enum \"Demo Kind\";",
+                "        S := K::Standard;",
             ),
             (
                 "FromInteger",

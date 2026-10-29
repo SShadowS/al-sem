@@ -1081,14 +1081,14 @@ mod tests {
                 "dynamic-target",
                 "object-run-unresolved",
                 "test-page",
-                "unfetched-dependency",
                 "unresolved-receiver-type",
             ]
         );
         // CardShowsRecord, OpenCardModally (test-page), DynamicRun, VariantPing.
         assert_eq!(c.tests_with_unresolved_traversal, 4, "{c:?}");
-        // OpenCardModally's `Page.RunModal` row.
-        assert_eq!(c.tests_calling_dependency_code, 1, "{c:?}");
+        // OpenCardModally's `Page.RunModal` runs a page that declares no trigger
+        // a run reaches: no AL code, no dependency boundary (it was one).
+        assert_eq!(c.tests_calling_dependency_code, 0, "{c:?}");
     }
 
     /// Matrix row 4, the precondition the CLI test `configured_test_kind_is_not_a_root`

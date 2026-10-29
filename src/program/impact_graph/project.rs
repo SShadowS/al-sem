@@ -1196,7 +1196,10 @@ mod tests {
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             });
             oid
         }
@@ -1262,6 +1265,7 @@ mod tests {
                 preproc_context: Box::default(),
                 source_unit: None,
                 abi_params: AbiParams::Missing,
+                abi_method_id: None,
             };
             f(&mut r);
             let id = r.id.clone();

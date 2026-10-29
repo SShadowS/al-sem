@@ -113,7 +113,9 @@ use crate::program::node_extract::{AbiParamRetained, AbiParams, ObjectRef, Routi
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{BuiltinId, RouteTarget};
 use crate::program::resolve::extract::WithState;
-use crate::program::resolve::framework_returns::record_builtin_return_kind;
+use crate::program::resolve::framework_returns::{
+    framework_return_kind, record_builtin_return_kind,
+};
 use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
 use crate::program::resolve::receiver::{
     CallerScopeSymbol, FrameworkKind, ParsedType, ReceiverType, caller_scope_symbol,
@@ -164,6 +166,58 @@ pub(crate) enum CanonicalArgType {
         base: String,
         args: Vec<GenericArgType>,
     },
+    /// An array (`array[8] of Text[100]`): its dimensions, whitespace-free
+    /// (`"8"`, `"2,3"`), and its element type. An array never binds a
+    /// non-array parameter nor a non-array an array one, so the pair is
+    /// incompatible; two arrays that differ are undecided, never eliminated.
+    /// Before this an array read as a malformed generic clause (`of` with no
+    /// `[..]`), so one array parameter degraded every overload pick of its
+    /// name: Base Application's `VendorRemitToAddress(Rec, array[8] of
+    /// Text[100])` / `(Rec, Record "Remit Address Buffer")`.
+    Array {
+        dims: String,
+        elem: Box<CanonicalArgType>,
+    },
+}
+
+/// The shape of a declared type text's `array[..] of <element>` prefix.
+enum ArrayShape<'a> {
+    NotArray,
+    Array {
+        dims: String,
+        elem: &'a str,
+    },
+    /// `array` with no well-formed `[..] of <element>`: undecided.
+    Malformed,
+}
+
+/// Split `array[<dims>] of <element>` (any case, any spacing) off `ty_text`.
+fn split_array_type(ty_text: &str) -> ArrayShape<'_> {
+    let trimmed = ty_text.trim();
+    let Some(head) = trimmed.get(..5).filter(|h| h.eq_ignore_ascii_case("array")) else {
+        return ArrayShape::NotArray;
+    };
+    let rest = trimmed[head.len()..].trim_start();
+    if !rest.starts_with('[') {
+        // `ArrayX` / `Array` as a name, not the keyword.
+        return ArrayShape::NotArray;
+    }
+    let Some(close) = rest.find(']') else {
+        return ArrayShape::Malformed;
+    };
+    let dims: String = rest[1..close]
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let after = rest[close + 1..].trim_start();
+    let elem = match after.get(..2) {
+        Some(of) if of.eq_ignore_ascii_case("of") => after[2..].trim(),
+        _ => return ArrayShape::Malformed,
+    };
+    if dims.is_empty() || elem.is_empty() || !after[2..].starts_with(char::is_whitespace) {
+        return ArrayShape::Malformed;
+    }
+    ArrayShape::Array { dims, elem }
 }
 
 /// Recursively-parsed identity of ONE generic type ARGUMENT (`Dictionary of
@@ -225,6 +279,123 @@ pub(crate) enum LiteralKind {
     Text,
     Bool,
     Decimal,
+}
+
+/// AL's built-in option types, folded: a `T::V` value of one types as `T`'s
+/// base keyword ([`base_keyword`]), as a parameter declared `T` does.
+const BUILTIN_OPTION_TYPES: &[&str] = &[
+    "action",
+    "clienttype",
+    "commitbehavior",
+    "dataclassification",
+    "datascope",
+    "defaultlayout",
+    "executioncontext",
+    "executionmode",
+    "fieldclass",
+    "fieldtype",
+    "inherentpermissionsscope",
+    "isolationlevel",
+    "objecttype",
+    "pagebackgroundtaskerrorlevel",
+    "permissionobjecttype",
+    "reportformat",
+    "reportlayouttype",
+    "securityfilter",
+    "securityoperationresult",
+    "tableconnectiontype",
+    "telemetryscope",
+    "testpermissions",
+    "textencoding",
+    "transactionmodel",
+    "transactiontype",
+    "verbosity",
+];
+
+/// A framework kind a member returns (`framework_returns`) as an argument,
+/// named by its AL keyword. Only a kind whose name IS one types; a generic or
+/// grouped kind (List, Xml) or a modelling one (Scalar, PageInstance) stays
+/// untyped. Never var-passable: it is a call result.
+fn framework_kind_arg(
+    kind: Option<FrameworkKind>,
+    from: &ObjectNodeId,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+) -> ArgDispatchInfo {
+    use FrameworkKind as F;
+    match kind {
+        Some(
+            k @ (F::JsonObject
+            | F::JsonToken
+            | F::JsonArray
+            | F::JsonValue
+            | F::HttpClient
+            | F::HttpRequestMessage
+            | F::HttpResponseMessage
+            | F::HttpContent
+            | F::HttpHeaders
+            | F::InStream
+            | F::OutStream
+            | F::TextBuilder
+            | F::Text
+            | F::BigText
+            | F::SecretText
+            | F::Date
+            | F::DateTime
+            | F::Time
+            | F::Duration
+            | F::Guid
+            | F::Media
+            | F::Notification
+            | F::ErrorInfo
+            | F::RecordId
+            | F::ModuleInfo
+            | F::DataTransfer
+            | F::SessionSettings
+            | F::FilterPageBuilder
+            | F::File
+            | F::FileUpload
+            | F::Version),
+        ) => {
+            let ty = format!("{k:?}");
+            ArgDispatchInfo {
+                canonical: dispatch_canonical_type_text(&ty, from, graph, index),
+                exact_text: Some(normalize_type_text(&ty)),
+                literal_kind: None,
+                var_passable: false,
+            }
+        }
+        _ => ArgDispatchInfo::untyped(),
+    }
+}
+
+/// A parens-less member of a `RecordRef`/`FieldRef` value (`base`, folded) as
+/// an argument: the type its method returns (MS Learn, methods-auto/recordref
+/// and /fieldref). `RecRef.Number` is an Integer, so
+/// `IsPurchaseDocument(RecRef.Number)` picks `(Integer)` over
+/// `(Codeunit "…Factory")` (Continia CDN). Any other member stays untyped.
+fn ref_member_arg(
+    base: &str,
+    member: &str,
+    from: &ObjectNodeId,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+) -> ArgDispatchInfo {
+    let member_lc = unquote_identifier(member).fold_identifier();
+    let ty = match (base, member_lc.as_str()) {
+        (_, "number") => "Integer",
+        ("recordref", "fieldcount" | "keycount" | "count") => "Integer",
+        (_, "name" | "caption") => "Text",
+        ("recordref", "getfilters" | "getview" | "getposition" | "currentkey") => "Text",
+        ("recordref", "recordid") => "RecordId",
+        _ => return ArgDispatchInfo::untyped(),
+    };
+    ArgDispatchInfo {
+        canonical: dispatch_canonical_type_text(ty, from, graph, index),
+        exact_text: Some(normalize_type_text(ty)),
+        literal_kind: None,
+        var_passable: false,
+    }
 }
 
 /// Lowercase the leading whitespace-delimited token of a declared type string
@@ -438,6 +609,16 @@ pub(crate) fn dispatch_canonical_type_text(
 ) -> Option<CanonicalArgType> {
     if ty_text.trim().is_empty() {
         return None;
+    }
+    match split_array_type(ty_text) {
+        ArrayShape::NotArray => {}
+        ArrayShape::Array { dims, elem } => {
+            return Some(CanonicalArgType::Array {
+                dims,
+                elem: Box::new(dispatch_canonical_type_text(elem, from, graph, index)?),
+            });
+        }
+        ArrayShape::Malformed => return None,
     }
     let resolve = |kind: ObjectKind, oref: &ObjectRef| match index.resolve_object_ref(
         graph,
@@ -667,20 +848,169 @@ fn type_one_arg(
                     literal_kind: None,
                     var_passable: true,
                 },
-                // Found but no declared type text, not found at all in
-                // caller scope, or a malformed same-scope duplicate —
-                // untyped either way, never a guess.
-                CallerScopeSymbol::Found(None)
-                | CallerScopeSymbol::NotFound
-                | CallerScopeSymbol::MalformedDuplicate => ArgDispatchInfo::untyped(),
+                // An undeclared `Rec`/`xRec` is the object's implicit record,
+                // typed as the `Rec.Field` arm below types its base (the
+                // receiver typer's Step 3b). Without it an overload picked on
+                // the record (`SetTemplateFilter(Rec)` on Continia DO, over
+                // two record types) stayed ambiguous.
+                CallerScopeSymbol::NotFound
+                    if matches!(name.fold_identifier().as_str(), "rec" | "xrec") =>
+                {
+                    match object_by_id(graph, from)
+                        .map(|o| infer_implicit_rec(routine, o, graph, index))
+                    {
+                        Some(ReceiverType::Record { table: Some(id) }) => ArgDispatchInfo {
+                            canonical: Some(CanonicalArgType::Object(id)),
+                            exact_text: None,
+                            literal_kind: None,
+                            var_passable: true,
+                        },
+                        _ => ArgDispatchInfo::untyped(),
+                    }
+                }
+                // Not in caller scope, inside an object with an implicit
+                // record: a field of it, as the `Rec.Field` arm below types
+                // one (a table's own `"Document Type"`; Base Application's
+                // `Cust.CheckBlockedCustOnJnls(Cust, "Document Type", false)`
+                // in Gen. Journal Line stayed ambiguous between its `Enum` and
+                // `var Record` overloads). A name the table also declares as
+                // a routine stays untyped.
+                CallerScopeSymbol::NotFound => {
+                    let field_lc = unquote_identifier(name).fold_identifier();
+                    let Some(o) = object_by_id(graph, from) else {
+                        return ArgDispatchInfo::untyped();
+                    };
+                    // A report's / XmlPort's dataitem by name: a record of its
+                    // source table (Base Application's `ReservMgt.
+                    // SetReservSource("Prod. Order Component")` in Replan
+                    // Production Order over `(Variant)` / `(RecordRef)`).
+                    if let Some(d) = o.dataitems.iter().find(|d| d.name_lc == field_lc.as_str()) {
+                        return match index.resolve_object_ref(
+                            graph,
+                            from.clone(),
+                            ObjectKind::Table,
+                            &d.source_table,
+                        ) {
+                            ObjectRefResolution::Unique(id) => ArgDispatchInfo {
+                                canonical: Some(CanonicalArgType::Object(id)),
+                                exact_text: None,
+                                literal_kind: None,
+                                var_passable: true,
+                            },
+                            _ => ArgDispatchInfo::untyped(),
+                        };
+                    }
+                    let ReceiverType::Record { table: Some(id) } =
+                        infer_implicit_rec(routine, o, graph, index)
+                    else {
+                        return ArgDispatchInfo::untyped();
+                    };
+                    if index.table_scope_has_routine(graph, o, &id, &field_lc) {
+                        return ArgDispatchInfo::untyped();
+                    }
+                    match index.field_in_table(graph, o, &id, &field_lc) {
+                        Some(field) => ArgDispatchInfo {
+                            canonical: dispatch_canonical_type_text(
+                                &field.type_text,
+                                from,
+                                graph,
+                                index,
+                            ),
+                            exact_text: Some(normalize_type_text(&field.type_text)),
+                            literal_kind: None,
+                            var_passable: true,
+                        },
+                        None => ArgDispatchInfo::untyped(),
+                    }
+                }
+                // Found but no declared type text, or a malformed same-scope
+                // duplicate — untyped either way, never a guess.
+                CallerScopeSymbol::Found(None) | CallerScopeSymbol::MalformedDuplicate => {
+                    ArgDispatchInfo::untyped()
+                }
+            }
+        }
+        // An element of a declared array (`RequestHeaders[i, 1]`): the
+        // array's element type, and a variable (it binds a `var` parameter).
+        // Continia's `Http.AddRequestHeader(RequestHeaders[i, 1],
+        // RequestHeaders[i, 2])` over `(Text, Text)` / `(Text, SecretText)`
+        // stayed ambiguous. Indexing anything else (a Text's Char) stays
+        // untyped.
+        ExprKind::Index { base, .. } => {
+            let declared = match &file.ir.expr(*base).kind {
+                ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n)
+                    if with_state == WithState::NoWithProven =>
+                {
+                    match caller_scope_symbol(n, routine, object_globals) {
+                        CallerScopeSymbol::Found(Some(t)) => Some(t),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            match declared.map(split_array_type) {
+                Some(ArrayShape::Array { elem, .. }) => ArgDispatchInfo {
+                    canonical: dispatch_canonical_type_text(elem, from, graph, index),
+                    exact_text: Some(normalize_type_text(elem)),
+                    literal_kind: None,
+                    var_passable: true,
+                },
+                _ => ArgDispatchInfo::untyped(),
+            }
+        }
+        // A concatenation with a Text literal (`'Bearer ' + AccessToken`): a
+        // Text, unbounded. Base Application's `HttpWebRequestMgt.AddHeader(
+        // 'Authorization', 'Bearer ' + AccessToken)` over `(Text, Text)` /
+        // `(Text, SecretText)` stayed ambiguous.
+        ExprKind::Binary {
+            op: BinaryOp::Add,
+            lhs,
+            rhs,
+        } if [*lhs, *rhs].iter().any(|&e| {
+            matches!(
+                file.ir.expr(e).kind,
+                ExprKind::Literal(al_syntax::ir::Literal::Text(_))
+            )
+        }) =>
+        {
+            ArgDispatchInfo {
+                canonical: Some(CanonicalArgType::Base("text".to_string())),
+                exact_text: Some("text".to_string()),
+                literal_kind: None,
+                var_passable: false,
+            }
+        }
+        // An object-id reference (`Database::Contact`, `Page::"…"`) is the
+        // object's number, an Integer: Base Application's
+        // `GetIntegrationTableMapping(Mapping, DATABASE::Contact)` over
+        // `(…, RecordId)` / `(…, Integer)` stayed ambiguous.
+        ExprKind::DatabaseReference(text) => {
+            let keyword = text.split("::").next().unwrap_or("").trim();
+            if [
+                "database", "table", "page", "codeunit", "report", "query", "xmlport",
+            ]
+            .iter()
+            .any(|k| keyword.eq_ignore_ascii_case(k))
+            {
+                ArgDispatchInfo {
+                    canonical: Some(CanonicalArgType::Base("integer".to_string())),
+                    exact_text: Some("integer".to_string()),
+                    literal_kind: None,
+                    var_passable: false,
+                }
+            } else {
+                ArgDispatchInfo::untyped()
             }
         }
         ExprKind::Literal(lit) => match literal_canonical(lit) {
             Some((canonical, kind)) => {
                 let text = match &canonical {
                     CanonicalArgType::Base(s) => s.clone(),
-                    // `literal_canonical` never produces `Object(..)`/`Generic(..)`.
-                    CanonicalArgType::Object(_) | CanonicalArgType::Generic { .. } => {
+                    // `literal_canonical` never produces `Object(..)`/`Generic(..)`/
+                    // `Array(..)`.
+                    CanonicalArgType::Object(_)
+                    | CanonicalArgType::Generic { .. }
+                    | CanonicalArgType::Array { .. } => {
                         unreachable!("literal_canonical only ever returns CanonicalArgType::Base")
                     }
                 };
@@ -693,6 +1023,34 @@ fn type_one_arg(
             }
             None => ArgDispatchInfo::untyped(),
         },
+        // `Foo(this.Global)`: `this.` names an object GLOBAL only, never a
+        // local or parameter (the keyword's whole point), and a `with` cannot
+        // rebind it. Typed as the bare identifier arm types the global.
+        // Without it an overload set picked on such an argument stayed
+        // ambiguous (Continia CDN: `this.Utilities.IsPurchaseDocument(
+        // this.CreationFactory)`, overloaded on `Codeunit` against `Integer`).
+        ExprKind::Member { object, member, .. }
+            if matches!(
+                &file.ir.expr(*object).kind,
+                ExprKind::Identifier(t) if t.eq_ignore_ascii_case("this")
+            ) =>
+        {
+            let global_lc = unquote_identifier(member).fold_identifier();
+            let mut decls = object_globals
+                .iter()
+                .filter(|v| v.name.fold_identifier() == global_lc);
+            match (decls.next().and_then(|v| v.ty.as_deref()), decls.next()) {
+                (Some(ty), None) => ArgDispatchInfo {
+                    canonical: dispatch_canonical_type_text(ty, from, graph, index),
+                    exact_text: Some(normalize_type_text(ty)),
+                    literal_kind: None,
+                    var_passable: true,
+                },
+                // No such global, no type text, or several declarations (`#if`
+                // arms that may differ): untyped, never a guess.
+                _ => ArgDispatchInfo::untyped(),
+            }
+        }
         // Member-field arg (Task 4, receiver-closure-and-arg-increments plan
         // — `Foo(Rec.Field)` / `Foo(Rec."Quoted Field")`): types the field's
         // DECLARED type via the SAME `field_in_table` machinery
@@ -743,16 +1101,60 @@ fn type_one_arg(
             }
             let base_name = match &file.ir.expr(*object).kind {
                 ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => n,
-                // Multi-hop base (itself a Member/Call/…) — out of this
-                // increment's scope, decline rather than guess.
-                _ => return ArgDispatchInfo::untyped(),
+                // Multi-hop base (itself a Member/Call/…): only a RecordRef or
+                // FieldRef one types its member
+                // (`Factory.GetHeader().Number`), off the base's own type.
+                _ => {
+                    let base = type_one_arg(
+                        file,
+                        file.ir.expr(*object),
+                        routine,
+                        object_globals,
+                        from,
+                        graph,
+                        index,
+                        surface,
+                        with_state,
+                    );
+                    return match base.exact_text.as_deref() {
+                        Some(kw @ ("recordref" | "fieldref")) => {
+                            ref_member_arg(kw, member, from, graph, index)
+                        }
+                        _ => ArgDispatchInfo::untyped(),
+                    };
+                }
             };
             let Some(from_object) = object_by_id(graph, from) else {
                 return ArgDispatchInfo::untyped();
             };
             let table_id = match caller_scope_symbol(base_name, routine, object_globals) {
                 CallerScopeSymbol::Found(Some(base_ty_text)) => {
-                    let ParsedType::Record { table_ref } = classify_type_text(base_ty_text) else {
+                    let parsed = classify_type_text(base_ty_text);
+                    match parsed {
+                        ParsedType::RecordRef => {
+                            return ref_member_arg("recordref", member, from, graph, index);
+                        }
+                        ParsedType::FieldRef => {
+                            return ref_member_arg("fieldref", member, from, graph, index);
+                        }
+                        _ => {}
+                    }
+                    // A framework variable's parens-less member
+                    // (`Response.Content`): the kind it returns
+                    // (`framework_returns`), named by its AL keyword. Only a
+                    // kind whose name IS one types; a generic or grouped kind
+                    // (List, Xml) or a modelling one (Scalar, PageInstance)
+                    // stays untyped.
+                    if let ParsedType::Framework(kind) = &parsed {
+                        let member_lc = unquote_identifier(member).fold_identifier();
+                        return framework_kind_arg(
+                            framework_return_kind(kind, &member_lc, true, 0),
+                            from,
+                            graph,
+                            index,
+                        );
+                    }
+                    let ParsedType::Record { table_ref } = parsed else {
                         return ArgDispatchInfo::untyped();
                     };
                     match index.resolve_object_ref(
@@ -918,38 +1320,114 @@ fn type_one_arg(
         // overloads (alc 18.0.41.45789 + altool graph: `EN(Enum)`/`EN(InStream)`
         // and `EI(Enum)`/`EI(Integer)` both bind the Enum overload). Only a
         // bare qualifier that names an enum: `R.Kind::A` (an option field's
-        // value) and `K::A` with `K` a caller-scope variable are option values,
+        // value) and `K::A` with `K` an Option variable are option values,
         // which bind `Integer` (`EI(R.Kind::A)` binds `EI(Integer)`), so they
-        // stay untyped. Gated on `with` like the bare-identifier arm: a field
-        // of the `with` record could take the name.
+        // stay untyped. G27: `K::A` with `K` a variable DECLARED `Enum X` is a
+        // value of X (BaseApp's `PriceSourceList.Add(SourceType::"All
+        // Customers")`, `SourceType: Enum "Price Source Type"`), typed as the
+        // bare `K` is; and the keyword form `Enum::"X"::A` is X's. Gated on
+        // `with` like the bare-identifier arm: a field of the `with` record
+        // could take the name.
         ExprKind::QualifiedEnum { enum_type, .. } => {
             if with_state != WithState::NoWithProven {
                 return ArgDispatchInfo::untyped();
             }
-            let name = match &file.ir.expr(*enum_type).kind {
-                ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => n,
-                _ => return ArgDispatchInfo::untyped(),
+            let enum_named = |name: &String| {
+                let oref = ObjectRef::Name {
+                    raw: name.clone(),
+                    normalized_lc: name.fold_identifier(),
+                };
+                match index.resolve_object_ref(graph, from.clone(), ObjectKind::Enum, &oref) {
+                    ObjectRefResolution::Unique(id) => ArgDispatchInfo {
+                        canonical: Some(CanonicalArgType::Object(id)),
+                        exact_text: Some(normalize_type_text(&format!("Enum \"{name}\""))),
+                        literal_kind: None,
+                        var_passable: false,
+                    },
+                    ObjectRefResolution::Ambiguous
+                    | ObjectRefResolution::OutOfClosure
+                    | ObjectRefResolution::Unresolved => ArgDispatchInfo::untyped(),
+                }
             };
-            if !matches!(
-                caller_scope_symbol(name, routine, object_globals),
-                CallerScopeSymbol::NotFound
-            ) {
-                return ArgDispatchInfo::untyped();
-            }
-            let oref = ObjectRef::Name {
-                raw: name.clone(),
-                normalized_lc: name.fold_identifier(),
-            };
-            match index.resolve_object_ref(graph, from.clone(), ObjectKind::Enum, &oref) {
-                ObjectRefResolution::Unique(id) => ArgDispatchInfo {
-                    canonical: Some(CanonicalArgType::Object(id)),
-                    exact_text: Some(normalize_type_text(&format!("Enum \"{name}\""))),
-                    literal_kind: None,
-                    var_passable: false,
-                },
-                ObjectRefResolution::Ambiguous
-                | ObjectRefResolution::OutOfClosure
-                | ObjectRefResolution::Unresolved => ArgDispatchInfo::untyped(),
+            match &file.ir.expr(*enum_type).kind {
+                ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => {
+                    match caller_scope_symbol(n, routine, object_globals) {
+                        CallerScopeSymbol::NotFound => {
+                            let named = enum_named(n);
+                            // A value of a built-in option type
+                            // (`TextEncoding::UTF8`, `Verbosity::Normal`): its
+                            // type is that keyword, as a parameter declared with
+                            // it canonicalizes (System Application's
+                            // `TempBlob.CreateInStream(TextEncoding::UTF8)` stayed
+                            // ambiguous with `CreateInStream(var InStream)`).
+                            match BUILTIN_OPTION_TYPES
+                                .iter()
+                                .find(|t| t.eq_ignore_ascii_case(n))
+                            {
+                                Some(t) if named.canonical.is_none() => ArgDispatchInfo {
+                                    canonical: Some(CanonicalArgType::Base(t.to_string())),
+                                    exact_text: Some(t.to_string()),
+                                    literal_kind: None,
+                                    var_passable: false,
+                                },
+                                _ => named,
+                            }
+                        }
+                        CallerScopeSymbol::Found(Some(ty))
+                            if ty.trim_start().to_ascii_lowercase().starts_with("enum ") =>
+                        {
+                            ArgDispatchInfo {
+                                canonical: dispatch_canonical_type_text(ty, from, graph, index),
+                                exact_text: Some(normalize_type_text(ty)),
+                                literal_kind: None,
+                                var_passable: false,
+                            }
+                        }
+                        // An Option variable (an option value), no type text,
+                        // or a malformed duplicate: never a guess.
+                        CallerScopeSymbol::Found(_) | CallerScopeSymbol::MalformedDuplicate => {
+                            ArgDispatchInfo::untyped()
+                        }
+                    }
+                }
+                // `Enum::"X"::A`: the inner `Enum::"X"` names X.
+                ExprKind::QualifiedEnum {
+                    enum_type: keyword,
+                    value: x,
+                } if matches!(&file.ir.expr(*keyword).kind,
+                    ExprKind::Identifier(k) if k.eq_ignore_ascii_case("enum")) =>
+                {
+                    enum_named(x)
+                }
+                // `Rec."Field"::Value`: the field's declared enum (Base
+                // Application's `CheckBlockedCustOnJnls(Customer,
+                // GenJournalLine."Document Type"::Payment, true)` over `(…; DocType:
+                // Enum …; …)` / `(…; var GenJnlLine: Record …; …)` stayed
+                // ambiguous). Only an enum-typed field: a value, not a variable.
+                ExprKind::Member { .. } => {
+                    let field = type_one_arg(
+                        file,
+                        file.ir.expr(*enum_type),
+                        routine,
+                        object_globals,
+                        from,
+                        graph,
+                        index,
+                        surface,
+                        with_state,
+                    );
+                    match field.canonical {
+                        Some(CanonicalArgType::Object(ref id)) if id.kind == ObjectKind::Enum => {
+                            ArgDispatchInfo {
+                                var_passable: false,
+                                literal_kind: None,
+                                ..field
+                            }
+                        }
+                        _ => ArgDispatchInfo::untyped(),
+                    }
+                }
+                _ => ArgDispatchInfo::untyped(),
             }
         }
         // Any other expression shape stays untyped.
@@ -1086,7 +1564,70 @@ fn type_call_result_arg_member(
     let base_ty_text = match &file.ir.expr(base_expr).kind {
         ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => {
             match caller_scope_symbol(n, routine, object_globals) {
+                // An enum value's `AsInteger()`: its ordinal (System
+                // Application's `IsValidConnector(Connector.AsInteger())`).
+                CallerScopeSymbol::Found(Some(t))
+                    if inner_arity == 0
+                        && unquote_identifier(member).fold_identifier() == "asinteger"
+                        && t.trim_start().to_ascii_lowercase().starts_with("enum ") =>
+                {
+                    return ArgDispatchInfo {
+                        canonical: Some(CanonicalArgType::Base("integer".to_string())),
+                        exact_text: Some("integer".to_string()),
+                        literal_kind: None,
+                        var_passable: false,
+                    };
+                }
+                // A collection's `Get(key)` / `Get(index)`: its declared value
+                // type (`Dictionary of [Text, Text]` → Text). System
+                // Application's `HttpContent.SetHeader(HeaderKey,
+                // AdditionalHeaders.Get(HeaderKey))` over `(Text, Text)` /
+                // `(Text, SecretText)` stayed ambiguous.
+                CallerScopeSymbol::Found(Some(t))
+                    if inner_arity == 1
+                        && unquote_identifier(member).fold_identifier() == "get"
+                        && let Some((base, targs)) = generic_type_args(t)
+                        && let Some(value) = match (base.as_str(), targs.as_slice()) {
+                            ("dictionary", [_, v]) => Some(*v),
+                            ("list", [v]) => Some(*v),
+                            _ => None,
+                        } =>
+                {
+                    return ArgDispatchInfo {
+                        canonical: dispatch_canonical_type_text(value, from, graph, index),
+                        exact_text: Some(normalize_type_text(value)),
+                        literal_kind: None,
+                        var_passable: false,
+                    };
+                }
                 CallerScopeSymbol::Found(Some(t)) => t,
+                // `"Enum Name".FromInteger(i)` on an enum type (no variable
+                // of that name): a value of that enum. Base Application's
+                // `ShowComments("Service Comment Line Type".FromInteger(Type))`
+                // over `(Option …)` / `(Enum …)` stayed ambiguous.
+                CallerScopeSymbol::NotFound
+                    if inner_arity == 1
+                        && unquote_identifier(member).fold_identifier() == "frominteger" =>
+                {
+                    let oref = ObjectRef::Name {
+                        raw: n.clone(),
+                        normalized_lc: n.fold_identifier(),
+                    };
+                    return match index.resolve_object_ref(
+                        graph,
+                        from.clone(),
+                        ObjectKind::Enum,
+                        &oref,
+                    ) {
+                        ObjectRefResolution::Unique(id) => ArgDispatchInfo {
+                            canonical: Some(CanonicalArgType::Object(id)),
+                            exact_text: Some(normalize_type_text(&format!("Enum \"{n}\""))),
+                            literal_kind: None,
+                            var_passable: false,
+                        },
+                        _ => ArgDispatchInfo::untyped(),
+                    };
+                }
                 _ => return ArgDispatchInfo::untyped(),
             }
         }
@@ -1108,9 +1649,62 @@ fn type_call_result_arg_member(
                 None => return ArgDispatchInfo::untyped(),
             }
         }
-        // Any other multi-hop base (a Call, a deeper Member, …) — out of
-        // this increment's scope, decline rather than guess.
-        _ => return ArgDispatchInfo::untyped(),
+        // An enum value's name or ordinal list read by `Get`
+        // (`Method.Names.Get(i)`, a `List of [Text]`; `Ordinals`, of
+        // [Integer]): System Application's `SetHttpMethod(Method.Names.Get(
+        // …))` over `Text` / `Enum "Http Method"` stayed ambiguous.
+        ExprKind::Member {
+            object,
+            member: list,
+            ..
+        } if unquote_identifier(member).fold_identifier() == "get" && inner_arity == 1 => {
+            let is_enum = match &file.ir.expr(*object).kind {
+                ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => matches!(
+                    caller_scope_symbol(n, routine, object_globals),
+                    CallerScopeSymbol::Found(Some(t))
+                        if t.trim_start().to_ascii_lowercase().starts_with("enum ")
+                ),
+                _ => false,
+            };
+            let keyword = match unquote_identifier(list).fold_identifier().as_str() {
+                "names" if is_enum => "text",
+                "ordinals" if is_enum => "integer",
+                _ => return ArgDispatchInfo::untyped(),
+            };
+            return ArgDispatchInfo {
+                canonical: Some(CanonicalArgType::Base(keyword.to_string())),
+                exact_text: Some(keyword.to_string()),
+                literal_kind: None,
+                var_passable: false,
+            };
+        }
+        // Any other multi-hop base (a Call, a deeper Member, …): only a
+        // framework-typed one types the call, by the kind its member returns
+        // (`Token.AsValue().AsText()`, Continia CDN's `SetSeverity(…)` over
+        // `Text` / `Enum`). Anything else declines rather than guesses.
+        _ => {
+            let base = type_one_arg(
+                file,
+                file.ir.expr(base_expr),
+                routine,
+                object_globals,
+                from,
+                graph,
+                index,
+                surface,
+                with_state,
+            );
+            let member_lc = unquote_identifier(member).fold_identifier();
+            return match base.exact_text.as_deref().map(classify_type_text) {
+                Some(ParsedType::Framework(kind)) => framework_kind_arg(
+                    framework_return_kind(&kind, &member_lc, true, inner_arity),
+                    from,
+                    graph,
+                    index,
+                ),
+                _ => ArgDispatchInfo::untyped(),
+            };
+        }
     };
     let Some(from_object) = object_by_id(graph, from) else {
         return ArgDispatchInfo::untyped();
@@ -1118,6 +1712,22 @@ fn type_call_result_arg_member(
     let base_receiver =
         parsed_type_to_receiver(classify_type_text(base_ty_text), from_object, graph, index);
     let member_lc = unquote_identifier(member).fold_identifier();
+    // An interface method (`Function.GetName()`): the interface's own
+    // declared return type, which every implementer shares. System
+    // Application's `SetFunctionAsToolChoice(Function.GetName())` over
+    // `(Interface "AOAI Function")` / `(Text)` stayed ambiguous.
+    if let ReceiverType::Interface { name_lc } = &base_receiver
+        && let Some(node) = crate::program::resolve::receiver::interface_own_routine_node(
+            name_lc,
+            &member_lc,
+            inner_arity,
+            from_object,
+            graph,
+            index,
+        )
+    {
+        return call_result_arg_from_routine_node(node, from, graph, index);
+    }
     let (_shape, routes) = resolve_member(
         &base_receiver,
         &member_lc,
@@ -1127,9 +1737,113 @@ fn type_call_result_arg_member(
         index,
         surface,
     );
-    let [route] = routes.as_slice() else {
-        return ArgDispatchInfo::untyped();
+    let route = match routes.as_slice() {
+        [route] => route,
+        // Same-arity overloads that all return the same type: the call is
+        // that type whichever one binds. System Application's
+        // `CreateFile(FilePath, AFSHttpContentHelper.GetContentLength(InStream),
+        // …)`, `GetContentLength` being `(var InStream)` / `(Text)`, both
+        // Integer, over `(…; InStream; …)` / `(…; Integer; …)` stayed ambiguous.
+        [_, _, ..] => {
+            let mut typed = routes.iter().map(|r| {
+                if !matches!(
+                    r.target,
+                    RouteTarget::Routine(_) | RouteTarget::AbiSymbol { .. }
+                ) {
+                    return None;
+                }
+                routine_node_for_type_query(r, inner_arity, from_object, graph, index)
+                    .map(|n| call_result_arg_from_routine_node(n, from, graph, index))
+                    .filter(|a| a.canonical.is_some())
+            });
+            let Some(Some(first)) = typed.next() else {
+                return ArgDispatchInfo::untyped();
+            };
+            let agree = typed.all(|a| {
+                a.as_ref().is_some_and(|a| {
+                    a.canonical == first.canonical && a.exact_text == first.exact_text
+                })
+            });
+            return if agree {
+                first
+            } else {
+                ArgDispatchInfo::untyped()
+            };
+        }
+        [] => return ArgDispatchInfo::untyped(),
     };
+    // A record's platform method (`Line.RecordId()`): its documented return
+    // (`record_builtin_return_kind`), as the parens-less `Rec.RecordId` arm
+    // types it. Business Foundation's `AddAction(ErrorInfo, Line.RecordId(),
+    // …)` over `RecordId` / `Code[20]` stayed ambiguous.
+    // A RecordRef's/FieldRef's (`RecRef.Number()`, Continia CDN's
+    // `IsSalesDocument(RecordRef.Number())`), as the parens-less form.
+    if matches!(route.target, RouteTarget::Builtin(_)) {
+        match &base_receiver {
+            // A framework method (`Token.AsValue()`): the kind it returns.
+            ReceiverType::Framework(kind) => {
+                // An Integer result, which the return table's generic
+                // `Scalar` does not say (MS Learn methods-auto/recordid, /list,
+                // /dictionary, /jsonarray, /text): Base Application's
+                // `GetIntegrationTableMapping(Mapping, RecordID.TableNo())` over
+                // `(…, RecordId)` / `(…, Integer)` stayed ambiguous.
+                use crate::program::resolve::receiver::FrameworkKind as F;
+                if matches!(
+                    (kind, member_lc.as_str(), inner_arity),
+                    (F::RecordId, "tableno", 0)
+                        | (F::List | F::Dictionary | F::JsonArray, "count", 0)
+                        | (F::Text, "indexof" | "lastindexof", 1 | 2)
+                ) {
+                    return ArgDispatchInfo {
+                        canonical: Some(CanonicalArgType::Base("integer".to_string())),
+                        exact_text: Some("integer".to_string()),
+                        literal_kind: None,
+                        var_passable: false,
+                    };
+                }
+                return framework_kind_arg(
+                    framework_return_kind(kind, &member_lc, true, inner_arity),
+                    from,
+                    graph,
+                    index,
+                );
+            }
+            ReceiverType::RecordRef => {
+                return ref_member_arg("recordref", member, from, graph, index);
+            }
+            ReceiverType::FieldRef => {
+                return ref_member_arg("fieldref", member, from, graph, index);
+            }
+            _ => {}
+        }
+    }
+    if matches!(route.target, RouteTarget::Builtin(_))
+        && matches!(base_receiver, ReceiverType::Record { .. })
+    {
+        // `Count`/`CountApprox` and `FieldNo` return an Integer (MS Learn,
+        // methods-auto/record), which the table's generic `Scalar` does not
+        // say: Base Application's `AddAllowedTable(Database::"…",
+        // Log.FieldNo(SystemCreatedAt))` over `(Integer, Integer)` /
+        // `(Integer, JsonArray)` stayed ambiguous.
+        let integer = matches!(
+            (member_lc.as_str(), inner_arity),
+            ("count" | "countapprox", 0) | ("fieldno", 1)
+        );
+        let keyword = match record_builtin_return_kind(&member_lc, true, inner_arity) {
+            _ if integer => "integer",
+            Some(FrameworkKind::RecordId) => "recordid",
+            Some(FrameworkKind::Guid) => "guid",
+            Some(FrameworkKind::DateTime) => "datetime",
+            Some(FrameworkKind::Text) => "text",
+            _ => return ArgDispatchInfo::untyped(),
+        };
+        return ArgDispatchInfo {
+            canonical: Some(CanonicalArgType::Base(keyword.to_string())),
+            exact_text: Some(keyword.to_string()),
+            literal_kind: None,
+            var_passable: false,
+        };
+    }
     if matches!(
         route.target,
         RouteTarget::Unresolved | RouteTarget::Builtin(_)
@@ -1218,7 +1932,9 @@ fn call_result_arg_from_routine_node(
 /// `DelChr`, `ConvertStr`, `PadStr`, `SelectStr`, `IncStr` and `GetUrl` return
 /// Text; `SecretStrSubstNo` returns SecretText; `CurrentDateTime` and
 /// `CreateDateTime` a DateTime; `Today`, `WorkDate` and `DT2Date` a Date;
-/// `Time` and `DT2Time` a Time. The receiver typer (`receiver.rs`, Step 5)
+/// `Time` and `DT2Time` a Time; `CreateGuid` a Guid (Base Application's
+/// `Convert.ToBase64(CreateGuid())` over `(Text)` / `(SecretText)` /
+/// `(InStream)` stayed ambiguous). The receiver typer (`receiver.rs`, Step 5)
 /// reads this catalog too, for `Format(X).Trim()`-style chains.
 const BUILTIN_RETURN_TEXT_CATALOG: &[(&str, &str)] = &[
     ("strsubstno", "text"),
@@ -1242,6 +1958,7 @@ const BUILTIN_RETURN_TEXT_CATALOG: &[(&str, &str)] = &[
     ("dt2date", "date"),
     ("time", "time"),
     ("dt2time", "time"),
+    ("createguid", "guid"),
 ];
 
 /// Look up `name_lc` in [`BUILTIN_RETURN_TEXT_CATALOG`] — `None` for any
@@ -1476,9 +2193,22 @@ pub(crate) fn candidate_param_infos_abi(
     };
     let mut out = Vec::with_capacity(params.len());
     for p in params {
+        let elem = abi_param_canonical(p, &rid.object, graph, index)?;
+        // An array parameter's symbols give its element type and, apart, its
+        // dimensions (`AbiParamRetained::array_dims`).
+        let (canonical, exact_text) = match &p.array_dims {
+            Some(dims) => (
+                CanonicalArgType::Array {
+                    dims: dims.chars().filter(|c| !c.is_whitespace()).collect(),
+                    elem: Box::new(elem),
+                },
+                normalize_type_text(&format!("array[{dims}] of {}", p.type_text)),
+            ),
+            None => (elem, normalize_type_text(&p.type_text)),
+        };
         out.push(ParamDispatchInfo {
-            canonical: abi_param_canonical(p, &rid.object, graph, index)?,
-            exact_text: normalize_type_text(&p.type_text),
+            canonical,
+            exact_text,
             by_ref: p.is_var,
         });
     }
@@ -1564,10 +2294,13 @@ fn position_exact_match(arg: &ArgDispatchInfo, param: &ParamDispatchInfo) -> boo
             return false;
         }
         // Length-EXACT identity for `var`, Base (scalar/Text/Code) types
-        // only — object-bearing types have no "length" concept; the
-        // canonical Object(..) equality above already IS their exact
-        // identity.
-        if matches!(param.canonical, CanonicalArgType::Base(_)) {
+        // and arrays (whose element carries the length) only — object-
+        // bearing types have no "length" concept; the canonical Object(..)
+        // equality above already IS their exact identity.
+        if matches!(
+            param.canonical,
+            CanonicalArgType::Base(_) | CanonicalArgType::Array { .. }
+        ) {
             match &arg.exact_text {
                 Some(a_text) if *a_text == param.exact_text => {}
                 _ => return false,
@@ -1613,7 +2346,74 @@ fn position_provably_incompatible(arg: &ArgDispatchInfo, param: &ParamDispatchIn
     if param.canonical.is_variant() && !param.by_ref {
         return false;
     }
+    // A `Variant` argument converts into any parameter (alc 18.0.43: by value
+    // into Integer, Record, Codeunit, InStream and Dictionary, `var` into
+    // Integer, Record and Dictionary all compile), its content checked at run
+    // time.
+    if arg_canonical.is_variant() {
+        return false;
+    }
+    // Every DotNet type canonicalizes to `dotnet`, and whether one converts
+    // with a simple AL value depends on the .NET type (alc 18.0.43: a `DotNet
+    // MemoryStream` into InStream and OutStream, a `DotNet String` into Text
+    // and `var Text` and a Text or Code into it, while a MemoryStream into Text
+    // or Integer, a `DotNet XmlNode` into Boolean, Guid or Date, or a Text into
+    // either is AL0133). So a DotNet value is proven apart, both ways, only
+    // from the types no .NET type converts with: an AL object (a MemoryStream
+    // into a Record, Codeunit or Interface is AL0133) and AL's own wrapper
+    // types (a `DotNet XmlNode` into XmlNode, `var XmlNode`, XmlDocument,
+    // JsonObject, HttpClient, `List of [Text]`, TextBuilder or RecordRef, and
+    // an XmlNode, XmlElement, JsonObject or RecordRef into a `DotNet XmlNode`,
+    // are AL0133). An enum and an array stay undecided. Base Application's
+    // `DataCompression.SaveZipArchive(MemoryStream)` over `(OutStream)` /
+    // `(var Codeunit "Temp Blob")` stayed ambiguous; its `XMLDOMMgt.FindNode(…)`
+    // over `(DotNet XmlNode; …)` / `(XmlNode; …)` binds by the wrapper rule.
+    const DOTNET_CONVERTIBLE: &[&str] = &[
+        "text",
+        "code",
+        "label",
+        "secrettext",
+        "char",
+        "byte",
+        "integer",
+        "biginteger",
+        "decimal",
+        "option",
+        "duration",
+        "boolean",
+        "guid",
+        "date",
+        "time",
+        "datetime",
+        "instream",
+        "outstream",
+        "variant",
+        "any",
+    ];
+    let is_dotnet = |t: &CanonicalArgType| matches!(t, CanonicalArgType::Base(b) if b == "dotnet");
+    if is_dotnet(arg_canonical) != is_dotnet(&param.canonical) {
+        let other = if is_dotnet(arg_canonical) {
+            &param.canonical
+        } else {
+            arg_canonical
+        };
+        return match other {
+            CanonicalArgType::Base(b) => !DOTNET_CONVERTIBLE.contains(&b.as_str()),
+            CanonicalArgType::Object(id) => id.kind != ObjectKind::Enum,
+            CanonicalArgType::Generic { .. } => true,
+            CanonicalArgType::Array { .. } => false,
+        };
+    }
     if arg_canonical != &param.canonical {
+        // An array and a non-array never bind; two different arrays are not
+        // proven apart (element conversions are not modelled).
+        match (arg_canonical, &param.canonical) {
+            (CanonicalArgType::Array { .. }, CanonicalArgType::Array { .. }) => return false,
+            (CanonicalArgType::Array { .. }, _) | (_, CanonicalArgType::Array { .. }) => {
+                return true;
+            }
+            _ => {}
+        }
         return !matches!(
             (arg_canonical, &param.canonical),
             (CanonicalArgType::Base(a), CanonicalArgType::Base(b)) if same_soft_family(a, b)
@@ -1628,7 +2428,12 @@ fn position_provably_incompatible(arg: &ArgDispatchInfo, param: &ParamDispatchIn
         if !arg.var_passable {
             return true;
         }
-        if matches!(param.canonical, CanonicalArgType::Base(_))
+        // Not for a DotNet type: every one canonicalizes to `dotnet`, and a
+        // `var` DotNet parameter takes a derived class (Base Application's
+        // `XMLDOMMgt.AddAttribute(DocumentElement, …)` passes a `DotNet
+        // XmlElement` to `var XMLNode: DotNet XmlNode`), so two aliases are
+        // not proven apart.
+        if matches!(&param.canonical, CanonicalArgType::Base(b) if b != "dotnet")
             && arg.exact_text.as_deref() != Some(param.exact_text.as_str())
         {
             return true;
@@ -1651,6 +2456,9 @@ fn position_provably_incompatible(arg: &ArgDispatchInfo, param: &ParamDispatchIn
 /// - An enum converts with `Integer`, `BigInteger` and `Option` both ways
 ///   (AL0603), but NOT into `Decimal` (AL0133).
 /// - `Guid` converts with `Text` and `Code` both ways; `Label` into `Guid`.
+/// - `Text`/`Code`/`Label` convert into `SecretText` (documented, MS Learn
+///   methods-auto/secrettext; not alc-probed here). Listing a pair as
+///   convertible can only leave a call undecided, never pick wrongly.
 ///
 /// Proven NOT convertible (AL0133), so still incompatible: `Text`/`Code`/
 /// `Boolean`/`Date`/`Time`/`InStream`/`Guid` into `Integer`; `Integer`/
@@ -1689,6 +2497,11 @@ fn implicitly_converts(arg: &CanonicalArgType, param: &CanonicalArgType) -> bool
         || (numeric(arg) && param == "enum")
         || (arg == "guid" && matches!(param, "text" | "code"))
         || (matches!(arg, "text" | "code" | "label") && param == "guid")
+        // A Text converts into SecretText (never the other way: MS Learn
+        // methods-auto/secrettext): System Application's
+        // `SignedXmlImpl.SetSigningKey(XmlString)` with a Text over `(SecretText)`
+        // / `(Codeunit "Signature Key")` lost both candidates.
+        || (matches!(arg, "text" | "code" | "label") && param == "secrettext")
 }
 
 /// Attempt the Task 2 fail-closed pick over a prevalidated, same-name/
@@ -1735,11 +2548,15 @@ pub(crate) fn pick_candidate(
     let discriminating: Vec<usize> = (0..args.len())
         .filter(|&pos| candidates.windows(2).any(|w| w[0][pos] != w[1][pos]))
         .collect();
-    // Call-level degradation: EVERY argument at a discriminating position
-    // must be typed.
-    if discriminating.iter().any(|&p| args[p].canonical.is_none()) {
-        return None;
-    }
+    // Call-level degradation: an exact match needs EVERY argument at a
+    // discriminating position typed. An untyped one is never proven
+    // incompatible, so rule (B) below still holds without it: when every
+    // other candidate is proven unable at a TYPED position, that one binds.
+    // Base Application's `XMLDOMMgt.FindNode(DotNetDoc.DocumentElement, Path,
+    // XmlRootNode)` (an untyped DotNet member first) over `(DotNet XmlNode; …;
+    // var DotNet XmlNode)` / `(XmlNode; …; var XmlNode)`: the third argument
+    // rules out the second.
+    let untyped = discriminating.iter().any(|&p| args[p].canonical.is_none());
     for &pos in &discriminating {
         // `Any` wildcard gate: no compiler-proven precedence for `Any`.
         // `Variant` is handled after this loop (S9.0e, proven below).
@@ -1748,19 +2565,42 @@ pub(crate) fn pick_candidate(
         if types_at_pos.iter().any(|t| t.is_any()) {
             return None;
         }
-        // C6 literal-forbidden-family gate, stated verbatim (module doc):
-        // the MERE PRESENCE of a "contextually usable but unproven" target
-        // family at this position degrades the whole call.
+        // C6 literal-forbidden-family gate (module doc): a "contextually
+        // usable but unproven" target family at this position degrades the
+        // whole call while another candidate could still take the literal
+        // there. When every other candidate is proven unable to (a text
+        // literal against `Integer`), the gate has no choice to guard and rule
+        // (B) decides: Continia DO's `EMailLog.InitNewEntry(…, '', …)` over
+        // `TemplateLineNo: Integer` / `TemplateVariantValueCode: Code[20]`
+        // binds the `Code[20]` overload. A candidate another position already
+        // rules out is no choice either: System Application's
+        // `AddBlobPutContentHeaders(…, BlobType::AppendBlob, 0, …)` over
+        // `(…; var InStream; Enum; …)` / `(…; Text; Enum; …)` / `(…; Enum;
+        // BigInteger; …)`, where the enum value rules out the first two, stayed
+        // ambiguous on the `0`.
         if let Some(lk) = args[pos].literal_kind {
             let forbidden = literal_forbidden_families(lk);
+            let viable: Vec<&CanonicalArgType> = candidates
+                .iter()
+                .filter(|c| {
+                    !discriminating
+                        .iter()
+                        .any(|&p| position_provably_incompatible(&args[p], &c[p]))
+                })
+                .map(|c| &c[pos].canonical)
+                .collect();
             if !forbidden.is_empty()
-                && types_at_pos.iter().any(
+                && viable.len() > 1
+                && viable.iter().any(
                     |t| matches!(t, CanonicalArgType::Base(b) if forbidden.contains(&b.as_str())),
                 )
             {
                 return None;
             }
         }
+    }
+    if untyped {
+        return pick_sole_applicable(args, candidates, &discriminating);
     }
 
     // `Variant` precedence (S9.0e), proven with alc 18.0.41.45789 on
@@ -1790,8 +2630,13 @@ pub(crate) fn pick_candidate(
             let picked = pool.next()?;
             return pool.next().is_none().then_some(picked);
         }
+        // Some but not all: a `Variant` argument is never proven
+        // incompatible, so only rule (B) can decide. System Application's
+        // `WordTemplates.Merge(DataVariant, SplitDocuments, …)` (a Variant, a
+        // Boolean) over `(Variant; Boolean; …)` / `(Dictionary …; Enum …; …)`
+        // stayed ambiguous.
         if variant_args > 0 {
-            return None;
+            return pick_sole_applicable(args, candidates, &discriminating);
         }
     }
     // (A) An exact match at every discriminating position wins, against any
@@ -1816,8 +2661,65 @@ pub(crate) fn pick_candidate(
     // `Variant` overload). No ranking among conversions is attempted: where the
     // compiler picks between two needed conversions (`Code[30]` into
     // `TC(Text|Code[20])` binds Text; `Integer` into `IB(Decimal|BigInteger)`
-    // binds BigInteger) the call stays ambiguous here, never a guess.
+    // binds BigInteger) the call stays ambiguous here, never a guess — except
+    // the one ranking rule (C) proves.
     pick_sole_applicable(args, candidates, &discriminating)
+        .or_else(|| pick_over_secrettext(args, candidates, &discriminating))
+}
+
+/// Rule (C) of [`pick_candidate`]: a Text-family argument binds a by-value
+/// unbounded `Text` parameter over a by-value `SecretText` one. Among the
+/// candidates rule (B) leaves applicable, the one every other loses to binds,
+/// where `x` loses to `y` when at every discriminating position they differ
+/// `x` takes `SecretText` and `y` takes `Text`.
+///
+/// Proven with alc 18.0.43, the overloads returning different types and a
+/// control assignment failing with AL0122: `F(Text)` / `F(SecretText)` binds
+/// `F(Text)` for a Label (Locked or not), a `Code[20]`, a text literal and a
+/// `Format(…)` result; `G(Text; Text)` / `G(Text; SecretText)` binds the first
+/// for two Labels; `V(Text; SecretText)` / `V(SecretText; SecretText)` binds
+/// the first for two Texts. Base Application's `HttpWebRequestMgt.AddHeader(
+/// AcceptEncodingHeaderNameTxt, EncodingUtf8Txt)` and System Application's
+/// `CryptographyManagementImpl.VerifyData(InputString, XmlString, …)` stayed
+/// ambiguous.
+fn pick_over_secrettext(
+    args: &[ArgDispatchInfo],
+    candidates: &[Vec<ParamDispatchInfo>],
+    discriminating: &[usize],
+) -> Option<usize> {
+    let applicable: Vec<usize> = (0..candidates.len())
+        .filter(|&i| {
+            !discriminating
+                .iter()
+                .any(|&p| position_provably_incompatible(&args[p], &candidates[i][p]))
+        })
+        .collect();
+    let text_family = |a: &ArgDispatchInfo| {
+        matches!(&a.canonical, Some(CanonicalArgType::Base(b))
+            if matches!(b.as_str(), "text" | "code" | "label"))
+    };
+    let loses_to = |x: usize, y: usize| {
+        let mut differs = false;
+        for &p in discriminating {
+            let (px, py) = (&candidates[x][p], &candidates[y][p]);
+            if px == py {
+                continue;
+            }
+            let secret = !px.by_ref && px.exact_text == "secrettext";
+            let text = !py.by_ref && py.exact_text == "text";
+            if !(secret && text && text_family(&args[p])) {
+                return false;
+            }
+            differs = true;
+        }
+        differs
+    };
+    let mut winners = applicable
+        .iter()
+        .copied()
+        .filter(|&y| applicable.iter().all(|&x| x == y || loses_to(x, y)));
+    let picked = winners.next()?;
+    winners.next().is_none().then_some(picked)
 }
 
 /// Rule (A) of [`pick_candidate`]: the one candidate in `pool` that exactly
@@ -3208,7 +4110,10 @@ mod tests {
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
+            lookup_pages: Vec::new(),
+            obsolete_gone: false,
         };
         let caller = ObjectNode {
             id: ObjectNodeId {
@@ -3231,7 +4136,10 @@ mod tests {
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
+            lookup_pages: Vec::new(),
+            obsolete_gone: false,
         };
         let from_id = caller.id.clone();
         let mut objects = vec![table, caller];
@@ -3662,29 +4570,26 @@ codeunit 50100 "C"
 
     /// Every lowered `BinaryOp` token class AL defines as UNCONDITIONALLY
     /// Boolean-typed (Eq/Ne/Lt/Le/Gt/Ge/And/Or/Xor/In) types cleanly
-    /// regardless of operand shape; the arithmetic family (`Add`) declines —
-    /// including a TEXT `+` concatenation (the SAME `Add` variant, non-
-    /// numeric operands), proving the decline is OPERATOR-driven, never
-    /// "looks numeric"-driven.
+    /// regardless of operand shape; the arithmetic family (`Add`) declines,
+    /// except a `+` with a Text literal operand, a Text concatenation (`'a' +
+    /// 'b'`, `'Bearer ' + Token`), which types Text.
     #[test]
     fn type_one_arg_binary_operators_type_boolean_or_decline_per_token_class() {
-        let cases: &[(&str, bool)] = &[
-            ("1 = 1", true),          // Eq
-            ("1 <> 1", true),         // Ne
-            ("1 < 2", true),          // Lt
-            ("1 <= 2", true),         // Le
-            ("2 > 1", true),          // Gt
-            ("2 >= 1", true),         // Ge
-            ("TRUE AND FALSE", true), // And
-            ("TRUE OR FALSE", true),  // Or
-            ("TRUE XOR FALSE", true), // Xor
-            ("1 IN [1, 2, 3]", true), // In
-            ("1 + 1", false),         // Add (arithmetic decline)
-            ("'a' + 'b'", false),     // Add (text-concat decline — same
-                                      // variant as arithmetic; proves the decline is per-OPERATOR, not
-                                      // per-operand-"numeric-ness").
+        let cases: &[(&str, Option<&str>)] = &[
+            ("1 = 1", Some("boolean")),          // Eq
+            ("1 <> 1", Some("boolean")),         // Ne
+            ("1 < 2", Some("boolean")),          // Lt
+            ("1 <= 2", Some("boolean")),         // Le
+            ("2 > 1", Some("boolean")),          // Gt
+            ("2 >= 1", Some("boolean")),         // Ge
+            ("TRUE AND FALSE", Some("boolean")), // And
+            ("TRUE OR FALSE", Some("boolean")),  // Or
+            ("TRUE XOR FALSE", Some("boolean")), // Xor
+            ("1 IN [1, 2, 3]", Some("boolean")), // In
+            ("1 + 1", None),                     // Add (arithmetic decline)
+            ("'a' + 'b'", Some("text")),         // Add with a Text literal
         ];
-        for (expr_src, expect_boolean) in cases {
+        for (expr_src, expect) in cases {
             let src = format!(
                 r#"
 codeunit 50100 "C"
@@ -3714,19 +4619,19 @@ codeunit 50100 "C"
                 &surface,
                 with_state,
             );
-            if *expect_boolean {
+            if let Some(ty) = expect {
                 assert_eq!(
                     info.canonical,
-                    Some(CanonicalArgType::Base("boolean".into())),
-                    "case {expr_src:?} must type Boolean; got {info:?}"
+                    Some(CanonicalArgType::Base(ty.to_string())),
+                    "case {expr_src:?} must type {ty}; got {info:?}"
                 );
                 assert!(
                     !info.var_passable,
-                    "case {expr_src:?}: a computed Boolean is never var-passable"
+                    "case {expr_src:?}: a computed value is never var-passable"
                 );
                 assert_eq!(
                     info.literal_kind, None,
-                    "case {expr_src:?}: a computed Boolean is not itself a literal"
+                    "case {expr_src:?}: a computed value is not itself a literal"
                 );
             } else {
                 assert_eq!(
@@ -3961,7 +4866,10 @@ codeunit 50100 "C"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
             ObjectNode {
                 id: dep_id.clone(),
@@ -3980,7 +4888,10 @@ codeunit 50100 "C"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
         ];
         objects.sort_by(|a, b| a.id.cmp(&b.id));
@@ -4011,6 +4922,7 @@ codeunit 50100 "C"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }];
 
         let mut topology = DependencyGraph::default();
@@ -4112,6 +5024,7 @@ codeunit 50700 "Caller"
             subtype_id,
             subtype_raw_name: subtype_raw_name.map(Into::into),
             subtype_tag,
+            array_dims: None,
         }
     }
 
@@ -4143,7 +5056,10 @@ codeunit 50700 "Caller"
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
+            lookup_pages: Vec::new(),
+            obsolete_gone: false,
         };
         let objects = vec![table];
         let obj_index = ObjectIndex::build(&objects);
@@ -4186,7 +5102,10 @@ codeunit 50700 "Caller"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             })
             .collect();
         let obj_index = ObjectIndex::build(&objects);
@@ -4236,6 +5155,7 @@ codeunit 50700 "Caller"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params,
+            abi_method_id: None,
         }
     }
 
@@ -4262,7 +5182,10 @@ codeunit 50700 "Caller"
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
+            lookup_pages: Vec::new(),
+            obsolete_gone: false,
         };
         let objects = vec![object];
         let obj_index = ObjectIndex::build(&objects);

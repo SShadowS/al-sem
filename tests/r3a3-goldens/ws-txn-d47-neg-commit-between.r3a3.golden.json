@@ -12,6 +12,14 @@
 					"witnessOperationId": "11111111-0000-0000-0000-0000000d4704:Codeunit:50000#226b4a363a54af6515b6d1e081f77cd8360b094cf05d6bb7b1a349f33795da01/op2"
 				},
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-0000000d4704:Codeunit:50000#226b4a363a54af6515b6d1e081f77cd8360b094cf05d6bb7b1a349f33795da01/op0"
+				},
+				{
 					"op": "modify",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -59,15 +67,15 @@
 					},
 					"witnessCallsiteId": "11111111-0000-0000-0000-0000000d4704:Codeunit:50000#226b4a363a54af6515b6d1e081f77cd8360b094cf05d6bb7b1a349f33795da01/cs0",
 					"extra": {
-						"kind": "http",
-						"method": "Get",
 						"bodyArgSource": {
-							"kind": "constant-var",
-							"varName": "resp",
 							"initializer": {
 								"kind": "unknown"
-							}
-						}
+							},
+							"kind": "constant-var",
+							"varName": "resp"
+						},
+						"kind": "http",
+						"method": "Get"
 					}
 				}
 			],

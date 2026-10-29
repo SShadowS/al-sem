@@ -24,6 +24,7 @@ pub mod resolve;
 pub mod resolved;
 pub mod sig_fp;
 pub mod site_key;
+pub mod source_deps;
 pub mod str_pool;
 pub mod topology;
 

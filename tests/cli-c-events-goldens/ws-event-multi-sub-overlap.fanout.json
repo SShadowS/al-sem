@@ -29,6 +29,7 @@
   "entries": [
     {
       "publisher": "130d6f7145f7cd1c/c494e2e26ef5d2e521cb5a07d634e52f8231eadd92f0f38901b3ed4e56632da0",
+      "publisherStableRoutineId": "22222222-2222-2222-2222-222222222222:Codeunit:50000#fa1eb97dcfb6bf28311db3073b9ba9c295461b40e7a33da0440f48a6df91c9e6",
       "eventId": "22222222-2222-2222-2222-222222222222/Codeunit/50000/event/onafterpost",
       "eventName": "OnAfterPost",
       "eventKind": "integration",

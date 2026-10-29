@@ -156,7 +156,7 @@ fn map_kind(routine: &AbiRoutine) -> (AbiRoutineKind, AbiEventKind) {
             let ek = match &routine.event_kind {
                 SrAbiEventKind::Integration => AbiEventKind::Integration,
                 SrAbiEventKind::Business => AbiEventKind::Business,
-                SrAbiEventKind::Unknown => AbiEventKind::Internal,
+                SrAbiEventKind::Internal | SrAbiEventKind::Unknown => AbiEventKind::Internal,
             };
             (AbiRoutineKind::EventPublisher, ek)
         }

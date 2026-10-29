@@ -254,9 +254,14 @@ codeunit 50205 "G6 GetTable Cond"
     );
 }
 
-/// `Open` inside an if-conditional → Unknown (conservative).
+/// `Open(_, true)` inside an if-conditional, and no other way to bind the LOCAL
+/// RecordRef → Known(true): on the path that skips the `Open`, `DeleteAll` on an
+/// unopened RecordRef is a runtime error, not a write. (It was Unknown, a
+/// conservative choice the `record_types` pass for a local RecordRef opened only
+/// temporary now proves.) The counterpart below opens it non-temporary on the
+/// other branch.
 #[test]
-fn open_inside_conditional_stays_unknown() {
+fn open_inside_conditional_is_temporary() {
     let src = r#"
 table 50206 "G6 Item7"
 {
@@ -285,8 +290,43 @@ codeunit 50206 "G6 Open Cond"
 
     assert_eq!(
         routine.first_record_op_temp_known("RecRef"),
+        Some(true),
+        "RecRef only ever opened temporary"
+    );
+}
+
+/// The other branch opens it non-temporary → Unknown.
+#[test]
+fn open_temporary_on_one_branch_only_stays_unknown() {
+    let src = r#"
+table 50206 "G6 Item7"
+{
+    fields { field(1; Id; Integer) { } }
+    keys { key(PK; Id) { } }
+}
+
+codeunit 50206 "G6 Open Cond"
+{
+    procedure MaybeOpen(SomeFlag: Boolean)
+    var
+        RecRef: RecordRef;
+    begin
+        if SomeFlag then
+            RecRef.Open(Database::"G6 Item7", true)
+        else
+            RecRef.Open(Database::"G6 Item7");
+        RecRef.DeleteAll();
+    end;
+}
+"#;
+    let resolved = assemble_and_resolve_inline_program_default(&[al("G6OpenCond2", src)], APP_GUID);
+    let routine = resolved
+        .routine_by_name("MaybeOpen")
+        .expect("MaybeOpen must be resolved");
+    assert_eq!(
+        routine.first_record_op_temp_known("RecRef"),
         None,
-        "RecRef op after a conditional Open must stay Unknown (conservative)"
+        "a non-temporary Open on another branch leaves it Unknown"
     );
 }
 

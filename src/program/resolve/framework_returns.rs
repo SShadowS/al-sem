@@ -314,6 +314,12 @@ pub fn framework_return_kind(
         // `ModuleInfo.AppVersion()` / `DataVersion()` return `Version`; its parts
         // are `Integer` (methods-auto/moduleinfo, /version).
         (ModuleInfo, "appversion" | "dataversion", true, 0) => Some(Version),
+        // `Id()` / `PackageId()` return `Guid`, `Name()` / `Publisher()` `Text`
+        // (methods-auto/moduleinfo). System Application's
+        // `IsCapabilityRegistered(Capability, CallerModuleInfo.Id())` picks its
+        // `Guid` overload over `ModuleInfo` by it.
+        (ModuleInfo, "id" | "packageid", true, 0) => Some(Guid),
+        (ModuleInfo, "name" | "publisher", true, 0) => Some(Text),
         (Version, "major" | "minor" | "build" | "revision", true, 0) => Some(Scalar),
         // `XmlElement.Attributes()` (an `XmlAttributeCollection`) and
         // `GetChildElements([..])` / `GetDescendantElements([..])` (an
@@ -628,6 +634,14 @@ mod tests {
         assert_eq!(
             framework_return_kind(&ModuleInfo, "appversion", true, 0),
             Some(Version)
+        );
+        assert_eq!(
+            framework_return_kind(&ModuleInfo, "id", true, 0),
+            Some(Guid)
+        );
+        assert_eq!(
+            framework_return_kind(&ModuleInfo, "name", true, 0),
+            Some(Text)
         );
         assert_eq!(
             framework_return_kind(&Version, "major", true, 0),

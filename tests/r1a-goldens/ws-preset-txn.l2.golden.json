@@ -600,6 +600,14 @@
               }
             }
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "r0/2d15d1cf7085b0d9922cf3a39dcc04eb0e26aad7a50d8d6ca6341b5c6fb1033f/op0"
         }
       ],
       "capabilityStatus": "complete",

@@ -46,8 +46,18 @@ pub fn merge_extension_fields(workspace: &mut ModelEntities) {
         let Some(base_idx) = table_index_by_name(&workspace.tables, extends_target) else {
             continue;
         };
+        // The extension's own STUB (G-5): its id reuses the extension's object
+        // number, which a real table of the same app may share. Continia DO's
+        // `CDOSalesHeaderExt` (6175275, adds field 6175274 `CDO Handled`) and
+        // its table 6175275 `CDO E-Mail Template Merge Field`: the id lookup
+        // took the table, so Sales Header got that table's fields and lost the
+        // extension's.
         let extension_table_id = encode_table_id(&object.app_guid, object.object_number);
-        let Some(ext_idx) = table_index_by_id(&workspace.tables, &extension_table_id) else {
+        let Some(ext_idx) = workspace
+            .tables
+            .iter()
+            .rposition(|t| t.is_extension_stub && t.id == extension_table_id)
+        else {
             continue;
         };
 
@@ -80,23 +90,14 @@ pub fn merge_extension_fields(workspace: &mut ModelEntities) {
     }
 }
 
-/// `tableByName` semantics: case-insensitive, LAST-wins on collision.
+/// `tableByName` semantics: case-insensitive, LAST-wins on collision, over
+/// real tables only (an extension stub carries the extension's name, never
+/// the base's, but is no base either).
 fn table_index_by_name(tables: &[ModelTable], name: &str) -> Option<usize> {
     let want = name.to_lowercase();
     let mut found = None;
     for (i, t) in tables.iter().enumerate() {
-        if t.name.to_lowercase() == want {
-            found = Some(i); // LAST-wins
-        }
-    }
-    found
-}
-
-/// `tableById` semantics: LAST-wins on collision.
-fn table_index_by_id(tables: &[ModelTable], id: &str) -> Option<usize> {
-    let mut found = None;
-    for (i, t) in tables.iter().enumerate() {
-        if t.id == id {
+        if !t.is_extension_stub && t.name.to_lowercase() == want {
             found = Some(i); // LAST-wins
         }
     }

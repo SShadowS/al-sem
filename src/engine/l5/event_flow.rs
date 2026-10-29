@@ -136,6 +136,10 @@ pub struct FanoutCoverage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FanoutEntry {
     pub publisher: String,
+    /// The publisher's `stableRoutineId`, the routine key `alsem graph`,
+    /// `fingerprint` and `prove` share (G13). Filled by the events command
+    /// from the model; `None` when no model routine has the publisher's id.
+    pub publisher_stable_routine_id: Option<String>,
     pub event_id: String,
     pub event_name: String,
     pub event_kind: EventKind,
@@ -368,6 +372,7 @@ pub fn compute_fanout(
 
         out.push(FanoutEntry {
             publisher: publisher.clone(),
+            publisher_stable_routine_id: None,
             event_id: ev.id.clone(),
             event_name: ev.event_name.clone(),
             event_kind: event_kind_of(&ev.event_kind),

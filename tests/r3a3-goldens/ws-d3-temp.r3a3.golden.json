@@ -4,6 +4,14 @@
 			"routineId": "11111111-0000-0000-0000-0000000033d3:Codeunit:50100#30c4072149e2af5070fe216fb0e353c6249664ccc5830b81f1c5b54109078d9f",
 			"capabilityFactsDirect": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "11111111-0000-0000-0000-0000000033d3:Codeunit:50100#30c4072149e2af5070fe216fb0e353c6249664ccc5830b81f1c5b54109078d9f/op0"
+				},
+				{
 					"op": "read",
 					"resourceKind": "table",
 					"confidence": "static",

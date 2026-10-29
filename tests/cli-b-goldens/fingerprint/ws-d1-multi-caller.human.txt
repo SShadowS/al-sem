@@ -7,6 +7,10 @@ Codeunit D1 Multi Caller::CallerB  [public-procedure]
     TableData "11111111-0000-0000-0000-00000000d01a/table/50101" MR
 
   witnesses:
+    error-implicit error — 1 path shown
+      Path 1/1 shown:
+        direct Cust.FindSet at ws:src/D1MultiCaller.al:32:8
+
     modify table "11111111-0000-0000-0000-00000000d01a/table/50101" — 1 path shown
       Path 1/1 shown:
         ModifyHelper (via ModifyHelper at ws:src/D1MultiCaller.al:34:12)
@@ -24,6 +28,10 @@ Codeunit D1 Multi Caller::CallerC  [public-procedure]
     TableData "11111111-0000-0000-0000-00000000d01a/table/50101" MR
 
   witnesses:
+    error-implicit error — 1 path shown
+      Path 1/1 shown:
+        direct Cust.FindSet at ws:src/D1MultiCaller.al:40:8
+
     modify table "11111111-0000-0000-0000-00000000d01a/table/50101" — 1 path shown
       Path 1/1 shown:
         ModifyHelper (via ModifyHelper at ws:src/D1MultiCaller.al:42:12)
@@ -41,6 +49,10 @@ Codeunit D1 Multi Caller::CallerA  [public-procedure]
     TableData "11111111-0000-0000-0000-00000000d01a/table/50101" MR
 
   witnesses:
+    error-implicit error — 1 path shown
+      Path 1/1 shown:
+        direct Cust.FindSet at ws:src/D1MultiCaller.al:24:8
+
     modify table "11111111-0000-0000-0000-00000000d01a/table/50101" — 1 path shown
       Path 1/1 shown:
         ModifyHelper (via ModifyHelper at ws:src/D1MultiCaller.al:26:12)

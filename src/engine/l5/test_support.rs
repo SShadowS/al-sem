@@ -362,6 +362,7 @@ pub fn record_op(
         loop_stack,
         field_argument_infos: None,
         in_until_condition,
+        in_statement_position: false,
         run_trigger: None,
     }
 }

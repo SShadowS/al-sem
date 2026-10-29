@@ -399,17 +399,28 @@ fn item6_legal_combos_pass() {
 #[test]
 fn item6_default_format_resolution() {
     // Omitted + no shard → human.
-    assert_eq!(default_format(None, false), Ok(FingerprintFormat::Human));
+    assert_eq!(
+        default_format(None, false, false),
+        Ok(FingerprintFormat::Human)
+    );
     // Omitted + shard → json.
-    assert_eq!(default_format(None, true), Ok(FingerprintFormat::Json));
+    assert_eq!(
+        default_format(None, true, false),
+        Ok(FingerprintFormat::Json)
+    );
+    // Omitted + --inventory-only → json (G12: its help says it implies json).
+    assert_eq!(
+        default_format(None, false, true),
+        Ok(FingerprintFormat::Json)
+    );
     // Explicit values.
     assert_eq!(
-        default_format(Some("cbor.gz"), false),
+        default_format(Some("cbor.gz"), false, false),
         Ok(FingerprintFormat::CborGz)
     );
     // Unknown format → exact error.
     assert_eq!(
-        default_format(Some("yaml"), false),
+        default_format(Some("yaml"), false, false),
         Err("unknown --format 'yaml'; valid: human, json, cbor, cbor.gz".to_string())
     );
 }

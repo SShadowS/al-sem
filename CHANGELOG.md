@@ -9,6 +9,288 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The RecordRef value flow reads a `case R.Number` branch under the tables
+  passed in** (G35, extending G34's `recref_flow`). Base Application's
+  workflow loop (`Workflow Management.ExecuteResponses`) passes one Variant by
+  `var` to every response. `ReleaseDocument`/`OpenDocument` swap it for
+  `RecordRef.Get("Record ID to Approve")` only in their `Database::"Approval
+  Entry"` branch, and `PostDocument` runs Sales-Post only for a Sales Header.
+  - A fact inside a `case R.Number` branch (or past an `if R.Number <> … then
+    exit;`) now records that condition. A routine with such facts, or one
+    that passes a RecordRef or Variant into one, is evaluated under its actual
+    input tables: a least fixpoint over its facts and its callees, memoized
+    and bounded (`EVAL_BUDGET`, `EVAL_DEPTH`; giving up means "anything").
+    It is used only where the summary alone answers "anything".
+  - A by-value Variant parameter is the callee's own copy, so reassigning it
+    does not reach the caller. The exception is a callee that rebinds a
+    RecordRef the Variant holds through an alias, directly or further down
+    (`alias_shared`).
+  On Continia DO the requisition-batch route the HandledState triage traced
+  for HAND-SALE-009.c2 and EMAIL-TPLM-011.c9 is now cut. Both claims still
+  answer `yes`, through the customer-credit-limit workflow event, which hands
+  `PostDocument` the Sales Header itself. Whether that runs depends on
+  workflow setup data and on Sales-Post refusing a quote: a stated limit.
+  Test `cli_prove_recref_guard::a_branch_on_the_variants_table_rebinds_it_only_for_that_table`.
+
+- **`prove` follows the table a RecordRef holds into `if R.Number <>
+  Database::"T" then exit;`** (G34), through `GetTable`, `Duplicate()`,
+  parameters and a codeunit global. Continia DO's `VendorLedgerPrint` puts a
+  Vendor Ledger Entry in a RecordRef, stores it in the e-mail handler's global
+  (`SetRecRefFilter`) and prints. The print path copies the global and reaches
+  `CDO File.CalcSalesDisc`, which exits unless the RecordRef holds a Sales
+  Header, so its `Sales-Calc. Discount` run cannot happen from there. `prove …
+  writes-table:Vendor` still answered `yes` through it (contradicted claim
+  HAND-PSV-004.c5); it now answers `unknown` (open interface calls remain).
+  Re-proving the 584 DO claims moved exactly 4, every one a contradicted `yes`
+  through this route, now `unknown`: HAND-PSV-004.c5 and EMAIL-OPEN-001.c1, c3,
+  c7. Nothing else moved.
+  How it works (`engine::l5::recref_flow`):
+  - Each routine gets a flow-insensitive summary of what each RecordRef and
+    Variant may hold: a parameter's entry value, no table for a local, a
+    record's table by `GetTable`, another variable by `:=` or `Duplicate()`,
+    or anything. A call reads what the callee may leave in the parameter; an
+    event reads its loaded subscribers, an interface call its loaded
+    implementers (`prove` already lists an open interface as a blocker).
+  - `A := B` shares the RecordRef: a rebinding (`Open`, `GetTable`, `Close`…)
+    of either that can run after it rebinds both. Separate branches of one
+    `if`/`case` outside a loop do not count.
+  - A codeunit global is read per instance. A codeunit the caller declares as
+    a local (not `SingleInstance`, never passed on) holds only what the calls
+    made on it assign. A self-call carries the instance along.
+  - The guarded search (`literal_reach`) binds the parameters and globals a
+    guard depends on, and now binds arguments across interface calls too.
+  - `R.GetTable(Rec)` past a guard that `R` already held `Rec`'s table adds
+    no table (`CalcSalesDisc` puts its own Sales Header back).
+  Test `cli_prove_recref_guard` (a `no`, and four `yes` cases: the guard's own
+  table, a rebinding callee, an alias rebinding, a rebinding subscriber).
+
+- **`aldump --dump-dependency-source <workspace> <out-dir>`** writes the AL the
+  engine reads from inside each dependency `.app` to `<out-dir>/<app guid>/<virtual
+  path>`. That is the path a dependency citation `dep:<guid>:<path>` names, with the
+  same text and lines. It includes the AL synthesized for a runtime package that
+  ships no AL; each of its statements ends in `// cs <line>`, the transpiled C# line.
+  Source from a folder on disk is not written; it is already a file. Asked by the
+  CONtinAI pipeline so citations into Continia Core resolve to a file and line. On
+  Continia DO: 9 apps, Core 291 files. Test `cli_dump_dependency_source`.
+
+- **`prove` shows how a dependency boundary group reaches the asked table**
+  (G35). A `writes-table` evidence entry on a group now carries `groupPath`:
+  `{resource, hops}`, the routines from the root to one where a write of that
+  table can run, each hop `<edge kind> → Object.Routine`. Under rule B a
+  witness ends where it enters dependency code, so Continia DO's
+  `writes-table:CDO E-Mail Log` answer through `Base
+  Application.CalcInvDiscForHeader` had no path to check. The path is read off
+  the guarded search G23/G33 already run (`LiteralReach::live_tree`), so a
+  branch G33 proves dead is never shown; it is one example, not checked further
+  for feasibility (`engine::l5::group_path`). Test `cli_prove_group_path`.
+
+- **`prove` follows the table a record argument holds into `case RecRef.Number`**
+  (G33). A routine that takes a record as a `Variant`, reads its table with
+  `RecRef.GetTable(Variant)` and branches on `case RecRef.Number of
+  Database::"T": …` runs a branch only for the table its caller passes. G23's
+  per-root reachability (`literal_reach`) now carries, next to literal Booleans, the
+  table of each such parameter: a call binds it from a record variable of known table
+  (the implicit `Rec` included) or forwards the caller's own, and a branch (an `else`
+  for a table no branch names) whose table contradicts it cannot run. The `case` and
+  its branches are marked in the control-flow tree (`PCFNNode::table_case`). Sound
+  limits: a local RecordRef only, bound by one `GetTable` of a by-value `Variant`
+  nothing assigns; a call passing either on must sit inside that `case`, which must
+  be in no loop. Dependency writes grouped at a boundary drop a resource whose every
+  originating operation cannot run (`dead_group_resources`). On Continia DO,
+  `ApprovalsMgmt.PreventDeletingRecordWithOpenApprovalEntry`'s `Gen. Journal Batch`
+  branch no longer reaches the workflow engine from a Requisition Line delete; its
+  `Requisition Wksh. Name` branch, which that caller does pass, still does, so the
+  claims' answers do not move. Test `cli_prove_table_branches`.
+- **`prove` and `digest` start inside a dependency** (G31). A dependency routine named
+  by its StableRoutineId is a root (a display name still selects only the
+  workspace's). Rule B (spec 2026-10-23 §14.3.5) ends a workspace root's witness at
+  the first dependency routine and groups what lies beyond, which bounds digest's
+  cost; a dependency root starts past that boundary, so it is read with rule B off,
+  and its witness paths follow the code to each effect of every kind (writes,
+  commits, events, …) in every app. It got no effect at all: the reportable roots
+  leave every dependency routine out (`digest::reportable_roots`), and rule B ended
+  every fact at the root. On Continia DO, from `Sales-Calc. Discount.OnRun`, the
+  `Cust. Ledger Entry` write runs through `ApprovalsMgmt` → the workflow engine's
+  `ExecuteResponse` (every response) → `GenJournalLine.ClearCustVendApplnEntry`.
+  Test `cli_dependency_roots`.
+- **An interface held in a codeunit global, set only from codeunit variables, is a
+  closed dispatch site** (G30). An interface call on an object global of a workspace
+  codeunit dispatches over the codeunits the global can hold when the codeunit itself
+  is the only writer: every write, in every routine, stores a `Codeunit X` variable
+  or a parameter of a `local`/`internal` routine (not an event subscriber, and the
+  workspace names no `internalsVisibleTo` friend), and every call of that routine
+  passes a `Codeunit X` variable there. The site is then `Complete`, its routes
+  narrowed to those codeunits, with no assumption label. Phase 1 records both facts
+  per call site (`SiteFacts::interface_holder`, `argument_codeunits`); a post-pass
+  (`resolve::interface_holder::close_holder_sites`) closes the site once every call
+  edge is known. Every doubt keeps the site open: a `protected var`, a codeunit that
+  implements an interface, a parse issue, any other read or write of the global
+  (passing it on, `Clear`), a public setter, one caller passing anything else. On
+  Continia DO this is `CDO Template Variant Mgt`'s `FieldChainEvaluator`
+  (`SetFieldChainEvaluator`): 348 → 359 proven. Test `cli_prove_interface_holder`.
+- **`prove` labels the answers that assume no subscriber beyond the loaded ones**
+  (Q6, G29). The cone follows the LOADED subscribers of every event, so events are
+  closed over them while interfaces are open; that was unlabelled. prove now has
+  three worlds, weakest first (`prove::World`): strict (nothing assumed) <
+  loaded-subscribers (the default) < closed-world (`--closed-world`). An answer
+  carries ONE label, the weakest world that gives it:
+  - `assumptions: ["loaded-subscribers"]` on a `no` whose cone raises an event any
+    app may subscribe to: a table write or `Validate` (the platform table events,
+    raised for temporary records too; read off the cone's record operations,
+    `UnresolvedCone::fires_table_events`), an explicit event publication, or a page
+    opened. A `yes` stands on its witness and carries none. Over-approximates: an
+    internal publisher only friends can subscribe to counts too.
+  - System Application's `Telemetry Logger` falls under the same assumption: its
+    loggers exist only through `OnRegisterTelemetryLogger` subscribers that register
+    them, so an unloaded app's logger is an unloaded subscriber. In the default world
+    a call on it reaches only the loaded implementations, and its open-world row
+    stops blocking when the cone already follows them all (counted in
+    `obligations.loadedSubscribersRows`). The catalog
+    (`calls::PUBLISHER_SCOPED_INTERFACES`) keys on the declaring app's GUID, not the
+    name.
+
+  On Continia DO: 340 → 348 proven (the 8 claims the Telemetry Logger alone
+  blocked); 57 of the 148 proven `no` answers carry the label, 91 raise no
+  subscribable event. Tests `cli_prove_loaded_subscribers`, `cli_prove_publisher_scoped`.
+- **An internal interface with every friend loaded is a closed dispatch site** (G28).
+  Only the declaring app and the apps its manifest lists in `internalsVisibleTo` can
+  implement an interface declared `Access = Internal`. When every such friend is a
+  loaded app, a call on the interface reaches only the implementers the program holds,
+  so the site is closed in the open world, with no assumption label (the model marks it
+  as #264 marks a closed-enum site, `DispatchMeta::closed_over`). On Continia DO this
+  covers `CDO Module License`. A public interface, a name two objects share, a route
+  that does not resolve, or a declared friend that is not loaded keeps the site open.
+  `ProgramGraph::closed_internal_interfaces`; test `cli_prove_internal_interface`.
+
+- **AL synthesized for runtime packages that ship no AL** (phases 2–4 of transpiled
+  runtime bodies, spec `docs/superpowers/specs/2026-10-28-transpiled-runtime-bodies-design.md`,
+  route A). A `.app` with no `.al` but with BC's transpiled C# (`bin/*.cs`) and its
+  `SymbolReference.json` used to be symbol-only: every routine bodyless, its cones
+  `opaque-dependency`, the app a `symbol-only-boundary` analysis gap. Extraction now
+  synthesizes AL for it (`snapshot::transpiled`), one file per object at
+  `transpiled/<KIND><id>.al`, read like any embedded source:
+  - declarations come from the symbols: ids, names, namespaces, table fields (type,
+    class, `CalcFormula`, option members) and keys, enum values and implementations,
+    page source tables, extension targets, routine signatures and event attributes;
+  - bodies come from the C# (`cs`: a reader for the transpiler's output; `translate`):
+    each AL-runtime call becomes the AL call it came from, on a variable of the matching
+    AL type, so the existing extractors classify it as real AL. `rec.Target.ALModifyAsync`
+    is `"rec".Modify()`, `TrapError` keeps the Boolean consumed, and a record's table
+    and temporariness come from its `new NavRecordHandle(…)`. Calls into AL code are
+    bound by method id, and record arguments pass through. Control flow is kept, every
+    condition an opaque Boolean, so an effect is conditional where the AL was;
+  - triggers are placed by `NavName` (`OnRun`, `<Field> - OnValidate`,
+    `<Action> - OnAction`), and event subscribers are declared from the C#
+    `[NavEventSubscriber]`;
+  - every statement carries `// cs <line>`, its C# line. Soundness: a C# call the
+    translator cannot place becomes `"__alsem_untranslated"('<shape>')`, an unresolved
+    call naming its shape, and a symbol routine with no C# body gets one such call,
+    never an empty body.
+
+  A table method called by id on a record variable binds too
+  (`resolve_in_extendable_scope`, by id across the table and its extensions). The
+  embedded-source cache file is now `<hash>.s<EXTRACTION_SCHEME>.json` (scheme 2), so
+  an earlier "no source" entry is not reused. On Continia's Core 29.0 (230 C# files,
+  1727 symbol routines): 291 files, 3293 routines, all parse clean, 3 statements
+  untranslated. On Continia DO: `unknown` edges 19 → 7 (`realUnknownRate` 0.091% →
+  0.033%); the 84 calls into Core's ABI now resolve to its synthesized source; prove
+  claims 318 → 321 proven, and 336 of 408 with `--closed-world` (15 labelled), with no
+  new contradiction. Tests: the `cs`, `translate` and `synth` units (hand-written C# in
+  the transpiler's shape), the extraction hook (`a_package_with_only_transpiled_cs_
+  yields_synthesized_al`, which fails with the hook off; shipped `.al` wins), and the
+  table-method case of `synthesized_calls_bind_by_method_id` (which failed before the
+  fix). Real-package checks are gated on `TRANSPILED_CS_DIR` / `TRANSPILED_SYMBOLS`
+  (a package's own files are never committed).
+- **AL method ids, and calls bound by them** (phase 1 of transpiled runtime bodies,
+  spec `docs/superpowers/specs/2026-10-28-transpiled-runtime-bodies-design.md`). The
+  new `program::resolve::method_id` computes the id the AL compiler gives a routine
+  (`[MethodId(n)]` in BC's transpiled C#, `Id` in `SymbolReference.json`) from its
+  signature: FNV-1a of the upper-cased name, combined with the return type's and each
+  parameter's type kind, `var` flag and, for an overloadable routine with an object
+  parameter, each parameter's subtype. It matches 16 of 16 ids alc 18.0.43 gave a
+  probe app and all 1715 computable methods of Continia's Core 29.0. A signature with a
+  generic (`List`, `Dictionary`) or `DotNet` parameter whose subtype counts has no id,
+  so a call to it stays unresolved. The resolver binds a member call named
+  `__alsem_mid_<n>` (what synthesized source will emit for a call the C# names only by
+  id) to the one routine of the receiver's object with that id, source or ABI. Limit:
+  ABI type text drops array dimensions, so an ABI routine with an array parameter does
+  not match. Tests: `method_id` unit tests (the alc ids);
+  `synthesized_calls_bind_by_method_id` (an id picks the overload the argument types
+  would not, a `Record` parameter folds in its table id, an unknown id stays
+  unresolved), failing with the rule off or the subtype id wrong.
+- **`prove --closed-world`** (G24): assume the loaded world is all there is. An
+  interface call then dispatches only to the loaded implementations, which the cone
+  already follows, so its open-world row stops blocking (`obligations.closedWorldRows`
+  counts them), and coverage that is partial only through `interface-open-world` counts
+  as complete. A site a closed world cannot follow still blocks: one with no
+  implementer in the model, a dependency implementer whose body is not loaded (a
+  to-less route), or a closed enum that maps a value to a codeunit outside the
+  program. That last one is now listed in the site's `unresolvedCandidates`
+  (`enum-implementation-not-found`, from the new `ResolveIndex::
+  unmapped_enum_implementers`). An answer that holds only under the assumption (the
+  open world answers differently) carries `assumptions: ["closed-world"]`. A decided
+  answer both worlds give is the open-world result, unlabelled. When both stay
+  `unknown`, the result is the closed world's, so its blockers are what remains after
+  the assumption. Without the flag nothing changes. On Continia DO it waives
+  interface sites in 41 of the 88 undecided claims (`TelemetryLogger.LogMessage`,
+  `FieldChainEvaluator.EvaluateFieldChain` and others) but decides none of them yet:
+  each still has blockers outside interface dispatch, mostly calls into Continia's
+  `Core`, which ships no AL. Limit: an extensible enum's value mappings are not
+  extracted, so a mapping of one into an app missing from the package closure is not
+  seen. Test: `cli_prove_closed_world`, with discrimination proofs on each guard.
+- **Dependencies given as source folders** (G4). A workspace can name dependency
+  apps that exist only as source, a folder with its own `app.json` and `.al` files
+  and no `.app` (e.g. a BC.History checkout of Base Application), in
+  `al-sem.dependencies.json` at its root: `{ "sources": ["../deps/Base Application"] }`,
+  relative to the workspace or absolute. Each folder's `.al` files are all read,
+  including folders under it with an `app.json` of their own: in BC.History those
+  are the app's modules (110 in System Application, 39 in Base Application), and its
+  test apps live beside the app's folder (`System Application/Test/…`), so naming the
+  app's folder leaves them out. An app with no `.al` file (BC's umbrella
+  `Application`) still counts through its `app.json`. A configured folder
+  always supplies its app: a `.app` of the same id is not loaded. The folders are
+  read once into `WorkspaceInputs` (`program::source_deps`), become dependency units
+  of tier `LocalSourceApproximate` (dependency listings: `localApproximate`), and are
+  inputs wherever inputs matter: a `dep-source` fingerprint row per folder (hashed
+  over its `app.json`, file paths and texts), the incremental L4 host's reuse key,
+  `alsem batch`'s write check (a job writing into a folder is refused), and the LSP
+  watcher (an edit there, or to the list, rebuilds the dependencies; a changed list
+  is watched from the next start). A config that cannot be honoured (unreadable or
+  unknown keys, a missing folder, no or invalid `app.json`, a folder inside the
+  workspace, two folders with one app id, the workspace app itself) fails the build
+  with the reason. Measured on Continia DO 29.0 with BC.History w1-29 (Base
+  Application, System Application, Business Foundation, Application):
+  `primaryScoped` unknown edges 726 → 283 (real-unknown rate 3.46 % → 1.35 %);
+  `alsem analyze` 1.9 s / 0.7 GB peak → 21.5 s / 3.5 GB peak. Their tiers are not
+  shared through the dependency cache (no `.app` stamp), so an LSP root rebuild parses
+  them again.
+
+- **Runtime (`.NEA`) `.app` packages are read, not reported as encrypted** (branch
+  `continai-gaps`, Continia's public 29.0 release as the sample set). These are BC
+  runtime packages — the same `.NEA` form BC has shipped for years, scrambled with a
+  fixed, public RC4 key (community-documented: hougaard.com, `SimonOfHH/D365BCAppHelper`,
+  `businessdev.ALbuild`), not encrypted. `engine::deps::app_package_zip` now detects the
+  mark, descrambles the stream (`capped_io::RUNTIME_APP_STREAM_CAP`, a new 512 MB cap on
+  the declared stream length), and opens the plain zip: manifest, `SymbolReference.json`
+  and embedded source read through the same public readers as a plain package, so the
+  dependency loader, ABI ingest, LSP embedded-source and L4 artifacts get the real app
+  (measured end-to-end on the 36-file CDN workspace: coverage holds, 22,188 classified
+  edges, unknown 542/2.4%, ABI 383/383 mapped). `EncryptedApp` remains as the failure
+  channel: a `.NEA` package whose stream cannot be descrambled (truncated, over the cap,
+  not a zip) is named in `payload.summary.encryptedPackages` and counted unreadable for
+  that stated reason — a future key or format change surfaces loudly, not as silent
+  absence. Format notes: `docs/encrypted-app-packages.md` (rewritten: layout, scramble,
+  trailer now identified as an `NXSB` + PKCS#7/CMS code-signing signature, per-package
+  contents).
+- **`subscriber_arity_bound` saturates on the `UNKNOWN_ARITY` sentinel** (`usize::MAX`,
+  the ABI arity sentinel) instead of overflowing: debug panicked
+  (`attempt to add with overflow`), release would wrap to 0 and admit every subscriber
+  as a Sender match. The two `params_count + 1` comparisons in `resolve::index` use
+  `checked_add` for the same reason. Exposed by the runtime-package read (dep routines
+  with `parameters_known == false` now reach the event wiring); measured on the 10
+  Continia packages, zero real occurrences of the panicking shape (an unknown-arity
+  publisher with `IncludeSender: true`), so behavior changes nowhere real.
+
 - **The test runners refuse a zero `RLIMIT_RTTIME`** (`scripts/require-rttime`, called by
   `ci-steps` test/task-affected/perf-bounds, `check-goldens` (so the pre-commit hook)
   and `cdo-gate`). Under a zero realtime timeout the kernel SIGKILLs ordinary test
@@ -44,9 +326,663 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--diff-root` with only file inputs used to fail (exit 3) and now works. A
   `--diff-root` with no diff and no file input (alone, or with `--routine` only) is still
   exit 3, now with `--diff-root needs a diff or file inputs (--diff, --file or --changed)`.
+- **`prove … reaches-ui` asks about interactive UI only** (G18). An `Error` counted as
+  UI, which overlapped `throws-error` and was wrong where the error never surfaces:
+  Continia DO's `TryGetTerminalField`, a `[TryFunction]`, raises `Error('')` to fail
+  softly, and its callers answered `reaches-ui = yes`. `reaches-ui` now means a dialog
+  or window a user must see or answer (`Message`, `Confirm`, `StrMenu`, a page or
+  report `Run`/`RunModal`, `Hyperlink`); errors are `throws-error`'s question. Stated
+  in `alsem prove --help` and the module doc. Test: `cli_prove_reaches_ui` (an
+  `Error`-only routine and a `[TryFunction]` answer `no`; `throws-error` still sees
+  the error). No golden moved.
 
 ### Fixed
 
+- **A table extension's method shadows a same-signature base-table method for
+  calls from the extension's own app.** The engine reported such a call as
+  `overloadAmbiguous`. The compiler binds it to the extension (alc 18.0.43,
+  measured: warning AL0523 "already defines a method … with the same parameter
+  types"; with both methods `internal`, the same binding with or without
+  `internalsVisibleTo`). From a third app that sees both, it is error AL0196
+  "The call is ambiguous", which stays ambiguous. Tables only; page and report
+  extensions are unchanged (not measured). Found by loading Continia Approvals
+  (29.2.0.242622, from the Continia catalogue with `continia deps download`)
+  next to Continia DO: its page extensions call `Rec.GetSalesPurchName()`,
+  which both Continia Business Foundation's `CTS-CBF Continia User Setup` and
+  Approvals' own table extension declare. With Approvals loaded, DO's
+  dependency code resolves completely: 432,906 call edges, 0 unknown, 0
+  ambiguous (the one unknown left before, Online Connector calling into
+  Approvals, resolves). Test `cli_own_table_extension_method`.
+
+- **An object declared `ObsoleteState = Moved` (or `Removed`) binds no reference
+  while another of its name or number is visible.** Base Application keeps
+  `table 308 "No. Series"` (and `No. Series Line`, `Source Code Setup`,
+  `Reason Code`, …: 8 tables) as `Moved` stubs pointing to Business Foundation,
+  under `#if not CLEANSCHEMA27`. For every app seeing both, the name resolved
+  to two tables, ambiguous, so `Record "No. Series"` had no table; and Base
+  Application's own references bound to its stub through the own-app shadow.
+  The index now drops such an object wherever an alternative exists
+  (`ObjectNode::obsolete_gone`, pack schema 12; a symbol-only object's state is
+  not read yet). Continia DO's dependency-body `ambiguousResolved`: 17 → 15
+  (CDN's `InvalidCharsInNoSeries(NoSeriesRec)`). Test
+  `cli_moved_table_resolution`.
+
+- **Overload selection: a DotNet argument picks the DotNet `var` overload, and
+  framework methods' Integer results type.** Every DotNet type canonicalizes to
+  `dotnet`, and the `var` exact-text rule called a `DotNet XmlElement` against
+  `var DotNet XmlNode` incompatible, so Base Application's
+  `XMLDOMMgt.AddAttribute(DocumentElement, …)` over `(var DotNet XmlNode; …)` /
+  `(var XmlNode; …)` lost both candidates (a `var` DotNet parameter takes a
+  derived class; two aliases are now undecided). `RecordId.TableNo()`,
+  `Count()` of a List/Dictionary/JsonArray and `Text.IndexOf`/`LastIndexOf`
+  now type as Integer (`GetIntegrationTableMapping(Mapping,
+  RecordID.TableNo())`). An untyped argument no longer stops the pick when
+  the typed ones prove every other candidate unable (rule (B) holds without
+  it): `XMLDOMMgt.FindNode(DotNetDoc.DocumentElement, Path, Found)`, whose
+  first argument is an untyped DotNet member. An object-id reference
+  (`Database::Contact`, `Page::"…"`, `Codeunit::"…"`) and an enum value's
+  `AsInteger()` type as Integer (`GetIntegrationTableMapping(Mapping,
+  DATABASE::Contact)`, `IsValidConnector(Connector.AsInteger())`). Continia DO's
+  dependency-body `ambiguousResolved`: 59 → 21. Tests
+  `cli_dotnet_var_overload`, `cli_record_integer_builtin_arg`,
+  `cli_object_ref_integer_arg`.
+
+- **A Text argument is no proof against a `SecretText` parameter.** Text, Code
+  and Label convert into SecretText, but overload selection called the pair
+  incompatible. That lost both candidates of `SignedXmlImpl.SetSigningKey(Text)`
+  over `(SecretText)` / `(Codeunit "Signature Key")` (now bound to the
+  SecretText one), and it picked `AddHeader(Label, Label)`'s `(Text, Text)`
+  overload over `(Text, SecretText)` on that false proof (now ambiguous: which
+  conversion the compiler prefers is not proven). A `Dictionary`'s / `List`'s
+  `Get(..)` argument now types as its declared value type
+  (`HttpContent.SetHeader(Key, Headers.Get(Key))` over `(Text, Text)` / `(Text,
+  SecretText)`), and an element of a declared array as the element type
+  (Continia's `Http.AddRequestHeader(RequestHeaders[i, 1], RequestHeaders[i,
+  2])`), and a field-qualified enum value `Rec."Field"::Value` as the field's
+  enum (Base Application's `CheckBlockedCustOnJnls(Customer,
+  GenJournalLine."Document Type"::Payment, true)` over `(…; Enum …; …)` /
+  `(…; var Record …; …)`), and an enum type's `FromInteger(i)` as that enum
+  (`ShowComments("Service Comment Line Type".FromInteger(Type))` over `(Option
+  …)` / `(Enum …)`), and a report's dataitem passed by name as a record of
+  its source table (`ReservMgt.SetReservSource("Prod. Order Component")` over
+  `(Variant)` / `(RecordRef)`), and a `+` with a Text literal operand as a
+  Text (`AddHeader('Authorization', 'Bearer ' + AccessToken)` over `(Text,
+  Text)` / `(Text, SecretText)`). Continia DO's dependency-body
+  `ambiguousResolved`: 21 → 17 (→ 11 with the Moved-object fix). Tests
+  `cli_secrettext_arg`, `cli_array_param_overload`,
+  `cli_object_ref_integer_arg`, `cli_dataitem_name_arg`.
+
+- **The last 11 overload ambiguities in Continia DO's dependency code bind,
+  each checked with the AL compiler (alc 18.0.43).** A Text-family argument
+  (Text, Code, Label, a text literal) binds an unbounded `Text` parameter over a
+  `SecretText` one. This is the one conversion ranking the engine now applies:
+  probes whose overloads return different types, with a control assignment
+  failing (AL0122), prove it. It settles `AddHeader(Label, Label)` ×2,
+  `UrlEncode(Label)` and `VerifyData(Text, Text, …)` over `(Text; SecretText;
+  …)` / `(SecretText; SecretText; …)`. Six more fixes:
+  - A Variant argument is never proven incompatible (it converts into every
+    parameter type probed, by value and `var`). A Variant next to typed
+    arguments now decides by elimination instead of declining:
+    `WordTemplates.Merge(DataVariant, SplitDocuments, …)` ×2. Before, a Variant
+    into a `Dictionary` parameter counted as incompatible, which was wrong.
+  - A DotNet value is proven apart, both ways, only from AL objects (Record,
+    Codeunit, Interface) and AL's wrapper types (Xml*, Json*, Http*, List,
+    TextBuilder, RecordRef). Simple values and streams stay undecided:
+    `DotNet MemoryStream` converts into OutStream, `DotNet String` with Text.
+    That binds `SaveZipArchive(MemoryStream)` over `(OutStream)` / `(var
+    Codeunit "Temp Blob")`.
+  - The Integer-literal guard ignores a candidate another position already
+    rules out: `AddBlobPutContentHeaders(…, BlobType::AppendBlob, 0, …)`.
+  - A member call whose same-arity overloads all return one type is that type:
+    `CreateFile(…, Helper.GetContentLength(InStream), …)`.
+  - An interface method's result is its declared return type:
+    `SetFunctionAsToolChoice(Function.GetName())`.
+  - `CreateGuid()` is a Guid: `Convert.ToBase64(CreateGuid())`.
+  Continia DO's dependency-body `ambiguousResolved`: 11 → 0, `resolvedSource`
+  +11, no other count moved. Test `cli_overload_last_ambiguities`.
+
+- **A RecordRef write behind `if not R.FieldExist(N) then exit;` writes only a
+  table that has field `N`** (G36). Continia DO's `UpdateHandledFields(var
+  FilterRecord: RecordRef)` modifies whatever table it holds, so `prove …
+  writes-table` had an `unknown-table-write` for every table. Past its
+  `FieldExist(6175274)` guard, only tables a DO extension gives that field
+  (Sales Header and the other documents) can be written: such a table's
+  question now answers `yes`, and a table the workspace declares without the
+  field `no` (a dependency's table keeps the blocker: an extension of it in
+  another loaded app may not be in the model). The guard must be a top-level
+  statement and the RecordRef not rebound after it (`GetTable`, `Open`,
+  `Copy`, `Close`, passed on, assigned). 15 of the HandledState slice's
+  unknowns decide (`engine::l5::field_guard`). Test
+  `cli_prove_field_guarded_write`.
+
+- **A table extension's fields reach its base table when a table shares the
+  extension's number.** The model's extension-field merge looked the
+  extension's stub up by its id (`app/table/<extension number>`) and took the
+  LAST row of that id: a real table of the same number when it came later.
+  Continia DO's `CDOSalesHeaderExt` (6175275) and its table 6175275 `CDO
+  E-Mail Template Merge Field`: Sales Header got that table's fields and lost
+  the extension's (G-5). The merge now takes the stub, and a base is a real
+  table. Pinned by `cli_prove_field_guarded_write`.
+
+- **`Page.Run(0, Rec)` on a dependency's table runs that table's lookup page**
+  (G37). Only a workspace table's `LookupPageId` was known, so Continia DO's
+  `Page.Run(0, TempServDocLog)` on Base Application's `Service Document Log`
+  (`LookupPageID = "Service Document Log"`) was a dynamic run and `prove`'s
+  `unresolved-callsite`. Every table with source now carries its
+  `LookupPageId` (`ObjectNode::lookup_pages`, pack schema 11), joined with the
+  loaded table extensions of it; a symbol-only table's is not read yet. Test
+  `cli_dependency_lookup_page_run`.
+
+- **An array parameter takes part in overload selection.** Argument typing read
+  `array[8] of Text[100]` as a malformed generic clause (`of` with no `[..]`),
+  so an array parameter was untyped and degraded every overload pick of its
+  name: Base Application's `VendorRemitToAddress(Rec, array[8] of Text[100])` /
+  `(Rec, Record "Remit Address Buffer")` stayed `ambiguousResolved` for both
+  argument kinds. An array now types as its dimensions plus element type; it
+  never binds a non-array (nor the other way round), and two different arrays
+  stay undecided. A symbol parameter's `ArrayDimensions` were dropped too (its
+  text is the element type), so a symbol array parameter looked scalar; they are
+  now read (`AbiParamRetained::array_dims`, pack schema 10). Argument types
+  never choose between two `#if` alternatives (candidates that exist in no
+  common build): only one is compiled, and the other build binds the other one
+  (`overload_candidates_are_narrowed_to_the_call_sites_build`, which array
+  typing would otherwise have broken). Test `cli_array_param_overload`.
+
+- **A record's `FieldNo(..)` / `Count()` argument is an Integer in overload
+  selection.** Base Application's `AddAllowedTable(Database::"…",
+  Log.FieldNo(SystemCreatedAt))` over `(Integer, Integer)` / `(Integer,
+  JsonArray)` stayed ambiguous. Test `cli_record_integer_builtin_arg`. With the
+  array fix, Continia DO's dependency-body `ambiguousResolved`: 86 → 59.
+
+- **A dependency page's `CurrPage.<usercontrol>` call resolves against an add-in
+  its package declares only in symbols.** Continia's CDN embeds
+  `usercontrol(RefreshTimer; "CTS-CDN Refresh Timer")` and calls
+  `CurrPage.RefreshTimer.Schedule(..)`, but ships no `controladdin` `.al`. A
+  dependency with source took no objects from its symbols, so the add-in was
+  missing (`compoundReceiver`). It now takes the control add-ins its source
+  lacks (an add-in has no AL body, so its symbols say all source would). And a
+  symbol add-in was read with no procedures at all, so every call to one was
+  `memberNotFound`; its `Methods` are now its procedures (its `Events`, as in
+  source, are none). Test `cli_dependency_symbol_control_addin`.
+
+- **A symbol-only method with no parameters is called with none.** The compiler
+  leaves an empty array out of `SymbolReference.json`, so such a method has no
+  `Parameters` key (BC 29's Base Application: 7211 methods so, one
+  `"Parameters": []`). Ingestion read the missing key as an unknown arity, which
+  no call matches: every 0-argument call into a symbol-only package was an
+  `arityMismatch` unknown, and those methods had no symbol method id. Continia
+  DO's dependency-body unknowns: 41 → 2 (the 38 `arityMismatch` calls into
+  Microsoft's `System` package, e.g. `AgentUtilities.
+  BlockPageFromBeingOpenedByAgent()`, and the `compoundReceiver` `.Get` on
+  `IndexManagement.GetSupportedOptimizedTextSearchLanguages()`). Earlier notes
+  called these 38 a platform version skew; the symbols declare every one. Test
+  `cli_parameterless_symbol_method`.
+
+- **A write with no known table is never hidden in a dependency group, nor shown
+  at another write.** Digest's producer-proof search matched facts with
+  `fact_equivalent`, which treats a missing resource as equal to any, so an
+  unresolved table write was proved by a typed parameter-bound producer's path:
+  `prove`'s `unknown-table-write` blockers pointed at a typed insert (Continia DO:
+  three anchored at a `CDO File` insert). Proved at its own operation, such a
+  write inside a dependency is a boundary group's, and a group listed only the
+  resources its facts name, so the write vanished and `prove` could answer `no`
+  past it. A group now counts them (`detail.unresolvedResources`), and `prove`
+  blocks on such a group. Test
+  `an_unknown_table_write_is_never_witnessed_by_a_typed_producer`.
+- **`ModuleInfo.Id()`/`PackageId()` return `Guid`, `Name()`/`Publisher()` `Text`**
+  (`framework_returns`). System Application's
+  `IsCapabilityRegistered(Capability, CallerModuleInfo.Id())` and
+  `IsCapabilityActive(…, CallerModuleInfo.Id())` stayed ambiguous between their
+  `ModuleInfo` and `Guid` overloads. Test
+  `record_builtin_and_enum_list_results_pick_overloads`.
+- **Framework and RecordRef call results type an argument.** A framework method's
+  call result (`Token.AsValue()`) types as the kind it returns, and so does a
+  framework call on one (`Token.AsValue().AsText()`); a `RecordRef`/`FieldRef`
+  method with parentheses (`RecRef.Number()`) as its parens-less form. Continia
+  CDN's `SetSeverity(SeverityToken.AsValue().AsText())` and
+  `IsSalesDocument(RecordRef.Number())` no longer stay `ambiguousResolved`. Test
+  `record_builtin_and_enum_list_results_pick_overloads`.
+- **An XmlPort's `Export`/`Import`/`Run` is a multicast over every trigger it
+  reaches.** With no extension mechanism, the entry dispatch was `Exact` whenever
+  it had any route, so an xmlport run reaching `OnPreXmlPort` and its elements'
+  triggers read as an ambiguous overload set and `prove` blocked on it (Base
+  Application's `ICOutboxImpExpXML.Export()`). Test
+  `an_xmlport_export_reaches_all_its_triggers`.
+- **Two more call results type an argument.** A record's platform method
+  (`Line.RecordId()`) types as its documented return, and an enum value's
+  `Names.Get(i)`/`Ordinals.Get(i)` as `Text`/`Integer`: Business Foundation's
+  `AddAction(ErrorInfo, NoSeriesLine.RecordId(), …)` and System Application's
+  `SetHttpMethod(Method.Names.Get(…))` no longer stay `ambiguousResolved`. Test
+  `record_builtin_and_enum_list_results_pick_overloads`.
+- **A report dataitem or xmlport table element named as a receiver is a record
+  operation.** The body pass took only globals, parameters and locals as record
+  receivers, so `"Job Ledger Entry".Modify()` from a nested dataitem's trigger, or
+  `ICOutboxTrans.Insert()` on a table element, became a call the model could not
+  type: `digest` listed it `unresolved-receiver-type` and `prove` blocked on it
+  (Base Application's Update Job Item Cost; IC Outbox Imp/Exp: 25 such rows on one
+  Continia DO claim, now 0). A dataitem's `UseTemporary = true` is now read
+  (`ObjectDecl::temporary_dataitems`), so its record is temporary. A quoted
+  receiver (`"My Rec".Insert()`) missed its record variable in the record typing,
+  which compared the raw text with the logical name, so its table and temp state
+  stayed unknown. Test `dataitem_record_ops_are_record_operations`.
+- **A synthesized global the C# exposes as a property is declared and called by
+  its AL name.** The runtime stores such a global in a backing field `δx` and
+  reads it as `this.x`, so the global was declared `"δx"` and every call on it
+  stayed `__alsem_untranslated('untyped …')` (98 Continia Core files; its
+  `processingWindow.Open`). `ALFieldExists` is `RecordRef.FieldExist`. Extraction
+  scheme 6. Continia DO's dependency-body unknown call edges: 44 → 41 (Continia
+  Core: 0). Test `keeps_generic_types_and_member_paths`.
+- **G28 closes a dependency's internal interfaces too.** An interface declared
+  `Access = Internal` in any app with source closes its dispatch when every friend
+  that app's manifest lists is loaded; before, only the workspace's own did.
+  Continia CDN's internal `IEndpointCreator`, `IPartyIdentificationCreator` and
+  `IPartyTaxSchemeCreator`, held in locals filled from factory getters, were
+  dispatched open-world from CDN's own code (the `CTS-CDN Party Type` path of
+  `IPartyInformationCreator` stays open: that enum is extensible). An object's
+  `Access = Internal` is now `ObjectNode::internal`; `PACK_SCHEMA` 9. Test
+  `a_dependencys_internal_interface_with_every_friend_loaded_is_closed`.
+- **Three more argument shapes pick an overload.** The C6 literal gate degraded a
+  call whenever a `Code` candidate faced a text literal, even when the rival took
+  an `Integer` that cannot take the literal at all; it now guards only a choice
+  still open (Continia DO's `EMailLog.InitNewEntry(…, '', …)`). A table's own
+  field named bare types as the field (Base Application's
+  `Cust.CheckBlockedCustOnJnls(Cust, "Document Type", false)`). A `RecordRef`/
+  `FieldRef` member without parentheses (`Number`, `Name`, `Caption`, …) types as
+  its documented return, on a variable or a call result (Continia CDN's
+  `IsPurchaseDocument(RecRef.Number)`). Test
+  `literals_own_fields_and_ref_members_pick_overloads`.
+- **Calls by method id reach dependency routines whose id a signature cannot
+  give.** A dependency's source routine now takes the id its app's
+  `SymbolReference.json` declares (`RoutineNode::abi_method_id`), matched by
+  object, name and arity, then by parameter types among overloads. A
+  `Dictionary`/`List` parameter's part of the id cannot be computed (Continia
+  Core's calls to Continia System Application's
+  `GetDictionary(var Dictionary of [Text, Text])`). A `[TryFunction]` that declares
+  no return value hashes a `Boolean` return, as the compiler does (System
+  Application's `Uri.IsValidUri(Text)`, `TryInitializeFromCurrentApp()`).
+  `PACK_SCHEMA` 8. Tests `dependency_source_routines_take_their_symbol_method_ids`,
+  `synthesized_calls_bind_by_method_id`.
+- **AL synthesized from transpiled C# keeps a call's member path and generic
+  types.** `webResponse.ALContent.ALReadAs(…)` was written `"webResponse".ReadAs(…)`
+  (no such method) and `client.ALDefaultRequestHeaders.ALAdd` became
+  `"client".Add`; they now read `.Content().ReadAs(…)` and
+  `.DefaultRequestHeaders().Add(…)`. A comma inside a generic type
+  (`NavDictionary<NavText, NavText>`) split the scope's locals and the call's
+  arguments, so a Dictionary local was declared `Text`. `ALLoadFrom` is
+  `HttpContent.WriteFrom`, and an option's `Names()`/`Ordinals()` chain reads only
+  metadata. Extraction scheme 5. Continia DO's dependency-body unknown call edges:
+  91 → 44 (with the method-id fix above; 38 of the 44 are the System Application
+  source/symbols version gap). Test `keeps_generic_types_and_member_paths`.
+- **Two more argument shapes pick an overload.** A value of a built-in option type
+  (`TextEncoding::UTF8`, `Verbosity::Normal`; `arg_dispatch::BUILTIN_OPTION_TYPES`)
+  types as that type, so System Application's
+  `TempBlob.CreateInStream(TextEncoding::UTF8)` no longer stays `ambiguousResolved`
+  with `CreateInStream(var InStream)`. A framework variable's member without
+  parentheses (`Response.Content`) types as the kind it returns, when that kind's
+  name is an AL type. Test `builtin_option_values_and_framework_members_type_arguments`.
+- **A negative synthesized method id no longer breaks the file's parse.** The
+  grammar takes no negative number as an attribute argument, so `[MethodId(-5)]`
+  made the whole synthesized file `Recovered` and every object in it
+  parse-incomplete. Half of all method ids are negative. A parse-incomplete object
+  is not read as loaded source, so a run of a codeunit with no `OnRun` stayed
+  `external` instead of running nothing (Continia Core: `"databaseReader".Run()` on
+  `CSC DB Reader`). The id is now written quoted, `[MethodId('-5')]`, and read either
+  way. Extraction scheme 4. Tests `a_negative_method_id_keeps_the_file_clean`,
+  `method_id_attribute_is_the_declared_id`, `synthesized_calls_bind_by_method_id`.
+- **Synthesized runtime code binds by the runtime's own method ids.** AL synthesized
+  from a transpiled package (`snapshot::transpiled`) now writes `[MethodId(n)]` on
+  every routine whose id the symbols or the C# give, and the resolver takes a
+  declared id over the one it computes from the signature
+  (`RoutineMeta::method_id`). A routine only the C# declares (a `local procedure`)
+  got its signature from C# types, where an enum parameter shows as `NavOption`
+  (declared `Integer`), so its computed id was wrong and every `"__alsem_mid_<n>"`
+  call to it stayed unresolved (Continia Core: `CSC Licensing.GetLicenseState`,
+  `__alsem_mid_1859663910`). Extraction scheme 3 (`EXTRACTION_SCHEME`). Continia DO's
+  dependency-body unknown call edges: 214 → 91. Tests
+  `synthesized_calls_bind_by_method_id`, `method_id_attribute_is_the_declared_id`.
+- **`Page.Run(0, Rec)` runs the lookup page of `Rec`'s table.** Page `0` is the
+  table's `LookupPageId` (or one a table extension sets); with none, the platform
+  shows a page of its own, which runs no AL code. The run was dynamic
+  (`Page.Run(<dynamic>)`), which `prove` and every cone blocked on. For a record of a
+  workspace table it now reaches that page's lifecycle triggers, or nothing (the
+  model's `Builtin` run); `Partial`, since a table extension outside the program may
+  set another page (`ProgramGraph::lookup_pages`, `resolve::full::zero_page_table`).
+  Continia DO: `CDO E-Mail Log.ShowLog`. Test `cli_lookup_page_run`.
+- **A Variant's type tests resolve.** `V.IsRecord()`, `V.IsGuid()` and the other `Is…`
+  methods of the AL `Variant` type are platform built-ins with no AL code behind
+  them, whatever the Variant holds; a Variant receiver made every member call an open
+  dynamic site, so `prove` blocked on them (Continia DO: `RecVariant.IsRecord`,
+  `ReferenceVariant.IsGuid`, … across 7 claims). They are now catalog members
+  (`resolver::VARIANT_TYPE_TESTS`); any other member stays dynamic. Test
+  `cli_variant_type_tests`.
+- **`publishes-event` evidence cites the publish call** (G32). An event publication is
+  the publisher routine's own fact, with no operation to cite, so its evidence read
+  `sourceKind: unavailable` (35 proven answers on Continia DO had no file or line).
+  Its anchor is now the call into the publisher, the last hop of its shortest witness
+  path. Test `cli_prove_event_anchor`.
+- **A known-temporary write the root's L4 summary has no row for says so.** A DB
+  effect's `tempState` is joined from the root's L4 rows; with none (a dependency
+  root, a write inside a dependency boundary group) it was absent, so `prove` counted
+  a temporary record as a table write (from `Sales-Calc. Discount.OnRun`:
+  `TempCustLedgEntry.DeleteAll` as a `Cust. Ledger Entry` write). The cone fact's own
+  class is frame-correct (#69 D1), so a known-temporary one is now `known(true)`;
+  any other class stays absent. Test `cli_dependency_roots`.
+- **A record of a namespace-qualified type writes its table, and a write to a table
+  that is not known rules out `writes-table`'s `no`.** The model's record-type parse
+  (`record_types::record_table_name_of`) took a qualified type's whole dotted path as
+  the table name (`Record Microsoft.Manufacturing.Capacity."Capacity Ledger Entry"`,
+  as Base Application 29 declares records throughout), so no table resolved and the
+  record's writes named none; receiver typing already read the last segment. And a
+  write that names no table was no match for any table, so `writes-table:T` answered
+  `no` past it: unsound for the qualified record and for a RecordRef opened on a
+  computed number. Such a write now blocks `no` (`unknown-table-write`), unless it is
+  known to write a temporary record. Test `cli_prove_table_writes`.
+- **A page, report or XMLport run reaches its whole lifecycle, and a run with none
+  runs no AL code.** A run followed one entry trigger (`OnOpenPage`, `OnPreReport`,
+  `OnPreXmlPort`), so a `no` could miss a write or Commit in `OnAfterGetRecord`,
+  `OnQueryClosePage` or a report's dataitem triggers (d35's filed limit D3a). It now
+  reaches every trigger a run runs with no user acting on a control
+  (`resolver::run_triggers`): a page's `OnInit`, `OnOpenPage`, `OnFindRecord`,
+  `OnNextRecord`, `OnAfterGetRecord`, `OnAfterGetCurrRecord`, `OnNewRecord`,
+  `OnQueryClosePage`, `OnClosePage` and background-task triggers; a report's
+  `OnInitReport`/`OnPreReport`/`OnPostReport` and its dataitems'
+  `OnPreDataItem`/`OnAfterGetRecord`/`OnPostDataItem`; an XMLport's object and
+  element triggers. A user's action (`OnAction`, a field's `OnValidate`, record
+  edits) stays under `platformEntryPointsNotModelled`, as do page parts. A run of an
+  object whose source is loaded and declares none of these runs no AL code: the
+  model's edge is `Builtin`, still naming the object (it was `Opaque`, an unresolved
+  run that `prove` and every cone blocked on). Continia DO: `ImportLines.RunModal`,
+  `DialogLanguage.RunModal` (a PromptDialog declaring only `OnQueryClosePage`).
+- **A computed `Page.RunModal(<n>)` (keyword member form) makes the cone partial.**
+  The combined graph turned only the `Codeunit.Run(<n>)` callee shape into an
+  unresolved object run; `Page.RunModal(<n>)`, `Report.Run(<n>)` were skipped, so a
+  cone through one counted as complete and d35 reported nothing
+  (`combined_graph::keyword_run_kind`). `prove` already blocked on it. Tests
+  `cli_d35_unknown_commit` V6, V7.
+- **An operation on a table of no known resource is no witness of a table's effect.**
+  The digest's witness search (`digest::is_bfs_carrier`) accepted any direct fact of
+  the same operation whose resource is unknown as the carrier of an inherited fact
+  that names a table (`fact_equivalent`'s one-sided leniency). Such an ordinary fact
+  never becomes one naming a table at a caller (only the producer solve binds one),
+  so it was a false witness: on Continia DO a temporary `RecRef.Insert` was shown
+  writing 156 tables, among them `Cust. Ledger Entry`, that dependency boundaries
+  below it write. Each effect is now witnessed by its own producer or boundary.
+  Test `cli_digest_include_reads` (its G-1 fixture had relied on the shared witness).
+- **A local RecordRef opened only temporary is temporary in a routine that branches.**
+  The RecordRef temp-state pass (`record_types`) needed a routine with no branching.
+  A LOCAL RecordRef whose every `Open` is `Open(_, true)`, with no `GetTable`/`Copy`,
+  no assignment to it and never passed on, holds a temporary table on every path (an
+  op before any `Open` is a runtime error, not a write), so its ops are now
+  `known(true)`. Continia DO: `TryMatchTypedFilter`'s `RecRef.Insert` on `CDO Typed
+  Value Buffer`. Test `cli_recordref_open_temporary`.
+- **An implicit `Rec`/`xRec` argument is typed, so the overload it picks resolves.**
+  An undeclared `Rec`/`xRec` passed to a call was untyped, so an overload set over
+  record types stayed ambiguous: Continia DO's `LineAttachment.SetTemplateFilter(xRec)`
+  in a table's `OnDelete`. It is now the object's implicit record, as the `Rec.Field`
+  argument arm already typed it (`receiver::infer_implicit_rec`). Test
+  `cli_implicit_rec_argument`.
+- **A `this.Global` argument is typed, so the overload it picks resolves.** Argument
+  typing (`arg_dispatch::type_one_arg`) read a bare identifier, a literal and
+  `Rec.Field`, but not `this.X`, which names an object global only. A call
+  overloaded on that argument stayed an ambiguous pair: Continia CDN's
+  `this.Utilities.IsPurchaseDocument(this.CreationFactory)` (overloaded on
+  `Codeunit` against `Integer`) blocked 30 cone rows of DO claims. Several `#if`
+  declarations of the global leave it untyped. Test `cli_this_argument`.
+- **One routine id and declared line bases across `graph`, `fingerprint` and
+  `prove`** (G13), so a consumer can join their outputs.
+  - `alsem graph` nodes carry `stableRoutineId`, the id the other commands use, on
+    every routine with source. It is minted from the graph's own declaration data
+    (the same `RoutineDecl` fields the model mints it from), so the export builds no
+    model. It matches the model's id for all 5488 routines of Continia DO. Omitted on
+    symbol-only and synthetic nodes; the 5 `OnOpenPageEvent` nodes with no
+    `sourcePath` are platform publishers the engine synthesizes (`synthetic: true`),
+    so they have no declaration and no location by design.
+  - `routineInventory` rows carry `arity` and `sourceAnchor`, the same anchor `prove`
+    reports as `routine.anchor`.
+  - Each document states its line base: graph `meta.lineBase: 1` (as its schema
+    always said), prove and fingerprint-inventory `payload.lineBase: 0`. A graph
+    node's `line` is the inventory anchor's line + 1.
+
+  These are additive; the graph schema doc lists the new fields. The three
+  base-minted goldens that are never regenerated (`single-app/inventory.dd.json`,
+  `cross-app/inventory.two-onruns.json`, `single-app/prove.dd.CallChain.may-commit
+  .json`) were updated after checking that each differs from its old content only by
+  these keys. Test: `cli_ids_and_line_bases` (overloads and a field trigger; it fails
+  with the graph's member discriminator off).
+  - `events fanout` entries carry `publisherStableRoutineId` next to `publisher`
+    (the event graph's own `<16 hex>/<64 hex>` routine id), the last output G13
+    named. The `cli-c-events` fanout goldens gain only that key (19 entries, all
+    filled). Test: `cli_ids_and_line_bases::events_fanout_names_publishers_by_the_
+    shared_id`.
+- **`fingerprint --inventory-only` without `--format` emits json** (G12). Its help
+  says it implies `--format=json`, but an omitted format resolved to `human`, and the
+  command failed with "--inventory-only requires --format=json (got Human)".
+  `default_format` now takes `inventory_only`: omitted means json, while an explicit
+  non-json format is still refused. Test: `cli_fingerprint_inventory_format` (the real
+  binary, both cases).
+- **`prove` evidence lists no witness path that cannot run** (G23 follow-up). The
+  witness search took the shortest path to an effect. Through a recursive SCC that
+  could be one dead under a literal argument (Continia DO's `DocSave` →
+  `RunReport(false)` → `if UseQueue then QueueMail`), although the effect is reached
+  by a longer live path. Each listed path is now replayed with `literal_reach`'s
+  rules (`path_live`) and dropped when a hop's guard contradicts what the call chain
+  binds. When that leaves an effect with no listed path, `viaPathsTruncated` is set,
+  because a live path exists that was not listed. Test: `cli_prove_dead_paths`
+  `DocBoth` (fails with the replay off, and with the truncation flag off).
+- **Calls into Microsoft's `Base64Convert` platform codeunit have known behaviour.**
+  `Base64Convert` (codeunit 2000000024 of the `System` symbol package) is `[Native]`:
+  there is no AL body, so a call was an `unfetched-dependency`, an opaque cone. The
+  package also made its app a `symbol-only-boundary` analysis gap. Together they kept
+  `prove … no` at `unknown` (35 call sites in Continia DO's claim cones, reached through
+  System Application's `Base64 Convert Impl.`). `program::model::platform_natives` is
+  now a curated catalog. `[Native]` alone is not enough: `Agent Utilities.
+  DeleteCustomAgent` or `Index Management.DisableKey` have effects, so only methods
+  whose behaviour is known are listed. A cataloged routine has no database, UI or commit
+  effect; `FromBase64` keeps an implicit error (a malformed string). The same predicate
+  serves all four places that saw the routine as opaque: its direct facts in the cone,
+  its call sites (`resolved`, not `unfetched-dependency`), the gap derivation, and the
+  gap count's app-prefix match. On DO with BC 29's `System` symbols added to
+  `.alpackages`, 19 of the 39 claims a Base64 call blocked now answer `no`, all as
+  expected. Test: `cli_prove_platform_natives` (an uncataloged native stays opaque; it
+  fails with an empty catalog, and with the gap exemption off).
+- **`prove` follows literal Boolean arguments through recursive SCCs** (G23). The
+  cone's `param_guard` drops a fact behind `if P then` when every path binds `P` to the
+  opposite literal, but only through a non-recursive singleton SCC: a recursive SCC
+  shares one cone, so its members' requirements were dropped and a write behind
+  `if UseQueue then` counted for a caller passing `false`. On Continia DO, `RunReport`
+  and `RunReportID` sit in a 489-routine recursive SCC. `literal_reach` now runs, for
+  `prove`'s read, a per-root reachability over the snapshot's own edges. Its state is a
+  routine plus the known literal values of its usable guard parameters (the cone's own
+  frames). A direct call binds a literal or forwards a known parameter; every other edge
+  kind binds nothing. An effect counts as unreachable only when every origin operation's
+  routine is reached with guards ignored but never with its own requirements met. A
+  graph or id mismatch never drops an effect, and the search gives up (drops nothing)
+  past 400,000 states. The two DO claims the peer named stay `yes`, correctly as a MAY:
+  `DocSave` also reaches `DocHandle(true)` through `Codeunit.Run("Sales-Calc. Discount")`
+  → a Sales Line `OnDelete` → the approval workflow's `ExecuteResponses` →
+  `Sales-Post` → DO's `OnAfterFinalizePosting` subscriber. Test: `cli_prove_dead_paths`
+  (the recursive case answered `yes` before; it fails with the mark ignored; controls
+  for a literal `true`, the root's own parameter, a reassigned parameter and one passed
+  to a `var`).
+- **An enum value qualified by an enum VARIABLE, or written `Enum::"X"::V`, types as
+  the enum** (G27), so an overloaded call binds the Enum overload, as the compiler does
+  (alc/altool 18.0.43.1464, `graph extract`: `EI(K::Open)` with `K: Enum "SV Kind"`
+  and `EI(Enum::"SV Kind"::Open)` both bind `EI(Enum)` over `EI(Integer)`). Only an
+  unshadowed `"X"::V` was typed, so BaseApp's
+  `PriceSourceList.Add(SourceType::"All Customers")` (`SourceType: Enum "Price Source
+  Type"`, overloads `Add(Enum)` / `Add(Record "Price Source")`) stayed
+  `ambiguous`. That was 65 unresolved rows in 5 of Continia DO's prove claims, all gone
+  (the claims still have other blockers). The same `K::V` shape now also closes an
+  interface site over a closed enum (`closed_enum::value_enum`). An Option variable's
+  `K::A` stays an option value (untyped), as before. Tests: the S9.5c enum-value
+  harness test and closed-enum T3, each failing with its arm removed.
+- **`prove … reaches-ui` counts client file dialogs and progress windows** (G26, a
+  regression G18 exposed). `UploadIntoStream`, `DownloadFromStream`, `Upload` and
+  `Download` (bare, or on `File` as a keyword or a `File` variable) and `Open` /
+  `Update` on a `Dialog` variable produced no effect at all. Routines reaching one
+  answered `yes` only through an `Error` on the same path, which G18 stopped counting
+  as UI, so they turned into a confident wrong `no`. They are now the capability ops
+  `ui-file-dialog` / `ui-progress`, effects `UI_FILE_DIALOG` / `UI_PROGRESS`. One
+  classifier (`ui_dialog_call`) serves the body extractor and the capability cone. They
+  are their own types, so the ordering engine's `UI_WINDOW_OPEN` grading does not
+  change. On Continia DO, 1 of 73 `reaches-ui` claims moved
+  (EMAIL-TPLM-010.c2, `no` → `yes` through `UploadIntoStream`) and none contradicts
+  its expectation. Test: `cli_prove_reaches_ui` (bare, `File.`, `Dialog`, transitive,
+  and an `Update` on a codeunit variable as control). It fails when the cone drops the
+  facts, and when the `Dialog` receiver check is dropped.
+- **`prove … writes-table` resolves a caller-dependent write through the callers**
+  (G25). A write to a `var` record parameter, or a table method's own `Rec`, whose
+  temporariness is the caller's (G17b) answered `unknown`. It is now asked in the
+  frames of the routine's callers in the loaded world (the same L4 temp-state join,
+  for the caller's id), climbing up to 6 levels while it stays caller-dependent: a
+  caller that passes a record not known temporary makes it `yes`, and the evidence
+  names that caller (`viaCaller: {stableId, display}`). With no caller, or when every
+  caller passes a temporary record, it stays `unknown` with
+  `temp-state-depends-on-caller`: the routine may still be called from outside the
+  world. On Continia DO, 5 of the 14 claims this blocked are now `yes` via a named
+  caller; the other 9 are three methods of obsolete tables that nothing calls and a
+  `ZipFiles` whose only caller passes a temporary record. Test:
+  `cli_prove_temp_writes` (a `var` parameter, a table method on its own `Rec`, a
+  callee only ever given a temporary record), which fails with the walk off.
+- **A truncated witness no longer blocks a decided `prove` answer** (G22). Any effect
+  whose via paths were capped (or whose evidence anchor was unavailable) made every
+  question `unknown` with `witness-truncated`. Truncation caps how many paths an
+  effect lists; the effect stays listed, so it cannot hide a match: a MAY question's
+  `no` now stands. The MUST question (`commits-on-success-path`) judges
+  "unconditional" over a COMMIT's paths, so it still blocks, but only on a COMMIT whose
+  own paths were cut short. On Continia DO, all 18 claims whose only blocker this was
+  are now decided (`no`). Tests: `prove` unit tests
+  `a_truncated_witness_does_not_block_a_may_no`,
+  `a_truncated_commit_still_blocks_the_must_question`,
+  `evidence_unavailable_does_not_block_a_may_no` (the two old tests pinned the
+  blocker on `may-commit`).
+- **`prove … throws-error` sees implicit runtime errors** (G20). Only an explicit
+  `Error` counted, so Continia DO's `CDO E-Mail.Init`, whose unguarded `DOSetup.Get();`
+  raises an error when the setup record is missing, answered `no`. A record lookup
+  whose Boolean is discarded (`Get`, `FindFirst`, `FindLast`, `FindSet` in statement
+  position), `TestField` and `FieldError` on a record now give an `error-implicit` fact
+  (`ERROR_IMPLICIT` effect), from one shared rule in both extractors
+  (`implicit_error_record_op`, `implicit_error_call`); record operations carry
+  `in_statement_position` as call sites do. Their own op, not `error-throw`: the
+  ordering engine and the detectors read `error-throw` as an explicit `Error`, and DO's
+  findings did not move (2,203). Only `throws-error` counts both. `if X.Get(...)`, an
+  `HttpClient.Get` statement and other non-record calls give none; `Codeunit.Run` is
+  left to the run codeunit's own errors (a caught `if Codeunit.Run` is not modelled).
+  Goldens: 192 files gain the facts (an r3a3 HTTP fact's `extra` keys were also
+  re-ordered, values unchanged); the `l2cap` vectors gain two expected facts; the
+  never-regenerated split record `full-snapshot.r5b.cross-app` was re-minted through the
+  new explicit `REMINT_SPLIT_RECORDS=1` (its `RECORD` says why; the diff is the one new
+  fact); the R3a-3 manifest gains the 146 facts (127 direct, 19 inherited); the policy
+  facts oracle, whose recorder is gone, was re-recorded through the new
+  `REMINT_POLICY_FACTS_ORACLE=1` (118 of 446 cases gain facts, none loses one).
+  DO: all four claims now `yes`, with the lookup or `TestField` as evidence. Test:
+  `cli_prove_throws_error::throws_error_sees_implicit_runtime_errors` (guarded lookups
+  and `HttpClient.Get` are controls).
+- **`Rename` is a table write in the digest and `prove`** (G19). The capability
+  facts had it (op `rename`), but the digest's effect taxonomy had no entry for it,
+  so it was no effect at all and `writes-table` answered a confident `no` for
+  Continia DO's `CDO Document Template Line.OnRename` (`MovedLineAttachment.Rename(...)`).
+  It is now a `DB_MODIFY` (a rename rewrites the row's key; the evidence keeps the
+  `.Rename`), so it also gets the temp-state rule (G17) and the ordering engine's
+  write handling. No golden moved; both DO claims now `yes` with the rename as
+  evidence. Test: `cli_prove_temp_writes` (a persistent and a temporary rename).
+- **`prove … writes-table` does not count temporary records** (G17, G17b). It matched
+  every DB write by table, so a write to a record declared `temporary` or on a
+  `SourceTableTemporary` page answered `yes`. It now reads each write's `tempState`
+  (#65, joined in the asked routine's own frame): a write that is `known(true)` on
+  every path is no table write; a write to a `var` record parameter whose state is the
+  caller's (`parameter-dependent`, nothing known persistent) answers `unknown` with
+  the new blocker `temp-state-depends-on-caller` when nothing else decides it, while
+  a caller passing a temporary record sees `known(true)` and gets `no`. On Continia
+  DO, the 8 claims this contradicted: 2 are now `no` as claimed, 6 `unknown` (other
+  open blockers), none `yes`. Tests: `cli_prove_temp_writes::writes_table_skips_temporary_records`
+  (each rule removed alone fails it); `cli_implicit_trigger_cone::a3_temporary_receiver_stays_non_physical`
+  now pins `no` (it pinned `yes` with the temporary write as evidence).
+- **A source-folder dependency includes its module folders** (G21). G4 first read a
+  folder without the folders under it that hold their own `app.json`, to keep nested
+  test apps out. In BC.History those are the app's modules, so most of Base and System
+  Application was missing: calls such as `ConfirmManagement.GetResponseOrDefault`,
+  `NoSeries.GetNextNo` and `FeatureTelemetry.LogUsage` stayed `objectNotInGraph`. The
+  folder is now walked whole, like the workspace; test apps sit beside the app's
+  folder. On Continia DO with the four BC.History roots, `primaryScoped` unknown edges
+  283 → 19 (real-unknown rate 1.35 % → 0.09 %; 726 with no sources). Test:
+  `cli_source_dependencies::a_source_folder_dependency_resolves_with_its_modules_not_its_tests`
+  (BC.History's layout: a module inside the app folder, a test app beside it), which
+  fails with the old walk.
+- **`alsem batch` with many `prove`/`digest` jobs no longer grows per job** (G16).
+  Every tree job on a view composed its own tree in the view's one `prepare`, and
+  each tree is a whole-program snapshot: a derive per job, and each job's result
+  kept its own copy of the tree's identity table and coverage until the job ran.
+  Over Continia DO with Base Application's source (G4), 408 `prove` jobs passed 40 GB
+  with no output after ten minutes. Now consecutive `Effects` readers with the same
+  flags (not `--tests`) share ONE tree over the union of their roots, answered by ONE
+  digest query (`digest_effects_each`), and share the two tables (`DigestEffects`
+  holds them by `Arc`). A root's entries and cones are those of its own tree
+  (`prove_scoped_equals_unscoped`). Measured on that workspace (release-fast,
+  `reaches-ui` jobs): 10 jobs 45 s / 4.4 GB → 28 s / 3.5 GB, 40 jobs 175 s / 10.1 GB →
+  33 s / 4.2 GB peak, every output byte-identical to the old binary's. Test:
+  `cli_batch_plan::batch_prove_jobs_share_one_tree` (one tree, each job equal to its
+  standalone run; without the grouping it builds two). `batch_counters_one_per_view`'s
+  second digest now shares the first's tree (snap 2 → 1).
+- **`prove … reaches-ui` sees pages and reports opening, and `Hyperlink`** (G15). It
+  counted only `UI_MESSAGE`, `UI_CONFIRM` and `UI_ERROR`, so the `UI_WINDOW_OPEN` the
+  digest already had for `Page.Run`/`RunModal`, `Report.Run`/`RunModal` and `StrMenu`
+  was ignored: Continia DO's `CDO Signature FactBox` field trigger `OnDrillDown`
+  (`Page.Run(Page::"CDO E-Mail Signature List", Signature)`) answered `no` with
+  complete coverage claimed. `Run()` on a Page- or Report-typed variable produced no
+  UI fact at all (only `RunModal` did), in both the cone's and the body's extractor.
+  And `Hyperlink(url)` (op `open`, resource kind `ui`) was typed `FILE` by op alone,
+  so it read as file I/O; it is now `UI_HYPERLINK`, which `reaches-ui` counts and the
+  ordering engine does not grade (the ordering prefilter `ordering_kept_roots` reads
+  the same type). No golden and no DO finding moved. Test:
+  `cli_prove_reaches_ui::every_ui_opening_call_reaches_ui` (a no-UI control keeps
+  `no`); each of the three fixes, removed alone, fails it.
+- **`[InternalEvent]` routines are event publishers** (G10). Both routine-kind rules
+  (`ir_walk::ir_routine_kind`, which the model uses, and `engine::snapshot`'s
+  `classify_kind_ir`) and the `.app`-symbols side (`symbol_reference::parse_method`,
+  a new `AbiEventKind::Internal`) left an internal event a plain "procedure", after
+  the retired al-sem reference. The program engine's own event binding already knew
+  better, but the model's event graph, `events fanout` and every detector that reads
+  the kind did not: on Continia DO 29.0 `events fanout` reported 208 publishers where
+  the source has 217 (DO's three `[InternalEvent(false)]` events and six of CDN's), and
+  d19 reported all 8 parameters of DO's three internal events as unused (8 of 8 false
+  positives, triaged against the source; no other finding moved). The event graph now
+  gives them event kind `internal` and reads `[InternalEvent(IncludeSender, Isolated)]`'s
+  `Isolated` (index 1). Goldens: `ws-r0-canon-stress`'s internal event (its fixture
+  comment said the old rule) moves in five families; the R2c coverage matrix gains an
+  `internalPublishers` axis (the event was counted as an unknown kind), and the R3a-3
+  manifest and the policy facts oracle (amended by hand: its recorder no longer
+  exists) gain its one direct `publish` fact. Test:
+  `gap_d19_event_publisher_skip::internal_event_publisher_parameters_are_not_flagged`,
+  which fails with the old rule ("classified procedure").
+- **`alsem batch` time is linear in the number of jobs again** (G14). The write-set
+  check that runs before any build (`check_write_sets`) asked, for every job and every
+  other job's write, whether the job's workspace read takes that file, and redid the
+  workspace's package scope (file-system path resolution) for each pair. 800
+  `query effects` jobs on Continia DO spent ~25 s there and 5,488 ran over ten
+  minutes before the first job. Each distinct workspace is now resolved once, each
+  pair of a workspace and a write asked once, and the read and write-write checks
+  look targets up instead of scanning every pair; the first clash reported is the
+  pair scan's. Measured on DO (release-fast): 200 jobs 3.1 → 1.7 s, 800 jobs 29.8 →
+  4.7 s, 5,488 jobs in one manifest 29.4 s (the 28 × 200-job workaround on 4
+  processes: 30 s), every one of the 10,976 output files byte-identical to the old
+  binary's. A view's demands also no longer each get copies of all later demands'
+  reads (`ViewCx::later_cells`/`later_runs`, another O(n²)): one last-reader table per
+  view answers the same question (about 2 s of the 5,488-job run, one run each).
+  Guard: `perf_bounds::batch_write_check_is_not_quadratic` (2,000 jobs under 1 s;
+  8.8 ms now, 162.6 s with the old check).
+- **A failed program build now says why.** `build_context_with` and the
+  `LspSnapshot::build_full*` builders returned `Option` and dropped the snapshot
+  builder's error, so `--analyze` warned only "the program snapshot could not be built"
+  (a BOM or a typo in `app.json` looked like any other failure). They now return
+  `Result<_, String>` with the reason, e.g. `snapshot build failed: parse
+  <ws>/app.json: EOF while parsing a value at line 1 column 8`, and every consumer
+  prints it: the `--analyze` call-graph warning (a missing `app.json` keeps its plain
+  "no app.json at the project root"), the `--project` index report, the LSP server's
+  per-root build warning (whose text had also lost a line continuation and carried
+  long runs of spaces) and the updater's rung-3 rebuild warning. Test:
+  `cli_analyze_call_hierarchy_json::unusable_app_json_warning_names_the_builder_reason`,
+  which fails with the old fixed message.
 - **A UTF-8 BOM in `app.json` no longer empties the program.** VS Code on Windows
   often writes one and the AL compiler accepts it, but `serde_json` rejected it: the
   root `app.json` failed to parse, the snapshot build returned nothing, and

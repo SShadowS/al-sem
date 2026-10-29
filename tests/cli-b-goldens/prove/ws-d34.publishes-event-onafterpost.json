@@ -5,6 +5,7 @@
   "generatedAt": "1970-01-01T00:00:00Z",
   "kind": "prove",
   "payload": {
+    "lineBase": 0,
     "question": "publishes-event:OnAfterPost",
     "result": {
       "answer": "no",

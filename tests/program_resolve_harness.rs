@@ -33,6 +33,10 @@ use cdo::cdo_ws_or_enforce;
 #[path = "common/regen.rs"]
 mod regen;
 
+#[path = "common/symbol_app.rs"]
+#[allow(dead_code)]
+mod symbol_app;
+
 /// Shared CDO substrate (2026-07-15 shared-substrate spec): ONE snapshot →
 /// graph → parse → full-resolve build, consumed by every read-only CDO test.
 /// The engine's own determinism test (two independent builds, below) licenses
@@ -475,6 +479,7 @@ fn dep_pub_abi() -> SymbolReferenceAbi {
                         subtype_id: None,
                         subtype_raw_name: None,
                         subtype_tag: SubtypeTag::NoSubtype,
+                        array_dims: None,
                     }],
                     return_type_text: None,
                     return_type_id: None,
@@ -482,6 +487,7 @@ fn dep_pub_abi() -> SymbolReferenceAbi {
                     is_internal: false,
                     is_protected: false,
                     parameters_known: true,
+                    method_id: None,
                     attributes: vec![],
                     attributes_parsed: vec![],
                 },
@@ -498,6 +504,7 @@ fn dep_pub_abi() -> SymbolReferenceAbi {
                             subtype_id: None,
                             subtype_raw_name: None,
                             subtype_tag: SubtypeTag::NoSubtype,
+                            array_dims: None,
                         },
                         AbiParameter {
                             name: "p2".into(),
@@ -507,6 +514,7 @@ fn dep_pub_abi() -> SymbolReferenceAbi {
                             subtype_id: None,
                             subtype_raw_name: None,
                             subtype_tag: SubtypeTag::NoSubtype,
+                            array_dims: None,
                         },
                     ],
                     return_type_text: None,
@@ -515,6 +523,7 @@ fn dep_pub_abi() -> SymbolReferenceAbi {
                     is_internal: false,
                     is_protected: false,
                     parameters_known: true,
+                    method_id: None,
                     attributes: vec![],
                     attributes_parsed: vec![],
                 },
@@ -5185,7 +5194,8 @@ fn assert_binds_param(
 /// value (`R.Opt::A`, an option variable's `K::A`, also when the variable is
 /// named like the enum) to the Integer one. Only the
 /// enum value is typed; the option values stay untyped, so those calls stay
-/// ambiguous (never mistyped as the enum).
+/// ambiguous (never mistyped as the enum). G27 adds an enum VARIABLE's `K::A`
+/// and `Enum::"X"::A`, both enum values.
 #[test]
 fn enum_value_arguments_type_as_their_enum_and_option_values_do_not() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -5253,17 +5263,585 @@ codeunit 50173 "SV Caller"
     begin
         T.EI("SV Kind"::Open);
     end;
+
+    procedure EnumVarQualifier()
+    var
+        T: Codeunit "SV Target";
+        K: Enum "SV Kind";
+    begin
+        T.EI(K::Open);
+    end;
+
+    procedure EnumKeywordQualifier()
+    var
+        T: Codeunit "SV Target";
+    begin
+        T.EI(Enum::"SV Kind"::Open);
+    end;
 }
 "#,
     )
     .expect("write probe");
     let report = resolve_full_program(tmp.path()).expect("resolve");
     assert_binds_param(&report, tmp.path(), "enumvalue", "enum");
+    // G27: a variable DECLARED `Enum X` qualifies a value of X, and so does the
+    // keyword form `Enum::"X"`. alc/altool 18.0.43.1464 binds both `EI(K::Open)`
+    // and `EI(Enum::"SV Kind"::Open)` to `EI(Enum)` (graph extract, 2026-10-28);
+    // BaseApp's `PriceSourceList.Add(SourceType::"All Customers")` is the shape.
+    assert_binds_param(&report, tmp.path(), "enumvarqualifier", "enum");
+    assert_binds_param(&report, tmp.path(), "enumkeywordqualifier", "enum");
     assert_stays_ambiguous_resolved(&report, "optionfield");
     assert_stays_ambiguous_resolved(&report, "optionvar");
     // A local option variable named like the enum shadows it: the compiler binds
     // `EI(Integer)` (probe `ShadowVarToEI`), so the value must not type as the enum.
     assert_stays_ambiguous_resolved(&report, "shadowingvar");
+}
+
+/// Two argument shapes that typed as nothing, so a same-arity overload pair
+/// stayed `ambiguousResolved`. A value of a built-in option type
+/// (`TextEncoding::UTF8`) is that type: System Application's
+/// `TempBlob.CreateInStream(TextEncoding::UTF8)` against
+/// `CreateInStream(var InStream)`. A framework variable's parens-less member
+/// (`Response.Content`) is the kind the member returns (`framework_returns`).
+/// Neither call has a second reading: an InStream cannot take an option value,
+/// and Text cannot take an HttpContent.
+#[test]
+fn builtin_option_values_and_framework_members_type_arguments() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::write(
+        tmp.path().join("app.json"),
+        r#"{ "id": "dddddddd-1111-2222-3333-828282828282", "name": "ProbeBO", "publisher": "probe",
+  "version": "1.0.0.0", "runtime": "11.0", "idRanges": [{ "from": 50190, "to": 50199 }] }"#,
+    )
+    .expect("write app.json");
+    std::fs::write(
+        src.join("Probe.al"),
+        r#"codeunit 50190 "BO Target"
+{
+    procedure P(var S: InStream) begin end;
+    procedure P(E: TextEncoding): Boolean begin end;
+    procedure Q(C: HttpContent) begin end;
+    procedure Q(T: Text) begin end;
+}
+
+codeunit 50191 "BO Caller"
+{
+    procedure OptionValue()
+    var
+        T: Codeunit "BO Target";
+    begin
+        T.P(TextEncoding::UTF8);
+    end;
+
+    procedure FrameworkMember()
+    var
+        T: Codeunit "BO Target";
+        Response: HttpResponseMessage;
+    begin
+        T.Q(Response.Content);
+    end;
+}
+"#,
+    )
+    .expect("write probe");
+    let report = resolve_full_program(tmp.path()).expect("resolve");
+    assert_binds_param(&report, tmp.path(), "optionvalue", "e: textencoding");
+    assert_binds_param(&report, tmp.path(), "frameworkmember", "c: httpcontent");
+}
+
+/// An XmlPort's `Export` runs every trigger it reaches (`OnPreXmlPort`, an
+/// element's `OnBeforePassVariable`): a multicast over all of them. It was
+/// `Exact` with several routes, which the model reads as an ambiguous overload
+/// set, so `prove` blocked on Base Application's
+/// `ICOutboxImpExpXML.Export()`.
+#[test]
+fn an_xmlport_export_reaches_all_its_triggers() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::write(
+        tmp.path().join("app.json"),
+        r#"{ "id": "dddddddd-1111-2222-3333-888888888888", "name": "ProbeXP", "publisher": "probe",
+  "version": "1.0.0.0", "runtime": "11.0", "idRanges": [{ "from": 50240, "to": 50249 }] }"#,
+    )
+    .expect("write app.json");
+    std::fs::write(
+        src.join("Probe.al"),
+        r#"xmlport 50240 "XP Port"
+{
+    schema
+    {
+        textelement(Root)
+        {
+            textelement(Name)
+            {
+                trigger OnBeforePassVariable()
+                begin
+                end;
+            }
+        }
+    }
+
+    trigger OnPreXmlPort()
+    begin
+    end;
+}
+codeunit 50241 "XP Caller"
+{
+    procedure Go()
+    var
+        Port: XmlPort "XP Port";
+    begin
+        Port.Export();
+    end;
+}
+"#,
+    )
+    .expect("write probe");
+    let report = resolve_full_program(tmp.path()).expect("resolve");
+    let edge = &outer_call_edge(&report, "go").edge;
+    assert_eq!(edge.shape, DispatchShape::Multicast, "{edge:?}");
+    assert_eq!(edge.routes.len(), 2, "{edge:?}");
+}
+
+/// Two call results that typed as nothing, each the one discriminating
+/// argument of a same-arity overload pair: a record's platform method
+/// (Business Foundation's `AddAction(ErrorInfo, NoSeriesLine.RecordId(), …)`
+/// over `RecordId` / `Code[20]`), and an enum value's name list read by `Get`
+/// (System Application's `SetHttpMethod(Method.Names.Get(…))` over `Text` /
+/// `Enum "Http Method"`), a RecordRef's `Number()` (Continia CDN's
+/// `IsSalesDocument(RecordRef.Number())`), and a framework call chain
+/// (`Token.AsValue().AsText()`).
+#[test]
+fn record_builtin_and_enum_list_results_pick_overloads() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::write(
+        tmp.path().join("app.json"),
+        r#"{ "id": "dddddddd-1111-2222-3333-878787878787", "name": "ProbeAA", "publisher": "probe",
+  "version": "1.0.0.0", "runtime": "11.0", "idRanges": [{ "from": 50230, "to": 50239 }] }"#,
+    )
+    .expect("write app.json");
+    std::fs::write(
+        src.join("Probe.al"),
+        r#"table 50230 "AA Line"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+}
+codeunit 50231 "AA Errors"
+{
+    procedure ThrowLine(Line: Record "AA Line"; ActionDictionary: Dictionary of [Text, Text])
+    var
+        ErrorInfo: ErrorInfo;
+    begin
+        AddAction(ErrorInfo, Line.RecordId(), ActionDictionary);
+    end;
+
+    procedure ThrowCode(NoSeriesCode: Code[20]; ActionDictionary: Dictionary of [Text, Text])
+    var
+        ErrorInfo: ErrorInfo;
+    begin
+        AddAction(ErrorInfo, NoSeriesCode, ActionDictionary);
+    end;
+
+    local procedure AddAction(var ErrorInfo: ErrorInfo; RecordId: RecordId; ActionDictionary: Dictionary of [Text, Text]) begin end;
+    local procedure AddAction(var ErrorInfo: ErrorInfo; NoSeriesCode: Code[20]; ActionDictionary: Dictionary of [Text, Text]) begin end;
+
+    procedure SetMethod(Method: Enum "AA Method")
+    begin
+        SetHttpMethod(Method.Names.Get(Method.Ordinals.IndexOf(Method.AsInteger())));
+    end;
+
+    procedure SetHttpMethod(MethodName: Text) begin end;
+    procedure SetHttpMethod(Method: Enum "AA Method") begin end;
+
+    procedure RefNumberCall()
+    var
+        RecRef: RecordRef;
+    begin
+        IsSales(RecRef.Number());
+    end;
+
+    procedure IsSales(Factory: Codeunit "AA Errors"): Boolean begin end;
+    procedure IsSales(TableNo: Integer): Boolean begin end;
+    procedure IsSales(DocumentTable: Variant): Boolean begin end;
+
+    procedure JsonChain()
+    var
+        SeverityToken: JsonToken;
+    begin
+        SetSeverity(SeverityToken.AsValue().AsText());
+    end;
+
+    procedure SetSeverity(NewSeverity: Text) begin end;
+    procedure SetSeverity(NewSeverity: Enum "AA Method") begin end;
+
+    procedure ModuleId()
+    var
+        CallerModuleInfo: ModuleInfo;
+    begin
+        IsRegistered(CallerModuleInfo.Id());
+    end;
+
+    procedure IsRegistered(CallerModuleInfo: ModuleInfo): Boolean begin end;
+    procedure IsRegistered(AppId: Guid): Boolean begin end;
+}
+enum 50232 "AA Method" { value(0; GET) { } value(1; POST) { } }
+"#,
+    )
+    .expect("write probe");
+    let report = resolve_full_program(tmp.path()).expect("resolve");
+    assert_binds_param(&report, tmp.path(), "throwline", "recordid: recordid");
+    assert_binds_param(&report, tmp.path(), "throwcode", "noseriescode: code[20]");
+    assert_binds_param(&report, tmp.path(), "setmethod", "methodname: text");
+    // A RecordRef's `Number()` with parentheses, as the parens-less form;
+    // an exact Integer beats the Variant overload.
+    assert_binds_param(&report, tmp.path(), "refnumbercall", "tableno: integer");
+    // A framework call on a framework call result (Continia CDN's
+    // `SetSeverity(SeverityToken.AsValue().AsText())`).
+    assert_binds_param(&report, tmp.path(), "jsonchain", "newseverity: text");
+    // `ModuleInfo.Id()` is a Guid (System Application's
+    // `IsCapabilityRegistered(Capability, CallerModuleInfo.Id())`).
+    assert_binds_param(&report, tmp.path(), "moduleid", "appid: guid");
+}
+
+/// Three argument shapes that left a same-arity overload pair
+/// `ambiguousResolved`, each with one reading only:
+/// - a text literal where the rival takes an `Integer` (Continia DO's
+///   `EMailLog.InitNewEntry(…, '', …)`): the C6 gate guards a Text/Code
+///   choice, and an Integer cannot take `''`;
+/// - a table's own field named bare (Base Application's
+///   `Cust.CheckBlockedCustOnJnls(Cust, "Document Type", false)` in Gen.
+///   Journal Line, over `Enum` / `var Record`);
+/// - a RecordRef's `Number`, on a variable or a call result (Continia CDN's
+///   `IsPurchaseDocument(RecRef.Number)` /
+///   `IsPurchaseDocument(Factory.GetHeader().Number)`, over `Integer` /
+///   `Codeunit`).
+#[test]
+fn literals_own_fields_and_ref_members_pick_overloads() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::write(
+        tmp.path().join("app.json"),
+        r#"{ "id": "dddddddd-1111-2222-3333-858585858585", "name": "ProbeLE", "publisher": "probe",
+  "version": "1.0.0.0", "runtime": "11.0", "idRanges": [{ "from": 50210, "to": 50219 }] }"#,
+    )
+    .expect("write app.json");
+    std::fs::write(
+        src.join("Probe.al"),
+        r#"table 50210 "LE Log"
+{
+    fields { field(1; K; Integer) { } field(2; Type; Option) { OptionMembers = A,Skip; } field(3; "Linked to Table"; Option) { OptionMembers = " ",Customer; } }
+    keys { key(PK; K) { } }
+
+    procedure InitNewEntry(NewType: Integer; SentWith: Integer; Code1: Code[20]; Lang: Code[10]; TemplateLineNo: Integer; ReportID: Integer; RecRef: RecordRef; LinkedToTable: Integer; LinkedToCode: Code[20]; Recipients: Text; CC: Text; BCC: Text; Filename: Text; NewSubject: Text) begin end;
+    procedure InitNewEntry(NewType: Integer; SentWith: Integer; Code1: Code[20]; Lang: Code[10]; Variant: Code[20]; ReportID: Integer; RecRef: RecordRef; LinkedToTable: Integer; LinkedToCode: Code[20]; Recipients: Text; CC: Text; BCC: Text; Filename: Text; NewSubject: Text) begin end;
+
+    procedure CheckBlocked(DocType: Enum "LE Doc Type"; Transaction: Boolean) begin end;
+    procedure CheckBlocked(var Other: Record "LE Log"; Transaction: Boolean) begin end;
+}
+
+table 50212 "LE Doc"
+{
+    fields { field(1; K; Integer) { } field(2; "Document Type"; Enum "LE Doc Type") { } }
+    keys { key(PK; K) { } }
+
+    procedure OwnFieldOtherTable()
+    var
+        L: Record "LE Log";
+    begin
+        L.CheckBlocked("Document Type", false);
+    end;
+}
+
+enum 50213 "LE Doc Type" { value(0; Invoice) { } }
+
+codeunit 50214 "LE Factory"
+{
+    procedure GetHeader(): RecordRef begin end;
+}
+
+codeunit 50215 "LE Util"
+{
+    procedure IsPurchase(Factory: Codeunit "LE Factory"): Boolean begin end;
+    procedure IsPurchase(TableNo: Integer): Boolean begin end;
+}
+
+codeunit 50211 "LE Caller"
+{
+    procedure TextLiteral()
+    var
+        L: Record "LE Log";
+        RecRef: RecordRef;
+        SendCode: Code[20];
+        CustomerNo: Code[20];
+    begin
+        L.InitNewEntry(L.Type::Skip, 0, SendCode, '', '', 0, RecRef, L."Linked to Table"::Customer, CustomerNo, '', '', '', '', '');
+    end;
+
+    procedure RefNumber()
+    var
+        U: Codeunit "LE Util";
+        RecRef: RecordRef;
+    begin
+        U.IsPurchase(RecRef.Number);
+    end;
+
+    procedure CallRefNumber()
+    var
+        U: Codeunit "LE Util";
+        F: Codeunit "LE Factory";
+    begin
+        U.IsPurchase(F.GetHeader().Number);
+    end;
+}
+"#,
+    )
+    .expect("write probe");
+    let report = resolve_full_program(tmp.path()).expect("resolve");
+    assert_binds_param(&report, tmp.path(), "textliteral", "variant: code[20]");
+    assert_binds_param(&report, tmp.path(), "ownfieldothertable", "doctype: enum");
+    assert_binds_param(&report, tmp.path(), "refnumber", "tableno: integer");
+    assert_binds_param(&report, tmp.path(), "callrefnumber", "tableno: integer");
+}
+
+/// A dependency's source routine takes the method id its app's symbols
+/// declare: a `Dictionary`/`List` parameter's subtype hash cannot be computed
+/// from the signature, so before, `__alsem_mid_<n>` to it stayed unresolved
+/// (Continia Core's calls to Continia System Application's
+/// `GetDictionary(var Dictionary of [Text, Text])`, symbol id 169123018). Two
+/// overloads of one arity are told apart by their parameter types (the
+/// symbols name a generic type by its keyword alone).
+#[test]
+fn dependency_source_routines_take_their_symbol_method_ids() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    let dep_guid = "dddddddd-1111-2222-3333-838383838383";
+    std::fs::write(
+        tmp.path().join("app.json"),
+        format!(
+            r#"{{ "id": "dddddddd-1111-2222-3333-848484848484", "name": "ProbeSM", "publisher": "probe",
+  "version": "1.0.0.0", "runtime": "11.0", "idRanges": [{{ "from": 50200, "to": 50209 }}],
+  "dependencies": [{{ "id": "{dep_guid}", "name": "SMDep", "publisher": "probe", "version": "1.0.0.0" }}] }}"#
+        ),
+    )
+    .expect("write app.json");
+    let dep_al = r#"codeunit 60200 "SM Dims"
+{
+    procedure GetDictionary(var Dict: Dictionary of [Text, Text])
+    begin
+    end;
+
+    procedure SetValue(var Dict: Dictionary of [Text, Text]; N: Integer)
+    begin
+    end;
+
+    procedure SetValue(var Dict: Dictionary of [Text, Text]; T: Text)
+    begin
+    end;
+}
+"#;
+    let dict = r#"{"Name":"Dict","IsVar":true,"TypeDefinition":{"Name":"Dictionary","TypeArguments":[{"Name":"Text"},{"Name":"Text"}]}}"#;
+    let symbols = format!(
+        r#"{{"Codeunits":[{{"Id":60200,"Name":"SM Dims","Methods":[
+{{"Id":169123018,"Name":"GetDictionary","Parameters":[{dict}]}},
+{{"Id":777,"Name":"SetValue","Parameters":[{dict},{{"Name":"N","TypeDefinition":{{"Name":"Integer"}}}}]}},
+{{"Id":888,"Name":"SetValue","Parameters":[{dict},{{"Name":"T","TypeDefinition":{{"Name":"Text"}}}}]}}]}}],
+"AppId":"{dep_guid}","Name":"SMDep","Publisher":"probe","Version":"1.0.0.0"}}"#
+    );
+    symbol_app::write_source_app(
+        &tmp.path()
+            .join(".alpackages")
+            .join("probe_SMDep_1.0.0.0.app"),
+        dep_guid,
+        "SMDep",
+        "1.0.0.0",
+        &symbols,
+        &[("src/Dims.al", dep_al)],
+        "",
+    );
+    std::fs::write(
+        src.join("Probe.al"),
+        r#"codeunit 50200 "SM Caller"
+{
+    procedure ByGenericParam()
+    var
+        D: Codeunit "SM Dims";
+        X: Dictionary of [Text, Text];
+    begin
+        D."__alsem_mid_169123018"(X);
+    end;
+
+    procedure ByIntegerOverload()
+    var
+        D: Codeunit "SM Dims";
+        X: Dictionary of [Text, Text];
+    begin
+        D."__alsem_mid_777"(X, 1);
+    end;
+
+    procedure ByTextOverload()
+    var
+        D: Codeunit "SM Dims";
+        X: Dictionary of [Text, Text];
+    begin
+        D."__alsem_mid_888"(X, 1);
+    end;
+}
+"#,
+    )
+    .expect("write probe");
+    let report = resolve_full_program(tmp.path()).expect("resolve");
+    // The bound routine's name and arity, off its node id.
+    let bound = |caller: &str| -> String {
+        let edge = &outer_call_edge(&report, caller).edge;
+        match edge.routes.as_slice() {
+            [r] => match &r.target {
+                RouteTarget::Routine(rid) => format!("{}/{}", rid.name_lc, rid.params_count),
+                t => format!("{t:?}"),
+            },
+            rs => format!("{rs:?}"),
+        }
+    };
+    assert_eq!(bound("bygenericparam"), "getdictionary/1");
+    assert_eq!(bound("byintegeroverload"), "setvalue/2");
+    assert_eq!(bound("bytextoverload"), "setvalue/2");
+    // The two `SetValue`s by their second parameter's type, off the routes.
+    let target = |caller: &str| match &outer_call_edge(&report, caller).edge.routes[0].target {
+        RouteTarget::Routine(rid) => rid.clone(),
+        t => panic!("{caller}: {t:?}"),
+    };
+    assert_ne!(
+        target("byintegeroverload"),
+        target("bytextoverload"),
+        "each id binds its own overload"
+    );
+}
+
+/// Synthesized calls by method id (spec 2026-10-28 transpiled runtime bodies,
+/// §8.3): `T."__alsem_mid_<n>"(…)` binds the one routine of `T` whose AL method id
+/// is `n`, computed from its declared signature, whatever the name, the arity
+/// picks or the argument types say. The ids are the compiler's (the
+/// `method_id` module's alc-probe test pins the function): `P(Integer)` is
+/// -226272512, `P(Text)` -222078196, `Q(var Record "MI T")` 2000513576 with the
+/// table's id 50181 folded in, `Q(Integer)` -190766007. An id no routine has
+/// stays unresolved.
+#[test]
+fn synthesized_calls_bind_by_method_id() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    std::fs::write(
+        tmp.path().join("app.json"),
+        r#"{ "id": "dddddddd-1111-2222-3333-818181818181", "name": "ProbeMI", "publisher": "probe",
+  "version": "1.0.0.0", "runtime": "11.0", "idRanges": [{ "from": 50180, "to": 50189 }] }"#,
+    )
+    .expect("write app.json");
+    std::fs::write(
+        src.join("Probe.al"),
+        r#"table 50181 "MI T"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+
+    procedure IsValid(): Boolean begin end;
+
+    procedure ByIdOwnTable()
+    begin
+        "__alsem_mid_-117753573"();
+    end;
+}
+
+codeunit 50182 "MI Target"
+{
+    procedure P(X: Integer) begin end;
+    procedure P(X: Text) begin end;
+    procedure Q(var R: Record "MI T") begin end;
+    procedure Q(X: Integer) begin end;
+    [MethodId('-777')]
+    procedure Declared(X: Integer) begin end;
+    [TryFunction]
+    procedure IsValidUri(UriString: Text) begin end;
+}
+
+codeunit 50183 "MI Caller"
+{
+    procedure ByIdText()
+    var
+        T: Codeunit "MI Target";
+        I: Integer;
+    begin
+        T."__alsem_mid_-222078196"(I);
+    end;
+
+    procedure ByIdRecord()
+    var
+        T: Codeunit "MI Target";
+        R: Record "MI T";
+    begin
+        T."__alsem_mid_2000513576"(R);
+    end;
+
+    procedure ByIdNone()
+    var
+        T: Codeunit "MI Target";
+    begin
+        T."__alsem_mid_12345"();
+    end;
+
+    procedure ByIdDeclared()
+    var
+        T: Codeunit "MI Target";
+        I: Integer;
+    begin
+        T."__alsem_mid_-777"(I);
+    end;
+
+    procedure ByIdTryFunction()
+    var
+        T: Codeunit "MI Target";
+        S: Text;
+    begin
+        T."__alsem_mid_-248270644"(S);
+    end;
+
+    procedure ByIdTableMethod()
+    var
+        R: Record "MI T";
+    begin
+        R."__alsem_mid_-117753573"();
+    end;
+}
+"#,
+    )
+    .expect("write probe");
+    let report = resolve_full_program(tmp.path()).expect("resolve");
+    // The argument is an Integer, yet the id names the Text overload.
+    assert_binds_param(&report, tmp.path(), "byidtext", "x: text");
+    assert_binds_param(&report, tmp.path(), "byidrecord", "record \"mi t\"");
+    // A table method by id (`IsValid(): Boolean` is -117753573): on a record
+    // variable, and bare from inside the table.
+    assert_binds_param(&report, tmp.path(), "byidtablemethod", "isvalid");
+    assert_binds_param(&report, tmp.path(), "byidowntable", "isvalid");
+    // A declared `[MethodId(n)]` (synthesized AL carries the runtime's) is the
+    // routine's id, not the one its signature gives. A negative id is written
+    // quoted: the grammar takes no negative attribute argument.
+    assert_binds_param(&report, tmp.path(), "byiddeclared", "declared");
+    // A `[TryFunction]` declaring no return value hashes a `Boolean` return:
+    // -248270644 is the id Continia Core's compiled C# calls System
+    // Application's `Uri.IsValidUri(Text)` by.
+    assert_binds_param(&report, tmp.path(), "byidtryfunction", "isvaliduri");
+    let edge = &outer_call_edge(&report, "byidnone").edge;
+    assert!(
+        matches!(edge.routes.as_slice(), [r] if matches!(r.evidence, Evidence::Unknown(_))),
+        "an id no routine has stays unresolved: {edge:?}"
+    );
 }
 
 /// Test 23n (deferred-increment guard): `ws-overload-field-discriminator`'s

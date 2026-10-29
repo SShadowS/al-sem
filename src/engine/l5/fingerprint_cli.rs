@@ -190,14 +190,19 @@ impl SpecifiedFlags {
 
 /// `defaultFormat` (fingerprint.ts:140). When `--format` is given it must be one
 /// of human|json|cbor|cbor.gz (else exit-1 `unknown --format '<f>'; valid: ...`).
-/// When omitted: `--shard` → json, else human.
-pub fn default_format(format: Option<&str>, shard: bool) -> Result<FingerprintFormat, String> {
+/// When omitted: `--shard` → json, `--inventory-only` → json (its help says it
+/// implies json; G12: it used to resolve to human and then fail), else human.
+pub fn default_format(
+    format: Option<&str>,
+    shard: bool,
+    inventory_only: bool,
+) -> Result<FingerprintFormat, String> {
     const VALID: &[&str] = &["human", "json", "cbor", "cbor.gz"];
     match format {
         Some(f) => FingerprintFormat::parse(f)
             .ok_or_else(|| format!("unknown --format '{f}'; valid: {}", VALID.join(", "))),
         None => {
-            if shard {
+            if shard || inventory_only {
                 Ok(FingerprintFormat::Json)
             } else {
                 Ok(FingerprintFormat::Human)

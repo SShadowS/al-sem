@@ -21,11 +21,20 @@ pub fn cache_dir() -> PathBuf {
     dir
 }
 
+/// The version of what extraction produces for a package, in the cache file's
+/// name. Bump it when [`extract_embedded_source`]'s output for an unchanged
+/// `.app` changes (2: AL synthesized from transpiled C#; its own changes too;
+/// 3: synthesized routines carry their `[MethodId(n)]`; 4: the id is quoted,
+/// since a negative one made the file `Recovered`; 5: generic types split no
+/// local, and a call keeps its receiver's member path; 6: a property-backed
+/// global `δx` is `x`).
+pub const EXTRACTION_SCHEME: u32 = 6;
+
 /// Return embedded AL source for `app_path`, using the content-addressed
 /// on-disk cache when available.
 ///
 /// On a cache miss the source is extracted, serialised as JSON, and written to
-/// `<cache_dir>/<blake3-hex>.json`.  On a cache hit the JSON is deserialised
+/// `<cache_dir>/<blake3-hex>.s<EXTRACTION_SCHEME>.json`.  On a cache hit the JSON is deserialised
 /// directly — no zip I/O needed.
 ///
 /// Returns `(files, content_hash)`.  `files` is empty for symbol-only apps
@@ -39,7 +48,11 @@ pub fn cached_source(app_path: &Path) -> Result<(Vec<SourceFile>, String)> {
     let hash = app_content_hash(app_path)
         .with_context(|| format!("content hash for {}", app_path.display()))?;
 
-    let cache_file = cache_dir().join(format!("{hash}.json"));
+    // The extraction scheme is part of the name, not the hash (the hash stays
+    // the app's identity): a package with only transpiled C# extracts to
+    // synthesized AL since scheme 2, so a scheme-1 entry ("no source") must not
+    // be read for it, nor an older synthesizer's output.
+    let cache_file = cache_dir().join(format!("{hash}.s{EXTRACTION_SCHEME}.json"));
 
     // Cache hit — deserialise; fall through to re-extract on a corrupt entry.
     if cache_file.exists() {

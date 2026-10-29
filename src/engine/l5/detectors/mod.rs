@@ -2263,6 +2263,7 @@ mod issue21_predicate_tests {
             },
             loop_stack: vec!["loop0".to_string()],
             in_until_condition: true,
+            in_statement_position: false,
             run_trigger: None,
         }
     }
@@ -2422,6 +2423,9 @@ mod walk_paths_tests {
             is_case_else: false,
             source_range: None,
             path_hint: None,
+            table_case: None,
+            field_exit_guard: None,
+            table_exit_guard: None,
         }
     }
     fn call(id: &str) -> PCFNNode {

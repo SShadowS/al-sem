@@ -5,6 +5,15 @@
 			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "call",
+					"witnessOperationId": "22222222-d200-0000-0000-000000000002:Codeunit:64102#4d03e01dd65f3dc7bc13cc1c58f845ff3b6497d6cd06c9382ee206d2d4997b7b/op0",
+					"witnessCallsiteId": "22222222-d200-0000-0000-000000000002:Codeunit:64101#299663ee14d29f43470da2f218237c42dc9923d39062c86dbc2982a454f2e0ac/cs0"
+				},
+				{
 					"op": "publish",
 					"resourceKind": "event",
 					"confidence": "static",
@@ -138,6 +147,15 @@
 			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "call",
+					"witnessOperationId": "22222222-d200-0000-0000-000000000002:Codeunit:64102#4d03e01dd65f3dc7bc13cc1c58f845ff3b6497d6cd06c9382ee206d2d4997b7b/op0",
+					"witnessCallsiteId": "22222222-d200-0000-0000-000000000002:Codeunit:64101#9f8e1dcbbca5845f181918754d798dca39710fc8ce8bec00f8b389605f25b3eb/cs0"
+				},
+				{
 					"op": "publish",
 					"resourceKind": "event",
 					"confidence": "static",
@@ -208,6 +226,15 @@
 			],
 			"capabilityFactsInherited": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "event-dispatch",
+					"witnessOperationId": "22222222-d200-0000-0000-000000000002:Codeunit:64102#4d03e01dd65f3dc7bc13cc1c58f845ff3b6497d6cd06c9382ee206d2d4997b7b/op0",
+					"witnessFirstHopEventId": "22222222-d200-0000-0000-000000000002:Codeunit:64101::OnProcessLine::d96efb00d9e8a0bfcd862b8a0683eb5afca10c6dbd8c1238053bc8c31a75ca92"
+				},
+				{
 					"op": "read",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -250,6 +277,14 @@
 		{
 			"routineId": "22222222-d200-0000-0000-000000000002:Codeunit:64102#4d03e01dd65f3dc7bc13cc1c58f845ff3b6497d6cd06c9382ee206d2d4997b7b",
 			"capabilityFactsDirect": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "22222222-d200-0000-0000-000000000002:Codeunit:64102#4d03e01dd65f3dc7bc13cc1c58f845ff3b6497d6cd06c9382ee206d2d4997b7b/op0"
+				},
 				{
 					"op": "read",
 					"resourceKind": "table",

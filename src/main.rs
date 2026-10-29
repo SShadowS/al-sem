@@ -162,13 +162,12 @@ fn main() -> Result<()> {
 /// (`dep_meta` — real per-routine identities, unlike a `.app`'s
 /// symbol-only ABI catalog, which has no equivalent "definition" to count).
 fn report_index_stats(project: &Path, dependency_source: DependencySource) -> Result<()> {
-    let Some(snap) = LspSnapshot::build_full_with(project, dependency_source) else {
-        anyhow::bail!(
-            "Failed to build the program snapshot for {} — is this a valid AL app \
-             workspace (a readable app.json at its root)?",
+    let snap = LspSnapshot::build_full_with(project, dependency_source).map_err(|reason| {
+        anyhow::anyhow!(
+            "Failed to build the program snapshot for {}: {reason}",
             project.display()
-        );
-    };
+        )
+    })?;
 
     let definitions: usize = snap.decls_by_file.values().map(|v| v.len()).sum();
     let call_sites: usize = snap.edges_by_file.values().map(|v| v.len()).sum();

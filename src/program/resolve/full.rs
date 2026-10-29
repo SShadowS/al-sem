@@ -142,6 +142,21 @@ pub struct SiteFacts {
     /// candidate is a model routine; a symbol-only implementer keeps the
     /// model's site open (its body is not analysed).
     pub interface_closed_over: Vec<ObjectNodeId>,
+    /// G24: the closed enums implementing the interface that map a value to a
+    /// codeunit outside the program
+    /// ([`ResolveIndex::unmapped_enum_implementers`]). The model lists them
+    /// in `DispatchMeta.unresolved_impls`, so a closed-world `prove` keeps the
+    /// site open.
+    pub interface_unmapped_enums: Vec<ObjectNodeId>,
+    /// G30: what every write to the object global this interface call's
+    /// receiver names stores
+    /// ([`crate::program::resolve::interface_holder::holder_sources`]); closed
+    /// after phase 1 (`close_holder_sites`). `None` when not provable.
+    pub interface_holder: Option<Vec<crate::program::resolve::interface_holder::HolderSource>>,
+    /// G30: per argument, the codeunit of a codeunit variable passed there,
+    /// when the call's one target has an `Interface` parameter
+    /// ([`crate::program::resolve::interface_holder::argument_codeunits`]).
+    pub argument_codeunits: Vec<Option<ObjectNodeId>>,
     /// The member call's receiver as the resolver typed it.
     pub receiver: Option<ReceiverFact>,
     /// The object an object run (`Page.Run(Page::X)`, `PageVar.RunModal()`)
@@ -722,6 +737,29 @@ fn resolve_call_site_obligation(
                         crate::program::resolve::closed_enum::closed_over(
                             &cx, *receiver, name_lc, &r,
                         );
+                    // G28: an internal interface no unloaded app can implement
+                    // reaches exactly its routes, whatever the receiver holds.
+                    let real = |x: &Route| {
+                        !matches!(x.target, RouteTarget::Unresolved)
+                            && !matches!(x.evidence, Evidence::Unknown(_))
+                    };
+                    if facts_out.interface_closed_over.is_empty()
+                        && !r.is_empty()
+                        && r.iter().all(real)
+                        && let Some(i) = index.unique_object(ObjectKind::Interface, name_lc)
+                        && graph.closed_internal_interfaces.contains(i)
+                    {
+                        facts_out.interface_closed_over = vec![i.clone()];
+                    }
+                    // G30: an object global its own codeunit alone writes.
+                    if facts_out.interface_closed_over.is_empty() {
+                        facts_out.interface_holder =
+                            crate::program::resolve::interface_holder::holder_sources(
+                                &cx, *receiver, name_lc,
+                            );
+                    }
+                    facts_out.interface_unmapped_enums =
+                        index.unmapped_enum_implementers(graph, name_lc);
                 }
                 (s, r)
             } else {
@@ -779,7 +817,51 @@ fn resolve_call_site_obligation(
                 "XmlPort" => Some(ObjectKind::XmlPort),
                 _ => None,
             };
-            if let Some(okind) = okind_opt {
+            // `Page.Run(0, Rec)` / `Page.RunModal(0, Rec)`: the lookup page of
+            // `Rec`'s table, when that is a workspace table.
+            let lookup = (okind_opt == Some(ObjectKind::Page) && target_ref.is_none())
+                .then(|| zero_page_table(call_args, file, routine, obj, obj_node_opt, graph, index))
+                .flatten()
+                .and_then(|t| graph.lookup_pages.get(&t).map(|pages| (t, pages)));
+            if let Some((table, pages)) = lookup {
+                let mut routes = Vec::new();
+                for v in pages {
+                    let (text, is_name) =
+                        match crate::program::impact_graph::facts::property_object_ref(v) {
+                            crate::program::node_extract::ObjectRef::Id(n) => {
+                                (n.to_string(), false)
+                            }
+                            crate::program::node_extract::ObjectRef::Name { raw, .. } => {
+                                (raw, true)
+                            }
+                        };
+                    let (_, _, r) = resolve_object_run(
+                        caller_app,
+                        ObjectKind::Page,
+                        Some(&text),
+                        is_name,
+                        graph,
+                        index,
+                        surface,
+                    );
+                    routes.extend(r);
+                }
+                // A table with no lookup page: the platform shows a page of its
+                // own, which runs no AL code (`program_calls`' empty run).
+                if routes.is_empty() {
+                    facts_out.run_target = Some(table);
+                }
+                // A table extension outside the program may set another page.
+                (
+                    EdgeKind::Run,
+                    DispatchShape::Multicast,
+                    SetCompleteness::Partial {
+                        reason: OpenWorldReason::ReverseDependentExtensions,
+                    },
+                    routes,
+                    None,
+                )
+            } else if let Some(okind) = okind_opt {
                 let (shape, completeness, routes) = resolve_object_run(
                     caller_app,
                     okind,
@@ -1076,6 +1158,25 @@ pub(crate) fn resolve_file_obligations(
                 if facts.open.is_empty() {
                     facts.open = site_open_bounds(&site.shape, site.arity, shape, &routes);
                 }
+                // G30: the codeunit variables passed to a routine's interface
+                // parameters (`interface_holder::close_holder_sites` reads them).
+                if let [route] = routes.as_slice()
+                    && let RouteTarget::Routine(target) = &route.target
+                {
+                    let args = crate::program::resolve::interface_holder::argument_codeunits(
+                        graph,
+                        index,
+                        &obj_node_id,
+                        routine,
+                        &obj.globals,
+                        &pf.file.ir,
+                        &site.args,
+                        target,
+                    );
+                    if args.iter().any(Option::is_some) {
+                        facts.argument_codeunits = args;
+                    }
+                }
                 if facts != SiteFacts::default() {
                     site_facts.push((obl_id.clone(), facts));
                 }
@@ -1137,6 +1238,45 @@ pub(crate) fn resolve_file_obligations(
         indeterminate,
         site_facts,
         parenless,
+    }
+}
+
+/// The table of `Rec` in `Page.Run(0, Rec)` / `Page.RunModal(0, Rec)`: the
+/// first argument the literal `0`, the second a variable (the implicit `Rec`
+/// included) typed as a record of a known table. `None` for any other shape.
+fn zero_page_table(
+    args: &[al_syntax::ir::ExprId],
+    file: &al_syntax::ir::AlFile,
+    routine: &al_syntax::ir::RoutineDecl,
+    obj: &al_syntax::ir::ObjectDecl,
+    obj_node: Option<&ObjectNode>,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+) -> Option<ObjectNodeId> {
+    use al_syntax::ir::{ExprKind, Literal};
+    let [first, second, ..] = args else {
+        return None;
+    };
+    if !matches!(&file.ir.expr(*first).kind, ExprKind::Literal(Literal::Int(n)) if n.trim() == "0")
+    {
+        return None;
+    }
+    let name = match &file.ir.expr(*second).kind {
+        ExprKind::Identifier(n) | ExprKind::QuotedIdentifier(n) => n.fold_identifier(),
+        _ => return None,
+    };
+    match infer_receiver_type(
+        &name,
+        routine,
+        &obj.globals,
+        obj_node?,
+        graph,
+        index,
+        None,
+        None,
+    ) {
+        ReceiverType::Record { table: Some(t) } => Some(t),
+        _ => None,
     }
 }
 
@@ -1343,6 +1483,14 @@ fn resolve_full_program_from_parts(
         indeterminate.extend(file_res.indeterminate);
         site_facts.extend(file_res.site_facts);
     }
+
+    // ── Phase 1b (G30): interface sites on an object global its own codeunit
+    // writes, closed once every call of the writing routines is known ────────
+    crate::program::resolve::interface_holder::close_holder_sites(
+        graph,
+        &mut classified_edges,
+        &mut site_facts,
+    );
 
     // ── Phase 2: publisher event flow obligations (all apps) ──────────────────
     // emit_event_flow_edges processes ALL graph.routines (no app filter).
@@ -1786,13 +1934,15 @@ pub fn build_context_res(workspace_root: &Path) -> Result<ProgramContext, String
 /// reuses those products, so nothing reads dependency text. The tier is held
 /// until the build returns, so it cannot die in between. Otherwise the
 /// snapshot is built again with the text.
-#[must_use]
+///
+/// The error is the reason, worded like [`build_snapshot_res`]'s, so a caller
+/// can tell the user why there is no program (#G2: it used to be dropped).
 pub fn build_context_with(
     workspace_root: &Path,
     dependency_source: DependencySource,
     profile: BuildProfile,
     dep_cache: &DepCache,
-) -> Option<ProgramContext> {
+) -> Result<ProgramContext, String> {
     let builder = SnapshotBuilder {
         workspace_root: workspace_root.to_path_buf(),
         // Local providers are NOT part of `DepKey`: a caller that sets them
@@ -1800,9 +1950,10 @@ pub fn build_context_with(
         // checkout and the embedded source of the same `.app` would share.
         local_providers: vec![],
     };
+    let snapshot_failed = |e: anyhow::Error| format!("snapshot build failed: {e:#}");
     let (snap, _dropped) = builder
         .build_deferring_dependency_text(dependency_source, dep_cache)
-        .ok()?;
+        .map_err(snapshot_failed)?;
     let mut held = None;
     let snap = if snap.has_deferred_dependency_text() {
         held = dep_cache
@@ -1814,14 +1965,14 @@ pub fn build_context_with(
             drop(snap);
             builder
                 .build_with_options(dependency_source, dep_cache)
-                .ok()?
+                .map_err(snapshot_failed)?
                 .0
         }
     } else {
         snap
     };
     crate::census_hook::mark("1.snapshot");
-    let ctx = build_context_from_snapshot_cached(snap, profile, dep_cache).ok();
+    let ctx = build_context_from_snapshot_cached(snap, profile, dep_cache);
     drop(held);
     ctx
 }
@@ -2024,6 +2175,12 @@ pub struct FreshCoverage {
     /// (and whether the primary needs them) is unknown: `"{path}: {error}"`,
     /// sorted.
     pub unidentified_packages: Vec<String>,
+    /// The encrypted ones among them (G3): no manifest, symbols or source can
+    /// be read, so the analysis cannot see into the app at all. Each is its
+    /// package key (`.alpackages/<file>`, `../.alpackages/<file>` for an
+    /// ancestor's cache, as in the dependency-closure digest), sorted. The file
+    /// name is the only hint of what app it holds.
+    pub encrypted_packages: Vec<String>,
     /// The primary app's `[EventSubscriber]`s that bound to no publisher
     /// (ambiguous, orphaned, or publisher object not found; engine-switch
     /// S5.2b). Such a subscriber's dispatch is unknown, yet it is no call edge,
@@ -2251,7 +2408,7 @@ pub fn build_program_with_coverage_profiled(
     // `2.parse` (the command path had no mark between the snapshot and the parse).
     crate::census_hook::mark("1.snapshot");
     let (ctx, report) = fresh_program_from_snapshot_with(snap, profile)?;
-    let fc = reduce_fresh_coverage(&ctx, &report, &load.unreadable);
+    let fc = reduce_fresh_coverage(&ctx, &report, &load.unreadable, &inputs.workspace);
     Ok((ctx, report, fc))
 }
 
@@ -2357,11 +2514,13 @@ impl LoadedDependencies {
 
 /// Reduce a [`fresh_program_from_snapshot`] result to the preflight status.
 /// `unreadable` is the dependency loader's list of packages it could not read
-/// (`DependencyLoadReport::unreadable`).
+/// (`DependencyLoadReport::unreadable`); `workspace_root` keys the encrypted
+/// ones.
 pub fn reduce_fresh_coverage(
     ctx: &ProgramContext,
     report: &ProgramReport,
     unreadable: &[crate::dependencies::UnreadableDependency],
+    workspace_root: &Path,
 ) -> FreshCoverage {
     let opaque_apps = {
         let _s = pt::span("preflight", "preflight.opaque_closure");
@@ -2377,6 +2536,15 @@ pub fn reduce_fresh_coverage(
         .map(|u| format!("{}: {}", u.path.display(), u.error))
         .collect();
     unidentified_packages.sort();
+    let mut encrypted_packages: Vec<String> = unreadable
+        .iter()
+        .filter(|u| u.encrypted)
+        .map(|u| {
+            super::semantic_golden::package_key(workspace_root, &u.path)
+                .unwrap_or_else(|| u.path.display().to_string())
+        })
+        .collect();
+    encrypted_packages.sort();
     let unbound_subscriptions = {
         use crate::program::resolve::index::{SubscriberIndex, SubscriptionOutcome};
         SubscriberIndex::build(&ctx.graph)
@@ -2406,6 +2574,7 @@ pub fn reduce_fresh_coverage(
         opaque_apps,
         ledger,
         unidentified_packages,
+        encrypted_packages,
     }
 }
 
@@ -3132,8 +3301,13 @@ mod tests {
             })
             .collect();
         got.sort();
+        // Each run reaches the XMLport's whole run: its `OnPreXmlPort` and the
+        // element trigger `OnBeforePassVariable` (`resolver::run_triggers`).
         let want: Vec<(String, String)> = [
             ("onbeforepassvariable", "XmlPortInstance::skip"),
+            ("p", "onbeforepassvariable"),
+            ("p", "onbeforepassvariable"),
+            ("p", "onbeforepassvariable"),
             ("p", "onprexmlport"),
             ("p", "onprexmlport"),
             ("p", "onprexmlport"),

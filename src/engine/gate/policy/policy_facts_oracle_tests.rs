@@ -9,6 +9,16 @@
 //! `facts:` mode selects per primary routine, as counts and the sha256 of the
 //! rendering below. The parent path no longer exists, so the oracle cannot be
 //! re-minted: a mismatch is a change in what policy rules see.
+//!
+//! Amended by hand (2026-10-28, G10): `r0/ws-r0-canon-stress` (cross and single)
+//! gained one direct fact, the `publish` of its `[InternalEvent]` routine, which
+//! is now an event publisher like the integration and business ones (`direct`
+//! 4 → 5, `any` 5 → 6, new sha256). No other case moved.
+//!
+//! Re-recorded (2026-10-28, G20) with `REMINT_POLICY_FACTS_ORACLE=1`: 118 cases
+//! gained the `error-implicit` facts (unguarded record lookups, `TestField`,
+//! `FieldError`) of their routines, which policy sees as it sees `error-throw`.
+//! Re-record only for such an intended change, after reading the diff.
 
 use super::*;
 use crate::engine::gate::policy::policy_loader::{LoadResult, load_policy_from_string};
@@ -175,6 +185,15 @@ fn policy_selects_the_parents_facts_per_primary_routine() {
         "precondition: the oracle selects inherited facts, dependency ones cross-app only"
     );
     let got = cases();
+    // The recorder is gone (module doc), so an INTENDED change of what policy
+    // sees re-records the cases from this run, explicitly, and the module doc
+    // says why. The precondition above was checked on the oracle as it was.
+    if std::env::var_os("REMINT_POLICY_FACTS_ORACLE").is_some() {
+        let mut doc = oracle.clone();
+        doc["cases"] = serde_json::Value::Object(got.clone());
+        std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap() + "\n").unwrap();
+        return;
+    }
     let mut bad: Vec<String> = want
         .iter()
         .filter(|(k, v)| got.get(*k) != Some(v))

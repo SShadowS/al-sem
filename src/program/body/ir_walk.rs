@@ -204,11 +204,27 @@ fn build_scope(
     source_table_name: Option<&str>,
 ) -> (Scope, bool) {
     let o = &file.objects[object_idx];
+    let object_procedure_names: HashSet<String> = o
+        .routines
+        .iter()
+        .map(|r| r.name.to_ascii_lowercase())
+        .collect();
+    // A report/xmlport dataitem is a record variable in every routine of the
+    // object (`ObjectDecl::dataitems`): `"Job Ledger Entry".Modify()` from a
+    // nested dataitem's trigger is a record op (Base Application's Update Job
+    // Item Cost). A name a procedure also has stays out (the resolver's
+    // dataitem lookup declines it the same way).
+    let dataitems = o
+        .dataitems
+        .iter()
+        .map(|(name, _)| name.to_ascii_lowercase())
+        .filter(|n| !object_procedure_names.contains(n));
     let mut globals: HashSet<String> = o
         .globals
         .iter()
         .filter(|v| is_record_ty(v))
         .map(|v| v.name.to_ascii_lowercase())
+        .chain(dataitems.clone())
         .collect();
     // Rec/xRec are record receivers by name convention regardless of object type.
     globals.insert("rec".to_string());
@@ -218,6 +234,7 @@ fn build_scope(
         .iter()
         .filter(|v| is_record_ty(v))
         .map(|v| v.name.to_ascii_lowercase())
+        .chain(dataitems)
         .collect();
     let implicit_rec = has_implicit_rec(o, source_table_name);
 
@@ -242,11 +259,6 @@ fn build_scope(
         frvars.insert("rec".to_string());
     }
     frvars.extend(params_locals);
-    let object_procedure_names: HashSet<String> = o
-        .routines
-        .iter()
-        .map(|r| r.name.to_ascii_lowercase())
-        .collect();
     (
         Scope {
             rvars,
@@ -776,6 +788,24 @@ impl<'a> SpineCtx<'a> {
         }
     }
 
+    /// G34: `(X, M)` folded when `e` is `X.M` or `X.M()` on a bare identifier `X`.
+    fn member_of_identifier(&self, e: ExprId) -> Option<(String, String)> {
+        let ir = &self.file.ir;
+        let member = match &ir.expr(e).kind {
+            ExprKind::Call { function, args } if args.is_empty() => *function,
+            _ => e,
+        };
+        let ExprKind::Member { object, member, .. } = &ir.expr(member).kind else {
+            return None;
+        };
+        match &ir.expr(*object).kind {
+            ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => {
+                Some((x.to_ascii_lowercase(), member.to_ascii_lowercase()))
+            }
+            _ => None,
+        }
+    }
+
     fn walk_stmt(&mut self, sid: al_syntax::ir::StmtId) {
         use StmtKind::*;
         let st = self.file.ir.stmt(sid);
@@ -800,11 +830,16 @@ impl<'a> SpineCtx<'a> {
                         }
                         _ => None,
                     };
+                    let rhs_member = match &self.file.ir.expr(*target).kind {
+                        ExprKind::Identifier(_) => self.member_of_identifier(*value),
+                        _ => None,
+                    };
                     self.var_assignments.push(PVarAssignment {
                         lhs_name,
                         rhs_literal_value: self.lit_text(*value),
                         source_anchor: self.anchor(&st.origin),
                         rhs_identifier,
+                        rhs_member,
                     });
                 }
                 use crate::program::body::features::FieldAccessKind;
@@ -1047,6 +1082,7 @@ impl<'a> SpineCtx<'a> {
                         loop_stack: loop_stack.clone(),
                         source_anchor: anchor.clone(),
                         in_until_condition: self.in_until,
+                        in_statement_position: self.in_stmt_position,
                         // RunTrigger literal arg of a trigger-firing op (Insert/
                         // Modify/Delete/DeleteAll → arg 0; ModifyAll → arg 2) —
                         // Some(bool) iff that arg is a boolean literal. L5/d29 input
@@ -1398,6 +1434,9 @@ fn cfn_node(kind: &str) -> PCFNNode {
         is_case_else: false,
         source_range: None,
         path_hint: None,
+        table_case: None,
+        field_exit_guard: None,
+        table_exit_guard: None,
     }
 }
 
@@ -1593,6 +1632,127 @@ impl<'a> IrCfn<'a> {
         leaf
     }
 
+    /// G36: `(R folded, N)` when `cond` is `not R.FieldExist(N)` (through
+    /// parentheses, `N` an integer literal) and `then_block` is a lone `exit`.
+    fn field_exit_guard(&self, cond: ExprId, then_block: BlockId) -> Option<(String, i64)> {
+        use ExprKind::*;
+        let [BlockItem::Stmt(s)] = self.ir().block(then_block).items.as_slice() else {
+            return None;
+        };
+        if !matches!(self.ir().stmt(*s).kind, al_syntax::ir::StmtKind::Exit(_)) {
+            return None;
+        }
+        let strip = |mut e: ExprId| {
+            while let Parenthesized(x) = &self.ir().expr(e).kind {
+                e = *x;
+            }
+            e
+        };
+        let Unary {
+            op: UnaryOp::Not,
+            operand,
+        } = &self.ir().expr(strip(cond)).kind
+        else {
+            return None;
+        };
+        let Call { function, args } = &self.ir().expr(strip(*operand)).kind else {
+            return None;
+        };
+        let [arg] = args.as_slice() else {
+            return None;
+        };
+        let Member { object, member, .. } = &self.ir().expr(*function).kind else {
+            return None;
+        };
+        if !member.eq_ignore_ascii_case("fieldexist") {
+            return None;
+        }
+        let receiver = match &self.ir().expr(*object).kind {
+            Identifier(n) | QuotedIdentifier(n) => n.to_ascii_lowercase(),
+            _ => return None,
+        };
+        let Literal(al_syntax::ir::Literal::Int(n)) = &self.ir().expr(strip(*arg)).kind else {
+            return None;
+        };
+        Some((receiver, n.trim().parse().ok()?))
+    }
+
+    /// G34: `(R folded, [T folded])` when `cond` is `R.Number <> Database::"T"`
+    /// (either side, through parentheses) and `then_block` is a lone `exit`.
+    fn table_exit_guard(&self, cond: ExprId, then_block: BlockId) -> Option<(String, Vec<String>)> {
+        let [BlockItem::Stmt(s)] = self.ir().block(then_block).items.as_slice() else {
+            return None;
+        };
+        if !matches!(self.ir().stmt(*s).kind, al_syntax::ir::StmtKind::Exit(_)) {
+            return None;
+        }
+        let mut cond = cond;
+        while let ExprKind::Parenthesized(x) = &self.ir().expr(cond).kind {
+            cond = *x;
+        }
+        let ExprKind::Binary {
+            op: BinaryOp::Ne,
+            lhs,
+            rhs,
+        } = &self.ir().expr(cond).kind
+        else {
+            return None;
+        };
+        let strip = |mut e: ExprId| {
+            while let ExprKind::Parenthesized(x) = &self.ir().expr(e).kind {
+                e = *x;
+            }
+            e
+        };
+        let (lhs, rhs) = (strip(*lhs), strip(*rhs));
+        let (r, t) = match (self.number_receiver(lhs), self.number_receiver(rhs)) {
+            (Some(r), None) => (r, self.database_table(rhs)?),
+            (None, Some(r)) => (r, self.database_table(lhs)?),
+            _ => return None,
+        };
+        Some((r, vec![t]))
+    }
+
+    /// G33: `R` (folded) when `e` is `R.Number` (`R.Number()` too), parentheses
+    /// removed.
+    fn number_receiver(&self, mut e: ExprId) -> Option<String> {
+        use ExprKind::*;
+        while let Parenthesized(x) = &self.ir().expr(e).kind {
+            e = *x;
+        }
+        let member = match &self.ir().expr(e).kind {
+            Call { function, args } if args.is_empty() => *function,
+            _ => e,
+        };
+        match &self.ir().expr(member).kind {
+            Member { object, member, .. } if member.eq_ignore_ascii_case("number") => {
+                match &self.ir().expr(*object).kind {
+                    Identifier(n) | QuotedIdentifier(n) => Some(n.to_ascii_lowercase()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// G33: the logical table name (folded) of a `Database::"T"` / `Database::T`
+    /// pattern, or `None` for any other pattern (a number included).
+    fn database_table(&self, e: ExprId) -> Option<String> {
+        let ExprKind::DatabaseReference(text) = &self.ir().expr(e).kind else {
+            return None;
+        };
+        let (kw, name) = text.split_once("::")?;
+        if !kw.trim().eq_ignore_ascii_case("database") {
+            return None;
+        }
+        let name = name.trim();
+        if name.parse::<i64>().is_ok() {
+            return None;
+        }
+        let logical = super::scope::unescape_al_identifier(&strip_quote_chars(name));
+        Some(logical.to_lowercase())
+    }
+
     fn simple_guard(&self, cond: ExprId) -> Option<PConditionGuard> {
         use ExprKind::*;
         let e = self.ir().expr(cond);
@@ -1700,6 +1860,10 @@ impl<'a> IrCfn<'a> {
                 n.path_hint = self.cond_call(*cond, &leaves);
                 n.condition_leaves = some_if(leaves);
                 n.condition_guard = self.simple_guard(*cond);
+                if else_block.is_none() {
+                    n.field_exit_guard = self.field_exit_guard(*cond, *then_block);
+                    n.table_exit_guard = self.table_exit_guard(*cond, *then_block);
+                }
                 n
             }
             Case {
@@ -1708,10 +1872,19 @@ impl<'a> IrCfn<'a> {
                 else_block,
             } => {
                 let mut branch_cfns = Vec::new();
+                let on_number = self.number_receiver(*scrutinee);
                 for br in branches {
                     let mut b = cfn_node("case-branch");
                     b.source_range = self.range_of(&br.origin);
                     b.children = Some(vec![self.build_block(br.body)]);
+                    if on_number.is_some() {
+                        b.table_case = br
+                            .patterns
+                            .iter()
+                            .map(|&p| self.database_table(p))
+                            .collect::<Option<Vec<_>>>()
+                            .map(super::features::TableCase::Tables);
+                    }
                     branch_cfns.push(b);
                 }
                 if let Some(eb) = else_block {
@@ -1724,6 +1897,7 @@ impl<'a> IrCfn<'a> {
                 let mut n = cfn_node("case");
                 n.children = Some(branch_cfns);
                 n.condition_leaves = some_if(self.harvest_vec(*scrutinee));
+                n.table_case = on_number.map(super::features::TableCase::On);
                 n
             }
             While { cond, body } => {
@@ -2274,7 +2448,13 @@ pub fn ir_record_variables(
                 name: di_name.clone(),
                 // The IR keeps a `""`; the model stores the LOGICAL name (#240).
                 table_name: Some(super::scope::unescape_al_identifier(di_table)),
-                temp_state: ts_known(false),
+                // Physical unless the dataitem or table element declares
+                // `UseTemporary = true`.
+                temp_state: ts_known(
+                    o.temporary_dataitems
+                        .iter()
+                        .any(|t| t.eq_ignore_ascii_case(di_name)),
+                ),
                 is_parameter: false,
                 parameter_index: None,
                 scope: None,
@@ -2925,12 +3105,15 @@ pub fn ir_enclosing_member(routine: &RoutineDecl) -> Option<String> {
 }
 
 /// Routine kind for id/classification (mirrors classify_kind): event-subscriber /
-/// event-publisher from attributes, else trigger / procedure.
+/// event-publisher from attributes, else trigger / procedure. `[InternalEvent]`
+/// publishes like `[IntegrationEvent]`/`[BusinessEvent]` (G10: it was a
+/// "procedure", so the model's event graph, `events fanout` and the detectors
+/// left it out, and its routine id carried the procedure kind).
 pub fn ir_routine_kind(routine: &RoutineDecl) -> &'static str {
     let has = |n: &str| routine.attributes.iter().any(|a| a == n);
     if has("eventsubscriber") {
         "event-subscriber"
-    } else if has("integrationevent") || has("businessevent") {
+    } else if has("integrationevent") || has("businessevent") || has("internalevent") {
         "event-publisher"
     } else if routine.kind == al_syntax::ir::RoutineKind::Trigger {
         "trigger"

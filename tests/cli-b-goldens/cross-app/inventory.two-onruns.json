@@ -95,6 +95,7 @@
         "bbbb7070-0000-0000-0000-000000000070:Table:18"
       ]
     },
+    "lineBase": 0,
     "rootClassifications": [
       {
         "confidence": "static",
@@ -199,33 +200,68 @@
     ],
     "routineInventory": [
       {
+        "arity": 0,
         "objectNumber": 50170,
         "objectType": "Codeunit",
         "routineName": "CallChain",
+        "sourceAnchor": {
+          "column": 4,
+          "file": "ws:src/Work.al",
+          "line": 12,
+          "sourceKind": "source"
+        },
         "stableRoutineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea"
       },
       {
+        "arity": 0,
         "objectNumber": 50170,
         "objectType": "Codeunit",
         "routineName": "RaiseDep",
+        "sourceAnchor": {
+          "column": 4,
+          "file": "ws:src/Work.al",
+          "line": 19,
+          "sourceKind": "source"
+        },
         "stableRoutineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330"
       },
       {
+        "arity": 0,
         "objectNumber": 50170,
         "objectType": "Codeunit",
         "routineName": "TouchCust",
+        "sourceAnchor": {
+          "column": 4,
+          "file": "ws:src/Work.al",
+          "line": 26,
+          "sourceKind": "source"
+        },
         "stableRoutineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b8639b321a7b761371329176d52b28230370ba7ae47e1c2a25059a5452980d4a"
       },
       {
+        "arity": 0,
         "objectNumber": 50171,
         "objectType": "Codeunit",
         "routineName": "HandleInWs",
+        "sourceAnchor": {
+          "column": 4,
+          "file": "ws:src/Work.al",
+          "line": 37,
+          "sourceKind": "source"
+        },
         "stableRoutineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171#f0ffda384ed60fe2a01bf1f6ec979e480f4737c2c9ed3eab1826cf562bc836aa"
       },
       {
+        "arity": 0,
         "objectNumber": 50176,
         "objectType": "Codeunit",
         "routineName": "OnRun",
+        "sourceAnchor": {
+          "column": 4,
+          "file": "ws:src/Extra.al",
+          "line": 2,
+          "sourceKind": "source"
+        },
         "stableRoutineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50176#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
       }
     ]

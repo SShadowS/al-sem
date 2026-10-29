@@ -241,6 +241,28 @@
             "viaPathsTruncated": false
           },
           {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Header.Get",
+              "file": "ws:src/posting.al",
+              "line": 7,
+              "sourceKind": "source"
+            },
+            "factId": "164581d562c1cf44",
+            "guarantees": [],
+            "provenance": "direct",
+            "scopedGuarantees": [],
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT",
+            "viaPaths": [
+              []
+            ],
+            "viaPathsTruncated": false
+          },
+          {
             "conditionality": "unknown",
             "confidence": "static",
             "detail": {
@@ -249,7 +271,11 @@
               "resourceId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc"
             },
             "evidence": {
-              "sourceKind": "unavailable"
+              "column": 8,
+              "excerpt": "OnAfterPostSalesDoc",
+              "file": "ws:src/posting.al",
+              "line": 12,
+              "sourceKind": "source"
             },
             "factId": "9a275bc82593f13c",
             "guarantees": [
@@ -289,13 +315,7 @@
             "viaPathsTruncated": false
           }
         ],
-        "entryDiagnostics": [
-          {
-            "effectType": "EVENT_PUBLISH",
-            "factSubject": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#2e5621326f8bababbcb4016a11968674e37ac0be41cdb950e2e16bf34125f1b1",
-            "kind": "evidence-unavailable"
-          }
-        ],
+        "entryDiagnostics": [],
         "routine": {
           "anchor": {
             "column": 4,
@@ -602,7 +622,7 @@
     "summary": {
       "rootsRequested": 3,
       "rootsResolved": 3,
-      "totalEffects": 11,
+      "totalEffects": 12,
       "totalUnresolved": 0
     },
     "workspaceFingerprint": "422fd5d79e0d95f73a850372a04ff8ed07ccc5ee82deecc2ee2bcf44aa4ef31f"

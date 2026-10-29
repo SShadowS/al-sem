@@ -134,11 +134,19 @@ impl Refresher for IncrementalHost {
         // makes the NEXT digest differ, never a false reuse.
         let closure = dependency_closure_digest(&self.workspace).map_err(RefreshError::Build)?;
         let inputs = WorkspaceInputs::read(&self.workspace, &WorkspaceNeeds::default());
+        // G4: a source-folder dependency is no `.app`, so the closure digest
+        // does not see it. Its digest is read from the same `inputs` the build
+        // uses, so the key and the build cannot disagree.
+        let source_deps = inputs
+            .source_dependencies
+            .as_ref()
+            .map(|d| crate::program::source_deps::digest(d));
         let host_global = sha256_of_debug(&(
             self.universe,
             &closure,
             inputs.app_json.bytes.as_ref().ok(),
             &inputs.model_instance_id,
+            &source_deps,
         ));
         if cancel() {
             return Err(RefreshError::Cancelled);

@@ -278,8 +278,11 @@ fn main_selection_exact_sets() {
 /// unresolved object run), `V.Ping()` (Dynamic.al:10: dynamic-target), the
 /// `TestPage` local and `Card.OpenView` (Tests.al:59-61: test-page,
 /// unresolved-receiver-type), the `TestPage` parameter of the handler
-/// (Tests.al:75: test-page) and `Page.RunModal` (Ledger.al:158: an unresolved
-/// object run and unfetched-dependency).
+/// (Tests.al:75: test-page). `Page.RunModal(Page::"Sel Ledger Card")`
+/// (Ledger.al:158) is NO reason: the page declares no trigger a run reaches
+/// (only a field's `OnValidate`, a user's action), so the run runs no AL code
+/// (`resolver::run_triggers`). It was an unresolved object run and an
+/// `unfetched-dependency` boundary.
 #[test]
 fn traversal_incomplete_is_partial() {
     let (_, doc) = with_tests(&graph_ws(), &routines(MAIN));
@@ -293,16 +296,15 @@ fn traversal_incomplete_is_partial() {
             "dynamic-target",
             "object-run-unresolved",
             "test-page",
-            "unfetched-dependency",
             "unresolved-receiver-type",
         ]),
         "{c}"
     );
-    // Incomplete rows: CardShowsRecord, OpenCardModally (test-page; also the
-    // unresolved object run under it), DynamicRun, VariantPing.
+    // Incomplete rows: CardShowsRecord, OpenCardModally (test-page), DynamicRun,
+    // VariantPing.
     assert_eq!(c["testsWithUnresolvedTraversal"].as_u64(), Some(4), "{c}");
-    // Dependency boundary: only OpenCardModally's Page.RunModal row.
-    assert_eq!(c["testsCallingDependencyCode"].as_u64(), Some(1), "{c}");
+    // No dependency boundary: the workspace has no dependency.
+    assert_eq!(c["testsCallingDependencyCode"].as_u64(), Some(0), "{c}");
 }
 
 /// Row 4: a `[Test]` procedure and a helper of a `Subtype = Test` codeunit are
@@ -491,7 +493,7 @@ fn human_line_with_tests() {
         vec![
             "test coverage: 6 of 10 changed routines reached; 11 [Test] procedures \
              considered (partial: dynamic-target, object-run-unresolved, test-page, \
-             unfetched-dependency, unresolved-receiver-type)"
+             unresolved-receiver-type)"
         ],
         "{on}"
     );
@@ -604,11 +606,10 @@ fn tests_block_with_no_resolved_root_is_the_workspaces() {
                 "dynamic-target",
                 "object-run-unresolved",
                 "test-page",
-                "unfetched-dependency",
                 "unresolved-receiver-type"
             ],
             "status": "partial",
-            "testsCallingDependencyCode": 1,
+            "testsCallingDependencyCode": 0,
             "testsWithUnresolvedTraversal": 4
         },
         "covered": [],

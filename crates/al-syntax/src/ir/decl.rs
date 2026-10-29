@@ -29,6 +29,9 @@ pub struct ObjectDecl {
     /// dataitem trigger's per-dataitem implicit `Rec` (see
     /// [`RoutineDecl::dataitem_source_table`]).
     pub dataitems: Vec<(String, String)>,
+    /// The [`Self::dataitems`] names (as declared) whose own properties set
+    /// `UseTemporary = true`: the record behind the name is temporary.
+    pub temporary_dataitems: Vec<String>,
     /// Query `column(Name; "Source Field")` declarations with no `Method` property, as
     /// (column name, enclosing dataitem's source table, source field), all unquoted,
     /// document order — Query only (empty otherwise). Such a column has its source

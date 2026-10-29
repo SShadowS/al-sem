@@ -70,7 +70,71 @@ pub fn extract_embedded_source(app_path: &Path) -> Result<Vec<SourceFile>> {
             text: text.into(),
         });
     }
+    if out.is_empty() {
+        out = synthesized_source(&mut archive);
+    }
     Ok(out)
+}
+
+/// A package with no `.al` but with BC's transpiled C# (`bin/*.cs`, a runtime
+/// package built without its source) and its `SymbolReference.json`: AL
+/// synthesized from both ([`crate::snapshot::transpiled`]), one file per object
+/// at `transpiled/<Kind><id>.al`. Empty when either is missing or unreadable:
+/// the app stays symbol-only, as before.
+fn synthesized_source<R: std::io::Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+) -> Vec<SourceFile> {
+    let mut cs = Vec::new();
+    let mut symbols = None;
+    for i in 0..archive.len() {
+        let Ok(entry) = archive.by_index(i) else {
+            continue;
+        };
+        let Ok(name) = entry.name().map(|n| n.into_owned()) else {
+            continue;
+        };
+        let lc = name.to_ascii_lowercase();
+        let (is_cs, is_symbols) = (
+            lc.starts_with("bin/") && lc.ends_with(".cs"),
+            lc == "symbolreference.json",
+        );
+        if !is_cs && !is_symbols {
+            continue;
+        }
+        let cap = if is_symbols {
+            crate::capped_io::SYMBOL_REFERENCE_JSON_CAP
+        } else {
+            crate::capped_io::EMBEDDED_AL_SOURCE_CAP
+        };
+        if crate::capped_io::check_declared_size(entry.size(), cap).is_err() {
+            continue;
+        }
+        let Ok(raw) = crate::capped_io::read_capped(entry, cap) else {
+            continue;
+        };
+        let text = crate::source_text::decode_al_source(&raw);
+        if is_symbols {
+            symbols = Some(text);
+        } else {
+            cs.push((name, text));
+        }
+    }
+    let Some(symbols) = symbols else {
+        return Vec::new();
+    };
+    if cs.is_empty() {
+        return Vec::new();
+    }
+    let Ok(symbols) = serde_json::from_str::<serde_json::Value>(&symbols) else {
+        return Vec::new();
+    };
+    crate::snapshot::transpiled::synth::synthesize(&symbols, &cs)
+        .into_iter()
+        .map(|(virtual_path, text)| SourceFile {
+            virtual_path,
+            text: text.into(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -192,5 +256,96 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].virtual_path, "src/Sales Post.Codeunit.al");
         assert_eq!(&*files[0].text, "codeunit 80 X { }");
+    }
+
+    /// Hand-written in the transpiler's shape (no publisher's code): one
+    /// codeunit whose `Post` commits.
+    const TRANSPILED_CS: &str = r#"
+public sealed class Codeunit50400 : NavCodeunit
+{
+    [NavName("Post")]
+    [MethodId(1175451114)]
+    public async ValueTask Post()
+    {
+        ALMethodScope<(bool γfiller)> γscope = default;
+        try
+        {
+            γscope = new ALMethodScope<(bool γfiller)>(this, "Post", MethodScopeFlags.None, 1175451114);
+            {
+                γscope.StmtHit(0);
+                ALDatabase.ALCommit();
+            }
+        }
+        finally
+        {
+            ALMethodScope.ALFinally(γscope);
+        }
+    }
+}
+"#;
+    const TRANSPILED_SYMBOLS: &str = r#"{"Name":"T","Codeunits":[{"Id":50400,"Name":"Poster","Methods":[{"Id":1175451114,"Name":"Post"}]}]}"#;
+
+    fn write_app(dir: &Path, entries: &[(&str, &[u8])]) -> std::path::PathBuf {
+        let p = dir.join("t.app");
+        std::fs::write(
+            &p,
+            crate::engine::deps::app_package_zip::test_apps::build_app(entries),
+        )
+        .unwrap();
+        p
+    }
+
+    /// A package with no `.al` but with transpiled C# and its symbols extracts
+    /// to synthesized AL: the object, its routine, and the C#'s effect, with
+    /// the C# line it came from.
+    #[test]
+    fn a_package_with_only_transpiled_cs_yields_synthesized_al() {
+        let t = tempfile::tempdir().unwrap();
+        let app = write_app(
+            t.path(),
+            &[
+                ("SymbolReference.json", TRANSPILED_SYMBOLS.as_bytes()),
+                ("bin/COD50400.cs", TRANSPILED_CS.as_bytes()),
+            ],
+        );
+        let files = extract_embedded_source(&app).expect("extract");
+        let [f] = files.as_slice() else {
+            panic!("one synthesized file: {files:?}")
+        };
+        assert_eq!(f.virtual_path, "transpiled/COD50400.al");
+        assert!(f.text.contains("codeunit 50400 \"Poster\""), "{}", f.text);
+        assert!(f.text.contains("procedure \"Post\"()"), "{}", f.text);
+        assert!(f.text.contains("Commit(); // cs 14"), "{}", f.text);
+        assert_eq!(
+            al_syntax::parse(&f.text).parse_status,
+            al_syntax::ir::ParseStatus::Clean,
+            "{}",
+            f.text
+        );
+    }
+
+    /// Shipped AL wins: a package with `.al` is read as it is, never
+    /// synthesized; and C# without symbols stays symbol-only.
+    #[test]
+    fn shipped_al_wins_and_cs_alone_is_not_enough() {
+        let t = tempfile::tempdir().unwrap();
+        let with_al = write_app(
+            t.path(),
+            &[
+                ("SymbolReference.json", TRANSPILED_SYMBOLS.as_bytes()),
+                ("bin/COD50400.cs", TRANSPILED_CS.as_bytes()),
+                ("src/Poster.Codeunit.al", b"codeunit 50400 Poster { }"),
+            ],
+        );
+        let files = extract_embedded_source(&with_al).expect("extract");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].virtual_path, "src/Poster.Codeunit.al");
+        let t2 = tempfile::tempdir().unwrap();
+        let cs_only = write_app(t2.path(), &[("bin/COD50400.cs", TRANSPILED_CS.as_bytes())]);
+        assert!(
+            extract_embedded_source(&cs_only)
+                .expect("extract")
+                .is_empty()
+        );
     }
 }

@@ -134,6 +134,37 @@
           {
             "conditionality": "unconditional-on-success",
             "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Rec.Get",
+              "file": "ws:src/Sender.Codeunit.al",
+              "line": 13,
+              "sourceKind": "source"
+            },
+            "factId": "912baed2581280aa",
+            "guarantees": [
+              "COMMIT_REACHABLE"
+            ],
+            "provenance": "direct",
+            "scopedGuarantees": [
+              {
+                "interveningBoundary": "none",
+                "label": "COMMIT_REACHABLE",
+                "scope": "owning-routine",
+                "validForRefutation": false
+              }
+            ],
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT",
+            "viaPaths": [
+              []
+            ],
+            "viaPathsTruncated": false
+          },
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
             "detail": {
               "fileOp": "write-blob"
             },
@@ -223,7 +254,7 @@
     "summary": {
       "rootsRequested": 1,
       "rootsResolved": 1,
-      "totalEffects": 3,
+      "totalEffects": 4,
       "totalUnresolved": 1
     },
     "workspaceFingerprint": "e50d20fccb69854fbbf2a517d67bd58d54002d8dc6f3519c8618126ba3683e47"

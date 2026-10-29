@@ -272,6 +272,129 @@ fn routine_is_source_aliased(rid: &RoutineNodeId, graph: &ProgramGraph) -> bool 
         .is_some_and(|i| graph.routines[i].source_overload_aliased)
 }
 
+/// The AL method id of routine `r` from its declared signature
+/// ([`crate::program::resolve::method_id`]): a source routine's parameters from
+/// `surface`, an ABI routine's from its retained parameters. Object subtypes
+/// resolve strictly from the routine's own object. `None` when any part of the
+/// signature is not reproducible.
+pub(crate) fn routine_method_id(
+    r: &crate::program::node_extract::RoutineNode,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+    surface: &DeclSurface,
+) -> Option<i32> {
+    use crate::program::node_extract::AbiParams;
+    use crate::program::resolve::index::ObjectRefResolution;
+    use crate::program::resolve::method_id::{SigParam, SubtypeHash, method_id, parse_type};
+    use crate::program::resolve::receiver::ParsedType;
+    let from = r.id.object.clone();
+    let resolve_ref = |kind: ObjectKind, text: &str| -> Option<&ObjectNode> {
+        let ParsedType::Object { object_ref, .. } =
+            crate::program::resolve::receiver::parse_object_kind_type(kind, text)
+        else {
+            return None;
+        };
+        match index.resolve_object_ref_strict(graph, from.clone(), kind, &object_ref) {
+            ObjectRefResolution::Unique(id) => graph.object(&id),
+            _ => None,
+        }
+    };
+    // A declared id (`[MethodId(n)]`, synthesized from a runtime package) is
+    // the runtime's own: no signature to recompute it from.
+    if let Some(id) = surface.get(&r.id).and_then(|m| m.method_id) {
+        return Some(id);
+    }
+    // The id the app's symbols declare: also the runtime's.
+    if let Some(id) = r.abi_method_id {
+        return Some(id);
+    }
+    let mut sig: Vec<SigParam> = Vec::new();
+    // Per parameter, an ABI subtype's id and raw name when the symbols give them.
+    let mut abi_subtypes: Vec<(Option<i64>, Option<&str>)> = Vec::new();
+    match &r.abi_params {
+        AbiParams::Complete(ps) => {
+            for p in ps {
+                sig.push(SigParam {
+                    is_var: p.is_var,
+                    ty: parse_type(&p.type_text)?,
+                });
+                abi_subtypes.push((p.subtype_id, p.subtype_raw_name.as_deref()));
+            }
+        }
+        AbiParams::Missing => {
+            for p in &surface.get(&r.id)?.params {
+                sig.push(SigParam {
+                    is_var: p.by_ref,
+                    ty: parse_type(p.ty.as_deref()?)?,
+                });
+                abi_subtypes.push((None, None));
+            }
+        }
+        AbiParams::CollapsedUntrusted => return None,
+    }
+    let ret = match r.return_type.as_deref() {
+        Some(t) => Some(parse_type(t)?),
+        // A `[TryFunction]` declaring no return value returns `Boolean`, and
+        // its id hashes that (System Application's `Uri.IsValidUri(Text)` is
+        // -248270644, the runtime's id for it in a compiled caller).
+        None if surface.get(&r.id).is_some_and(|m| m.try_function) => Some(parse_type("Boolean")?),
+        None => None,
+    };
+    let overloadable = r.publisher_kind.is_none() && r.event_subscribers.is_empty();
+    method_id(&r.name, ret.as_ref(), &sig, overloadable, |i, ty| {
+        let (abi_id, abi_name) = abi_subtypes[i];
+        let abi_name = abi_name.map(str::to_string);
+        if ty.is_interface() {
+            let text = abi_name.unwrap_or_else(|| ty.subtype_text.clone());
+            let o = resolve_ref(ObjectKind::Interface, &text)?;
+            return Some(SubtypeHash::InterfaceName(o.name.to_string()));
+        }
+        let kind = ty.subtype_object_kind()?;
+        if let Some(id) = abi_id {
+            return i32::try_from(id).ok().map(SubtypeHash::ObjectId);
+        }
+        let text = abi_name.unwrap_or_else(|| ty.subtype_text.clone());
+        let o = resolve_ref(kind, &text)?;
+        i32::try_from(o.declared_id?)
+            .ok()
+            .map(SubtypeHash::ObjectId)
+    })
+}
+
+/// A synthesized call by method id (`Cu."__alsem_mid_<n>"(…)`, spec
+/// `2026-10-28-transpiled-runtime-bodies-design.md` §8.3): the one non-trigger
+/// routine of `obj_id` whose [`routine_method_id`] is `n`, or unresolved.
+fn resolve_by_method_id(
+    obj_id: &ObjectNodeId,
+    obj_tier: TrustTier,
+    n: i32,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+    surface: &DeclSurface,
+) -> (DispatchShape, Vec<Route>) {
+    let matched: Vec<&RoutineNodeId> = graph
+        .routines
+        .run_by(|r| r.id.object.cmp(obj_id))
+        .filter(|r| !r.is_trigger)
+        .filter(|r| routine_method_id(r, graph, index, surface) == Some(n))
+        .map(|r| &r.id)
+        .collect();
+    match matched.as_slice() {
+        [rid] => (
+            DispatchShape::Exact,
+            vec![make_routine_route(rid, obj_tier, surface, graph)],
+        ),
+        [] => (
+            DispatchShape::Exact,
+            vec![unresolved_route(UnknownReason::IndexIntegrationGap)],
+        ),
+        _ => (
+            DispatchShape::Exact,
+            vec![unresolved_route(UnknownReason::OverloadAmbiguous)],
+        ),
+    }
+}
+
 /// Try to resolve `name_lc` with `arity` arguments inside `obj_id`, as called
 /// from the identity `from_object` (Task 1 — beyond-1B.3b-follow-up:
 /// PER-CANDIDATE access filtering; see [`routine_candidate_is_visible`]).
@@ -336,7 +459,8 @@ fn routine_is_source_aliased(rid: &RoutineNodeId, graph: &ProgramGraph) -> bool 
 /// visible, prevalidated-concrete candidate case, which is
 /// `(DispatchShape::AmbiguousOverload, vec![one route per candidate])` — see
 /// the `_` arm's doc below for the prevalidation contract.
-#[allow(clippy::too_many_arguments)] // 8 pre-existing params + `args` (Task 2, argtype-dispatch-and-page-catalog plan) + `build` (S9.0e); each is a distinct identity/lookup input, grouping would obscure call sites.
+#[allow(clippy::too_many_arguments)]
+// 8 pre-existing params + `args` (Task 2, argtype-dispatch-and-page-catalog plan) + `build` (S9.0e); each is a distinct identity/lookup input, grouping would obscure call sites.
 fn resolve_in_object(
     obj_id: &ObjectNodeId,
     obj_tier: TrustTier,
@@ -359,6 +483,12 @@ fn resolve_in_object(
     // (the same wrappers as `args`).
     build: &[(String, bool)],
 ) -> Option<(DispatchShape, Vec<Route>)> {
+    // A synthesized call by method id binds by id, never by name.
+    if let Some(n) = crate::program::resolve::method_id::synthesized_call_id(name_lc) {
+        return Some(resolve_by_method_id(
+            obj_id, obj_tier, n, graph, index, surface,
+        ));
+    }
     // A trigger is never a call candidate: AL code cannot call one, so a field
     // trigger `OnValidate` and a procedure `OnValidate` in the same object are
     // not overloads of each other (#63; triggers are reached by role, through
@@ -591,7 +721,12 @@ fn resolve_in_object(
             // not merely a convention check) — no unknown-metadata candidate
             // is ever filtered out of the competition, its mere presence
             // degrades the whole call (module doc's cardinal rule).
-            if !args.is_empty() {
+            // Two candidates that exist in no common build are no overloads of
+            // each other but `#if` alternatives: only one is compiled, so the
+            // argument types cannot choose between them (with `CLEAN27` only
+            // the `var array[15] of Text` arm exists, and a `Text[80]` array
+            // binds it).
+            if !args.is_empty() && !has_build_alternatives(&visible, graph) {
                 let mut candidate_params = Vec::with_capacity(visible.len());
                 let mut all_known = true;
                 for rid in &visible {
@@ -762,6 +897,27 @@ fn object_has_member_candidate(
         return true;
     }
     candidates.any(|rid| rid.params_count == arity)
+}
+
+/// Whether two of `candidates` exist in no common build: every node of one
+/// has build conditions that contradict every node of the other.
+fn has_build_alternatives(candidates: &[&RoutineNodeId], graph: &ProgramGraph) -> bool {
+    let contexts = |rid: &RoutineNodeId| -> Vec<&[(String, bool)]> {
+        graph
+            .routines
+            .run_by(|p| p.id.cmp(rid))
+            .map(|n| &*n.preproc_context)
+            .collect()
+    };
+    let all: Vec<Vec<&[(String, bool)]>> = candidates.iter().map(|rid| contexts(rid)).collect();
+    all.iter().enumerate().any(|(i, a)| {
+        all[i + 1..].iter().any(|b| {
+            !a.is_empty()
+                && !b.is_empty()
+                && a.iter()
+                    .all(|x| b.iter().all(|y| al_syntax::ir::preproc_contradicts(x, y)))
+        })
+    })
 }
 
 /// Whether candidate `rid` exists in no build the call site's build context
@@ -1104,6 +1260,7 @@ fn resolve_in_extendable_scope(
     build: &[(String, bool)],
     extensions_of: for<'a> fn(&'a ResolveIndex, &str) -> &'a [ObjectNodeId],
     zero_match: ZeroMatchStrategy,
+    own_extension_wins: bool,
 ) -> TableScopeOutcome {
     let closure = graph.topology.closure(from_object.id.app);
 
@@ -1145,19 +1302,68 @@ fn resolve_in_extendable_scope(
     // Deterministic ordering (candidate vectors sorted by stable ObjectNodeId).
     scope.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    let mut candidate_objects = scope.iter().filter(|(oid, tier)| {
-        object_has_visible_member_candidate(
-            oid,
-            *tier,
-            name_lc,
-            arity,
-            &from_object.id,
-            graph,
-            index,
-        )
-    });
-    let first = candidate_objects.next();
-    let second = candidate_objects.next();
+    // A synthesized call by method id: the one object of the scope (the base or
+    // an extension) with a routine of that id, never a name match.
+    if let Some(n) = crate::program::resolve::method_id::synthesized_call_id(name_lc) {
+        let hits: Vec<&(ObjectNodeId, TrustTier)> = scope
+            .iter()
+            .filter(|(oid, _)| {
+                graph.routines.run_by(|r| r.id.object.cmp(oid)).any(|r| {
+                    !r.is_trigger && routine_method_id(r, graph, index, surface) == Some(n)
+                })
+            })
+            .collect();
+        return match hits.as_slice() {
+            [(oid, tier)] => {
+                let (shape, routes) = resolve_by_method_id(oid, *tier, n, graph, index, surface);
+                TableScopeOutcome::Resolved(shape, routes)
+            }
+            [] => TableScopeOutcome::NotVisible {
+                access_excluded: Some(UnknownReason::IndexIntegrationGap),
+            },
+            _ => TableScopeOutcome::Ambiguous,
+        };
+    }
+
+    let candidates: Vec<&(ObjectNodeId, TrustTier)> = scope
+        .iter()
+        .filter(|(oid, tier)| {
+            object_has_visible_member_candidate(
+                oid,
+                *tier,
+                name_lc,
+                arity,
+                &from_object.id,
+                graph,
+                index,
+            )
+        })
+        .collect();
+    // A TableExtension in the CALLER's own app wins over a same-signature
+    // method of the base table declared in another app (alc 18.0.43: the
+    // extension's method binds, with only warning AL0523 "already defines a
+    // method … with the same parameter types"); from any other app the same
+    // pair is error AL0196 "The call is ambiguous", so it stays ambiguous.
+    // Continia Approvals' page extensions call `Rec.GetSalesPurchName()` on
+    // Continia Business Foundation's `CTS-CBF Continia User Setup`, which both
+    // the table and Approvals' own table extension declare.
+    let own_extension: Vec<&&(ObjectNodeId, TrustTier)> = if own_extension_wins {
+        candidates
+            .iter()
+            .filter(|(oid, _)| *oid != base_id && oid.app == from_object.id.app)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let candidates: Vec<&(ObjectNodeId, TrustTier)> = if let [own] = own_extension.as_slice()
+        && base_id.app != from_object.id.app
+    {
+        vec![**own]
+    } else {
+        candidates
+    };
+    let first = candidates.first().copied();
+    let second = candidates.get(1).copied();
 
     match (first, second) {
         (Some(_), Some(_)) => TableScopeOutcome::Ambiguous,
@@ -1277,6 +1483,7 @@ fn resolve_in_table_scope(
         build,
         ResolveIndex::table_extensions_of,
         ZeroMatchStrategy::AccessExcludedReason,
+        true,
     )
 }
 
@@ -1338,6 +1545,7 @@ fn resolve_in_page_scope(
         build,
         ResolveIndex::page_extensions_of,
         ZeroMatchStrategy::PreserveArityMismatch,
+        false,
     )
 }
 
@@ -1398,6 +1606,7 @@ fn resolve_in_report_scope(
         build,
         ResolveIndex::report_extensions_of,
         ZeroMatchStrategy::PreserveArityMismatch,
+        false,
     )
 }
 
@@ -2017,6 +2226,62 @@ fn entry_trigger_name(kind: ObjectKind) -> &'static str {
     }
 }
 
+/// The triggers a run of a page, report or XMLport reaches with no user acting
+/// on a control, as (object-level names, member-level names), folded; `None`
+/// for a codeunit (its `OnRun` alone, [`entry_trigger_name`]).
+///
+/// A run is the object's whole lifecycle, not one trigger: a page's
+/// `OnAfterGetRecord` or `OnQueryClosePage` runs in every `RunModal`, and a
+/// report's dataitem triggers in every run. Only `OnOpenPage` was followed, so
+/// a `no` could miss a write in `OnAfterGetRecord`, and a page declaring only
+/// `OnQueryClosePage` (Continia DO's `CDO To Language PromptDialog`) left the
+/// run unresolved. Triggers a user's action runs (`OnAction`, a field's
+/// `OnValidate`, `OnInsertRecord`/`OnModifyRecord`/`OnDeleteRecord`) are not
+/// followed: platform entry points are not modelled (the call graph's
+/// `platformEntryPointsNotModelled` assumption). A page part's triggers are
+/// not followed either.
+fn run_triggers(kind: ObjectKind) -> Option<(&'static [&'static str], &'static [&'static str])> {
+    match kind {
+        ObjectKind::Page => Some((
+            &[
+                "oninit",
+                "onopenpage",
+                "onfindrecord",
+                "onnextrecord",
+                "onaftergetrecord",
+                "onaftergetcurrrecord",
+                "onnewrecord",
+                "onqueryclosepage",
+                "onclosepage",
+                "onpagebackgroundtaskcompleted",
+                "onpagebackgroundtaskerror",
+            ],
+            &[],
+        )),
+        ObjectKind::Report => Some((
+            &["oninitreport", "onprereport", "onpostreport"],
+            &["onpredataitem", "onaftergetrecord", "onpostdataitem"],
+        )),
+        ObjectKind::XmlPort => Some((
+            &["oninitxmlport", "onprexmlport", "onpostxmlport"],
+            &[
+                "onbeforepassvariable",
+                "onbeforepassfield",
+                "onafterassignvariable",
+                "onafterassignfield",
+                "onafterinitrecord",
+                "onbeforeinsertrecord",
+                "onafterinsertrecord",
+                "onbeforemodifyrecord",
+                "onaftermodifyrecord",
+                "onprexmlitem",
+                "onaftergetrecord",
+            ],
+        )),
+        _ => None,
+    }
+}
+
 /// Build a single Opaque boundary route (target exists but is not in our source).
 fn opaque_boundary_route(key: AbiRoutineKey) -> Route {
     Route {
@@ -2056,14 +2321,35 @@ fn dispatch_entry_trigger(
     surface: &DeclSurface,
 ) -> (DispatchShape, SetCompleteness, Vec<Route>) {
     let trigger_name = entry_trigger_name(object_kind);
-    // The object-level trigger of `object` (`enclosing_member_lc == None`),
-    // else any routine of that name.
-    let entry_of = |object: &ObjectNodeId| -> Option<&RoutineNodeId> {
-        let candidates = index.routines_in_object(graph, object, trigger_name);
-        candidates
-            .clone()
-            .find(|r| r.enclosing_member_lc.is_none())
-            .or_else(|| candidates.clone().next())
+    // Every trigger of `object` a run reaches ([`run_triggers`]); for a
+    // codeunit, the object-level `OnRun` (`enclosing_member_lc == None`), else
+    // any routine of that name.
+    let entries_of = |object: &ObjectNodeId| -> Vec<&RoutineNodeId> {
+        let Some((object_level, member_level)) = run_triggers(object_kind) else {
+            let candidates = index.routines_in_object(graph, object, trigger_name);
+            return candidates
+                .clone()
+                .find(|r| r.enclosing_member_lc.is_none())
+                .or_else(|| candidates.clone().next())
+                .into_iter()
+                .collect();
+        };
+        let mut out: Vec<&RoutineNodeId> = Vec::new();
+        for name in object_level {
+            out.extend(
+                index
+                    .routines_in_object(graph, object, name)
+                    .filter(|r| r.enclosing_member_lc.is_none()),
+            );
+        }
+        for name in member_level {
+            out.extend(
+                index
+                    .routines_in_object(graph, object, name)
+                    .filter(|r| r.enclosing_member_lc.is_some()),
+            );
+        }
+        out
     };
     // COLLAPSE-MARKER GUARD (Task 2 review fix): this lookup bypasses
     // `resolve_in_object`'s name+arity selection entirely (it picks by ROLE —
@@ -2079,13 +2365,11 @@ fn dispatch_entry_trigger(
     };
 
     let mut routes = Vec::new();
-    match entry_of(target_id) {
-        Some(rid) => routes.push(route_to(rid, target_tier)),
-        None if target_tier == TrustTier::SymbolOnly => {
-            routes.push(opaque_entry_route(target_id, trigger_name))
-        }
-        None => {}
+    let entries = entries_of(target_id);
+    if entries.is_empty() && target_tier == TrustTier::SymbolOnly {
+        routes.push(opaque_entry_route(target_id, trigger_name));
     }
+    routes.extend(entries.into_iter().map(|rid| route_to(rid, target_tier)));
 
     let extensions: &[ObjectNodeId] = match object_kind {
         ObjectKind::Page | ObjectKind::Report => {
@@ -2100,11 +2384,15 @@ fn dispatch_entry_trigger(
             }
         }
         _ => {
-            // No extension mechanism: the declared trigger, or a closed empty set.
-            let shape = if routes.is_empty() {
-                DispatchShape::Multicast
-            } else {
+            // No extension mechanism: the one declared trigger, or a closed
+            // set of every trigger the run reaches (an XmlPort's `Export` runs
+            // `OnPreXmlPort` and its elements' triggers: all of them, not one
+            // of them, so never `Exact` with several routes, which reads as an
+            // ambiguous overload set). Empty is a closed empty set.
+            let shape = if routes.len() == 1 {
                 DispatchShape::Exact
+            } else {
+                DispatchShape::Multicast
             };
             return (shape, SetCompleteness::Complete, routes);
         }
@@ -2115,9 +2403,11 @@ fn dispatch_entry_trigger(
             .iter()
             .find(|o| &o.id == ext_id)
             .map_or(TrustTier::Workspace, |o| o.tier);
-        if let Some(rid) = entry_of(ext_id) {
-            routes.push(route_to(rid, ext_tier));
-        }
+        routes.extend(
+            entries_of(ext_id)
+                .into_iter()
+                .map(|rid| route_to(rid, ext_tier)),
+        );
     }
     (
         DispatchShape::Multicast,
@@ -2403,6 +2693,64 @@ fn member_unknown_route_with_tier(
         vec![unresolved_route_with_tier(reason, tier)],
     )
 }
+
+/// A Variant's type tests (the AL `Variant` data type's `Is…` methods), folded.
+/// Each answers whether the Variant holds a value of one type; none runs AL
+/// code. Any other member of a Variant stays dynamic.
+const VARIANT_TYPE_TESTS: &[&str] = &[
+    "isaction",
+    "isautomation",
+    "isbiginteger",
+    "isbinary",
+    "isboolean",
+    "isbyte",
+    "ischar",
+    "isclienttype",
+    "iscode",
+    "iscodeunit",
+    "isdataclassification",
+    "isdataclassificationtype",
+    "isdate",
+    "isdateformula",
+    "isdatetime",
+    "isdecimal",
+    "isdefaultlayout",
+    "isdictionary",
+    "isdotnet",
+    "isduration",
+    "isexecutionmode",
+    "isfieldref",
+    "isfile",
+    "isfilterpagebuilder",
+    "isguid",
+    "isinstream",
+    "isinteger",
+    "isjsonarray",
+    "isjsonobject",
+    "isjsontoken",
+    "isjsonvalue",
+    "iskeyref",
+    "islist",
+    "isnotification",
+    "isobjecttype",
+    "isoption",
+    "isoutstream",
+    "ispromptmode",
+    "isrecord",
+    "isrecordid",
+    "isrecordref",
+    "isreportformat",
+    "issecurityfiltering",
+    "istableconnectiontype",
+    "istestpermissions",
+    "istext",
+    "istextbuilder",
+    "istextconstant",
+    "istextencoding",
+    "istime",
+    "istransactiontype",
+    "iswidechar",
+];
 
 /// Build a `(DynamicOpen, [Unknown blocker])` outcome for Dynamic receivers —
 /// the receiver's static type is genuinely untracked (a runtime Variant), so
@@ -3026,6 +3374,11 @@ pub(crate) fn resolve_member_with_args(
             // Non-catalog type — honest Unknown (not a false resolution gap).
             member_unknown_route(UnknownReason::CatalogMiss)
         }
+        ReceiverType::Dynamic if VARIANT_TYPE_TESTS.contains(&method_lc) => {
+            // A Variant's own type test (`V.IsRecord()`): a platform built-in
+            // with no AL code behind it, whatever the Variant holds.
+            member_catalog_route(BuiltinId(format!("Variant::{method_lc}")))
+        }
         ReceiverType::Dynamic => {
             // Variant-typed receiver — genuinely dynamic, not a resolution hole.
             member_dynamic_open_route()
@@ -3620,6 +3973,9 @@ mod tests {
             routines: routines.into(),
             obj_index,
             friends: friends_map,
+            closed_internal_interfaces: Default::default(),
+            workspace_friendless: false,
+            lookup_pages: Default::default(),
             abi_ingest_errors: Default::default(),
             workspace_rows: Default::default(),
         }
@@ -4657,7 +5013,10 @@ pageextension 52911 "ExtA" extends BasePage
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
             ObjectNode {
                 id: base_obj_id.clone(),
@@ -4676,7 +5035,10 @@ pageextension 52911 "ExtA" extends BasePage
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
         ];
 
@@ -4707,6 +5069,7 @@ pageextension 52911 "ExtA" extends BasePage
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }];
 
         let mut topology = DependencyGraph::default();
@@ -4829,7 +5192,10 @@ pageextension 52911 "ExtA" extends BasePage
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
             ObjectNode {
                 id: dep_obj_id.clone(),
@@ -4848,7 +5214,10 @@ pageextension 52911 "ExtA" extends BasePage
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
         ];
 
@@ -4883,6 +5252,7 @@ pageextension 52911 "ExtA" extends BasePage
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }];
 
         let mut topology = DependencyGraph::default();
@@ -5028,7 +5398,10 @@ pageextension 52911 "ExtA" extends BasePage
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
             ObjectNode {
                 id: dep_obj_id.clone(),
@@ -5047,7 +5420,10 @@ pageextension 52911 "ExtA" extends BasePage
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
         ];
 
@@ -5078,6 +5454,7 @@ pageextension 52911 "ExtA" extends BasePage
                 preproc_context: Box::default(),
                 source_unit: None,
                 abi_params,
+                abi_method_id: None,
             }
         }
 
@@ -5093,6 +5470,7 @@ pageextension 52911 "ExtA" extends BasePage
                     subtype_id: None,
                     subtype_raw_name: None,
                     subtype_tag: SubtypeTag::NoSubtype,
+                    array_dims: None,
                 }]),
             ),
             abi_node(&dep_obj_id, 222, AbiParams::Missing),
@@ -5243,7 +5621,9 @@ codeunit 50611 "MixedCU"
                 subtype_id: None,
                 subtype_raw_name: None,
                 subtype_tag: SubtypeTag::NoSubtype,
+                array_dims: None,
             }]),
+            abi_method_id: None,
         });
         graph.routines.sort_by(|a, b| a.id.cmp(&b.id));
 
@@ -5324,6 +5704,7 @@ codeunit 50612 "MixedCU2"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         });
         graph.routines.sort_by(|a, b| a.id.cmp(&b.id));
 
@@ -5420,7 +5801,10 @@ codeunit 50612 "MixedCU2"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
             ObjectNode {
                 id: dep_obj_id.clone(),
@@ -5439,7 +5823,10 @@ codeunit 50612 "MixedCU2"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
         ];
 
@@ -5469,6 +5856,7 @@ codeunit 50612 "MixedCU2"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }];
 
         let mut topology = DependencyGraph::default();
@@ -5657,7 +6045,10 @@ codeunit 50612 "MixedCU2"
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
+            lookup_pages: Vec::new(),
+            obsolete_gone: false,
         }];
 
         let routines = vec![RoutineNode {
@@ -5686,6 +6077,7 @@ codeunit 50612 "MixedCU2"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }];
 
         let obj_index = ObjectIndex::build(&objects);
@@ -5807,7 +6199,10 @@ codeunit 50612 "MixedCU2"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
             ObjectNode {
                 id: sub_obj_id.clone(),
@@ -5826,7 +6221,10 @@ codeunit 50612 "MixedCU2"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
         ];
 
@@ -5856,6 +6254,7 @@ codeunit 50612 "MixedCU2"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         };
 
         let subscriber = RoutineNode {
@@ -5892,6 +6291,7 @@ codeunit 50612 "MixedCU2"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         };
 
         let mut routines = vec![publisher, subscriber];
@@ -6404,7 +6804,10 @@ codeunit 50203 "NoTriggerCU"
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
+            lookup_pages: Vec::new(),
+            obsolete_gone: false,
         }];
         let mut topology = DependencyGraph::default();
         topology.add_dependency(ws_ref, dep_ref);
@@ -6703,7 +7106,10 @@ codeunit 50300 "OverloadCU"
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
+            lookup_pages: Vec::new(),
+            obsolete_gone: false,
         };
         (graph, index, surface, from_obj)
     }
@@ -10975,7 +11381,10 @@ codeunit 50000 "Caller"
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
+            lookup_pages: Vec::new(),
+            obsolete_gone: false,
         });
 
         // Event-publisher routine: abi_routine_kind=EventPublisher, abi_event_kind=Integration.
@@ -11005,6 +11414,7 @@ codeunit 50000 "Caller"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         });
 
         // Regular procedure: abi_routine_kind=Procedure, abi_event_kind=None.
@@ -11034,6 +11444,7 @@ codeunit 50000 "Caller"
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         });
 
         objects.sort_by(|a, b| a.id.cmp(&b.id));
@@ -13246,7 +13657,10 @@ codeunit 53971 "OverloadNCaller"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
             ObjectNode {
                 id: target_obj_id.clone(),
@@ -13265,7 +13679,10 @@ codeunit 53971 "OverloadNCaller"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
         ];
 
@@ -13301,6 +13718,7 @@ codeunit 53971 "OverloadNCaller"
                 preproc_context: Box::default(),
                 source_unit: None,
                 abi_params: AbiParams::Missing,
+                abi_method_id: None,
             }
         }
         let routines = vec![
@@ -13640,7 +14058,10 @@ codeunit 53975 "Overload3Caller"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
             ObjectNode {
                 id: dep_obj_id.clone(),
@@ -13659,7 +14080,10 @@ codeunit 53975 "Overload3Caller"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
         ];
 
@@ -13692,6 +14116,7 @@ codeunit 53975 "Overload3Caller"
                 preproc_context: Box::default(),
                 source_unit: None,
                 abi_params: AbiParams::Missing,
+                abi_method_id: None,
             },
             RoutineNode {
                 id: RoutineNodeId {
@@ -13719,6 +14144,7 @@ codeunit 53975 "Overload3Caller"
                 preproc_context: Box::default(),
                 source_unit: None,
                 abi_params: AbiParams::Missing,
+                abi_method_id: None,
             },
         ];
 
@@ -13837,7 +14263,10 @@ codeunit 53975 "Overload3Caller"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
             ObjectNode {
                 id: target_obj_id.clone(),
@@ -13856,7 +14285,10 @@ codeunit 53975 "Overload3Caller"
                 protected_vars: Vec::new(),
                 parse_incomplete: false,
                 closed_enum: false,
+                internal: false,
                 enum_impls: Vec::new(),
+                lookup_pages: Vec::new(),
+                obsolete_gone: false,
             },
         ];
 
@@ -13904,6 +14336,7 @@ codeunit 60152 "AliasTarget"
                 preproc_context: Box::default(),
                 source_unit: None,
                 abi_params: AbiParams::Missing,
+                abi_method_id: None,
             },
             RoutineNode {
                 id: real_id.clone(),
@@ -13925,6 +14358,7 @@ codeunit 60152 "AliasTarget"
                 preproc_context: Box::default(),
                 source_unit: None,
                 abi_params: AbiParams::Missing,
+                abi_method_id: None,
             },
         ];
 

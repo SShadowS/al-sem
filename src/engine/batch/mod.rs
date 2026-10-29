@@ -16,6 +16,7 @@ pub mod manifest;
 pub mod output;
 pub mod worker;
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -24,7 +25,7 @@ use crate::engine::gate::run::{ViewModel, build_view_model};
 use crate::engine::perf_trace as pt;
 use crate::engine::session::{Cell, JobId, Plan, View};
 
-use job::{Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, ViewCx, ViewDemand};
+use job::{Doc, Job, JobFailure, LastReads, PlanPart, ResolveCx, SideDoc, ViewCx, ViewDemand};
 use output::{JobOutput, Stream, WriteAction, capture, replay, replay_on, write_error};
 
 /// Run one job as its own process does (D1): through the driver, then its
@@ -77,8 +78,7 @@ pub(crate) fn run_on_target(
         job: JobId(0),
         keys,
         has_tree,
-        later_cells: vec![],
-        later_runs: vec![],
+        later: job::LaterReads::NONE,
         carry: part.carry,
         handed: &mut handed,
     };
@@ -428,12 +428,21 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
         shared_census(&fills);
     }
     let mut handed = Vec::new();
+    // What a demand after each one reads, in one pass (G14).
+    let mut last_reads = LastReads::default();
+    for (k, r) in reads.iter().enumerate() {
+        if let Some((cells, runs, _, _)) = r {
+            last_reads.record(k, cells, runs);
+        }
+    }
+    let mut seen_jobs = HashSet::new();
     // (9) Each demand's compute, in job order.
     for (k, (i, (j, d))) in on_view.iter().enumerate() {
+        // Once per job and view: `diff A A`'s two sides share one solve.
+        let first_of_job = seen_jobs.insert(*j);
         let Some((_, keys, has_tree, builds_l4)) = reads[k].clone() else {
             continue;
         };
-        let later = || reads[k + 1..].iter().flatten();
         let mut cx = ViewCx {
             view: &mut view,
             inputs: &d.inputs,
@@ -441,15 +450,12 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
             job: job_id(*j),
             keys,
             has_tree,
-            later_cells: later().flat_map(|r| r.0.clone()).collect(),
-            later_runs: later().flat_map(|r| r.1.clone()).collect(),
+            later: last_reads.after(k),
             carry: carries[k].take(),
             handed: &mut handed,
         };
         let _s = job_span(*j, jobs[*j], "compute");
         let (side, own) = capture(|| jobs[*j].compute(d.side, &mut cx));
-        // Once per job and view: `diff A A`'s two sides share one solve.
-        let first_of_job = !on_view[..k].iter().any(|(_, (jj, _))| jj == j);
         let mut lines = if builds_l4 && first_of_job {
             l4_lines.clone()
         } else {

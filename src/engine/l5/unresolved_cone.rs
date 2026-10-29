@@ -34,6 +34,16 @@ pub struct UnresolvedConeItem {
     pub status: String,
     pub candidates: Option<Vec<String>>,
     pub open_world: Option<bool>,
+    /// G24: every implementer of this interface site is in the model, so a
+    /// closed world (no implementer beyond the loaded ones) follows it all:
+    /// at least one candidate, no to-less route (a dependency implementer
+    /// whose body is not loaded: in `resolved_edges`, never in `candidates`)
+    /// and no `unresolvedCandidates`. Not serialized.
+    pub closed_world_followable: bool,
+    /// G29: the call stack's publishers select this interface site's
+    /// implementations (`SnapshotCallsiteResolution::publisher_scoped`). Not
+    /// serialized.
+    pub publisher_scoped: bool,
     pub owning_routine: String,
     pub owning_routine_display: String,
 }
@@ -204,6 +214,12 @@ pub fn unresolved_cone(snap: &CapabilitySnapshot, root: &str) -> UnresolvedConeR
                         status: row.status.clone(),
                         candidates,
                         open_world,
+                        closed_world_followable: row
+                            .candidates
+                            .as_ref()
+                            .is_some_and(|c| !c.is_empty() && c.len() == row.resolved_edges.len())
+                            && row.unresolved_candidates.as_ref().is_none_or(Vec::is_empty),
+                        publisher_scoped: row.publisher_scoped,
                         owning_routine: routine.clone(),
                         owning_routine_display: display_by_id
                             .get(routine.as_str())
@@ -360,6 +376,7 @@ mod tests {
             unresolved_candidates: None,
             result_consumed: None,
             under_asserterror: None,
+            publisher_scoped: false,
         }
     }
 

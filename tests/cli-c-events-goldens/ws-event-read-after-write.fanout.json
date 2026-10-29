@@ -29,6 +29,7 @@
   "entries": [
     {
       "publisher": "0e30d75dac7a63ae/9e1e6b0771b4bdb5de60aef74eaa7546b18a69264eef32468b66904317e024f4",
+      "publisherStableRoutineId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:Codeunit:50000#ed27d554e6d11ba3175fe7fe2009aa2988f48de11a8f60fb84b18baa8c671b40",
       "eventId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb/Codeunit/50000/event/onafteradjust",
       "eventName": "OnAfterAdjust",
       "eventKind": "integration",

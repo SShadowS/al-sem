@@ -29,6 +29,7 @@
   "entries": [
     {
       "publisher": "b022562a20b2f6d9/2ce6f2d185735f9cf3c7b059ade99c63c56b0708f5eed2d624a89317f6a181a9",
+      "publisherStableRoutineId": "dddddddd-dddd-dddd-dddd-dddddddddddd:Codeunit:50000#7d2467af0ac36f49f50d4d1c3910f242cf90d0fac214f5c66716a0c8fe4d4cee",
       "eventId": "dddddddd-dddd-dddd-dddd-dddddddddddd/Codeunit/50000/event/one",
       "eventName": "OnE",
       "eventKind": "integration",

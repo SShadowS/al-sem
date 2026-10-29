@@ -224,6 +224,7 @@ fn debug_digest_catches_serde_skip_drift() {
             syntax_kind: "call_expression".to_string(),
         },
         in_until_condition: false,
+        in_statement_position: false,
         run_trigger: None,
     };
     let mut flipped = base.clone();

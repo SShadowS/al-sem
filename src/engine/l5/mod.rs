@@ -139,6 +139,11 @@ pub mod ordering_facts;
 pub mod conditionality;
 pub mod diff_parser;
 pub mod digest_cli;
+// G23: effects unreachable once literal Boolean arguments are followed.
+pub mod field_guard;
+pub mod group_path;
+pub mod literal_reach;
+pub mod recref_flow;
 // Shared deterministic routine-selector resolution (5-form resolveSelector
 // cascade). Consumed by BOTH digest_cli (changed-roots selectors) and
 // fingerprint_query (routine selectors) — kept as ONE implementation so the two

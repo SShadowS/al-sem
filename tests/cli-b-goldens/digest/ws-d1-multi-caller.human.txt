@@ -4,6 +4,9 @@
     evidence: ws:src/D1MultiCaller.al:18 "Cust.Modify"
     detail: resourceId=11111111-0000-0000-0000-00000000d01a/table/50101, resourceDisplay=MC Customer, tempState=known(false)
     via: 1 path(s)
+  [ERROR_IMPLICIT] direct
+    evidence: ws:src/D1MultiCaller.al:32 "Cust.FindSet"
+    via: 1 path(s)
 
 --- Codeunit D1 Multi Caller::CallerC ---
   coverage: complete
@@ -11,12 +14,18 @@
     evidence: ws:src/D1MultiCaller.al:18 "Cust.Modify"
     detail: resourceId=11111111-0000-0000-0000-00000000d01a/table/50101, resourceDisplay=MC Customer, tempState=known(false)
     via: 1 path(s)
+  [ERROR_IMPLICIT] direct
+    evidence: ws:src/D1MultiCaller.al:40 "Cust.FindSet"
+    via: 1 path(s)
 
 --- Codeunit D1 Multi Caller::CallerA ---
   coverage: complete
   [DB_MODIFY] transitive
     evidence: ws:src/D1MultiCaller.al:18 "Cust.Modify"
     detail: resourceId=11111111-0000-0000-0000-00000000d01a/table/50101, resourceDisplay=MC Customer, tempState=known(false)
+    via: 1 path(s)
+  [ERROR_IMPLICIT] direct
+    evidence: ws:src/D1MultiCaller.al:24 "Cust.FindSet"
     via: 1 path(s)
 
 --- Codeunit D1 Multi Caller::ModifyHelper ---

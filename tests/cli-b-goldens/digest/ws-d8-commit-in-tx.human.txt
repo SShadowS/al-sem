@@ -19,11 +19,13 @@
     evidence: ws:src/posting.al:14 "Header.Modify"
     detail: resourceId=11111111-0000-0000-0000-00000000d80a/table/36, resourceDisplay=Sales Header, tempState=known(false)
     via: 1 path(s)
+  [ERROR_IMPLICIT] direct
+    evidence: ws:src/posting.al:7 "Header.Get"
+    via: 1 path(s)
   [EVENT_PUBLISH] transitive
-    evidence: (unavailable)
+    evidence: ws:src/posting.al:12 "OnAfterPostSalesDoc"
     detail: resourceId=11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc, resourceDisplay=onafterpostsalesdoc, eventClass=Integration
     via: 1 path(s)
-  diagnostic: evidence-unavailable (EVENT_PUBLISH)
 
 --- Codeunit D8PostingChain::OnAfterPostSalesDoc ---
   coverage: complete

@@ -15,6 +15,7 @@
 //!   - formatDigestHuman → human text
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
@@ -939,6 +940,18 @@ pub struct DigestEffectFull {
     /// A boundary group's full `(resource id, display)` set (#160 step 9
     /// D2 (6)); `detail` lists at most 10. Not serialized; empty off a group.
     pub group_resources: Vec<(String, String)>,
+    /// G35: per group resource id, one example path inside the dependency
+    /// ([`crate::engine::l5::group_path`]); `prove` shows the matched ones.
+    pub group_resource_paths: Vec<(String, Vec<String>)>,
+    /// The operations the effect originates from, and its class's "known
+    /// temporary" flag: what [`DbTempStates`] joins on, so `prove` can ask the
+    /// same write in a CALLER's frame (G25). Not serialized.
+    pub origin_operation_ids: Vec<String>,
+    pub effect_is_kt: bool,
+    /// G23: unreachable from the root once literal Boolean arguments are
+    /// followed ([`crate::engine::l5::literal_reach`]); a MAY question does not
+    /// count it. Not serialized.
+    pub literal_unreachable: bool,
 }
 
 pub struct FullAnchor {
@@ -1099,7 +1112,12 @@ impl<'a> DbTempStates<'a> {
 
     /// The root's L4 rows for these originating operations, joined for an effect
     /// of class `effect_is_kt` (a root L4 does not know has no rows).
-    fn for_effect(&self, root_stable: &str, op_ids: &[String], effect_is_kt: bool) -> TempJoin {
+    pub(crate) fn for_effect(
+        &self,
+        root_stable: &str,
+        op_ids: &[String],
+        effect_is_kt: bool,
+    ) -> TempJoin {
         let rows: Vec<(&str, TempStateKind)> = self
             .ix_by_stable
             .get(root_stable)
@@ -1114,12 +1132,17 @@ impl<'a> DbTempStates<'a> {
 /// What digest's query reads of its tree (#160 step 6 D7 (5), A1-16): per
 /// root its S4 entry and its unresolved cone, plus the tree's identity table
 /// and coverage. Computed while the tree is alive; the tree is then released.
+///
+/// The identity table and the coverage are whole-program and the same for
+/// every reader of one tree, so the readers of a shared tree share one copy
+/// (G16: one copy per `prove` job, over a program holding Base Application's
+/// source, held ~0.2 GB per job until the job ran).
 #[derive(Default)]
 pub struct DigestEffects {
     pub entries: Vec<DigestEntryResult>,
     pub unresolved: BTreeMap<String, UnresolvedCone>,
-    pub coverage: Vec<SnapshotCoverageRecord>,
-    pub identities: SnapshotIdentityTable,
+    pub coverage: Arc<Vec<SnapshotCoverageRecord>>,
+    pub identities: Arc<SnapshotIdentityTable>,
     /// `--tests` (#254): the test-coverage graph over the same tree.
     pub coverage_graph: Option<crate::engine::l5::test_coverage::CoverageGraph>,
 }
@@ -1135,6 +1158,12 @@ pub struct UnresolvedCone {
     /// step 9 D2 (5)): prove's `analysisGaps` obligation. `None` off prove's
     /// plan: digest never reads it, so it never counts it (final panel C1).
     pub gaps_in_cone: Option<usize>,
+    /// The cone visits a routine with a record operation that raises the
+    /// platform table events (`Insert`, `Modify`, `Delete`, `ModifyAll`,
+    /// `DeleteAll`, `Rename`, `Validate`), which any app may subscribe to:
+    /// prove's `loaded-subscribers` label. `None` off prove's plan, as
+    /// `gaps_in_cone`.
+    pub fires_table_events: Option<bool>,
 }
 
 /// Count analysis gaps whose subject intersects the visited cone.
@@ -1151,6 +1180,7 @@ pub struct UnresolvedCone {
 fn count_gaps_in_cone(
     gap_subjects: &[&str],
     visited_ids: &std::collections::HashSet<String>,
+    known_natives: &std::collections::HashSet<&str>,
 ) -> usize {
     let mut count = 0usize;
     for subject in gap_subjects {
@@ -1160,9 +1190,14 @@ fn count_gaps_in_cone(
             continue;
         }
         // App-level (symbol-only-boundary) match: subject is a bare app GUID and some
-        // visited routine has a stable id of the form `{appGuid}:Type:{n}#hash`.
+        // visited routine has a stable id of the form `{appGuid}:Type:{n}#hash`. A
+        // cataloged platform native (`platform_natives`) has known behaviour: it
+        // does not put its app's gap in the cone.
         let prefix = format!("{}:", subject);
-        if visited_ids.iter().any(|v| v.starts_with(&prefix)) {
+        if visited_ids
+            .iter()
+            .any(|v| v.starts_with(&prefix) && !known_natives.contains(v.as_str()))
+        {
             count += 1;
         }
     }
@@ -1184,7 +1219,25 @@ pub(crate) fn digest_effects(
 ) -> DigestEffects {
     let coverage_graph =
         tests.then(|| crate::engine::l5::test_coverage::CoverageGraph::from_snapshot(tree, model));
-    let entries = compute_digest_effects_cli(tree, model, Some(roots), include_reads);
+    let mut out = digest_effects_each(tree, model, &[roots], gaps_in_cone, include_reads);
+    let mut one = out.pop().expect("one reader, one result");
+    one.coverage_graph = coverage_graph;
+    one
+}
+
+/// [`digest_effects`] (without `--tests`) for several readers of ONE tree, in
+/// order (G16): each reader's S4 entries and unresolved cones off the same
+/// tree, then the identity table and the coverage moved out once and shared.
+/// Over a tree whose subjects include a reader's roots, a reader's entries and
+/// cones are those of a tree over its roots alone
+/// (`prove_scoped_equals_unscoped`, `t3_digest_scoped_equals_unscoped`).
+pub(crate) fn digest_effects_each(
+    tree: &mut CapabilitySnapshot,
+    model: &Model,
+    readers: &[&[String]],
+    gaps_in_cone: bool,
+    include_reads: bool,
+) -> Vec<DigestEffects> {
     let gap_subjects: Vec<&str> = if gaps_in_cone {
         tree.analysis_gaps
             .iter()
@@ -1193,28 +1246,145 @@ pub(crate) fn digest_effects(
     } else {
         Vec::new()
     };
-    let unresolved = roots
+    // Cataloged platform natives: they do not bring their app's gap.
+    let natives: std::collections::HashSet<&str> = model
+        .workspace
+        .routines
         .iter()
-        .map(|r| {
-            let c = unresolved_cone(tree, r);
-            (
-                r.clone(),
-                UnresolvedCone {
-                    gaps_in_cone: gaps_in_cone
-                        .then(|| count_gaps_in_cone(&gap_subjects, &c.visited_ids)),
-                    items: c.items,
-                    traversal: c.traversal,
-                },
-            )
+        .filter(|r| crate::program::model::platform_natives::pure_native(r).is_some())
+        .map(|r| r.stable_routine_id.as_str())
+        .collect();
+    // Routines that raise platform table events (prove's `loaded-subscribers`).
+    let fires: std::collections::HashSet<&str> = if gaps_in_cone {
+        model
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| {
+                r.record_operations.iter().any(|op| {
+                    crate::program::resolve::full::can_fire_trigger(&op.op.to_ascii_lowercase())
+                })
+            })
+            .map(|r| r.stable_routine_id.as_str())
+            .collect()
+    } else {
+        Default::default()
+    };
+    // One query over every reader's roots: the per-root work is independent
+    // (one worker per root), and the per-call work (the tree's indexes, the
+    // reportable roots) is whole-program, so a call per reader repeated it
+    // (G16: ~1 s per `prove` job over Base Application's source). Each reader
+    // then takes the entries of its own roots, in the query's sorted order.
+    let all: Vec<String> = readers
+        .iter()
+        .flat_map(|r| r.iter().cloned())
+        .collect::<BTreeSet<String>>()
+        .into_iter()
+        .collect();
+    // G31: a root INSIDE a dependency. Rule B (spec 2026-10-23 §14.3.5) ends a
+    // witness on entering dependency code and groups what lies beyond, which
+    // is right for a workspace root (it bounds digest's cost) but leaves a
+    // dependency root nothing: it starts past its own boundary, so every fact
+    // ended at the root and none was an effect. Such a root is asked with rule
+    // B off, so its witness paths follow the code that reaches each effect,
+    // in every app.
+    let is_dependency_root = |r: &String| {
+        tree.boundary
+            .as_ref()
+            .is_some_and(|b| b.dependency_app.contains_key(r))
+    };
+    let (dependency_roots, workspace_roots): (Vec<String>, Vec<String>) =
+        all.iter().cloned().partition(is_dependency_root);
+    let mut all_entries =
+        compute_digest_effects_cli(tree, model, Some(&workspace_roots), include_reads);
+    if !dependency_roots.is_empty() {
+        let rule_b = tree.boundary.take();
+        all_entries.extend(compute_digest_effects_cli(
+            tree,
+            model,
+            Some(&dependency_roots),
+            include_reads,
+        ));
+        tree.boundary = rule_b;
+        all_entries.sort_by(|a, b| a.routine_id.cmp(&b.routine_id));
+    }
+    // G23, prove's read only: effects a root cannot reach once literal Boolean
+    // arguments are followed through recursive SCCs, where the cone drops guards.
+    if gaps_in_cone {
+        let reach = crate::engine::l5::literal_reach::LiteralReach::new(&tree.typed_edges, model);
+        // G35: how each group resource is reached inside the dependency.
+        let group_paths = crate::engine::l5::group_path::GroupPaths::new(&tree.typed_edges, model);
+        for entry in &mut all_entries {
+            if entry.effects.iter().any(|e| e.boundary_group)
+                && let Some(tree) = reach.live_tree(&entry.routine_id)
+            {
+                for e in entry.effects.iter_mut().filter(|e| e.boundary_group) {
+                    e.group_resource_paths = group_paths.paths(&reach, &tree, e);
+                }
+            }
+            let (dead, dead_resources) =
+                reach.unreachable_effects(&entry.routine_id, &entry.effects);
+            for i in dead {
+                entry.effects[i].literal_unreachable = true;
+            }
+            // G33: a group's resources reached only through code that cannot run.
+            for (i, resources) in dead_resources {
+                entry.effects[i].dead_group_resources = resources;
+            }
+            // A listed witness path that cannot run is not evidence: drop it.
+            // When none is left for a still-reachable effect, a live path exists
+            // that was not listed.
+            for e in entry.effects.iter_mut().filter(|e| !e.literal_unreachable) {
+                let before = e.via_paths.len();
+                e.via_paths.retain(|p| reach.path_live(p));
+                if e.via_paths.len() < before && e.via_paths.is_empty() {
+                    e.via_paths_truncated = true;
+                }
+            }
+        }
+    }
+    let read: Vec<(Vec<DigestEntryResult>, BTreeMap<String, UnresolvedCone>)> = readers
+        .iter()
+        .map(|roots| {
+            let own: std::collections::HashSet<&str> = roots.iter().map(String::as_str).collect();
+            let entries: Vec<DigestEntryResult> = all_entries
+                .iter()
+                .filter(|e| own.contains(e.routine_id.as_str()))
+                .cloned()
+                .collect();
+            let unresolved = roots
+                .iter()
+                .map(|r| {
+                    let c = unresolved_cone(tree, r);
+                    (
+                        r.clone(),
+                        UnresolvedCone {
+                            gaps_in_cone: gaps_in_cone.then(|| {
+                                count_gaps_in_cone(&gap_subjects, &c.visited_ids, &natives)
+                            }),
+                            fires_table_events: gaps_in_cone
+                                .then(|| c.visited_ids.iter().any(|v| fires.contains(v.as_str()))),
+                            items: c.items,
+                            traversal: c.traversal,
+                        },
+                    )
+                })
+                .collect();
+            (entries, unresolved)
         })
         .collect();
-    DigestEffects {
-        entries,
-        unresolved,
-        coverage: std::mem::take(&mut tree.coverage),
-        identities: std::mem::take(&mut tree.identities),
-        coverage_graph,
-    }
+    drop(gap_subjects);
+    let coverage = Arc::new(std::mem::take(&mut tree.coverage));
+    let identities = Arc::new(std::mem::take(&mut tree.identities));
+    read.into_iter()
+        .map(|(entries, unresolved)| DigestEffects {
+            entries,
+            unresolved,
+            coverage: Arc::clone(&coverage),
+            identities: Arc::clone(&identities),
+            coverage_graph: None,
+        })
+        .collect()
 }
 
 /// The real entry point: given resolved workspace + a list of roots (their stableIds),
@@ -1235,7 +1405,7 @@ pub fn run_digest_query_full_from_entries(
 
     // Coverage map
     let mut coverage_by_id: HashMap<&str, (&str, Vec<&str>)> = HashMap::new();
-    for rec in &effects.coverage {
+    for rec in effects.coverage.iter() {
         let reasons: Vec<&str> = rec.reasons.iter().map(|s| s.as_str()).collect();
         coverage_by_id.insert(
             rec.subject.as_str(),
@@ -1370,17 +1540,34 @@ pub fn run_digest_query_full_from_entries(
                     TX_UNKNOWN
                 };
 
-                // Evidence anchor
-                let evidence = FullAnchor {
-                    source_kind: eff.evidence.source_kind,
-                    file: eff.evidence.file.clone(),
-                    line: eff.evidence.line,
-                    column: eff.evidence.column,
-                    excerpt: eff.evidence.excerpt.clone(),
+                // Evidence anchor. G32: an event publication is the publisher
+                // routine's own fact, with no operation to cite: its anchor is the
+                // call into the publisher, the last hop of its shortest path.
+                let publish_call = (eff.evidence.source_kind == "unavailable"
+                    && eff.effect_type == "EVENT_PUBLISH")
+                    .then(|| eff.via_paths.iter().min_by_key(|p| p.len()))
+                    .flatten()
+                    .and_then(|p| p.last())
+                    .and_then(|h| Some((h.inner.anchor.as_ref()?, &h.inner)));
+                let evidence = match publish_call {
+                    Some((a, hop)) => FullAnchor {
+                        source_kind: "source",
+                        file: Some(a.file.clone()),
+                        line: a.line,
+                        column: a.column,
+                        excerpt: hop.callee_display.clone(),
+                    },
+                    None => FullAnchor {
+                        source_kind: eff.evidence.source_kind,
+                        file: eff.evidence.file.clone(),
+                        line: eff.evidence.line,
+                        column: eff.evidence.column,
+                        excerpt: eff.evidence.excerpt.clone(),
+                    },
                 };
 
                 // evidence-unavailable diagnostic
-                if eff.evidence.source_kind == "unavailable" {
+                if evidence.source_kind == "unavailable" {
                     entry_diagnostics.push(EntryDiagnostic {
                         kind: "evidence-unavailable",
                         effect_type: Some(eff.effect_type.clone()),
@@ -1418,13 +1605,18 @@ pub fn run_digest_query_full_from_entries(
                     eff.effect_type.as_str(),
                     "DB_INSERT" | "DB_MODIFY" | "DB_DELETE" | "DB_READ"
                 ) {
-                    let join = temp_states.for_effect(
-                        rid,
-                        &eff.origin_operation_ids,
-                        is_known_temp_state(eff.temp_state.as_ref()),
-                    );
-                    if let Some(ts) = join.render() {
-                        detail.push(("tempState".to_string(), ts));
+                    let kt = is_known_temp_state(eff.temp_state.as_ref());
+                    let join = temp_states.for_effect(rid, &eff.origin_operation_ids, kt);
+                    match join.render() {
+                        Some(ts) => detail.push(("tempState".to_string(), ts)),
+                        // G31: a root L4 holds no rows for (a dependency root:
+                        // the summary bundle has none). The cone fact's own class
+                        // is frame-correct (#69 D1), so a known-temporary write
+                        // says so; any other class stays absent (not known).
+                        None if kt && join.states.is_empty() => {
+                            detail.push(("tempState".to_string(), "known(true)".to_string()));
+                        }
+                        None => {}
                     }
                     entry_diagnostics.extend(incoherence_diagnostics(
                         &eff.effect_type,
@@ -1446,7 +1638,19 @@ pub fn run_digest_query_full_from_entries(
                     guarantees,
                     fact_id: eff.fact_id.clone(),
                     scoped_guarantees: eff.scoped_guarantees.clone(),
-                    group_resources: std::mem::take(&mut eff.group_resources),
+                    // G33: a resource the root cannot reach is no member prove
+                    // matches (`literal_reach`).
+                    group_resources: std::mem::take(&mut eff.group_resources)
+                        .into_iter()
+                        .filter(|(id, _)| !eff.dead_group_resources.contains(id))
+                        .collect(),
+                    group_resource_paths: std::mem::take(&mut eff.group_resource_paths)
+                        .into_iter()
+                        .filter(|(id, _)| !eff.dead_group_resources.contains(id))
+                        .collect(),
+                    origin_operation_ids: eff.origin_operation_ids.clone(),
+                    effect_is_kt: is_known_temp_state(eff.temp_state.as_ref()),
+                    literal_unreachable: eff.literal_unreachable,
                 });
             }
         }
@@ -2959,7 +3163,7 @@ mod tests {
             "11112222-0000-0000-0000-00000000aaaa", // matches via `{guid}:` prefix
             "99998888-0000-0000-0000-00000000cccc", // no visited routine in this app
         ];
-        let count = count_gaps_in_cone(&gap_subjects, &visited);
+        let count = count_gaps_in_cone(&gap_subjects, &visited, &Default::default());
         assert_eq!(
             count, 1,
             "exactly the app-level-matching gap is in cone (the prefix branch must fire)"
@@ -2976,7 +3180,7 @@ mod tests {
 
         // A parse-incomplete gap whose subject IS a visited StableRoutineId.
         let gap_subjects = vec![rid.as_str()];
-        let count = count_gaps_in_cone(&gap_subjects, &visited);
+        let count = count_gaps_in_cone(&gap_subjects, &visited, &Default::default());
         assert_eq!(count, 1, "direct routine-subject gap must match");
     }
 
@@ -2989,7 +3193,7 @@ mod tests {
         visited.insert("aaaa1111-0000-0000-0000-00000000dddd:Codeunit:70000#beadfeed".to_string());
 
         let gap_subjects = vec!["zzzz9999-0000-0000-0000-00000000eeee"];
-        let count = count_gaps_in_cone(&gap_subjects, &visited);
+        let count = count_gaps_in_cone(&gap_subjects, &visited, &Default::default());
         assert_eq!(count, 0, "unrelated gap subject must not be counted");
     }
 }

@@ -57,6 +57,15 @@
       },
       {
         "confidence": "static",
+        "op": "error-implicit",
+        "provenance": "direct",
+        "resourceKind": "error",
+        "subject": "11111111-0000-0000-0000-0000000d4702:Codeunit:50000#ac74742b81f7f1f1ddeda902e79e314c6d65bb8e97f49257b6268d29e0cabe95",
+        "via": "self",
+        "witnessOperationId": "bc9111dfe1c1b2f9/67546f13322e2ed52f1a7a3f33492abbe9ae04758f15f9b670ce97703dc761f1/op0"
+      },
+      {
+        "confidence": "static",
         "extra": {
           "kind": "table",
           "opSubtype": "Modify",

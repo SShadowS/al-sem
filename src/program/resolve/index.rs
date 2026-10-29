@@ -20,7 +20,7 @@
 //! runtime parameter, making the scoping visible and compiler-checkable at
 //! each call site.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::ObjectKind;
@@ -246,6 +246,11 @@ pub struct ResolveIndex {
     report_extensions: HashMap<String, Vec<ObjectNodeId>>,
     /// Lowercased interface name → all object ids that implement it.
     implementers: HashMap<String, Vec<ObjectNodeId>>,
+    /// Lowercased interface name → the CLOSED enums implementing it (G24):
+    /// only they carry their value mappings (`ObjectNode::enum_impls`), read
+    /// by [`Self::unmapped_enum_implementers`]. Apart from `implementers`,
+    /// which is codeunits only (an enum has no methods to dispatch to).
+    closed_enum_implementers: HashMap<String, Vec<ObjectNodeId>>,
 }
 
 /// Event subscriptions resolved over a [`ProgramGraph`]: which subscribers
@@ -390,9 +395,15 @@ impl SubscriberIndex {
                             let picked: Option<&(RoutineNodeId, bool)> = if exact.len() == 1 {
                                 Some(exact[0])
                             } else if exact.is_empty() {
+                                // `checked_add`: a `params_count` of
+                                // `UNKNOWN_ARITY` (`usize::MAX`) must stay
+                                // never-equal, not wrap to 0 and admit every
+                                // subscriber as a Sender match.
                                 let sender: Vec<&(RoutineNodeId, bool)> = candidates
                                     .iter()
-                                    .filter(|(rid, _)| rid.params_count + 1 == sub_params)
+                                    .filter(|(rid, _)| {
+                                        rid.params_count.checked_add(1) == Some(sub_params)
+                                    })
                                     .collect();
                                 (sender.len() == 1).then(|| sender[0])
                             } else {
@@ -552,6 +563,7 @@ impl ResolveIndex {
         let mut page_extensions: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
         let mut report_extensions: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
         let mut implementers: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
+        let mut closed_enum_implementers: HashMap<String, Vec<ObjectNodeId>> = HashMap::new();
 
         for obj in &graph.objects {
             // By-number: first sorted entry wins for a given (app, kind, id).
@@ -616,6 +628,43 @@ impl ResolveIndex {
                     }
                 }
             }
+            if obj.closed_enum {
+                for iface in &obj.implements {
+                    let list = closed_enum_implementers
+                        .entry(iface.fold_identifier())
+                        .or_default();
+                    if !list.contains(&obj.id) {
+                        list.push(obj.id.clone());
+                    }
+                }
+            }
+        }
+
+        // An object declared `ObsoleteState = Moved`/`Removed` binds no
+        // reference while another of its name or number exists
+        // (`ObjectNode::obsolete_gone`): Base Application's `Moved` stub of
+        // `No. Series` gives way to Business Foundation's table, for its own
+        // code (the own-app shadow) and for every app that sees both.
+        let gone: HashSet<&ObjectNodeId> = graph
+            .objects
+            .iter()
+            .filter(|o| o.obsolete_gone)
+            .map(|o| &o.id)
+            .collect();
+        if !gone.is_empty() {
+            let prune = |ids: &mut Vec<ObjectNodeId>| {
+                if ids.iter().any(|id| !gone.contains(id)) {
+                    ids.retain(|id| !gone.contains(id));
+                }
+            };
+            objects_by_name.values_mut().for_each(prune);
+            objects_by_id.values_mut().for_each(prune);
+            objs_by_number.retain(|&(_, kind, n), id| {
+                !gone.contains(&*id)
+                    || !objects_by_id
+                        .get(&(kind, n))
+                        .is_some_and(|ids| ids.iter().any(|o| !gone.contains(o)))
+            });
         }
 
         ResolveIndex {
@@ -627,6 +676,7 @@ impl ResolveIndex {
             page_extensions,
             report_extensions,
             implementers,
+            closed_enum_implementers,
         }
     }
 
@@ -645,6 +695,7 @@ impl ResolveIndex {
             page_extensions,
             report_extensions,
             implementers,
+            closed_enum_implementers,
         } = self;
         vec![
             ("objs_by_number", Box::new(objs_by_number)),
@@ -658,6 +709,10 @@ impl ResolveIndex {
             ("page_extensions", Box::new(page_extensions)),
             ("report_extensions", Box::new(report_extensions)),
             ("implementers", Box::new(implementers)),
+            (
+                "closed_enum_implementers",
+                Box::new(closed_enum_implementers),
+            ),
         ]
     }
 
@@ -885,6 +940,19 @@ impl ResolveIndex {
             .is_some_and(|c| c.len() == 1)
     }
 
+    /// The one object of `kind` named `name_lc` (folded) in the whole program,
+    /// or `None` when there is none or more than one.
+    pub fn unique_object(&self, kind: ObjectKind, name_lc: &str) -> Option<&ObjectNodeId> {
+        match self
+            .objects_by_name
+            .get(&(kind, name_lc.to_string()))?
+            .as_slice()
+        {
+            [only] => Some(only),
+            _ => None,
+        }
+    }
+
     /// All `TableExtension` objects whose `extends_target` (lowercased) equals
     /// `base_table_name_lc` — [`WorldMode::AnalyzedSnapshot`], whole-program
     /// view (extensions live in reverse-dependent apps, outside the base
@@ -933,6 +1001,47 @@ impl ResolveIndex {
             .get(interface_name_lc)
             .map(Vec::as_slice)
             .unwrap_or(&[])
+    }
+
+    /// G24: the closed enums implementing `interface_name_lc` that map a value
+    /// (an `Implementation`, `DefaultImplementation` or
+    /// `UnknownValueImplementation`) to a codeunit that does not resolve,
+    /// strictly from the enum's own app, to exactly one codeunit. Such a value
+    /// dispatches to code outside the program, whatever routes the site has.
+    /// Only closed enums carry their mappings (`ObjectNode::enum_impls`), so an
+    /// extensible enum is never listed here. A mapped codeunit must declare
+    /// the interface itself, so one that exists anywhere in the program is an
+    /// implementer the site's routes cover (or a to-less dependency route):
+    /// what this finds is a mapping into an app missing from the closure.
+    pub fn unmapped_enum_implementers(
+        &self,
+        graph: &ProgramGraph,
+        interface_name_lc: &str,
+    ) -> Vec<ObjectNodeId> {
+        self.closed_enum_implementers
+            .get(interface_name_lc)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|id| graph.object(id))
+            .filter(|o| {
+                o.enum_impls
+                    .iter()
+                    .filter(|(i, _)| i.as_ref() == interface_name_lc)
+                    .any(|(_, codeunit)| {
+                        !matches!(
+                            self.resolve_object_ref_strict(
+                                graph,
+                                o.id.clone(),
+                                ObjectKind::Codeunit,
+                                codeunit
+                            ),
+                            ObjectRefResolution::Unique(_)
+                        )
+                    })
+            })
+            .map(|o| o.id.clone())
+            .collect()
     }
 
     /// Resolve field `field_lc` against the VISIBILITY-SCOPED table field
@@ -1376,7 +1485,9 @@ pub fn count_unknown_include_sender_plus1_subscribers(graph: &ProgramGraph) -> u
                     && pr.id.name_lc == event_name_lc
                     && pr.publisher_kind.is_some()
                     && pr.include_sender.is_none()
-                    && pr.id.params_count + 1 == sub_params
+                    // `checked_add`: `UNKNOWN_ARITY` (`usize::MAX`) must stay
+                    // never-equal, not wrap to 0.
+                    && pr.id.params_count.checked_add(1) == Some(sub_params)
                 {
                     count += 1;
                 }
@@ -1440,7 +1551,10 @@ mod tests {
             protected_vars: Vec::new(),
             parse_incomplete: false,
             closed_enum: false,
+            internal: false,
             enum_impls: Vec::new(),
+            lookup_pages: Vec::new(),
+            obsolete_gone: false,
         }
     }
 
@@ -1471,6 +1585,7 @@ mod tests {
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }
     }
 
@@ -1507,6 +1622,7 @@ mod tests {
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }
     }
 
@@ -1543,6 +1659,7 @@ mod tests {
             preproc_context: Box::default(),
             source_unit: None,
             abi_params: AbiParams::Missing,
+            abi_method_id: None,
         }
     }
 

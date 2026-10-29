@@ -1,6 +1,6 @@
 al-sem: warning: analysis coverage degraded — 1 unknown resolution edge(s)
 {
-  "alsemVersion": "2.0.3",
+  "alsemVersion": "2.1.1",
   "deterministic": true,
   "diagnostics": [],
   "generatedAt": "1970-01-01T00:00:00Z",
@@ -262,6 +262,7 @@ al-sem: warning: analysis coverage degraded — 1 unknown resolution edge(s)
           "skipped": {}
         }
       ],
+      "encryptedPackages": [],
       "opaqueApps": [],
       "routinesAnalyzed": 1,
       "sourceUnitsParsed": 2,

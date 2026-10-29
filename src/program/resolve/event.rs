@@ -361,7 +361,13 @@ pub fn subscriber_arity_bound(
     publisher_params_count: usize,
     include_sender: Option<bool>,
 ) -> usize {
-    publisher_params_count + usize::from(include_sender == Some(true))
+    // `publisher_params_count` can be `UNKNOWN_ARITY` (`usize::MAX`, the ABI
+    // sentinel for a dep routine whose `Parameters` array was absent — see
+    // `abi_ingest::UNKNOWN_ARITY`'s doc): saturate instead of overflowing
+    // (debug: panic; release: wrap to 0, admitting every subscriber). The
+    // bound stays "never arity-matches a real call" either way, which is
+    // that sentinel's whole contract.
+    publisher_params_count.saturating_add(usize::from(include_sender == Some(true)))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -802,6 +808,17 @@ mod tests {
     fn arity_bound_no_tolerance_when_include_sender_unknown() {
         assert_eq!(subscriber_arity_bound(0, None), 0);
         assert_eq!(subscriber_arity_bound(3, None), 3);
+    }
+
+    /// `UNKNOWN_ARITY` (`usize::MAX`, the ABI sentinel for a dep routine whose
+    /// `Parameters` array was absent) saturates, never wraps: wrapped to 0 the
+    /// bound would admit EVERY subscriber. The bound stays "never
+    /// arity-matches a real call" either way, which is the sentinel's
+    /// contract (`abi_ingest::UNKNOWN_ARITY`).
+    #[test]
+    fn arity_bound_saturates_on_unknown_arity_sentinel() {
+        assert_eq!(subscriber_arity_bound(usize::MAX, Some(true)), usize::MAX);
+        assert_eq!(subscriber_arity_bound(usize::MAX, None), usize::MAX);
     }
 
     // ── read_event_subscriber_instance ───────────────────────────────────────

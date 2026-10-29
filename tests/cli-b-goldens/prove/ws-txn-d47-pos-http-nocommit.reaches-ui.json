@@ -5,9 +5,13 @@
   "generatedAt": "1970-01-01T00:00:00Z",
   "kind": "prove",
   "payload": {
+    "lineBase": 0,
     "question": "reaches-ui",
     "result": {
       "answer": "no",
+      "assumptions": [
+        "loaded-subscribers"
+      ],
       "obligations": {
         "analysisGaps": 0,
         "coneTruncated": false,

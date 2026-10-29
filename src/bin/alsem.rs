@@ -577,7 +577,10 @@ struct ProveCli {
     routine: String,
 
     /// Prove question: may-commit | commits-on-success-path | writes-table:<name>
-    ///   | publishes-event:<name> | reaches-ui | throws-error.
+    ///   | publishes-event:<name> | reaches-ui | throws-error. `reaches-ui` is
+    ///   interactive UI (Message, Confirm, StrMenu, Page/Report Run or RunModal,
+    ///   Hyperlink, UploadIntoStream/DownloadFromStream/Upload/Download, a
+    ///   Dialog's Open/Update); an Error is `throws-error`'s.
     question: String,
 
     /// Output format: json | human. Defaults to json.
@@ -597,6 +600,20 @@ struct ProveCli {
     /// at more memory and time.
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
+
+    /// Assume the loaded world is all there is (G24): an interface call
+    /// dispatches only to the implementations loaded, which the cone already
+    /// follows, so its open-world row stops blocking. A site with an
+    /// implementer that could not be resolved still blocks. A result that
+    /// relies on it carries `assumptions: ["closed-world"]`, and its
+    /// obligations count the waived rows in `closedWorldRows`.
+    ///
+    /// Without it, prove assumes only that no event subscriber exists beyond
+    /// the loaded ones (which includes the loggers behind System Application's
+    /// `Telemetry Logger`, registered by subscribers). An answer that holds
+    /// only under that carries `assumptions: ["loaded-subscribers"]`.
+    #[arg(long = "closed-world", default_value_t = false)]
+    closed_world: bool,
 }
 
 /// `FingerprintCli` — arguments for `alsem fingerprint <ws>`.
@@ -1266,7 +1283,7 @@ fn job_kind(command: &Commands) -> Option<JobKind> {
 /// Whether a fingerprint job's view is single-app. Read only for a job that
 /// passed its validation (FR-14), so its format resolves.
 fn fingerprint_single_app(f: &FingerprintCli) -> bool {
-    default_format(f.format.as_deref(), f.shard.is_some()).is_ok_and(|format| {
+    default_format(f.format.as_deref(), f.shard.is_some(), f.inventory_only).is_ok_and(|format| {
         reads_single_app(
             &format,
             f.shard.is_some(),
@@ -1951,6 +1968,7 @@ fn plan_prove(p: ProveCli) -> Planned {
                 alsem_ver: version,
                 deterministic: p.deterministic,
                 single_app: p.single_app,
+                closed_world: p.closed_world,
                 human: p.format == "human",
                 out: p.out.as_deref(),
             })
@@ -1988,7 +2006,7 @@ fn plan_fingerprint(f: FingerprintCli) -> Planned {
     let specified = fingerprint_flags(&f);
 
     // defaultFormat (fingerprint.ts:140) + rejectIllegalCombos (fingerprint.ts:110).
-    let format = match default_format(f.format.as_deref(), shard_mode.is_some()) {
+    let format = match default_format(f.format.as_deref(), shard_mode.is_some(), f.inventory_only) {
         Ok(fmt) => fmt,
         Err(msg) => return failed(msg, 1, 1),
     };

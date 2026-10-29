@@ -24,6 +24,113 @@ use std::path::Path;
 /// `.app` files start with a 40-byte NAVX header, then a standard zip.
 pub const NAVX_HEADER_SIZE: u64 = 40;
 
+/// The bytes at offset 36 of a runtime `.app`: the header's closing `NAVX`
+/// followed by `.NEA` where an ordinary package's zip (`PK\x03\x04`) starts.
+/// The mark's trailing `00 00 00 01` matches every community-documented sample
+/// (hougaard.com, D365BCAppHelper).
+const RUNTIME_MARK: &[u8; 8] = b"NAVX.NEA";
+
+/// The fixed RC4 key a runtime package's payload is scrambled with — public and
+/// community-documented for years (hougaard.com's runtime-app writeups,
+/// `SimonOfHH/D365BCAppHelper`, `businessdev.ALbuild`'s `Expand-BcAppFile`).
+/// Obfuscation, not secrecy: the same key on every package, the same key at
+/// every BC version measured.
+const RUNTIME_RC4_KEY: [u8; 6] = [15, 11, 81, 137, 184, 120];
+
+/// A runtime (`.NEA`) `.app` package whose payload could not be descrambled
+/// (truncated file, stream past the cap, not a zip): it holds an app, but
+/// nothing of it can be read, so its id, name and version are unknown.
+///
+/// A well-formed runtime package — one the key opens — never produces this
+/// error: its manifest, symbols and source read through the same public
+/// readers as a plain package (see [`open_app_file`]). The error exists so a
+/// future format or key change from the publisher surfaces by name, not as
+/// the app silently vanishing.
+#[derive(Debug)]
+pub struct EncryptedApp {
+    pub path: std::path::PathBuf,
+}
+
+impl std::fmt::Display for EncryptedApp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "encrypted .app package, its manifest, symbols and source cannot be read: {}",
+            self.path.display()
+        )
+    }
+}
+
+impl std::error::Error for EncryptedApp {}
+
+/// `head` (a `.app`'s first bytes) is a runtime package's header: a normal
+/// NAVX header whose payload is an RC4-scrambled zip instead of the zip
+/// itself. `false` for a plain package and for anything unreadable.
+pub fn is_encrypted_app_header(head: &[u8]) -> bool {
+    head.starts_with(b"NAVX") && head.get(36..44) == Some(&RUNTIME_MARK[..])
+}
+
+/// The `.app` at `path` is an encrypted package (`false` when it cannot be read).
+fn is_encrypted_app_file(path: &Path) -> bool {
+    let mut head = [0u8; 44];
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_ok_and(|()| is_encrypted_app_header(&head))
+}
+
+/// Descramble a runtime package's whole RC4 stream (see [`RUNTIME_RC4_KEY`])
+/// into a `Vec`. RC4 is symmetric, so this is also the scramble direction.
+fn rc4_descramble_stream(stream: &[u8]) -> Vec<u8> {
+    let mut s: [u8; 256] = core::array::from_fn(|i| i as u8);
+    let mut j = 0u8;
+    for i in 0..256 {
+        j = j
+            .wrapping_add(s[i])
+            .wrapping_add(RUNTIME_RC4_KEY[i % RUNTIME_RC4_KEY.len()]);
+        s.swap(i, j as usize);
+    }
+    let mut out = Vec::with_capacity(stream.len());
+    let (mut i, mut j) = (0u8, 0u8);
+    for &b in stream {
+        i = i.wrapping_add(1);
+        j = j.wrapping_add(s[i as usize]);
+        s.swap(i as usize, j as usize);
+        let k = usize::from(s[i as usize]) + usize::from(s[j as usize]);
+        out.push(b ^ s[k & 0xff]);
+    }
+    out
+}
+
+/// The RC4 stream length declared by the runtime header in `head`
+/// (`None` when `head` is shorter than a full 40-byte NAVX header).
+fn runtime_stream_len(head: &[u8]) -> Option<u64> {
+    Some(u64::from_le_bytes(head.get(28..36)?.try_into().ok()?))
+}
+
+/// Open a runtime (`.NEA`) `.app` package: read its whole RC4 stream
+/// (length from the header, capped), descramble it, and open the plain zip
+/// it wraps. Errors when the stream cannot be read or the descrambled bytes
+/// are not a zip — the loud failure channel for a format or key change from
+/// the publisher.
+fn open_runtime_app_file(path: &Path) -> anyhow::Result<zip::ZipArchive<AppReader>> {
+    let mut file =
+        std::fs::File::open(path).with_context(|| format!("open .app: {}", path.display()))?;
+    let mut head = [0u8; 48];
+    file.read_exact(&mut head)
+        .with_context(|| format!("read .app header: {}", path.display()))?;
+    let stream_len =
+        runtime_stream_len(&head).context("runtime package header declares no stream length")?;
+    crate::capped_io::check_declared_size(stream_len, crate::capped_io::RUNTIME_APP_STREAM_CAP)
+        .with_context(|| format!("runtime package stream length: {}", path.display()))?;
+    let mut stream = vec![0u8; stream_len as usize];
+    file.read_exact(&mut stream)
+        .with_context(|| format!("read .app stream: {}", path.display()))?;
+    let clear = rc4_descramble_stream(&stream);
+    drop(stream);
+    let reader = Box::new(Cursor::new(clear)) as AppReader;
+    zip::ZipArchive::new(reader).with_context(|| format!("reading zip in .app: {}", path.display()))
+}
+
 /// The root entry that marks a Ready-to-Run package.
 const READY_TO_RUN_MANIFEST: &str = "readytorunappmanifest.json";
 
@@ -150,8 +257,49 @@ pub fn app_zip_bytes(app_bytes: &[u8]) -> Cow<'_, [u8]> {
 /// still read straight from the file. A nested app is decompressed into an
 /// anonymous temp file (deleted when the archive is dropped), not into memory.
 ///
+/// A runtime (`.NEA`) package — one whose head is
+/// [`is_encrypted_app_header`]-shaped — is descrambled with the public RC4
+/// key and its plain zip opened in the file's place, so its manifest,
+/// symbols and source read like any other package's. `Err(EncryptedApp)` only
+/// when the descramble fails (truncated stream, cap exceeded, not a zip): a
+/// future format or key change surfaces by name, not as silent absence.
+///
 /// `Ok(None)` when the file holds no zip at all (a symbol-only runtime app).
 pub fn open_app_file(path: &Path) -> anyhow::Result<Option<zip::ZipArchive<AppReader>>> {
+    if is_encrypted_app_file(path) {
+        // Descramble the runtime payload into memory and open its plain zip.
+        // A nested Ready-to-Run app inside a runtime package has never been
+        // seen; if one appears, the R2R branch below unwraps it the usual way.
+        let mut archive = open_runtime_app_file(path).map_err(|_| {
+            anyhow::Error::new(EncryptedApp {
+                path: path.to_path_buf(),
+            })
+        })?;
+        let app: AppReader = match with_ready_to_run_app(&mut archive, |app| {
+            copy_nested_app_to_tempfile(app)
+        }) {
+            Ok(None) => return Ok(Some(archive)),
+            Ok(Some(file)) => Box::new(BufReader::new(file)),
+            Err(e) if crate::capped_io::is_temp_storage_failure(&e) => {
+                log::warn!(
+                    "{}: temp storage failed ({e:#}); reading the nested app into memory",
+                    path.display()
+                );
+                let mut app = read_ready_to_run_app(&mut archive)
+                    .with_context(|| format!("Ready-to-Run package: {}", path.display()))?
+                    .with_context(|| format!("Ready-to-Run package: {}", path.display()))?;
+                let header = app.len() - strip_app_header(&app).len();
+                app.drain(..header);
+                Box::new(Cursor::new(app))
+            }
+            Err(e) => {
+                return Err(e).with_context(|| format!("Ready-to-Run package: {}", path.display()));
+            }
+        };
+        let nested = zip::ZipArchive::new(app)
+            .with_context(|| format!("reading nested app in {}", path.display()))?;
+        return Ok(Some(nested));
+    }
     let file =
         std::fs::File::open(path).with_context(|| format!("open .app: {}", path.display()))?;
     let mut reader = BufReader::new(file);
@@ -418,6 +566,31 @@ pub(crate) mod test_apps {
             r#"<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="{guid}" Name="{name}" Publisher="Microsoft" Version="28.4.53241.53758" Runtime="16.0" /></Package>"#
         )
     }
+
+    /// A runtime (`.NEA`) `.app` around `inner_zip`: a 40-byte NAVX header,
+    /// the `.NEA 00 00 00 01` mark, `inner_zip` scrambled with the public RC4
+    /// key, then the `NXSB`-magic signature trailer the real packages carry
+    /// (its bytes are opaque here; nothing reads it).
+    ///
+    /// The stream length at offset 28 counts from the mark's END (offset 48),
+    /// not from the header's end — the community-documented layout, verified
+    /// against all 36 Continia 29.0 sample files.
+    pub(crate) fn wrap_runtime(inner_zip: &[u8]) -> Vec<u8> {
+        let scrambled = super::rc4_descramble_stream(inner_zip);
+        let mut out = Vec::with_capacity(48 + scrambled.len() + 10);
+        out.extend_from_slice(b"NAVX"); // 0..4   magic
+        out.extend_from_slice(&40u32.to_le_bytes()); // 4..8   header size
+        out.extend_from_slice(&2u32.to_le_bytes()); // 8..12  header version
+        out.extend_from_slice(&[0x22u8; 16]); // 12..28 any GUID; not the app id
+        out.extend_from_slice(&(scrambled.len() as u64).to_le_bytes()); // 28..36 stream length
+        out.extend_from_slice(b"NAVX"); // 36..40 closing magic
+        out.extend_from_slice(b".NEA\x00\x00\x00\x01"); // 40..48 the runtime mark
+        out.extend_from_slice(&scrambled); // 48..   the RC4 stream
+        // A plausible trailer (NXSB magic + DER bytes); nothing reads it.
+        out.extend_from_slice(b"NXSB");
+        out.extend_from_slice(&[0x30, 0x82, 0x36, 0xb5, 0x06, 0x09]);
+        out
+    }
 }
 
 #[cfg(test)]
@@ -487,6 +660,104 @@ mod tests {
         let mut archive = open_app_file(&path).unwrap().expect("a zip");
         assert!(archive.by_name("NavxManifest.xml").is_ok());
         assert!(archive.by_name(READY_TO_RUN_MANIFEST).is_err());
+    }
+
+    /// RC4 test vector: the public runtime key applied to `b"hello world"`.
+    /// A wrong key or KSA order produces different bytes, so this pins both.
+    #[test]
+    fn rc4_public_key_test_vector() {
+        assert_eq!(
+            rc4_descramble_stream(b"hello world"),
+            vec![
+                0x95, 0xed, 0xfc, 0x70, 0x27, 0xad, 0x0d, 0x87, 0x4e, 0xb1, 0x08
+            ]
+        );
+        // Symmetry: scrambling back yields the input.
+        assert_eq!(
+            rc4_descramble_stream(&rc4_descramble_stream(b"hello world")),
+            b"hello world".to_vec()
+        );
+    }
+
+    /// A runtime package must open through the same public path-based opener
+    /// the dependency loader, ABI ingest and embedded-source extraction use:
+    /// its descrambled manifest and symbols read like a plain package's.
+    /// Before this, a `.NEA` package was `EncryptedApp` — unreadable by name.
+    #[test]
+    fn runtime_package_reads_through_the_public_opener() {
+        let manifest = test_apps::manifest_xml("437dbf0e-84ff-417a-965d-ed2bb9650972", "Base App");
+        let symbols = br#"{"Codeunits":[{"Id":80,"Name":"Sales-Post"}]}"#;
+        let plain = test_apps::build_app(&[
+            ("NavxManifest.xml", manifest.as_bytes()),
+            ("SymbolReference.json", symbols),
+        ]);
+        // strip the 40-byte NAVX header `build_app` adds: the runtime wrapper
+        // must wrap the bare zip, and `wrap_runtime` re-adds its own header.
+        let inner_zip = strip_app_header(&plain);
+        let runtime = test_apps::wrap_runtime(inner_zip);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Continia_Runtime_29.0.213759.app");
+        std::fs::write(&path, &runtime).unwrap();
+
+        assert!(is_encrypted_app_file(&path));
+        let mut archive = open_app_file(&path).unwrap().expect("a zip");
+        let mut m = String::new();
+        archive
+            .by_name("NavxManifest.xml")
+            .unwrap()
+            .read_to_string(&mut m)
+            .unwrap();
+        assert_eq!(m, manifest);
+        let mut s = String::new();
+        archive
+            .by_name("SymbolReference.json")
+            .unwrap()
+            .read_to_string(&mut s)
+            .unwrap();
+        assert_eq!(s.as_bytes(), symbols.as_slice());
+    }
+
+    /// A `.NEA`-marked package whose stream cannot be descrambled into a zip
+    /// fails as `EncryptedApp` — the loud channel for a format or key change.
+    #[test]
+    fn runtime_package_that_does_not_descramble_fails_as_encrypted_app() {
+        // Mark + header right, stream garbage: whatever RC4 makes of it is not
+        // a zip, so the archive open fails and maps to `EncryptedApp`.
+        let mut out = Vec::new();
+        out.extend_from_slice(b"NAVX");
+        out.extend_from_slice(&40u32.to_le_bytes());
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&[0x22u8; 16]);
+        out.extend_from_slice(&0x10u64.to_le_bytes());
+        out.extend_from_slice(b"NAVX");
+        out.extend_from_slice(b".NEA\x00\x00\x00\x01");
+        out.extend_from_slice(&[0xa5u8; 16]);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Broken_Runtime.app");
+        std::fs::write(&path, &out).unwrap();
+
+        let err = match open_app_file(&path) {
+            Err(e) => e,
+            // `ZipArchive<AppReader>` is not `Debug`; report its presence.
+            Ok(_) => panic!("a broken runtime package must not open"),
+        };
+        let e = format!("{err:#}");
+        assert!(
+            e.contains("encrypted .app package"),
+            "expected EncryptedApp, got: {e}"
+        );
+    }
+
+    /// `is_encrypted_app_header` accepts only the runtime shape: a plain
+    /// package's head (zip at offset 40) and a short head are not runtime.
+    #[test]
+    fn is_encrypted_app_header_discriminates() {
+        let runtime = test_apps::wrap_runtime(b"PK\x03\x04 whatever");
+        assert!(is_encrypted_app_header(&runtime[..44]));
+        let plain = test_apps::build_app(&[("NavxManifest.xml", b"<Package/>")]);
+        assert!(!is_encrypted_app_header(&plain[..44]));
+        assert!(!is_encrypted_app_header(b"NAVX short"));
     }
 
     #[test]

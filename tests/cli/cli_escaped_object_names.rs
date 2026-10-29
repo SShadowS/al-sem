@@ -221,7 +221,9 @@ fn every_raw_reference_shape_binds_the_escaped_object() {
     );
     write(
         &ws.join("src/Target.Codeunit.al"),
-        "codeunit 50151 \"C \"\"Q\"\" U\"\n{\n    procedure Noop()\n    begin\n    end;\n}\n",
+        // An `OnRun`: a run of a codeunit without one runs no AL code, so it has
+        // no object-run edge to read (`resolver::run_triggers`).
+        "codeunit 50151 \"C \"\"Q\"\" U\"\n{\n    trigger OnRun()\n    begin\n    end;\n}\n",
     );
     write(
         &ws.join("src/Caller.Codeunit.al"),
