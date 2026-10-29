@@ -579,6 +579,7 @@ mod tests {
             path_hint: None,
             table_case: None,
             field_exit_guard: None,
+            table_exit_guard: None,
         }
     }
 
@@ -596,6 +597,7 @@ mod tests {
             path_hint: None,
             table_case: None,
             field_exit_guard: None,
+            table_exit_guard: None,
         }
     }
 
@@ -617,6 +619,7 @@ mod tests {
             path_hint: None,
             table_case: None,
             field_exit_guard: None,
+            table_exit_guard: None,
         }
     }
 

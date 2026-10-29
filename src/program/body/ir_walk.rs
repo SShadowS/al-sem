@@ -788,6 +788,24 @@ impl<'a> SpineCtx<'a> {
         }
     }
 
+    /// G34: `(X, M)` folded when `e` is `X.M` or `X.M()` on a bare identifier `X`.
+    fn member_of_identifier(&self, e: ExprId) -> Option<(String, String)> {
+        let ir = &self.file.ir;
+        let member = match &ir.expr(e).kind {
+            ExprKind::Call { function, args } if args.is_empty() => *function,
+            _ => e,
+        };
+        let ExprKind::Member { object, member, .. } = &ir.expr(member).kind else {
+            return None;
+        };
+        match &ir.expr(*object).kind {
+            ExprKind::Identifier(x) | ExprKind::QuotedIdentifier(x) => {
+                Some((x.to_ascii_lowercase(), member.to_ascii_lowercase()))
+            }
+            _ => None,
+        }
+    }
+
     fn walk_stmt(&mut self, sid: al_syntax::ir::StmtId) {
         use StmtKind::*;
         let st = self.file.ir.stmt(sid);
@@ -812,11 +830,16 @@ impl<'a> SpineCtx<'a> {
                         }
                         _ => None,
                     };
+                    let rhs_member = match &self.file.ir.expr(*target).kind {
+                        ExprKind::Identifier(_) => self.member_of_identifier(*value),
+                        _ => None,
+                    };
                     self.var_assignments.push(PVarAssignment {
                         lhs_name,
                         rhs_literal_value: self.lit_text(*value),
                         source_anchor: self.anchor(&st.origin),
                         rhs_identifier,
+                        rhs_member,
                     });
                 }
                 use crate::program::body::features::FieldAccessKind;
@@ -1413,6 +1436,7 @@ fn cfn_node(kind: &str) -> PCFNNode {
         path_hint: None,
         table_case: None,
         field_exit_guard: None,
+        table_exit_guard: None,
     }
 }
 
@@ -1653,6 +1677,42 @@ impl<'a> IrCfn<'a> {
         Some((receiver, n.trim().parse().ok()?))
     }
 
+    /// G34: `(R folded, [T folded])` when `cond` is `R.Number <> Database::"T"`
+    /// (either side, through parentheses) and `then_block` is a lone `exit`.
+    fn table_exit_guard(&self, cond: ExprId, then_block: BlockId) -> Option<(String, Vec<String>)> {
+        let [BlockItem::Stmt(s)] = self.ir().block(then_block).items.as_slice() else {
+            return None;
+        };
+        if !matches!(self.ir().stmt(*s).kind, al_syntax::ir::StmtKind::Exit(_)) {
+            return None;
+        }
+        let mut cond = cond;
+        while let ExprKind::Parenthesized(x) = &self.ir().expr(cond).kind {
+            cond = *x;
+        }
+        let ExprKind::Binary {
+            op: BinaryOp::Ne,
+            lhs,
+            rhs,
+        } = &self.ir().expr(cond).kind
+        else {
+            return None;
+        };
+        let strip = |mut e: ExprId| {
+            while let ExprKind::Parenthesized(x) = &self.ir().expr(e).kind {
+                e = *x;
+            }
+            e
+        };
+        let (lhs, rhs) = (strip(*lhs), strip(*rhs));
+        let (r, t) = match (self.number_receiver(lhs), self.number_receiver(rhs)) {
+            (Some(r), None) => (r, self.database_table(rhs)?),
+            (None, Some(r)) => (r, self.database_table(lhs)?),
+            _ => return None,
+        };
+        Some((r, vec![t]))
+    }
+
     /// G33: `R` (folded) when `e` is `R.Number` (`R.Number()` too), parentheses
     /// removed.
     fn number_receiver(&self, mut e: ExprId) -> Option<String> {
@@ -1802,6 +1862,7 @@ impl<'a> IrCfn<'a> {
                 n.condition_guard = self.simple_guard(*cond);
                 if else_block.is_none() {
                     n.field_exit_guard = self.field_exit_guard(*cond, *then_block);
+                    n.table_exit_guard = self.table_exit_guard(*cond, *then_block);
                 }
                 n
             }

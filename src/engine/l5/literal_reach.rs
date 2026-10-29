@@ -25,10 +25,18 @@
 //! tables of its usable table parameters:
 //! - an edge from a site whose requirements contradict the known values is not
 //!   followed;
-//! - a direct or variable-typed call binds the callee's usable parameters from
-//!   a `true`/`false` argument, a record variable of known table, or the
+//! - a direct, variable-typed or interface call (G34: an implementer takes the
+//!   arguments by position) binds the callee's usable parameters from a
+//!   `true`/`false` argument, a record variable of known table, or the
 //!   caller's own known parameter it forwards; every other edge kind (events,
-//!   triggers, object runs, interface dispatch) binds nothing.
+//!   triggers, object runs) binds nothing.
+//!
+//! G34 adds the RecordRef/Variant value flow ([`RecRefFlow`]): a callee's
+//! parameter (or its instance's global) that a guard reads, directly or
+//! through what it is passed on to, is bound to the tables the argument's
+//! atoms evaluate to in the caller's state, and an exit guard `if R.Number <>
+//! Database::"T" then exit;` makes every later site of its routine require
+//! `R` to have held `T`.
 //!
 //! An operation is UNREACHABLE when its routine is reached with guards ignored
 //! but no reached state of that routine satisfies the operation's own
@@ -41,6 +49,9 @@
 
 use crate::engine::l4::param_guard::{FrameGuards, Req, frame_guards_over};
 use crate::engine::l5::digest::DigestEffectResult;
+use crate::engine::l5::recref_flow::{
+    Atom, Atoms, RecRefFlow, RelevantGlobals, RelevantParams, TSet, eval,
+};
 use crate::engine::l5::snapshot::SnapshotGraphEdge;
 use crate::program::body::features::{PCFNNode, TableCase};
 use crate::program::model::workspace::{Model, ModelRoutine};
@@ -54,12 +65,18 @@ const STATE_CAP: usize = 400_000;
 /// table must be IN the set (else NOT in it), the folded table names).
 type TableReq = (u32, bool, Arc<[String]>);
 
+/// G34: a requirement that what `atoms` stand for (in the routine's terms)
+/// holds one of the tables.
+type AtomReq = (Atoms, Arc<[String]>);
+
 /// Known parameter values, each list sorted by parameter index: Booleans, and
-/// the folded name of the table a record argument holds.
+/// the folded names of the tables a record argument may hold (`""`: none).
+/// G34: and the tables the routine's own instance's globals may hold.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 struct Bindings {
     bools: Vec<(u32, bool)>,
-    tables: Vec<(u32, Arc<str>)>,
+    tables: Vec<(u32, TSet)>,
+    globals: Vec<(Arc<str>, TSet)>,
 }
 
 fn contradicts(reqs: &[Req], b: &Bindings) -> bool {
@@ -67,12 +84,49 @@ fn contradicts(reqs: &[Req], b: &Bindings) -> bool {
         .any(|&(i, v)| b.bools.iter().any(|&(j, w)| j == i && w != v))
 }
 
+/// Whether no table of `held` meets a requirement that it be (or not be) in `set`.
+fn violates(held: &TSet, must_be_in: bool, set: &[String]) -> bool {
+    let in_set = |t: &Arc<str>| set.iter().any(|s| s.as_str() == &**t);
+    if must_be_in {
+        !held.iter().any(in_set)
+    } else {
+        held.iter().all(in_set)
+    }
+}
+
 fn contradicts_tables(reqs: &[TableReq], b: &Bindings) -> bool {
     reqs.iter().any(|(i, must_be_in, set)| {
         b.tables
             .iter()
-            .any(|(j, t)| j == i && set.iter().any(|s| s.as_str() == &**t) != *must_be_in)
+            .any(|(j, t)| j == i && violates(t, *must_be_in, set))
     })
+}
+
+fn contradicts_atoms(reqs: &[AtomReq], b: &Bindings) -> bool {
+    reqs.iter().any(|(atoms, set)| {
+        eval(atoms, &b.tables, &b.globals).is_some_and(|held| violates(&held, true, set))
+    })
+}
+
+/// G34: one routine's exit guards: past a top-level `if R.Number <>
+/// Database::"T" then exit;`, every site requires `R` to have held `T` there.
+/// `R` is a parameter or local bound by nothing before the guard (so it holds
+/// its entry value, or no table), or an object global (its instance's value
+/// at any time). A rebinding after it does not matter: the guard already ran.
+fn exit_guards(flow: &RecRefFlow, i: usize) -> HashMap<String, Vec<AtomReq>> {
+    let mut out: HashMap<String, Vec<AtomReq>> = HashMap::new();
+    let anytime = |n: &str| matches!(flow.initial_atom(i, n), Some(Atom::Global(_)));
+    for (rec, tables, ids) in crate::engine::l5::recref_flow::exit_guards(flow.routine(i), anytime)
+    {
+        let Some(init) = flow.initial_atom(i, &rec) else {
+            continue;
+        };
+        let req: AtomReq = (Atoms::from([init]), tables.into());
+        for id in ids {
+            out.entry(id).or_default().push(req.clone());
+        }
+    }
+    out
 }
 
 /// G33: one routine's table frame. A parameter is USABLE when it is a
@@ -294,12 +348,14 @@ fn edge_parts(e: &SnapshotGraphEdge) -> Option<(&str, &str, Option<&str>, bool)>
             callsite_id,
             ..
         } => (from, to, Some(callsite_id.as_str()), true),
+        // G34: an implementer takes the call's arguments by position, as a
+        // direct callee does.
         SnapshotGraphEdge::InterfaceDispatch {
             from,
             to,
             callsite_id,
             ..
-        } => (from, to, Some(callsite_id.as_str()), false),
+        } => (from, to, Some(callsite_id.as_str()), true),
         SnapshotGraphEdge::ObjectRunResolved {
             from,
             to,
@@ -342,6 +398,14 @@ pub(crate) struct LiteralReach<'a> {
     table_names: HashMap<&'a str, Arc<str>>,
     /// Operation id → the stable id of the routine it sits in.
     op_owner: HashMap<&'a str, &'a str>,
+    /// G34: the RecordRef/Variant value flow, and per routine (stable id) the
+    /// exit-guard requirements by site.
+    flow: RecRefFlow<'a>,
+    guards: HashMap<&'a str, HashMap<String, Vec<AtomReq>>>,
+    /// G34: per routine (flow index) the parameters, and per object the
+    /// globals, whose tables a search state carries.
+    rel_params: RelevantParams,
+    rel_globals: RelevantGlobals<'a>,
 }
 
 impl<'a> LiteralReach<'a> {
@@ -391,6 +455,36 @@ impl<'a> LiteralReach<'a> {
                 out.entry(from).or_default().push((to, site, binds));
             }
         }
+        // G34: the exit guards, and what a search must carry to read them
+        // (and G33's table parameters).
+        let flow = RecRefFlow::new(model, edges);
+        let mut guards = HashMap::new();
+        let mut seeds: Vec<(usize, Atom)> = Vec::new();
+        if flow.usable() {
+            for (i, r) in routines.iter().enumerate() {
+                if flow.index_of(&r.stable_routine_id) != Some(i) {
+                    continue;
+                }
+                let g = exit_guards(&flow, i);
+                if g.is_empty() {
+                    continue;
+                }
+                for (atoms, _) in g.values().flatten() {
+                    seeds.extend(atoms.iter().map(|a| (i, a.clone())));
+                }
+                guards.insert(r.stable_routine_id.as_str(), g);
+            }
+            for (stable, t) in &tables {
+                if let Some(i) = flow.index_of(stable) {
+                    seeds.extend(t.usable.iter().map(|&p| (i, Atom::Param(p))));
+                }
+            }
+        }
+        let (rel_params, rel_globals) = if seeds.is_empty() {
+            Default::default()
+        } else {
+            flow.relevance(seeds)
+        };
         LiteralReach {
             out,
             by_stable,
@@ -398,6 +492,10 @@ impl<'a> LiteralReach<'a> {
             tables,
             table_names,
             op_owner,
+            flow,
+            guards,
+            rel_params,
+            rel_globals,
         }
     }
 
@@ -419,12 +517,23 @@ impl<'a> LiteralReach<'a> {
     fn dead_at(&self, routine: &str, site: &str, b: &Bindings) -> bool {
         contradicts(self.reqs_at(routine, site), b)
             || contradicts_tables(self.table_reqs_at(routine, site), b)
+            || self
+                .guards
+                .get(routine)
+                .and_then(|g| g.get(site))
+                .is_some_and(|reqs| contradicts_atoms(reqs, b))
     }
 
     /// The callee's bindings across a call at `site` of `caller` with `b`.
     fn bind(&self, caller: &str, site: &str, callee: &str, b: &Bindings) -> Bindings {
         let (f, t) = (self.frames.get(callee), self.tables.get(callee));
-        if f.is_none() && t.is_none() {
+        let ci = self.flow.index_of(callee);
+        let rel_params = ci.and_then(|c| self.rel_params.get(&c));
+        let rel_globals = ci.and_then(|c| {
+            self.rel_globals
+                .get(self.flow.routine(c).object_id.as_str())
+        });
+        if f.is_none() && t.is_none() && rel_params.is_none() && rel_globals.is_none() {
             return Bindings::default();
         }
         let Some((r, cs)) = self.by_stable.get(caller).and_then(|r| {
@@ -470,7 +579,7 @@ impl<'a> LiteralReach<'a> {
                     .find(|v| v.name.to_ascii_lowercase() == a)
                     .and_then(|v| v.table_id.as_deref())
                     .and_then(|id| self.table_names.get(id))
-                    .cloned()
+                    .map(|t| TSet::from([Arc::clone(t)]))
             });
             let table = own.or_else(|| {
                 forwarded(j).and_then(|i| {
@@ -484,8 +593,42 @@ impl<'a> LiteralReach<'a> {
                 out.tables.push((j, table));
             }
         }
+        // G34: what the value flow knows of the callee's relevant parameters
+        // (G33's included, where it knows more), and of its instance's globals.
+        if let (Some(c), Some(fi)) = (ci, self.flow.index_of(caller)) {
+            for &j in rel_params.into_iter().flatten() {
+                let atoms = self.flow.arg_atoms(fi, cs, j);
+                if let Some(set) = eval(&atoms, &b.tables, &b.globals) {
+                    out.tables.retain(|(k, _)| *k != j);
+                    out.tables.push((j, set));
+                }
+            }
+            if let Some(wanted) = rel_globals.filter(|g| !g.is_empty()) {
+                if self.flow.is_self_call(fi, cs, c) {
+                    out.globals = b
+                        .globals
+                        .iter()
+                        .filter(|(g, _)| wanted.contains(g))
+                        .cloned()
+                        .collect();
+                } else {
+                    let wanted: Vec<Arc<str>> = wanted.iter().cloned().collect();
+                    for (g, atoms) in self
+                        .flow
+                        .instance_globals(fi, cs, c, &wanted)
+                        .into_iter()
+                        .flatten()
+                    {
+                        if let Some(set) = eval(&atoms, &b.tables, &b.globals) {
+                            out.globals.push((g, set));
+                        }
+                    }
+                }
+            }
+        }
         out.bools.sort_unstable();
         out.tables.sort();
+        out.globals.sort();
         out
     }
 
@@ -582,7 +725,8 @@ impl<'a> LiteralReach<'a> {
 
     /// Whether a listed witness path can run: replayed from the root with no
     /// known values, each hop's call site must not contradict what is known,
-    /// and a direct or variable-typed call binds the callee as in the search.
+    /// and a direct, variable-typed or interface call binds the callee as in
+    /// the search.
     pub(crate) fn path_live(&self, path: &[crate::engine::l5::digest::ProjectedHop]) -> bool {
         let mut b = Bindings::default();
         for hop in path {
@@ -598,7 +742,7 @@ impl<'a> LiteralReach<'a> {
                 break;
             };
             b = match (h.edge_kind.as_deref(), h.callsite_id.as_deref()) {
-                (Some("direct-call" | "variable-typed-call"), Some(cs)) => {
+                (Some("direct-call" | "variable-typed-call" | "interface-dispatch"), Some(cs)) => {
                     self.bind(from, cs, to, &b)
                 }
                 _ => Bindings::default(),
@@ -633,7 +777,7 @@ impl<'a> LiteralReach<'a> {
         let mut out = HashSet::new();
         let mut dead_resources: HashMap<usize, Vec<String>> = HashMap::new();
         // A root with no usable guard anywhere has nothing to prune.
-        if self.frames.is_empty() && self.tables.is_empty() {
+        if self.frames.is_empty() && self.tables.is_empty() && self.guards.is_empty() {
             return (out, dead_resources);
         }
         let Some(reached) = self.search(root) else {

@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`prove` follows the table a RecordRef holds into `if R.Number <>
+  Database::"T" then exit;`** (G34), through `GetTable`, `Duplicate()`,
+  parameters and a codeunit global. Continia DO's `VendorLedgerPrint` puts a
+  Vendor Ledger Entry in a RecordRef, stores it in the e-mail handler's global
+  (`SetRecRefFilter`) and prints. The print path copies the global and reaches
+  `CDO File.CalcSalesDisc`, which exits unless the RecordRef holds a Sales
+  Header, so its `Sales-Calc. Discount` run cannot happen from there. `prove …
+  writes-table:Vendor` still answered `yes` through it (contradicted claim
+  HAND-PSV-004.c5); it now answers `unknown` (open interface calls remain).
+  Re-proving the 584 DO claims moved exactly 4, every one a contradicted `yes`
+  through this route, now `unknown`: HAND-PSV-004.c5 and EMAIL-OPEN-001.c1, c3,
+  c7. Nothing else moved.
+  How it works (`engine::l5::recref_flow`):
+  - Each routine gets a flow-insensitive summary of what each RecordRef and
+    Variant may hold: a parameter's entry value, no table for a local, a
+    record's table by `GetTable`, another variable by `:=` or `Duplicate()`,
+    or anything. A call reads what the callee may leave in the parameter; an
+    event reads its loaded subscribers, an interface call its loaded
+    implementers (`prove` already lists an open interface as a blocker).
+  - `A := B` shares the RecordRef: a rebinding (`Open`, `GetTable`, `Close`…)
+    of either that can run after it rebinds both. Separate branches of one
+    `if`/`case` outside a loop do not count.
+  - A codeunit global is read per instance. A codeunit the caller declares as
+    a local (not `SingleInstance`, never passed on) holds only what the calls
+    made on it assign. A self-call carries the instance along.
+  - The guarded search (`literal_reach`) binds the parameters and globals a
+    guard depends on, and now binds arguments across interface calls too.
+  - `R.GetTable(Rec)` past a guard that `R` already held `Rec`'s table adds
+    no table (`CalcSalesDisc` puts its own Sales Header back).
+  Test `cli_prove_recref_guard` (a `no`, and four `yes` cases: the guard's own
+  table, a rebinding callee, an alias rebinding, a rebinding subscriber).
+
 - **`aldump --dump-dependency-source <workspace> <out-dir>`** writes the AL the
   engine reads from inside each dependency `.app` to `<out-dir>/<app guid>/<virtual
   path>`. That is the path a dependency citation `dep:<guid>:<path>` names, with the

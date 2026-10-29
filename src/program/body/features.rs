@@ -36,11 +36,13 @@
 //!   - `PRecordVariable.is_receiver`
 //!   - `PFieldAccess.access`
 //!   - `PVarAssignment.rhs_identifier`
+//!   - `PVarAssignment.rhs_member`
 //!   - `PCFNNode.is_case_else`
 //!   - `PCFNNode.source_range`
 //!   - `PCFNNode.path_hint`
 //!   - `PCFNNode.table_case`
 //!   - `PCFNNode.field_exit_guard`
+//!   - `PCFNNode.table_exit_guard`
 
 use super::operation_order::{OperationOrder, ScopeFrame};
 use serde::{Deserialize, Serialize};
@@ -550,6 +552,12 @@ pub struct PVarAssignment {
     /// golden stays byte-identical; deserialized goldens default it to `None`.
     #[serde(skip)]
     pub rhs_identifier: Option<String>,
+    /// G34: `(X, M)` folded, set ONLY when the target is a bare identifier and
+    /// the value is `X.M` or `X.M()` on a bare identifier `X` (`R :=
+    /// Other.Duplicate()`, `Id := R.RecordId`). INTERNAL-ONLY like
+    /// `rhs_identifier`, and excluded from `PartialEq` for the same reason.
+    #[serde(skip)]
+    pub rhs_member: Option<(String, String)>,
 }
 
 /// MANUAL PartialEq: compares exactly the SERIALIZED L2 contract surface.
@@ -649,6 +657,12 @@ pub struct PCFNNode {
     /// `PartialEq`.
     #[serde(skip, default)]
     pub field_exit_guard: Option<(String, i64)>,
+    /// In-memory ONLY (G34): on an `if` with no `else` whose condition is
+    /// `R.Number <> Database::"T"` (either side, through parentheses) and whose
+    /// then-branch is only `exit`: `(R folded, [T folded])`. Past it, `R` holds
+    /// table `T`. EXCLUDED from `PartialEq`.
+    #[serde(skip, default)]
+    pub table_exit_guard: Option<(String, Vec<String>)>,
 }
 
 /// G33: what a `case R.Number of Database::"T": …` says about the tables.
@@ -860,7 +874,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 14, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 16, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 
