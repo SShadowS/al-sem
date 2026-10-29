@@ -1,4 +1,0 @@
---- Codeunit D34 Demo::DirectCommitInLoop ---
-  question: writes-table:Customer
-  answer:   no
-  obligations: all clear

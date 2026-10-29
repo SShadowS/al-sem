@@ -490,7 +490,9 @@ enum ImplicitRecv {
 impl WithCtx {
     /// The context at the start of `file.objects[object_idx]`'s `routine`.
     fn for_routine(src: &str, file: &AlFile, object_idx: usize, routine: &RoutineDecl) -> WithCtx {
-        let rec = crate::program::body::ir_walk::object_has_implicit_rec(&file.objects[object_idx]);
+        // G41: a report dataitem trigger's implicit `Rec` is its dataitem's record.
+        let rec = crate::program::body::ir_walk::object_has_implicit_rec(&file.objects[object_idx])
+            || routine.dataitem_source_table.is_some();
         WithCtx {
             depth: 0,
             scan_hit: routine_has_with_token(src, routine.origin.byte.clone()),

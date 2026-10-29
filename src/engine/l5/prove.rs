@@ -467,6 +467,17 @@ const UI_TYPES: &[&str] = &[
     "UI_PROGRESS",
 ];
 
+/// G40: whether `query` names a real table of the model, by name (case-
+/// insensitive) or by number, the two ways [`name_or_id_matches`] matches a
+/// write. An extension stub is not a table.
+fn names_a_known_table(model: &crate::program::model::workspace::Model, query: &str) -> bool {
+    let q = query.trim();
+    model.workspace.tables.iter().any(|t| {
+        !t.is_extension_stub
+            && (t.name.eq_ignore_ascii_case(q) || t.id.rsplit('/').next().is_some_and(|n| n == q))
+    })
+}
+
 /// Case-insensitive match of `query` against the resourceDisplay or the
 /// trailing segment of the resourceId (after the last '/').
 fn resource_name_matches(detail: &[(String, String)], query: &str) -> bool {
@@ -1615,6 +1626,16 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     // Parse question (already validated at CLI layer, but re-check cleanly)
     let parsed_question = parse_question(question_text)
         .ok_or_else(|| format!("prove: unknown question '{}'", question_text))?;
+    // G40: a table the model does not know answers nothing. Matching no write
+    // would read as a proven `no`.
+    if let ProveQuestion::WritesTable { table } = &parsed_question
+        && !names_a_known_table(resolved, table)
+    {
+        return Err(format!(
+            "prove: unknown table '{table}' in '{question_text}': no table of the program has \
+             that name or number"
+        ));
+    }
     // G25: caller-dependent writes asked in the callers' frames, while the
     // bundle is alive.
     let via_callers = query_full
