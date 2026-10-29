@@ -2200,6 +2200,9 @@ fn position_provably_incompatible(arg: &ArgDispatchInfo, param: &ParamDispatchIn
 /// - An enum converts with `Integer`, `BigInteger` and `Option` both ways
 ///   (AL0603), but NOT into `Decimal` (AL0133).
 /// - `Guid` converts with `Text` and `Code` both ways; `Label` into `Guid`.
+/// - `Text`/`Code`/`Label` convert into `SecretText` (documented, MS Learn
+///   methods-auto/secrettext; not alc-probed here). Listing a pair as
+///   convertible can only leave a call undecided, never pick wrongly.
 ///
 /// Proven NOT convertible (AL0133), so still incompatible: `Text`/`Code`/
 /// `Boolean`/`Date`/`Time`/`InStream`/`Guid` into `Integer`; `Integer`/
@@ -2238,6 +2241,11 @@ fn implicitly_converts(arg: &CanonicalArgType, param: &CanonicalArgType) -> bool
         || (numeric(arg) && param == "enum")
         || (arg == "guid" && matches!(param, "text" | "code"))
         || (matches!(arg, "text" | "code" | "label") && param == "guid")
+        // A Text converts into SecretText (never the other way: MS Learn
+        // methods-auto/secrettext): System Application's
+        // `SignedXmlImpl.SetSigningKey(XmlString)` with a Text over `(SecretText)`
+        // / `(Codeunit "Signature Key")` lost both candidates.
+        || (matches!(arg, "text" | "code" | "label") && param == "secrettext")
 }
 
 /// Attempt the Task 2 fail-closed pick over a prevalidated, same-name/
