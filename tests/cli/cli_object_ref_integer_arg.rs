@@ -8,7 +8,7 @@
 
 use std::process::Command;
 
-const SOURCE: &str = r#"table 50420 "DR T" { fields { field(1; K; Integer) { } } keys { key(PK; K) { } } }
+const SOURCE: &str = r#"table 50420 "DR T" { fields { field(1; K; Integer) { } field(2; "Doc Type"; Enum "DR E") { } } keys { key(PK; K) { } } }
 page 50421 "DR P" { SourceTable = "DR T"; }
 enum 50422 "DR E" { value(0; A) { } }
 codeunit 50423 "DR Lib"
@@ -20,6 +20,14 @@ codeunit 50423 "DR Lib"
     procedure Add(Id: Integer; X: Text)
     begin
     end;
+
+    procedure Check(DocType: Enum "DR E")
+    begin
+    end;
+
+    procedure Check(var Rec: Record "DR T")
+    begin
+    end;
 }
 codeunit 50424 "DR Caller"
 {
@@ -27,11 +35,14 @@ codeunit 50424 "DR Caller"
     var
         Lib: Codeunit "DR Lib";
         E: Enum "DR E";
+        T: Record "DR T";
     begin
         Lib.Add(1, Database::"DR T");
         Lib.Add(1, Page::"DR P");
         Lib.Add(1, Codeunit::"DR Lib");
         Lib.Add(1, E.AsInteger());
+        // A value of the field's enum, never a variable.
+        Lib.Check(T."Doc Type"::A);
     end;
 }
 "#;
@@ -60,6 +71,6 @@ fn object_references_and_as_integer_are_integer_arguments() {
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stats JSON");
     let s = &v["primaryScoped"];
-    assert_eq!(s["resolvedSource"], 4, "{s}");
+    assert_eq!(s["resolvedSource"], 5, "{s}");
     assert_eq!(s["ambiguousResolved"], 0, "{s}");
 }

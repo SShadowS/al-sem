@@ -1357,6 +1357,34 @@ fn type_one_arg(
                 {
                     enum_named(x)
                 }
+                // `Rec."Field"::Value`: the field's declared enum (Base
+                // Application's `CheckBlockedCustOnJnls(Customer,
+                // GenJournalLine."Document Type"::Payment, true)` over `(…; DocType:
+                // Enum …; …)` / `(…; var GenJnlLine: Record …; …)` stayed
+                // ambiguous). Only an enum-typed field: a value, not a variable.
+                ExprKind::Member { .. } => {
+                    let field = type_one_arg(
+                        file,
+                        file.ir.expr(*enum_type),
+                        routine,
+                        object_globals,
+                        from,
+                        graph,
+                        index,
+                        surface,
+                        with_state,
+                    );
+                    match field.canonical {
+                        Some(CanonicalArgType::Object(ref id)) if id.kind == ObjectKind::Enum => {
+                            ArgDispatchInfo {
+                                var_passable: false,
+                                literal_kind: None,
+                                ..field
+                            }
+                        }
+                        _ => ArgDispatchInfo::untyped(),
+                    }
+                }
                 _ => ArgDispatchInfo::untyped(),
             }
         }

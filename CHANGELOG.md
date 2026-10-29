@@ -318,8 +318,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`HttpContent.SetHeader(Key, Headers.Get(Key))` over `(Text, Text)` / `(Text,
   SecretText)`), and an element of a declared array as the element type
   (Continia's `Http.AddRequestHeader(RequestHeaders[i, 1], RequestHeaders[i,
-  2])`). Continia DO's dependency-body `ambiguousResolved`: 21 → 17. Tests
-  `cli_secrettext_arg`, `cli_array_param_overload`.
+  2])`), and a field-qualified enum value `Rec."Field"::Value` as the field's
+  enum (Base Application's `CheckBlockedCustOnJnls(Customer,
+  GenJournalLine."Document Type"::Payment, true)` over `(…; Enum …; …)` /
+  `(…; var Record …; …)`). Continia DO's dependency-body `ambiguousResolved`:
+  21 → 17 (→ 14 with the Moved-object fix). Tests `cli_secrettext_arg`,
+  `cli_array_param_overload`, `cli_object_ref_integer_arg`.
 
 - **A RecordRef write behind `if not R.FieldExist(N) then exit;` writes only a
   table that has field `N`** (G36). Continia DO's `UpdateHandledFields(var
