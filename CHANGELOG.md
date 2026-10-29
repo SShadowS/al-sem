@@ -283,8 +283,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   derived class; two aliases are now undecided). `RecordId.TableNo()`,
   `Count()` of a List/Dictionary/JsonArray and `Text.IndexOf`/`LastIndexOf`
   now type as Integer (`GetIntegrationTableMapping(Mapping,
-  RecordID.TableNo())`). Continia DO's dependency-body `ambiguousResolved`:
-  59 → 49. Tests `cli_dotnet_var_overload`, `cli_record_integer_builtin_arg`.
+  RecordID.TableNo())`). An untyped argument no longer stops the pick when
+  the typed ones prove every other candidate unable (rule (B) holds without
+  it): `XMLDOMMgt.FindNode(DotNetDoc.DocumentElement, Path, Found)`, whose
+  first argument is an untyped DotNet member. Continia DO's dependency-body
+  `ambiguousResolved`: 59 → 33. Tests `cli_dotnet_var_overload`,
+  `cli_record_integer_builtin_arg`.
 
 - **A RecordRef write behind `if not R.FieldExist(N) then exit;` writes only a
   table that has field `N`** (G36). Continia DO's `UpdateHandledFields(var

@@ -2248,11 +2248,15 @@ pub(crate) fn pick_candidate(
     let discriminating: Vec<usize> = (0..args.len())
         .filter(|&pos| candidates.windows(2).any(|w| w[0][pos] != w[1][pos]))
         .collect();
-    // Call-level degradation: EVERY argument at a discriminating position
-    // must be typed.
-    if discriminating.iter().any(|&p| args[p].canonical.is_none()) {
-        return None;
-    }
+    // Call-level degradation: an exact match needs EVERY argument at a
+    // discriminating position typed. An untyped one is never proven
+    // incompatible, so rule (B) below still holds without it: when every
+    // other candidate is proven unable at a TYPED position, that one binds.
+    // Base Application's `XMLDOMMgt.FindNode(DotNetDoc.DocumentElement, Path,
+    // XmlRootNode)` (an untyped DotNet member first) over `(DotNet XmlNode; …;
+    // var DotNet XmlNode)` / `(XmlNode; …; var XmlNode)`: the third argument
+    // rules out the second.
+    let untyped = discriminating.iter().any(|&p| args[p].canonical.is_none());
     for &pos in &discriminating {
         // `Any` wildcard gate: no compiler-proven precedence for `Any`.
         // `Variant` is handled after this loop (S9.0e, proven below).
@@ -2285,6 +2289,9 @@ pub(crate) fn pick_candidate(
                 return None;
             }
         }
+    }
+    if untyped {
+        return pick_sole_applicable(args, candidates, &discriminating);
     }
 
     // `Variant` precedence (S9.0e), proven with alc 18.0.41.45789 on

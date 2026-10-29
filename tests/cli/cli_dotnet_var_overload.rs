@@ -9,6 +9,10 @@
 //! `ambiguousResolved` (Continia DO: 7 such dependency sites). A `var` DotNet
 //! parameter takes a derived class, so two aliases are undecided; the native
 //! `XmlNode` one never takes a DotNet value.
+//!
+//! `XMLDOMMgt.FindNode(DotNetDoc.DocumentElement, Path, Found)` passes an
+//! untyped DotNet member first, which made the whole pick give up; the typed
+//! `Found` alone rules the native overload out (rule (B)).
 
 use std::process::Command;
 
@@ -21,6 +25,14 @@ const SOURCE: &str = r#"codeunit 50410 "DN Lib"
     procedure AddAttribute(var Node: XmlNode; Name: Text)
     begin
     end;
+
+    procedure FindNode(Root: DotNet XmlNode; Path: Text; var Found: DotNet XmlNode)
+    begin
+    end;
+
+    procedure FindNode(Root: XmlNode; Path: Text; var Found: XmlNode)
+    begin
+    end;
 }
 codeunit 50411 "DN Caller"
 {
@@ -28,8 +40,13 @@ codeunit 50411 "DN Caller"
     var
         Lib: Codeunit "DN Lib";
         Element: DotNet XmlElement;
+        Doc: DotNet XmlDocument;
+        Found: DotNet XmlNode;
     begin
         Lib.AddAttribute(Element, 'a');
+        // The first argument is a DotNet member (untyped); the third rules
+        // the native overload out.
+        Lib.FindNode(Doc.DocumentElement, 'p', Found);
     end;
 }
 "#;
@@ -58,6 +75,6 @@ fn a_dotnet_argument_picks_the_dotnet_var_overload() {
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stats JSON");
     let s = &v["primaryScoped"];
-    assert_eq!(s["resolvedSource"], 1, "{s}");
+    assert_eq!(s["resolvedSource"], 2, "{s}");
     assert_eq!(s["ambiguousResolved"], 0, "{s}");
 }
