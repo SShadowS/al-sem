@@ -332,6 +332,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cli_secrettext_arg`, `cli_array_param_overload`,
   `cli_object_ref_integer_arg`, `cli_dataitem_name_arg`.
 
+- **The last 11 overload ambiguities in Continia DO's dependency code bind,
+  each checked with the AL compiler (alc 18.0.43).** A Text-family argument
+  (Text, Code, Label, a text literal) binds an unbounded `Text` parameter over a
+  `SecretText` one. This is the one conversion ranking the engine now applies:
+  probes whose overloads return different types, with a control assignment
+  failing (AL0122), prove it. It settles `AddHeader(Label, Label)` ×2,
+  `UrlEncode(Label)` and `VerifyData(Text, Text, …)` over `(Text; SecretText;
+  …)` / `(SecretText; SecretText; …)`. Six more fixes:
+  - A Variant argument is never proven incompatible (it converts into every
+    parameter type probed, by value and `var`). A Variant next to typed
+    arguments now decides by elimination instead of declining:
+    `WordTemplates.Merge(DataVariant, SplitDocuments, …)` ×2. Before, a Variant
+    into a `Dictionary` parameter counted as incompatible, which was wrong.
+  - A DotNet value is proven apart, both ways, only from AL objects (Record,
+    Codeunit, Interface) and AL's wrapper types (Xml*, Json*, Http*, List,
+    TextBuilder, RecordRef). Simple values and streams stay undecided:
+    `DotNet MemoryStream` converts into OutStream, `DotNet String` with Text.
+    That binds `SaveZipArchive(MemoryStream)` over `(OutStream)` / `(var
+    Codeunit "Temp Blob")`.
+  - The Integer-literal guard ignores a candidate another position already
+    rules out: `AddBlobPutContentHeaders(…, BlobType::AppendBlob, 0, …)`.
+  - A member call whose same-arity overloads all return one type is that type:
+    `CreateFile(…, Helper.GetContentLength(InStream), …)`.
+  - An interface method's result is its declared return type:
+    `SetFunctionAsToolChoice(Function.GetName())`.
+  - `CreateGuid()` is a Guid: `Convert.ToBase64(CreateGuid())`.
+  Continia DO's dependency-body `ambiguousResolved`: 11 → 0, `resolvedSource`
+  +11, no other count moved. Test `cli_overload_last_ambiguities`.
+
 - **A RecordRef write behind `if not R.FieldExist(N) then exit;` writes only a
   table that has field `N`** (G36). Continia DO's `UpdateHandledFields(var
   FilterRecord: RecordRef)` modifies whatever table it holds, so `prove …

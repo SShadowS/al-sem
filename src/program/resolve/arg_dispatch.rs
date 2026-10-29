@@ -1712,6 +1712,22 @@ fn type_call_result_arg_member(
     let base_receiver =
         parsed_type_to_receiver(classify_type_text(base_ty_text), from_object, graph, index);
     let member_lc = unquote_identifier(member).fold_identifier();
+    // An interface method (`Function.GetName()`): the interface's own
+    // declared return type, which every implementer shares. System
+    // Application's `SetFunctionAsToolChoice(Function.GetName())` over
+    // `(Interface "AOAI Function")` / `(Text)` stayed ambiguous.
+    if let ReceiverType::Interface { name_lc } = &base_receiver
+        && let Some(node) = crate::program::resolve::receiver::interface_own_routine_node(
+            name_lc,
+            &member_lc,
+            inner_arity,
+            from_object,
+            graph,
+            index,
+        )
+    {
+        return call_result_arg_from_routine_node(node, from, graph, index);
+    }
     let (_shape, routes) = resolve_member(
         &base_receiver,
         &member_lc,
@@ -1721,8 +1737,40 @@ fn type_call_result_arg_member(
         index,
         surface,
     );
-    let [route] = routes.as_slice() else {
-        return ArgDispatchInfo::untyped();
+    let route = match routes.as_slice() {
+        [route] => route,
+        // Same-arity overloads that all return the same type: the call is
+        // that type whichever one binds. System Application's
+        // `CreateFile(FilePath, AFSHttpContentHelper.GetContentLength(InStream),
+        // …)`, `GetContentLength` being `(var InStream)` / `(Text)`, both
+        // Integer, over `(…; InStream; …)` / `(…; Integer; …)` stayed ambiguous.
+        [_, _, ..] => {
+            let mut typed = routes.iter().map(|r| {
+                if !matches!(
+                    r.target,
+                    RouteTarget::Routine(_) | RouteTarget::AbiSymbol { .. }
+                ) {
+                    return None;
+                }
+                routine_node_for_type_query(r, inner_arity, from_object, graph, index)
+                    .map(|n| call_result_arg_from_routine_node(n, from, graph, index))
+                    .filter(|a| a.canonical.is_some())
+            });
+            let Some(Some(first)) = typed.next() else {
+                return ArgDispatchInfo::untyped();
+            };
+            let agree = typed.all(|a| {
+                a.as_ref().is_some_and(|a| {
+                    a.canonical == first.canonical && a.exact_text == first.exact_text
+                })
+            });
+            return if agree {
+                first
+            } else {
+                ArgDispatchInfo::untyped()
+            };
+        }
+        [] => return ArgDispatchInfo::untyped(),
     };
     // A record's platform method (`Line.RecordId()`): its documented return
     // (`record_builtin_return_kind`), as the parens-less `Rec.RecordId` arm
@@ -1884,7 +1932,9 @@ fn call_result_arg_from_routine_node(
 /// `DelChr`, `ConvertStr`, `PadStr`, `SelectStr`, `IncStr` and `GetUrl` return
 /// Text; `SecretStrSubstNo` returns SecretText; `CurrentDateTime` and
 /// `CreateDateTime` a DateTime; `Today`, `WorkDate` and `DT2Date` a Date;
-/// `Time` and `DT2Time` a Time. The receiver typer (`receiver.rs`, Step 5)
+/// `Time` and `DT2Time` a Time; `CreateGuid` a Guid (Base Application's
+/// `Convert.ToBase64(CreateGuid())` over `(Text)` / `(SecretText)` /
+/// `(InStream)` stayed ambiguous). The receiver typer (`receiver.rs`, Step 5)
 /// reads this catalog too, for `Format(X).Trim()`-style chains.
 const BUILTIN_RETURN_TEXT_CATALOG: &[(&str, &str)] = &[
     ("strsubstno", "text"),
@@ -1908,6 +1958,7 @@ const BUILTIN_RETURN_TEXT_CATALOG: &[(&str, &str)] = &[
     ("dt2date", "date"),
     ("time", "time"),
     ("dt2time", "time"),
+    ("createguid", "guid"),
 ];
 
 /// Look up `name_lc` in [`BUILTIN_RETURN_TEXT_CATALOG`] — `None` for any
@@ -2295,6 +2346,64 @@ fn position_provably_incompatible(arg: &ArgDispatchInfo, param: &ParamDispatchIn
     if param.canonical.is_variant() && !param.by_ref {
         return false;
     }
+    // A `Variant` argument converts into any parameter (alc 18.0.43: by value
+    // into Integer, Record, Codeunit, InStream and Dictionary, `var` into
+    // Integer, Record and Dictionary all compile), its content checked at run
+    // time.
+    if arg_canonical.is_variant() {
+        return false;
+    }
+    // Every DotNet type canonicalizes to `dotnet`, and whether one converts
+    // with a simple AL value depends on the .NET type (alc 18.0.43: a `DotNet
+    // MemoryStream` into InStream and OutStream, a `DotNet String` into Text
+    // and `var Text` and a Text or Code into it, while a MemoryStream into Text
+    // or Integer, a `DotNet XmlNode` into Boolean, Guid or Date, or a Text into
+    // either is AL0133). So a DotNet value is proven apart, both ways, only
+    // from the types no .NET type converts with: an AL object (a MemoryStream
+    // into a Record, Codeunit or Interface is AL0133) and AL's own wrapper
+    // types (a `DotNet XmlNode` into XmlNode, `var XmlNode`, XmlDocument,
+    // JsonObject, HttpClient, `List of [Text]`, TextBuilder or RecordRef, and
+    // an XmlNode, XmlElement, JsonObject or RecordRef into a `DotNet XmlNode`,
+    // are AL0133). An enum and an array stay undecided. Base Application's
+    // `DataCompression.SaveZipArchive(MemoryStream)` over `(OutStream)` /
+    // `(var Codeunit "Temp Blob")` stayed ambiguous; its `XMLDOMMgt.FindNode(…)`
+    // over `(DotNet XmlNode; …)` / `(XmlNode; …)` binds by the wrapper rule.
+    const DOTNET_CONVERTIBLE: &[&str] = &[
+        "text",
+        "code",
+        "label",
+        "secrettext",
+        "char",
+        "byte",
+        "integer",
+        "biginteger",
+        "decimal",
+        "option",
+        "duration",
+        "boolean",
+        "guid",
+        "date",
+        "time",
+        "datetime",
+        "instream",
+        "outstream",
+        "variant",
+        "any",
+    ];
+    let is_dotnet = |t: &CanonicalArgType| matches!(t, CanonicalArgType::Base(b) if b == "dotnet");
+    if is_dotnet(arg_canonical) != is_dotnet(&param.canonical) {
+        let other = if is_dotnet(arg_canonical) {
+            &param.canonical
+        } else {
+            arg_canonical
+        };
+        return match other {
+            CanonicalArgType::Base(b) => !DOTNET_CONVERTIBLE.contains(&b.as_str()),
+            CanonicalArgType::Object(id) => id.kind != ObjectKind::Enum,
+            CanonicalArgType::Generic { .. } => true,
+            CanonicalArgType::Array { .. } => false,
+        };
+    }
     if arg_canonical != &param.canonical {
         // An array and a non-array never bind; two different arrays are not
         // proven apart (element conversions are not modelled).
@@ -2463,12 +2572,21 @@ pub(crate) fn pick_candidate(
         // literal against `Integer`), the gate has no choice to guard and rule
         // (B) decides: Continia DO's `EMailLog.InitNewEntry(…, '', …)` over
         // `TemplateLineNo: Integer` / `TemplateVariantValueCode: Code[20]`
-        // binds the `Code[20]` overload.
+        // binds the `Code[20]` overload. A candidate another position already
+        // rules out is no choice either: System Application's
+        // `AddBlobPutContentHeaders(…, BlobType::AppendBlob, 0, …)` over
+        // `(…; var InStream; Enum; …)` / `(…; Text; Enum; …)` / `(…; Enum;
+        // BigInteger; …)`, where the enum value rules out the first two, stayed
+        // ambiguous on the `0`.
         if let Some(lk) = args[pos].literal_kind {
             let forbidden = literal_forbidden_families(lk);
             let viable: Vec<&CanonicalArgType> = candidates
                 .iter()
-                .filter(|c| !position_provably_incompatible(&args[pos], &c[pos]))
+                .filter(|c| {
+                    !discriminating
+                        .iter()
+                        .any(|&p| position_provably_incompatible(&args[p], &c[p]))
+                })
                 .map(|c| &c[pos].canonical)
                 .collect();
             if !forbidden.is_empty()
@@ -2512,8 +2630,13 @@ pub(crate) fn pick_candidate(
             let picked = pool.next()?;
             return pool.next().is_none().then_some(picked);
         }
+        // Some but not all: a `Variant` argument is never proven
+        // incompatible, so only rule (B) can decide. System Application's
+        // `WordTemplates.Merge(DataVariant, SplitDocuments, …)` (a Variant, a
+        // Boolean) over `(Variant; Boolean; …)` / `(Dictionary …; Enum …; …)`
+        // stayed ambiguous.
         if variant_args > 0 {
-            return None;
+            return pick_sole_applicable(args, candidates, &discriminating);
         }
     }
     // (A) An exact match at every discriminating position wins, against any
@@ -2538,8 +2661,65 @@ pub(crate) fn pick_candidate(
     // `Variant` overload). No ranking among conversions is attempted: where the
     // compiler picks between two needed conversions (`Code[30]` into
     // `TC(Text|Code[20])` binds Text; `Integer` into `IB(Decimal|BigInteger)`
-    // binds BigInteger) the call stays ambiguous here, never a guess.
+    // binds BigInteger) the call stays ambiguous here, never a guess — except
+    // the one ranking rule (C) proves.
     pick_sole_applicable(args, candidates, &discriminating)
+        .or_else(|| pick_over_secrettext(args, candidates, &discriminating))
+}
+
+/// Rule (C) of [`pick_candidate`]: a Text-family argument binds a by-value
+/// unbounded `Text` parameter over a by-value `SecretText` one. Among the
+/// candidates rule (B) leaves applicable, the one every other loses to binds,
+/// where `x` loses to `y` when at every discriminating position they differ
+/// `x` takes `SecretText` and `y` takes `Text`.
+///
+/// Proven with alc 18.0.43, the overloads returning different types and a
+/// control assignment failing with AL0122: `F(Text)` / `F(SecretText)` binds
+/// `F(Text)` for a Label (Locked or not), a `Code[20]`, a text literal and a
+/// `Format(…)` result; `G(Text; Text)` / `G(Text; SecretText)` binds the first
+/// for two Labels; `V(Text; SecretText)` / `V(SecretText; SecretText)` binds
+/// the first for two Texts. Base Application's `HttpWebRequestMgt.AddHeader(
+/// AcceptEncodingHeaderNameTxt, EncodingUtf8Txt)` and System Application's
+/// `CryptographyManagementImpl.VerifyData(InputString, XmlString, …)` stayed
+/// ambiguous.
+fn pick_over_secrettext(
+    args: &[ArgDispatchInfo],
+    candidates: &[Vec<ParamDispatchInfo>],
+    discriminating: &[usize],
+) -> Option<usize> {
+    let applicable: Vec<usize> = (0..candidates.len())
+        .filter(|&i| {
+            !discriminating
+                .iter()
+                .any(|&p| position_provably_incompatible(&args[p], &candidates[i][p]))
+        })
+        .collect();
+    let text_family = |a: &ArgDispatchInfo| {
+        matches!(&a.canonical, Some(CanonicalArgType::Base(b))
+            if matches!(b.as_str(), "text" | "code" | "label"))
+    };
+    let loses_to = |x: usize, y: usize| {
+        let mut differs = false;
+        for &p in discriminating {
+            let (px, py) = (&candidates[x][p], &candidates[y][p]);
+            if px == py {
+                continue;
+            }
+            let secret = !px.by_ref && px.exact_text == "secrettext";
+            let text = !py.by_ref && py.exact_text == "text";
+            if !(secret && text && text_family(&args[p])) {
+                return false;
+            }
+            differs = true;
+        }
+        differs
+    };
+    let mut winners = applicable
+        .iter()
+        .copied()
+        .filter(|&y| applicable.iter().all(|&x| x == y || loses_to(x, y)));
+    let picked = winners.next()?;
+    winners.next().is_none().then_some(picked)
 }
 
 /// Rule (A) of [`pick_candidate`]: the one candidate in `pool` that exactly

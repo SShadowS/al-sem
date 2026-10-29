@@ -2268,7 +2268,7 @@ fn infer_cross_object_chain_receiver(
 /// than-one same-arity candidate is declared (defensive — a single interface
 /// declaration should never itself be arity-ambiguous, but this never
 /// guesses).
-fn interface_own_routine_node<'g>(
+pub(crate) fn interface_own_routine_node<'g>(
     name_lc: &str,
     member_lc: &str,
     arity: usize,

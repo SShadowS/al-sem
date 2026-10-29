@@ -133,6 +133,7 @@ mod cli_moved_table_resolution;
 mod cli_numberless_object_ids;
 mod cli_object_display;
 mod cli_object_ref_integer_arg;
+mod cli_overload_last_ambiguities;
 mod cli_p1_enclosing_member;
 mod cli_p1_inventory;
 mod cli_parameterless_symbol_method;
