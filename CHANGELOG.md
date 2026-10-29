@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`prove` shows how a dependency boundary group reaches the asked table**
+  (G35). A `writes-table` evidence entry on a group now carries `groupPath`:
+  `{resource, hops}`, the routines from the root to one where a write of that
+  table can run, each hop `<edge kind> → Object.Routine`. Under rule B a
+  witness ends where it enters dependency code, so Continia DO's
+  `writes-table:CDO E-Mail Log` answer through `Base
+  Application.CalcInvDiscForHeader` had no path to check. The path is read off
+  the guarded search G23/G33 already run (`LiteralReach::live_tree`), so a
+  branch G33 proves dead is never shown; it is one example, not checked further
+  for feasibility (`engine::l5::group_path`). Test `cli_prove_group_path`.
+
 - **`prove` follows the table a record argument holds into `case RecRef.Number`**
   (G33). A routine that takes a record as a `Variant`, reads its table with
   `RecRef.GetTable(Variant)` and branches on `case RecRef.Number of

@@ -1135,6 +1135,27 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
                         serde_json::json!({"stableId": c.stable_id, "display": c.display}),
                     );
                 }
+                // G35: a group matched on the asked table shows how its code
+                // reaches that table.
+                if let (Some(ProveQuestion::WritesTable { table }), Some(obj)) =
+                    (parse_question(question), v.as_object_mut())
+                {
+                    let eff = &effects[i];
+                    let hit = eff.group_resource_paths.iter().find_map(|(id, hops)| {
+                        let display = eff
+                            .group_resources
+                            .iter()
+                            .find(|(r, _)| r == id)
+                            .map(|(_, d)| d.as_str());
+                        name_or_id_matches(display, Some(id), &table).then_some((display, hops))
+                    });
+                    if let Some((display, hops)) = hit {
+                        obj.insert(
+                            "groupPath".into(),
+                            serde_json::json!({"resource": display.unwrap_or_default(), "hops": hops}),
+                        );
+                    }
+                }
                 v
             })
             .collect();
@@ -2130,6 +2151,7 @@ mod tests {
             fact_id: "abcdef1234567890".to_string(),
             scoped_guarantees: vec![],
             group_resources: vec![],
+            group_resource_paths: vec![],
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
@@ -2163,6 +2185,7 @@ mod tests {
             fact_id: "abcdef1234567890".to_string(),
             scoped_guarantees: vec![],
             group_resources: vec![],
+            group_resource_paths: vec![],
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
@@ -2296,6 +2319,7 @@ mod tests {
             fact_id: "1234567890abcdef".to_string(),
             scoped_guarantees: vec![],
             group_resources: vec![],
+            group_resource_paths: vec![],
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
@@ -2346,6 +2370,7 @@ mod tests {
             fact_id: "fedcba0987654321".to_string(),
             scoped_guarantees: vec![],
             group_resources: vec![],
+            group_resource_paths: vec![],
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,

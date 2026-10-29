@@ -141,6 +141,7 @@ pub mod diff_parser;
 pub mod digest_cli;
 // G23: effects unreachable once literal Boolean arguments are followed.
 pub mod field_guard;
+pub mod group_path;
 pub mod literal_reach;
 // Shared deterministic routine-selector resolution (5-form resolveSelector
 // cascade). Consumed by BOTH digest_cli (changed-roots selectors) and

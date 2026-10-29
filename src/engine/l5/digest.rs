@@ -3259,6 +3259,10 @@ pub struct DigestEffectResult {
     /// arguments are followed ([`crate::engine::l5::literal_reach`]): prove
     /// matches none of them. Set only for `prove`'s read; not serialized.
     pub dead_group_resources: Vec<String>,
+    /// G35: per group resource, one example path inside the dependency
+    /// ([`crate::engine::l5::group_path`]). Set only for `prove`'s read; not
+    /// serialized.
+    pub group_resource_paths: Vec<(String, Vec<String>)>,
     /// G23: the root cannot reach the effect once literal Boolean arguments
     /// are followed ([`crate::engine::l5::literal_reach`]). Set only for
     /// `prove`'s read; not serialized.
@@ -4325,6 +4329,7 @@ fn digest_one_root<'i>(
                     .collect(),
                 literal_unreachable: false,
                 dead_group_resources: Vec::new(),
+                group_resource_paths: Vec::new(),
             });
         }
 

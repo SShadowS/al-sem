@@ -940,6 +940,9 @@ pub struct DigestEffectFull {
     /// A boundary group's full `(resource id, display)` set (#160 step 9
     /// D2 (6)); `detail` lists at most 10. Not serialized; empty off a group.
     pub group_resources: Vec<(String, String)>,
+    /// G35: per group resource id, one example path inside the dependency
+    /// ([`crate::engine::l5::group_path`]); `prove` shows the matched ones.
+    pub group_resource_paths: Vec<(String, Vec<String>)>,
     /// The operations the effect originates from, and its class's "known
     /// temporary" flag: what [`DbTempStates`] joins on, so `prove` can ask the
     /// same write in a CALLER's frame (G25). Not serialized.
@@ -1309,7 +1312,16 @@ pub(crate) fn digest_effects_each(
     // arguments are followed through recursive SCCs, where the cone drops guards.
     if gaps_in_cone {
         let reach = crate::engine::l5::literal_reach::LiteralReach::new(&tree.typed_edges, model);
+        // G35: how each group resource is reached inside the dependency.
+        let group_paths = crate::engine::l5::group_path::GroupPaths::new(&tree.typed_edges, model);
         for entry in &mut all_entries {
+            if entry.effects.iter().any(|e| e.boundary_group)
+                && let Some(tree) = reach.live_tree(&entry.routine_id)
+            {
+                for e in entry.effects.iter_mut().filter(|e| e.boundary_group) {
+                    e.group_resource_paths = group_paths.paths(&reach, &tree, e);
+                }
+            }
             let (dead, dead_resources) =
                 reach.unreachable_effects(&entry.routine_id, &entry.effects);
             for i in dead {
@@ -1629,6 +1641,10 @@ pub fn run_digest_query_full_from_entries(
                     // G33: a resource the root cannot reach is no member prove
                     // matches (`literal_reach`).
                     group_resources: std::mem::take(&mut eff.group_resources)
+                        .into_iter()
+                        .filter(|(id, _)| !eff.dead_group_resources.contains(id))
+                        .collect(),
+                    group_resource_paths: std::mem::take(&mut eff.group_resource_paths)
                         .into_iter()
                         .filter(|(id, _)| !eff.dead_group_resources.contains(id))
                         .collect(),

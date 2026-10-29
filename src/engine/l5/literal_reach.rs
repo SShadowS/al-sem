@@ -325,6 +325,13 @@ type OutEdge<'a> = (&'a str, Option<&'a str>, bool);
 /// binding states reached per routine with them.
 type Reached<'a> = (HashSet<&'a str>, HashMap<&'a str, Vec<Bindings>>);
 
+/// G35: a guarded search's states with their parents, in visit order
+/// ([`LiteralReach::live_tree`]).
+pub(crate) struct LiveTree<'a> {
+    parent: HashMap<(&'a str, Bindings), Option<(&'a str, Bindings)>>,
+    order: Vec<(&'a str, Bindings)>,
+}
+
 /// The search context over one snapshot and model, shared by every root.
 pub(crate) struct LiteralReach<'a> {
     out: HashMap<&'a str, Vec<OutEdge<'a>>>,
@@ -519,6 +526,58 @@ impl<'a> LiteralReach<'a> {
             }
         }
         Some((plain, states))
+    }
+
+    /// G35: the guarded search from `root`, keeping each state's parent and
+    /// its order of visit, so [`Self::live_path`] can read a path that can
+    /// run off it. `None` when the search hit the cap.
+    pub(crate) fn live_tree(&self, root: &'a str) -> Option<LiveTree<'a>> {
+        let start = (root, Bindings::default());
+        let mut parent: HashMap<(&'a str, Bindings), Option<(&'a str, Bindings)>> =
+            HashMap::from([(start.clone(), None)]);
+        let mut order: Vec<(&'a str, Bindings)> = Vec::new();
+        let mut q = VecDeque::from([start]);
+        while let Some((f, b)) = q.pop_front() {
+            order.push((f, b.clone()));
+            for &(to, site, binds) in self.out.get(f).into_iter().flatten() {
+                if let Some(s) = site
+                    && self.dead_at(f, s, &b)
+                {
+                    continue;
+                }
+                let nb = match (binds, site) {
+                    (true, Some(s)) => self.bind(f, s, to, &b),
+                    _ => Bindings::default(),
+                };
+                let key = (to, nb);
+                if !parent.contains_key(&key) {
+                    if parent.len() > STATE_CAP {
+                        return None;
+                    }
+                    parent.insert(key.clone(), Some((f, b.clone())));
+                    q.push_back(key);
+                }
+            }
+        }
+        Some(LiveTree { parent, order })
+    }
+
+    /// G35: over `tree`, the routines from its root to the first state (in
+    /// visit order) of a routine owning one of `ops` where that operation can
+    /// run; `None` when no such state was reached.
+    pub(crate) fn live_path(&self, tree: &LiveTree<'a>, ops: &[String]) -> Option<Vec<&'a str>> {
+        let (f, b) = tree.order.iter().find(|(f, b)| {
+            ops.iter()
+                .any(|o| self.op_owner.get(o.as_str()) == Some(f) && !self.dead_at(f, o, b))
+        })?;
+        let mut path = vec![*f];
+        let mut cur = (*f, b.clone());
+        while let Some(Some(p)) = tree.parent.get(&cur) {
+            path.push(p.0);
+            cur = p.clone();
+        }
+        path.reverse();
+        Some(path)
     }
 
     /// Whether a listed witness path can run: replayed from the root with no
