@@ -669,6 +669,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   .json`) were updated after checking that each differs from its old content only by
   these keys. Test: `cli_ids_and_line_bases` (overloads and a field trigger; it fails
   with the graph's member discriminator off).
+  - `events fanout` entries carry `publisherStableRoutineId` next to `publisher`
+    (the event graph's own `<16 hex>/<64 hex>` routine id), the last output G13
+    named. The `cli-c-events` fanout goldens gain only that key (19 entries, all
+    filled). Test: `cli_ids_and_line_bases::events_fanout_names_publishers_by_the_
+    shared_id`.
 - **`fingerprint --inventory-only` without `--format` emits json** (G12). Its help
   says it implies `--format=json`, but an omitted format resolved to `human`, and the
   command failed with "--inventory-only requires --format=json (got Human)".

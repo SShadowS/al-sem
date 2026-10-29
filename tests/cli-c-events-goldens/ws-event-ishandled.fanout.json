@@ -29,6 +29,7 @@
   "entries": [
     {
       "publisher": "b604c4a94147977a/5b5c2ece65baf318c6aa32cc7831fcb10ea9d5b0e922af53aa2e4eda9ff52606",
+      "publisherStableRoutineId": "11111111-1111-1111-1111-111111111111:Codeunit:50000#79767d9473a76d5a6a2ba94c6eb8b6272dba8f6125ea7ab2d39e177ba2a91cd1",
       "eventId": "11111111-1111-1111-1111-111111111111/Codeunit/50000/event/onbeforepost",
       "eventName": "OnBeforePost",
       "eventKind": "integration",

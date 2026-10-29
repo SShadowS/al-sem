@@ -127,3 +127,52 @@ fn graph_inventory_and_prove_share_ids_and_declare_line_bases() {
         );
     }
 }
+
+/// `events fanout` names each publisher by the same StableRoutineId too, next
+/// to the event graph's own routine id (`publisher`).
+#[test]
+fn events_fanout_names_publishers_by_the_shared_id() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"13131313-0000-4000-8000-000000000014","name":"G13E","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join("src/S.al"),
+        r#"codeunit 50132 "G13 Pub"
+{
+    procedure Go() begin OnThing(); end;
+    [IntegrationEvent(false, false)]
+    procedure OnThing() begin end;
+}
+codeunit 50133 "G13 Sub"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"G13 Pub", 'OnThing', '', false, false)]
+    local procedure H() begin end;
+}
+"#,
+    )
+    .unwrap();
+    let inv: serde_json::Value =
+        serde_json::from_str(&run(t.path(), &["fingerprint", "ws", "--inventory-only"])).unwrap();
+    let on_thing = inv["payload"]["routineInventory"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["routineName"] == "OnThing")
+        .expect("OnThing in the inventory");
+    let fanout: serde_json::Value = serde_json::from_str(&run(
+        t.path(),
+        &["events", "fanout", "ws", "--format", "json"],
+    ))
+    .unwrap();
+    let entries = fanout["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(
+        entries[0]["publisherStableRoutineId"], on_thing["stableRoutineId"],
+        "{entries:?}"
+    );
+}

@@ -16,6 +16,7 @@
   "entries": [
     {
       "publisher": "8ef077c43e81b792/fb61ffca7cfc70125c6c53f415ebd78a1a37364f533a88968b68adeff38e3008",
+      "publisherStableRoutineId": "88888888-8888-8888-8888-888888888888:Codeunit:51200#476712af2598f38dc2f6d352859e11ac7681d84607ccc4af6ce6e9914c606bf6",
       "eventId": "88888888-8888-8888-8888-888888888888/Codeunit/51200/event/onafterdowork",
       "eventName": "OnAfterDoWork",
       "eventKind": "integration",

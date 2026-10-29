@@ -16,6 +16,7 @@
   "entries": [
     {
       "publisher": "fb75564f2c10e967/c1ccd8b8425a7c65bb030c5e2529e0f12fe9ee96c956cecdb0733cee23001bc7",
+      "publisherStableRoutineId": "11111111-0000-0000-0000-00000000d12a:Codeunit:50112#fbd570fa4286481b85a1c9b61b7d67c3b8ecaad847cd9bbb28e78b3158294cf6",
       "eventId": "11111111-0000-0000-0000-00000000d12a/Codeunit/50112/event/onafterdostuff",
       "eventName": "OnAfterDoStuff",
       "eventKind": "integration",

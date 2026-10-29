@@ -29,6 +29,7 @@
   "entries": [
     {
       "publisher": "923f038c25dd33d5/7c54ab6a0f00e4cfac57b9a08521197c89172bb69de8da86d66eb5aae22954a1",
+      "publisherStableRoutineId": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee:Codeunit:50001#c20b962c170f5f2341d4bd8a092c2f45f560251730f811fe1c3c61570a71d064",
       "eventId": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee/Codeunit/50001/event/onb",
       "eventName": "OnB",
       "eventKind": "integration",
@@ -41,6 +42,7 @@
     },
     {
       "publisher": "923f038c25dd33d5/804d57935506c43d82d8b2f32c5386357cd9d79f3aea09b31bd57e05ea5e28ba",
+      "publisherStableRoutineId": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee:Codeunit:50000#8c4b7025f4e73b832b8a89cb3a77c97a7cab8eaf987070a2bb93106a2d25154e",
       "eventId": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee/Codeunit/50000/event/ona",
       "eventName": "OnA",
       "eventKind": "integration",

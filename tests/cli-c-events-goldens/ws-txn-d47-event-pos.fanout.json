@@ -16,6 +16,7 @@
   "entries": [
     {
       "publisher": "8ce978d396a9be42/8ecd741f61ab0d2e54f53d737d95b2f4bd6f9ec711ba71c9d1ade8f050239b50",
+      "publisherStableRoutineId": "11111111-0000-0000-0000-0000000d4720:Codeunit:50000#d0a450b21f8ea380958c1bfed3418cca2c74830fa0ce77fa007a2e8a51673ea1",
       "eventId": "11111111-0000-0000-0000-0000000d4720/Codeunit/50000/event/onafterprocess",
       "eventName": "OnAfterProcess",
       "eventKind": "integration",
