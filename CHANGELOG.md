@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A table extension's method shadows a same-signature base-table method for
+  calls from the extension's own app.** The engine reported such a call as
+  `overloadAmbiguous`. The compiler binds it to the extension (alc 18.0.43,
+  measured: warning AL0523 "already defines a method … with the same parameter
+  types"; with both methods `internal`, the same binding with or without
+  `internalsVisibleTo`). From a third app that sees both, it is error AL0196
+  "The call is ambiguous", which stays ambiguous. Tables only; page and report
+  extensions are unchanged (not measured). Found by loading Continia Approvals
+  (29.2.0.242622, from the Continia catalogue with `continia deps download`)
+  next to Continia DO: its page extensions call `Rec.GetSalesPurchName()`,
+  which both Continia Business Foundation's `CTS-CBF Continia User Setup` and
+  Approvals' own table extension declare. With Approvals loaded, DO's
+  dependency code resolves completely: 432,906 call edges, 0 unknown, 0
+  ambiguous (the one unknown left before, Online Connector calling into
+  Approvals, resolves). Test `cli_own_table_extension_method`.
+
 ### Added
 
 - **The RecordRef value flow reads a `case R.Number` branch under the tables

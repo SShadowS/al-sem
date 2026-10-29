@@ -1260,6 +1260,7 @@ fn resolve_in_extendable_scope(
     build: &[(String, bool)],
     extensions_of: for<'a> fn(&'a ResolveIndex, &str) -> &'a [ObjectNodeId],
     zero_match: ZeroMatchStrategy,
+    own_extension_wins: bool,
 ) -> TableScopeOutcome {
     let closure = graph.topology.closure(from_object.id.app);
 
@@ -1324,19 +1325,45 @@ fn resolve_in_extendable_scope(
         };
     }
 
-    let mut candidate_objects = scope.iter().filter(|(oid, tier)| {
-        object_has_visible_member_candidate(
-            oid,
-            *tier,
-            name_lc,
-            arity,
-            &from_object.id,
-            graph,
-            index,
-        )
-    });
-    let first = candidate_objects.next();
-    let second = candidate_objects.next();
+    let candidates: Vec<&(ObjectNodeId, TrustTier)> = scope
+        .iter()
+        .filter(|(oid, tier)| {
+            object_has_visible_member_candidate(
+                oid,
+                *tier,
+                name_lc,
+                arity,
+                &from_object.id,
+                graph,
+                index,
+            )
+        })
+        .collect();
+    // A TableExtension in the CALLER's own app wins over a same-signature
+    // method of the base table declared in another app (alc 18.0.43: the
+    // extension's method binds, with only warning AL0523 "already defines a
+    // method … with the same parameter types"); from any other app the same
+    // pair is error AL0196 "The call is ambiguous", so it stays ambiguous.
+    // Continia Approvals' page extensions call `Rec.GetSalesPurchName()` on
+    // Continia Business Foundation's `CTS-CBF Continia User Setup`, which both
+    // the table and Approvals' own table extension declare.
+    let own_extension: Vec<&&(ObjectNodeId, TrustTier)> = if own_extension_wins {
+        candidates
+            .iter()
+            .filter(|(oid, _)| *oid != base_id && oid.app == from_object.id.app)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let candidates: Vec<&(ObjectNodeId, TrustTier)> = if let [own] = own_extension.as_slice()
+        && base_id.app != from_object.id.app
+    {
+        vec![**own]
+    } else {
+        candidates
+    };
+    let first = candidates.first().copied();
+    let second = candidates.get(1).copied();
 
     match (first, second) {
         (Some(_), Some(_)) => TableScopeOutcome::Ambiguous,
@@ -1456,6 +1483,7 @@ fn resolve_in_table_scope(
         build,
         ResolveIndex::table_extensions_of,
         ZeroMatchStrategy::AccessExcludedReason,
+        true,
     )
 }
 
@@ -1517,6 +1545,7 @@ fn resolve_in_page_scope(
         build,
         ResolveIndex::page_extensions_of,
         ZeroMatchStrategy::PreserveArityMismatch,
+        false,
     )
 }
 
@@ -1577,6 +1606,7 @@ fn resolve_in_report_scope(
         build,
         ResolveIndex::report_extensions_of,
         ZeroMatchStrategy::PreserveArityMismatch,
+        false,
     )
 }
 
