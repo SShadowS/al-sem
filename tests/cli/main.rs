@@ -113,6 +113,7 @@ mod cli_digest_query_dependencies;
 mod cli_digest_temp_state;
 mod cli_digest_test_coverage;
 mod cli_dotnet_var_overload;
+mod cli_dump_dependency_source;
 mod cli_envelope_detector_set;
 mod cli_escaped_object_names;
 mod cli_event_dispatch_first_hop;

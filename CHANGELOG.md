@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`aldump --dump-dependency-source <workspace> <out-dir>`** writes the AL the
+  engine reads from inside each dependency `.app` to `<out-dir>/<app guid>/<virtual
+  path>`. That is the path a dependency citation `dep:<guid>:<path>` names, with the
+  same text and lines. It includes the AL synthesized for a runtime package that
+  ships no AL; each of its statements ends in `// cs <line>`, the transpiled C# line.
+  Source from a folder on disk is not written; it is already a file. Asked by the
+  CONtinAI pipeline so citations into Continia Core resolve to a file and line. On
+  Continia DO: 9 apps, Core 291 files. Test `cli_dump_dependency_source`.
+
 - **`prove` shows how a dependency boundary group reaches the asked table**
   (G35). A `writes-table` evidence entry on a group now carries `groupPath`:
   `{resource, hops}`, the routines from the root to one where a write of that

@@ -48,9 +48,76 @@ fn usage() -> ExitCode {
          --graphify-export | --graphify-export-fragments | --integration-points] \
          <workspace-or-.app>\n\
          \x20      aldump --switch-dump <workspace> <out-dir>\n\
+         \x20      aldump --dump-dependency-source <workspace> <out-dir>\n\
          \x20      aldump --switch-compare <dump-dir-A> <dump-dir-B> [--sample N] [--width N]"
     );
     ExitCode::FAILURE
+}
+
+/// `--dump-dependency-source <workspace> <out-dir>`: write the AL source the
+/// engine reads from inside each dependency `.app` to
+/// `<out-dir>/<app guid>/<virtual path>`: embedded source, and the AL synthesized
+/// for a runtime package that ships none (its statements end in `// cs <line>`,
+/// the transpiled C# line). A dependency citation `dep:<guid>:<path>` then names a
+/// file there, with the same lines. Source read from a folder on disk is not
+/// written; it is already a file.
+fn dump_dependency_source_cmd(args: &[String]) -> ExitCode {
+    let [ws, out] = args else {
+        return usage();
+    };
+    let snapshot = match (al_sem::snapshot::SnapshotBuilder {
+        workspace_root: std::path::PathBuf::from(ws),
+        local_providers: Vec::new(),
+    })
+    .build()
+    {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("aldump: error: {e:#}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let out = std::path::Path::new(out);
+    for app in snapshot.apps.iter().skip(1) {
+        let Some(root) = &app.source else {
+            continue;
+        };
+        if root.tier != al_sem::snapshot::TrustTier::EmbeddedSource {
+            continue;
+        }
+        let dir = out.join(&app.id.guid);
+        for f in root.files.iter() {
+            // A path inside the package: never absolute, never `..`.
+            let rel = std::path::Path::new(&f.virtual_path);
+            if !rel
+                .components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)))
+            {
+                eprintln!(
+                    "aldump: error: {}: unsafe path {:?}",
+                    app.id.short(),
+                    f.virtual_path
+                );
+                return ExitCode::FAILURE;
+            }
+            let path = dir.join(rel);
+            let written = path
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(&path, f.text.as_bytes()));
+            if let Err(e) = written {
+                eprintln!("aldump: error: writing {}: {e}", path.display());
+                return ExitCode::FAILURE;
+            }
+        }
+        println!(
+            "{} {}: {} files",
+            app.id.guid,
+            app.id.short(),
+            root.files.len()
+        );
+    }
+    ExitCode::SUCCESS
 }
 
 /// `--switch-dump <workspace> <out-dir>`: write the engine-switch dump.
@@ -192,6 +259,7 @@ fn run_main() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     match raw.first().map(String::as_str) {
         Some("--switch-dump") => return switch_dump_cmd(&raw[1..]),
+        Some("--dump-dependency-source") => return dump_dependency_source_cmd(&raw[1..]),
         Some("--switch-compare") => return switch_compare_cmd(&raw[1..]),
         Some("--compiler-oracle") => return compiler_oracle_cmd(&raw[1..]),
         _ => {}
