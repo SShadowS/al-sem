@@ -41,6 +41,8 @@ codeunit 50432 "ST Caller"
         Lib.SetSigningKey(XmlString);
         // A Dictionary's `Get(key)` is its value type, Text: the exact match.
         Lib.SetHeader(HeaderKey, Headers.Get(HeaderKey));
+        // A concatenation with a Text literal is a Text: the exact match.
+        Lib.SetHeader('Authorization', 'Bearer ' + XmlString);
     end;
 }
 "#;
@@ -69,6 +71,6 @@ fn a_text_argument_binds_the_secrettext_overload() {
     );
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stats JSON");
     let s = &v["primaryScoped"];
-    assert_eq!(s["resolvedSource"], 2, "{s}");
+    assert_eq!(s["resolvedSource"], 3, "{s}");
     assert_eq!(s["ambiguousResolved"], 0, "{s}");
 }

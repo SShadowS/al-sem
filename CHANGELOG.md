@@ -325,8 +325,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`ShowComments("Service Comment Line Type".FromInteger(Type))` over `(Option
   …)` / `(Enum …)`), and a report's dataitem passed by name as a record of
   its source table (`ReservMgt.SetReservSource("Prod. Order Component")` over
-  `(Variant)` / `(RecordRef)`). Continia DO's dependency-body
-  `ambiguousResolved`: 21 → 17 (→ 12 with the Moved-object fix). Tests
+  `(Variant)` / `(RecordRef)`), and a `+` with a Text literal operand as a
+  Text (`AddHeader('Authorization', 'Bearer ' + AccessToken)` over `(Text,
+  Text)` / `(Text, SecretText)`). Continia DO's dependency-body
+  `ambiguousResolved`: 21 → 17 (→ 11 with the Moved-object fix). Tests
   `cli_secrettext_arg`, `cli_array_param_overload`,
   `cli_object_ref_integer_arg`, `cli_dataitem_name_arg`.
 

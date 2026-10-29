@@ -958,6 +958,28 @@ fn type_one_arg(
                 _ => ArgDispatchInfo::untyped(),
             }
         }
+        // A concatenation with a Text literal (`'Bearer ' + AccessToken`): a
+        // Text, unbounded. Base Application's `HttpWebRequestMgt.AddHeader(
+        // 'Authorization', 'Bearer ' + AccessToken)` over `(Text, Text)` /
+        // `(Text, SecretText)` stayed ambiguous.
+        ExprKind::Binary {
+            op: BinaryOp::Add,
+            lhs,
+            rhs,
+        } if [*lhs, *rhs].iter().any(|&e| {
+            matches!(
+                file.ir.expr(e).kind,
+                ExprKind::Literal(al_syntax::ir::Literal::Text(_))
+            )
+        }) =>
+        {
+            ArgDispatchInfo {
+                canonical: Some(CanonicalArgType::Base("text".to_string())),
+                exact_text: Some("text".to_string()),
+                literal_kind: None,
+                var_passable: false,
+            }
+        }
         // An object-id reference (`Database::Contact`, `Page::"…"`) is the
         // object's number, an Integer: Base Application's
         // `GetIntegrationTableMapping(Mapping, DATABASE::Contact)` over
@@ -4368,29 +4390,26 @@ codeunit 50100 "C"
 
     /// Every lowered `BinaryOp` token class AL defines as UNCONDITIONALLY
     /// Boolean-typed (Eq/Ne/Lt/Le/Gt/Ge/And/Or/Xor/In) types cleanly
-    /// regardless of operand shape; the arithmetic family (`Add`) declines —
-    /// including a TEXT `+` concatenation (the SAME `Add` variant, non-
-    /// numeric operands), proving the decline is OPERATOR-driven, never
-    /// "looks numeric"-driven.
+    /// regardless of operand shape; the arithmetic family (`Add`) declines,
+    /// except a `+` with a Text literal operand, a Text concatenation (`'a' +
+    /// 'b'`, `'Bearer ' + Token`), which types Text.
     #[test]
     fn type_one_arg_binary_operators_type_boolean_or_decline_per_token_class() {
-        let cases: &[(&str, bool)] = &[
-            ("1 = 1", true),          // Eq
-            ("1 <> 1", true),         // Ne
-            ("1 < 2", true),          // Lt
-            ("1 <= 2", true),         // Le
-            ("2 > 1", true),          // Gt
-            ("2 >= 1", true),         // Ge
-            ("TRUE AND FALSE", true), // And
-            ("TRUE OR FALSE", true),  // Or
-            ("TRUE XOR FALSE", true), // Xor
-            ("1 IN [1, 2, 3]", true), // In
-            ("1 + 1", false),         // Add (arithmetic decline)
-            ("'a' + 'b'", false),     // Add (text-concat decline — same
-                                      // variant as arithmetic; proves the decline is per-OPERATOR, not
-                                      // per-operand-"numeric-ness").
+        let cases: &[(&str, Option<&str>)] = &[
+            ("1 = 1", Some("boolean")),          // Eq
+            ("1 <> 1", Some("boolean")),         // Ne
+            ("1 < 2", Some("boolean")),          // Lt
+            ("1 <= 2", Some("boolean")),         // Le
+            ("2 > 1", Some("boolean")),          // Gt
+            ("2 >= 1", Some("boolean")),         // Ge
+            ("TRUE AND FALSE", Some("boolean")), // And
+            ("TRUE OR FALSE", Some("boolean")),  // Or
+            ("TRUE XOR FALSE", Some("boolean")), // Xor
+            ("1 IN [1, 2, 3]", Some("boolean")), // In
+            ("1 + 1", None),                     // Add (arithmetic decline)
+            ("'a' + 'b'", Some("text")),         // Add with a Text literal
         ];
-        for (expr_src, expect_boolean) in cases {
+        for (expr_src, expect) in cases {
             let src = format!(
                 r#"
 codeunit 50100 "C"
@@ -4420,19 +4439,19 @@ codeunit 50100 "C"
                 &surface,
                 with_state,
             );
-            if *expect_boolean {
+            if let Some(ty) = expect {
                 assert_eq!(
                     info.canonical,
-                    Some(CanonicalArgType::Base("boolean".into())),
-                    "case {expr_src:?} must type Boolean; got {info:?}"
+                    Some(CanonicalArgType::Base(ty.to_string())),
+                    "case {expr_src:?} must type {ty}; got {info:?}"
                 );
                 assert!(
                     !info.var_passable,
-                    "case {expr_src:?}: a computed Boolean is never var-passable"
+                    "case {expr_src:?}: a computed value is never var-passable"
                 );
                 assert_eq!(
                     info.literal_kind, None,
-                    "case {expr_src:?}: a computed Boolean is not itself a literal"
+                    "case {expr_src:?}: a computed value is not itself a literal"
                 );
             } else {
                 assert_eq!(
