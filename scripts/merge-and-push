@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# scripts/merge-and-push — land one branch on master: merge, gate, push.
+#
+# The one command an agent session runs to land work, so the owner approves
+# it once instead of a different git command line each time. It refuses
+# anything unexpected rather than improvising around it:
+#   - the work tree must be clean (tracked files; untracked ones are ignored);
+#   - <branch> must exist and must not be master;
+#   - master must be a fast-forward of origin/master (fetched first), so the
+#     push never rewrites or races the remote;
+#   - a merge conflict aborts the merge and stops, leaving master as it was;
+#   - the task gate (`scripts/ci-steps task`) must pass on the merged master,
+#     else master is reset back to where it was and nothing is pushed.
+# Then `git push origin master` (a plain fast-forward; never --force).
+#
+# Usage: scripts/merge-and-push <branch>
+# Exit: 0 pushed; 1 refused or failed (the message says which step).
+set -uo pipefail
+
+die() {
+    echo "merge-and-push: $*" >&2
+    exit 1
+}
+
+[ $# -eq 1 ] || die "usage: scripts/merge-and-push <branch>"
+branch=$1
+[ "$branch" != master ] || die "the branch to merge must not be master"
+
+root=$(git rev-parse --show-toplevel) || die "not in a git checkout"
+cd "$root" || die "cannot enter $root"
+
+git rev-parse --verify --quiet "refs/heads/$branch" >/dev/null || die "no local branch '$branch'"
+[ -z "$(git status --porcelain --untracked-files=no)" ] || die "the work tree has uncommitted changes"
+
+git fetch --quiet origin master || die "git fetch origin master failed"
+git switch --quiet master || die "cannot switch to master"
+git merge-base --is-ancestor origin/master master \
+    || die "local master is not a fast-forward of origin/master; resolve that by hand"
+
+before=$(git rev-parse HEAD)
+if git merge-base --is-ancestor "$branch" master; then
+    echo "merge-and-push: '$branch' is already in master; nothing to merge"
+else
+    if ! git merge --no-ff --quiet "$branch" -m "Merge branch '$branch'
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"; then
+        git merge --abort 2>/dev/null
+        die "merging '$branch' conflicts; aborted, master unchanged at ${before:0:8}"
+    fi
+fi
+
+log=$(mktemp -t merge-and-push-gate.XXXXXX.log)
+echo "merge-and-push: running the task gate on $(git rev-parse --short HEAD) (log: $log)"
+if ! scripts/ci-steps task >"$log" 2>&1; then
+    git reset --quiet --hard "$before"
+    die "the task gate failed (see $log); master reset to ${before:0:8}, nothing pushed"
+fi
+
+git push origin master || die "git push origin master failed; master is merged locally at $(git rev-parse --short HEAD)"
+echo "merge-and-push: pushed master at $(git rev-parse --short HEAD)"
