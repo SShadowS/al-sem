@@ -227,6 +227,12 @@ Spec: `docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 3).
     (3) and `tests/cli-c-policy-goldens/pins.*` (4); new fixtures
     `tests/fixtures/policy-pins/{bypass,fixed}` (`FIXTURE_ROOTS` fixtures 48 -> 50).
     On `ws-d65` the emitted pins flag exactly d65's five writes.
+- **`scripts/intent-cdo-check <cdo-workspace> [out-dir]`** runs the two checks
+  that need the pinned CDO baseline (spec section 6): `scripts/cdo-gate`, and
+  d65 at `--scope primary` and `--scope all` (JSON and terminal). It writes
+  logs, reports and a `summary.txt` into one folder (default
+  `target/intent-cdo-check/`) and exits 1 only when the gate fails or a d65 run
+  gives no report. Trial-run on Continia DO: d65 0 findings at both scopes.
 
 ### Fixed (G52)
 
