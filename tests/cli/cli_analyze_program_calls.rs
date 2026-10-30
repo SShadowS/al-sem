@@ -102,7 +102,7 @@ fn analyze_matches_the_detectors_over_the_program_model_on_r0_fixtures() {
             &inputs,
             MODEL_INSTANCE_ID_DEFAULT,
             false,
-            al_sem::program::model::workspace::AssemblyNeeds::BASE,
+            al_sem::engine::l5::registry::assembly_needs(&registered_detectors()),
         )
         .expect("program model");
         let want = harness_keys(&run_detectors(&model, &registered_detectors()).findings);

@@ -297,6 +297,15 @@ const WAVE_BCQ: &[Smoke] = &[
         ported: true,
         corpus_dir: None,
     },
+    // d65 is OPT-IN (intent evidence, guard-bypass); its model is built with
+    // the rules it reads (`run_rust` asks `registry::assembly_needs`).
+    Smoke {
+        fixture: "ws-d65",
+        wave: "R4-INTENT",
+        detectors: &["d65-guard-bypass"],
+        ported: true,
+        corpus_dir: None,
+    },
 ];
 
 /// R4-G per-detector fixtures (d14 dead-routine + d46 commit-in-lifecycle).
@@ -1375,7 +1384,19 @@ fn run_rust(golden_name: &str, source_dir: &str, detector_names: &[&str]) -> R4F
     );
     let names: Vec<String> = detector_names.iter().map(|s| s.to_string()).collect();
     let detectors = registered_detectors();
-    match assemble_and_resolve_workspace_with_program_calls(&fixture_dir) {
+    // The model holds what the named detectors read (d65: the rules).
+    let selected: Vec<_> = detectors
+        .iter()
+        .filter(|d| names.contains(&d.name))
+        .cloned()
+        .collect();
+    let model = al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
+        &al_sem::program::inputs::WorkspaceInputs::read(&fixture_dir, &Default::default()),
+        al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
+        false,
+        al_sem::engine::l5::registry::assembly_needs(&selected),
+    );
+    match model {
         Some(resolved) => project_r4_findings(&resolved, &detectors, golden_name, &names),
         None => R4FindingsProjection {
             fixture_name: golden_name.to_string(),

@@ -317,7 +317,7 @@ mod tests {
         let ws =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-cross-object-chain");
         let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
-        let built = crate::engine::gate::run::build_analysis_model(&inputs, true);
+        let built = crate::engine::gate::run::build_analysis_model(&inputs, true, &[]);
         let model = match built.model.expect("fixture builds") {
             crate::engine::gate::run::AnalysisTarget::SingleApp(r) => *r,
             crate::engine::gate::run::AnalysisTarget::CrossApp(_) => {
@@ -349,7 +349,7 @@ mod tests {
         let ws =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-cross-object-chain");
         let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
-        let built = crate::engine::gate::run::build_analysis_model(&inputs, true);
+        let built = crate::engine::gate::run::build_analysis_model(&inputs, true, &[]);
         let model = match built.model.unwrap() {
             crate::engine::gate::run::AnalysisTarget::SingleApp(r) => r.workspace,
             crate::engine::gate::run::AnalysisTarget::CrossApp(_) => {
@@ -420,7 +420,7 @@ mod tests {
             "page 50103 \"T Page\"\n{\n    SourceTable = \"T \"\"Q\"\" X\";\n}\n",
         );
         let inputs = crate::program::inputs::WorkspaceInputs::read(ws, &Default::default());
-        let facts = crate::engine::gate::run::build_analysis_model(&inputs, true)
+        let facts = crate::engine::gate::run::build_analysis_model(&inputs, true, &[])
             .object_facts
             .expect("the model builds");
         assert_eq!(facts, vec!["compared\t5".to_string()]);

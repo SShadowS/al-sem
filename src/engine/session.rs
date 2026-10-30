@@ -22,6 +22,7 @@ use crate::engine::l5::detector_context::{
 };
 use crate::engine::l5::digest_cli::DigestEffects;
 use crate::engine::l5::registry::{self, Detector, RunOutput, substrate};
+use crate::engine::l5::rules_index::RulesIndex;
 use crate::engine::l5::snapshot::CapabilitySnapshot;
 use crate::engine::perf_trace as pt;
 use crate::program::model::role::Role;
@@ -57,6 +58,9 @@ pub struct View {
     /// One bit per [`Cell`] released; a released cell is never refilled.
     released: u16,
     ordering: Option<OrderingFactsMap>,
+    /// The per-field writer index (`substrate::RULES`), filled like
+    /// `ordering`: once, before the runs.
+    rules: Option<RulesIndex>,
     runs: BTreeMap<RunKey, Arc<RunOutput>>,
 }
 
@@ -293,6 +297,9 @@ pub enum Cell {
     /// After step 9's `TreeRead`: #277 merged second, so its cell takes the
     /// next free bit (spec §9).
     Base,
+    /// The per-field writer index (`substrate::RULES`, intent-evidence step
+    /// 6). Last, so every older cell keeps its bit.
+    Rules,
 }
 
 impl Cell {
@@ -301,10 +308,11 @@ impl Cell {
     /// `Effects` (with `L4`) for its query, then releases both. `TreeRead` is
     /// here as `Raw` is: released whether filled or not (a fingerprint tree
     /// read is usually taken, and so released, first).
-    const ALL: [Cell; 6] = [
+    const ALL: [Cell; 7] = [
         Cell::Det,
         Cell::L4,
         Cell::Ordering,
+        Cell::Rules,
         Cell::Rel,
         Cell::Raw,
         Cell::TreeRead,
@@ -667,6 +675,7 @@ fn substrate_bit_name(bit: u32) -> &'static str {
         substrate::CLOSED_WORLD_TEMP => "CLOSED_WORLD_TEMP",
         substrate::DB_EFFECT_REVERSE_INDEX => "DB_EFFECT_REVERSE_INDEX",
         substrate::ORDERING_FACTS => "ORDERING_FACTS",
+        substrate::RULES => "RULES",
         _ => "an unnamed substrate bit",
     }
 }
@@ -716,6 +725,7 @@ impl View {
             det: None,
             released: 0,
             ordering: None,
+            rules: None,
             runs: BTreeMap::new(),
         }
     }
@@ -763,6 +773,7 @@ impl View {
         let [need_rel, need_raw, need_l4, need_det] =
             [Cell::Rel, Cell::Raw, Cell::L4, Cell::Det].map(|c| fills.contains(&c));
         let need_ordering = union & substrate::ORDERING_FACTS != 0;
+        let need_rules = union & substrate::RULES != 0;
         let need_derived = plan.needs_derived();
         let need_caps = plan.composes(self.det.is_some());
         // D3: the subjects are fixed once, before the one composition: a
@@ -783,6 +794,7 @@ impl View {
         // `release(Det)` would find no `CoreSummaries`.
         for (cell, needed) in [
             (Cell::Ordering, need_ordering),
+            (Cell::Rules, need_rules),
             (Cell::Rel, need_rel),
             (Cell::Det, need_det),
             (Cell::L4, need_l4),
@@ -832,6 +844,7 @@ impl View {
             det,
             released,
             ordering,
+            rules,
             runs,
         } = self;
         // Final panel F1-C2: the dependency calls (cross-app) are read only by
@@ -859,6 +872,10 @@ impl View {
         // wants it before the runs.
         if need_ordering && ordering.is_none() {
             *ordering = Some(dc::fill_ordering(model));
+        }
+        // The rules index reads the model alone too: before the runs.
+        if need_rules && rules.is_none() {
+            *rules = Some(dc::fill_rules(model));
         }
         if need_rel && rel.is_none() {
             *rel = Some(relation_of(target));
@@ -1118,6 +1135,7 @@ impl View {
                 ("L4", l4.is_some()),
                 ("Det", true),
                 ("Ordering", ordering.is_some()),
+                ("Rules", rules.is_some()),
             ]
             .into_iter()
             .filter_map(|(name, filled)| filled.then_some(name))
@@ -1133,7 +1151,8 @@ impl View {
                 continue;
             }
             // One context per run (its borrowed maps print per construction).
-            let ctx: DetectorContext<'_> = dc::detector_context(model, art, ordering.as_ref());
+            let ctx: DetectorContext<'_> =
+                dc::detector_context(model, art, ordering.as_ref(), rules.as_ref());
             // Rule 3: a run's summarize diagnostics come from ITS mask.
             let summarize: &[SummarizeDiagnostic] = if key.demanded & substrate::CORE_SUMMARIES != 0
             {
@@ -1162,6 +1181,7 @@ impl View {
             Cell::Det => self.det = None,
             Cell::L4 => self.l4 = None,
             Cell::Ordering => self.ordering = None,
+            Cell::Rules => self.rules = None,
             Cell::Rel => self.rel = None,
             Cell::Caps => self.caps = None,
             Cell::Raw => self.raw = None,
@@ -1222,6 +1242,7 @@ impl View {
             ("L4", self.l4.is_some()),
             ("Det", self.det.is_some()),
             ("Ordering", self.ordering.is_some()),
+            ("Rules", self.rules.is_some()),
         ]
         .into_iter()
         .filter_map(|(name, filled)| filled.then_some(name))
@@ -2292,6 +2313,7 @@ mod tests {
             v.released,
             Cell::Det.bit()
                 | Cell::Ordering.bit()
+                | Cell::Rules.bit()
                 | Cell::Rel.bit()
                 | Cell::Raw.bit()
                 | Cell::TreeRead.bit()
@@ -2454,6 +2476,7 @@ mod tests {
             Cell::Effects,
             Cell::TreeRead,
             Cell::Base,
+            Cell::Rules,
         ];
         for c in all {
             match c {
@@ -2466,7 +2489,8 @@ mod tests {
                 | Cell::Tree
                 | Cell::Effects
                 | Cell::TreeRead
-                | Cell::Base => assert_ne!(c.bit(), 0, "(f) {c:?} has a bit"),
+                | Cell::Base
+                | Cell::Rules => assert_ne!(c.bit(), 0, "(f) {c:?} has a bit"),
             }
         }
         let mask = all.iter().fold(0u16, |m, c| m | c.bit());
@@ -2481,8 +2505,11 @@ mod tests {
     /// deleting one arm of `substrate_bit_name` fails this.
     #[test]
     fn every_substrate_bit_has_a_name() {
-        let all = substrate::ALL | substrate::DB_EFFECT_REVERSE_INDEX | substrate::ORDERING_FACTS;
-        assert_eq!(all.count_ones(), 6, "precondition: six bits");
+        let all = substrate::ALL
+            | substrate::DB_EFFECT_REVERSE_INDEX
+            | substrate::ORDERING_FACTS
+            | substrate::RULES;
+        assert_eq!(all.count_ones(), 7, "precondition: seven bits");
         for i in 0..u32::BITS {
             let bit = 1u32 << i;
             if all & bit != 0 {

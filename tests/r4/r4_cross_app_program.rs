@@ -805,7 +805,6 @@ fn d44_anchors_on_the_workspace_subscriber() {
 fn without_dependencies_cross_app_mode_reports_what_single_app_mode_does() {
     use al_sem::engine::l5::detectors::registered_detectors;
     use al_sem::engine::l5::finding::{project_r4_findings, project_r4_findings_cross_app};
-    use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
     let detectors = registered_detectors();
     let names: Vec<String> = detectors.iter().map(|d| d.name.clone()).collect();
     let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
@@ -817,7 +816,16 @@ fn without_dependencies_cross_app_mode_reports_what_single_app_mode_does() {
     dirs.sort();
     let (mut compared, mut differ) = (0, Vec::new());
     for ws in &dirs {
-        let Some(single) = assemble_and_resolve_workspace_with_program_calls(ws) else {
+        // Built with what every registered detector reads (d65: the rules),
+        // as the cross-app projection builds its base.
+        let Some(single) =
+            al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
+                &al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default()),
+                al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
+                false,
+                al_sem::engine::l5::registry::assembly_needs(&detectors),
+            )
+        else {
             continue;
         };
         let ids = |p: al_sem::engine::l5::finding::R4FindingsProjection| {

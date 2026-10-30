@@ -67,10 +67,19 @@
 //!
 //! **Caller rules**: for each known caller (a resolved call edge, or a record
 //! operation's trigger edge, into the routine), the rules the caller runs
-//! before every one of its calls: its own rules anchored before the call, and
-//! `all` of each `top-level` call step that ends before it. A rule is
-//! *applied* by a caller only when it always stops (`MayNotStop` rules are
-//! listed, never applied).
+//! before every one of its calls: its own rules on the path to the call
+//! (`PRule::guards`: not one in a sibling branch, nor one in a loop body
+//! before it), and `all` of each `top-level` call step that ends before it. A
+//! rule is *applied* by a caller only when it always stops (`MayNotStop` rules
+//! are listed, never applied).
+//!
+//! **On the path.** A routine's own rule counts before a site only when the
+//! check is on every path to it (`program::body::rules`, "On the path"); `all`
+//! of a routine keeps its rules that are passed on every path to its end
+//! (`PRule::at_exit`). Until intent-evidence step 6 any own rule anchored
+//! before the site counted, even one in a branch that does not lead to it.
+//! That would hide a skipped check from d65, whose rule key drops the
+//! conditions that are not on the written table.
 //!
 //! **Bounds.** Cycles are cut: a routine already on the walk's stack adds
 //! nothing again (its rules are already being collected). Results are
@@ -87,8 +96,8 @@
 //! every write is in the same branch. Writes made by event subscribers are not
 //! counted as writes of the publisher's caller. A callee's `FieldCompare` and
 //! similar atoms keep the callee's record-variable names (the `via` path says
-//! whose). A caller's own rule counts as applied when it is anchored before
-//! the call, even when it sits in a branch that does not lead to the call.
+//! whose). A check in a `while` / `for` / `foreach` body never counts for a
+//! site after the loop, even when the loop surely runs.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -490,8 +499,15 @@ impl<'m> CrossRules<'m> {
     fn across(&self, rule: &PRule, caller: usize, step: &Step<'_>) -> Option<PRule> {
         let mut when = Vec::with_capacity(rule.when.len());
         let mut texts = Vec::with_capacity(rule.when.len());
+        let mut earlier = Vec::with_capacity(rule.when.len());
         let callee_usable = self.usable(step.to);
-        for (atom, text) in rule.when.iter().zip(&rule.when_texts) {
+        // Each atom kept keeps where it came from (`when_earlier`): an
+        // iteration pushes at most one atom, so the flag of the atom it
+        // pushed is filled in at the next iteration's start (and at the end).
+        let mut last = false;
+        for (k, (atom, text)) in rule.when.iter().zip(&rule.when_texts).enumerate() {
+            earlier.resize(when.len(), last);
+            last = rule.when_earlier.get(k).copied().unwrap_or(false);
             let ConditionAtom::ParamBool { index, value } = atom else {
                 when.push(atom.clone());
                 texts.push(text.clone());
@@ -556,10 +572,12 @@ impl<'m> CrossRules<'m> {
                 }
             }
         }
+        earlier.resize(when.len(), last);
         Some(PRule {
             when_text: texts.join(" and "),
             when_texts: texts,
             when,
+            when_earlier: earlier,
             ..rule.clone()
         })
     }
@@ -624,10 +642,15 @@ impl<'m> CrossRules<'m> {
             Kind::All => None,
             Kind::Pre => self.first_write(row),
         };
+        // Own rules on the path: to the first write (`pre`), else to the
+        // routine's end (`all`).
         let mut out: Vec<Inh> = self
             .own(row)
             .into_iter()
-            .filter(|i| fw.is_none_or(|w| ends_before(&i.rule.anchor, w)))
+            .filter(|i| match fw {
+                Some(w) => i.rule.guards(w),
+                None => i.rule.at_exit,
+            })
             .collect();
         let steps = self.steps.get(&row).cloned().unwrap_or_default();
         for s in steps.iter().filter(|s| s.top_level) {
@@ -728,13 +751,14 @@ impl<'m> CrossRules<'m> {
         plain
     }
 
-    /// The rules `caller` runs before `site` (its own, anchored before it,
-    /// and `all` of each `top-level` step that ends before it).
+    /// The rules `caller` runs before `site` (its own that are on the path to
+    /// it, [`PRule::guards`], and `all` of each `top-level` step that ends
+    /// before it).
     fn before_site(&self, caller: usize, site: &PAnchor) -> Vec<Inh> {
         let mut out: Vec<Inh> = self
             .own(caller)
             .into_iter()
-            .filter(|i| ends_before(&i.rule.anchor, site))
+            .filter(|i| i.rule.guards(site))
             .collect();
         let steps = self.steps.get(&caller).cloned().unwrap_or_default();
         for s in steps
@@ -746,6 +770,36 @@ impl<'m> CrossRules<'m> {
             self.lift(caller, s, &sub, &mut out);
         }
         dedup(&mut out);
+        out
+    }
+
+    /// The rules in force at `site`, a write of `row` (spec §4.5 step 2,
+    /// before the caller rules): the routine's own rules on the path to it,
+    /// `all` of each `top-level` call that ends before it, and the rules of
+    /// the table triggers the write itself runs (a `Validate`'s `OnValidate`;
+    /// those carry `trigger`). Sorted like [`CrossRules::inherited`].
+    #[must_use]
+    pub fn effective_at(&self, row: usize, site: &PAnchor) -> Vec<Inh> {
+        let mut out = self.before_site(row, site);
+        let steps = self.steps.get(&row).cloned().unwrap_or_default();
+        for s in steps
+            .iter()
+            .filter(|s| s.op.is_some() && same_site(s.anchor, site))
+        {
+            let op = s.op.expect("a trigger step");
+            let mut low = usize::MAX;
+            let sub = self.compute(s.to, Kind::All, &mut low);
+            let start = out.len();
+            self.lift(row, s, &sub, &mut out);
+            for i in &mut out[start..] {
+                i.trigger = Some(TriggerAt {
+                    op: op.op.clone(),
+                    anchor: op.source_anchor.clone(),
+                });
+            }
+        }
+        dedup(&mut out);
+        sort_inh(&mut out);
         out
     }
 

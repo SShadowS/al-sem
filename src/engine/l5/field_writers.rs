@@ -5,9 +5,9 @@
 //! the assignment's, and the `Modify` that stores it is a table write the
 //! digest effects already carry.
 //!
-//! `alsem explain --table T --field F` lists these writers (spec §4.4). Step
-//! 6's `substrate::RULES` writer index (d65) is meant to be built from the same
-//! function, so both answer "who writes this field" one way.
+//! `alsem explain --table T --field F` lists these writers (spec §4.4), and
+//! the `substrate::RULES` writer index d65 reads (`l5::rules_index`) is built
+//! from the same function, so both answer "who writes this field" one way.
 //!
 //! Read from the model alone: each routine's `field_accesses` (the access kind
 //! of #14 says which are writes) and `record_operations`, with the record
@@ -25,14 +25,13 @@
 //! - A bare field assignment in a table's own trigger (`Amount := 0;`, no
 //!   `Rec.`) is a write only when the body walk records it as a field access
 //!   of `Rec`.
-//! - **`ModifyAll` writers are not found yet.** The body walk keeps a record
-//!   operation's argument texts only for the operations in
-//!   `program::body::record_op::FIELD_ARGS_OPS`, and `ModifyAll` is not one.
-//!   Adding it there changes the serialized `fieldArguments` of every
-//!   `ModifyAll` (the l2 feature goldens) and the input of the detectors that
-//!   read those arguments, so it is left to step 6 (d65 needs it), which must
-//!   measure that move. The `ModifyAll` arm below already reads the field once
-//!   the argument is kept.
+//! - **`ModifyAll`'s field** is `ModelRecordOperation::modify_all_field`,
+//!   read at model assembly from the IR (intent-evidence step 6). The body
+//!   walk keeps a record operation's argument texts only for the operations
+//!   in `program::body::record_op::FIELD_ARGS_OPS`; adding `ModifyAll` there
+//!   would change the serialized `fieldArguments` of every `ModifyAll` (the l2
+//!   feature goldens) and the input of the detectors that read those
+//!   arguments, so the field is kept beside them instead, never serialized.
 
 use std::collections::HashMap;
 
@@ -148,13 +147,13 @@ pub fn field_writes(model: &Model) -> Vec<FieldWrite<'_>> {
             } else {
                 continue;
             };
-            // The body walk keeps a record operation's arguments only for
-            // `FIELD_ARGS_OPS`: `Validate` is one, `ModifyAll` is not (yet), so
-            // a `ModifyAll` has no field here and is skipped (module doc).
-            let (Some(table_id), Some(first)) = (
-                op.table_id.as_deref(),
-                op.field_arguments.as_ref().and_then(|a| a.first()),
-            ) else {
+            // `Validate`'s field is its first kept argument (`FIELD_ARGS_OPS`);
+            // `ModifyAll`'s is read at assembly (module doc).
+            let first = match kind {
+                WriteKind::ModifyAll => op.modify_all_field.as_ref(),
+                _ => op.field_arguments.as_ref().and_then(|a| a.first()),
+            };
+            let (Some(table_id), Some(first)) = (op.table_id.as_deref(), first) else {
                 continue;
             };
             let Some(table) = tables.get(table_id) else {

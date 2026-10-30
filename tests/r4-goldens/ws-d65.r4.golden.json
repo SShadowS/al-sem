@@ -1,0 +1,299 @@
+{
+  "fixtureName": "ws-d65",
+  "detectors": [
+    "d65-guard-bypass"
+  ],
+  "findingCount": 5,
+  "findings": [
+    {
+      "detector": "d65-guard-bypass",
+      "id": "d65/11111111-0000-0000-0000-00000000d650:Codeunit:50651#254cfb29592b28bf563a531ae62a02680f2f7a9b67c3e393d8df74153bc45757/11111111-0000-0000-0000-00000000d650/table/50650/Note/TestField: status <> ::open",
+      "rootCauseKey": "d65/11111111-0000-0000-0000-00000000d650:Codeunit:50651#254cfb29592b28bf563a531ae62a02680f2f7a9b67c3e393d8df74153bc45757/11111111-0000-0000-0000-00000000d650/table/50650/Note/TestField: status <> ::open",
+      "title": "Write skips a rule the other writers apply",
+      "rootCause": "CollectNote writes Guard Order.Note without the rule that 3 of 4 writers of this field apply: rejects when O.Status <> O.Status::Open (TestField) (for example Guard Writers::FollowAssign and Guard Writers::FollowValidate).",
+      "severity": "low",
+      "confidence": {
+        "level": "possible",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/Writers.al",
+        "range": {
+          "startLine": 109,
+          "startColumn": 8,
+          "endLine": 109,
+          "endColumn": 14
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d650:Codeunit:50651#254cfb29592b28bf563a531ae62a02680f2f7a9b67c3e393d8df74153bc45757",
+        "syntaxKind": "member_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d650:Codeunit:50651#254cfb29592b28bf563a531ae62a02680f2f7a9b67c3e393d8df74153bc45757",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Writers.al",
+            "range": {
+              "startLine": 109,
+              "startColumn": 8,
+              "endLine": 109,
+              "endColumn": 14
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d650:Codeunit:50651#254cfb29592b28bf563a531ae62a02680f2f7a9b67c3e393d8df74153bc45757",
+            "syntaxKind": "member_expression"
+          },
+          "note": "writes Guard Order.Note (assign) without: TestField: status <> ::open"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d650:Codeunit:50651"
+      ],
+      "affectedTables": [
+        "11111111-0000-0000-0000-00000000d650:Table:50650"
+      ],
+      "fixOptions": [
+        {
+          "description": "Add the check, or mark the exception with `// al-sem-ignore d65-guard-bypass` and a reason.",
+          "safety": "medium"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "1e559cf7e0c4778d"
+    },
+    {
+      "detector": "d65-guard-bypass",
+      "id": "d65/11111111-0000-0000-0000-00000000d650:Codeunit:50651#8ad508f94816ec9b6285227abe96283738f5aec67f4252b77cf8f2c07bfbf596/11111111-0000-0000-0000-00000000d650/table/50650/Amount/TestField: status <> ::open",
+      "rootCauseKey": "d65/11111111-0000-0000-0000-00000000d650:Codeunit:50651#8ad508f94816ec9b6285227abe96283738f5aec67f4252b77cf8f2c07bfbf596/11111111-0000-0000-0000-00000000d650/table/50650/Amount/TestField: status <> ::open",
+      "title": "Write skips a rule the other writers apply",
+      "rootCause": "BypassAmount writes Guard Order.Amount without the rule that 4 of 5 writers of this field apply: rejects when O.Status <> O.Status::Open (TestField) (for example Guard Writers::FollowAssign and Guard Writers::FollowValidate).",
+      "severity": "low",
+      "confidence": {
+        "level": "possible",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/Writers.al",
+        "range": {
+          "startLine": 71,
+          "startColumn": 8,
+          "endLine": 71,
+          "endColumn": 16
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d650:Codeunit:50651#8ad508f94816ec9b6285227abe96283738f5aec67f4252b77cf8f2c07bfbf596",
+        "syntaxKind": "member_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d650:Codeunit:50651#8ad508f94816ec9b6285227abe96283738f5aec67f4252b77cf8f2c07bfbf596",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Writers.al",
+            "range": {
+              "startLine": 71,
+              "startColumn": 8,
+              "endLine": 71,
+              "endColumn": 16
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d650:Codeunit:50651#8ad508f94816ec9b6285227abe96283738f5aec67f4252b77cf8f2c07bfbf596",
+            "syntaxKind": "member_expression"
+          },
+          "note": "writes Guard Order.Amount (assign) without: TestField: status <> ::open"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d650:Codeunit:50651"
+      ],
+      "affectedTables": [
+        "11111111-0000-0000-0000-00000000d650:Table:50650"
+      ],
+      "fixOptions": [
+        {
+          "description": "Add the check, or mark the exception with `// al-sem-ignore d65-guard-bypass` and a reason.",
+          "safety": "medium"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "03e11dbdbc5d4061"
+    },
+    {
+      "detector": "d65-guard-bypass",
+      "id": "d65/11111111-0000-0000-0000-00000000d650:Codeunit:50651#797751d0c02b2b9742afada6db26a4b3b2f5a936775770031a79ad89b29e6595/11111111-0000-0000-0000-00000000d650/table/50650/Quantity/TestField: status <> ::open",
+      "rootCauseKey": "d65/11111111-0000-0000-0000-00000000d650:Codeunit:50651#797751d0c02b2b9742afada6db26a4b3b2f5a936775770031a79ad89b29e6595/11111111-0000-0000-0000-00000000d650/table/50650/Quantity/TestField: status <> ::open",
+      "title": "Write skips a rule the other writers apply",
+      "rootCause": "BypassBranch writes Guard Order.Quantity without the rule that 3 of 4 writers of this field apply: rejects when O.Status <> O.Status::Open (TestField) (for example Guard Writers::FollowAssign and Guard Writers::FollowValidate).",
+      "severity": "low",
+      "confidence": {
+        "level": "possible",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/Writers.al",
+        "range": {
+          "startLine": 82,
+          "startColumn": 12,
+          "endLine": 82,
+          "endColumn": 22
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d650:Codeunit:50651#797751d0c02b2b9742afada6db26a4b3b2f5a936775770031a79ad89b29e6595",
+        "syntaxKind": "member_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d650:Codeunit:50651#797751d0c02b2b9742afada6db26a4b3b2f5a936775770031a79ad89b29e6595",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Writers.al",
+            "range": {
+              "startLine": 82,
+              "startColumn": 12,
+              "endLine": 82,
+              "endColumn": 22
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d650:Codeunit:50651#797751d0c02b2b9742afada6db26a4b3b2f5a936775770031a79ad89b29e6595",
+            "syntaxKind": "member_expression"
+          },
+          "note": "writes Guard Order.Quantity (assign) without: TestField: status <> ::open"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d650:Codeunit:50651"
+      ],
+      "affectedTables": [
+        "11111111-0000-0000-0000-00000000d650:Table:50650"
+      ],
+      "fixOptions": [
+        {
+          "description": "Add the check, or mark the exception with `// al-sem-ignore d65-guard-bypass` and a reason.",
+          "safety": "medium"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "b57196fc3d3c6f08"
+    },
+    {
+      "detector": "d65-guard-bypass",
+      "id": "d65/11111111-0000-0000-0000-00000000d650:Codeunit:50651#ff30d31d8fcb0c785af6ee6382d75f78cc26407b83381613d6eb6b614e2810b9/11111111-0000-0000-0000-00000000d650/table/50650/Price/TestField: status <> ::open",
+      "rootCauseKey": "d65/11111111-0000-0000-0000-00000000d650:Codeunit:50651#ff30d31d8fcb0c785af6ee6382d75f78cc26407b83381613d6eb6b614e2810b9/11111111-0000-0000-0000-00000000d650/table/50650/Price/TestField: status <> ::open",
+      "title": "Write skips a rule the other writers apply",
+      "rootCause": "BypassModifyAll writes Guard Order.Price without the rule that 3 of 4 writers of this field apply: rejects when O.Status <> O.Status::Open (TestField) (for example Guard Writers::FollowAssign and Guard Writers::FollowValidate).",
+      "severity": "low",
+      "confidence": {
+        "level": "possible",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/Writers.al",
+        "range": {
+          "startLine": 91,
+          "startColumn": 8,
+          "endLine": 91,
+          "endColumn": 29
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d650:Codeunit:50651#ff30d31d8fcb0c785af6ee6382d75f78cc26407b83381613d6eb6b614e2810b9",
+        "syntaxKind": "call_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d650:Codeunit:50651#ff30d31d8fcb0c785af6ee6382d75f78cc26407b83381613d6eb6b614e2810b9",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Writers.al",
+            "range": {
+              "startLine": 91,
+              "startColumn": 8,
+              "endLine": 91,
+              "endColumn": 29
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d650:Codeunit:50651#ff30d31d8fcb0c785af6ee6382d75f78cc26407b83381613d6eb6b614e2810b9",
+            "syntaxKind": "call_expression"
+          },
+          "note": "writes Guard Order.Price (modify-all) without: TestField: status <> ::open"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d650:Codeunit:50651"
+      ],
+      "affectedTables": [
+        "11111111-0000-0000-0000-00000000d650:Table:50650"
+      ],
+      "fixOptions": [
+        {
+          "description": "Add the check, or mark the exception with `// al-sem-ignore d65-guard-bypass` and a reason.",
+          "safety": "medium"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "fd30fe76996dbead"
+    },
+    {
+      "detector": "d65-guard-bypass",
+      "id": "d65/11111111-0000-0000-0000-00000000d650:Codeunit:50651#53e15fb98838203e83ddfc7e71e48731e81bf867b9f6bcbd848a6b39d306911a/11111111-0000-0000-0000-00000000d650/table/50650/Discount/TestField: status <> ::open",
+      "rootCauseKey": "d65/11111111-0000-0000-0000-00000000d650:Codeunit:50651#53e15fb98838203e83ddfc7e71e48731e81bf867b9f6bcbd848a6b39d306911a/11111111-0000-0000-0000-00000000d650/table/50650/Discount/TestField: status <> ::open",
+      "title": "Write skips a rule the other writers apply",
+      "rootCause": "ResetDiscount writes Guard Order.Discount without the rule that 3 of 4 writers of this field apply: rejects when O.Status <> O.Status::Open (TestField) (for example Guard Writers::FollowAssign and Guard Writers::FollowValidate).",
+      "severity": "low",
+      "confidence": {
+        "level": "possible",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/Writers.al",
+        "range": {
+          "startLine": 99,
+          "startColumn": 8,
+          "endLine": 99,
+          "endColumn": 18
+        },
+        "enclosingRoutineId": "11111111-0000-0000-0000-00000000d650:Codeunit:50651#53e15fb98838203e83ddfc7e71e48731e81bf867b9f6bcbd848a6b39d306911a",
+        "syntaxKind": "member_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "11111111-0000-0000-0000-00000000d650:Codeunit:50651#53e15fb98838203e83ddfc7e71e48731e81bf867b9f6bcbd848a6b39d306911a",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Writers.al",
+            "range": {
+              "startLine": 99,
+              "startColumn": 8,
+              "endLine": 99,
+              "endColumn": 18
+            },
+            "enclosingRoutineId": "11111111-0000-0000-0000-00000000d650:Codeunit:50651#53e15fb98838203e83ddfc7e71e48731e81bf867b9f6bcbd848a6b39d306911a",
+            "syntaxKind": "member_expression"
+          },
+          "note": "writes Guard Order.Discount (assign) without: TestField: status <> ::open"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-00000000d650:Codeunit:50651"
+      ],
+      "affectedTables": [
+        "11111111-0000-0000-0000-00000000d650:Table:50650"
+      ],
+      "fixOptions": [
+        {
+          "description": "Add the check, or mark the exception with `// al-sem-ignore d65-guard-bypass` and a reason.",
+          "safety": "medium"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "cbdf5e3194c3c300"
+    }
+  ]
+}

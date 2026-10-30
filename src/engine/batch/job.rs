@@ -74,8 +74,8 @@ pub struct ViewNeeds {
     pub model: bool,
     /// Each routine's rules, built at model assembly from the IR
     /// (`ModelRoutine::rules`, intent-evidence spec §4.1b). `alsem explain`
-    /// sets it; `analyze` will when a selected detector requires
-    /// `substrate::RULES`. It changes what the model holds, not which
+    /// sets it; `analyze` does when a selected detector requires
+    /// `substrate::RULES` ([`ViewNeeds::analyze_for`]). It changes what the model holds, not which
     /// workspace or universe it is, so it stays out of [`ViewKey`]: a view
     /// whose union has it builds rules for every demand on it.
     pub rules: bool,
@@ -111,6 +111,18 @@ impl ViewNeeds {
         card_text: true,
         ..ViewNeeds::MODEL
     };
+
+    /// `alsem analyze` running `detectors`: [`ViewNeeds::ANALYZE`], with
+    /// `rules` iff a selected detector requires `substrate::RULES`
+    /// (`registry::assembly_needs`). A default run selects none, so it builds
+    /// no rules.
+    #[must_use]
+    pub fn analyze_for(detectors: &[crate::engine::l5::registry::Detector]) -> ViewNeeds {
+        ViewNeeds {
+            rules: crate::engine::l5::registry::assembly_needs(detectors).rules,
+            ..ViewNeeds::ANALYZE
+        }
+    }
 
     pub fn union(self, other: ViewNeeds) -> ViewNeeds {
         ViewNeeds {

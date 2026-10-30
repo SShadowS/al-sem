@@ -58,6 +58,7 @@ use crate::engine::l5::digest_cli::{
     resolve_changed_roots,
 };
 use crate::engine::l5::field_writers::{WriteKind, field_writes};
+use crate::engine::l5::rules_index::{FieldWriters, RulesIndex, WriteSite, Writer as IndexWriter};
 use crate::engine::session::{Cell, explain_plan};
 use crate::program::body::features::PAnchor;
 use crate::program::body::rules::{
@@ -702,8 +703,19 @@ fn render(
             doc.insert("selector".into(), json!({ "table": table, "field": field }));
         }
     }
+    // `--table/--field`: each writer's effective rules, from the index d65
+    // reads (spec §4.4, §4.5 step 2).
+    let rules_index = resolved
+        .field
+        .as_ref()
+        .map(|f| RulesIndex::build_where(model, |t, n| t == f.table_id && n == f.field));
+    let entry = resolved
+        .field
+        .as_ref()
+        .zip(rules_index.as_ref())
+        .and_then(|(f, idx)| idx.field(&f.table_id, &f.field));
     if let Some(f) = &resolved.field {
-        doc.insert("field".into(), field_json(&ix, f));
+        doc.insert("field".into(), field_json(&ix, f, entry));
     }
     doc.insert(
         "cards".into(),
@@ -723,7 +735,7 @@ fn render(
 
     let mut human = String::new();
     if let Some(f) = &resolved.field {
-        human.push_str(&field_human(&ix, f));
+        human.push_str(&field_human(&ix, f, entry));
     }
     for (_, _, _, h) in &cards {
         human.push_str(h);
@@ -753,8 +765,25 @@ fn writers_by_anchor(f: &FieldAnswer) -> Vec<(&String, &Vec<(WriteKind, PAnchor)
     w
 }
 
-/// The `field` block of `--table/--field`.
-fn field_json(ix: &Indexes<'_>, f: &FieldAnswer) -> Value {
+/// The index's writer `id`, and its site at `a`.
+fn index_site<'e>(
+    entry: Option<&'e FieldWriters>,
+    id: &str,
+    a: &PAnchor,
+) -> (Option<&'e IndexWriter>, Option<&'e WriteSite>) {
+    let w = entry.and_then(|e| e.writers.iter().find(|w| w.stable_id == id));
+    let s = w.and_then(|w| {
+        w.sites
+            .iter()
+            .find(|s| anchor_key(&s.anchor) == anchor_key(a))
+    });
+    (w, s)
+}
+
+/// The `field` block of `--table/--field`. Each site lists its effective
+/// rules (`rules`: own, inherited, table-trigger) and each writer the rules
+/// every known caller applies (`callerRules`), from the rules index.
+fn field_json(ix: &Indexes<'_>, f: &FieldAnswer, entry: Option<&FieldWriters>) -> Value {
     let writers: Vec<Value> = writers_by_anchor(f)
         .into_iter()
         .map(|(id, sites)| {
@@ -763,13 +792,30 @@ fn field_json(ix: &Indexes<'_>, f: &FieldAnswer) -> Value {
                 .get(id.as_str())
                 .and_then(|r| r.first())
                 .map_or_else(|| id.clone(), |&i| ix.qualified(i));
+            let writer = entry.and_then(|e| e.writers.iter().find(|w| &w.stable_id == id));
+            let caller_rules: Vec<Value> = writer
+                .map(|w| {
+                    w.caller_rules()
+                        .into_iter()
+                        .map(|i| inh_json(ix, i))
+                        .collect()
+                })
+                .unwrap_or_default();
             json!({
                 "id": id,
                 "routine": display,
                 "sites": sites
                     .iter()
-                    .map(|(k, a)| json!({ "kind": k.as_str(), "anchor": anchor_json(a) }))
+                    .map(|(k, a)| {
+                        let rules: Vec<Value> = index_site(entry, id, a)
+                            .1
+                            .map(|s| s.rules.iter().map(|i| inh_json(ix, i)).collect())
+                            .unwrap_or_default();
+                        json!({ "kind": k.as_str(), "anchor": anchor_json(a), "rules": rules })
+                    })
                     .collect::<Vec<_>>(),
+                "callerRules": caller_rules,
+                "knownCallers": writer.map_or(0, |w| w.callers.len()),
             })
         })
         .collect();
@@ -784,7 +830,7 @@ fn field_json(ix: &Indexes<'_>, f: &FieldAnswer) -> Value {
     })
 }
 
-fn field_human(ix: &Indexes<'_>, f: &FieldAnswer) -> String {
+fn field_human(ix: &Indexes<'_>, f: &FieldAnswer, entry: Option<&FieldWriters>) -> String {
     let mut out = format!("field: {}.{}", f.table, f.field);
     if let Ok(Some(c)) = one_text(&f.captions) {
         out.push_str(&format!(" (caption \"{c}\")"));
@@ -801,6 +847,28 @@ fn field_human(ix: &Indexes<'_>, f: &FieldAnswer) -> String {
             .map(|(k, a)| format!("{} at {}", k.as_str(), anchor_human(a)))
             .collect();
         out.push_str(&format!("  {display}: {}\n", at.join(", ")));
+        for (_, a) in sites {
+            let (_, site) = index_site(entry, id, a);
+            let rules = site.map_or(&[][..], |s| s.rules.as_slice());
+            if rules.is_empty() {
+                out.push_str(&format!("    at {}: no rule\n", anchor_human(a)));
+            }
+            for i in rules {
+                out.push_str(&format!(
+                    "    at {}: {}\n",
+                    anchor_human(a),
+                    rule_human(&i.rule)
+                ));
+            }
+        }
+        if let Some(w) = entry.and_then(|e| e.writers.iter().find(|w| &w.stable_id == id)) {
+            for i in w.caller_rules() {
+                out.push_str(&format!(
+                    "    every caller applies: {}\n",
+                    rule_human(&i.rule)
+                ));
+            }
+        }
     }
     out.push('\n');
     out

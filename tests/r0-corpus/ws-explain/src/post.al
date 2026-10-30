@@ -27,7 +27,7 @@ codeunit 50401 "Explain Post"
         Commit();
     end;
 
-    // A ModifyAll writer of Status: not listed by --field yet (field_writers' limit).
+    // A ModifyAll writer of Status: listed by --field since step 6.
     procedure ReopenAll()
     var
         Order: Record "Explain Order";

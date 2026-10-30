@@ -652,6 +652,7 @@ mod tests {
             in_until_condition: false,
             in_statement_position: false,
             run_trigger: None,
+            modify_all_field: None,
         };
         let temp = Some(ts_known(true));
         // (is_implicit_rec, expected: Rec row temp, Rec op temp, xRec op temp)

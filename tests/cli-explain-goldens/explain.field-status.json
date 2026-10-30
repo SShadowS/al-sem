@@ -279,6 +279,60 @@
         "own": []
       },
       "tests": []
+    },
+    {
+      "effects": {
+        "commitSites": [],
+        "commits": "no",
+        "events": [],
+        "ui": [],
+        "writes": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Order.ModifyAll",
+              "file": "ws:src/post.al",
+              "line": 34,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "fieldCaptions": {
+              "Status": "Order Status"
+            },
+            "fields": [
+              "Status"
+            ],
+            "op": "DB_MODIFY",
+            "table": "Explain Order",
+            "tableId": "44444444-e491-0000-0000-0000000e4a11/table/50400",
+            "via": []
+          }
+        ]
+      },
+      "extensionPoints": [],
+      "gaps": [],
+      "reachedFrom": [],
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/post.al",
+          "line": 30,
+          "sourceKind": "source"
+        },
+        "doc": "A ModifyAll writer of Status: listed by --field since step 6.",
+        "id": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50401#aaf03061fc8320278fbda70747ce69ed453f2b4cea634b6de192ac6910df865e",
+        "name": "ReopenAll",
+        "object": "Explain Post",
+        "objectCaption": null,
+        "objectType": "Codeunit"
+      },
+      "rules": {
+        "callers": [],
+        "inherited": [],
+        "knownCallers": 0,
+        "own": []
+      },
+      "tests": []
     }
   ],
   "diagnostics": [],
@@ -290,7 +344,9 @@
     "tableId": "44444444-e491-0000-0000-0000000e4a11/table/50400",
     "writers": [
       {
+        "callerRules": [],
         "id": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50401#d2166489ad174cb2f8c763f785477e5a5160ade8e87e7435e965fed790061e77",
+        "knownCallers": 2,
         "routine": "Codeunit Explain Post::PostOrder",
         "sites": [
           {
@@ -300,12 +356,95 @@
               "line": 16,
               "sourceKind": "source"
             },
-            "kind": "validate"
+            "kind": "validate",
+            "rules": [
+              {
+                "anchor": {
+                  "column": 12,
+                  "file": "ws:src/post.al",
+                  "line": 10,
+                  "sourceKind": "source"
+                },
+                "comment": null,
+                "id": "d43dde0308e4c15c/373fb44213213995d73ed3dd9a09ef3a78ffe1d6f79da4a31031aa5640a85f7e/rule0",
+                "in": "Codeunit Explain Post::PostOrder",
+                "kind": "Error",
+                "message": {
+                  "args": [
+                    "Order.\"No.\""
+                  ],
+                  "candidates": [],
+                  "labelComment": "%1 = order number",
+                  "source": "Label",
+                  "text": "Order %1 is not released.",
+                  "var": "NotReleasedErr"
+                },
+                "stops": "always",
+                "stopsReason": null,
+                "trigger": null,
+                "via": [],
+                "when": [
+                  {
+                    "field": "Status",
+                    "kind": "FieldCompare",
+                    "op": "<>",
+                    "recordVar": "Order",
+                    "table": "Explain Order",
+                    "value": "Order.Status::Released"
+                  }
+                ],
+                "whenText": "Order.Status <> Order.Status::Released"
+              },
+              {
+                "anchor": {
+                  "column": 8,
+                  "file": "ws:src/post.al",
+                  "line": 11,
+                  "sourceKind": "source"
+                },
+                "comment": null,
+                "id": "d43dde0308e4c15c/373fb44213213995d73ed3dd9a09ef3a78ffe1d6f79da4a31031aa5640a85f7e/rule1",
+                "in": "Codeunit Explain Post::PostOrder",
+                "kind": "TestField",
+                "message": {
+                  "args": [],
+                  "candidates": [],
+                  "labelComment": null,
+                  "source": "Platform",
+                  "text": null,
+                  "var": null
+                },
+                "stops": "always",
+                "stopsReason": null,
+                "trigger": null,
+                "via": [],
+                "when": [
+                  {
+                    "field": "Status",
+                    "kind": "FieldCompare",
+                    "op": "=",
+                    "recordVar": "Order",
+                    "table": "Explain Order",
+                    "value": "Order.Status::Released"
+                  },
+                  {
+                    "field": "Amount",
+                    "kind": "FieldEmpty",
+                    "negated": false,
+                    "recordVar": "Order",
+                    "table": "Explain Order"
+                  }
+                ],
+                "whenText": "not (Order.Status <> Order.Status::Released) and Order.Amount is empty"
+              }
+            ]
           }
         ]
       },
       {
+        "callerRules": [],
         "id": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50401#784c1883c3a487fed2627f93fb9437018e64ce687a18635d0bf7e49b484b411c",
+        "knownCallers": 0,
         "routine": "Codeunit Explain Post::Archive",
         "sites": [
           {
@@ -315,7 +454,26 @@
               "line": 24,
               "sourceKind": "source"
             },
-            "kind": "assign"
+            "kind": "assign",
+            "rules": []
+          }
+        ]
+      },
+      {
+        "callerRules": [],
+        "id": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50401#aaf03061fc8320278fbda70747ce69ed453f2b4cea634b6de192ac6910df865e",
+        "knownCallers": 0,
+        "routine": "Codeunit Explain Post::ReopenAll",
+        "sites": [
+          {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/post.al",
+              "line": 34,
+              "sourceKind": "source"
+            },
+            "kind": "modify-all",
+            "rules": []
           }
         ]
       }

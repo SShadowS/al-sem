@@ -71,6 +71,49 @@ codeunit 50453 "Calls Post"
         Release(Order);
     end;
 
+    // The check sits in the other branch: it does not guard the call.
+    procedure ReleaseBranch(var Order: Record "Calls Order"; Quick: Boolean)
+    begin
+        if Quick then begin
+            if Order.Blocked then
+                Error('A blocked order cannot be released quickly.');
+        end else
+            Release(Order);
+    end;
+
+    // A loop body may run no time: neither its own check nor CheckLines'
+    // guards the call.
+    procedure ReleaseLoop(var Order: Record "Calls Order"; Lines: Integer)
+    var
+        Checks: Codeunit "Calls Checks";
+        i: Integer;
+    begin
+        for i := 1 to Lines do
+            if Order.Amount = 0 then
+                Error('A zero line cannot be released.');
+        Checks.CheckLines(Order, Lines);
+        Release(Order);
+    end;
+
+    // The check and the call share the branch: it guards the call.
+    procedure ReleaseGuarded(var Order: Record "Calls Order"; Quick: Boolean)
+    begin
+        if Quick then begin
+            if Order.Blocked then
+                Error('A blocked order cannot be released quickly.');
+            Release(Order);
+        end;
+    end;
+
+    // The call is in the else of the check: its condition was evaluated.
+    procedure ReleaseElse(var Order: Record "Calls Order")
+    begin
+        if Order."No." = '' then
+            Error('An order without a number cannot be released.')
+        else
+            Release(Order);
+    end;
+
     [IntegrationEvent(false, false)]
     local procedure OnBeforePostOrder(var Order: Record "Calls Order")
     begin

@@ -1232,6 +1232,20 @@
       "routines": 0,
       "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
     },
+    "r0/ws-d65 cross": {
+      "any": 34,
+      "direct": 32,
+      "inherited": 2,
+      "routines": 15,
+      "sha256": "8248aa0c922c82ee0949354e416c631e68f2526f798c04a9843d433fff27a331"
+    },
+    "r0/ws-d65 single": {
+      "any": 34,
+      "direct": 32,
+      "inherited": 2,
+      "routines": 15,
+      "sha256": "8248aa0c922c82ee0949354e416c631e68f2526f798c04a9843d433fff27a331"
+    },
     "r0/ws-d7-event-cycle cross": {
       "any": 20,
       "direct": 4,
@@ -1695,18 +1709,18 @@
       "sha256": "3afe9c3298774c07c3bdd26f47e00fce81b39c5646d3398d8e31591be73bfc25"
     },
     "r0/ws-explain-calls cross": {
-      "any": 62,
-      "direct": 30,
-      "inherited": 32,
-      "routines": 23,
-      "sha256": "e151a999fd21cc743bda465f802b9928dcf56ff2b5facda2185dfbd0726b05d9"
+      "any": 78,
+      "direct": 40,
+      "inherited": 38,
+      "routines": 28,
+      "sha256": "ecf5b2fb77641488cab3a1bf2328261aaad9cec8caa8d714b11f43d58c649634"
     },
     "r0/ws-explain-calls single": {
-      "any": 62,
-      "direct": 30,
-      "inherited": 32,
-      "routines": 23,
-      "sha256": "e151a999fd21cc743bda465f802b9928dcf56ff2b5facda2185dfbd0726b05d9"
+      "any": 78,
+      "direct": 40,
+      "inherited": 38,
+      "routines": 28,
+      "sha256": "ecf5b2fb77641488cab3a1bf2328261aaad9cec8caa8d714b11f43d58c649634"
     },
     "r0/ws-implicit-trigger cross": {
       "any": 6,

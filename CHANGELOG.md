@@ -123,7 +123,8 @@ Spec: `docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 3).
   their rules), `error-collector` (a call to a `Log…` procedure of
   `Error Message Management` / `Error Message`, a stated list), and
   `cross-call-rules-truncated` (the walk's budget of 200,000 routine
-  expansions; cycles are cut, results memoised). Each extension point lists its
+  expansions, or a chain of calls 512 deep, the walk's recursion limit; cycles
+  are cut, results memoised). Each extension point lists its
   subscribers' own rules (`subscriberRoutines`, `conditionalOnAppSet`), never
   merged into `inherited`. `reachedFrom` follows a page action's
   `RunObject = Codeunit X` into that codeunit's `OnRun` (`runObject`). Wiring:
@@ -136,6 +137,61 @@ Spec: `docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 3).
   root-class summary, a new r2c golden and two policy-facts oracle cases); 12
   new goldens in `tests/cli-explain-goldens/`, and the step-4 goldens show the
   computed lists.
+- **Step 6: `d65-guard-bypass` (opt-in) and the rules index behind it.**
+  - *A check counts only on the path.* Step 5 counted a caller's own check as
+    applied when it sat anywhere before the call, even in the other branch of an
+    `if` or in a loop body that may not run; d65 drops conditions that are not on
+    the written table, so that hid a real bypass. Each `PRule` now records where
+    it is on the path (`on_path`, `PRule::guards`): after the check to the end of
+    its block, in the `else` of an `if` whose `then` it directly is (only for a
+    check with no condition of its own: `Error`, `FieldError`, a `Confirm` exit;
+    a `TestField` is not evaluated there), and wherever its statement lifts out
+    of an `if`/`case` branch, `begin..end`, `repeat` or `with`, never out of a
+    `while`/`for`/`foreach` body, `try`, `asserterror` or `#if` arm.
+    `cross_rules` uses it for caller rules and "before the first write", and a
+    callee's `all` keeps only the checks passed on every path to its end
+    (`at_exit`). `explain`'s `appliedBy`/`skippedBy` follow it. `PRule` also gains
+    `when_earlier` (which atoms are an earlier check's `not C`).
+  - *`ModifyAll` writes a field.* `ModelRecordOperation::modify_all_field` holds a
+    `ModifyAll`'s first argument, read at assembly from the IR (never serialized),
+    so `fieldArguments` and every detector input stay as they were;
+    `explain --table/--field` and d65 list `ModifyAll` writers.
+  - *`substrate::RULES` (`1 << 7`)*: the per-field writer index
+    (`l5::rules_index`): each primary-app writer of each field with the rules in
+    force at each write (own on the path, the calls before it, the table triggers
+    it runs, and per known caller the rules it applies), `MayNotStop` rules left
+    out. Outside `ALL`; filled once before the detector loop (`fill_rules`, also a
+    `View` cell, `Cell::Rules`); `get_rules_index()` panics "declare
+    substrate::RULES"; filling it from a model without rules panics.
+    `registry::assembly_needs(detectors)` says what model a detector list needs;
+    `alsem analyze` builds the rules only when a selected detector requires
+    `RULES` (`ViewNeeds::analyze_for`), so a default run builds none.
+    `project_r4_findings[_cross_app]` now run only the named detectors, and every
+    builder that runs a detector list (aldump's `--r4-findings*`, the switch dump,
+    `build_analysis_model`) builds with its needs.
+  - *`d65-guard-bypass`*: rule key = kind plus the atoms on the written table
+    (record variable dropped, enum values by member; `Other`, parameter and call
+    atoms, and an earlier check's `not C`, form none); a key applied by at
+    least 3 writers and 75 % of them is a majority rule, and each writer without it
+    is a finding (`possible`, low) at its first write, with the rule, the follower
+    count and two examples. Opt-in: `--detector d65-guard-bypass` or the new
+    `--preset business-rules`. Suppress with `// al-sem-ignore d65-guard-bypass:
+    <reason>` above the write.
+  - `explain --table/--field` lists each write's effective rules (`sites[].rules`)
+    and each writer's `callerRules` / `knownCallers`, from the same index.
+  - Goldens: new `ws-d65` fixture and r4 golden (5 findings); the d65 row in every
+    `all`-slot detector-stats golden (cli-a json/stats) and its SARIF rule in the
+    gate goldens; new `ws-explain-calls` callers (`ReleaseBranch`, `ReleaseLoop`,
+    `ReleaseGuarded`, `ReleaseElse`, `CheckLines`) move the l2 snapshot, the r4f
+    root-class summary and the `calls.*` explain goldens (line shifts and the new
+    caller rules); `explain.field-status` gains `ReopenAll` (its `ModifyAll`) and
+    the rules per write. `FIXTURE_ROOTS` r0-corpus 220 -> 221.
+  - Triage (`docs/detector-audit.md`): on the Continia DO workspace d65 gives 0
+    findings at `--scope primary` and `--scope all` (722 written fields; 166 with
+    at least 3 writers, none with a majority rule that a writer skips). At looser
+    thresholds (N = 2, p = 0.5) it would give 5, all deliberate import/upgrade
+    writes, so N = 3, p = 0.75 stay. The CDO-baseline triage is still owed; d65
+    stays opt-in.
 
 ### Fixed (G52)
 

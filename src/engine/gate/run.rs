@@ -310,9 +310,17 @@ pub struct AnalysisModel {
 /// dependency code it demands. The switch harness dumps the single-app model (it
 /// needs the physical rows); the cross-app side is measured with
 /// `aldump --r4-findings-cross-app`.
-pub fn build_analysis_model(inputs: &Arc<WorkspaceInputs>, single_app: bool) -> AnalysisModel {
+///
+/// `detectors` are the ones the caller runs on the model: their needs are
+/// analyze's ([`ViewNeeds::analyze_for`], the rules only for a detector that
+/// reads them).
+pub fn build_analysis_model(
+    inputs: &Arc<WorkspaceInputs>,
+    single_app: bool,
+    detectors: &[crate::engine::l5::registry::Detector],
+) -> AnalysisModel {
     let key = ViewKey::new(&inputs.workspace, single_app, false);
-    match build_view_model(inputs, &key, ViewNeeds::ANALYZE, |_| {}) {
+    match build_view_model(inputs, &key, ViewNeeds::analyze_for(detectors), |_| {}) {
         Ok(view) => {
             let view = view.expect("a model view");
             AnalysisModel {
@@ -694,7 +702,14 @@ impl Job for AnalyzeJob<'_> {
         // so the internal RoutineIds embedded in each finding's rootCauseKey — and
         // therefore the SARIF fingerprint hashed over them — byte-match the al-sem
         // `analyze` CLI goldens (`build_analysis_model`).
-        ViewDemand::one(self.inputs, self.args.single_app, false, ViewNeeds::ANALYZE)
+        // The rules only when a selected detector reads them (d65): a default
+        // run builds none (intent-evidence §4.1b).
+        ViewDemand::one(
+            self.inputs,
+            self.args.single_app,
+            false,
+            ViewNeeds::analyze_for(&self.detectors),
+        )
     }
 
     fn resolve(&self, _: SideIx, _: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {

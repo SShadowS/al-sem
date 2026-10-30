@@ -54,7 +54,7 @@ fn three(ws: &Path, no_roots_config: bool) -> [Option<Vec<String>>; 3] {
     let target = AnalysisTarget::build(&other, true, "t16")
         .ok()
         .map(|t| rows(t.resolved()));
-    let analysis = build_analysis_model(&other, true)
+    let analysis = build_analysis_model(&other, true, &[])
         .model
         .ok()
         .map(|t| rows(t.resolved()));

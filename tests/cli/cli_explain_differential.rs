@@ -23,9 +23,10 @@
 //!   prove's `routine-not-found` / `routine-ambiguous` wording;
 //! - `--diff`: one card per changed routine, the hunk outside any routine
 //!   reported as digest reports it;
-//! - `--table/--field`: the field's writers (assignment and `Validate`) with
-//!   one card each, and an unknown field (exit 2). `ReopenAll`'s `ModifyAll`
-//!   of the same field is NOT listed: `field_writers`' stated limit (step 6);
+//! - `--table/--field`: the field's writers (assignment, `Validate` and, since
+//!   step 6, `ReopenAll`'s `ModifyAll`) with one card each and each write's
+//!   effective rules (the rules index d65 reads), and an unknown field (exit
+//!   2);
 //! - gaps: a test procedure's calls into a symbol-only `Assert`.
 //! - rules across calls (step 5, fixture `ws-explain-calls`): inherited
 //!   rules through one and two calls, a matching literal (atom dropped), a
@@ -260,6 +261,27 @@ fn explain_field_writers() {
     check_case(&explain_field());
 }
 
+/// Step 6: a `ModifyAll` writes its first argument's field, and each write
+/// lists its effective rules (from the rules index).
+#[test]
+fn explain_field_lists_modify_all_and_effective_rules() {
+    let doc = json_of(&explain_field());
+    let writers = doc["field"]["writers"].as_array().expect("writers");
+    let by = |name: &str| {
+        writers
+            .iter()
+            .find(|w| w["routine"].as_str().is_some_and(|r| r.ends_with(name)))
+            .unwrap_or_else(|| panic!("no writer {name}: {writers:?}"))
+    };
+    assert_eq!(by("ReopenAll")["sites"][0]["kind"], "modify-all");
+    assert_eq!(by("ReopenAll")["sites"][0]["rules"], serde_json::json!([]));
+    assert!(
+        texts(&by("PostOrder")["sites"][0]["rules"]).contains(&"Order %1 is not released.".into()),
+        "{}",
+        by("PostOrder")
+    );
+}
+
 /// The step-5 routines of `ws-explain-calls` (golden slug, routine), one
 /// golden pair each.
 const CALLS_ROUTINES: &[(&str, &str)] = &[
@@ -460,7 +482,13 @@ fn caller_rules_and_trigger_and_collector_gaps() {
     );
     assert_eq!(
         own["skippedBy"],
-        serde_json::json!(["Codeunit Calls Post::ReleaseDirect"])
+        serde_json::json!([
+            "Codeunit Calls Post::ReleaseDirect",
+            "Codeunit Calls Post::ReleaseBranch",
+            "Codeunit Calls Post::ReleaseLoop",
+            "Codeunit Calls Post::ReleaseGuarded",
+            "Codeunit Calls Post::ReleaseElse"
+        ])
     );
     // A MayNotStop rule is present, never applied.
     let collected = rule_with(callers, "A negative amount is collected.");
@@ -469,7 +497,35 @@ fn caller_rules_and_trigger_and_collector_gaps() {
         serde_json::json!(["Codeunit Calls Post::ReleaseChecked"])
     );
     assert_eq!(collected["appliedBy"], serde_json::json!([]));
-    assert_eq!(release["rules"]["knownCallers"], 2);
+    assert_eq!(release["rules"]["knownCallers"], 6);
+
+    // Step 6, on the path: a caller's check counts only when every path to
+    // its call passes it. In the other branch (ReleaseBranch) or in a loop
+    // body (ReleaseLoop, and CheckLines' loop) it does not; in the same
+    // branch (ReleaseGuarded) or with the call in its `else` (ReleaseElse)
+    // it does.
+    let t = texts(callers);
+    for absent in [
+        "A zero line cannot be released.",
+        "A line amount is negative.",
+    ] {
+        assert!(!t.contains(&absent.to_string()), "{absent}: {t:?}");
+    }
+    let quick = callers
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["message"]["text"] == "A blocked order cannot be released quickly.")
+        .collect::<Vec<_>>();
+    assert_eq!(quick.len(), 1, "only ReleaseGuarded's check: {quick:?}");
+    assert_eq!(
+        quick[0]["appliedBy"],
+        serde_json::json!(["Codeunit Calls Post::ReleaseGuarded"])
+    );
+    assert_eq!(
+        rule_with(callers, "An order without a number cannot be released.")["appliedBy"],
+        serde_json::json!(["Codeunit Calls Post::ReleaseElse"])
+    );
 
     let quick = calls_card("QuickPost");
     let gaps = quick["gaps"].as_array().unwrap();

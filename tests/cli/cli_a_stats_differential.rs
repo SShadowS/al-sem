@@ -163,7 +163,8 @@ fn run_stats(fixture: &str, names: &[&str]) -> String {
         &inputs,
         MODEL_INSTANCE_ID_DEFAULT,
         false,
-        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+        // What the selected detectors read (the `all` slot holds d65: rules).
+        al_sem::engine::l5::registry::assembly_needs(&selected),
     ) {
         Some(resolved) => {
             let output = run_detectors(&resolved, &selected);

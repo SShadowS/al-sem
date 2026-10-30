@@ -22,6 +22,30 @@
 //!    named `Error` (#288). It then drops the `not C` parts an earlier check
 //!    contributed when that earlier check may not stop, and gives the final
 //!    [`PRule`]s.
+//!
+//! **On the path** (intent-evidence step 6). A rule counts as applied before
+//! a site of the same routine (a write, a call) only when every path to the
+//! site passes the check, so that when its condition held the site was not
+//! reached ([`PRule::guards`]). The walk records where that is, as source
+//! stretches ([`PRule::on_path`]):
+//!
+//! - after the check, to the end of its own block;
+//! - for a check directly in an `if`'s `then` branch, the `else` block (the
+//!   condition was evaluated there and was false) — only for a check with no
+//!   condition of its own (`Error`, `FieldError`, a `Confirm` exit), whose
+//!   condition is the branch's; a `TestField` is not evaluated in the `else`;
+//! - after each enclosing statement the check lifts out of, to the end of
+//!   that statement's block. A check lifts out of an `if` / `case` branch, a
+//!   `begin .. end`, and a `repeat` or `with` body (each runs once it is
+//!   entered). Its condition then holds the enclosing branch's condition too,
+//!   which is already in its `when`.
+//!
+//! It does not lift out of a `while` / `for` / `foreach` body (it may run no
+//! time), a `try` block, an `asserterror` block or an `#if` arm. So a check
+//! in a branch does not count for a site in a sibling branch (`if A then
+//! <check> else <call>`), nor a check in a loop body for a site after the
+//! loop. [`PRule::at_exit`] says the lifting reached the routine's own body:
+//! the check is passed on every path to the routine's end.
 
 use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::{
@@ -195,10 +219,48 @@ pub struct PRule {
     /// `" and "`). Rules across calls (`alsem explain`, spec §4.3) rewrite one
     /// atom at a time, so they need the texts one by one.
     pub when_texts: Vec<String>,
+    /// Parallel to `when`: the atom is an earlier check's `not C` (that check
+    /// always stops when `C` holds), not the check's own condition, an
+    /// enclosing branch's or an early `exit`'s. d65's rule key leaves these
+    /// out: the earlier check is a rule of its own, counted on its own, and
+    /// its `not C` adds nothing a writer that passes it does not already
+    /// guarantee. An early `exit`'s `not C` stays: the exit returns to the
+    /// caller, which goes on.
+    pub when_earlier: Vec<bool>,
     pub message: Option<RuleMessage>,
     /// The trailing `//` comment on the check's line, else the run of own-line
     /// `//` comments directly above it (or above its `if`).
     pub comment: Option<String>,
+    /// Where in the routine the check is on the path: a site that lies in
+    /// one of these stretches runs only after the check ran (and did not
+    /// fire). See [`PRule::guards`] and the module doc ("On the path").
+    pub on_path: Vec<PathSpan>,
+    /// The check's guard statement lifts to the routine's own body, so it
+    /// runs on every path that reaches the routine's end: a caller that calls
+    /// the routine has passed it.
+    pub at_exit: bool,
+}
+
+/// A stretch of a routine's source, from `from` to `to` (line, column, in
+/// the model's anchor coordinates).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PathSpan {
+    pub from: (u32, u32),
+    pub to: (u32, u32),
+}
+
+impl PRule {
+    /// Whether this check is on the path to `site` (an anchor in the same
+    /// routine): every path that reaches `site` passed the check, so when the
+    /// rule's condition held, `site` was not reached.
+    #[must_use]
+    pub fn guards(&self, site: &PAnchor) -> bool {
+        let (start, end) = (
+            (site.start_line, site.start_column),
+            (site.end_line, site.end_column),
+        );
+        self.on_path.iter().any(|p| p.from <= start && end <= p.to)
+    }
 }
 
 /// One condition atom with its text, and, when an earlier check contributed it
@@ -210,6 +272,9 @@ pub struct WhenPart {
     from_rule: Option<usize>,
     /// From an enclosing `if` / `case` (not from an earlier statement).
     enclosing: bool,
+    /// An earlier check's `not C` (that check stops when `C` holds), not the
+    /// check's own condition, an enclosing branch's or an early `exit`'s.
+    earlier: bool,
     /// The `Confirm(...)` call this atom tests, if any.
     confirm: Option<ExprId>,
 }
@@ -233,6 +298,8 @@ pub struct RuleDraft {
     /// resolution.
     builtin_sites: Vec<(String, &'static str)>,
     parts: Vec<WhenPart>,
+    on_path: Vec<PathSpan>,
+    at_exit: bool,
 }
 
 impl RuleDraft {
@@ -280,8 +347,11 @@ pub fn settle_rules(drafts: &[RuleDraft], binds_builtin: impl Fn(&str) -> bool) 
                 .collect::<Vec<_>>()
                 .join(" and "),
             when_texts: kept.iter().map(|p| p.text.clone()).collect(),
+            when_earlier: kept.iter().map(|p| p.earlier).collect(),
             message: d.message.clone(),
             comment: d.comment.clone(),
+            on_path: d.on_path.clone(),
+            at_exit: d.at_exit,
         });
     }
     out
@@ -321,7 +391,13 @@ pub fn build_rule_drafts(inputs: &RuleInputs<'_>) -> Vec<RuleDraft> {
         cx: inputs,
         drafts: Vec::new(),
     };
-    w.block(body, &Ctx::default(), None);
+    // The routine's own body: a statement in it lifts no further, and is
+    // passed on every path to the routine's end.
+    let root = Ctx {
+        up_exit: true,
+        ..Ctx::default()
+    };
+    w.block(body, &root, None);
     w.drafts
 }
 
@@ -329,12 +405,48 @@ pub fn build_rule_drafts(inputs: &RuleInputs<'_>) -> Vec<RuleDraft> {
 struct Ctx {
     parts: Vec<WhenPart>,
     asserterror: bool,
+    /// The end of the block being walked (set by [`Walker::block`]).
+    block_end: (u32, u32),
+    /// Where a statement of this block is also on the path when it lifts out
+    /// of the block: the stretches after each enclosing statement up to its
+    /// own block's end, out to the first block that is not lifted out of
+    /// (module doc, "On the path").
+    up: Vec<PathSpan>,
+    /// Those stretches reach the routine's own body.
+    up_exit: bool,
+    /// For an `if`'s `then` branch that has an `else`: the `else` block, where
+    /// a check directly in the `then` branch has been evaluated (and was not
+    /// taken).
+    else_span: Option<PathSpan>,
 }
 
 impl Ctx {
     fn with(&self, extra: Vec<WhenPart>) -> Ctx {
         let mut c = self.clone();
         c.parts.extend(extra);
+        c
+    }
+
+    /// This context for a block nested in statement `s` (ending at `s_end`):
+    /// lifted out of (an `if` / `case` branch, a `begin .. end`, a
+    /// `repeat` or `with` body: a statement there is on the path after `s`
+    /// too) or not (a `while` / `for` / `foreach` body, which may run no
+    /// time, a `try` or `asserterror` block, an `#if` arm).
+    fn nested(&self, s_end: (u32, u32), lifted: bool, else_span: Option<PathSpan>) -> Ctx {
+        let mut c = self.clone();
+        c.else_span = else_span;
+        if lifted {
+            let mut up = Vec::with_capacity(self.up.len() + 1);
+            up.push(PathSpan {
+                from: s_end,
+                to: self.block_end,
+            });
+            up.extend_from_slice(&self.up);
+            c.up = up;
+        } else {
+            c.up = Vec::new();
+            c.up_exit = false;
+        }
         c
     }
 
@@ -560,6 +672,7 @@ impl Walker<'_, '_> {
             atom,
             from_rule: None,
             enclosing: false,
+            earlier: false,
             confirm: None,
         }
     }
@@ -743,6 +856,15 @@ impl Walker<'_, '_> {
         vec![self.part(text, ConditionAtom::NoneOf { scrutinee, values })]
     }
 
+    /// An IR origin as a stretch of the model's anchor coordinates.
+    fn span(&self, o: &Origin) -> PathSpan {
+        let a = (self.cx.anchor)(o);
+        PathSpan {
+            from: (a.start_line, a.start_column),
+            to: (a.end_line, a.end_column),
+        }
+    }
+
     /// The one statement of `b`, through `begin .. end` wrappers.
     fn single_stmt(&self, b: BlockId) -> Option<StmtId> {
         match self.ir().block(b).items.as_slice() {
@@ -768,11 +890,13 @@ impl Walker<'_, '_> {
         let single = items.len() == 1;
         // The parts earlier statements of this block add (`not C`).
         let mut cur = ctx.clone();
+        cur.block_end = self.span(&self.ir().block(b).origin).to;
         for (stmt, branches) in items {
             let Some(s) = stmt else {
                 // Each `#if` arm is walked on its own; nothing flows out of it.
+                let arm = cur.nested(cur.block_end, false, None);
                 for br in branches {
-                    self.block(br, &cur, None);
+                    self.block(br, &arm, None);
                 }
                 continue;
             };
@@ -806,13 +930,24 @@ impl Walker<'_, '_> {
         };
         self.cond_parts(*cond, true)
             .into_iter()
-            .map(|p| WhenPart { from_rule, ..p })
+            .map(|p| WhenPart {
+                from_rule,
+                // An earlier check's `not C`, not an early exit's: an exit
+                // returns to the caller, so its `not C` is a real
+                // precondition of the rule.
+                earlier: from_rule.is_some(),
+                ..p
+            })
             .collect()
     }
 
     fn stmt(&mut self, s: StmtId, ctx: &Ctx, owner_row: Option<u32>) {
         let stmt = self.ir().stmt(s);
         let row = stmt.origin.start.row;
+        let s_end = self.span(&stmt.origin).to;
+        // A nested block lifted out of (`lifted`) or not; see `Ctx::nested`.
+        let lifted = || ctx.nested(s_end, true, None);
+        let kept = || ctx.nested(s_end, false, None);
         match &stmt.kind {
             StmtKind::Call(e) => self.check(s, *e, ctx, owner_row),
             StmtKind::If {
@@ -829,10 +964,13 @@ impl Walker<'_, '_> {
                         })
                         .collect()
                 };
-                let then_ctx = ctx.with(enclosing(self.cond_parts(cond, false)));
+                let else_span = else_block.map(|e| self.span(&self.ir().block(e).origin));
+                let then_ctx = ctx
+                    .nested(s_end, true, else_span)
+                    .with(enclosing(self.cond_parts(cond, false)));
                 self.block(then_block, &then_ctx, Some(row));
                 if let Some(e) = else_block {
-                    let else_ctx = ctx.with(enclosing(self.cond_parts(cond, true)));
+                    let else_ctx = lifted().with(enclosing(self.cond_parts(cond, true)));
                     self.block(e, &else_ctx, Some(row));
                 }
             }
@@ -849,42 +987,47 @@ impl Walker<'_, '_> {
                 let else_block = *else_block;
                 for (patterns, body) in &arms {
                     let parts = self.arm_parts(scrutinee, patterns);
-                    self.block(*body, &ctx.with(parts), None);
+                    self.block(*body, &lifted().with(parts), None);
                 }
                 if let Some(e) = else_block {
                     let pats: Vec<Vec<ExprId>> = arms.iter().map(|(p, _)| p.clone()).collect();
                     let parts = self.case_else_parts(scrutinee, &pats);
-                    self.block(e, &ctx.with(parts), None);
+                    self.block(e, &lifted().with(parts), None);
                 }
             }
             StmtKind::While { cond, body } => {
                 let (cond, body) = (*cond, *body);
                 let parts = self.cond_parts(cond, false);
-                self.block(body, &ctx.with(parts), None);
+                self.block(body, &kept().with(parts), None);
             }
-            StmtKind::Repeat { body, .. }
-            | StmtKind::For { body, .. }
-            | StmtKind::Foreach { body, .. }
-            | StmtKind::With { body, .. } => {
+            // A `repeat` body runs at least once; a `with` body once.
+            StmtKind::Repeat { body, .. } | StmtKind::With { body, .. } => {
                 let body = *body;
-                self.block(body, ctx, None);
+                self.block(body, &lifted(), None);
+            }
+            StmtKind::For { body, .. } | StmtKind::Foreach { body, .. } => {
+                let body = *body;
+                self.block(body, &kept(), None);
             }
             StmtKind::Try { body, catch_block } => {
                 let (body, catch_block) = (*body, *catch_block);
-                self.block(body, ctx, None);
+                self.block(body, &kept(), None);
                 if let Some(c) = catch_block {
-                    self.block(c, ctx, None);
+                    self.block(c, &kept(), None);
                 }
             }
             StmtKind::AssertError(b) => {
                 let b = *b;
-                let mut c = ctx.clone();
+                let mut c = kept();
                 c.asserterror = true;
                 self.block(b, &c, None);
             }
             StmtKind::Block(b) => {
                 let b = *b;
-                self.block(b, ctx, owner_row);
+                // `begin .. end`: transparent, a check directly in it keeps
+                // the `else` of the branch it is.
+                let inner = ctx.nested(s_end, true, ctx.else_span);
+                self.block(b, &inner, owner_row);
             }
             StmtKind::Exit(_) => {
                 if let Some(confirm) = ctx.confirm_false() {
@@ -1153,8 +1296,23 @@ impl Walker<'_, '_> {
     ) {
         let origin = &self.ir().stmt(s).origin;
         let mut parts = ctx.parts.clone();
+        // On the path after the check in its own block, in the `else` of the
+        // branch it is directly in, and wherever its statement lifts to. The
+        // `else` counts only for a check with no condition of its own (an
+        // `Error`, a `FieldError`, a `Confirm` exit): its condition is the
+        // branch's, evaluated there. A `TestField`'s own condition is not.
+        let mut on_path = vec![PathSpan {
+            from: self.span(origin).to,
+            to: ctx.block_end,
+        }];
+        if own.is_empty() {
+            on_path.extend(ctx.else_span);
+        }
+        on_path.extend_from_slice(&ctx.up);
         parts.extend(own);
         let draft = RuleDraft {
+            on_path,
+            at_exit: ctx.up_exit,
             id: format!("{}/rule{}", self.cx.routine_id, self.drafts.len()),
             kind,
             anchor: (self.cx.anchor)(origin),

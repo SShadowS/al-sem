@@ -20,18 +20,35 @@
 //!     fixture proves a closed-world temp param; it needs a `local` by-var record proc
 //!     called only from all-temp callers — see `gap_g19_temp_param`). There d10/d1 are
 //!     suppressed by the proof, so dropping CLOSED_WORLD_TEMP would make them fire.
+//!   - RULES                  — ws-d65 (d65 fires). Every model here is built with
+//!     its rules (`registry::assembly_needs`), since the rules index is filled from
+//!     them, and the full context's mask holds `RULES` (it is outside `ALL`).
 //!
 //! A detector whose findings are empty on ALL inputs for both contexts contributes only
 //! weak coverage — acceptable for this wave (noted in the Task 10 commit message).
 
 use al_sem::engine::l5::detector_context::build_detector_context;
 use al_sem::engine::l5::detectors::registered_detectors;
-use al_sem::engine::l5::registry::{Detector, substrate};
+use al_sem::engine::l5::registry::{Detector, assembly_needs, substrate};
 use al_sem::program::model::program_calls::{
-    assemble_and_resolve_inline_program_default, assemble_and_resolve_workspace_program,
+    assemble_and_resolve_inline_program_with, assemble_and_resolve_workspace_program,
 };
 use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
 use std::path::PathBuf;
+
+/// An inline workspace built with what every registered detector reads (the
+/// rules for d65, `substrate::RULES`).
+fn with_rules(
+    files: &[(String, String)],
+    app_guid: &str,
+) -> al_sem::program::model::workspace::Model {
+    assemble_and_resolve_inline_program_with(
+        files,
+        app_guid,
+        MODEL_INSTANCE_ID_DEFAULT,
+        assembly_needs(&registered_detectors()),
+    )
+}
 
 const PARITY_FIXTURES: &[&str] = &[
     "ws-d8-commit-in-tx",    // SUMMARIES + TRANSACTION_SPANS + parameter_roles
@@ -49,6 +66,7 @@ const PARITY_FIXTURES: &[&str] = &[
     "ws-d1-setup-singleton", // SUMMARIES (d1 fires)
     "ws-d2",                 // SUMMARIES (d2/d55 fire)
     "ws-d10-self-mod",       // SUMMARIES (d1/d10 fire)
+    "ws-d65",                // RULES (d65 fires)
 ];
 
 const CWT_APP_GUID: &str = "11111111-0000-0000-0000-00000cwtpar";
@@ -110,9 +128,13 @@ fn assert_parity(
     label: &str,
 ) {
     // Build the full context ONCE; each detector's minimal context is rebuilt from
-    // its own declared `requires`. `ALL` carries no ordering bit, and a read of an
-    // unfilled ordering slot panics, so the full context also fills it.
-    let full_owned = build_detector_context(resolved, substrate::ALL | substrate::ORDERING_FACTS);
+    // its own declared `requires`. `ALL` carries neither the ordering bit nor the
+    // rules bit, and a read of either unfilled slot panics, so the full context
+    // also fills both (every model here is built with its rules, `with_rules`).
+    let full_owned = build_detector_context(
+        resolved,
+        substrate::ALL | substrate::ORDERING_FACTS | substrate::RULES,
+    );
     let full_ctx = full_owned.ctx();
     for det in detectors {
         let min = build_detector_context(resolved, det.requires);
@@ -142,7 +164,7 @@ fn every_detector_parity_between_full_and_minimal_ctx() {
             &al_sem::program::inputs::WorkspaceInputs::read(&dir, &Default::default()),
             MODEL_INSTANCE_ID_DEFAULT,
             false,
-            al_sem::program::model::workspace::AssemblyNeeds::BASE,
+            assembly_needs(&detectors),
         )
         .unwrap_or_else(|| panic!("fixture {fixture} must assemble"));
         assert_parity(&resolved, &detectors, fixture);
@@ -150,7 +172,7 @@ fn every_detector_parity_between_full_and_minimal_ctx() {
 
     // Closed-world-temp teeth: an inline workspace whose proven-temp param populates
     // `closed_world_temp_params` (corpus fixtures never do).
-    let cwt = assemble_and_resolve_inline_program_default(
+    let cwt = with_rules(
         &[
             ("src/CwtLine.al".to_string(), CWT_TABLE.to_string()),
             ("src/CwtPrune.al".to_string(), CWT_CODEUNIT.to_string()),
@@ -162,7 +184,7 @@ fn every_detector_parity_between_full_and_minimal_ctx() {
     // #148 teeth: d35 on an UNKNOWN commit answer reads the subscriber's uncertainty
     // set (CORE_SUMMARIES) for its `cappedBy`. No corpus fixture has an unknown d35,
     // so without this workspace a d35 that under-declared CORE_SUMMARIES would pass.
-    let d35_unknown = assemble_and_resolve_inline_program_default(
+    let d35_unknown = with_rules(
         &[
             ("src/ReproOrder.al".to_string(), D35_TABLE.to_string()),
             ("src/ReasonDialog.al".to_string(), D35_PAGE.to_string()),

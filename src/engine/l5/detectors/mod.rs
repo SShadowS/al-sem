@@ -8,7 +8,8 @@
 //! query-filter-after-open / integrationevent-var-boolean-guard /
 //! upgrade-loop-should-be-datatransfer), d61/d62/d63/d64 (BCQuality wave, OPT-IN,
 //! ishandled-bypasses-critical-write / telemetry-before-success /
-//! html-concat-injection / api-page-write-surface).
+//! html-concat-injection / api-page-write-surface), d65 (intent evidence,
+//! OPT-IN, guard-bypass).
 
 pub mod d1;
 pub mod d10;
@@ -62,6 +63,7 @@ pub mod d61;
 pub mod d62;
 pub mod d63;
 pub mod d64;
+pub mod d65;
 pub mod d7;
 pub mod d8;
 pub mod d9;
@@ -1644,7 +1646,8 @@ where
 /// DEFAULT order (40): d1, d2, d3, d4, d5, d7, d9, d10, d11, d12, d13, d14,
 ///   d16, d18, d19, d20, d21, d22, d29, d32, d33, d34, d35, d36, d37, d38,
 ///   d39, d41, d42, d43, d44, d52, d53, d54, d55, d56, d57, d58, d59, d60.
-/// OPT_IN order (14):  d40, d46, d47, d48, d49, d50, d51, d17, d8, d45, d61, d62, d63, d64.
+/// OPT_IN order (15):  d40, d46, d47, d48, d49, d50, d51, d17, d8, d45, d61, d62, d63, d64,
+///   d65.
 pub fn registered_detectors() -> Vec<Detector> {
     let mut all = default_detectors();
     all.extend(opt_in_detectors());
@@ -2103,6 +2106,16 @@ pub fn opt_in_detectors() -> Vec<Detector> {
             short_description: "API page leaves OData write operations exposed",
             requires: 0,
         },
+        // d65: OPT-IN (intent evidence, guard-bypass). Spec §4.5: it may run
+        // by default only after a CDO triage under 30 % false positives.
+        Detector {
+            name: d65::DETECTOR.to_string(),
+            run: d65::detect_d65,
+            rule_name: "GuardBypass",
+            short_description: "Write skips a check most other writers of the field apply",
+            // The per-field writer index, built from the model's rules.
+            requires: substrate::RULES,
+        },
     ]
 }
 
@@ -2136,7 +2149,7 @@ mod tests {
             "duplicate detector name in {all:?}"
         );
 
-        // (3) the opt-in set is exactly the owner-decided 14.
+        // (3) the opt-in set is exactly the owner-decided 15.
         let expected_opt_in = [
             "d40-transitive-load-missing",
             "d46-commit-in-lifecycle",
@@ -2152,12 +2165,13 @@ mod tests {
             "d62-telemetry-before-success",
             "d63-html-concat-injection",
             "d64-api-page-write-surface",
+            "d65-guard-bypass",
         ];
         assert_eq!(opt_in, expected_opt_in, "opt-in set changed");
 
         // (4) counts: a default deleted outright passes (1)-(3).
         assert_eq!(default.len(), 40, "default_detectors() count");
-        assert_eq!(all.len(), 54, "registered_detectors() count");
+        assert_eq!(all.len(), 55, "registered_detectors() count");
     }
 
     fn rec_var(id: &str, name: &str, table_id: Option<&str>) -> ModelRecordVariable {
@@ -2265,6 +2279,7 @@ mod issue21_predicate_tests {
             in_until_condition: true,
             in_statement_position: false,
             run_trigger: None,
+            modify_all_field: None,
         }
     }
 

@@ -131,7 +131,11 @@
               "Codeunit Calls Post::ReleaseChecked"
             ],
             "skippedBy": [
-              "Codeunit Calls Post::ReleaseDirect"
+              "Codeunit Calls Post::ReleaseDirect",
+              "Codeunit Calls Post::ReleaseBranch",
+              "Codeunit Calls Post::ReleaseLoop",
+              "Codeunit Calls Post::ReleaseGuarded",
+              "Codeunit Calls Post::ReleaseElse"
             ],
             "stops": "always",
             "stopsReason": null,
@@ -177,7 +181,11 @@
               "Codeunit Calls Post::ReleaseChecked"
             ],
             "skippedBy": [
-              "Codeunit Calls Post::ReleaseDirect"
+              "Codeunit Calls Post::ReleaseDirect",
+              "Codeunit Calls Post::ReleaseBranch",
+              "Codeunit Calls Post::ReleaseLoop",
+              "Codeunit Calls Post::ReleaseGuarded",
+              "Codeunit Calls Post::ReleaseElse"
             ],
             "stops": "always",
             "stopsReason": null,
@@ -230,7 +238,11 @@
               "Codeunit Calls Post::ReleaseChecked"
             ],
             "skippedBy": [
-              "Codeunit Calls Post::ReleaseDirect"
+              "Codeunit Calls Post::ReleaseDirect",
+              "Codeunit Calls Post::ReleaseBranch",
+              "Codeunit Calls Post::ReleaseLoop",
+              "Codeunit Calls Post::ReleaseGuarded",
+              "Codeunit Calls Post::ReleaseElse"
             ],
             "stops": "always",
             "stopsReason": null,
@@ -279,7 +291,11 @@
             ],
             "skippedBy": [
               "Codeunit Calls Post::ReleaseChecked",
-              "Codeunit Calls Post::ReleaseDirect"
+              "Codeunit Calls Post::ReleaseDirect",
+              "Codeunit Calls Post::ReleaseBranch",
+              "Codeunit Calls Post::ReleaseLoop",
+              "Codeunit Calls Post::ReleaseGuarded",
+              "Codeunit Calls Post::ReleaseElse"
             ],
             "stops": "may-not-stop",
             "stopsReason": "the message is an ErrorInfo: when the error is collectible, execution goes on",
@@ -326,7 +342,11 @@
               "Codeunit Calls Post::ReleaseChecked"
             ],
             "skippedBy": [
-              "Codeunit Calls Post::ReleaseDirect"
+              "Codeunit Calls Post::ReleaseDirect",
+              "Codeunit Calls Post::ReleaseBranch",
+              "Codeunit Calls Post::ReleaseLoop",
+              "Codeunit Calls Post::ReleaseGuarded",
+              "Codeunit Calls Post::ReleaseElse"
             ],
             "stops": "always",
             "stopsReason": null,
@@ -343,10 +363,114 @@
               }
             ],
             "whenText": "Order.Status = Order.Status::Posted"
+          },
+          {
+            "anchor": {
+              "column": 16,
+              "file": "ws:src/post.al",
+              "line": 102,
+              "sourceKind": "source"
+            },
+            "appliedBy": [
+              "Codeunit Calls Post::ReleaseGuarded"
+            ],
+            "comment": null,
+            "id": "bc117818cc986894/fed1713d53e8f4b1c803033629bd5fee1c2a3aafee00f67ec27cbba9a84f3128/rule0",
+            "in": "Codeunit Calls Post::ReleaseGuarded",
+            "kind": "Error",
+            "message": {
+              "args": [],
+              "candidates": [],
+              "labelComment": null,
+              "source": "Literal",
+              "text": "A blocked order cannot be released quickly.",
+              "var": null
+            },
+            "note": "applies only when called from the callers in appliedBy",
+            "presentIn": [
+              "Codeunit Calls Post::ReleaseGuarded"
+            ],
+            "skippedBy": [
+              "Codeunit Calls Post::ReleaseChecked",
+              "Codeunit Calls Post::ReleaseDirect",
+              "Codeunit Calls Post::ReleaseBranch",
+              "Codeunit Calls Post::ReleaseLoop",
+              "Codeunit Calls Post::ReleaseElse"
+            ],
+            "stops": "always",
+            "stopsReason": null,
+            "trigger": null,
+            "via": [],
+            "when": [
+              {
+                "index": 1,
+                "kind": "ParamBool",
+                "value": true
+              },
+              {
+                "anchor": {
+                  "column": 15,
+                  "file": "ws:src/post.al",
+                  "line": 101,
+                  "sourceKind": "source"
+                },
+                "kind": "Other",
+                "text": "Order.Blocked"
+              }
+            ],
+            "whenText": "Quick and Order.Blocked"
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "file": "ws:src/post.al",
+              "line": 111,
+              "sourceKind": "source"
+            },
+            "appliedBy": [
+              "Codeunit Calls Post::ReleaseElse"
+            ],
+            "comment": null,
+            "id": "bc117818cc986894/f783131ae8c40053fc45582139fd0e661de3d2da5cfb8624a1ebfd06f92184db/rule0",
+            "in": "Codeunit Calls Post::ReleaseElse",
+            "kind": "Error",
+            "message": {
+              "args": [],
+              "candidates": [],
+              "labelComment": null,
+              "source": "Literal",
+              "text": "An order without a number cannot be released.",
+              "var": null
+            },
+            "note": "applies only when called from the callers in appliedBy",
+            "presentIn": [
+              "Codeunit Calls Post::ReleaseElse"
+            ],
+            "skippedBy": [
+              "Codeunit Calls Post::ReleaseChecked",
+              "Codeunit Calls Post::ReleaseDirect",
+              "Codeunit Calls Post::ReleaseBranch",
+              "Codeunit Calls Post::ReleaseLoop",
+              "Codeunit Calls Post::ReleaseGuarded"
+            ],
+            "stops": "always",
+            "stopsReason": null,
+            "trigger": null,
+            "via": [],
+            "when": [
+              {
+                "field": "No.",
+                "kind": "FieldEmpty",
+                "negated": false,
+                "recordVar": "Order",
+                "table": "Calls Order"
+              }
+            ],
+            "whenText": "Order.\"No.\" = ''"
           }
         ],
         "inherited": [],
-        "knownCallers": 2,
+        "knownCallers": 6,
         "own": []
       },
       "tests": []

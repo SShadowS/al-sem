@@ -725,13 +725,33 @@ pub fn assemble_and_resolve_inline_program(
     app_guid: &str,
     model_instance_id: &str,
 ) -> crate::program::model::workspace::Model {
-    let dir = write_inline_workspace(files, app_guid);
     // What a default `analyze` builds: no rules.
+    assemble_and_resolve_inline_program_with(
+        files,
+        app_guid,
+        model_instance_id,
+        AssemblyNeeds::BASE,
+    )
+}
+
+/// [`assemble_and_resolve_inline_program`] with stated `needs` (a test that
+/// runs a detector reading the rules, `registry::assembly_needs`).
+///
+/// # Panics
+/// As [`assemble_and_resolve_inline_program`].
+#[must_use]
+pub fn assemble_and_resolve_inline_program_with(
+    files: &[(String, String)],
+    app_guid: &str,
+    model_instance_id: &str,
+    needs: AssemblyNeeds,
+) -> crate::program::model::workspace::Model {
+    let dir = write_inline_workspace(files, app_guid);
     assemble_and_resolve_workspace_program(
         &crate::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default()),
         model_instance_id,
         true,
-        AssemblyNeeds::BASE,
+        needs,
     )
     .unwrap_or_else(|| panic!("program build failed for inline workspace {app_guid}"))
 }

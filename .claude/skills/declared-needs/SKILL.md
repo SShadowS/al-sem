@@ -85,16 +85,18 @@ depends on, and a mismatch fails loudly (see rule 5).
    readers stays **out** of `ALL`, like `ORDERING_FACTS` and `DB_EFFECT_REVERSE_INDEX`,
    so the many `build_detector_context(.., substrate::ALL)` callers don't pay for it.
    When you do that, add the bit to the parity test's full mask
-   (`tests/gap/gap_detector_substrate_parity.rs`, today `ALL | ORDERING_FACTS`) in the
-   same change. Otherwise the full context lacks the bit while the minimal one has it,
+   (`tests/gap/gap_detector_substrate_parity.rs`, today
+   `ALL | ORDERING_FACTS | RULES`) in the same change. Otherwise the full context lacks the bit while the minimal one has it,
    and the test fails against correct code. Read the `DB_EFFECT_REVERSE_INDEX` doc
    before deciding.
 9. **A detector declares everything it reads.** The per-detector full-against-minimal
    parity test (`tests/gap/gap_detector_substrate_parity.rs`) compares findings and is
    the general guard. `every_detector_alone_declares_what_it_reads` (registry) is
-   **narrow**: it runs each detector on a model with zero routines and only looks for
-   the `"substrate::ORDERING_FACTS"` panic text. It guards nothing else until you add
-   a needle (and, for a fact read per routine, a model with at least one routine).
+   **narrow**: it runs each detector alone on a one-writer model built with what its
+   `requires` asks for (`registry::assembly_needs`) and looks for three panic texts:
+   `"substrate::ORDERING_FACTS"`, `"substrate::RULES"` and `"ViewNeeds::rules"`. It
+   guards nothing else until you add a needle (and, for a fact read per routine, make
+   sure the model reaches the read).
    Prove the declaration matters: remove the bit from `requires` and watch a test fail
    (CLAUDE.md's discrimination-proof rule). If no test fails, the declaration is
    unguarded: add the test, or say so.
@@ -133,7 +135,7 @@ depends on, and a mismatch fails loudly (see rule 5).
 
 ## Checklist: adding a substrate bit (level 2)
 
-1. Take the next free bit in `pub mod substrate` (today `1 << 7`). Document what it
+1. Take the next free bit in `pub mod substrate` (today `1 << 8`). Document what it
    fills, its cost, and any bit or profile it implies.
 2. Decide on `ALL` membership (rule 8). If it stays out, update the parity test's full
    mask in the same change.
@@ -144,7 +146,12 @@ depends on, and a mismatch fails loudly (see rule 5).
    post-run readers (rules 9 and 10).
 6. If the bit needs a level-1 fact, the command that demands the bit must also declare
    it (the `ViewNeeds` field, or a profile that keeps it). Make the mismatch panic in
-   debug builds and tests.
+   debug builds and tests. Give the mapping one home (`registry::assembly_needs`,
+   `ViewNeeds::analyze_for`) and use it in every builder that runs a detector list it
+   did not choose (the r4 projections, `aldump`'s detector modes, the switch dump,
+   tests running every registered detector): otherwise those builders meet the panic.
+7. If the bit is a `View` cell, add it to `session::Cell` (and `Cell::ALL`, so
+   `release_all_but` drops it) and fill it in `View::prepare` before the runs.
 
 ## Checklist: a new command (level 3)
 
@@ -153,10 +160,10 @@ build a `DetectorContext` outside a `View` (`alsem query` has its own pipeline, 
 that is documented as the exception, not the pattern). Pick the build profile from
 what the plan needs, not `FULL` by habit, once a smaller profile is enough.
 
-## Worked example in progress: intent evidence
+## Worked example: intent evidence (landed)
 
-`docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 3, design only, not
-built) shows each choice above:
+`docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 3, built in six
+steps; each step's "As built" notes say what changed) shows each choice above:
 
 - **No gate for text.** Label text, captions, tooltips and doc comments are plain IR
   fields every profile keeps. G52 already lowers label text for every build. Rev 2
@@ -178,7 +185,7 @@ panics on `None`; `rules_tests.rs` pins that a rules view builds them in both
 universes and that `ViewNeeds::ANALYZE` builds none. A fact built at assembly that
 also needs call resolution (here `stops`) keeps its inputs on the row
 (`rule_drafts`) and is settled in `attach_program_calls`, which every model passes
-through. Steps 5 and 6 (`substrate::RULES`) are not built yet; follow §4.1b.
+through.
 
 **Landed (step 4):** `alsem explain` declares `ViewNeeds::EXPLAIN` (`rules` plus a
 second level-1 need, `card_text`, so d65 will not pay for the card's text) and has its
@@ -194,3 +201,20 @@ anchor), so `RULES` does not imply `ORDERING_FACTS`. An object-level fact one co
 reads (`ModelObject::run_actions`, the `RunObject` page actions) follows the same rule
 as a routine-level one: `Option`, built behind the command's need (`card_text`), and a
 panicking accessor.
+
+**Landed (step 6):** `substrate::RULES = 1 << 7` (`registry.rs`) fills
+`l5::rules_index::RulesIndex` once before the detector loop (`fill_rules`, also the
+`View`'s `Cell::Rules`); `get_rules_index()` panics "declare substrate::RULES", and
+filling it from a model without rules panics "rules not built: declare
+ViewNeeds::rules". It is outside `ALL`; the parity test's full mask is
+`ALL | ORDERING_FACTS | RULES`, and its models are built with rules. The level-1 need
+follows the level-2 bit through one function, `registry::assembly_needs(detectors)`:
+`alsem analyze` declares `ViewNeeds::analyze_for(detectors)` (rules only when a
+selected detector requires `RULES`), and so do `build_analysis_model`, the r4
+projections (which now run only the named detectors) and `aldump`'s detector modes.
+A default `analyze` builds no rules (`a_default_analyze_view_builds_no_rules`). The
+proof the declaration matters: d65 with `requires: 0` fails
+`every_detector_alone_declares_what_it_reads` naming d65. A small fact one consumer
+needs that the body walk drops (`ModifyAll`'s field) was added beside the serialized
+rows (`ModelRecordOperation::modify_all_field`, read at assembly from the IR), not to
+them, so no serialized output and no other detector's input moved.

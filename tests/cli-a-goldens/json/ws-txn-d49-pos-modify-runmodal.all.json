@@ -378,6 +378,14 @@
           "detector": "d64-api-page-write-surface",
           "findingsEmitted": 0,
           "skipped": {}
+        },
+        {
+          "candidatesConsidered": 1,
+          "detector": "d65-guard-bypass",
+          "findingsEmitted": 0,
+          "skipped": {
+            "tooFewWriters": 1
+          }
         }
       ],
       "encryptedPackages": [],

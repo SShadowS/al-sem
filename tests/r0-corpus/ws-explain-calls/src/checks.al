@@ -53,6 +53,16 @@ codeunit 50454 "Calls Checks"
             ErrorMessageMgt.LogSimpleError('The order is blocked.');
     end;
 
+    // The check is in a loop body: a caller does not surely pass it.
+    procedure CheckLines(var Order: Record "Calls Order"; Lines: Integer)
+    var
+        i: Integer;
+    begin
+        for i := 1 to Lines do
+            if Order.Amount < 0 then
+                Error('A line amount is negative.');
+    end;
+
     // PingCheck and PongCheck call each other: the walk must stop.
     procedure PingCheck(var Order: Record "Calls Order")
     begin

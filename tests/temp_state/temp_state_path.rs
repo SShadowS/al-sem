@@ -533,6 +533,7 @@ fn record_op(
         in_until_condition: false,
         in_statement_position: false,
         run_trigger: Some(true),
+        modify_all_field: None,
     }
 }
 

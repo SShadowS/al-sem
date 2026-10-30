@@ -306,14 +306,19 @@ fn reading_rules_not_built_panics() {
     let _ = r.rules();
 }
 
-/// A default `analyze` view (`ViewNeeds::ANALYZE`) builds no rules, in either
-/// universe: a default run pays nothing for them.
+/// A default `analyze` view (`ViewNeeds::analyze_for` the default detectors)
+/// builds no rules, in either universe: a default run pays nothing for them.
 #[test]
 fn a_default_analyze_view_builds_no_rules() {
     let (analyze, model) = (ViewNeeds::ANALYZE, ViewNeeds::MODEL);
     assert!(!analyze.rules && !model.rules);
+    let defaults = crate::engine::l5::detectors::default_detectors();
+    assert!(
+        !ViewNeeds::analyze_for(&defaults).rules,
+        "no default detector reads the rules"
+    );
     for single_app in [true, false] {
-        let a = build_analysis_model(&inputs(), single_app);
+        let a = build_analysis_model(&inputs(), single_app, &defaults);
         let m = a.model.unwrap_or_else(|_| panic!("analyze model"));
         let rows = &m.resolved().workspace.routines;
         assert!(rows.iter().any(|r| r.name == "CheckOrder"), "precondition");
@@ -332,6 +337,35 @@ fn a_default_analyze_view_builds_no_rules() {
                 .iter()
                 .all(|o| o.run_actions.is_none()),
             "single_app {single_app}: a default analyze built the RunObject actions"
+        );
+    }
+}
+
+/// An `analyze` that selects d65 (`substrate::RULES`) builds the rules, and
+/// only them (no card text), in either universe (intent-evidence step 6).
+#[test]
+fn an_analyze_view_running_d65_builds_rules() {
+    let d65: Vec<_> = crate::engine::l5::detectors::registered_detectors()
+        .into_iter()
+        .filter(|d| d.name == "d65-guard-bypass")
+        .collect();
+    assert_eq!(d65.len(), 1, "precondition: d65 registered");
+    let needs = ViewNeeds::analyze_for(&d65);
+    assert!(needs.rules && !needs.card_text && needs.analyze_extras);
+    for single_app in [true, false] {
+        let a = build_analysis_model(&inputs(), single_app, &d65);
+        let m = a.model.unwrap_or_else(|_| panic!("analyze model"));
+        assert_text(
+            &rules_text(m.resolved()),
+            &format!("analyze with d65, single_app {single_app}"),
+        );
+        assert!(
+            m.resolved()
+                .workspace
+                .routines
+                .iter()
+                .all(|r| r.card_text.is_none()),
+            "single_app {single_app}: d65 needs no card text"
         );
     }
 }
@@ -397,4 +431,82 @@ fn reading_card_text_not_built_panics() {
         .expect("CheckOrder");
     assert!(r.rules.is_some(), "precondition: rules are built");
     let _ = r.card_text();
+}
+
+/// Step 6: `when_earlier` marks the `not C` an earlier always-stopping check
+/// adds, and not the one an early `exit` adds (the exit returns to the caller,
+/// so its `not C` is a real precondition; d65's key keeps it). On the path:
+/// a `TestField` directly in a `then` is not passed in the `else`, an `Error`
+/// is.
+#[test]
+fn when_earlier_and_on_path_shapes() {
+    let src = "table 50995 \"WE T\" { fields { field(1; \"No.\"; Code[20]) { } \
+               field(2; Status; Option) { OptionMembers = Open,Released; } \
+               field(3; Amount; Decimal) { } field(4; Blocked; Boolean) { } } }\n\
+               codeunit 50996 \"WE C\" {\n\
+               procedure AfterCheck(var T: Record \"WE T\")\nbegin\n\
+               if T.Amount < 0 then Error('neg');\nT.TestField(Status);\nT.Amount := 1;\nend;\n\
+               procedure AfterExit(var T: Record \"WE T\")\nbegin\n\
+               if T.Amount < 0 then exit;\nT.TestField(Status);\nT.Amount := 1;\nend;\n\
+               procedure ElseShapes(var T: Record \"WE T\"; Q: Boolean)\nbegin\n\
+               if Q then T.TestField(Status) else T.Amount := 1;\n\
+               if T.Blocked then Error('blocked') else T.Amount := 2;\nend;\n}\n";
+    let m = crate::program::model::program_calls::assemble_and_resolve_inline_program_with(
+        &[("src/we.al".to_string(), src.to_string())],
+        "99999999-0000-0000-0000-0000000ee652",
+        MODEL_INSTANCE_ID_DEFAULT,
+        AssemblyNeeds::RULES,
+    );
+    let routine = |name: &str| {
+        m.workspace
+            .routines
+            .iter()
+            .find(|r| r.name == name)
+            .unwrap_or_else(|| panic!("{name}"))
+    };
+    let testfield = |name: &str| {
+        routine(name)
+            .rules()
+            .iter()
+            .find(|r| r.kind == crate::program::body::rules::RuleKind::TestField)
+            .cloned()
+            .unwrap_or_else(|| panic!("{name}: a TestField rule"))
+    };
+    let after_check = testfield("AfterCheck");
+    assert_eq!(after_check.when.len(), 2, "{after_check:?}");
+    assert_eq!(
+        after_check.when_earlier,
+        vec![true, false],
+        "{after_check:?}"
+    );
+    let after_exit = testfield("AfterExit");
+    assert_eq!(after_exit.when.len(), 2, "{after_exit:?}");
+    assert_eq!(
+        after_exit.when_earlier,
+        vec![false, false],
+        "{after_exit:?}"
+    );
+    // ElseShapes: the writes in the two `else` branches.
+    let r = routine("ElseShapes");
+    let writes: Vec<_> = r
+        .field_accesses
+        .iter()
+        .filter(|fa| fa.field_name.eq_ignore_ascii_case("Amount"))
+        .map(|fa| fa.source_anchor.clone())
+        .collect();
+    assert_eq!(writes.len(), 2, "precondition: two writes");
+    let tf = testfield("ElseShapes");
+    assert!(
+        !tf.guards(&writes[0]),
+        "a TestField is not evaluated in the else"
+    );
+    let err = r
+        .rules()
+        .iter()
+        .find(|x| x.kind == crate::program::body::rules::RuleKind::Error)
+        .expect("the Error rule");
+    assert!(
+        err.guards(&writes[1]),
+        "an Error's condition is the branch's"
+    );
 }

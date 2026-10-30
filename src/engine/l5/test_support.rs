@@ -367,6 +367,7 @@ pub fn record_op(
         in_until_condition,
         in_statement_position: false,
         run_trigger: None,
+        modify_all_field: None,
     }
 }
 
@@ -398,7 +399,7 @@ pub struct MinimalCtx<'a> {
 
 impl<'a> MinimalCtx<'a> {
     pub fn ctx(&self) -> DetectorContext<'_> {
-        DetectorContext::new(self.routines, self.objects, &[], &self.art, None)
+        DetectorContext::new(self.routines, self.objects, &[], &self.art, None, None)
     }
 
     /// The object rows the context's `declaring` index is built over (none by

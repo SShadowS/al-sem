@@ -339,6 +339,14 @@ pub struct ModelRecordOperation {
     /// re-firing suppressed (no recursive-event loop). Forwarded for d29. Never
     /// serialized (the L3 projection is field-allowlisted).
     pub run_trigger: Option<bool>,
+    /// For a `ModifyAll(Field, Value, ...)`: its first argument as written,
+    /// the field it writes (intent-evidence step 6, `l5::field_writers`).
+    /// `None` for every other operation. Read at assembly from the IR, not
+    /// from the body walk: the walk keeps argument texts only for
+    /// `FIELD_ARGS_OPS`, and adding `ModifyAll` there would change the
+    /// serialized `fieldArguments` and the input of every detector that
+    /// reads them. Never serialized.
+    pub modify_all_field: Option<String>,
 }
 
 /// A lexical variable (params → locals → globals) carrying its declared type, for
@@ -1219,6 +1227,22 @@ pub fn rows_population(
     by_file
 }
 
+/// The first argument of the `ModifyAll(..)` call whose expression index is
+/// `expr` (`SiteExprs::record_ops`), as written: the field it writes
+/// (`ModelRecordOperation::modify_all_field`).
+fn modify_all_field(
+    ir_file: &al_syntax::ir::AlFile,
+    source: &str,
+    expr: Option<u32>,
+) -> Option<String> {
+    let e = ir_file.ir.iter_exprs().nth(usize::try_from(expr?).ok()?)?;
+    let al_syntax::ir::ExprKind::Call { args, .. } = &e.kind else {
+        return None;
+    };
+    let first = ir_file.ir.expr(*args.first()?);
+    source.get(first.origin.byte.clone()).map(str::to_string)
+}
+
 /// Project one ALREADY-PARSED file into `workspace` — [`project_file`] without the
 /// parse. Engine-switch S2a: the analyze path hands in the program engine's parse
 /// of the same text (`al_syntax::parse` over the same `read_al_source` bytes), so
@@ -1646,7 +1670,13 @@ fn project_ir(
             let record_operations: Vec<ModelRecordOperation> = features
                 .record_operations
                 .iter()
-                .map(|op| ModelRecordOperation {
+                .enumerate()
+                .map(|(i, op)| ModelRecordOperation {
+                    modify_all_field: (op.op == "ModifyAll")
+                        .then(|| {
+                            modify_all_field(ir_file, source, site_exprs.record_ops.get(i).copied())
+                        })
+                        .flatten(),
                     id: op.id.clone(),
                     op: op.op.clone(),
                     record_variable_name: op.record_variable_name.clone(),

@@ -87,7 +87,7 @@ Point any command at the directory containing `app.json`. Dependencies are read 
 
 ## What `alsem analyze` finds
 
-54 checks in total: 40 run by default, 14 more are opt-in. A sample of what they cover:
+55 checks in total: 40 run by default, 15 more are opt-in. A sample of what they cover:
 
 | Check | Plain English |
 |-------|---------------|
@@ -124,8 +124,8 @@ Useful flags:
 | Flag | What it does |
 |------|--------------|
 | `--format terminal \| json \| sarif \| html \| pr-summary` | Default `auto`: terminal when you run it by hand, JSON when piped |
-| `--preset transaction-integrity` \| `--preset bcquality` | Run a themed bundle instead of the defaults |
-| `--detector d1-db-op-in-loop,d8-commit-in-transaction` | Run only the checks you name. This and `--preset` are how you reach the 14 opt-in checks; they're mutually exclusive |
+| `--preset transaction-integrity` \| `--preset bcquality` \| `--preset business-rules` | Run a themed bundle instead of the defaults |
+| `--detector d1-db-op-in-loop,d8-commit-in-transaction` | Run only the checks you name. This and `--preset` are how you reach the 15 opt-in checks; they're mutually exclusive |
 | `--min-severity high` | Drop everything below a severity |
 | `--group-by object \| routine \| table \| detector \| file` | Reorganize terminal output |
 | `--baseline al-sem.baseline.json` | Suppress findings listed in the file — adopt the tool on an old codebase without fixing 500 things first. `--update-baseline` rewrites it to the current state |
@@ -256,6 +256,17 @@ raises and their subscribers' own checks, the page actions that reach it (also t
 unresolved calls, unparsed code, table-trigger checks a plain assignment or `Modify()`
 skips, and calls to an error collector. `--diff` resolves the same routines
 `digest --diff` does. A name no routine has, or one that names several, exits 2.
+A caller's check counts only when every path to its call passes it: a check in the
+other branch of an `if`, or in a loop body, does not. `--table/--field` lists, for
+each write (assignment, `Validate` or `ModifyAll`), the checks in force at it, and the
+checks every caller makes.
+
+The same index drives an opt-in check, `d65-guard-bypass` (`--preset business-rules`):
+for each table field, a check that at least 3 writers and at least 75 % of all writers
+apply, and one writer does not, is reported at that writer. It is either a bug or a
+deliberate exception; mark an exception with
+`// al-sem-ignore d65-guard-bypass: <reason>` on the line above the write. Only
+writers in your own app are counted.
 
 **"What changed between two versions?"**
 

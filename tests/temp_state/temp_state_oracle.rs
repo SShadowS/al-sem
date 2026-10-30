@@ -57,7 +57,13 @@ const APP_GUID: &str = "11111111-0000-0000-0000-00000014ec70";
 /// gate that could itself drop a finding for orthogonal reasons.
 fn run_all_detectors(files: &[(String, String)]) -> Vec<Finding> {
     let resolved = assemble_and_resolve_inline_program_default(files, APP_GUID);
-    let detectors = registered_detectors();
+    // The inline model holds no rules (a default build), so the detectors
+    // that read them (d65, `substrate::RULES`) are left out: the oracle is
+    // about temp-state severities, which they do not produce.
+    let detectors: Vec<_> = registered_detectors()
+        .into_iter()
+        .filter(|d| d.requires & al_sem::engine::l5::registry::substrate::RULES == 0)
+        .collect();
     assert!(
         !detectors.is_empty(),
         "the default detector registry must be non-empty"

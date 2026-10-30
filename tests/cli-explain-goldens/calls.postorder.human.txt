@@ -11,7 +11,7 @@ Codeunit Calls Post::PostOrder  ws:src/post.al:2
   commits: no
   raises OnBeforePostOrder (unknown) at ws:src/post.al:10
   extension point OnBeforePostOrder: 1 subscriber(s)
-    subscriber Codeunit Calls Subscriber::CheckBeforePost (only when its app is installed): rejects when Order.Amount = 0: "A zero amount cannot post."  [Error ws:src/post.al:85]
+    subscriber Codeunit Calls Subscriber::CheckBeforePost (only when its app is installed): rejects when Order.Amount = 0: "A zero amount cannot post."  [Error ws:src/post.al:128]
   reached from page action PostIt on Page Calls Order Card (caption "Post") (RunObject = codeunit "Calls Post Run") at ws:src/order.al:37
   tests: none reach it
 

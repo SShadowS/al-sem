@@ -40,6 +40,20 @@ fn program_model(workspace: &std::path::Path) -> Option<al_sem::program::model::
     )
 }
 
+/// [`program_model`] for a mode that runs `detectors`: built with what they
+/// read (`registry::assembly_needs`; the rules for d65).
+fn program_model_for(
+    workspace: &std::path::Path,
+    detectors: &[al_sem::engine::l5::registry::Detector],
+) -> Option<al_sem::program::model::workspace::Model> {
+    al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
+        &al_sem::program::inputs::WorkspaceInputs::read(workspace, &Default::default()),
+        al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
+        false,
+        al_sem::engine::l5::registry::assembly_needs(detectors),
+    )
+}
+
 fn usage() -> ExitCode {
     eprintln!(
         "usage: aldump [--l2 | \
@@ -582,7 +596,7 @@ fn run_main() -> ExitCode {
             .unwrap_or_default();
         let detectors = al_sem::engine::l5::detectors::registered_detectors();
         let detector_names: Vec<String> = detectors.iter().map(|d| d.name.clone()).collect();
-        let Some(resolved) = program_model(&workspace) else {
+        let Some(resolved) = program_model_for(&workspace, &detectors) else {
             eprintln!(
                 "aldump: error: fail-closed/empty layout at {} — cannot compute R4 findings projection",
                 workspace.display()

@@ -39,11 +39,17 @@ pub const PRESET_BCQUALITY: &[&str] = &[
     "d64-api-page-write-surface",
 ];
 
+/// The `business-rules` preset (intent evidence, spec §4.5): the checks that
+/// compare a write with the rules the rest of the code applies. Its one member
+/// is opt-in (the preset IS the explicit opt-in for it).
+pub const PRESET_BUSINESS_RULES: &[&str] = &["d65-guard-bypass"];
+
 /// Every preset: name -> member detector names. The ONLY place a preset is
 /// defined; `resolve_preset` and `preset_names` both read it.
 pub const PRESETS: &[(&str, &[&str])] = &[
     ("transaction-integrity", PRESET_TRANSACTION_INTEGRITY),
     ("bcquality", PRESET_BCQUALITY),
+    ("business-rules", PRESET_BUSINESS_RULES),
 ];
 
 /// Known preset names, in `PRESETS` order (CLI surface + error messages).
@@ -194,5 +200,13 @@ mod tests {
         let names = resolve_preset("bcquality").unwrap();
         assert_eq!(names, PRESET_BCQUALITY);
         assert_eq!(names.len(), 13);
+    }
+
+    #[test]
+    fn preset_resolves_business_rules() {
+        assert_eq!(
+            resolve_preset("business-rules").unwrap(),
+            ["d65-guard-bypass"]
+        );
     }
 }

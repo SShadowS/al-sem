@@ -1909,6 +1909,7 @@ pub(crate) mod tests {
             in_until_condition: false,
             in_statement_position: false,
             run_trigger: None,
+            modify_all_field: None,
         }
     }
 
