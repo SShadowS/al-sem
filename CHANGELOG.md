@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (G42/G43)
+
+- **The G34 exit guard reads the set form `if not (R.Number in [Database::"A",
+  Database::"B"]) then exit;`** (G43). Only `R.Number <> Database::"T"` was
+  modelled. Continia DO's `CDO Electronic Document Mgt..CreateSalesSourceDocs`
+  exits unless the RecordRef holds a Sales Invoice or Credit Memo Header, so
+  from a Service Shipment Header its boundary group (Sales/Purchase/Service
+  Header writes) cannot run. Three contradicted claims that expect `no`
+  (DSRV-OPEN-003.c4, DSRV-POST-001.c5, DSRV-POST-002.c6, `writes-table:Service
+  Header`) now answer `unknown`; DSRV-OPEN-006.c5 (expect `yes`) still proves
+  `yes`. Test `cli_prove_recref_guard` (set guard, a live and a dead table).
+- **`prove` on a routine selector that matches nothing says so** (G42). Its
+  `unknown` answer had no blocker and no message, so a mistyped id or a
+  missing app-guid prefix read like an answer. The result now carries
+  `blockedBy: [{kind: "routine-not-found"}]`, or `routine-ambiguous` with the
+  candidates. Exit 2 stays the no-root code `digest` and `fingerprint` share
+  (a refused question, like an unknown `writes-table:` table, is exit 1). The
+  cli-b `dummy-doc` goldens gain the blocker.
+
 ### Fixed (G40/G41, not yet re-verified on the DO claim set)
 
 - **`prove … writes-table:<name>` matched no write of a table numbered like a

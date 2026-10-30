@@ -1,4 +1,6 @@
 --- NonExistentRoutineXYZ ---
   question: may-commit
   answer:   unknown
+  blockedBy: 1 blocker(s)
+    [routine-not-found] no routine of the program has the id or name 'NonExistentRoutineXYZ'
   obligations: coverage=incomplete

@@ -52,6 +52,15 @@ codeunit 50403 "RG Handler"
         Output.CreateWithEvent(RecRef);
     end;
 
+    procedure PrintFromSet(VariantRec: Variant)
+    var
+        RecRef: RecordRef;
+        Output: Codeunit "RG Output";
+    begin
+        RecRef.GetTable(VariantRec);
+        Output.CreateFromSet(RecRef);
+    end;
+
     local procedure RunIt(VariantRec: Variant)
     var
         RecRef: RecordRef;
@@ -75,6 +84,17 @@ codeunit 50404 "RG Output"
     begin
         OnBeforeCreate(RecordFilter);
         CalcDisc(RecordFilter);
+    end;
+
+    procedure CreateFromSet(var RecordFilter: RecordRef)
+    var
+        Log: Record "RG Log";
+    begin
+        // G43: the set form of the exit guard.
+        if not (RecordFilter.Number in [Database::"RG Doc", Database::"RG Log"]) then
+            exit;
+        Log.Code := 'S';
+        Log.Insert();
     end;
 
     local procedure CalcDisc(var RecRef: RecordRef)
@@ -141,6 +161,20 @@ codeunit 50406 "RG Pages"
         Handler: Codeunit "RG Handler";
     begin
         Handler.PrintViaEvent(Entry);
+    end;
+
+    procedure PrintEntryFromSet(var Entry: Record "RG Entry")
+    var
+        Handler: Codeunit "RG Handler";
+    begin
+        Handler.PrintFromSet(Entry);
+    end;
+
+    procedure PrintDocFromSet(var Doc: Record "RG Doc")
+    var
+        Handler: Codeunit "RG Handler";
+    begin
+        Handler.PrintFromSet(Doc);
     end;
 
     procedure PrintEntryAliased(var Entry: Record "RG Entry")
@@ -343,6 +377,13 @@ fn a_recordref_number_guard_reads_the_table_the_root_put_in() {
     // it before the guard.
     let event = prove("PrintEntryViaEvent");
     assert_eq!(event["answer"], "yes", "{event}");
+
+    // G43: `if not (R.Number in [Database::"RG Doc", Database::"RG Log"]) then
+    // exit;` lets a Doc through and stops an Entry.
+    let set_doc = prove("PrintDocFromSet");
+    assert_eq!(set_doc["answer"], "yes", "precondition: {set_doc}");
+    let set_entry = prove("PrintEntryFromSet");
+    assert_eq!(set_entry["answer"], "no", "{set_entry}");
 }
 
 #[test]

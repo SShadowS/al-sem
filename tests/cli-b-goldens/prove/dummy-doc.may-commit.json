@@ -15,6 +15,12 @@
     "question": "may-commit",
     "result": {
       "answer": "unknown",
+      "blockedBy": [
+        {
+          "detail": "no routine of the program has the id or name 'NonExistentRoutineXYZ'",
+          "kind": "routine-not-found"
+        }
+      ],
       "obligations": {
         "analysisGaps": 0,
         "coneTruncated": false,

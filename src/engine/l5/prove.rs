@@ -1555,10 +1555,37 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             answer_relies_on_world: false,
             relies_on_loaded_subscribers: false,
         };
+        // G42: say WHY there is no answer (an `unknown` with no blocker read
+        // like an answer and hid a mistyped id or a missing app-guid prefix):
+        // the selector names no routine, or several. Exit 2 stays the
+        // no-root code digest and fingerprint share.
+        use crate::engine::l5::digest_cli::ChangedRootsDiagnostic;
+        let blocker = match changed_roots.diagnostics.iter().find_map(|d| match d {
+            ChangedRootsDiagnostic::SelectorAmbiguous { candidates, .. } => Some(candidates),
+            _ => None,
+        }) {
+            Some(candidates) => ProveBlocker {
+                kind: "routine-ambiguous",
+                detail: format!(
+                    "'{routine_selector}' names {} routines ({}); qualify it as \
+                     <owner>::<routine> or pass a stable id",
+                    candidates.len(),
+                    candidates.join(", ")
+                ),
+                anchor: None,
+            },
+            None => ProveBlocker {
+                kind: "routine-not-found",
+                detail: format!(
+                    "no routine of the program has the id or name '{routine_selector}'"
+                ),
+                anchor: None,
+            },
+        };
         let dummy_result = ProveResult {
             answer: ProveAnswer::Unknown,
             evidence: None,
-            blocked_by: None,
+            blocked_by: Some(vec![blocker]),
             obligations: dummy_oblg,
         };
 
