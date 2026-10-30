@@ -1169,7 +1169,9 @@ pub(crate) fn direct_facts_for_routine(
             }
         }
         for cs in &call_sites {
-            if implicit_error_call(&cs.callee, &receiver_type_of).is_some() {
+            if implicit_error_call(&cs.callee, cs.in_statement_position, &receiver_type_of)
+                .is_some()
+            {
                 facts.push(implicit(None, Some(cs.id.clone())));
             }
         }

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (G50)
+
+- **`Evaluate(X, Text)` used as a statement may throw** (G50), as `Get` does:
+  its discarded Boolean result means a failed parse raises a runtime error.
+  So does `ReadFrom` on a JSON or XML value used as a statement. `throws-error`
+  answered a decided `no` for Continia DO's `CDO Functions.GetCDOVerAsInteger`
+  (three statement-form `Evaluate`s, PLAT-SET-009.c1, expect `yes`); it now
+  answers `yes`. `if Evaluate(…) then` stays error-free. Test
+  `cli_prove_throws_error` (statement and checked forms, `JsonObject.ReadFrom`).
+
 ### Fixed (G48, part of G44/G46)
 
 - **A boundary group whose crossing into the dependency cannot run is

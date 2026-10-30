@@ -73,6 +73,30 @@ codeunit 50181 "G20 Errors"
     begin
         Client.Get('https://example.com', Response);
     end;
+
+    // G50: a discarded Boolean result: a failed parse raises an error.
+    procedure EvaluateStatement(VersionText: Text): Integer
+    var
+        Major: Integer;
+    begin
+        Evaluate(Major, VersionText);
+        exit(Major);
+    end;
+
+    procedure EvaluateChecked(VersionText: Text): Integer
+    var
+        Major: Integer;
+    begin
+        if Evaluate(Major, VersionText) then
+            exit(Major);
+    end;
+
+    procedure ReadJsonStatement(JsonText: Text)
+    var
+        Json: JsonObject;
+    begin
+        Json.ReadFrom(JsonText);
+    end;
 }
 "#;
 
@@ -138,6 +162,8 @@ fn throws_error_sees_implicit_runtime_errors() {
         ("UnguardedFindSet", "T.FindSet"),
         ("TestFieldCall", "T.TestField"),
         ("FieldErrorCall", "T.FieldError"),
+        ("EvaluateStatement", "Evaluate"),
+        ("ReadJsonStatement", "Json.ReadFrom"),
     ] {
         let r = prove(routine);
         assert_eq!(r["answer"], "yes", "{routine}: {r}");
@@ -159,7 +185,7 @@ fn throws_error_sees_implicit_runtime_errors() {
             "{routine}: the evidence must be an ERROR_IMPLICIT at {excerpt:?}: {evidence:?}"
         );
     }
-    for routine in ["GuardedGet", "GuardedFindSet", "HttpGet"] {
+    for routine in ["GuardedGet", "GuardedFindSet", "HttpGet", "EvaluateChecked"] {
         let r = prove(routine);
         assert_eq!(r["answer"], "no", "{routine} raises no implicit error: {r}");
     }
