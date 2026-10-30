@@ -509,8 +509,13 @@ fn model_event_edges(
     workspace(dir.path(), al);
     let inputs =
         al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &crate::fingerprint_needs());
-    let m = assemble_and_resolve_workspace_program(&inputs, MODEL_INSTANCE_ID_DEFAULT, false)
-        .expect("model");
+    let m = assemble_and_resolve_workspace_program(
+        &inputs,
+        MODEL_INSTANCE_ID_DEFAULT,
+        false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .expect("model");
     let name_of = |id: &str| {
         m.workspace
             .routines
@@ -745,8 +750,13 @@ fn model_event_ids(al: &str) -> Vec<(String, String, String)> {
     workspace(dir.path(), al);
     let inputs =
         al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &crate::fingerprint_needs());
-    let m = assemble_and_resolve_workspace_program(&inputs, MODEL_INSTANCE_ID_DEFAULT, false)
-        .expect("model");
+    let m = assemble_and_resolve_workspace_program(
+        &inputs,
+        MODEL_INSTANCE_ID_DEFAULT,
+        false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .expect("model");
     let name_of = |id: &str| {
         m.workspace
             .routines

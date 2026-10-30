@@ -110,6 +110,40 @@ pub(crate) fn unescape_al_identifier(inner: &str) -> String {
     inner.replace("\"\"", "\"")
 }
 
+/// Which declaration a bare name in a routine body means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScopeTier {
+    Parameter,
+    /// The named return value (`procedure P() Ret: T`).
+    ReturnValue,
+    Local,
+    Global,
+}
+
+/// AL's scope order for a bare name: parameters, the named return value,
+/// locals, then the object's globals. The one ordering #288 (which overload a
+/// one-argument `Error` takes, `error_argument_proves_text`) and the rules
+/// pass (which label a message names, `rules::Walker::lookup`) share. Each
+/// flag says whether that tier declares the name.
+pub(crate) fn scope_tier(
+    is_parameter: bool,
+    is_return: bool,
+    is_local: bool,
+    is_global: bool,
+) -> Option<ScopeTier> {
+    if is_parameter {
+        Some(ScopeTier::Parameter)
+    } else if is_return {
+        Some(ScopeTier::ReturnValue)
+    } else if is_local {
+        Some(ScopeTier::Local)
+    } else if is_global {
+        Some(ScopeTier::Global)
+    } else {
+        None
+    }
+}
+
 /// Compute the internal RoutineId (`{modelInstanceId}/{canonicalKeyHash}`).
 ///
 /// `enclosing_member` is the member-trigger discriminator: the UNESCAPED logical

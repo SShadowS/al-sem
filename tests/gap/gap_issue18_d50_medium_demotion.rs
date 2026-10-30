@@ -102,6 +102,7 @@ fn resolve_fixture() -> Model {
         &al_sem::program::inputs::WorkspaceInputs::read(&dir, &Default::default()),
         MODEL_INSTANCE_ID_DEFAULT,
         false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
     .unwrap_or_else(|| panic!("workspace assembly returned None for {}", dir.display()))
 }

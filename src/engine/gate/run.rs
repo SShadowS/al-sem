@@ -379,7 +379,7 @@ pub fn build_view_model(
         }
         // A cross-app analyze with no id: one build under the single-app
         // profile, never `FULL`'s dependency bodies.
-        return build_single_app(inputs, key.no_roots_config, extras).map(Some);
+        return build_single_app(inputs, key.no_roots_config, extras, needs.assembly()).map(Some);
     }
     // The base span covers the program build and the base's, never the graph
     // export lent in between (#277 R6-5); a graph-only view builds no base.
@@ -419,6 +419,7 @@ pub fn build_view_model(
         inputs,
         mi,
         key.no_roots_config,
+        needs.assembly(),
     ) {
         Ok(base) => Ok(Some(ViewModel {
             fresh: extras.then(|| Ok(base.coverage.clone())),
@@ -460,6 +461,7 @@ fn build_single_app(
     inputs: &Arc<WorkspaceInputs>,
     skip_roots_config: bool,
     extras: bool,
+    assembly: crate::program::model::workspace::AssemblyNeeds,
 ) -> Result<ViewModel, ViewFailure> {
     let program = {
         let _s = pt::span("preflight", "preflight.fresh_program");
@@ -508,6 +510,7 @@ fn build_single_app(
             skip_roots_config,
             &program.body().ctx,
             &program.body().parenless_calls,
+            assembly,
         )
     };
     let Some(rows) = resolved else {

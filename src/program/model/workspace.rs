@@ -604,9 +604,30 @@ pub struct ModelRoutine {
     /// `None` for any other shape (conservative — detectors keep firing).
     /// Additive — `ModelRoutine` is NOT Serialize-derived, never reaches a golden.
     pub entry_temp_guard_receiver: Option<String>,
+    /// The routine's rules (intent-evidence spec §4.2): `None` when the view
+    /// did not declare `ViewNeeds::rules` (not built), `Some(vec![])` when they
+    /// were built and the routine has none (a routine with no body, a
+    /// symbol-only row included, has none of its own). Read through
+    /// [`ModelRoutine::rules`], which fails loudly on `None`. Set by
+    /// [`settle_rules`] after resolution, from `rule_drafts`.
+    pub rules: Option<Vec<crate::program::body::rules::PRule>>,
+    /// Build-local (assembly -> attach): the rules' assembly half, settled into
+    /// `rules` by [`settle_rules`] and then dropped. `Some` exactly when the
+    /// assembly built rules.
+    pub rule_drafts: Option<Vec<crate::program::body::rules::RuleDraft>>,
 }
 
 impl ModelRoutine {
+    /// The routine's rules. Reading them from a model built without
+    /// `ViewNeeds::rules` is a bug and panics, in every build
+    /// (`get_ordering_facts`'s pattern), so "not built" never reads as "none".
+    #[must_use]
+    pub fn rules(&self) -> &[crate::program::body::rules::PRule] {
+        self.rules
+            .as_deref()
+            .expect("rules not built: declare ViewNeeds::rules")
+    }
+
     /// Whether this row believes a site of its own with `control_context`
     /// never runs (#288): its dead marks are trusted and the site is marked
     /// `unreachable`. The one test `capability_cone::DeadSites` and d35 share.
@@ -794,17 +815,30 @@ fn source_dead_mark_trust(
     call_sites
         .iter()
         .filter(|cs| is_bare_error_call(cs))
-        .all(|cs| match cs.argument_infos.as_slice() {
-            [] => false,
-            [arg] => error_argument_proves_text(
-                arg,
-                routine.return_name.as_deref(),
-                routine.return_type.as_deref(),
-                variables,
-                &mut object_clean,
-            ),
-            _ => true,
-        })
+        .all(|cs| bare_error_proves_text(cs, routine, variables, &mut object_clean))
+}
+
+/// Whether bare `Error(...)` site `cs` provably takes the Text overload (#288):
+/// two or more arguments always do; one does when
+/// [`error_argument_proves_text`] proves it; none never does. The one decision
+/// [`source_dead_mark_trust`] and the rules pass (`stops`) share.
+pub(crate) fn bare_error_proves_text(
+    cs: &crate::program::body::features::PCallSite,
+    routine: &al_syntax::ir::RoutineDecl,
+    variables: &RoutineVariables,
+    object_clean: impl FnMut() -> bool,
+) -> bool {
+    match cs.argument_infos.as_slice() {
+        [] => false,
+        [arg] => error_argument_proves_text(
+            arg,
+            routine.return_name.as_deref(),
+            routine.return_type.as_deref(),
+            variables,
+            object_clean,
+        ),
+        _ => true,
+    }
 }
 
 /// Whether the one argument `arg` of a bare `Error(...)` provably selects the
@@ -826,9 +860,11 @@ pub(crate) fn error_argument_proves_text(
     variables: &RoutineVariables,
     mut object_clean: impl FnMut() -> bool,
 ) -> bool {
+    use crate::program::body::scope::{ScopeTier, scope_tier};
     let texty = |ty: &str| {
         let head = ty.split(['[', ' ']).next().unwrap_or("");
-        ["Text", "Label", "Code"]
+        // A `TextConst` is Text as well (intent-evidence step 3).
+        ["Text", "Label", "Code", "TextConst"]
             .iter()
             .any(|t| head.eq_fold_identifier(t))
     };
@@ -845,13 +881,27 @@ pub(crate) fn error_argument_proves_text(
             let param = variables
                 .iter()
                 .find(|v| v.is_parameter && same_identifier(&v.name, name));
-            if param.is_none() && return_name.is_some_and(|r| same_identifier(r, name)) {
+            let is_global = |v: &ModelVariable| v.scope.as_deref() == Some("global");
+            let local = variables
+                .iter()
+                .find(|v| !v.is_parameter && !is_global(v) && same_identifier(&v.name, name));
+            let global = variables
+                .iter()
+                .find(|v| is_global(v) && same_identifier(&v.name, name));
+            let v = match scope_tier(
+                param.is_some(),
+                return_name.is_some_and(|r| same_identifier(r, name)),
+                local.is_some(),
+                global.is_some(),
+            ) {
+                Some(ScopeTier::Parameter) => param,
                 // A named return with no type proves nothing.
-                return return_type.is_some_and(texty);
-            }
-            let Some(v) =
-                param.or_else(|| variables.iter().find(|v| same_identifier(&v.name, name)))
-            else {
+                Some(ScopeTier::ReturnValue) => return return_type.is_some_and(texty),
+                Some(ScopeTier::Local) => local,
+                Some(ScopeTier::Global) => global,
+                None => None,
+            };
+            let Some(v) = v else {
                 return false;
             };
             texty(&v.declared_type)
@@ -905,6 +955,56 @@ pub(crate) fn settle_dead_mark_trust(m: &mut Model) {
         .collect();
     for i in unproven {
         m.workspace.routines[i].dead_marks_trusted = false;
+    }
+}
+
+/// The resolution half of the rules (intent-evidence spec §4.2): turn every
+/// row's `rule_drafts` into `rules`. A draft whose `stops` the assembly left
+/// open stops `Always` only when each of its call sites (the bare `Error`
+/// itself; an `Error(StrSubstNo(..))`'s `StrSubstNo`) binds to the builtin
+/// alone, by the same test as [`settle_dead_mark_trust`] (one builtin edge, no
+/// other edge): a procedure named `Error` in scope returns (#288). Runs after
+/// the calls are attached; a row with no drafts (rules not declared) keeps
+/// `rules: None`.
+pub(crate) fn settle_rules(m: &mut Model) {
+    use crate::program::model::taxonomy::Resolution;
+    // (seen a builtin edge, seen another), for the call sites of drafts whose
+    // `stops` the assembly could not decide.
+    let mut sites: HashMap<usize, HashMap<String, (bool, bool)>> = HashMap::new();
+    for (i, r) in m.workspace.routines.iter().enumerate() {
+        for d in r.rule_drafts.iter().flatten() {
+            for cs in d.builtin_sites() {
+                sites
+                    .entry(i)
+                    .or_default()
+                    .insert(cs.to_string(), (false, false));
+            }
+        }
+    }
+    if !sites.is_empty() {
+        for e in &m.calls.edges {
+            if let Some((builtin, other)) = sites
+                .get_mut(&e.from_ix.get())
+                .and_then(|s| s.get_mut(e.callsite_id.as_str()))
+            {
+                if e.resolution == Resolution::Builtin {
+                    *builtin = true;
+                } else {
+                    *other = true;
+                }
+            }
+        }
+    }
+    for (i, r) in m.workspace.routines.iter_mut().enumerate() {
+        let Some(drafts) = r.rule_drafts.take() else {
+            continue;
+        };
+        r.rules = Some(crate::program::body::rules::settle_rules(&drafts, |cs| {
+            sites
+                .get(&i)
+                .and_then(|s| s.get(cs))
+                .is_some_and(|(builtin, other)| *builtin && !*other)
+        }));
     }
 }
 
@@ -968,6 +1068,26 @@ fn anchor_from_origin(
 
 pub const MODEL_INSTANCE_ID_DEFAULT: &str = "r0";
 
+/// What the model assembly builds beyond the rows every model has: the facts
+/// that need a routine's full IR, which only exists at assembly (the
+/// `declared-needs` skill, level 1). A view sets it from the union of its
+/// demands' `ViewNeeds` (`ViewNeeds::assembly`); every other caller names it.
+/// No `Default`: every assembly states its choice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AssemblyNeeds {
+    /// Build each routine's rules (`ModelRoutine::rules`, intent-evidence spec
+    /// §4.2). `false` leaves every row's `rules` `None` (not built).
+    pub rules: bool,
+}
+
+impl AssemblyNeeds {
+    /// Nothing beyond the base rows: what every command but `explain` (and an
+    /// `analyze` running a detector that requires `substrate::RULES`) builds.
+    pub const BASE: AssemblyNeeds = AssemblyNeeds { rules: false };
+    /// The base rows and the rules.
+    pub const RULES: AssemblyNeeds = AssemblyNeeds { rules: true };
+}
+
 /// The declarations of one file to project, by position: each object's index in
 /// `AlFile::objects` with the indices of its routines, document order.
 pub type FilePopulation = Vec<(usize, Vec<usize>)>;
@@ -1027,6 +1147,7 @@ fn project_ir(
     cols: &Utf16Cols,
     parenless_calls: &std::collections::HashSet<al_syntax::ir::ExprId>,
     file: Option<crate::program::site_key::FileIx>,
+    needs: AssemblyNeeds,
     workspace: &mut ModelEntities,
 ) -> Vec<(usize, usize)> {
     // The `(object, routine)` position in `ir_file` of each row pushed, in order.
@@ -1688,6 +1809,39 @@ fn project_ir(
                 &call_sites,
                 &variables,
             );
+            // Intent-evidence §4.2: the rules' assembly half, from the IR still
+            // in hand. `stops` of a bare `Error` is settled after resolution
+            // (`settle_rules`, run by the attach).
+            let rule_drafts = needs.rules.then(|| {
+                let clean =
+                    *object_clean.get_or_insert_with(|| source_clean(source, &o.origin.byte));
+                let error_text_proven: Vec<bool> = call_sites
+                    .iter()
+                    .map(|cs| {
+                        is_bare_error_call(cs)
+                            && bare_error_proves_text(cs, ir_routine, &variables, || clean)
+                    })
+                    .collect();
+                let record_vars: Vec<(String, Option<String>)> = record_variables
+                    .iter()
+                    .map(|rv| (rv.name.clone(), rv.table_name.clone()))
+                    .collect();
+                crate::program::body::rules::build_rule_drafts(
+                    &crate::program::body::rules::RuleInputs {
+                        file: ir_file,
+                        object: o,
+                        routine: ir_routine,
+                        routine_id: &routine_id,
+                        source,
+                        call_sites: &call_sites,
+                        call_exprs: &site_exprs.calls,
+                        error_text_proven: &error_text_proven,
+                        record_variables: &record_vars,
+                        object_clean: clean,
+                        anchor: &|origin| anchor_from_origin(origin, source_unit_id, cols),
+                    },
+                )
+            });
             workspace.routines.push(ModelRoutine {
                 id: routine_id,
                 stable_routine_id,
@@ -1726,6 +1880,8 @@ fn project_ir(
                 originating_object,
                 enclosing_member_range,
                 entry_temp_guard_receiver,
+                rules: None,
+                rule_drafts,
             });
         }
     }
@@ -1748,15 +1904,17 @@ fn project_ir(
 ///
 /// `parenless` is the resolution's [`crate::program::resolve::full::ParenlessCalls`]
 /// (`ProgramReport::parenless_calls`): the body walk takes those reads as calls.
+/// `needs` states what the assembly builds beyond the base rows.
 pub fn assemble_and_resolve_workspace_from_program(
     inputs: &crate::program::inputs::WorkspaceInputs,
     model_instance_id: &str,
     skip_roots_config: bool,
     ctx: &crate::program::resolve::full::ProgramContext,
     parenless: &crate::program::resolve::full::ParenlessCalls,
+    needs: AssemblyNeeds,
 ) -> Option<ModelRows> {
     let (ws, node_of) =
-        assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless)?;
+        assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless, needs)?;
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
     finish_resolved(ws, inputs, skip_roots_config, row_nodes)
 }
@@ -1773,9 +1931,10 @@ pub fn assemble_and_resolve_workspace_from_program_reversed_groups(
     skip_roots_config: bool,
     ctx: &crate::program::resolve::full::ProgramContext,
     parenless: &crate::program::resolve::full::ParenlessCalls,
+    needs: AssemblyNeeds,
 ) -> Option<ModelRows> {
     let (mut ws, mut node_of) =
-        assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless)?;
+        assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless, needs)?;
     let mut by_id: HashMap<String, Vec<usize>> = HashMap::new();
     for (ri, r) in ws.routines.iter().enumerate() {
         by_id.entry(r.id.clone()).or_default().push(ri);
@@ -1815,9 +1974,10 @@ pub fn assemble_and_resolve_cross_app_from_program(
     ctx: &crate::program::resolve::full::ProgramContext,
     demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
     parenless: &crate::program::resolve::full::ParenlessCalls,
+    needs: AssemblyNeeds,
 ) -> Option<(ModelRows, AbiRowIds)> {
     let (mut ws, mut node_of) =
-        assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless)?;
+        assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless, needs)?;
     let abi_rows = append_dependency_rows(
         &mut ws,
         &mut node_of,
@@ -1825,6 +1985,7 @@ pub fn assemble_and_resolve_cross_app_from_program(
         ctx,
         demand,
         parenless,
+        needs,
     );
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
     Some((
@@ -1871,6 +2032,7 @@ fn append_dependency_rows(
     ctx: &crate::program::resolve::full::ProgramContext,
     demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
     parenless: &crate::program::resolve::full::ParenlessCalls,
+    needs: AssemblyNeeds,
 ) -> AbiRowIds {
     let bodies = ctx
         .dep_bodies()
@@ -1920,7 +2082,17 @@ fn append_dependency_rows(
             routines.extend(p.routines);
         }
     }
+    let first_abi_row = ws.routines.len();
     crate::program::model::abi_rows::append_dep_entities(ws, &objects, &tables, &routines);
+    if needs.rules {
+        // A symbol-only row has no body in the model, so no rule of its own the
+        // engine can see: built, and empty. The missing body is stated from
+        // `body_available` (the card's `symbol-only-dependency` gap), not by
+        // leaving the rules unbuilt.
+        for r in &mut ws.routines[first_abi_row..] {
+            r.rule_drafts = Some(Vec::new());
+        }
+    }
 
     for unit in deps.iter().filter(|u| u.source.is_some()) {
         let Some(parsed) = bodies.iter().find(|b| b.app == unit.id) else {
@@ -1950,6 +2122,7 @@ fn append_dependency_rows(
                 &cols,
                 calls,
                 app.and_then(|a| ctx.file_ix(a, &pf.virtual_path)),
+                needs,
                 ws,
             );
             node_of.extend(positions.into_iter().map(|(oi, ri)| {
@@ -2060,6 +2233,7 @@ fn assemble_l3_workspace_from_program(
     model_instance_id: &str,
     ctx: &crate::program::resolve::full::ProgramContext,
     parenless: &crate::program::resolve::full::ParenlessCalls,
+    needs: AssemblyNeeds,
 ) -> Option<(
     ModelEntities,
     Vec<Option<crate::program::node::RoutineNodeId>>,
@@ -2138,6 +2312,7 @@ fn assemble_l3_workspace_from_program(
                     &cols,
                     calls,
                     ctx.file_ix(ctx.primary_app_ref, &pf.virtual_path),
+                    needs,
                     &mut ws,
                 );
                 let nodes = positions
@@ -3468,6 +3643,7 @@ mod population_tests {
             true,
             &ctx,
             &Default::default(),
+            AssemblyNeeds::BASE,
         )
         .unwrap();
 
@@ -3486,6 +3662,7 @@ mod population_tests {
             true,
             &ctx,
             &Default::default(),
+            AssemblyNeeds::BASE,
         )
         .unwrap();
 
@@ -3540,6 +3717,7 @@ mod population_tests {
                 true,
                 &ctx,
                 &Default::default(),
+                AssemblyNeeds::BASE,
             )
             .unwrap(),
         );
@@ -3560,6 +3738,7 @@ mod population_tests {
                 true,
                 &ctx,
                 &Default::default(),
+                AssemblyNeeds::BASE,
             )
             .unwrap(),
         );
@@ -3569,3 +3748,8 @@ mod population_tests {
         assert!(!fewer.contains(&gone));
     }
 }
+
+// Intent-evidence step 3: the rules a model assembles.
+#[cfg(test)]
+#[path = "rules_tests.rs"]
+mod rules_tests;

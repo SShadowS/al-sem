@@ -244,6 +244,21 @@ What a command builds is not chosen per detector. `ProgramScope`
   pattern (`src/engine/l5/detector_context.rs:1140`). "Not built" must never read as
   "no rules".
 
+*As built (step 3):* the need reaches the assembly as
+`program::model::workspace::AssemblyNeeds { rules }` (`ViewNeeds::assembly()`),
+with no `Default`: every assembly entry takes it as a parameter
+(`assemble_and_resolve_workspace_program`, `assemble_and_resolve_cross_app_program`,
+`cross_app_program_from`, `build_cross_app_base_from`, the three workspace.rs
+entries), and `build_view_model` passes the view's union to both its single-app and
+cross-app arms. The helpers that build what a default `analyze` builds
+(`assemble_and_resolve_workspace_with_program_calls`, the inline test builders,
+`build_cross_app_base`, `cross_app_assemble`, `aldump`'s detector modes) name
+`AssemblyNeeds::BASE` in their body and say so in their doc. A symbol-only
+(ABI) row of a rules-bearing model gets `Some(vec![])`: the model has no body for it,
+so no rule of its own; the missing body is the card's `symbol-only-dependency` gap,
+read from `body_available`, not an unbuilt `None`. `ModelRoutine::rules()` panics in
+every build, like `get_ordering_facts`. Rules are not in any projection or golden.
+
 **A detector substrate bit for the writer index.** `substrate::RULES = 1 << 7`
 (`src/engine/l5/registry.rs`; `DB_EFFECT_REVERSE_INDEX` is `1 << 5`, `ORDERING_FACTS`
 `1 << 6`) builds only the per-field writer index d65 reads, from the model's rules.
@@ -345,6 +360,51 @@ Table resolution for `record_var` uses the existing record-variable table
   callee's own conditions are not merged into it.
 - Error-collecting frameworks (`ErrorMessageMgt.LogError` and similar) are not
   checks. A call to one is listed in the card as a gap of kind `error-collector`.
+
+*As built (step 3)*, `src/program/body/rules.rs`, run from `project_ir`
+(`src/program/model/workspace.rs`) and settled by `settle_rules` in
+`attach_program_calls`. Where it differs from the text above, and why:
+
+- **`stops` is settled after resolution, in two halves.** The assembly decides what
+  syntax decides: `MayNotStop` for a one-argument `Error` that #288's
+  `bare_error_proves_text` (shared with `source_dead_mark_trust`) cannot prove is
+  Text (reason "the message is an ErrorInfo" when the variable is one, else "not
+  proven Text"), for a `TestField` / `FieldError` whose last argument is an
+  `ErrorInfo`, and under `asserterror`. Each draft also lists call sites that must
+  bind to the builtin alone: the bare `Error` itself and, for
+  `Error(StrSubstNo(..))`, the `StrSubstNo` call (#288 cannot prove a call is Text;
+  resolution can). `settle_rules` runs right after `settle_dead_mark_trust`, with the
+  same test (one builtin edge, no other edge), settles the drafts in source order,
+  and only then keeps an earlier check's `not C` when that check is `Always`. alc
+  shows why the bare-`Error` half is needed: an object with its own
+  `procedure Error(Text, Decimal)` hides the builtin for every bare call in it (a
+  one-argument `Error('x')` there is AL0135).
+- **`RuleMessage` gained `candidates`.** "Lists every candidate text" needs a field;
+  it holds them in scope order. The G52 rule is applied as written: a local proves
+  its text only when it is declared once and no global has the name; a global only
+  when it is declared once and the object has no directive (#288's rule for
+  globals). The scope order itself is one shared function,
+  `program::body::scope::scope_tier`, which #288's `error_argument_proves_text` now
+  uses too. #288's Text proof now also accepts a `TextConst`.
+- **Shapes added:** `R.F = ''` and `R.F = 0` give `FieldEmpty`; a bare field name in
+  a table trigger is `Rec.F` (its table is the table itself); `case true of C:` takes
+  `C` as the condition and its `else` the negation of every arm; `not (A or B)` is
+  split into `not A` and `not B`; a `while` condition is added for checks in its
+  body; `R.Get/Find*/FindSet/IsEmpty` give `RecordFound` with or without parentheses.
+  `ParamBool` is only a by-value `Boolean` parameter; whether it is never assigned
+  (`param_guard`'s usability) is left to step 5, which substitutes it.
+- **`when_text`:** the atoms' texts joined with " and "; a negated atom is `not X` /
+  `not (X)`, an `or` is parenthesised, and a built-in check's own atom reads
+  `R.F is empty` / `R.F <> V`.
+- **`ConfirmExit`** is the `exit` itself (any `exit` under an enclosing branch taken
+  when a `Confirm` returned false); its message is the `Confirm` question with the
+  placeholder values (the `Default` argument dropped).
+- **Limits kept:** `not C` from an earlier statement is added only when the `then`
+  branch is exactly one `exit` or one check (`param_guard`'s exit-only shape; a
+  nested `if` or a two-statement branch adds nothing), and a `TestField` adds none
+  (the text above names only `if C then Error`). Nothing flows out of an `#if` arm.
+  The rules pass reads the IR, not `PCFNNode`, so it mirrors `param_guard`'s
+  early-exit rule rather than calling it.
 
 ### 4.3 Part B2: rules across calls
 
@@ -525,7 +585,7 @@ Following CLAUDE.md:
 |---|---|---|
 | 1 | Part A.1: extend `LabelValue` (comment, max length, other attributes) and add the `TextConst` arm | none expected: no projection serialises the new fields. Prove it with `check-goldens` |
 | 2 | Part A.2 and A.3: captions, tooltips, actions, doc comments. Then measure and record memory (4.1b) | l2 snapshot only if actions join the projection; the l2 snapshot's Debug digest moves with any new IR field. *Done:* none moved (the l2 digest is over projected L2 features, which do not read the new fields) |
-| 3 | Part B: `ViewNeeds::rules`, `PRule` for own rules at assembly; `TestField` gets a rule as well as its `StateOnly` class | l2, r4 via the new fixture |
+| 3 | Part B: `ViewNeeds::rules`, `PRule` for own rules at assembly; `TestField` gets a rule as well as its `StateOnly` class | l2, r4 via the new fixture. *Done:* the l2 snapshot and the r4f whole-corpus root-class summary gained the ws-rules routines; no other line moved. No per-detector r4 golden was seeded, because no detector reads rules until step 6 (d65 will add ws-rules to its fixtures) |
 | 4 | Part C: `alsem explain --routine`, `--diff` and `--table/--field`, own rules plus existing effects, tests and events | new `cli-explain` family |
 | 5 | Part B2: inherited and caller rules; `substrate::RULES` implies `ORDERING_FACTS` | cli-explain |
 | 6 | Part D: `substrate::RULES` writer index, `d65-guard-bypass` opt-in, the registry-test extension, then the CDO triage | r4 |

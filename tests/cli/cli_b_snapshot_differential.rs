@@ -158,8 +158,13 @@ fn compose_for(fixture: &str) -> (al_sem::engine::gate::cbor::CborValue, Model, 
             ..Default::default()
         },
     );
-    let resolved = assemble_and_resolve_workspace_program(&inputs, &model_instance_id, false)
-        .unwrap_or_else(|| panic!("{fixture}: workspace did not resolve"));
+    let resolved = assemble_and_resolve_workspace_program(
+        &inputs,
+        &model_instance_id,
+        false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .unwrap_or_else(|| panic!("{fixture}: workspace did not resolve"));
     let opts = FullSnapshotOptions {
         inputs: &inputs,
         driver_version: VERSION_OVERRIDE,

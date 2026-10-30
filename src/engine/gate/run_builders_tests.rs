@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::engine::gate::run::{AnalysisTarget, build_analysis_model};
 use crate::program::inputs::{WorkspaceInputs, WorkspaceNeeds};
 use crate::program::model::program_calls::assemble_and_resolve_workspace_program;
-use crate::program::model::workspace::Model;
+use crate::program::model::workspace::{AssemblyNeeds, Model};
 
 /// The model's rows as text: every field `Debug`-printed, the one hash map
 /// (`upgraded_bindings`) sorted by key.
@@ -48,7 +48,8 @@ fn three(ws: &Path, no_roots_config: bool) -> [Option<Vec<String>>; 3] {
         Arc::clone(&full)
     };
     let program = full.model_instance_id.as_deref().and_then(|id| {
-        assemble_and_resolve_workspace_program(&full, id, no_roots_config).map(|m| rows(&m))
+        assemble_and_resolve_workspace_program(&full, id, no_roots_config, AssemblyNeeds::BASE)
+            .map(|m| rows(&m))
     });
     let target = AnalysisTarget::build(&other, true, "t16")
         .ok()

@@ -142,8 +142,13 @@ fn compose_full_for(
     let model_id = compute_gate_model_instance_id(&ws)
         .unwrap_or_else(|| panic!("{fixture}: could not compute modelInstanceId"));
     let inputs = read(&ws);
-    let resolved = assemble_and_resolve_workspace_program(&inputs, &model_id, false)
-        .unwrap_or_else(|| panic!("{fixture}: workspace did not resolve"));
+    let resolved = assemble_and_resolve_workspace_program(
+        &inputs,
+        &model_id,
+        false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .unwrap_or_else(|| panic!("{fixture}: workspace did not resolve"));
     let opts = FullSnapshotOptions {
         inputs: &inputs,
         driver_version: VERSION_OVERRIDE,

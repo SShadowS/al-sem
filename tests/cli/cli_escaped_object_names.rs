@@ -46,8 +46,13 @@ fn dep_dependency() -> String {
 
 fn model(ws: &Path) -> al_sem::program::model::workspace::Model {
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default());
-    al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(&inputs, MI, true)
-        .expect("model")
+    al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
+        &inputs,
+        MI,
+        true,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .expect("model")
 }
 
 /// The resolved table id of the first record op on `var` in the routine
@@ -449,7 +454,10 @@ fn already_quoted_dependency_parameter_binds_its_logical_table() {
     );
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     let cross = al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
-        &inputs, MI, true,
+        &inputs,
+        MI,
+        true,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
     .expect("cross-app model");
     let take = cross

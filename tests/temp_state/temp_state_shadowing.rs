@@ -140,6 +140,8 @@ fn make_routine_for_pass2b(variables: Vec<ModelVariable>) -> ModelRoutine {
         originating_object: None,
         enclosing_member_range: None,
         entry_temp_guard_receiver: None,
+        rules: None,
+        rule_drafts: None,
     }
 }
 

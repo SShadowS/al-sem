@@ -125,7 +125,7 @@ use super::calls::{
 };
 use super::ix::RoutineIx;
 use super::taxonomy::{DispatchKind, Resolution};
-use super::workspace::{ModelEntities, ModelRecordOperation, ModelRoutine};
+use super::workspace::{AssemblyNeeds, ModelEntities, ModelRecordOperation, ModelRoutine};
 use crate::program::body::features::{PCallSite, PCallee};
 use crate::program::graph::ProgramGraph;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
@@ -584,6 +584,9 @@ fn attach_program_calls_with(
     // #288: a row's dead marks stay trusted only if its `Error` calls bind to the
     // builtin.
     crate::program::model::workspace::settle_dead_mark_trust(&mut resolved);
+    // Intent evidence §4.2: rules built at assembly settle their `stops` here,
+    // by the same per-site test.
+    crate::program::model::workspace::settle_rules(&mut resolved);
     // A `local` event raised only with temporary records makes its subscribers'
     // same-named `var` parameters temporary (engine-switch S8).
     crate::program::model::event_param_temp::prove_event_param_temps(&mut resolved);
@@ -667,7 +670,8 @@ pub(crate) fn census_calls(c: &ResolvedCalls) -> crate::engine::census::Tally {
 /// and `roots.config.json` read: the model the detectors see in `alsem analyze`.
 /// `None` if the build fails. For tests that pin detector output (r4/r4f
 /// goldens). Until engine-switch S9.3 it built L3's disk model and attached the
-/// program calls to it; no golden moved when it switched.
+/// program calls to it; no golden moved when it switched. It builds what a
+/// default `analyze` builds ([`AssemblyNeeds::BASE`]: no rules).
 #[must_use]
 pub fn assemble_and_resolve_workspace_with_program_calls(
     workspace: &std::path::Path,
@@ -676,6 +680,7 @@ pub fn assemble_and_resolve_workspace_with_program_calls(
         &crate::program::inputs::WorkspaceInputs::read(workspace, &Default::default()),
         crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
+        AssemblyNeeds::BASE,
     )
 }
 
@@ -684,11 +689,13 @@ pub fn assemble_and_resolve_workspace_with_program_calls(
 /// `gate::run::build_analysis_model`), with the program engine's calls and event
 /// graph attached. `None` when the program build or the model assembly fails.
 /// Every workspace input comes from `inputs`, the command's one read (#160).
+/// `needs` states what the assembly builds beyond the base rows.
 #[must_use]
 pub fn assemble_and_resolve_workspace_program(
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     model_instance_id: &str,
     skip_roots_config: bool,
+    needs: AssemblyNeeds,
 ) -> Option<crate::program::model::workspace::Model> {
     let program = ResolvedProgram::build(inputs, ProgramScope::Workspace).ok()?;
     let rows = crate::program::model::workspace::assemble_and_resolve_workspace_from_program(
@@ -697,6 +704,7 @@ pub fn assemble_and_resolve_workspace_program(
         skip_roots_config,
         &program.body().ctx,
         &program.body().parenless_calls,
+        needs,
     )?;
     Some(attach_program_calls(rows, program).0)
 }
@@ -718,10 +726,12 @@ pub fn assemble_and_resolve_inline_program(
     model_instance_id: &str,
 ) -> crate::program::model::workspace::Model {
     let dir = write_inline_workspace(files, app_guid);
+    // What a default `analyze` builds: no rules.
     assemble_and_resolve_workspace_program(
         &crate::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default()),
         model_instance_id,
         true,
+        AssemblyNeeds::BASE,
     )
     .unwrap_or_else(|| panic!("program build failed for inline workspace {app_guid}"))
 }
@@ -748,6 +758,7 @@ pub fn assemble_and_resolve_inline_program_reversed_groups(
             true,
             &program.body().ctx,
             &program.body().parenless_calls,
+            AssemblyNeeds::BASE,
         )
         .unwrap_or_else(|| panic!("model assembly failed for inline workspace {app_guid}"));
     attach_program_calls(rows, program).0
@@ -840,17 +851,20 @@ pub enum CrossAppFailure {
 /// one `FULL` program build, with the program engine's calls attached for EVERY
 /// body in it — the workspace's, and each dependency's resolved from its own app
 /// (`ProgramContext::resolve_dependency_bodies`) — and its event graph over all of
-/// them. `Err` when the program build or the model assembly fails.
+/// them. `Err` when the program build or the model assembly fails. `needs`
+/// states what the assembly builds beyond the base rows.
 pub fn assemble_and_resolve_cross_app_program(
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     model_instance_id: &str,
     skip_roots_config: bool,
+    needs: AssemblyNeeds,
 ) -> Result<CrossAppProgram, CrossAppFailure> {
     cross_app_program_from(
         ResolvedProgram::build(inputs, ProgramScope::CrossApp),
         inputs,
         model_instance_id,
         skip_roots_config,
+        needs,
     )
 }
 
@@ -862,8 +876,10 @@ pub(crate) fn cross_app_program_from(
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     model_instance_id: &str,
     skip_roots_config: bool,
+    needs: AssemblyNeeds,
 ) -> Result<CrossAppProgram, CrossAppFailure> {
-    cross_app_program_census(program, inputs, model_instance_id, skip_roots_config).map(|(p, _)| p)
+    cross_app_program_census(program, inputs, model_instance_id, skip_roots_config, needs)
+        .map(|(p, _)| p)
 }
 
 /// The cross-app build up to the attach: the program, the demand the model was
@@ -876,6 +892,10 @@ pub(crate) struct CrossAppAssembled {
     pub(crate) abi_rows: crate::program::model::workspace::AbiRowIds,
 }
 
+/// The cross-app rows before the attach, for the test entries that inspect
+/// them. They build the base rows only ([`AssemblyNeeds::BASE`]); the
+/// production entry goes through [`cross_app_assemble_from`] with its view's
+/// needs.
 pub(crate) fn cross_app_assemble(
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     model_instance_id: &str,
@@ -886,6 +906,7 @@ pub(crate) fn cross_app_assemble(
         inputs,
         model_instance_id,
         skip_roots_config,
+        AssemblyNeeds::BASE,
     )
 }
 
@@ -895,6 +916,7 @@ fn cross_app_assemble_from(
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     model_instance_id: &str,
     skip_roots_config: bool,
+    needs: AssemblyNeeds,
 ) -> Result<CrossAppAssembled, CrossAppFailure> {
     use crate::engine::perf_trace as pt;
     let program = program.map_err(CrossAppFailure::Build)?;
@@ -919,6 +941,7 @@ fn cross_app_assemble_from(
             ctx,
             Some(&demand),
             &body.parenless_calls,
+            needs,
         )
     };
     let Some((rows, abi_rows)) = assembled else {
@@ -980,6 +1003,7 @@ fn cross_app_program_census(
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     model_instance_id: &str,
     skip_roots_config: bool,
+    needs: AssemblyNeeds,
 ) -> Result<(CrossAppProgram, SiteCensus), CrossAppFailure> {
     use crate::engine::perf_trace as pt;
     let CrossAppAssembled {
@@ -987,7 +1011,7 @@ fn cross_app_program_census(
         demand,
         rows,
         abi_rows,
-    } = cross_app_assemble_from(program, inputs, model_instance_id, skip_roots_config)?;
+    } = cross_app_assemble_from(program, inputs, model_instance_id, skip_roots_config, needs)?;
     let body = program.body();
     let ctx = &body.ctx;
     let mut friends: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
@@ -1071,6 +1095,7 @@ pub fn adapter_census_for_workspace_cross_app(
         &inputs,
         crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
+        AssemblyNeeds::BASE,
     )
     .map(|(_, c)| c)
     .map_err(|e| format!("cross-app build of {}: {e:?}", workspace.display()))
@@ -2445,6 +2470,7 @@ pub(crate) fn build_models_with(
         false,
         &ctx,
         &report.parenless_calls,
+        AssemblyNeeds::BASE,
     )
     .ok_or_else(|| {
         format!(
@@ -2607,7 +2633,9 @@ mod tests {
                 || manifest.get("application").is_some();
             let must_warn = declares && !ws.join(".alpackages").exists();
             let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
-            let disk = assemble_and_resolve_workspace_program(&inputs, "r0", true).expect("disk");
+            let disk =
+                assemble_and_resolve_workspace_program(&inputs, "r0", true, AssemblyNeeds::BASE)
+                    .expect("disk");
             let inline = assemble_and_resolve_inline_program(&files, guid, "r0");
             let mut disk_text = model_text(&disk);
             let inline_text = model_text(&inline);

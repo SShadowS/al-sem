@@ -249,7 +249,13 @@ fn model() -> &'static Model {
     MODEL.get_or_init(|| {
         let tmp = write_workspace();
         let id = compute_gate_model_instance_id(tmp.path()).expect("model id");
-        assemble_and_resolve_workspace_program(&read(tmp.path()), &id, false).expect("model")
+        assemble_and_resolve_workspace_program(
+            &read(tmp.path()),
+            &id,
+            false,
+            al_sem::program::model::workspace::AssemblyNeeds::BASE,
+        )
+        .expect("model")
     })
 }
 

@@ -136,7 +136,13 @@ fn stable_id_of(ws: &Path, file: &str, display: &str) -> String {
 fn assert_identity_table_holds_table_name(ws: &Path) {
     let model_id = compute_gate_model_instance_id(ws).unwrap();
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default());
-    let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).unwrap();
+    let model = assemble_and_resolve_workspace_program(
+        &inputs,
+        &model_id,
+        false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .unwrap();
     let snap = compose_snapshot(&model);
     let ids = &snap.identities;
     let key = format!("{GUID}:Table:50100");

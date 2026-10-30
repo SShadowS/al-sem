@@ -74,7 +74,13 @@ fn read_inputs(dir: &Path) -> std::sync::Arc<WorkspaceInputs> {
 
 fn resolve(dir: &Path) -> Model {
     let model_id = compute_gate_model_instance_id(dir).expect("modelInstanceId");
-    assemble_and_resolve_workspace_program(&read_inputs(dir), &model_id, true).expect("resolve")
+    assemble_and_resolve_workspace_program(
+        &read_inputs(dir),
+        &model_id,
+        true,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .expect("resolve")
 }
 
 fn full_snapshot_json(dir: &Path, resolved: &Model) -> Value {

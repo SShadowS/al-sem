@@ -35,6 +35,8 @@ fn program_model(workspace: &std::path::Path) -> Option<al_sem::program::model::
         &al_sem::program::inputs::WorkspaceInputs::read(workspace, &Default::default()),
         al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
+        // What a default `analyze` builds: none of these modes reads rules.
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
 }
 

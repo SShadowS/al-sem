@@ -3418,6 +3418,7 @@ mod shadow_tests {
                 &crate::program::inputs::WorkspaceInputs::read(&ws_path, &Default::default()),
                 crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
                 false,
+                crate::program::model::workspace::AssemblyNeeds::BASE,
             )
             .expect("assemble_and_resolve_workspace_program failed for DO_WS");
         let owned = crate::engine::l5::detector_context::build_detector_context(

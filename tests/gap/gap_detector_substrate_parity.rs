@@ -142,6 +142,7 @@ fn every_detector_parity_between_full_and_minimal_ctx() {
             &al_sem::program::inputs::WorkspaceInputs::read(&dir, &Default::default()),
             MODEL_INSTANCE_ID_DEFAULT,
             false,
+            al_sem::program::model::workspace::AssemblyNeeds::BASE,
         )
         .unwrap_or_else(|| panic!("fixture {fixture} must assemble"));
         assert_parity(&resolved, &detectors, fixture);

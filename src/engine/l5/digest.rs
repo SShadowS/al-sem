@@ -6550,6 +6550,7 @@ mod tests {
                     &crate::program::inputs::WorkspaceInputs::read(dir, &Default::default()),
                     crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
                     false,
+                    crate::program::model::workspace::AssemblyNeeds::BASE,
                 )
             {
                 check_witness_bfs(&resolved, &dir.display().to_string(), &mut stats);
@@ -8320,6 +8321,7 @@ codeunit 50410 DupProducer
                     &crate::program::inputs::WorkspaceInputs::read(dir, &Default::default()),
                     crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
                     false,
+                    crate::program::model::workspace::AssemblyNeeds::BASE,
                 )
             })
             .collect()

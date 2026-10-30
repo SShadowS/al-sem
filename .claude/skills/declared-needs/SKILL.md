@@ -171,5 +171,11 @@ built) shows each choice above:
   from the rules. It implies `ORDERING_FACTS`, stays out of `ALL`, and is added to
   the parity mask.
 
-When that work starts, follow the spec's §4.1b, and update this example once it has
-landed.
+**Landed (step 3):** `ViewNeeds::rules` reaches the assembly as `AssemblyNeeds`
+(`src/program/model/workspace.rs`), a parameter of every assembly entry with no
+default; `ModelRoutine::rules` is `None` until built and `ModelRoutine::rules()`
+panics on `None`; `rules_tests.rs` pins that a rules view builds them in both
+universes and that `ViewNeeds::ANALYZE` builds none. A fact built at assembly that
+also needs call resolution (here `stops`) keeps its inputs on the row
+(`rule_drafts`) and is settled in `attach_program_calls`, which every model passes
+through. Steps 5 and 6 (`substrate::RULES`) are not built yet; follow §4.1b.

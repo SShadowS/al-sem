@@ -248,6 +248,10 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
         enclosing_member: None,
         originating_object: None,
         enclosing_member_range: None,
+        // Not built here: `append_dependency_rows` gives a symbol-only row its
+        // (empty) rules when the assembly declares them.
+        rules: None,
+        rule_drafts: None,
         entry_temp_guard_receiver: None,
     }
 }

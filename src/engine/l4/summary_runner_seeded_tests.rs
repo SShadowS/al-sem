@@ -427,9 +427,13 @@ fn all_cases() -> Vec<Case> {
     cases.extend(dirs.iter().map(|dir| {
         let name = dir.strip_prefix(&root).unwrap().display().to_string();
         let inputs = crate::program::inputs::WorkspaceInputs::read(dir, &Default::default());
-        let model =
-            assemble_and_resolve_workspace_program(&inputs, MODEL_INSTANCE_ID_DEFAULT, false)
-                .unwrap_or_else(|| panic!("{name}: no single-app model built"));
+        let model = assemble_and_resolve_workspace_program(
+            &inputs,
+            MODEL_INSTANCE_ID_DEFAULT,
+            false,
+            crate::program::model::workspace::AssemblyNeeds::BASE,
+        )
+        .unwrap_or_else(|| panic!("{name}: no single-app model built"));
         plain(&name, model)
     }));
     cases

@@ -36,6 +36,30 @@ Spec: `docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 3).
   every profile: measured +4.3 % peak memory on the DO workspace (comments alone
   +2.0 %), +2.2 % on the 1000-file LSP corpus, so no gate (spec 4.1b). No golden
   moves.
+- **Step 3: rules are built at model assembly, when a view asks for them.**
+  `ViewNeeds` gains `rules` (joined by `union`, kept out of `ViewKey`); no demand
+  sets it yet. `build_view_model` hands it to the assembly as the new
+  `AssemblyNeeds` (no default; `BASE` or `RULES`), which every assembly entry now
+  takes: `assemble_and_resolve_workspace_program`,
+  `assemble_and_resolve_cross_app_program`, `build_cross_app_base_from` and the
+  workspace.rs entries. The new body pass `program::body::rules` turns each
+  routine's IR into `PRule` rows (`Error`, `TestField`, `FieldError`,
+  `ConfirmError`, `ConfirmExit`): the condition as atoms (`FieldCompare`,
+  `FieldEmpty`, `ParamBool`, `CallResult`, `RecordFound`, `NoneOf`, `Other`) from
+  enclosing `if` (negated on `else`), `case` arms and `else` (`NoneOf`), earlier
+  `if C then exit;` and earlier `if C then <check>;`; the message (literal, label,
+  `TextConst`, `ErrorInfo`, platform or dynamic, with args, the label's comment and,
+  for a name the routine sees declared more than once, every candidate text); and
+  the check's comment. `stops` is settled after resolution, next to #288's dead-mark
+  trust and by the same per-site test: a bare `Error` that may bind to an own
+  `procedure Error`, or an `ErrorInfo` message, may not stop, and then adds no
+  `not C` to later checks. `ModelRoutine::rules` is `None` until built;
+  `ModelRoutine::rules()` panics on `None`. A default `analyze` builds none. #288's
+  one-argument `Error` proof now also accepts a `TextConst` (it is Text). The
+  lowerer now lowers date, time and datetime literals (`0D`) to their `Literal`
+  variants instead of `Unknown`. New fixture `tests/r0-corpus/ws-rules` (compiles
+  with alc 29); it adds its routines to the l2 snapshot and the r4f root-class
+  summary, and no other golden line moves.
 
 ### Fixed (G52)
 

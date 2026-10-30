@@ -3682,6 +3682,13 @@ fn lower_expr(
         )),
         RawKind::Integer => ExprKind::Literal(Literal::Int(node.text(source).to_string())),
         RawKind::Decimal => ExprKind::Literal(Literal::Decimal(node.text(source).to_string())),
+        // `0D`, `20240101D`, `0T`, `0DT`: the IR had these variants, but the
+        // lowerer gave `Unknown` (found by the ws-rules fixture, step 3).
+        RawKind::DateLiteral => ExprKind::Literal(Literal::Date(node.text(source).to_string())),
+        RawKind::DatetimeLiteral => {
+            ExprKind::Literal(Literal::DateTime(node.text(source).to_string()))
+        }
+        RawKind::TimeLiteral => ExprKind::Literal(Literal::Time(node.text(source).to_string())),
         RawKind::StringLiteral | RawKind::VerbatimString => {
             ExprKind::Literal(Literal::Text(node.text(source).to_string()))
         }
@@ -8332,6 +8339,46 @@ enumextension 50103 E extends K
         assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
         assert_eq!(af.objects.len(), 3);
         assert!(af.objects.iter().all(|o| o.enum_values.is_empty()));
+    }
+
+    /// Date, time and datetime literals lower to their own `Literal` variants,
+    /// not to `Unknown` (intent-evidence step 3: `if X = 0D then`).
+    #[test]
+    fn date_time_literals_are_lowered() {
+        let src = r#"
+codeunit 50100 C
+{
+    procedure P()
+    var
+        D: Date;
+        T: Time;
+        DT: DateTime;
+    begin
+        D := 20240101D;
+        T := 0T;
+        DT := 0DT;
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let lits: Vec<String> = af
+            .ir
+            .iter_exprs()
+            .filter_map(|e| match &e.kind {
+                ExprKind::Literal(Literal::Date(t)) => Some(format!("date {t}")),
+                ExprKind::Literal(Literal::Time(t)) => Some(format!("time {t}")),
+                ExprKind::Literal(Literal::DateTime(t)) => Some(format!("datetime {t}")),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lits, ["date 20240101D", "time 0T", "datetime 0DT"]);
+        assert!(
+            !af.ir
+                .iter_exprs()
+                .any(|e| matches!(e.kind, ExprKind::Unknown)),
+            "no literal lowers to Unknown"
+        );
     }
 
     /// G52: a label declaration carries its text and whether it is locked, and

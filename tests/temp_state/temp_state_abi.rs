@@ -161,6 +161,7 @@ fn project_and_resolve() -> al_sem::program::model::workspace::ModelEntities {
         &al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default()),
         MI,
         false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
     .expect("cross-app model")
     .resolved

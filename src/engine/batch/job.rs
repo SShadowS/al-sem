@@ -72,6 +72,13 @@ pub struct ViewNeeds {
     pub graph: bool,
     /// The model: every job but graph.
     pub model: bool,
+    /// Each routine's rules, built at model assembly from the IR
+    /// (`ModelRoutine::rules`, intent-evidence spec §4.1b). No demand sets it
+    /// yet: `alsem explain` will, and `analyze` will when a selected detector
+    /// requires `substrate::RULES`. It changes what the model holds, not which
+    /// workspace or universe it is, so it stays out of [`ViewKey`]: a view
+    /// whose union has it builds rules for every demand on it.
+    pub rules: bool,
 }
 
 impl ViewNeeds {
@@ -79,6 +86,7 @@ impl ViewNeeds {
         analyze_extras: false,
         graph: false,
         model: true,
+        rules: false,
     };
     pub const ANALYZE: ViewNeeds = ViewNeeds {
         analyze_extras: true,
@@ -88,6 +96,7 @@ impl ViewNeeds {
         analyze_extras: false,
         graph: true,
         model: false,
+        rules: false,
     };
 
     pub fn union(self, other: ViewNeeds) -> ViewNeeds {
@@ -95,7 +104,14 @@ impl ViewNeeds {
             analyze_extras: self.analyze_extras || other.analyze_extras,
             graph: self.graph || other.graph,
             model: self.model || other.model,
+            rules: self.rules || other.rules,
         }
+    }
+
+    /// What the model assembly builds for these needs.
+    #[must_use]
+    pub fn assembly(self) -> crate::program::model::workspace::AssemblyNeeds {
+        crate::program::model::workspace::AssemblyNeeds { rules: self.rules }
     }
 }
 

@@ -900,6 +900,17 @@ ws-roots-config/src/sample.al::0::DoWork	813f09fabc4e83e5
 ws-roots-config/src/sample.al::1::OnInstallAppPerCompany	dd6f4b5f2cedecfe
 ws-roots-config/src/sample.al::1::DoInstallWork	42504e997b97828f
 ws-roots-config/src/sample.al::2::ApiHelper	52773c03aa8538ed
+ws-rules/src/checks.al::0::CheckOrder	e6651847e1fbc080
+ws-rules/src/checks.al::0::ConfirmDelete	088e1c72c2b451b6
+ws-rules/src/checks.al::0::CheckStatus	aa4724c733213167
+ws-rules/src/checks.al::0::CheckCustomer	1fb251d6a38bb1d9
+ws-rules/src/checks.al::0::CollectibleCheck	a3d88655286e1473
+ws-rules/src/checks.al::0::ShadowedLabel	95e09b1859f3baf7
+ws-rules/src/checks.al::0::FailWith	8893f09f2ba59be5
+ws-rules/src/own_error.al::0::CheckLimit	abe84508345a47fa
+ws-rules/src/own_error.al::0::Error	2e2eac75ab7719f7
+ws-rules/src/own_error.al::1::CheckVersioned	6154d5ef06ef8c79
+ws-rules/src/tables.al::0::OnValidate	7718b896c582918e
 ws-sibling-member-triggers/src/SiblingTriggers.Page.al::0::OnAction	6c69e88b94b8db28
 ws-sibling-member-triggers/src/SiblingTriggers.Page.al::0::OnAction	693c845dec507009
 ws-statement-tree/src/Codeunit.al::0::StraightLine	47554b27256dc0da

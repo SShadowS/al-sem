@@ -3347,6 +3347,7 @@ mod step6_tree_tests {
                     &inputs,
                     crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
                     false,
+                    crate::program::model::workspace::AssemblyNeeds::BASE,
                 )
             else {
                 failures.push(format!("{where_}: no single-app model built"));

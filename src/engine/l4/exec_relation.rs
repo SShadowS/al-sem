@@ -333,6 +333,7 @@ mod tests {
             &crate::program::inputs::WorkspaceInputs::read(dir, &Default::default()),
             MODEL_INSTANCE_ID_DEFAULT,
             false,
+            crate::program::model::workspace::AssemblyNeeds::BASE,
         )
     }
 
@@ -354,9 +355,12 @@ mod tests {
             None => failures.push(format!("{where_}: no single-app model built")),
         }
         let inputs = crate::program::inputs::WorkspaceInputs::read(dir, &Default::default());
-        let Ok(x) =
-            assemble_and_resolve_cross_app_program(&inputs, MODEL_INSTANCE_ID_DEFAULT, false)
-        else {
+        let Ok(x) = assemble_and_resolve_cross_app_program(
+            &inputs,
+            MODEL_INSTANCE_ID_DEFAULT,
+            false,
+            crate::program::model::workspace::AssemblyNeeds::BASE,
+        ) else {
             failures.push(format!("{where_}: no cross-app model built"));
             return;
         };

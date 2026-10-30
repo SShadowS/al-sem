@@ -116,7 +116,10 @@ fn full_snapshot(ws: &Path) -> serde_json::Value {
         },
     );
     let model = al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
-        &inputs, MI, true,
+        &inputs,
+        MI,
+        true,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
     .expect("model");
     let opts = FullSnapshotOptions {
@@ -264,7 +267,10 @@ fn source_interfaces_get_distinct_ids_from_every_producer() {
     // P2: the model.
     let inputs = read(ws);
     let model = al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
-        &inputs, MI, true,
+        &inputs,
+        MI,
+        true,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
     .expect("model");
     let p2 = sorted(
@@ -377,6 +383,7 @@ fn codeunits_without_a_parsed_number_get_distinct_ids() {
         &read(ws),
         MI,
         true,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
     .expect("model");
     let id_a = format!("{GUID}/Codeunit/@cu%20a");
@@ -518,7 +525,10 @@ fn dependency_interface_graph_id_equals_its_model_object_id() {
 
     let inputs = read(ws);
     let cross = al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
-        &inputs, MI, true,
+        &inputs,
+        MI,
+        true,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
     .expect("cross-app model");
     let objects: Vec<_> = cross
@@ -584,7 +594,10 @@ fn dependency_interface_with_escaped_quotes_graph_id_equals_its_model_object_id(
 
     let inputs = read(ws);
     let cross = al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
-        &inputs, MI, true,
+        &inputs,
+        MI,
+        true,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
     .expect("cross-app model");
     let model_object = cross

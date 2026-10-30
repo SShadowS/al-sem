@@ -52,6 +52,7 @@ fn project(al_src: &str) -> R3a2Projection {
         &al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default()),
         MODEL_INSTANCE_ID_DEFAULT,
         false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
     .expect("assemble + resolve workspace");
     project_r3a2(&resolved)
@@ -68,6 +69,7 @@ fn resolve(al_src: &str) -> Model {
         &al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default()),
         MODEL_INSTANCE_ID_DEFAULT,
         false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
     .expect("assemble + resolve workspace")
 }
