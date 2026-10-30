@@ -692,6 +692,7 @@ fn collect_xmlport_text_nodes(node: RawNode, source: &str, out: &mut Vec<VarDecl
                 ty: Some(if big { "BigText" } else { "Text" }.to_string()),
                 temporary: false,
                 origin: origin_of(child),
+                label: None,
             });
         }
         collect_xmlport_text_nodes(child, source, out);
@@ -2309,6 +2310,7 @@ fn extract_var_decl(decl: RawNode, source: &str, out: &mut Vec<VarDecl>) {
     let temporary = type_node
         .map(|t| contains_kind(t, RawKind::TemporaryKeyword))
         .unwrap_or(false);
+    let label = label_value(decl, ty.as_deref(), source);
     let mut names = Vec::new();
     var_decl_names(decl, &mut names);
     for nm in names {
@@ -2317,8 +2319,49 @@ fn extract_var_decl(decl: RawNode, source: &str, out: &mut Vec<VarDecl>) {
             ty: ty.clone(),
             temporary,
             origin: origin_of(decl),
+            label: label.clone(),
         });
     }
+}
+
+/// The value of a label declaration (`Name: Label 'text', Locked = true;`): its
+/// `value` field, under a `Label` type. `None` for any other declaration. Locked
+/// only on an explicit `Locked = true` with no `Locked = false` beside it.
+fn label_value(decl: RawNode, ty: Option<&str>, source: &str) -> Option<crate::ir::LabelValue> {
+    if !ty.is_some_and(|t| t.eq_ignore_ascii_case("label")) {
+        return None;
+    }
+    let value = decl.field(FieldName::Value)?;
+    let text = match value.kind() {
+        RawKind::StringLiteral => crate::ir::al_string_literal_text(value.text(source)),
+        _ => None,
+    };
+    let mut locked_true = false;
+    let mut locked_false = false;
+    for attr in decl.named_children() {
+        if attr.kind() != RawKind::LabelAttribute {
+            continue;
+        }
+        let is_locked = attr
+            .field(FieldName::Name)
+            .is_some_and(|n| n.text(source).trim().eq_ignore_ascii_case("locked"));
+        if !is_locked {
+            continue;
+        }
+        match attr.field(FieldName::Value) {
+            Some(v)
+                if v.kind() == RawKind::Boolean
+                    && v.text(source).trim().eq_ignore_ascii_case("true") =>
+            {
+                locked_true = true
+            }
+            _ => locked_false = true,
+        }
+    }
+    Some(crate::ir::LabelValue {
+        text,
+        locked: locked_true && !locked_false,
+    })
 }
 
 /// The `name` fields of a `variable_declaration`, in document order. An `#if` group
@@ -7982,5 +8025,64 @@ enumextension 50103 E extends K
         assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
         assert_eq!(af.objects.len(), 3);
         assert!(af.objects.iter().all(|o| o.enum_values.is_empty()));
+    }
+
+    /// G52: a label declaration carries its text and whether it is locked, and
+    /// only a `Label` declaration carries one.
+    #[test]
+    fn label_declarations_carry_text_and_locked() {
+        let src = r#"
+codeunit 50100 C
+{
+    var
+        G: Label 'it''s', Locked = true;
+
+    procedure P()
+    var
+        A: Label '{a7c3e1b4-9d2f-4a8e-b5c6-d7e8f9a0b1c2}', Locked = true;
+        B: Label 'b', Comment = 'c';
+        C: Label 'c', Locked = false;
+        D: Label 'd', Locked = true, Locked = false;
+        E: Label 'e', MaxLength = 5, Locked = true;
+        N: Integer;
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let lv = |text: &str, locked: bool| {
+            Some(crate::ir::LabelValue {
+                text: Some(text.to_string()),
+                locked,
+            })
+        };
+        assert_eq!(af.objects[0].globals[0].label, lv("it's", true));
+        let labels: Vec<_> = af.objects[0].routines[0]
+            .locals
+            .iter()
+            .map(|l| (l.name.as_str(), l.label.clone()))
+            .collect();
+        assert_eq!(
+            labels,
+            vec![
+                ("A", lv("{a7c3e1b4-9d2f-4a8e-b5c6-d7e8f9a0b1c2}", true)),
+                ("B", lv("b", false)),
+                ("C", lv("c", false)),
+                ("D", lv("d", false)),
+                ("E", lv("e", true)),
+                ("N", None),
+            ]
+        );
+    }
+
+    #[test]
+    fn al_string_literal_text_reads_doubled_quotes() {
+        use crate::ir::al_string_literal_text as t;
+        assert_eq!(t("'a''b'").as_deref(), Some("a'b"));
+        assert_eq!(t("''").as_deref(), Some(""));
+        assert_eq!(t("'a'b'"), None);
+        assert_eq!(t("a"), None);
+        assert_eq!(t("'"), None);
     }
 }

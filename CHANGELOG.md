@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (G52)
+
+- **A statement `Evaluate` that provably cannot fail is no implicit error**
+  (G52, refines G50). `Evaluate(Target, Source)` with two arguments raises
+  nothing when `Source` is a constant no translation changes (a string
+  literal, or a label declared `Locked = true`) and its text parses for
+  `Target`'s declared type: a `Guid` in braced `{8-4-4-4-12}` form, or an
+  `Integer` of plain digits (optional leading `-`) in AL's Integer range
+  (±2,147,483,647). Both variables must be LOCALS declared exactly once in
+  the routine, with no parameter or global of the same name: the IR keeps
+  both arms of an `#if`, so a global, a local declared twice, or a local
+  declared in one arm only (the other arm then sees the global) may have
+  another type or text in the compiled arm. Anything else stays a possible
+  error: an unlocked label, a global label, a computed text, another type,
+  a target that is no plain variable, or a third (format) argument. Continia DO
+  reads notification ids this way (`CDO Conflict Notific. Handler`,
+  `CDO DO-eDocs Notific. Handler`): claim OPRF-CORE-007.c4 (throws-error,
+  expect no) now answers `no`; PLAT-SET-009.c1 (an `Evaluate` of computed
+  text) still answers `yes`. To know a label's text, the lowerer now records
+  it on `VarDecl.label` (`LabelValue`: text, locked), and the variable
+  symbol carries `fixed_local` (set only for such a local, with a locked
+  label's text).
+
 ### Fixed (G51)
 
 - **AL synthesized from transpiled C# keeps simple `if` conditions** (G51).

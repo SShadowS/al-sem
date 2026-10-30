@@ -2825,6 +2825,7 @@ pub fn ir_variables(
                 end_column: 0,
                 syntax_kind: "parameter".to_string(),
             },
+            fixed_local: None,
         });
     }
 
@@ -2842,6 +2843,20 @@ pub fn ir_variables(
             .body
             .and_then(|b| ir_first_assignment_value(file, b, &lc))
             .map(|val| ir_classify_rhs(file, val, source));
+        // G52: a fact only for a name with ONE declaration the routine can see.
+        let declared_once = routine
+            .locals
+            .iter()
+            .filter(|o| o.name.eq_ignore_ascii_case(&lc))
+            .count()
+            == 1
+            && !file.objects[object_idx]
+                .globals
+                .iter()
+                .any(|g| g.name.eq_ignore_ascii_case(&lc));
+        let fixed_local = declared_once.then(|| super::features::FixedLocal {
+            constant: super::features::label_constant_of(v.label.as_ref()),
+        });
         out.push(PVariableSymbol {
             name: lc,
             declared_type,
@@ -2850,6 +2865,7 @@ pub fn ir_variables(
             parameter_index: None,
             initializer,
             source_anchor: anchor(&v.origin, "variable_declaration"),
+            fixed_local,
         });
     }
 
@@ -2893,6 +2909,7 @@ pub fn ir_object_globals(
             continue;
         }
         out.push(PVariableSymbol {
+            fixed_local: None,
             name: lc,
             declared_type: canonicalize_type_text(g.ty.as_deref().unwrap_or("")),
             scope: "global".to_string(),

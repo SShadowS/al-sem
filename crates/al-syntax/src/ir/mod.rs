@@ -15,8 +15,8 @@ mod expr;
 mod stmt;
 
 pub use decl::{
-    AttributeIr, EnumValueDecl, FieldDecl, ObjectDecl, ObjectKind, ObjectProperty, PageControl,
-    Param, RoutineDecl, RoutineKind, VarDecl,
+    AttributeIr, EnumValueDecl, FieldDecl, LabelValue, ObjectDecl, ObjectKind, ObjectProperty,
+    PageControl, Param, RoutineDecl, RoutineKind, VarDecl, al_string_literal_text,
 };
 pub use expr::{BinaryOp, Expr, ExprKind, Literal, TypeOp, UnaryOp};
 pub use stmt::{Block, BlockItem, CaseBranch, PreprocGroup, Stmt, StmtKind};

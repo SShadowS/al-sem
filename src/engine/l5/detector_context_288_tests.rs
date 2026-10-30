@@ -1646,6 +1646,7 @@ fn fc3_unknown_scope_needs_the_object_scan() {
             parameter_index: None,
             initializer: None,
             scope: scope.map(str::to_string),
+            fixed_local: None,
         }])
     };
     let proves = |scope: Option<&str>, object_clean: bool| {

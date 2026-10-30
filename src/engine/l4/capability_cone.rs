@@ -1146,7 +1146,19 @@ pub(crate) fn direct_facts_for_routine(
     // `error-throw`, the evidence's excerpt names the call.
     {
         use crate::program::body::capability::ui_events_error::{
-            implicit_error_call, implicit_error_record_op,
+            agreed_var_facts, implicit_error_call, implicit_error_record_op,
+        };
+        let var_facts = |name: &str| {
+            agreed_var_facts(
+                routine.variables.iter().map(|v| {
+                    (
+                        v.name.as_str(),
+                        v.declared_type.as_str(),
+                        v.fixed_local.as_ref(),
+                    )
+                }),
+                name,
+            )
         };
         let implicit = |op: Option<String>, cs: Option<String>| CapabilityFact {
             subject: routine.id.clone(),
@@ -1169,9 +1181,7 @@ pub(crate) fn direct_facts_for_routine(
             }
         }
         for cs in &call_sites {
-            if implicit_error_call(&cs.callee, cs.in_statement_position, &receiver_type_of)
-                .is_some()
-            {
+            if implicit_error_call(cs, &receiver_type_of, &var_facts).is_some() {
                 facts.push(implicit(None, Some(cs.id.clone())));
             }
         }

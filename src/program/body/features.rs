@@ -34,6 +34,7 @@
 //!   - `PRecordOperation.run_trigger`
 //!   - `PLoop.exhausting_advance`
 //!   - `PRecordVariable.is_receiver`
+//!   - `PVariableSymbol.fixed_local`
 //!   - `PFieldAccess.access`
 //!   - `PVarAssignment.rhs_identifier`
 //!   - `PVarAssignment.rhs_member`
@@ -476,7 +477,7 @@ impl PartialEq for PRecordVariable {
 /// Variable initializer — a one-hop `ValueSource` projection. Kept as raw JSON
 /// because R1a does not constrain its internal shape beyond "matches the TS
 /// `VariableSymbol.initializer` value verbatim".
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq)]
 pub struct PVariableSymbol {
     pub name: String,
     #[serde(rename = "declaredType")]
@@ -490,6 +491,42 @@ pub struct PVariableSymbol {
     pub initializer: Option<serde_json::Value>,
     #[serde(rename = "sourceAnchor")]
     pub source_anchor: PAnchor,
+    /// `Some` only for a LOCAL declared exactly once in its routine, with no
+    /// parameter and no object global of the same name (G52). The IR keeps both
+    /// arms of an `#if`, so only then is this declaration, its type and its value,
+    /// the one every compile of the routine sees. `None` for everything else.
+    ///
+    /// INTERNAL-ONLY (`serde(skip)`, excluded from PartialEq), as
+    /// `PCallSite.in_statement_position`.
+    #[serde(skip)]
+    pub fixed_local: Option<FixedLocal>,
+}
+
+impl PartialEq for PVariableSymbol {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.declared_type == other.declared_type
+            && self.scope == other.scope
+            && self.is_parameter == other.is_parameter
+            && self.parameter_index == other.parameter_index
+            && self.initializer == other.initializer
+            && self.source_anchor == other.source_anchor
+    }
+}
+
+/// What a [`PVariableSymbol::fixed_local`] knows beyond the declared type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FixedLocal {
+    /// The text of a LOCKED label (`X: Label '…', Locked = true;`), the one kind
+    /// of variable whose value is a constant no translation can change. `None`
+    /// for every other declaration, an unlocked label included.
+    pub constant: Option<String>,
+}
+
+/// The constant text a declaration gives its variable: a locked label's text,
+/// else `None` (see [`FixedLocal::constant`]).
+pub fn label_constant_of(label: Option<&al_syntax::ir::LabelValue>) -> Option<String> {
+    label.filter(|l| l.locked).and_then(|l| l.text.clone())
 }
 
 /// How a field access uses the field (#14).
@@ -874,7 +911,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 16, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 17, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

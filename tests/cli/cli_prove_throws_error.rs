@@ -97,6 +97,127 @@ codeunit 50181 "G20 Errors"
     begin
         Json.ReadFrom(JsonText);
     end;
+
+    // G52: an Evaluate that provably cannot fail raises nothing. Continia DO's
+    // `CDO Conflict Notific. Handler` reads a notification id this way.
+    procedure EvaluateLockedGuidLabel(): Guid
+    var
+        Id: Guid;
+        IdTok: Label '{a7c3e1b4-9d2f-4a8e-b5c6-d7e8f9a0b1c2}', Locked = true;
+    begin
+        Evaluate(Id, IdTok);
+        exit(Id);
+    end;
+
+    procedure EvaluateGuidLiteral(): Guid
+    var
+        Id: Guid;
+    begin
+        Evaluate(Id, '{A7C3E1B4-9D2F-4A8E-B5C6-D7E8F9A0B1C2}');
+        exit(Id);
+    end;
+
+    procedure EvaluateIntegerLiteral(): Integer
+    var
+        N: Integer;
+    begin
+        Evaluate(N, '-42');
+        exit(N);
+    end;
+
+    // G52 controls: each may fail, or nothing proves it cannot.
+    // A global label: another `#if` arm may declare it with another text, and
+    // nothing here counts the global's declarations.
+    procedure EvaluateGlobalLockedInteger(): Integer
+    var
+        N: Integer;
+    begin
+        Evaluate(N, SevenTok);
+        exit(N);
+    end;
+
+    // A global target declared Guid in one arm and Integer in the other.
+    procedure EvaluateIntoPreprocGlobal()
+    begin
+        Evaluate(PreprocId, '{a7c3e1b4-9d2f-4a8e-b5c6-d7e8f9a0b1c2}');
+    end;
+
+    // A locked local declared in one arm only: in the other arm the name is
+    // the unlocked global label below.
+    procedure EvaluateLocalInOneArm(): Guid
+    var
+        Id: Guid;
+#if CLEAN99
+        ShadowTok: Label '{a7c3e1b4-9d2f-4a8e-b5c6-d7e8f9a0b1c2}', Locked = true;
+#endif
+    begin
+        Evaluate(Id, ShadowTok);
+        exit(Id);
+    end;
+
+    procedure EvaluateUnlockedGuidLabel(): Guid
+    var
+        Id: Guid;
+        IdTxt: Label '{a7c3e1b4-9d2f-4a8e-b5c6-d7e8f9a0b1c2}';
+    begin
+        Evaluate(Id, IdTxt);
+        exit(Id);
+    end;
+
+    procedure EvaluateLockedTextIntoGuid(): Guid
+    var
+        Id: Guid;
+        IdTok: Label 'not-a-guid', Locked = true;
+    begin
+        Evaluate(Id, IdTok);
+        exit(Id);
+    end;
+
+    procedure EvaluateUnbracedGuid(): Guid
+    var
+        Id: Guid;
+    begin
+        Evaluate(Id, 'a7c3e1b4-9d2f-4a8e-b5c6-d7e8f9a0b1c2');
+        exit(Id);
+    end;
+
+    procedure EvaluateIntegerOverflow(): Integer
+    var
+        N: Integer;
+    begin
+        Evaluate(N, '99999999999');
+        exit(N);
+    end;
+
+    procedure EvaluateDateLiteral(): Date
+    var
+        D: Date;
+    begin
+        Evaluate(D, '2020-01-01');
+        exit(D);
+    end;
+
+    procedure EvaluatePreprocLabel(): Guid
+    var
+        Id: Guid;
+#if CLEAN99
+        IdTok: Label '{a7c3e1b4-9d2f-4a8e-b5c6-d7e8f9a0b1c2}', Locked = true;
+#else
+        IdTok: Label 'not-a-guid', Locked = true;
+#endif
+    begin
+        Evaluate(Id, IdTok);
+        exit(Id);
+    end;
+
+    var
+        SevenTok: Label '7', Locked = true;
+        ShadowTok: Label '{a7c3e1b4-9d2f-4a8e-b5c6-d7e8f9a0b1c2}';
+#if CLEAN99
+        PreprocId: Guid;
+#else
+        PreprocId: Integer;
+#endif
 }
 "#;
 
@@ -164,6 +285,15 @@ fn throws_error_sees_implicit_runtime_errors() {
         ("FieldErrorCall", "T.FieldError"),
         ("EvaluateStatement", "Evaluate"),
         ("ReadJsonStatement", "Json.ReadFrom"),
+        ("EvaluateUnlockedGuidLabel", "Evaluate"),
+        ("EvaluateLockedTextIntoGuid", "Evaluate"),
+        ("EvaluateUnbracedGuid", "Evaluate"),
+        ("EvaluateIntegerOverflow", "Evaluate"),
+        ("EvaluateDateLiteral", "Evaluate"),
+        ("EvaluatePreprocLabel", "Evaluate"),
+        ("EvaluateGlobalLockedInteger", "Evaluate"),
+        ("EvaluateIntoPreprocGlobal", "Evaluate"),
+        ("EvaluateLocalInOneArm", "Evaluate"),
     ] {
         let r = prove(routine);
         assert_eq!(r["answer"], "yes", "{routine}: {r}");
@@ -185,7 +315,15 @@ fn throws_error_sees_implicit_runtime_errors() {
             "{routine}: the evidence must be an ERROR_IMPLICIT at {excerpt:?}: {evidence:?}"
         );
     }
-    for routine in ["GuardedGet", "GuardedFindSet", "HttpGet", "EvaluateChecked"] {
+    for routine in [
+        "GuardedGet",
+        "GuardedFindSet",
+        "HttpGet",
+        "EvaluateChecked",
+        "EvaluateLockedGuidLabel",
+        "EvaluateGuidLiteral",
+        "EvaluateIntegerLiteral",
+    ] {
         let r = prove(routine);
         assert_eq!(r["answer"], "no", "{routine} raises no implicit error: {r}");
     }
