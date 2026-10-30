@@ -1,0 +1,1 @@
+explain: 'CheckAmount' names 2 routines (Codeunit Explain Post::CheckAmount, Codeunit Explain Other::CheckAmount); qualify it as <owner>::<routine> or pass a stable id

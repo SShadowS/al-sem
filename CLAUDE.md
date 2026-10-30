@@ -453,13 +453,13 @@ metric-definition change is never stat-juked.
 - **One change moves SEVERAL golden families — regen and run them together, never
   one at a time.** A change anywhere under `src/engine/`, `crates/al-syntax/src/`,
   `tests/r0-corpus/` (fixtures), `tests/fixtures/`, or any golden/vector dir can
-  move any of the **23 golden directories**, which map to **8 test targets**:
+  move any of the **24 golden directories**, which map to **8 test targets**:
 
   | Golden dir(s) | Test target |
   |------------|-------------|
   | `tests/r4-goldens/`, `tests/r4f-goldens/` | `--test r4` |
   | `tests/ir-l2-goldens/` (the `l2_features.snapshot`) | `--test l2_ir` |
-  | `tests/cli-{a,b,c,c-events,c-policy,query}-goldens/`, `tests/gate-goldens/`, `tests/al2dump-smoke-goldens/` | `--test cli` |
+  | `tests/cli-{a,b,c,c-events,c-policy,query,explain}-goldens/`, `tests/gate-goldens/`, `tests/al2dump-smoke-goldens/` | `--test cli` |
   | `tests/r{0,1a,2a,2c,2d}-goldens/` (r2c is the event-graph family, projected from the program engine's event graph) | `--test differential` |
   | `tests/r3a{1,2,3,4,5}-goldens/` | `--test r3` |
   | `tests/l4-summary-baseline/` | `--test l4_summary_differential` |

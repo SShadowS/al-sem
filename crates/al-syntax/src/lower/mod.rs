@@ -569,8 +569,10 @@ fn literal_values(props: &[crate::ir::ObjectProperty], name: &str) -> Vec<String
 /// The text of the string literal a raw property value starts with, when the
 /// literal is the whole value or is followed by `,` (`'It''s', Comment = 'c'`
 /// gives `It's`; the grammar's `caption_value` is that literal followed by its
-/// attributes). `None` for any other value.
-fn leading_literal_text(raw: &str) -> Option<String> {
+/// attributes). `None` for any other value. Public for the engine's reads of
+/// raw object properties (`ObjectProperty::value`), such as an object's
+/// `Caption`, so both sides read a caption by one rule.
+pub fn leading_literal_text(raw: &str) -> Option<String> {
     let bytes = raw.as_bytes();
     if bytes.first() != Some(&b'\'') {
         return None;

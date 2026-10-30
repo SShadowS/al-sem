@@ -1680,6 +1680,20 @@
       "routines": 4,
       "sha256": "190abe748f5609eb4159ec17e6681f6aaff41340cb8318dd69a8d461b9405ee6"
     },
+    "r0/ws-explain cross": {
+      "any": 30,
+      "direct": 13,
+      "inherited": 17,
+      "routines": 10,
+      "sha256": "3afe9c3298774c07c3bdd26f47e00fce81b39c5646d3398d8e31591be73bfc25"
+    },
+    "r0/ws-explain single": {
+      "any": 30,
+      "direct": 13,
+      "inherited": 17,
+      "routines": 10,
+      "sha256": "3afe9c3298774c07c3bdd26f47e00fce81b39c5646d3398d8e31591be73bfc25"
+    },
     "r0/ws-implicit-trigger cross": {
       "any": 6,
       "direct": 2,

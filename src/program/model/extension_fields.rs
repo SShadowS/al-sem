@@ -83,6 +83,7 @@ pub fn merge_extension_fields(workspace: &mut ModelEntities) {
                 field_class: field.field_class.clone(),
                 data_type: field.data_type.clone(),
                 is_blob_like: field.is_blob_like,
+                captions: field.captions.clone(),
             };
             workspace.tables[base_idx].fields.push(merged);
             existing.insert(field.field_number);

@@ -1,0 +1,16 @@
+{
+  "cards": [],
+  "diagnostics": [
+    {
+      "candidates": [
+        "Codeunit Explain Post::CheckAmount",
+        "Codeunit Explain Other::CheckAmount"
+      ],
+      "kind": "routine-ambiguous",
+      "selector": "CheckAmount"
+    }
+  ],
+  "mode": "routine",
+  "schema": "al-sem.explain/1",
+  "selector": "CheckAmount"
+}

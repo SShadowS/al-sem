@@ -236,6 +236,23 @@ alsem prove <ws> PostDocument may-commit      # yes / no / unknown, with the rea
 `commits-on-success-path`, `writes-table:<table>`, `publishes-event:<event>`,
 `reaches-ui`, `throws-error`.
 
+**"Why is this code shaped like this?"** (for a person or an AI agent about to edit it)
+
+```bash
+alsem explain <ws> --routine PostDocument                  # the evidence card of one routine
+alsem explain <ws> --diff my.patch                         # one card per routine the diff changes
+alsem explain <ws> --table "Sales Header" --field Status   # every routine that writes the field, with its rules
+alsem explain <ws> --routine PostDocument --format json    # schema al-sem.explain/1, for agents
+```
+
+A card lists the routine's own checks as rules ("rejects when `Status <> Released`:
+'You cannot post…'", with the label text and its comment), what it writes (with field
+captions), whether it commits, the events it raises and their subscribers, the page
+actions that reach it, the tests that reach it, and every gap: calls into apps without
+source, unresolved calls, unparsed code. Checks in callees and callers are not computed
+yet; each card says so in its gaps. `--diff` resolves the same routines `digest --diff`
+does. A name no routine has, or one that names several, exits 2.
+
 **"What changed between two versions?"**
 
 ```bash

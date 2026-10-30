@@ -73,12 +73,17 @@ pub struct ViewNeeds {
     /// The model: every job but graph.
     pub model: bool,
     /// Each routine's rules, built at model assembly from the IR
-    /// (`ModelRoutine::rules`, intent-evidence spec §4.1b). No demand sets it
-    /// yet: `alsem explain` will, and `analyze` will when a selected detector
-    /// requires `substrate::RULES`. It changes what the model holds, not which
+    /// (`ModelRoutine::rules`, intent-evidence spec §4.1b). `alsem explain`
+    /// sets it; `analyze` will when a selected detector requires
+    /// `substrate::RULES`. It changes what the model holds, not which
     /// workspace or universe it is, so it stays out of [`ViewKey`]: a view
     /// whose union has it builds rules for every demand on it.
     pub rules: bool,
+    /// Each routine's evidence-card text (`ModelRoutine::card_text`: doc,
+    /// object caption, page actions, a test's own asserts; spec §4.4), built at
+    /// assembly from the IR. Only `alsem explain` sets it. Out of [`ViewKey`]
+    /// for the same reason as `rules`.
+    pub card_text: bool,
 }
 
 impl ViewNeeds {
@@ -87,6 +92,7 @@ impl ViewNeeds {
         graph: false,
         model: true,
         rules: false,
+        card_text: false,
     };
     pub const ANALYZE: ViewNeeds = ViewNeeds {
         analyze_extras: true,
@@ -97,6 +103,13 @@ impl ViewNeeds {
         graph: true,
         model: false,
         rules: false,
+        card_text: false,
+    };
+    /// `alsem explain`: the model with its rules and its card text.
+    pub const EXPLAIN: ViewNeeds = ViewNeeds {
+        rules: true,
+        card_text: true,
+        ..ViewNeeds::MODEL
     };
 
     pub fn union(self, other: ViewNeeds) -> ViewNeeds {
@@ -105,13 +118,17 @@ impl ViewNeeds {
             graph: self.graph || other.graph,
             model: self.model || other.model,
             rules: self.rules || other.rules,
+            card_text: self.card_text || other.card_text,
         }
     }
 
     /// What the model assembly builds for these needs.
     #[must_use]
     pub fn assembly(self) -> crate::program::model::workspace::AssemblyNeeds {
-        crate::program::model::workspace::AssemblyNeeds { rules: self.rules }
+        crate::program::model::workspace::AssemblyNeeds {
+            rules: self.rules,
+            card_text: self.card_text,
+        }
     }
 }
 

@@ -488,6 +488,36 @@ pub fn policy_plan(detectors: Vec<Detector>, rules: bool) -> Plan {
     }
 }
 
+/// `alsem explain` (intent-evidence spec §4.4): one tree over the cards'
+/// routines (stable ids), whose effects keep the test-coverage graph (the
+/// card's `tests`), and nothing else. No detector run and no `l4`: the card
+/// reads the raw per-root effects (types, resources, conditionality, witness
+/// paths), not digest's L4-joined `tempState` or its transaction context, and
+/// no analyzer diagnostics. No routine: nothing at all (the job answers with
+/// exit 2 and no card).
+pub fn explain_plan(roots: BTreeSet<String>) -> Plan {
+    if roots.is_empty() {
+        return Plan::merge(std::iter::empty());
+    }
+    let witness = WitnessRequest::roots(roots);
+    Plan {
+        runs: vec![],
+        need_l4: false,
+        after_run: 0,
+        trees: vec![(
+            JobId(0),
+            TreeDemand {
+                subjects: witness.clone(),
+                tests: true,
+                gaps_in_cone: false,
+                include_reads: false,
+                read: TreeRead::Effects,
+            },
+        )],
+        witness,
+    }
+}
+
 /// `alsem query`: no run, `l4` alone.
 pub fn query_plan() -> Plan {
     Plan {
@@ -1879,6 +1909,27 @@ mod tests {
     /// request and job 0's tree demand over them; a digest with no root
     /// (prove, or none resolved) has neither. A roots request scopes every
     /// row of each stable id.
+    /// `explain_plan` (intent evidence step 4): one effects tree with the
+    /// test-coverage graph over its routines, and no run and no `l4` (the card
+    /// reads neither); no routine, nothing at all.
+    #[test]
+    fn explain_plan_is_one_tests_tree_and_nothing_else() {
+        let roots: BTreeSet<String> = ["a:Codeunit:1#x".to_string()].into();
+        let p = explain_plan(roots.clone());
+        assert!(p.runs.is_empty() && !p.need_l4 && p.after_run == 0);
+        assert_eq!(p.witness, WitnessRequest::roots(roots.clone()));
+        assert!(
+            matches!(&p.trees[..], [(JobId(0), t)] if t.subjects == WitnessRequest::roots(roots)
+                && t.tests && !t.gaps_in_cone && !t.include_reads
+                && matches!(t.read, TreeRead::Effects)),
+            "{:?}",
+            p.trees
+        );
+        assert_eq!(p.fills(), vec![Cell::Rel, Cell::Raw]);
+        let p = explain_plan(BTreeSet::new());
+        assert!(p.trees.is_empty() && p.runs.is_empty() && p.fills().is_empty());
+    }
+
     #[test]
     fn digest_plan_asks_a_tree_only_for_roots() {
         let roots: BTreeSet<String> = ["a:Codeunit:1#x".to_string()].into();

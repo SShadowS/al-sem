@@ -321,5 +321,53 @@ fn a_default_analyze_view_builds_no_rules() {
             rows.iter().all(|r| r.rules.is_none()),
             "single_app {single_app}: a default analyze built rules"
         );
+        assert!(
+            rows.iter().all(|r| r.card_text.is_none()),
+            "single_app {single_app}: a default analyze built card text"
+        );
     }
+}
+
+/// `explain`'s view (`ViewNeeds::EXPLAIN`) builds the card text in both
+/// universes, through the one view builder: the doc above `CheckOrder`, and
+/// a routine with no doc reads `None` inside a BUILT text.
+#[test]
+fn an_explain_view_builds_card_text() {
+    for single_app in [true, false] {
+        let i = inputs();
+        let key = ViewKey::new(&i.workspace, single_app, false);
+        let view = build_view_model(&i, &key, ViewNeeds::EXPLAIN, |_| {})
+            .unwrap_or_else(|_| panic!("view (single_app {single_app})"))
+            .expect("a model view");
+        let rows = &view.target.resolved().workspace.routines;
+        let text = |name: &str| {
+            rows.iter()
+                .find(|r| r.name == name)
+                .unwrap_or_else(|| panic!("{name}"))
+                .card_text()
+                .clone()
+        };
+        assert_eq!(
+            text("CheckOrder").doc.as_deref(),
+            Some("Checks an order before it is posted."),
+            "single_app {single_app}"
+        );
+        assert_eq!(text("ConfirmDelete").doc, None, "single_app {single_app}");
+        assert!(rows.iter().all(|r| r.card_text.is_some()));
+    }
+}
+
+/// A model built without the card-text need fails loudly on a read.
+#[test]
+#[should_panic(expected = "card text not built: declare ViewNeeds::card_text")]
+fn reading_card_text_not_built_panics() {
+    let m = model(AssemblyNeeds::RULES);
+    let r = m
+        .workspace
+        .routines
+        .iter()
+        .find(|r| r.name == "CheckOrder")
+        .expect("CheckOrder");
+    assert!(r.rules.is_some(), "precondition: rules are built");
+    let _ = r.card_text();
 }

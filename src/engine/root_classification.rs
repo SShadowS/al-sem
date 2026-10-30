@@ -935,6 +935,7 @@ mod tests {
             entry_temp_guard_receiver: None,
             rules: None,
             rule_drafts: None,
+            card_text: None,
         }
     }
 

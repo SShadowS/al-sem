@@ -1,0 +1,271 @@
+{
+  "cards": [
+    {
+      "effects": {
+        "commitSites": [],
+        "commits": "no",
+        "events": [],
+        "ui": [],
+        "writes": []
+      },
+      "extensionPoints": [],
+      "gaps": [
+        {
+          "detail": "inherited and caller rules are not computed yet (intent evidence step 5): the empty rules.inherited and rules.callers lists mean not looked, not none",
+          "kind": "cross-call-rules-not-computed"
+        }
+      ],
+      "reachedFrom": [],
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/checks.al",
+          "line": 7,
+          "sourceKind": "source"
+        },
+        "doc": "Checks an order before it is posted.",
+        "id": "33333333-7a1e-0000-0000-00000000a1e5:Codeunit:50301#917b80327203aabac80506d6f8ea9a494df0c8e8618957a6b4e4399f3e6bef0e",
+        "name": "CheckOrder",
+        "object": "Rules Checks",
+        "objectCaption": null,
+        "objectType": "Codeunit"
+      },
+      "rules": {
+        "callers": [],
+        "inherited": [],
+        "own": [
+          {
+            "anchor": {
+              "column": 12,
+              "file": "ws:src/checks.al",
+              "line": 14,
+              "sourceKind": "source"
+            },
+            "comment": "released only",
+            "id": "25a81c6ced55540b/7d5d021332954495e88a8ad74ee41473249b33e000525944de87de1384ed4b83/rule0",
+            "kind": "Error",
+            "message": {
+              "args": [
+                "Order.\"Document Type\"",
+                "Order.\"No.\""
+              ],
+              "candidates": [],
+              "labelComment": "%1 = document type, %2 = number",
+              "source": "Label",
+              "text": "You cannot post %1 %2 because it is not released.",
+              "var": "NotReleasedErr"
+            },
+            "stops": "always",
+            "stopsReason": null,
+            "when": [
+              {
+                "field": "Status",
+                "kind": "FieldCompare",
+                "op": "<>",
+                "recordVar": "Order",
+                "table": "Rules Order",
+                "value": "Order.Status::Released"
+              }
+            ],
+            "whenText": "Order.Status <> Order.Status::Released"
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "file": "ws:src/checks.al",
+              "line": 16,
+              "sourceKind": "source"
+            },
+            "comment": null,
+            "id": "25a81c6ced55540b/7d5d021332954495e88a8ad74ee41473249b33e000525944de87de1384ed4b83/rule1",
+            "kind": "Error",
+            "message": {
+              "args": [],
+              "candidates": [],
+              "labelComment": null,
+              "source": "TextConst",
+              "text": "The amount must be positive.",
+              "var": "AmountTxt"
+            },
+            "stops": "always",
+            "stopsReason": null,
+            "when": [
+              {
+                "field": "Status",
+                "kind": "FieldCompare",
+                "op": "=",
+                "recordVar": "Order",
+                "table": "Rules Order",
+                "value": "Order.Status::Released"
+              },
+              {
+                "field": "Amount",
+                "kind": "FieldCompare",
+                "op": "<=",
+                "recordVar": "Order",
+                "table": "Rules Order",
+                "value": "0"
+              }
+            ],
+            "whenText": "not (Order.Status <> Order.Status::Released) and Order.Amount <= 0"
+          },
+          {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/checks.al",
+              "line": 19,
+              "sourceKind": "source"
+            },
+            "comment": "A customer is required.\nIt is checked before the blocked flag.",
+            "id": "25a81c6ced55540b/7d5d021332954495e88a8ad74ee41473249b33e000525944de87de1384ed4b83/rule2",
+            "kind": "TestField",
+            "message": {
+              "args": [],
+              "candidates": [],
+              "labelComment": null,
+              "source": "Platform",
+              "text": null,
+              "var": null
+            },
+            "stops": "always",
+            "stopsReason": null,
+            "when": [
+              {
+                "field": "Status",
+                "kind": "FieldCompare",
+                "op": "=",
+                "recordVar": "Order",
+                "table": "Rules Order",
+                "value": "Order.Status::Released"
+              },
+              {
+                "field": "Amount",
+                "kind": "FieldCompare",
+                "op": ">",
+                "recordVar": "Order",
+                "table": "Rules Order",
+                "value": "0"
+              },
+              {
+                "field": "Customer No.",
+                "kind": "FieldEmpty",
+                "negated": false,
+                "recordVar": "Order",
+                "table": "Rules Order"
+              }
+            ],
+            "whenText": "not (Order.Status <> Order.Status::Released) and not (Order.Amount <= 0) and Order.\"Customer No.\" is empty"
+          },
+          {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/checks.al",
+              "line": 20,
+              "sourceKind": "source"
+            },
+            "comment": null,
+            "id": "25a81c6ced55540b/7d5d021332954495e88a8ad74ee41473249b33e000525944de87de1384ed4b83/rule3",
+            "kind": "TestField",
+            "message": {
+              "args": [],
+              "candidates": [],
+              "labelComment": null,
+              "source": "Platform",
+              "text": null,
+              "var": null
+            },
+            "stops": "always",
+            "stopsReason": null,
+            "when": [
+              {
+                "field": "Status",
+                "kind": "FieldCompare",
+                "op": "=",
+                "recordVar": "Order",
+                "table": "Rules Order",
+                "value": "Order.Status::Released"
+              },
+              {
+                "field": "Amount",
+                "kind": "FieldCompare",
+                "op": ">",
+                "recordVar": "Order",
+                "table": "Rules Order",
+                "value": "0"
+              },
+              {
+                "field": "Blocked",
+                "kind": "FieldCompare",
+                "op": "<>",
+                "recordVar": "Order",
+                "table": "Rules Order",
+                "value": "false"
+              }
+            ],
+            "whenText": "not (Order.Status <> Order.Status::Released) and not (Order.Amount <= 0) and Order.Blocked <> false"
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "file": "ws:src/checks.al",
+              "line": 24,
+              "sourceKind": "source"
+            },
+            "comment": null,
+            "id": "25a81c6ced55540b/7d5d021332954495e88a8ad74ee41473249b33e000525944de87de1384ed4b83/rule4",
+            "kind": "Error",
+            "message": {
+              "args": [
+                "Order.\"No.\""
+              ],
+              "candidates": [],
+              "labelComment": "%1 = order number",
+              "source": "Label",
+              "text": "Order %1 has no posting date.",
+              "var": "GlobalOnlyLbl"
+            },
+            "stops": "always",
+            "stopsReason": null,
+            "when": [
+              {
+                "field": "Status",
+                "kind": "FieldCompare",
+                "op": "=",
+                "recordVar": "Order",
+                "table": "Rules Order",
+                "value": "Order.Status::Released"
+              },
+              {
+                "field": "Amount",
+                "kind": "FieldCompare",
+                "op": ">",
+                "recordVar": "Order",
+                "table": "Rules Order",
+                "value": "0"
+              },
+              {
+                "index": 1,
+                "kind": "ParamBool",
+                "value": false
+              },
+              {
+                "field": "Posting Date",
+                "kind": "FieldCompare",
+                "op": "=",
+                "recordVar": "Order",
+                "table": "Rules Order",
+                "value": "0D"
+              }
+            ],
+            "whenText": "not (Order.Status <> Order.Status::Released) and not (Order.Amount <= 0) and not PostingPreview and Order.\"Posting Date\" = 0D"
+          }
+        ]
+      },
+      "tests": []
+    }
+  ],
+  "diagnostics": [],
+  "mode": "routine",
+  "schema": "al-sem.explain/1",
+  "selector": "CheckOrder"
+}

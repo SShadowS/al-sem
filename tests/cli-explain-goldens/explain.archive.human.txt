@@ -1,0 +1,8 @@
+Codeunit Explain Post::Archive  ws:src/post.al:22
+  doc: Archives without any check.
+  rules: none of its own
+  rules from callees and callers: not computed yet
+  writes Explain Order [Status] (DB_MODIFY) at ws:src/post.al:25
+  commits: yes
+  tests: none reach it
+

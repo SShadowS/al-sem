@@ -1,0 +1,25 @@
+field: Explain Order.Status (caption "Order Status"): 2 writer(s)
+  Codeunit Explain Post::PostOrder: validate at ws:src/post.al:16
+  Codeunit Explain Post::Archive: assign at ws:src/post.al:24
+
+Codeunit Explain Post::PostOrder  ws:src/post.al:4
+  doc: Posts a released order. / It marks the order posted.
+  rejects when Order.Status <> Order.Status::Released: "Order %1 is not released."  [Error ws:src/post.al:10]
+  rejects when not (Order.Status <> Order.Status::Released) and Order.Amount is empty: (platform message)  [TestField ws:src/post.al:11]
+  rules from callees and callers: not computed yet
+  writes Explain Order [Posted, Status] (DB_MODIFY, guarded-by-IsHandled) at ws:src/post.al:17
+  commits: no
+  raises OnBeforePostOrder (unknown) at ws:src/post.al:12
+  extension point OnBeforePostOrder: 1 subscriber(s), IsHandled
+  UI_MESSAGE at ws:src/post.al:18
+  reached from page action Post on Page Explain Order Card (caption "P&ost") at ws:src/card.al:18
+  test Codeunit Explain Tests::PostUnreleasedFails (3 own assert(s))
+
+Codeunit Explain Post::Archive  ws:src/post.al:22
+  doc: Archives without any check.
+  rules: none of its own
+  rules from callees and callers: not computed yet
+  writes Explain Order [Status] (DB_MODIFY) at ws:src/post.al:25
+  commits: yes
+  tests: none reach it
+

@@ -142,6 +142,7 @@ fn make_routine_for_pass2b(variables: Vec<ModelVariable>) -> ModelRoutine {
         entry_temp_guard_receiver: None,
         rules: None,
         rule_drafts: None,
+        card_text: None,
     }
 }
 

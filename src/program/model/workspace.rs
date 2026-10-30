@@ -156,6 +156,12 @@ pub struct ModelField {
     pub field_class: String,
     pub data_type: String,
     pub is_blob_like: bool,
+    /// The field's `Caption` text(s) from source (`FieldDecl::caption`: one per
+    /// textually present `#if` arm). Empty when the field declares none, and
+    /// for a symbol-only dependency's field, whose `SymbolReference.json` row
+    /// the engine does not read a caption from (intent-evidence spec open
+    /// question 2). A plain fact, like the IR's (spec §4.1b).
+    pub captions: Vec<String>,
 }
 
 /// A workspace table key (the L3-relevant subset of al-sem's `Key`). Only the
@@ -615,6 +621,43 @@ pub struct ModelRoutine {
     /// `rules` by [`settle_rules`] and then dropped. `Some` exactly when the
     /// assembly built rules.
     pub rule_drafts: Option<Vec<crate::program::body::rules::RuleDraft>>,
+    /// The evidence card's text for this routine (intent-evidence spec §4.4):
+    /// its doc comment, its object's caption, the page actions it is a trigger
+    /// of, and a test's own assert count. `None` when the view did not declare
+    /// `ViewNeeds::card_text` (not built); a symbol-only row of a model that
+    /// built them gets an empty one (the model has no source for it). Read
+    /// through [`ModelRoutine::card_text`], which fails loudly on `None`.
+    pub card_text: Option<Box<CardText>>,
+}
+
+/// One routine's text for `alsem explain` (intent-evidence spec §4.4), read
+/// from the IR at assembly. Every text is as the IR lowers it: one entry per
+/// textually present `#if` arm, so more than one means the arms differ.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CardText {
+    /// The routine's doc comment (`RoutineDecl::doc`).
+    pub doc: Option<String>,
+    /// The leading string literal of each object-level `Caption` property of
+    /// the routine's object (`Caption = 'x', Comment = 'c'` gives `x`).
+    pub object_caption: Vec<String>,
+    /// The page actions whose `OnAction` trigger this routine is.
+    pub actions: Vec<CardAction>,
+    /// A `[Test]` procedure's own assert count (`test_quality::body_counts`:
+    /// the asserts in its own body, not in the helpers it calls); `None` for
+    /// any other routine.
+    pub own_asserts: Option<usize>,
+}
+
+/// A page action as `alsem explain` shows it (from `al_syntax::ir::ActionDecl`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CardAction {
+    pub name: String,
+    /// The grammar keyword: `action`, `systemaction`, `fileuploadaction`,
+    /// `customaction`.
+    pub kind: &'static str,
+    pub caption: Vec<String>,
+    pub tooltip: Vec<String>,
+    pub anchor: crate::program::body::features::PAnchor,
 }
 
 impl ModelRoutine {
@@ -626,6 +669,16 @@ impl ModelRoutine {
         self.rules
             .as_deref()
             .expect("rules not built: declare ViewNeeds::rules")
+    }
+
+    /// The routine's evidence-card text. Reading it from a model built without
+    /// `ViewNeeds::card_text` is a bug and panics, in every build, like
+    /// [`ModelRoutine::rules`].
+    #[must_use]
+    pub fn card_text(&self) -> &CardText {
+        self.card_text
+            .as_deref()
+            .expect("card text not built: declare ViewNeeds::card_text")
     }
 
     /// Whether this row believes a site of its own with `control_context`
@@ -676,6 +729,7 @@ fn index_table_ir(
             field_class: f.field_class.clone(),
             data_type: f.data_type.clone(),
             is_blob_like: f.is_blob_like,
+            captions: f.caption.clone(),
         })
         .collect();
     let fields_by_name: std::collections::HashMap<String, String> = fields
@@ -1078,14 +1132,29 @@ pub struct AssemblyNeeds {
     /// Build each routine's rules (`ModelRoutine::rules`, intent-evidence spec
     /// §4.2). `false` leaves every row's `rules` `None` (not built).
     pub rules: bool,
+    /// Build each routine's evidence-card text (`ModelRoutine::card_text`,
+    /// spec §4.4): `alsem explain` alone reads it. `false` leaves every row's
+    /// `card_text` `None` (not built).
+    pub card_text: bool,
 }
 
 impl AssemblyNeeds {
     /// Nothing beyond the base rows: what every command but `explain` (and an
     /// `analyze` running a detector that requires `substrate::RULES`) builds.
-    pub const BASE: AssemblyNeeds = AssemblyNeeds { rules: false };
+    pub const BASE: AssemblyNeeds = AssemblyNeeds {
+        rules: false,
+        card_text: false,
+    };
     /// The base rows and the rules.
-    pub const RULES: AssemblyNeeds = AssemblyNeeds { rules: true };
+    pub const RULES: AssemblyNeeds = AssemblyNeeds {
+        rules: true,
+        card_text: false,
+    };
+    /// What `alsem explain` reads: the rules and the card text.
+    pub const EXPLAIN: AssemblyNeeds = AssemblyNeeds {
+        rules: true,
+        card_text: true,
+    };
 }
 
 /// The declarations of one file to project, by position: each object's index in
@@ -1842,6 +1911,17 @@ fn project_ir(
                     },
                 )
             });
+            // Intent-evidence §4.4: the card text, from the IR still in hand.
+            let card_text = needs.card_text.then(|| {
+                Box::new(card_text_of(
+                    ir_file,
+                    o,
+                    rix,
+                    ir_routine,
+                    source_unit_id,
+                    cols,
+                ))
+            });
             workspace.routines.push(ModelRoutine {
                 id: routine_id,
                 stable_routine_id,
@@ -1882,10 +1962,50 @@ fn project_ir(
                 entry_temp_guard_receiver,
                 rules: None,
                 rule_drafts,
+                card_text,
             });
         }
     }
     positions
+}
+
+/// The evidence-card text of routine `rix` of object `o` (intent-evidence
+/// spec §4.4): its doc, its object's caption, the actions it is the `OnAction`
+/// trigger of (`ActionDecl::triggers` holds indexes into `o.routines`), and a
+/// test's own assert count.
+fn card_text_of(
+    ir_file: &al_syntax::ir::AlFile,
+    o: &al_syntax::ir::ObjectDecl,
+    rix: usize,
+    ir_routine: &al_syntax::ir::RoutineDecl,
+    source_unit_id: &str,
+    cols: &Utf16Cols,
+) -> CardText {
+    CardText {
+        doc: ir_routine.doc.clone(),
+        object_caption: o
+            .properties
+            .iter()
+            .filter(|p| p.name == "caption")
+            .filter_map(|p| al_syntax::lower::leading_literal_text(&p.value))
+            .collect(),
+        actions: o
+            .actions
+            .iter()
+            .filter(|a| a.triggers.contains(&rix))
+            .map(|a| CardAction {
+                name: a.name.clone(),
+                kind: a.kind,
+                caption: a.caption.clone(),
+                tooltip: a.tooltip.clone(),
+                anchor: anchor_from_origin(&a.origin, source_unit_id, cols),
+            })
+            .collect(),
+        own_asserts: crate::test_quality::is_test(ir_routine)
+            .then(|| crate::test_quality::body_counts(&ir_file.ir, o, ir_routine))
+            .flatten()
+            .map(|c| c.own()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2091,6 +2211,12 @@ fn append_dependency_rows(
         // leaving the rules unbuilt.
         for r in &mut ws.routines[first_abi_row..] {
             r.rule_drafts = Some(Vec::new());
+        }
+    }
+    if needs.card_text {
+        // The same for the card text: no source, so none of it is known.
+        for r in &mut ws.routines[first_abi_row..] {
+            r.card_text = Some(Box::default());
         }
     }
 

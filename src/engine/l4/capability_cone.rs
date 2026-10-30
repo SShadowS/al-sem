@@ -6645,7 +6645,7 @@ codeunit 50111 "Cell Calls"
     /// a new fixture changes this one list (`exec_relation`'s parity test reads
     /// it too).
     pub(crate) const FIXTURE_ROOTS: [(&str, usize); 5] = [
-        ("r0-corpus", 218),
+        ("r0-corpus", 219),
         ("fixtures", 48),
         ("r3a4-fixtures", 1),
         ("r3a5-fixtures", 1),

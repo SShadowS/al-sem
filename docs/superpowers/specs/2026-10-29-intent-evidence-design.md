@@ -477,6 +477,66 @@ Rules for the card:
 - `--table <T> --field <F>` (Done 3) prints one entry per writer of that field with
   its effective rules (4.5 step 2). It is the same index d65 reads.
 
+*As built (step 4)*, `src/engine/l5/explain.rs` (`ExplainJob`), wired in
+`src/bin/alsem.rs` (`Commands::Explain`, `plan_explain`). Where it differs from the
+text above, and why:
+
+- **Declarations.** `explain` declares `ViewNeeds::EXPLAIN`: `rules` and a new
+  `card_text` need (both level 1, built at assembly). The card's text (the routine's
+  `doc`, its object's `Caption`, the page actions whose `OnAction` it is, a test's own
+  assert count) is in the IR only, so it is built at assembly into
+  `ModelRoutine::card_text` (`None` when not declared, accessor panics), not re-parsed.
+  It is its own need, not part of `rules`, so step 6's d65 (which needs rules) does
+  not pay for it. Field captions are a plain `ModelField::captions` fact (spec 4.1b:
+  text is not gated). `explain` does **not** declare `substrate::RULES`: step 4 runs
+  no detector, and that bit builds only d65's index (step 6). Its plan factory,
+  `explain_plan`, asks one tree over the cards' routines with the test-coverage graph
+  and nothing else: no detector run, no `l4` (the card reads the raw per-root effects,
+  not digest's L4-joined `tempState` or transaction context). The build profile comes
+  from `ProgramScope` as for every command: cross-app by default, `--single-app`.
+- **Card shape.** The keys above are all present, with these additions: `routine`
+  also has `name` and `objectType`; a rule has `id`, `stopsReason` and `comment`;
+  `message.var` names the label; a write has `op`, `tableId` and `anchor`;
+  `effects.commits` is `no` / `may` / `yes` (some commit is
+  `unconditional-on-success`) and `effects.commitSites` lists each commit with its
+  anchor; `reachedFrom` has `objectType`, `actionKind`, `via` (routine names from the
+  trigger to the routine) and the action's anchor; a test has `id` and `anchor`, and
+  `asserts` is the test's **own** count (asserts in helpers it calls are not counted).
+  Anchors are digest's (`{sourceKind, file, line, column}`, 0-based lines). The
+  document is `{schema, mode, selector, field?, cards, diagnostics}`; `--routine`
+  gives one card. `effects.ui` excludes `UI_ERROR`: an `Error` is a check, shown under
+  `rules` (as `prove reaches-ui` counts UI).
+- **Cross-call rules (step 5).** Every card has `"inherited": []`, `"callers": []`
+  and one gap `cross-call-rules-not-computed`, so an empty list never reads as "none".
+  Step 5 fills the lists and drops that gap.
+- **Gaps.** `symbol-only-dependency` for each cone call site with ledger status
+  `external` / `unfetched-dependency` (anchored at the call), and one per app for the
+  resolved calls that reach a row with no body (listing the callees);
+  `unresolved-call` for every other unresolved cone site; `parse-incomplete` and
+  `body-unavailable`; `cone-truncated`; `text-differs-by-directive` when the `#if`
+  arms give different captions or tooltips (the field is then `null`);
+  `field-caption-unknown` for a written field of a dependency table with no caption
+  read. Error collectors (4.2 limits) and skipped table triggers (5) are not gaps yet.
+- **Resolution and exit codes.** `--routine` runs `prove`'s selector code
+  (`resolve_changed_roots` with one selector): not found and ambiguous exit 2 with
+  `routine-not-found` / `routine-ambiguous` (the candidates named). `--diff` runs
+  `digest --diff`'s resolution with the same diff root (`--diff-root`, one decision
+  shared with digest's, carried to batch workers): the same routines, and digest's
+  changed-roots diagnostics; no routine exits 2. `--table` is `query touches`' table
+  selector; the field matches by name or number. An unknown table or field exits 2; a
+  known field with no writer is an answer (exit 0). Usage errors exit 1 (bad
+  `--format`, no mode) or 3 (two modes, `--table` without `--field`, `--diff-root`
+  without `--diff`, an unreadable diff).
+- **Writers** (`src/engine/l5/field_writers.rs`): direct writers in the primary app,
+  by assignment (`#14`'s write access kinds) or `Validate`. **A `ModifyAll` is not
+  found yet**: the body walk keeps a record operation's argument texts only for
+  `FIELD_ARGS_OPS`, and adding `ModifyAll` there moves the serialized
+  `fieldArguments` and several detectors' inputs; step 6 (d65 needs it) must make and
+  measure that change. The fixture keeps a `ModifyAll` writer (`ReopenAll`) to show
+  the limit.
+- **Batch.** `explain` is a batch job (no measured admission row yet: it takes the
+  table's largest, as any kind without one).
+
 ### 4.5 Part D: `d65-guard-bypass`
 
 The idea is that a rule most writers follow, and one writer does not, shows a bug or a
@@ -586,7 +646,7 @@ Following CLAUDE.md:
 | 1 | Part A.1: extend `LabelValue` (comment, max length, other attributes) and add the `TextConst` arm | none expected: no projection serialises the new fields. Prove it with `check-goldens` |
 | 2 | Part A.2 and A.3: captions, tooltips, actions, doc comments. Then measure and record memory (4.1b) | l2 snapshot only if actions join the projection; the l2 snapshot's Debug digest moves with any new IR field. *Done:* none moved (the l2 digest is over projected L2 features, which do not read the new fields) |
 | 3 | Part B: `ViewNeeds::rules`, `PRule` for own rules at assembly; `TestField` gets a rule as well as its `StateOnly` class | l2, r4 via the new fixture. *Done:* the l2 snapshot and the r4f whole-corpus root-class summary gained the ws-rules routines; no other line moved. No per-detector r4 golden was seeded, because no detector reads rules until step 6 (d65 will add ws-rules to its fixtures) |
-| 4 | Part C: `alsem explain --routine`, `--diff` and `--table/--field`, own rules plus existing effects, tests and events | new `cli-explain` family |
+| 4 | Part C: `alsem explain --routine`, `--diff` and `--table/--field`, own rules plus existing effects, tests and events | new `cli-explain` family. *Done:* `tests/cli-explain-goldens/` (18 goldens, 9 cases × human and JSON); the new fixture `ws-explain` added lines to the l2 snapshot and the r4f root-class summary, a new r2c event-graph golden, and two policy-facts oracle cases; no other golden moved |
 | 5 | Part B2: inherited and caller rules; `substrate::RULES` implies `ORDERING_FACTS` | cli-explain |
 | 6 | Part D: `substrate::RULES` writer index, `d65-guard-bypass` opt-in, the registry-test extension, then the CDO triage | r4 |
 | 7 | Part E: policy emission (separate spec) | — |
@@ -603,7 +663,11 @@ about to change. Steps 5–6 make the card trustworthy across calls and add the 
    Check on a real `.app` before promising captions for them.
 3. Should `explain --diff` be a flag on `digest` (`digest --diff p --explain`) rather
    than its own command? One command keeps the agent's tool list short. Two keep
-   `digest`'s output shape stable.
+   `digest`'s output shape stable. *Decided (step 4): its own command.* `digest`'s
+   schema (1.8.0) stays as it is, `explain` has its own (`al-sem.explain/1`) and its
+   own needs (rules and card text, which `digest` should not pay for), and it shares
+   `digest`'s code where they overlap: the diff resolution (same routines, same
+   diagnostics, pinned by a test) and the per-root effects of the same tree read.
 4. Should bc-dev-mcp expose `explain` as an MCP tool, the way it reads `alsem graph`?
    We own both repos, so it is a matter of order, not of permission.
 5. Localised labels (XLIFF files) carry translations but not more intent. They are

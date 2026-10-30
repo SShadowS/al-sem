@@ -179,3 +179,9 @@ universes and that `ViewNeeds::ANALYZE` builds none. A fact built at assembly th
 also needs call resolution (here `stops`) keeps its inputs on the row
 (`rule_drafts`) and is settled in `attach_program_calls`, which every model passes
 through. Steps 5 and 6 (`substrate::RULES`) are not built yet; follow §4.1b.
+
+**Landed (step 4):** `alsem explain` declares `ViewNeeds::EXPLAIN` (`rules` plus a
+second level-1 need, `card_text`, so d65 will not pay for the card's text) and has its
+own level-3 factory, `explain_plan` (one tree, no run, no `l4`). A fact one command
+reads that only exists in the IR (a doc comment, an action's trigger link) is built at
+assembly behind that command's own need, not re-parsed by the command.

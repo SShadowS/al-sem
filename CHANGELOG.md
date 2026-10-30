@@ -60,6 +60,43 @@ Spec: `docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 3).
   variants instead of `Unknown`. New fixture `tests/r0-corpus/ws-rules` (compiles
   with alc 29); it adds its routines to the l2 snapshot and the r4f root-class
   summary, and no other golden line moves.
+- **Step 4: `alsem explain`, the evidence card.** New command
+  `alsem explain <ws> --routine <name> | --diff <patch> | --table <T> --field <F>`
+  (`--format human|json`, `--out`, `--single-app`, `--diff-root`). Each card
+  (JSON schema `al-sem.explain/1`) holds the routine (id, object, object caption,
+  doc comment, anchor), its own rules (kind, whether it stops, condition atoms and
+  text, message with label text, args, label comment and candidates, comment,
+  anchor), its effects (table writes with the fields written and their captions,
+  conditionality and call path; `commits` no / may / yes with each commit site;
+  events raised; interactive UI), the page actions that reach it (caption,
+  tooltip, path), the events it raises itself with their subscriber count and
+  `IsHandled` (extension points), the tests that reach it (with each test's own
+  assert count), and its gaps (symbol-only calls, unresolved calls, unparsed
+  bodies, a cut cone, a text that differs by `#if` arm, a dependency field
+  caption that is not read). Every list is always present. Inherited and caller
+  rules are step 5: each card has `"inherited": []`, `"callers": []` and a
+  `cross-call-rules-not-computed` gap. `--routine` resolves as `prove` does
+  (not found or ambiguous: exit 2, with a diagnostic naming the candidates);
+  `--diff` resolves the same routines as `digest --diff` (same code, same diff
+  root; no routine: exit 2); `--table/--field` lists every workspace routine
+  that writes the field by assignment or `Validate` (new
+  `engine::l5::field_writers`; an unknown table or field exits 2). Cards are
+  sorted by anchor. Usage errors exit 1 (bad `--format`, no mode) or 3 (two
+  modes, `--table` without `--field`, `--diff-root` without `--diff`). It runs
+  as a batch job too. Wiring: `ViewNeeds` gains `card_text` and the `EXPLAIN`
+  preset (rules and card text); `AssemblyNeeds` gains `card_text` and
+  `EXPLAIN`; `ModelRoutine::card_text` (doc, object caption, the page actions
+  the routine is the trigger of, a test's own asserts) is built at assembly only
+  for it and its accessor panics when not built. `ModelField::captions` is a
+  plain fact (empty for a symbol-only dependency's field). New `explain_plan`:
+  one tree with the test-coverage graph, no detector run, no `l4`.
+  `test_coverage::reaching_tests` lists every test that reaches a routine.
+  `al_syntax::lower::leading_literal_text` is public. Limit: a `ModifyAll` is
+  not yet found as a field writer (its argument is not kept by the body walk).
+  New fixture `tests/r0-corpus/ws-explain` (it adds lines to the l2 snapshot,
+  the r4f root-class summary, a new r2c event-graph golden and two policy-facts
+  oracle cases); new golden family `tests/cli-explain-goldens/` under
+  `--test cli`, listed in `scripts/check-goldens`.
 
 ### Fixed (G52)
 
