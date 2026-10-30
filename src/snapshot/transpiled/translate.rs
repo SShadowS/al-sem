@@ -7,7 +7,12 @@
 //! is `"rec".Modify()`, `ALDatabase.ALCommit()` is `Commit()`, a `NavHttpClient`'s
 //! `ALPostAsync` is `"client".Post(…)`. What is kept:
 //! - control flow (`if`, loops, `case`, `exit`), every condition an opaque
-//!   Boolean (`"alsem branch"`): which branch runs is not read, the structure is;
+//!   Boolean (`"alsem branch"`): which branch runs is not read, the structure is.
+//!   The one exception (G51) is an `if` whose condition is built only from
+//!   Boolean parameters and locals the body never writes, with `!`, `&`/`&&`,
+//!   `|`/`||` and parentheses: it is written out as AL ([`stable_bools`],
+//!   [`Tx::condition`]), so a guard such as `if ShowMessage then Message(…)`
+//!   is pruned by a caller's literal `false` like real AL;
 //! - record operations that read or write the database, raise an error or run
 //!   trigger code; `TrapError` (the AL `if Rec.Get() then`) consumes the
 //!   Boolean, `ThrowError` is a statement;
@@ -25,7 +30,7 @@
 use super::cs::{
     Call, Class, Member, Method, Param, Stmt, Tok, Token, calls, first_line, matching, split_commas,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// An AL variable a C# variable stands for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -394,6 +399,276 @@ pub(crate) fn method_locals(m: &Method) -> HashMap<String, VarType> {
     out
 }
 
+/// G51: the C# names of the method's Boolean parameters and locals whose value
+/// is the same for the whole body, so a condition reading them can be written
+/// out as AL ([`Tx::condition`]).
+///
+/// The translator drops assignments, so a variable the body writes would read
+/// as never written in the synthesized AL: translating a condition on it would
+/// state a value the C# does not have. A variable qualifies only when the C#
+/// never writes it:
+/// - a by-value `bool` parameter whose only write is the prologue's copy
+///   `γscope.Target.x = x;` (it holds the caller's argument throughout);
+/// - a `bool` scope-tuple local whose only writes are `= default(bool)` (it is
+///   `false` throughout, as the AL local the synthesized body declares is).
+///
+/// A write is any `Target.x` followed by `=` or a compound `op=`, one after
+/// `out`/`ref`, or one inside a statement `( … ) = …` (a tuple
+/// deconstruction). A `var` parameter's by-reference wrapper
+/// (`new ByRef<bool>(() => …x, v => …x = v)`) carries an assignment, so a
+/// variable passed to a `var` parameter never qualifies.
+pub(crate) fn stable_bools(m: &Method) -> HashSet<String> {
+    let is_bool = |ty: &[Token]| matches!(ty, [t] if t.is_ident("bool"));
+    let mut params: HashSet<String> = HashSet::new();
+    for p in &m.params {
+        if is_bool(&p.ty) && !p.by_reference() {
+            params.insert(p.name.clone());
+        }
+    }
+    let mut out: HashSet<String> = params.clone();
+    for s in &m.body {
+        if let Stmt::Local { ty, .. } = s
+            && ty.first().is_some_and(|t| t.is_ident("ALMethodScope"))
+            && let Some(open) = ty.iter().position(|t| t.is_punct("("))
+        {
+            let close = matching(ty, open);
+            for field in split_commas(&ty[open + 1..close - 1]) {
+                if let [t, n] = field.as_slice()
+                    && t.is_ident("bool")
+                    && let Some(name) = n.ident()
+                    && !name.starts_with('γ')
+                    && !params.iter().any(|p| p == name)
+                {
+                    out.insert(name.to_string());
+                }
+            }
+        }
+    }
+    let mut written: HashSet<String> = HashSet::new();
+    walk(&m.body, &mut |run| {
+        let deconstruction = run.first().is_some_and(|t| t.is_punct("("))
+            && run.get(matching(run, 0)).is_some_and(|t| t.is_punct("="));
+        for i in 0..run.len() {
+            if !run[i].is_ident("Target") || !run.get(i + 1).is_some_and(|t| t.is_punct(".")) {
+                continue;
+            }
+            let Some(x) = run.get(i + 2).and_then(Token::ident) else {
+                continue;
+            };
+            if !out.contains(x) {
+                continue;
+            }
+            let next = run.get(i + 3);
+            let assigned = next.is_some_and(|t| t.is_punct("="))
+                || (next.is_some_and(|t| {
+                    ["|", "&", "^", "+", "-", "*", "/", "%"]
+                        .iter()
+                        .any(|p| t.is_punct(p))
+                }) && run.get(i + 4).is_some_and(|t| t.is_punct("=")));
+            let by_ref = i >= 3
+                && run[i - 1].is_punct(".")
+                && (run[i - 3].is_ident("out") || run[i - 3].is_ident("ref"));
+            if deconstruction || by_ref {
+                written.insert(x.to_string());
+                continue;
+            }
+            if !assigned {
+                continue;
+            }
+            // The two writes that leave the value fixed, as whole statements:
+            // `γscope.Target.x = x` (a parameter) and `γscope.Target.x =
+            // default(bool)` (a local).
+            let rhs = &run[i + 4..];
+            let whole = i == 2 && run[0].ident().is_some_and(|s| s.starts_with('γ'));
+            let copy = whole && params.contains(x) && matches!(rhs, [t] if t.is_ident(x));
+            let default = whole
+                && !params.contains(x)
+                && matches!(rhs, [d, o, b, c]
+                    if d.is_ident("default") && o.is_punct("(") && b.is_ident("bool") && c.is_punct(")"));
+            if !(copy || default) {
+                written.insert(x.to_string());
+            }
+        }
+    });
+    out.retain(|x| !written.contains(x));
+    out
+}
+
+/// A Boolean condition [`Tx::condition`] can write out as AL.
+#[derive(Debug)]
+enum Cond {
+    Var(String),
+    Not(Box<Cond>),
+    And(Box<Cond>, Box<Cond>),
+    Or(Box<Cond>, Box<Cond>),
+}
+
+/// The AL words an unquoted variable name must not be.
+const AL_RESERVED: &[&str] = &[
+    "and",
+    "array",
+    "asserterror",
+    "begin",
+    "break",
+    "case",
+    "codeunit",
+    "continue",
+    "database",
+    "div",
+    "do",
+    "downto",
+    "else",
+    "end",
+    "enum",
+    "event",
+    "exit",
+    "false",
+    "for",
+    "foreach",
+    "if",
+    "implements",
+    "in",
+    "interface",
+    "internal",
+    "label",
+    "local",
+    "mod",
+    "not",
+    "of",
+    "or",
+    "page",
+    "procedure",
+    "protected",
+    "query",
+    "record",
+    "repeat",
+    "report",
+    "table",
+    "temporary",
+    "then",
+    "this",
+    "to",
+    "trigger",
+    "true",
+    "until",
+    "var",
+    "while",
+    "with",
+    "xmlport",
+    "xor",
+];
+
+/// A variable name as an AL reference: bare when it is a plain identifier
+/// (al-sem's guard reader matches bare identifiers), quoted otherwise.
+fn al_var(name: &str) -> String {
+    let plain = name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !AL_RESERVED.iter().any(|w| w.eq_ignore_ascii_case(name));
+    if plain { name.to_string() } else { quote(name) }
+}
+
+impl Cond {
+    /// AL text. Every binary operand that is itself binary is parenthesized,
+    /// so AL's precedence (`not` > `and` > `or`) never regroups it.
+    fn al(&self) -> String {
+        let operand = |c: &Cond| match c {
+            Cond::And(..) | Cond::Or(..) => format!("({})", c.al()),
+            _ => c.al(),
+        };
+        match self {
+            Cond::Var(n) => al_var(n),
+            Cond::Not(c) => match **c {
+                Cond::Var(_) => format!("not {}", c.al()),
+                _ => format!("not ({})", c.al()),
+            },
+            Cond::And(a, b) => format!("{} and {}", operand(a), operand(b)),
+            Cond::Or(a, b) => format!("{} or {}", operand(a), operand(b)),
+        }
+    }
+}
+
+/// A recursive-descent reader of a C# Boolean expression over `stable`
+/// variables, in C#'s precedence (`||` < `&&` < `|` < `&` < `!`). `None` for
+/// anything else; `^` (whose AL `xor` binds like `or`, unlike C#) included.
+struct CondReader<'t> {
+    toks: &'t [Token],
+    pos: usize,
+    stable: &'t HashSet<String>,
+}
+
+impl CondReader<'_> {
+    fn eat(&mut self, p: &str) -> bool {
+        if self.toks.get(self.pos).is_some_and(|t| t.is_punct(p)) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn level(
+        &mut self,
+        ops: &[&str],
+        is_or: bool,
+        next: fn(&mut Self) -> Option<Cond>,
+    ) -> Option<Cond> {
+        let mut lhs = next(self)?;
+        while ops
+            .iter()
+            .any(|op| self.toks.get(self.pos).is_some_and(|t| t.is_punct(op)))
+        {
+            self.pos += 1;
+            let rhs = next(self)?;
+            lhs = if is_or {
+                Cond::Or(Box::new(lhs), Box::new(rhs))
+            } else {
+                Cond::And(Box::new(lhs), Box::new(rhs))
+            };
+        }
+        Some(lhs)
+    }
+
+    fn cond_or(&mut self) -> Option<Cond> {
+        self.level(&["||"], true, Self::cond_and)
+    }
+    fn cond_and(&mut self) -> Option<Cond> {
+        self.level(&["&&"], false, Self::bit_or)
+    }
+    fn bit_or(&mut self) -> Option<Cond> {
+        self.level(&["|"], true, Self::bit_and)
+    }
+    fn bit_and(&mut self) -> Option<Cond> {
+        self.level(&["&"], false, Self::unary)
+    }
+
+    fn unary(&mut self) -> Option<Cond> {
+        if self.eat("!") {
+            return Some(Cond::Not(Box::new(self.unary()?)));
+        }
+        if self.eat("(") {
+            let c = self.cond_or()?;
+            return self.eat(")").then_some(c);
+        }
+        // `γscope.Target.x`.
+        match self.toks.get(self.pos..self.pos + 5)? {
+            [s, d1, t, d2, x]
+                if s.ident().is_some_and(|s| s.starts_with('γ'))
+                    && d1.is_punct(".")
+                    && t.is_ident("Target")
+                    && d2.is_punct(".")
+                    && x.ident().is_some_and(|x| self.stable.contains(x)) =>
+            {
+                self.pos += 5;
+                Some(Cond::Var(x.ident()?.to_string()))
+            }
+            _ => None,
+        }
+    }
+}
+
 /// What a call's receiver is.
 enum Receiver<'a> {
     /// A local or parameter (`γscope.Target.x…`).
@@ -731,6 +1006,8 @@ pub(crate) const UNTRANSLATED: &str = "\"__alsem_untranslated\"";
 struct Tx<'a> {
     cx: &'a ObjectCx<'a>,
     locals: &'a HashMap<String, VarType>,
+    /// [`stable_bools`] of the method.
+    stable: &'a HashSet<String>,
     lines: Vec<String>,
     depth: usize,
     used_int: bool,
@@ -796,7 +1073,15 @@ impl Tx<'_> {
                 if let Some(x) = after(4).and_then(Token::ident)
                     && self.locals.contains_key(x)
                 {
-                    refs.push(quote(x));
+                    // G51: a never-written Boolean is passed bare, as its
+                    // conditions read it: al-sem binds only a bare identifier
+                    // argument to the caller's parameter, which is how a
+                    // guard's requirement follows a forwarded flag.
+                    refs.push(if self.stable.contains(x) {
+                        al_var(x)
+                    } else {
+                        quote(x)
+                    });
                 }
             } else if id == "this"
                 && after(1).is_some_and(|t| t.is_punct("."))
@@ -850,6 +1135,40 @@ impl Tx<'_> {
         } else {
             format!("{target}.{call}")
         }
+    }
+
+    /// G51: an `if` condition as AL, when it reads only [`stable_bools`]
+    /// through `!`, `&`/`&&`, `|`/`||` and parentheses; `None` keeps it opaque.
+    ///
+    /// The transpiler writes `γscope.CStmtHit(n) & (c)`: `CStmtHit` records
+    /// the statement for code coverage and returns `true` (the `if` could
+    /// never run otherwise), and `&` binds tighter than every other operator
+    /// read here, so the condition's value is the rest's. The operands are
+    /// reads of non-null `bool` variables, which cannot fail or have effects,
+    /// so C#'s short-circuit `&&`/`||` and AL's `and`/`or` give the same value.
+    fn condition(&self, cond: &[Token]) -> Option<String> {
+        let mut t = cond;
+        while t.first().is_some_and(|f| f.is_punct("(")) && matching(t, 0) == t.len() {
+            t = &t[1..t.len() - 1];
+        }
+        if let [s, d, h, o, n, c, amp, rest @ ..] = t
+            && s.ident().is_some_and(|s| s.starts_with('γ'))
+            && d.is_punct(".")
+            && h.is_ident("CStmtHit")
+            && o.is_punct("(")
+            && matches!(n.tok, Tok::Num(_))
+            && c.is_punct(")")
+            && amp.is_punct("&")
+        {
+            t = rest;
+        }
+        let mut r = CondReader {
+            toks: t,
+            pos: 0,
+            stable: self.stable,
+        };
+        let c = r.cond_or()?;
+        (r.pos == t.len()).then(|| c.al())
     }
 
     fn untranslated(&mut self, shape: &str, line: u32) {
@@ -1177,7 +1496,8 @@ impl Tx<'_> {
             Stmt::Throw(_) | Stmt::Break | Stmt::Continue | Stmt::Goto | Stmt::Label => {}
             Stmt::If { cond, then, els } => {
                 self.run(cond, true);
-                self.push(&format!("if {BRANCH} then begin"), first_line(cond));
+                let al = self.condition(cond).unwrap_or_else(|| BRANCH.to_string());
+                self.push(&format!("if {al} then begin"), first_line(cond));
                 self.block(then);
                 match els {
                     Some(e) => {
@@ -1260,10 +1580,12 @@ fn args_of_invoke(args: &[Vec<Token>]) -> Vec<Vec<Token>> {
 /// Translate one method into an AL body.
 pub(crate) fn translate(cx: &ObjectCx, m: &Method) -> AlBody {
     let locals = method_locals(m);
+    let stable = stable_bools(m);
     let params: Vec<&str> = m.params.iter().map(|p: &Param| p.name.as_str()).collect();
     let mut tx = Tx {
         cx,
         locals: &locals,
+        stable: &stable,
         lines: Vec::new(),
         depth: 0,
         used_int: false,
@@ -1524,6 +1846,171 @@ public sealed class Codeunit50102 : NavCodeunit
                 table: Some(50150),
                 temporary: Some(false)
             })
+        );
+    }
+
+    /// G51, in the transpiler's shape: one `if` per condition shape. Each
+    /// expected line states the shape's verdict; the opaque ones are the
+    /// variables the C# writes (a reassigned parameter, an assigned, compound-
+    /// assigned, `out`-written or by-reference-passed local), a `var`
+    /// parameter, a global, `^`, and a comparison.
+    const GUARDS: &str = r#"
+public sealed class Codeunit50110 : NavCodeunit
+{
+    [NavName("Flag")]
+    private bool globalFlag;
+
+    [NavName("Guards")]
+    [MethodId(900)]
+    public async ValueTask Guards(bool showError, bool showMessage, bool flag, [NavByReferenceAttribute] ByRef<bool> refFlag)
+    {
+        ALMethodScope<(bool showError, bool showMessage, bool flag, bool neverSet, bool begin, bool isActive, bool cleared, bool outSet, bool passed, int length, bool γretVal)> γscope = default;
+        try
+        {
+            γscope = new ALMethodScope<(bool showError, bool showMessage, bool flag, bool neverSet, bool begin, bool isActive, bool cleared, bool outSet, bool passed, int length, bool γretVal)>(this, "Guards", MethodScopeFlags.None, 900);
+            γscope.ALStart();
+            γscope.Target.neverSet = default(bool);
+            γscope.Target.begin = default(bool);
+            γscope.Target.isActive = default(bool);
+            γscope.Target.cleared = default(bool);
+            γscope.Target.outSet = default(bool);
+            γscope.Target.passed = default(bool);
+            γscope.Target.showError = showError;
+            γscope.Target.showMessage = showMessage;
+            γscope.Target.flag = flag;
+            {
+                γscope.StmtHit(0);
+                γscope.Target.flag = true;
+                γscope.Target.isActive = γscope.Target.showError;
+                γscope.Target.cleared |= γscope.Target.showError;
+                ALSystemVariable.ALEvaluate(out γscope.Target.outSet, new NavText("1"));
+                await this.Helper(new ByRef<bool>(() => γscope.Target.passed, setValue => γscope.Target.passed = setValue));
+                if (γscope.CStmtHit(1) & (γscope.Target.showError))
+                {
+                    γscope.StmtHit(2);
+                }
+                if (γscope.CStmtHit(3) & (!γscope.Target.showError | γscope.Target.showMessage))
+                {
+                    γscope.StmtHit(4);
+                }
+                if (γscope.CStmtHit(5) & (!(γscope.Target.showError && (γscope.Target.showMessage || γscope.Target.neverSet))))
+                {
+                    γscope.StmtHit(6);
+                }
+                if ((γscope.Target.showMessage))
+                {
+                    γscope.StmtHit(7);
+                }
+                if (γscope.CStmtHit(8) & (γscope.Target.showError & γscope.Target.showMessage | γscope.Target.neverSet))
+                {
+                    γscope.StmtHit(9);
+                }
+                if (γscope.CStmtHit(10) & (γscope.Target.showError | γscope.Target.showMessage & !γscope.Target.neverSet))
+                {
+                    γscope.StmtHit(11);
+                }
+                if (γscope.CStmtHit(12) & (γscope.Target.begin))
+                {
+                    γscope.StmtHit(13);
+                }
+                if (γscope.CStmtHit(14) & (γscope.Target.flag))
+                {
+                    γscope.StmtHit(15);
+                }
+                if (γscope.CStmtHit(16) & (γscope.Target.isActive))
+                {
+                    γscope.StmtHit(17);
+                }
+                if (γscope.CStmtHit(18) & (γscope.Target.cleared))
+                {
+                    γscope.StmtHit(19);
+                }
+                if (γscope.CStmtHit(20) & (γscope.Target.outSet))
+                {
+                    γscope.StmtHit(21);
+                }
+                if (γscope.CStmtHit(22) & (γscope.Target.passed))
+                {
+                    γscope.StmtHit(23);
+                }
+                if (γscope.CStmtHit(24) & (γscope.Target.refFlag.Value))
+                {
+                    γscope.StmtHit(25);
+                }
+                if (γscope.CStmtHit(26) & (this.globalFlag))
+                {
+                    γscope.StmtHit(27);
+                }
+                if (γscope.CStmtHit(28) & (γscope.Target.showError ^ γscope.Target.showMessage))
+                {
+                    γscope.StmtHit(29);
+                }
+                if (γscope.CStmtHit(30) & (γscope.Target.length < 1))
+                {
+                    γscope.StmtHit(31);
+                }
+                if (γscope.CStmtHit(32) & (γscope.Target.showError) | γscope.Target.showMessage)
+                {
+                    γscope.StmtHit(33);
+                }
+            }
+        }
+        finally
+        {
+            ALMethodScope.ALFinally(γscope);
+        }
+    }
+
+    [NavName("Helper")]
+    [MethodId(901)]
+    public async ValueTask Helper([NavByReferenceAttribute] ByRef<bool> b)
+    {
+    }
+}
+"#;
+
+    #[test]
+    fn writes_out_conditions_on_never_written_booleans_only() {
+        let classes = classes(&lex(GUARDS));
+        let class = &classes[0];
+        let globals = class_globals(class);
+        let cx = ObjectCx::of(class, "Codeunit", &globals);
+        let m = class.methods().find(|m| m.name == "Guards").unwrap();
+        let mut stable: Vec<String> = stable_bools(m).into_iter().collect();
+        stable.sort();
+        assert_eq!(stable, ["begin", "neverSet", "showError", "showMessage"]);
+        let body = translate(&cx, m);
+        let ifs: Vec<&str> = body
+            .lines
+            .iter()
+            .map(|l| l.split(" // cs").next().unwrap().trim())
+            .filter(|l| l.starts_with("if "))
+            .collect();
+        let opaque = "if \"alsem branch\" then begin";
+        assert_eq!(
+            ifs,
+            [
+                "if showError then begin",
+                "if not showError or showMessage then begin",
+                "if not (showError and (showMessage or neverSet)) then begin",
+                "if showMessage then begin",
+                // C#'s `&` binds tighter than `|`: the grouping is kept.
+                "if (showError and showMessage) or neverSet then begin",
+                "if showError or (showMessage and not neverSet) then begin",
+                // A reserved word stays quoted.
+                "if \"begin\" then begin",
+                opaque, // flag: reassigned
+                opaque, // isActive: assigned
+                opaque, // cleared: compound-assigned
+                opaque, // outSet: written by `out`
+                opaque, // passed: passed to a `var` parameter
+                opaque, // refFlag: a `var` parameter
+                opaque, // a global
+                opaque, // `^`
+                opaque, // a comparison
+                // `CStmtHit(n) & (a) | b`: `(true & a) | b` is `a | b`.
+                "if showError or showMessage then begin",
+            ]
         );
     }
 }
