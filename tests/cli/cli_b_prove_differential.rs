@@ -125,13 +125,9 @@ const PROVE_CORPUS: &[(&str, &str, &str, &str, u8)] = &[
         "publishes-event:onafterpostsalesdoc",
         0,
     ),
-    (
-        "ws-d34",
-        "ws-d34.publishes-event-onafterpost",
-        "DirectCommitInLoop",
-        "publishes-event:OnAfterPost",
-        0,
-    ),
+    // ws-d34 `publishes-event:OnAfterPost`: no publisher or subscriber there
+    // names that event, so the question is refused (G47); see
+    // `publishes_event_of_an_unknown_event_is_refused`.
     (
         "ws-d35",
         "ws-d35.publishes-event-onafterpost",
@@ -346,6 +342,20 @@ fn writes_table_of_an_unknown_table_is_refused() {
             ),
             Ok((json, _, _)) => panic!("{fixture}/{routine}: answered instead of refusing: {json}"),
         }
+    }
+}
+
+/// G47: ws-d34 declares and subscribes to no `OnAfterPost` (ws-d35 subscribes
+/// to one, so there the question stands). The golden used to answer it.
+#[test]
+fn publishes_event_of_an_unknown_event_is_refused() {
+    match run_one(
+        "ws-d34",
+        "DirectCommitInLoop",
+        "publishes-event:OnAfterPost",
+    ) {
+        Err(e) => assert!(e.contains("unknown event 'OnAfterPost'"), "{e}"),
+        Ok((json, _, _)) => panic!("answered instead of refusing: {json}"),
     }
 }
 

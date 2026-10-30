@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (soundness of the guarded search; G47)
+
+- **The guarded search (G23/G33/G48) no longer drops an effect on the strength
+  of one representative fact.** The cone keeps one fact per kind (op,
+  resource, confidence, temp class) per root, so an effect's and a boundary
+  group resource's merged origin operations are that representative's. A dead
+  representative dropped the effect even when another write of the same kind
+  could run: a root writing a table through a nearer routine guarded by a
+  literal `false` and a farther unguarded one answered a false `no`. An
+  effect kind (effect type, resource) is now unreachable only when EVERY direct
+  fact of that kind in the root's reach has no state where its site can run
+  (`LiteralReach::kind_dead`, read off the snapshot's direct facts). Also
+  removed: the short-lived rule that dropped a whole group when its merged
+  facts were dead (same flaw); it cut real COMMITs on Continia DO (nine
+  `may-commit` claims, DPUR-DOC-001…007.c4, DSRV-OPEN-001…004, proven again).
+  The crossing rule (a group whose crossing cannot run is dropped) stays.
+- **`publishes-event:` an event no publisher or subscriber of the program
+  names is refused** (G47; exit 1, `prove: unknown event …`), as an unknown
+  table is (G40). The cli-b golden `ws-d34 publishes-event:OnAfterPost`
+  answered it; it is now a refusal test.
+
 ### Fixed (G50)
 
 - **`Evaluate(X, Text)` used as a statement may throw** (G50), as `Get` does:
