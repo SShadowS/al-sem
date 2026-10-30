@@ -1,0 +1,40 @@
+{
+  "events": [
+    {
+      "id": "55555555-ca11-0000-0000-0000000ca115:Codeunit:50453::OnBeforePostOrder::1505cbfeab0aabba5edb5ae807f7ec16c67fc8ec0b4c59dc41f7cd2f9718d34c",
+      "publisherObjectId": "55555555-ca11-0000-0000-0000000ca115:Codeunit:50453",
+      "eventName": "OnBeforePostOrder",
+      "eventKind": "integration",
+      "signatureHash": "1505cbfeab0aabba5edb5ae807f7ec16c67fc8ec0b4c59dc41f7cd2f9718d34c",
+      "parameters": [
+        {
+          "index": 0,
+          "name": "Order",
+          "typeText": "Record \"Calls Order\"",
+          "isVar": true,
+          "isRecord": true,
+          "tableName": "Calls Order"
+        }
+      ],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "publisherRoutineId": "55555555-ca11-0000-0000-0000000ca115:Codeunit:50453#1505cbfeab0aabba5edb5ae807f7ec16c67fc8ec0b4c59dc41f7cd2f9718d34c"
+    }
+  ],
+  "edges": [
+    {
+      "eventId": "55555555-ca11-0000-0000-0000000ca115:Codeunit:50453::OnBeforePostOrder::1505cbfeab0aabba5edb5ae807f7ec16c67fc8ec0b4c59dc41f7cd2f9718d34c",
+      "subscriberRoutineId": "55555555-ca11-0000-0000-0000000ca115:Codeunit:50455#1abae07a71773f058fea92c9c4a00029da67c92d852a28dcf1d96e298d42cd36",
+      "subscriberAppId": "55555555-ca11-0000-0000-0000000ca115",
+      "resolution": "resolved",
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ]
+    }
+  ]
+}

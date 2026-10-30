@@ -191,6 +191,10 @@ pub struct PRule {
     /// `not X` / `not (X)`. A built-in check's own condition reads
     /// `R.F is empty` / `R.F <> V`.
     pub when_text: String,
+    /// Each atom's text, parallel to `when` (`when_text` is them joined with
+    /// `" and "`). Rules across calls (`alsem explain`, spec §4.3) rewrite one
+    /// atom at a time, so they need the texts one by one.
+    pub when_texts: Vec<String>,
     pub message: Option<RuleMessage>,
     /// The trailing `//` comment on the check's line, else the run of own-line
     /// `//` comments directly above it (or above its `if`).
@@ -275,6 +279,7 @@ pub fn settle_rules(drafts: &[RuleDraft], binds_builtin: impl Fn(&str) -> bool) 
                 .map(|p| p.text.as_str())
                 .collect::<Vec<_>>()
                 .join(" and "),
+            when_texts: kept.iter().map(|p| p.text.clone()).collect(),
             message: d.message.clone(),
             comment: d.comment.clone(),
         });

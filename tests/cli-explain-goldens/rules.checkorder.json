@@ -9,12 +9,7 @@
         "writes": []
       },
       "extensionPoints": [],
-      "gaps": [
-        {
-          "detail": "inherited and caller rules are not computed yet (intent evidence step 5): the empty rules.inherited and rules.callers lists mean not looked, not none",
-          "kind": "cross-call-rules-not-computed"
-        }
-      ],
+      "gaps": [],
       "reachedFrom": [],
       "routine": {
         "anchor": {
@@ -33,6 +28,7 @@
       "rules": {
         "callers": [],
         "inherited": [],
+        "knownCallers": 0,
         "own": [
           {
             "anchor": {

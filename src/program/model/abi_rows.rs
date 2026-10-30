@@ -62,6 +62,8 @@ pub(crate) fn dep_object_to_l3(o: &ProjectedObject) -> ModelObject {
         delete_allowed: o.page_props.delete_allowed,
         source_anchor: None,
         declaration_only_routines: Vec::new(),
+        // Set by the assembly when the view declares the card text.
+        run_actions: None,
     }
 }
 

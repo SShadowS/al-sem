@@ -1,0 +1,10 @@
+Codeunit Calls Post::RecursivePost  ws:src/post.al:43
+  rules: none of its own
+  inherits via PingCheck: rejects when Order.Amount < 0: "The amount is negative."  [Error ws:src/checks.al:59]
+  caller rules: no known caller
+  writes Calls Order (DB_MODIFY) at ws:src/post.al:48
+  commits: no
+  tests: none reach it
+  gap: table-trigger-rules-skipped (what modify on Calls Order, table Calls Order) at ws:src/post.al:48
+    skips Table Calls Order::OnModify: rejects when Blocked  [Error ws:src/order.al:24]
+

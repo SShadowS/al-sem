@@ -246,12 +246,16 @@ alsem explain <ws> --routine PostDocument --format json    # schema al-sem.expla
 ```
 
 A card lists the routine's own checks as rules ("rejects when `Status <> Released`:
-'You cannot post…'", with the label text and its comment), what it writes (with field
-captions), whether it commits, the events it raises and their subscribers, the page
-actions that reach it, the tests that reach it, and every gap: calls into apps without
-source, unresolved calls, unparsed code. Checks in callees and callers are not computed
-yet; each card says so in its gaps. `--diff` resolves the same routines `digest --diff`
-does. A name no routine has, or one that names several, exits 2.
+'You cannot post…'", with the label text and its comment), the checks it inherits from
+the routines it always calls before its first write (with the call path, and with
+`true`/`false` arguments filled in), the table-trigger checks its `Validate` and
+`Modify(true)` run, the checks its callers make before calling it (and which callers
+skip them), what it writes (with field captions), whether it commits, the events it
+raises and their subscribers' own checks, the page actions that reach it (also through
+`RunObject`), the tests that reach it, and every gap: calls into apps without source,
+unresolved calls, unparsed code, table-trigger checks a plain assignment or `Modify()`
+skips, and calls to an error collector. `--diff` resolves the same routines
+`digest --diff` does. A name no routine has, or one that names several, exits 2.
 
 **"What changed between two versions?"**
 

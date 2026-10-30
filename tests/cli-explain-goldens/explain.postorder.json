@@ -66,18 +66,23 @@
             "line": 12,
             "sourceKind": "source"
           },
+          "conditionalOnAppSet": true,
           "event": "OnBeforePostOrder",
           "eventId": "44444444-e491-0000-0000-0000000e4a11/Codeunit/50401/event/onbeforepostorder",
           "isHandled": true,
+          "subscriberRoutines": [
+            {
+              "app": "44444444-e491-0000-0000-0000000e4a11",
+              "conditional": false,
+              "id": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50403#4a41efe8fa6904400b08f5b28c40b0b711bc616b02d26da59dbd1c1e1ec9872a",
+              "routine": "Codeunit Explain Subscriber::HandleBeforePost",
+              "rules": []
+            }
+          ],
           "subscribers": 1
         }
       ],
-      "gaps": [
-        {
-          "detail": "inherited and caller rules are not computed yet (intent evidence step 5): the empty rules.inherited and rules.callers lists mean not looked, not none",
-          "kind": "cross-call-rules-not-computed"
-        }
-      ],
+      "gaps": [],
       "reachedFrom": [
         {
           "action": "Post",
@@ -92,6 +97,7 @@
           "kind": "PageAction",
           "object": "Explain Order Card",
           "objectType": "Page",
+          "runObject": null,
           "tooltip": "Post the order.",
           "via": [
             "OnAction",
@@ -116,6 +122,7 @@
       "rules": {
         "callers": [],
         "inherited": [],
+        "knownCallers": 2,
         "own": [
           {
             "anchor": {

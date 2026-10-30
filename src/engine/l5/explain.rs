@@ -19,11 +19,17 @@
 //!   is `query touches`' (`resolve_table_selector`). An unknown table or field
 //!   exits 2; a known field with no writer is an answer (exit 0, no card).
 //!
-//! **What step 4 does not compute yet.** Inherited rules (callee rules that
-//! hold before the routine's first write) and caller rules are spec step 5.
-//! Every card carries `"inherited": []` and `"callers": []` and, in `gaps`, one
-//! `cross-call-rules-not-computed` gap, so an empty list never reads as "none".
-//! Step 5 fills the lists and drops that gap.
+//! **Rules across calls** (step 5, [`crate::engine::l5::cross_rules`]):
+//! `rules.inherited` lists the callee rules that hold before the routine's
+//! first write and the table-trigger rules its writes run (each with the write
+//! named); `rules.callers` lists the rules its known callers run before
+//! calling it, with who applies and who skips each. Table triggers a write
+//! skips (`Modify(false)`, a plain assignment) are a `table-trigger-rules-skipped`
+//! gap with the skipped rules; a call to an error collector is an
+//! `error-collector` gap; event subscribers' own rules are listed under their
+//! extension point (`subscriberRoutines`), not merged into `inherited`;
+//! `reachedFrom` also follows a page action's `RunObject = Codeunit X` into
+//! that codeunit's `OnRun`.
 //!
 //! The command builds the model with `ViewNeeds::EXPLAIN` (rules and card
 //! text, both built at assembly) and computes over it with `explain_plan`: one
@@ -44,6 +50,7 @@ use crate::engine::l4::effect_query_cli::{
     OwnerIndex, Resolution, object_display, owner_qualified, resolve_table_selector,
 };
 use crate::engine::l5::conditionality::UNCONDITIONAL;
+use crate::engine::l5::cross_rules::{CallerRule, CrossRules, EXPANSION_BUDGET, Inh, MAX_DEPTH};
 use crate::engine::l5::digest::DigestEffectResult;
 use crate::engine::l5::digest_cli::{
     ChangedInput, ChangedRootsDiagnostic, DiffRoot, DigestEffects, FullAnchor, anchor_to_value,
@@ -58,7 +65,10 @@ use crate::program::body::rules::{
 };
 use crate::program::model::declaring::DeclaringObjects;
 use crate::program::model::role::Role;
-use crate::program::model::workspace::{Model, ModelRoutine, table_by_id_preferring_real};
+use crate::program::model::workspace::{
+    CardAction, Model, ModelObject, ModelRoutine, table_by_id_preferring_real,
+};
+use al_syntax::IdentifierFoldExt;
 
 /// The JSON schema id of the document.
 pub const SCHEMA: &str = "al-sem.explain/1";
@@ -426,6 +436,100 @@ struct Indexes<'m> {
     op_row: HashMap<&'m str, usize>,
     /// (row, table id) -> the fields that row writes on that table.
     row_fields: HashMap<(usize, &'m str), BTreeSet<&'m str>>,
+    /// Codeunit object id -> the page actions whose `RunObject` runs it:
+    /// (the page's object index, the action, the raw `RunObject` value).
+    run_by: HashMap<&'m str, Vec<(usize, &'m CardAction, &'m str)>>,
+}
+
+/// The objects a raw `RunObject` value names (`Codeunit "Post"`,
+/// `Codeunit 50100`, `Codeunit::"Post"`): matched by type and by number or
+/// name, those of the page's own app first.
+fn run_object_targets<'m>(model: &'m Model, page_app: &str, raw: &str) -> Vec<&'m str> {
+    let t = raw.trim();
+    let (ty, rest) = match t.split_once("::") {
+        Some((ty, rest)) => (ty.trim(), rest.trim()),
+        None => match t.split_once(char::is_whitespace) {
+            Some((ty, rest)) => (ty.trim(), rest.trim()),
+            None => return Vec::new(),
+        },
+    };
+    let number: Option<i64> = rest.parse().ok();
+    let name = rest
+        .trim_matches('"')
+        .replace("\"\"", "\"")
+        .fold_identifier();
+    let matches: Vec<&ModelObject> = model
+        .workspace
+        .objects
+        .iter()
+        .filter(|o| o.object_type.eq_ignore_ascii_case(ty))
+        .filter(|o| match number {
+            Some(n) => o.object_number == n,
+            None => o.name.fold_identifier() == name,
+        })
+        .collect();
+    let own: Vec<&str> = matches
+        .iter()
+        .filter(|o| o.app_guid.eq_ignore_ascii_case(page_app))
+        .map(|o| o.id.as_str())
+        .collect();
+    if own.is_empty() {
+        matches.iter().map(|o| o.id.as_str()).collect()
+    } else {
+        own
+    }
+}
+
+/// An error collector (spec §4.2 limits): a `Log…` procedure of BC's
+/// `Error Message Management` codeunit or `Error Message` table. They record an
+/// error and go on, so the check they make is not a rule. The engine knows no
+/// other collector; this list is stated, not derived.
+fn is_error_collector(ix: &Indexes<'_>, row: usize) -> bool {
+    let (ty, obj) = ix.object_of(row);
+    let name = ix.row(row).name.to_ascii_lowercase();
+    let obj = obj.fold_identifier();
+    name.starts_with("log")
+        && ((ty == "Codeunit" && obj == "error message management")
+            || (ty == "Table" && obj == "error message"))
+}
+
+/// A routine's name in a `via` path: a member trigger with its member
+/// (`OnValidate (Amount)`).
+fn via_name(ix: &Indexes<'_>, row: usize) -> String {
+    let r = ix.row(row);
+    match &r.enclosing_member {
+        Some(m) => format!("{} ({m})", r.name),
+        None => r.name.clone(),
+    }
+}
+
+/// One inherited (or subscriber) rule: the rule's own JSON with the routine
+/// that holds the check (`in`), the call path to it (`via`), and for a table
+/// trigger's rule the write that runs it.
+fn inh_json(ix: &Indexes<'_>, i: &Inh) -> Value {
+    let mut v = rule_json(&i.rule);
+    let m = v.as_object_mut().expect("a rule is an object");
+    m.insert("in".into(), ix.qualified(i.owner).into());
+    m.insert(
+        "via".into(),
+        json!(i.via.iter().map(|&r| via_name(ix, r)).collect::<Vec<_>>()),
+    );
+    m.insert(
+        "trigger".into(),
+        i.trigger.as_ref().map_or(
+            Value::Null,
+            |t| json!({ "op": t.op, "anchor": anchor_json(&t.anchor) }),
+        ),
+    );
+    v
+}
+
+fn via_human(ix: &Indexes<'_>, i: &Inh) -> String {
+    i.via
+        .iter()
+        .map(|&r| via_name(ix, r))
+        .collect::<Vec<_>>()
+        .join(" > ")
 }
 
 impl<'m> Indexes<'m> {
@@ -465,6 +569,19 @@ impl<'m> Indexes<'m> {
                 .or_default()
                 .insert(w.field);
         }
+        let mut run_by: HashMap<&str, Vec<(usize, &CardAction, &str)>> = HashMap::new();
+        for (oi, o) in ws.objects.iter().enumerate() {
+            for a in o.run_actions() {
+                for raw in &a.run_object {
+                    for target in run_object_targets(model, &o.app_guid, raw) {
+                        run_by
+                            .entry(target)
+                            .or_default()
+                            .push((oi, a, raw.as_str()));
+                    }
+                }
+            }
+        }
         Indexes {
             model,
             rows_of,
@@ -473,6 +590,7 @@ impl<'m> Indexes<'m> {
             declaring: DeclaringObjects::new(&ws.objects),
             op_row,
             row_fields,
+            run_by,
         }
     }
 
@@ -542,6 +660,7 @@ fn render(
     effects: &DigestEffects,
 ) -> ExplainRunResult {
     let ix = Indexes::new(model);
+    let cross = CrossRules::new(model);
     let tests_reaching = effects.coverage_graph.as_ref().map(|g| {
         crate::engine::l5::test_coverage::reaching_tests(
             g,
@@ -554,7 +673,7 @@ fn render(
         .roots
         .iter()
         .map(|rid| {
-            let card = Card::build(&ix, rid, effects, tests_reaching.as_ref());
+            let card = Card::build(&ix, &cross, rid, effects, tests_reaching.as_ref());
             (
                 card.sort_key.clone(),
                 rid.clone(),
@@ -695,6 +814,11 @@ struct Card {
     anchor: Option<PAnchor>,
     doc: Option<String>,
     own: Vec<PRule>,
+    inherited: Vec<(Value, String)>,
+    callers: Vec<(Value, String)>,
+    /// How many known callers the routine has (the human text says when
+    /// there is none).
+    known_callers: usize,
     writes: Vec<Value>,
     writes_human: Vec<String>,
     commits: &'static str,
@@ -775,6 +899,7 @@ fn detail<'e>(e: &'e DigestEffectResult, key: &str) -> Option<&'e str> {
 impl Card {
     fn build(
         ix: &Indexes<'_>,
+        cross: &CrossRules<'_>,
         rid: &str,
         effects: &DigestEffects,
         tests_reaching: Option<&BTreeMap<String, Vec<(String, bool)>>>,
@@ -782,17 +907,6 @@ impl Card {
         let model = ix.model;
         let rows: Vec<usize> = ix.rows_of.get(rid).cloned().unwrap_or_default();
         let mut gaps: Vec<Gap> = Vec::new();
-        gaps.push(Gap::new(
-            "cross-call-rules-not-computed",
-            None,
-            Map::from_iter([(
-                "detail".to_string(),
-                Value::from(
-                    "inherited and caller rules are not computed yet (intent evidence step 5): \
-                     the empty rules.inherited and rules.callers lists mean not looked, not none",
-                ),
-            )]),
-        ));
 
         // The routine: the first row (two `#if` arms share one stable id).
         let first = rows.first().copied();
@@ -834,6 +948,96 @@ impl Card {
                 .then(a.id.cmp(&b.id))
         });
         own.dedup_by(|a, b| a.id == b.id);
+
+        // Rules across calls (step 5).
+        let inherited: Vec<(Value, String)> = cross
+            .inherited(&rows)
+            .iter()
+            .map(|i| {
+                let from = match &i.trigger {
+                    Some(t) => format!(
+                        "inherits from table trigger {} (run by {} at {})",
+                        via_human(ix, i),
+                        t.op,
+                        anchor_human(&t.anchor)
+                    ),
+                    None => format!("inherits via {}", via_human(ix, i)),
+                };
+                (inh_json(ix, i), format!("{from}: {}", rule_human(&i.rule)))
+            })
+            .collect();
+        let known_callers = cross.known_callers(&rows);
+        let names = |v: &[usize]| -> Vec<String> { v.iter().map(|&c| ix.qualified(c)).collect() };
+        let callers: Vec<(Value, String)> = cross
+            .caller_rules(&rows)
+            .iter()
+            .map(|c: &CallerRule| {
+                let mut v = inh_json(ix, &c.inh);
+                let m = v.as_object_mut().expect("a rule is an object");
+                m.insert("presentIn".into(), json!(names(&c.present_in)));
+                m.insert("appliedBy".into(), json!(names(&c.applied_by)));
+                m.insert("skippedBy".into(), json!(names(&c.skipped_by)));
+                m.insert(
+                    "note".into(),
+                    "applies only when called from the callers in appliedBy".into(),
+                );
+                let skipped = if c.skipped_by.is_empty() {
+                    String::new()
+                } else {
+                    format!("; skipped by {}", names(&c.skipped_by).join(", "))
+                };
+                let applied = if c.applied_by.is_empty() {
+                    format!(
+                        "applied by none, present in {} but may not stop",
+                        names(&c.present_in).join(", ")
+                    )
+                } else {
+                    format!("applied by {}", names(&c.applied_by).join(", "))
+                };
+                (
+                    v,
+                    format!(
+                        "caller rule ({applied}{skipped}): {}",
+                        rule_human(&c.inh.rule)
+                    ),
+                )
+            })
+            .collect();
+        for s in cross.skipped_triggers(&rows) {
+            let mut fields = Map::from_iter([
+                ("op".to_string(), Value::from(s.op.clone())),
+                ("table".to_string(), Value::from(s.table.clone())),
+                ("reason".to_string(), Value::from(s.reason)),
+                (
+                    "triggers".to_string(),
+                    json!(
+                        s.triggers
+                            .iter()
+                            .map(|&t| ix.qualified(t))
+                            .collect::<Vec<_>>()
+                    ),
+                ),
+                (
+                    "rules".to_string(),
+                    Value::Array(s.rules.iter().map(|i| inh_json(ix, i)).collect()),
+                ),
+            ]);
+            fields.insert(
+                "what".to_string(),
+                Value::from(match &s.field {
+                    Some(f) => format!("{} of {}.{f}", s.op, s.table),
+                    None => format!("{} on {}", s.op, s.table),
+                }),
+            );
+            if let Some(f) = &s.field {
+                fields.insert("field".to_string(), Value::from(f.clone()));
+            }
+            gaps.push(Gap::new(
+                "table-trigger-rules-skipped",
+                Some(&s.anchor),
+                fields,
+            ));
+        }
 
         for &i in &rows {
             let r = ix.row(i);
@@ -983,6 +1187,47 @@ impl Card {
                         .iter()
                         .filter(|x| x.event_id == event_id)
                         .count();
+                    // Spec §5: each subscriber's own rules (and its
+                    // top-level callees'), listed here, never merged into
+                    // `inherited`: a subscriber runs only when its app is
+                    // installed (and, `conditional`, may be skipped).
+                    let mut subscriber_routines: Vec<(Value, Vec<String>)> = model
+                        .events
+                        .graph
+                        .edges
+                        .iter()
+                        .filter(|x| x.event_id == event_id)
+                        .filter_map(|x| {
+                            let row = cross.row_of(&x.subscriber_routine_id)?;
+                            let rules = cross.rules_run_by(row);
+                            let human: Vec<String> = rules
+                                .iter()
+                                .map(|i| {
+                                    format!(
+                                        "subscriber {} (only when its app is installed): {}",
+                                        ix.qualified(row),
+                                        rule_human(&i.rule)
+                                    )
+                                })
+                                .collect();
+                            Some((
+                                json!({
+                                    "routine": ix.qualified(row),
+                                    "id": x.subscriber_stable_routine_id,
+                                    "app": x.subscriber_app_id,
+                                    "conditional": x.conditional,
+                                    "rules": rules.iter().map(|i| inh_json(ix, i)).collect::<Vec<_>>(),
+                                }),
+                                human,
+                            ))
+                        })
+                        .collect();
+                    subscriber_routines.sort_by_key(|a| a.0.to_string());
+                    subscriber_routines.dedup_by(|a, b| a.0 == b.0);
+                    let subscriber_human: Vec<String> = subscriber_routines
+                        .iter()
+                        .flat_map(|s| s.1.iter().cloned())
+                        .collect();
                     let is_handled = symbol.is_some_and(|s| {
                         s.parameters.iter().any(|p| {
                             p.is_var
@@ -990,18 +1235,28 @@ impl Card {
                                     || p.name.eq_ignore_ascii_case("Handled"))
                         })
                     });
+                    let mut human = format!(
+                        "extension point {event}: {subscribers} subscriber(s){}",
+                        if is_handled { ", IsHandled" } else { "" }
+                    );
+                    for h in subscriber_human {
+                        human.push_str("\n    ");
+                        human.push_str(&h);
+                    }
                     extension_points.push((
                         json!({
                             "event": event,
                             "eventId": event_id,
                             "subscribers": subscribers,
+                            "subscriberRoutines": subscriber_routines
+                                .into_iter()
+                                .map(|s| s.0)
+                                .collect::<Vec<_>>(),
+                            "conditionalOnAppSet": true,
                             "isHandled": is_handled,
                             "anchor": anchor,
                         }),
-                        format!(
-                            "extension point {event}: {subscribers} subscriber(s){}",
-                            if is_handled { ", IsHandled" } else { "" }
-                        ),
+                        human,
                     ));
                 }
             } else if ty.starts_with("UI_") && ty != "UI_ERROR" {
@@ -1044,6 +1299,39 @@ impl Card {
         let mut reached_from = Vec::new();
         for &r in up.keys() {
             let row = ix.row(r);
+            // A page action whose `RunObject` runs this codeunit's `OnRun`.
+            if row.kind == "trigger"
+                && row.object_type == "Codeunit"
+                && row.name.eq_ignore_ascii_case("OnRun")
+            {
+                for &(oi, a, raw) in ix.run_by.get(row.object_id.as_str()).into_iter().flatten() {
+                    let page = &model.workspace.objects[oi];
+                    let caption = one_text(&a.caption).ok().flatten();
+                    reached_from.push((
+                        json!({
+                            "kind": "PageAction",
+                            "objectType": page.object_type,
+                            "object": page.name,
+                            "action": a.name,
+                            "actionKind": a.kind,
+                            "caption": caption,
+                            "tooltip": one_text(&a.tooltip).ok().flatten(),
+                            "runObject": raw,
+                            "via": path_names(ix, &up, r),
+                            "anchor": anchor_json(&a.anchor),
+                        }),
+                        format!(
+                            "reached from page action {} on {}{} (RunObject = {raw}) at {}",
+                            a.name,
+                            object_display(&page.object_type, &page.name),
+                            caption
+                                .map(|c| format!(" (caption \"{c}\")"))
+                                .unwrap_or_default(),
+                            anchor_human(&a.anchor)
+                        ),
+                    ));
+                }
+            }
             let Some(t) = row.card_text.as_deref() else {
                 continue;
             };
@@ -1074,6 +1362,7 @@ impl Card {
                         "actionKind": a.kind,
                         "caption": caption,
                         "tooltip": tooltip.ok().flatten(),
+                        "runObject": Value::Null,
                         "via": via,
                         "anchor": anchor_json(&a.anchor),
                     }),
@@ -1206,6 +1495,31 @@ impl Card {
         let mut seen_incomplete: HashSet<usize> = HashSet::new();
         for &r in down.keys() {
             let row = ix.row(r);
+            // Error collectors (spec §4.2 limits): the check they make
+            // records an error and goes on, so it is no rule.
+            for cs in &row.call_sites {
+                if let Some(&c) = cross
+                    .targets_at(r, &cs.id)
+                    .iter()
+                    .find(|&&t| is_error_collector(ix, t))
+                {
+                    gaps.push(Gap::new(
+                        "error-collector",
+                        Some(&cs.source_anchor),
+                        Map::from_iter([
+                            ("callee".to_string(), Value::from(ix.qualified(c))),
+                            ("routine".to_string(), Value::from(ix.qualified(r))),
+                            (
+                                "detail".to_string(),
+                                Value::from(
+                                    "an error collector logs the error and goes on: the check \
+                                     around it does not stop, and is not listed as a rule",
+                                ),
+                            ),
+                        ]),
+                    ));
+                }
+            }
             if rows.contains(&r) {
                 continue;
             }
@@ -1236,6 +1550,21 @@ impl Card {
                 ]),
             ));
         }
+        if cross.truncated() {
+            gaps.push(Gap::new(
+                "cross-call-rules-truncated",
+                None,
+                Map::from_iter([(
+                    "detail".to_string(),
+                    Value::from(format!(
+                        "the walk over rules across calls stopped (at {EXPANSION_BUDGET} routine \
+                         expansions, or a call chain {MAX_DEPTH} deep): rules.inherited, \
+                         rules.callers and the subscriber and skipped-trigger rules may be \
+                         incomplete"
+                    )),
+                )]),
+            ));
+        }
         gaps.sort_by(|a, b| a.key.cmp(&b.key));
 
         Card {
@@ -1247,6 +1576,9 @@ impl Card {
             anchor,
             doc,
             own,
+            inherited,
+            callers,
+            known_callers: known_callers.len(),
             writes,
             writes_human,
             commits,
@@ -1267,8 +1599,9 @@ impl Card {
             "routine": self.routine,
             "rules": {
                 "own": self.own.iter().map(rule_json).collect::<Vec<_>>(),
-                "inherited": [],
-                "callers": [],
+                "inherited": self.inherited.iter().map(|r| r.0.clone()).collect::<Vec<_>>(),
+                "callers": self.callers.iter().map(|r| r.0.clone()).collect::<Vec<_>>(),
+                "knownCallers": self.known_callers,
             },
             "effects": {
                 "writes": self.writes,
@@ -1307,7 +1640,23 @@ impl Card {
         for r in &self.own {
             line(&rule_human(r));
         }
-        line("rules from callees and callers: not computed yet");
+        if self.inherited.is_empty() {
+            line("inherited rules: none");
+        }
+        for (_, h) in &self.inherited {
+            line(h);
+        }
+        if self.known_callers == 0 {
+            line("caller rules: no known caller");
+        } else if self.callers.is_empty() {
+            line(&format!(
+                "caller rules: none ({} known caller(s))",
+                self.known_callers
+            ));
+        }
+        for (_, h) in &self.callers {
+            line(h);
+        }
         for w in &self.writes_human {
             line(w);
         }
@@ -1332,9 +1681,6 @@ impl Card {
         }
         for g in &self.gaps {
             let kind = g.json["kind"].as_str().unwrap_or("");
-            if kind == "cross-call-rules-not-computed" {
-                continue;
-            }
             let what = ["callee", "routine", "what", "table", "app", "status"]
                 .iter()
                 .filter_map(|k| g.json[*k].as_str().map(|v| format!("{k} {v}")))
@@ -1353,6 +1699,21 @@ impl Card {
                     format!(" ({what})")
                 }
             ));
+            // The skipped table-trigger rules, one line each.
+            for r in g.json["rules"].as_array().into_iter().flatten() {
+                let when = r["whenText"].as_str().unwrap_or("");
+                line(&format!(
+                    "  skips {}: {}  [{} {}]",
+                    r["in"].as_str().unwrap_or(""),
+                    if when.is_empty() {
+                        "always".to_string()
+                    } else {
+                        format!("rejects when {when}")
+                    },
+                    r["kind"].as_str().unwrap_or(""),
+                    anchor_value_human(&r["anchor"])
+                ));
+            }
         }
         out.push('\n');
         out

@@ -1,0 +1,11 @@
+Codeunit Calls Post::ForwardPost  ws:src/post.al:27
+  rules: none of its own
+  inherits via CheckOrder: rejects when Order."No." = '': "The order has no number."  [Error ws:src/checks.al:5]
+  inherits via CheckOrder: rejects when not (Order."No." = '') and StrictMode and Order.Amount is empty: (platform message)  [TestField ws:src/checks.al:7]
+  inherits via CheckOrder > CheckCustomer: rejects when Order.Blocked: "The customer is blocked."  [Error ws:src/checks.al:14]
+  inherits from table trigger OnModify (run by Modify at ws:src/post.al:32): rejects when Blocked: "A blocked order cannot change."  [Error ws:src/order.al:24]
+  caller rules: no known caller
+  writes Calls Order (DB_MODIFY) at ws:src/post.al:32
+  commits: no
+  tests: none reach it
+

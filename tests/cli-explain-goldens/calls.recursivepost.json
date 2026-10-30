@@ -1,0 +1,154 @@
+{
+  "cards": [
+    {
+      "effects": {
+        "commitSites": [],
+        "commits": "no",
+        "events": [],
+        "ui": [],
+        "writes": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Order.Modify",
+              "file": "ws:src/post.al",
+              "line": 48,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "fieldCaptions": {},
+            "fields": [],
+            "op": "DB_MODIFY",
+            "table": "Calls Order",
+            "tableId": "55555555-ca11-0000-0000-0000000ca115/table/50450",
+            "via": []
+          }
+        ]
+      },
+      "extensionPoints": [],
+      "gaps": [
+        {
+          "anchor": {
+            "column": 8,
+            "file": "ws:src/post.al",
+            "line": 48,
+            "sourceKind": "source"
+          },
+          "kind": "table-trigger-rules-skipped",
+          "op": "modify",
+          "reason": "without RunTrigger = true the table trigger does not run",
+          "rules": [
+            {
+              "anchor": {
+                "column": 12,
+                "file": "ws:src/order.al",
+                "line": 24,
+                "sourceKind": "source"
+              },
+              "comment": null,
+              "id": "bc117818cc986894/6a778fb0754896e3ed60caba4452ae07ea0cb49b23c2c21de0d5cc03a40b93d9/rule0",
+              "in": "Table Calls Order::OnModify",
+              "kind": "Error",
+              "message": {
+                "args": [],
+                "candidates": [],
+                "labelComment": null,
+                "source": "Literal",
+                "text": "A blocked order cannot change.",
+                "var": null
+              },
+              "stops": "always",
+              "stopsReason": null,
+              "trigger": null,
+              "via": [
+                "OnModify"
+              ],
+              "when": [
+                {
+                  "anchor": {
+                    "column": 11,
+                    "file": "ws:src/order.al",
+                    "line": 23,
+                    "sourceKind": "source"
+                  },
+                  "kind": "Other",
+                  "text": "Blocked"
+                }
+              ],
+              "whenText": "Blocked"
+            }
+          ],
+          "table": "Calls Order",
+          "triggers": [
+            "Table Calls Order::OnModify"
+          ],
+          "what": "modify on Calls Order"
+        }
+      ],
+      "reachedFrom": [],
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/post.al",
+          "line": 43,
+          "sourceKind": "source"
+        },
+        "doc": null,
+        "id": "55555555-ca11-0000-0000-0000000ca115:Codeunit:50453#53e9e2d3734ad15dfe2a62b00b6e5be8fc4e1e6d91699c311e51d74968042549",
+        "name": "RecursivePost",
+        "object": "Calls Post",
+        "objectCaption": null,
+        "objectType": "Codeunit"
+      },
+      "rules": {
+        "callers": [],
+        "inherited": [
+          {
+            "anchor": {
+              "column": 12,
+              "file": "ws:src/checks.al",
+              "line": 59,
+              "sourceKind": "source"
+            },
+            "comment": null,
+            "id": "bc117818cc986894/08de3cf6ddb1af8952930777b25fd8e572a1f82c739478d9d0070c49d71f2024/rule0",
+            "in": "Codeunit Calls Checks::PingCheck",
+            "kind": "Error",
+            "message": {
+              "args": [],
+              "candidates": [],
+              "labelComment": null,
+              "source": "Literal",
+              "text": "The amount is negative.",
+              "var": null
+            },
+            "stops": "always",
+            "stopsReason": null,
+            "trigger": null,
+            "via": [
+              "PingCheck"
+            ],
+            "when": [
+              {
+                "field": "Amount",
+                "kind": "FieldCompare",
+                "op": "<",
+                "recordVar": "Order",
+                "table": "Calls Order",
+                "value": "0"
+              }
+            ],
+            "whenText": "Order.Amount < 0"
+          }
+        ],
+        "knownCallers": 0,
+        "own": []
+      },
+      "tests": []
+    }
+  ],
+  "diagnostics": [],
+  "mode": "routine",
+  "schema": "al-sem.explain/1",
+  "selector": "RecursivePost"
+}

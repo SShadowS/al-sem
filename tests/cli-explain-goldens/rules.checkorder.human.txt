@@ -5,7 +5,8 @@ Codeunit Rules Checks::CheckOrder  ws:src/checks.al:7
   rejects when not (Order.Status <> Order.Status::Released) and not (Order.Amount <= 0) and Order."Customer No." is empty: (platform message)  [TestField ws:src/checks.al:19]
   rejects when not (Order.Status <> Order.Status::Released) and not (Order.Amount <= 0) and Order.Blocked <> false: (platform message)  [TestField ws:src/checks.al:20]
   rejects when not (Order.Status <> Order.Status::Released) and not (Order.Amount <= 0) and not PostingPreview and Order."Posting Date" = 0D: "Order %1 has no posting date."  [Error ws:src/checks.al:24]
-  rules from callees and callers: not computed yet
+  inherited rules: none
+  caller rules: no known caller
   commits: no
   tests: none reach it
 

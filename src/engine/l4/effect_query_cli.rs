@@ -1443,6 +1443,7 @@ mod tests {
                     declaration_start_line: 0,
                 })
                 .collect(),
+            run_actions: None,
         }
     }
 

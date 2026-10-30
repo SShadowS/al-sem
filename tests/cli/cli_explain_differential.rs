@@ -27,6 +27,17 @@
 //!   one card each, and an unknown field (exit 2). `ReopenAll`'s `ModifyAll`
 //!   of the same field is NOT listed: `field_writers`' stated limit (step 6);
 //! - gaps: a test procedure's calls into a symbol-only `Assert`.
+//! - rules across calls (step 5, fixture `ws-explain-calls`): inherited
+//!   rules through one and two calls, a matching literal (atom dropped), a
+//!   contradicting one (rule dropped), a forwarded parameter (re-anchored), a
+//!   callee parameter assigned before its check (not substituted), a callee
+//!   called only in a branch and one called after the first write (neither
+//!   inherited), a `MayNotStop` callee rule (listed, never applied), a
+//!   recursive pair (the walk stops), caller rules with one skipping caller,
+//!   table-trigger rules run by `Validate` / `Modify(true)` and skipped by a
+//!   plain assignment and `Modify()`, an event subscriber's rule (under its
+//!   extension point only), an error collector, and a page action reaching
+//!   the routine through `RunObject`.
 //!
 //! The semantic tests below pin what bytes cannot: the `--diff` routine set
 //! equals `digest --diff`'s (the reuse, not a copy), every list is present on
@@ -249,6 +260,250 @@ fn explain_field_writers() {
     check_case(&explain_field());
 }
 
+/// The step-5 routines of `ws-explain-calls` (golden slug, routine), one
+/// golden pair each.
+const CALLS_ROUTINES: &[(&str, &str)] = &[
+    ("calls.postorder", "PostOrder"),
+    ("calls.quickpost", "QuickPost"),
+    ("calls.forwardpost", "ForwardPost"),
+    ("calls.previewpost", "PreviewPost"),
+    ("calls.recursivepost", "RecursivePost"),
+    ("calls.release", "Release"),
+];
+
+fn calls_case(routine: &str) -> Case {
+    let (slug, routine) = CALLS_ROUTINES
+        .iter()
+        .find(|(_, r)| *r == routine)
+        .copied()
+        .expect("a step-5 routine");
+    case(slug, "ws-explain-calls", &["--routine", routine], 0)
+}
+
+#[test]
+fn explain_rules_across_calls() {
+    for (_, r) in CALLS_ROUTINES {
+        check_case(&calls_case(r));
+    }
+}
+
+/// The one card of `--routine <routine>` on `ws-explain-calls`.
+fn calls_card(routine: &str) -> serde_json::Value {
+    let doc = json_of(&calls_case(routine));
+    doc["cards"][0].clone()
+}
+
+/// The message texts (or, with none, the whenText) of a rule list.
+fn texts(list: &serde_json::Value) -> Vec<String> {
+    list.as_array()
+        .unwrap_or_else(|| panic!("not a list: {list}"))
+        .iter()
+        .map(|r| {
+            r["message"]["text"].as_str().map_or_else(
+                || r["whenText"].as_str().unwrap().to_string(),
+                str::to_string,
+            )
+        })
+        .collect()
+}
+
+/// The first rule of `list` whose message text is `text`.
+fn rule_with<'a>(list: &'a serde_json::Value, text: &str) -> &'a serde_json::Value {
+    list.as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["message"]["text"] == text)
+        .unwrap_or_else(|| panic!("no rule with message {text:?} in {list}"))
+}
+
+/// The inherited `TestField(Amount)` of `CheckOrder` (a platform message).
+fn check_order_testfield(list: &serde_json::Value) -> Option<&serde_json::Value> {
+    list.as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "TestField" && r["anchor"]["file"] == "ws:src/checks.al")
+}
+
+/// Spec §4.3: what is inherited, and what is not.
+#[test]
+fn inherited_rules_follow_order_conditionality_and_literals() {
+    let post = calls_card("PostOrder");
+    let inh = &post["rules"]["inherited"];
+    let t = texts(inh);
+    // One call, and two calls deep.
+    assert_eq!(
+        rule_with(inh, "The order has no number.")["via"],
+        serde_json::json!(["CheckOrder"])
+    );
+    assert_eq!(
+        rule_with(inh, "The customer is blocked.")["via"],
+        serde_json::json!(["CheckOrder", "CheckCustomer"])
+    );
+    // A callee called only in a branch, and one called after the first write.
+    assert!(
+        !t.contains(&"The amount is too big.".to_string()),
+        "conditional call: {t:?}"
+    );
+    assert!(
+        !t.contains(&"The order is already posted.".to_string()),
+        "call after the write: {t:?}"
+    );
+    // A matching literal drops the atom: of `not No. empty`, `Strict` and
+    // `Amount empty`, the two field atoms are left.
+    let tf =
+        check_order_testfield(inh).expect("CheckOrder's TestField, inherited with Strict = true");
+    assert_eq!(
+        tf["whenText"], "not (Order.\"No.\" = '') and Order.Amount is empty",
+        "the matching literal drops the Strict atom: {tf}"
+    );
+    assert!(
+        tf["when"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["kind"] == "FieldEmpty"),
+        "the matching literal drops the Strict atom: {tf}"
+    );
+    // A MayNotStop callee rule is listed, as may-not-stop.
+    assert_eq!(
+        rule_with(inh, "A negative amount is collected.")["stops"],
+        "may-not-stop"
+    );
+    // Table triggers run by Validate and Modify(true), with the write named.
+    let ops: Vec<&str> = inh
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["trigger"]["op"].as_str())
+        .collect();
+    assert!(
+        ops.contains(&"Validate") && ops.contains(&"Modify"),
+        "trigger rules: {ops:?}"
+    );
+    // A subscriber's rule is under its extension point, not inherited.
+    assert!(
+        !t.contains(&"A zero amount cannot post.".to_string()),
+        "{t:?}"
+    );
+    let subs = &post["extensionPoints"][0]["subscriberRoutines"][0]["rules"];
+    assert!(
+        texts(subs).contains(&"A zero amount cannot post.".to_string()),
+        "{subs}"
+    );
+    // A page action's RunObject reaches the routine through OnRun.
+    assert!(
+        post["reachedFrom"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["action"] == "PostIt" && r["runObject"].is_string()),
+        "{}",
+        post["reachedFrom"]
+    );
+
+    // A contradicting literal drops the rule; the rest stay.
+    let quick = calls_card("QuickPost");
+    let qinh = &quick["rules"]["inherited"];
+    assert!(
+        check_order_testfield(qinh).is_none(),
+        "Strict = false: {qinh}"
+    );
+    assert!(texts(qinh).contains(&"The order has no number.".to_string()));
+
+    // A forwarded parameter re-anchors the atom to the caller's parameter.
+    let fwd = calls_card("ForwardPost");
+    let tf = check_order_testfield(&fwd["rules"]["inherited"]).expect("forwarded TestField");
+    assert!(
+        tf["when"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["kind"] == "ParamBool" && a["index"] == 1),
+        "re-anchored to ForwardPost's StrictMode (index 1): {tf}"
+    );
+    assert!(
+        tf["whenText"].as_str().unwrap().contains("StrictMode"),
+        "{tf}"
+    );
+
+    // A callee parameter assigned before its check is not substituted: the
+    // literal `false` does not drop the rule.
+    let preview = calls_card("PreviewPost");
+    let p = rule_with(&preview["rules"]["inherited"], "A preview cannot post.");
+    assert!(
+        p["when"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["kind"] == "Other"),
+        "kept as written: {p}"
+    );
+
+    // A recursive pair: the walk stops, each rule once.
+    let rec = calls_card("RecursivePost");
+    let n = texts(&rec["rules"]["inherited"])
+        .iter()
+        .filter(|t| *t == "The amount is negative.")
+        .count();
+    assert_eq!(n, 1, "{}", rec["rules"]["inherited"]);
+}
+
+/// Spec §4.3 caller rules and §5's table-trigger and error-collector gaps.
+#[test]
+fn caller_rules_and_trigger_and_collector_gaps() {
+    let release = calls_card("Release");
+    let callers = &release["rules"]["callers"];
+    let own = rule_with(callers, "A posted order cannot be released.");
+    assert_eq!(
+        own["appliedBy"],
+        serde_json::json!(["Codeunit Calls Post::ReleaseChecked"])
+    );
+    assert_eq!(
+        own["skippedBy"],
+        serde_json::json!(["Codeunit Calls Post::ReleaseDirect"])
+    );
+    // A MayNotStop rule is present, never applied.
+    let collected = rule_with(callers, "A negative amount is collected.");
+    assert_eq!(
+        collected["presentIn"],
+        serde_json::json!(["Codeunit Calls Post::ReleaseChecked"])
+    );
+    assert_eq!(collected["appliedBy"], serde_json::json!([]));
+    assert_eq!(release["rules"]["knownCallers"], 2);
+
+    let quick = calls_card("QuickPost");
+    let gaps = quick["gaps"].as_array().unwrap();
+    let skipped: Vec<&serde_json::Value> = gaps
+        .iter()
+        .filter(|g| g["kind"] == "table-trigger-rules-skipped")
+        .collect();
+    assert!(
+        skipped
+            .iter()
+            .any(|g| g["op"] == "assign" && g["field"] == "Amount"),
+        "a plain assignment skips OnValidate: {skipped:?}"
+    );
+    assert!(
+        skipped.iter().any(|g| g["op"] == "modify"),
+        "Modify() skips OnModify: {skipped:?}"
+    );
+    assert!(
+        gaps.iter().any(|g| g["kind"] == "error-collector"),
+        "LogIfBlocked's call to an error collector: {gaps:?}"
+    );
+    // PostOrder runs both triggers: nothing skipped.
+    let post = calls_card("PostOrder");
+    assert!(
+        !post["gaps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|g| g["kind"] == "table-trigger-rules-skipped"),
+        "{}",
+        post["gaps"]
+    );
+}
+
 #[test]
 fn explain_unknown_field_exits_2() {
     check_case(&case(
@@ -298,17 +553,19 @@ fn explain_diff_names_the_routines_digest_diff_names() {
 }
 
 /// Spec Done 5 and §4.4: every list of every card is present, an empty one
-/// included, and step 5's lists carry the gap that says they were not
-/// computed, so an empty list never reads as "none".
+/// included. Since step 5 the cross-call lists are computed, so no card
+/// carries step 4's `cross-call-rules-not-computed` gap any more.
 #[test]
-fn every_card_lists_are_present_and_cross_call_rules_are_a_gap() {
-    for c in [
+fn every_card_lists_are_present_and_cross_call_rules_are_computed() {
+    let mut all = vec![
         rules_check_order(),
         explain_post_order(),
         explain_archive(),
         explain_diff(),
         explain_field(),
-    ] {
+    ];
+    all.extend(CALLS_ROUTINES.iter().map(|(_, r)| calls_case(r)));
+    for c in all {
         let doc = json_of(&c);
         assert_eq!(doc["schema"], "al-sem.explain/1", "{}", c.slug);
         assert!(doc["diagnostics"].is_array(), "{}: diagnostics", c.slug);
@@ -335,13 +592,14 @@ fn every_card_lists_are_present_and_cross_call_rules_are_a_gap() {
                 );
             }
             assert!(card["effects"]["commits"].is_string(), "{}", c.slug);
+            assert!(card["rules"]["knownCallers"].is_u64(), "{}", c.slug);
             assert!(
-                card["gaps"]
+                !card["gaps"]
                     .as_array()
                     .unwrap()
                     .iter()
                     .any(|g| g["kind"] == "cross-call-rules-not-computed"),
-                "{}: the step-5 gap",
+                "{}: step 5 computes the cross-call lists",
                 c.slug
             );
         }

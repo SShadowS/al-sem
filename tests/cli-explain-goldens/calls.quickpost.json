@@ -1,0 +1,263 @@
+{
+  "cards": [
+    {
+      "effects": {
+        "commitSites": [],
+        "commits": "no",
+        "events": [],
+        "ui": [],
+        "writes": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Order.Modify",
+              "file": "ws:src/post.al",
+              "line": 24,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "fieldCaptions": {},
+            "fields": [
+              "Amount"
+            ],
+            "op": "DB_MODIFY",
+            "table": "Calls Order",
+            "tableId": "55555555-ca11-0000-0000-0000000ca115/table/50450",
+            "via": []
+          }
+        ]
+      },
+      "extensionPoints": [],
+      "gaps": [
+        {
+          "anchor": {
+            "column": 12,
+            "file": "ws:src/checks.al",
+            "line": 52,
+            "sourceKind": "source"
+          },
+          "callee": "Codeunit Error Message Management::LogSimpleError",
+          "detail": "an error collector logs the error and goes on: the check around it does not stop, and is not listed as a rule",
+          "kind": "error-collector",
+          "routine": "Codeunit Calls Checks::LogIfBlocked"
+        },
+        {
+          "anchor": {
+            "column": 8,
+            "file": "ws:src/post.al",
+            "line": 23,
+            "sourceKind": "source"
+          },
+          "field": "Amount",
+          "kind": "table-trigger-rules-skipped",
+          "op": "assign",
+          "reason": "a plain assignment does not run the field's OnValidate trigger",
+          "rules": [
+            {
+              "anchor": {
+                "column": 16,
+                "file": "ws:src/order.al",
+                "line": 15,
+                "sourceKind": "source"
+              },
+              "comment": null,
+              "id": "bc117818cc986894/b887850f7c006d5b0616a123c849f3977a38f28a9ade3e4d9a2b2fc98854b551/rule0",
+              "in": "Table Calls Order::OnValidate",
+              "kind": "TestField",
+              "message": {
+                "args": [],
+                "candidates": [],
+                "labelComment": null,
+                "source": "Platform",
+                "text": null,
+                "var": null
+              },
+              "stops": "always",
+              "stopsReason": null,
+              "trigger": null,
+              "via": [
+                "OnValidate (Amount)"
+              ],
+              "when": [
+                {
+                  "field": "Status",
+                  "kind": "FieldCompare",
+                  "op": "<>",
+                  "recordVar": "Rec",
+                  "table": "Calls Order",
+                  "value": "Status::Open"
+                }
+              ],
+              "whenText": "Status <> Status::Open"
+            }
+          ],
+          "table": "Calls Order",
+          "triggers": [
+            "Table Calls Order::OnValidate"
+          ],
+          "what": "assign of Calls Order.Amount"
+        },
+        {
+          "anchor": {
+            "column": 8,
+            "file": "ws:src/post.al",
+            "line": 24,
+            "sourceKind": "source"
+          },
+          "kind": "table-trigger-rules-skipped",
+          "op": "modify",
+          "reason": "without RunTrigger = true the table trigger does not run",
+          "rules": [
+            {
+              "anchor": {
+                "column": 12,
+                "file": "ws:src/order.al",
+                "line": 24,
+                "sourceKind": "source"
+              },
+              "comment": null,
+              "id": "bc117818cc986894/6a778fb0754896e3ed60caba4452ae07ea0cb49b23c2c21de0d5cc03a40b93d9/rule0",
+              "in": "Table Calls Order::OnModify",
+              "kind": "Error",
+              "message": {
+                "args": [],
+                "candidates": [],
+                "labelComment": null,
+                "source": "Literal",
+                "text": "A blocked order cannot change.",
+                "var": null
+              },
+              "stops": "always",
+              "stopsReason": null,
+              "trigger": null,
+              "via": [
+                "OnModify"
+              ],
+              "when": [
+                {
+                  "anchor": {
+                    "column": 11,
+                    "file": "ws:src/order.al",
+                    "line": 23,
+                    "sourceKind": "source"
+                  },
+                  "kind": "Other",
+                  "text": "Blocked"
+                }
+              ],
+              "whenText": "Blocked"
+            }
+          ],
+          "table": "Calls Order",
+          "triggers": [
+            "Table Calls Order::OnModify"
+          ],
+          "what": "modify on Calls Order"
+        }
+      ],
+      "reachedFrom": [],
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/post.al",
+          "line": 17,
+          "sourceKind": "source"
+        },
+        "doc": null,
+        "id": "55555555-ca11-0000-0000-0000000ca115:Codeunit:50453#530f12ea4342eb1026a3dfcca7b1af0f0126994942160ecc262e591ffd37c450",
+        "name": "QuickPost",
+        "object": "Calls Post",
+        "objectCaption": null,
+        "objectType": "Codeunit"
+      },
+      "rules": {
+        "callers": [],
+        "inherited": [
+          {
+            "anchor": {
+              "column": 12,
+              "file": "ws:src/checks.al",
+              "line": 5,
+              "sourceKind": "source"
+            },
+            "comment": null,
+            "id": "bc117818cc986894/6ee2fa48f12646d4c89ff8f95d2fe95c6cb64a160c3ba4bc71ec6a3f9124d2ac/rule0",
+            "in": "Codeunit Calls Checks::CheckOrder",
+            "kind": "Error",
+            "message": {
+              "args": [],
+              "candidates": [],
+              "labelComment": null,
+              "source": "Literal",
+              "text": "The order has no number.",
+              "var": null
+            },
+            "stops": "always",
+            "stopsReason": null,
+            "trigger": null,
+            "via": [
+              "CheckOrder"
+            ],
+            "when": [
+              {
+                "field": "No.",
+                "kind": "FieldEmpty",
+                "negated": false,
+                "recordVar": "Order",
+                "table": "Calls Order"
+              }
+            ],
+            "whenText": "Order.\"No.\" = ''"
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "file": "ws:src/checks.al",
+              "line": 14,
+              "sourceKind": "source"
+            },
+            "comment": null,
+            "id": "bc117818cc986894/35cf42a674cdde94ee00ea4cc3aae9520821b982c8185ca3e8aa2b7e060d6c58/rule0",
+            "in": "Codeunit Calls Checks::CheckCustomer",
+            "kind": "Error",
+            "message": {
+              "args": [],
+              "candidates": [],
+              "labelComment": null,
+              "source": "Literal",
+              "text": "The customer is blocked.",
+              "var": null
+            },
+            "stops": "always",
+            "stopsReason": null,
+            "trigger": null,
+            "via": [
+              "CheckOrder",
+              "CheckCustomer"
+            ],
+            "when": [
+              {
+                "anchor": {
+                  "column": 11,
+                  "file": "ws:src/checks.al",
+                  "line": 13,
+                  "sourceKind": "source"
+                },
+                "kind": "Other",
+                "text": "Order.Blocked"
+              }
+            ],
+            "whenText": "Order.Blocked"
+          }
+        ],
+        "knownCallers": 0,
+        "own": []
+      },
+      "tests": []
+    }
+  ],
+  "diagnostics": [],
+  "mode": "routine",
+  "schema": "al-sem.explain/1",
+  "selector": "QuickPost"
+}

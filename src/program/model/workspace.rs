@@ -110,6 +110,25 @@ pub struct ModelObject {
     /// Interface / ControlAddIn procedure declarations (#71); empty for every other
     /// object kind. They are not `ModelRoutine`s.
     pub declaration_only_routines: Vec<ModelDeclarationOnlyRoutine>,
+    /// The object's page actions that run an object (`RunObject = Codeunit X`),
+    /// for `alsem explain`'s `reachedFrom` (intent-evidence spec §5, step 5).
+    /// Built at assembly behind `ViewNeeds::card_text`, like
+    /// `ModelRoutine::card_text`: `None` when not built (read through
+    /// [`ModelObject::run_actions`], which fails loudly), `Some(vec![])` for an
+    /// object with none and for a symbol-only object (no source).
+    pub run_actions: Option<Vec<CardAction>>,
+}
+
+impl ModelObject {
+    /// The object's `RunObject` page actions. Reading them from a model built
+    /// without `ViewNeeds::card_text` is a bug and panics, in every build, like
+    /// [`ModelRoutine::card_text`].
+    #[must_use]
+    pub fn run_actions(&self) -> &[CardAction] {
+        self.run_actions
+            .as_deref()
+            .expect("run actions not built: declare ViewNeeds::card_text")
+    }
 }
 
 /// An Interface / ControlAddIn procedure declaration (#71). Not a `ModelRoutine`
@@ -657,6 +676,9 @@ pub struct CardAction {
     pub kind: &'static str,
     pub caption: Vec<String>,
     pub tooltip: Vec<String>,
+    /// The raw `RunObject` value(s), one per `#if` arm (`ActionDecl::run_object`):
+    /// `Codeunit "Post"`, `Page 50100`. Empty for an action with none.
+    pub run_object: Vec<String>,
     pub anchor: crate::program::body::features::PAnchor,
 }
 
@@ -1416,6 +1438,15 @@ fn project_ir(
             delete_allowed,
             source_anchor,
             declaration_only_routines,
+            // Intent-evidence step 5: the `RunObject` actions, behind the card
+            // text need (only `explain` reads them).
+            run_actions: needs.card_text.then(|| {
+                o.actions
+                    .iter()
+                    .filter(|a| !a.run_object.is_empty())
+                    .map(|a| card_action(a, source_unit_id, cols))
+                    .collect()
+            }),
         });
 
         if object_type == "Table" || object_type == "TableExtension" {
@@ -1993,18 +2024,28 @@ fn card_text_of(
             .actions
             .iter()
             .filter(|a| a.triggers.contains(&rix))
-            .map(|a| CardAction {
-                name: a.name.clone(),
-                kind: a.kind,
-                caption: a.caption.clone(),
-                tooltip: a.tooltip.clone(),
-                anchor: anchor_from_origin(&a.origin, source_unit_id, cols),
-            })
+            .map(|a| card_action(a, source_unit_id, cols))
             .collect(),
         own_asserts: crate::test_quality::is_test(ir_routine)
             .then(|| crate::test_quality::body_counts(&ir_file.ir, o, ir_routine))
             .flatten()
             .map(|c| c.own()),
+    }
+}
+
+/// One IR page action as the card shows it.
+fn card_action(
+    a: &al_syntax::ir::ActionDecl,
+    source_unit_id: &str,
+    cols: &Utf16Cols,
+) -> CardAction {
+    CardAction {
+        name: a.name.clone(),
+        kind: a.kind,
+        caption: a.caption.clone(),
+        tooltip: a.tooltip.clone(),
+        run_object: a.run_object.clone(),
+        anchor: anchor_from_origin(&a.origin, source_unit_id, cols),
     }
 }
 
@@ -2203,6 +2244,7 @@ fn append_dependency_rows(
         }
     }
     let first_abi_row = ws.routines.len();
+    let first_abi_object = ws.objects.len();
     crate::program::model::abi_rows::append_dep_entities(ws, &objects, &tables, &routines);
     if needs.rules {
         // A symbol-only row has no body in the model, so no rule of its own the
@@ -2217,6 +2259,9 @@ fn append_dependency_rows(
         // The same for the card text: no source, so none of it is known.
         for r in &mut ws.routines[first_abi_row..] {
             r.card_text = Some(Box::default());
+        }
+        for o in &mut ws.objects[first_abi_object..] {
+            o.run_actions = Some(Vec::new());
         }
     }
 

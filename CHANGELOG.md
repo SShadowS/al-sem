@@ -97,6 +97,45 @@ Spec: `docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 3).
   the r4f root-class summary, a new r2c event-graph golden and two policy-facts
   oracle cases); new golden family `tests/cli-explain-goldens/` under
   `--test cli`, listed in `scripts/check-goldens`.
+- **Step 5: rules across calls in `alsem explain`.** New
+  `engine::l5::cross_rules`. `rules.inherited` now lists the rules of the
+  routines a card's routine calls, when the call is `unconditional-on-success`
+  (not under `asserterror`) and ends, in the source, before the routine's first
+  write (a callee that is itself the first write gives only the rules it runs
+  before its own first write); transitively, with the call path (`via`) and the
+  routine that holds the check (`in`). A write counts when it assigns a record
+  field or mutates a record (not a known-temporary one), or calls a routine that
+  may write (or has no body). A callee's `ParamBool` atom is rewritten across the
+  call: a contradicting literal drops the rule, a matching one drops the atom, a
+  forwarded parameter re-anchors it, any other argument becomes an `Other` atom;
+  a callee parameter that is assigned (or passed to a `var`) keeps its atom as
+  written (`param_guard`'s usability). A call to a `[TryFunction]` whose result is
+  used, a `Codeunit.Run`, an interface call with several implementers and an
+  unresolved call give no inheritance. Table triggers that a `Validate`, a
+  `Rename` or an `Insert`/`Modify`/`Delete(true)` runs (the resolver's
+  `implicit-trigger` edges with `fires: always`) are inherited with the write
+  named (`trigger`). `rules.callers` lists the rules each known caller runs
+  before every call into the routine, with `presentIn`, `appliedBy` (never for a
+  `MayNotStop` rule) and `skippedBy`; `rules.knownCallers` counts the callers.
+  The `cross-call-rules-not-computed` gap is gone. New gaps:
+  `table-trigger-rules-skipped` (a plain field assignment, `Modify()` /
+  `Modify(false)` or a non-literal RunTrigger, with the skipped triggers and
+  their rules), `error-collector` (a call to a `Log…` procedure of
+  `Error Message Management` / `Error Message`, a stated list), and
+  `cross-call-rules-truncated` (the walk's budget of 200,000 routine
+  expansions; cycles are cut, results memoised). Each extension point lists its
+  subscribers' own rules (`subscriberRoutines`, `conditionalOnAppSet`), never
+  merged into `inherited`. `reachedFrom` follows a page action's
+  `RunObject = Codeunit X` into that codeunit's `OnRun` (`runObject`). Wiring:
+  `PRule::when_texts` (each atom's text); `CardAction::run_object`;
+  `ModelObject::run_actions` (the `RunObject` actions, built at assembly behind
+  `ViewNeeds::card_text`, accessor panics when not built). Statement order comes
+  from the sites' control context and source anchors, so `RULES` does not need
+  `ORDERING_FACTS` (spec §4.1b, §4.3 updated). New fixture
+  `tests/r0-corpus/ws-explain-calls` (adds lines to the l2 snapshot, the r4f
+  root-class summary, a new r2c golden and two policy-facts oracle cases); 12
+  new goldens in `tests/cli-explain-goldens/`, and the step-4 goldens show the
+  computed lists.
 
 ### Fixed (G52)
 

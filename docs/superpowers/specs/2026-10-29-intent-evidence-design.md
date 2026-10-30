@@ -263,7 +263,10 @@ every build, like `get_ordering_facts`. Rules are not in any projection or golde
 (`src/engine/l5/registry.rs`; `DB_EFFECT_REVERSE_INDEX` is `1 << 5`, `ORDERING_FACTS`
 `1 << 6`) builds only the per-field writer index d65 reads, from the model's rules.
 
-- It implies `ORDERING_FACTS` (4.3 needs statement order).
+- ~~It implies `ORDERING_FACTS` (4.3 needs statement order).~~ *Changed in step 5:*
+  it does not. `ORDERING_FACTS` are the IO / commit / UI hazard pairs d47/d49/d51
+  read, not a statement order. The order 4.3 needs comes from each site's control
+  context and source anchor, which every model already has (4.3, as built).
 - It stays **out of** `substrate::ALL`, like `ORDERING_FACTS`, so the many
   `build_detector_context(.., substrate::ALL)` callers neither pay for it nor need a
   rules-bearing model. The parity test's full context
@@ -432,6 +435,58 @@ across the edge, the way `param_guard::across_edge` does for effects: a contradi
 literal drops the rule, a matching one drops the atom, a forwarded parameter
 re-anchors it.
 
+*As built (step 5)*, `src/engine/l5/cross_rules.rs` (`CrossRules`), read by
+`explain.rs`. Where it differs from the text above, and why:
+
+- **Statement order is not `ORDERING_FACTS`.** Those facts are the IO / commit / UI
+  hazard pairs d47/d49/d51 read; they say nothing about where a call sits relative
+  to a write. The order comes from the model the card already has: a call is a step
+  when its site's control context is `top-level` (`unconditional-on-success`) and it
+  is not under `asserterror`, and it is "before" the write when its anchor ENDS before
+  the write's anchor starts. A `top-level` site is in no branch or loop, so in AL's
+  structured statements whatever follows it in the source runs only after it, and
+  whatever precedes it runs before it. Comparing the call's end keeps a write nested
+  in the call's arguments (`Check(Rec.Insert())`) from counting as after it. So
+  `RULES` does not imply `ORDERING_FACTS` (4.1b updated), and `explain` declares no
+  substrate bit.
+- **Writes.** A write is a record-field assignment (compound forms too), a mutating
+  record operation (`Insert`, `Modify`, `ModifyAll`, `Delete`, `DeleteAll`,
+  `Rename`, `Validate`), both unless the record is known temporary, or a call that
+  may reach one (a callee that writes through any number of resolved calls, or a
+  callee with no body). The first write is the one that starts first. A callee that
+  is itself the routine's first write gives only the rules it runs before its own
+  first write; one that ends before gives every rule it runs (its own rules and,
+  transitively, those of its own `top-level` calls).
+- **Which calls count.** A resolved `direct` / `method` edge with one target. A
+  `[TryFunction]` whose result is used (it catches the error), `Codeunit.Run`, page
+  and report runs, interface dispatch to several implementers and unresolved calls
+  give none.
+- **Substitution validity.** A callee's `ParamBool` is substituted only when the
+  parameter is `param_guard`-usable (by-value `Boolean`, never assigned, never
+  passed to a `var`); otherwise the atom becomes `Other` with its text as written.
+  A non-literal, non-forwarded argument also becomes `Other` (the argument's text),
+  never dropped. `PRule` gained `when_texts` (each atom's text) for this.
+- **Table triggers** (5): a write op with the resolver's `implicit-trigger` edge and
+  `fires: always` (`Validate`, `Rename`, `Insert/Modify/Delete(true)`) passes the
+  trigger's rules into `inherited` with a `trigger` field naming the write, whatever
+  the write's position: the trigger runs as part of that write, not before the first
+  one.
+- **Caller rules.** Per known caller (a call edge or a trigger edge into the
+  routine), the rules it runs before EVERY one of its sites: its own rules anchored
+  before the site, and every rule of its `top-level` steps that end before the site.
+  Grouped across callers by rule id and rewritten condition; each entry has
+  `presentIn`, `appliedBy` (empty for a `MayNotStop` rule) and `skippedBy`, and the
+  card has `knownCallers`.
+- **Bounds.** A routine on the walk's stack adds nothing again (cycles), results are
+  memoised when no cycle was cut beneath them, and one run makes at most 200,000
+  routine expansions; past that the card has a `cross-call-rules-truncated` gap.
+- **Limits.** A call after an early `if C then exit;` is `conditional`, so it gives
+  nothing even though the write after it is past the exit too; a call in a branch
+  gives nothing even when every write is in that branch; writes by event
+  subscribers are not counted; a callee's record-variable names are kept as the
+  callee writes them (`via` says whose); a caller's own rule counts when anchored
+  before the call even in a branch that does not lead to it.
+
 ### 4.4 Part C: the evidence card
 
 `alsem explain` declares `ViewNeeds::rules` and `substrate::RULES` (4.1b) and emits one
@@ -508,7 +563,8 @@ text above, and why:
   `rules` (as `prove reaches-ui` counts UI).
 - **Cross-call rules (step 5).** Every card has `"inherited": []`, `"callers": []`
   and one gap `cross-call-rules-not-computed`, so an empty list never reads as "none".
-  Step 5 fills the lists and drops that gap.
+  Step 5 fills the lists and drops that gap. *Done (step 5):* see 4.3 and 5, as
+  built.
 - **Gaps.** `symbol-only-dependency` for each cone call site with ledger status
   `external` / `unfetched-dependency` (anchored at the call), and one per app for the
   resolved calls that reach a row with no body (listing the callees);
@@ -516,7 +572,8 @@ text above, and why:
   `body-unavailable`; `cone-truncated`; `text-differs-by-directive` when the `#if`
   arms give different captions or tooltips (the field is then `null`);
   `field-caption-unknown` for a written field of a dependency table with no caption
-  read. Error collectors (4.2 limits) and skipped table triggers (5) are not gaps yet.
+  read. Error collectors (4.2 limits) and skipped table triggers (5) are not gaps yet
+  (*step 5 adds both*, 5 as built).
 - **Resolution and exit codes.** `--routine` runs `prove`'s selector code
   (`resolve_changed_roots` with one selector): not found and ambiguous exit 2 with
   `routine-not-found` / `routine-ambiguous` (the candidates named). `--diff` runs
@@ -600,6 +657,30 @@ triage shows real rules look like.
   card says that the trigger rules were skipped. That is often exactly the fact the
   agent needs.
 
+*As built (step 5):*
+
+- **Error collectors.** The engine knew no collector, so the list is stated: a
+  `Log…` procedure of codeunit `Error Message Management` or table `Error Message`,
+  matched on the resolved call's target. Each call to one, in the routine or any
+  routine it reaches, is an `error-collector` gap anchored at the call.
+- **Table triggers.** Inherited as 4.3 (as built) says. A skipped trigger is a
+  `table-trigger-rules-skipped` gap at the write, with `op` (`assign`, `modify`,
+  `insert`, `delete`), the table (and field), the reason (a plain assignment;
+  no `RunTrigger = true`; a non-literal RunTrigger), the triggers and their rules.
+  The triggers are found by name on the table and its table extensions
+  (`On<Op>` / `OnBefore<Op>` / `OnAfter<Op>`, and the `Validate` family on the
+  field). A gap is given only when the skipped triggers have a rule.
+- **Event subscribers.** Each extension point has `subscriberRoutines` (routine,
+  id, app, the edge's `conditional`, and the rules the subscriber runs: its own
+  and its `top-level` callees') and `conditionalOnAppSet: true`. They are never
+  merged into `inherited`.
+- **`reachedFrom` through `RunObject`.** A page action's `RunObject = Codeunit X`
+  reaches `X`'s `OnRun`, and from there the routine over the resolved calls; the
+  entry has `runObject`. Only codeunit targets (a page or report run is not a call
+  into code the card follows). The actions are `ModelObject::run_actions`, built at
+  assembly behind `ViewNeeds::card_text` (an object-level fact; the accessor panics
+  when not built).
+
 ## 6. Testing
 
 Following CLAUDE.md:
@@ -647,7 +728,7 @@ Following CLAUDE.md:
 | 2 | Part A.2 and A.3: captions, tooltips, actions, doc comments. Then measure and record memory (4.1b) | l2 snapshot only if actions join the projection; the l2 snapshot's Debug digest moves with any new IR field. *Done:* none moved (the l2 digest is over projected L2 features, which do not read the new fields) |
 | 3 | Part B: `ViewNeeds::rules`, `PRule` for own rules at assembly; `TestField` gets a rule as well as its `StateOnly` class | l2, r4 via the new fixture. *Done:* the l2 snapshot and the r4f whole-corpus root-class summary gained the ws-rules routines; no other line moved. No per-detector r4 golden was seeded, because no detector reads rules until step 6 (d65 will add ws-rules to its fixtures) |
 | 4 | Part C: `alsem explain --routine`, `--diff` and `--table/--field`, own rules plus existing effects, tests and events | new `cli-explain` family. *Done:* `tests/cli-explain-goldens/` (18 goldens, 9 cases × human and JSON); the new fixture `ws-explain` added lines to the l2 snapshot and the r4f root-class summary, a new r2c event-graph golden, and two policy-facts oracle cases; no other golden moved |
-| 5 | Part B2: inherited and caller rules; `substrate::RULES` implies `ORDERING_FACTS` | cli-explain |
+| 5 | Part B2: inherited and caller rules; ~~`substrate::RULES` implies `ORDERING_FACTS`~~ (not needed, 4.3 as built) | cli-explain. *Done:* 12 new goldens (fixture `ws-explain-calls`, 6 routines × human and JSON) and the step-4 goldens now show the computed lists; the new fixture added lines to the l2 snapshot and the r4f root-class summary, a new r2c golden and two policy-facts oracle cases |
 | 6 | Part D: `substrate::RULES` writer index, `d65-guard-bypass` opt-in, the registry-test extension, then the CDO triage | r4 |
 | 7 | Part E: policy emission (separate spec) | — |
 

@@ -1694,6 +1694,20 @@
       "routines": 10,
       "sha256": "3afe9c3298774c07c3bdd26f47e00fce81b39c5646d3398d8e31591be73bfc25"
     },
+    "r0/ws-explain-calls cross": {
+      "any": 62,
+      "direct": 30,
+      "inherited": 32,
+      "routines": 23,
+      "sha256": "e151a999fd21cc743bda465f802b9928dcf56ff2b5facda2185dfbd0726b05d9"
+    },
+    "r0/ws-explain-calls single": {
+      "any": 62,
+      "direct": 30,
+      "inherited": 32,
+      "routines": 23,
+      "sha256": "e151a999fd21cc743bda465f802b9928dcf56ff2b5facda2185dfbd0726b05d9"
+    },
     "r0/ws-implicit-trigger cross": {
       "any": 6,
       "direct": 2,

@@ -1,0 +1,14 @@
+Codeunit Calls Post::QuickPost  ws:src/post.al:17
+  rules: none of its own
+  inherits via CheckOrder: rejects when Order."No." = '': "The order has no number."  [Error ws:src/checks.al:5]
+  inherits via CheckOrder > CheckCustomer: rejects when Order.Blocked: "The customer is blocked."  [Error ws:src/checks.al:14]
+  caller rules: no known caller
+  writes Calls Order [Amount] (DB_MODIFY) at ws:src/post.al:24
+  commits: no
+  tests: none reach it
+  gap: error-collector (callee Codeunit Error Message Management::LogSimpleError, routine Codeunit Calls Checks::LogIfBlocked) at ws:src/checks.al:52
+  gap: table-trigger-rules-skipped (what assign of Calls Order.Amount, table Calls Order) at ws:src/post.al:23
+    skips Table Calls Order::OnValidate: rejects when Status <> Status::Open  [TestField ws:src/order.al:15]
+  gap: table-trigger-rules-skipped (what modify on Calls Order, table Calls Order) at ws:src/post.al:24
+    skips Table Calls Order::OnModify: rejects when Blocked  [Error ws:src/order.al:24]
+

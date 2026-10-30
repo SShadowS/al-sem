@@ -1,6 +1,7 @@
 Codeunit Explain Tests::PostUnreleasedFails  ws:src/tests.al:8
   rules: none of its own
-  rules from callees and callers: not computed yet
+  inherited rules: none
+  caller rules: no known caller
   writes Explain Order [Posted, Status] (DB_MODIFY, guarded-by-IsHandled) at ws:src/post.al:17
   commits: no
   raises OnBeforePostOrder (unknown) at ws:src/post.al:12

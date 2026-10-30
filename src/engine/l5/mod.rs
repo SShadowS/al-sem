@@ -168,6 +168,9 @@ pub mod fingerprint_cli;
 // writers its `--table/--field` mode lists.
 pub mod explain;
 pub mod field_writers;
+// Intent evidence step 5: rules across calls (inherited, caller and table-
+// trigger rules) for the evidence card.
+pub mod cross_rules;
 
 #[cfg(test)]
 pub(crate) mod test_support;

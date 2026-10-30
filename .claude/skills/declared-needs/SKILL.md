@@ -168,8 +168,8 @@ built) shows each choice above:
   only when a selected detector requires `substrate::RULES`. Every other command and
   a default `analyze` pay nothing.
 - **Level 2, `substrate::RULES`:** only the per-field writer index d65 reads, built
-  from the rules. It implies `ORDERING_FACTS`, stays out of `ALL`, and is added to
-  the parity mask.
+  from the rules. It stays out of `ALL` and is added to the parity mask. (Rev 3 said
+  it implies `ORDERING_FACTS`; step 5 found it does not, see below.)
 
 **Landed (step 3):** `ViewNeeds::rules` reaches the assembly as `AssemblyNeeds`
 (`src/program/model/workspace.rs`), a parameter of every assembly entry with no
@@ -185,3 +185,12 @@ second level-1 need, `card_text`, so d65 will not pay for the card's text) and h
 own level-3 factory, `explain_plan` (one tree, no run, no `l4`). A fact one command
 reads that only exists in the IR (a doc comment, an action's trigger link) is built at
 assembly behind that command's own need, not re-parsed by the command.
+
+**Landed (step 5):** rules across calls (`engine::l5::cross_rules`) need no new
+declaration. Check what a substrate bit really holds before you depend on it: the spec
+said "statement order comes from `ORDERING_FACTS`", but those are IO / commit / UI
+hazard pairs. The order is already on every model (a site's control context and
+anchor), so `RULES` does not imply `ORDERING_FACTS`. An object-level fact one command
+reads (`ModelObject::run_actions`, the `RunObject` page actions) follows the same rule
+as a routine-level one: `Option`, built behind the command's need (`card_text`), and a
+panicking accessor.

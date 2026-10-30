@@ -325,6 +325,14 @@ fn a_default_analyze_view_builds_no_rules() {
             rows.iter().all(|r| r.card_text.is_none()),
             "single_app {single_app}: a default analyze built card text"
         );
+        assert!(
+            m.resolved()
+                .workspace
+                .objects
+                .iter()
+                .all(|o| o.run_actions.is_none()),
+            "single_app {single_app}: a default analyze built the RunObject actions"
+        );
     }
 }
 
@@ -354,7 +362,26 @@ fn an_explain_view_builds_card_text() {
         );
         assert_eq!(text("ConfirmDelete").doc, None, "single_app {single_app}");
         assert!(rows.iter().all(|r| r.card_text.is_some()));
+        // The RunObject actions are built with the card text, for every
+        // object (an object with none reads `Some(vec![])`).
+        assert!(
+            view.target
+                .resolved()
+                .workspace
+                .objects
+                .iter()
+                .all(|o| o.run_actions.is_some())
+        );
     }
+}
+
+/// A model built without the card-text need fails loudly on a read of an
+/// object's RunObject actions.
+#[test]
+#[should_panic(expected = "run actions not built: declare ViewNeeds::card_text")]
+fn reading_run_actions_not_built_panics() {
+    let m = model(AssemblyNeeds::RULES);
+    let _ = m.workspace.objects[0].run_actions();
 }
 
 /// A model built without the card-text need fails loudly on a read.

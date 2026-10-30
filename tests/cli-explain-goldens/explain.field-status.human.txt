@@ -6,7 +6,8 @@ Codeunit Explain Post::PostOrder  ws:src/post.al:4
   doc: Posts a released order. / It marks the order posted.
   rejects when Order.Status <> Order.Status::Released: "Order %1 is not released."  [Error ws:src/post.al:10]
   rejects when not (Order.Status <> Order.Status::Released) and Order.Amount is empty: (platform message)  [TestField ws:src/post.al:11]
-  rules from callees and callers: not computed yet
+  inherited rules: none
+  caller rules: none (2 known caller(s))
   writes Explain Order [Posted, Status] (DB_MODIFY, guarded-by-IsHandled) at ws:src/post.al:17
   commits: no
   raises OnBeforePostOrder (unknown) at ws:src/post.al:12
@@ -18,7 +19,8 @@ Codeunit Explain Post::PostOrder  ws:src/post.al:4
 Codeunit Explain Post::Archive  ws:src/post.al:22
   doc: Archives without any check.
   rules: none of its own
-  rules from callees and callers: not computed yet
+  inherited rules: none
+  caller rules: no known caller
   writes Explain Order [Status] (DB_MODIFY) at ws:src/post.al:25
   commits: yes
   tests: none reach it
