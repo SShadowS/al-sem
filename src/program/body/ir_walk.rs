@@ -1684,6 +1684,8 @@ impl<'a> IrCfn<'a> {
 
     /// G34: `(R folded, [T folded])` when `cond` is `R.Number <> Database::"T"`
     /// (either side, through parentheses) and `then_block` is a lone `exit`.
+    /// G43: also `not (R.Number in [Database::"A", Database::"B", …])`, whose
+    /// tables are the list's (every element a `Database::` table, else none).
     fn table_exit_guard(&self, cond: ExprId, then_block: BlockId) -> Option<(String, Vec<String>)> {
         let [BlockItem::Stmt(s)] = self.ir().block(then_block).items.as_slice() else {
             return None;
@@ -1691,9 +1693,32 @@ impl<'a> IrCfn<'a> {
         if !matches!(self.ir().stmt(*s).kind, al_syntax::ir::StmtKind::Exit(_)) {
             return None;
         }
-        let mut cond = cond;
-        while let ExprKind::Parenthesized(x) = &self.ir().expr(cond).kind {
-            cond = *x;
+        let strip = |mut e: ExprId| {
+            while let ExprKind::Parenthesized(x) = &self.ir().expr(e).kind {
+                e = *x;
+            }
+            e
+        };
+        let cond = strip(cond);
+        if let ExprKind::Unary {
+            op: UnaryOp::Not,
+            operand,
+        } = &self.ir().expr(cond).kind
+            && let ExprKind::Binary {
+                op: BinaryOp::In,
+                lhs,
+                rhs,
+            } = &self.ir().expr(strip(*operand)).kind
+        {
+            let r = self.number_receiver(strip(*lhs))?;
+            let ExprKind::List(items) = &self.ir().expr(strip(*rhs)).kind else {
+                return None;
+            };
+            let tables = items
+                .iter()
+                .map(|&e| self.database_table(strip(e)))
+                .collect::<Option<Vec<String>>>()?;
+            return (!tables.is_empty()).then_some((r, tables));
         }
         let ExprKind::Binary {
             op: BinaryOp::Ne,
@@ -1702,12 +1727,6 @@ impl<'a> IrCfn<'a> {
         } = &self.ir().expr(cond).kind
         else {
             return None;
-        };
-        let strip = |mut e: ExprId| {
-            while let ExprKind::Parenthesized(x) = &self.ir().expr(e).kind {
-                e = *x;
-            }
-            e
         };
         let (lhs, rhs) = (strip(*lhs), strip(*rhs));
         let (r, t) = match (self.number_receiver(lhs), self.number_receiver(rhs)) {
