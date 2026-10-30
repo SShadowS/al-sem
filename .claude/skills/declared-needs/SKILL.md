@@ -23,22 +23,29 @@ A need is declared at the level where the fact is **produced**:
 
 | Level | What it controls | Where | Declared by |
 |---|---|---|---|
-| 1. Build profile | What parsing, lowering and the dependency tier keep (syntax trees, text, per-file facts) | `src/program/profile.rs` (`BuildProfile`) | Every graph build call site. Presets: `FULL` (everything), `LIGHT` (the LSP server) |
+| 1. Build profile and view needs | What parsing, lowering, the dependency tier and model assembly keep (syntax trees, dependency bodies, per-routine facts built from the IR) | `src/program/profile.rs` (`BuildProfile`); `src/engine/batch/job.rs` (`ViewNeeds`) | CLI commands: `ProgramScope` (`src/program/resolved.rs`) fixes the profile (`Workspace` → summary bodies, `CrossApp` → `FULL`), and each demand's `ViewNeeds` is unioned per view before `build_view_model` (`src/engine/gate/run.rs`) builds the model. Direct callers (the LSP server, dependency tests) name a `BuildProfile`: `FULL` (everything) or `LIGHT` |
 | 2. Substrate bit | Which expensive derived facts the detector context builds (summaries, transaction spans, ordering facts, …) | `src/engine/l5/registry.rs` (`pub mod substrate`) | Each detector's `requires`; `run_detectors` folds them into `demanded` |
 | 3. View plan | What one command computes over its model (L4 analysis, trees, witness facts, after-run reads) | `src/engine/session.rs` (`Plan`, `View`) | The command's plan factory: `analyze_plan`, `digest_plan`, `prove_plan`, `policy_plan`, `query_plan`, … |
 
 **Choose the level:**
 
-- The fact comes from the source text or from lowering one file (label text, captions,
-  dependency bodies)? → **Level 1**, a `BuildProfile` field.
-- The fact is derived across routines or the call graph, and detectors read it? →
-  **Level 2**, a substrate bit.
+- First ask whether it needs a declaration at all. A fact that is cheap to keep (one
+  short string per declaration, such as label text or a caption) is a plain IR field
+  every profile keeps. **Measure before you gate.** A gate costs code in the lowerer,
+  the cache key and the tests, so add one only for a measured cost.
+- The fact needs the full syntax (IR) of a routine, such as complete `if` conditions?
+  After assembly the model keeps only skeleton rows (`ModelRoutine`), so build it
+  **at model assembly** → **Level 1**, a `ViewNeeds` field. A fact that changes what
+  is lowered or what the dependency tier keeps → **Level 1**, a `BuildProfile` field.
+- The fact is derived from the model across routines or the call graph, and detectors
+  read it? → **Level 2**, a substrate bit.
 - One command's own computation that is not a detector input (a digest tree, a
   fingerprint read)? → **Level 3**, a `Plan` field set by that command's factory.
 
-A fact can need more than one level. For example, rules with messages need level 1
-(the label text) and level 2 (the rule index). Then the higher level states which
-lower level it depends on, and a mismatch fails loudly (see rule 5).
+A fact can need more than one level. For example, intent-evidence rules are built at
+assembly (level 1, `ViewNeeds::rules`), and d65's per-field writer index is built from
+them (level 2, `substrate::RULES`). Then the higher level states which lower level it
+depends on, and a mismatch fails loudly (see rule 5).
 
 ## Rules
 
@@ -50,13 +57,17 @@ lower level it depends on, and a mismatch fails loudly (see rule 5).
    profiles may skip it. (Rev 1 of the intent-evidence spec broke this rule with an
    `INTENT` preset "above `FULL`", and rev 2 had to undo it.)
 3. **Skipping a fact must not change any other fact.** A smaller profile may leave a
-   fact empty but must never compute any other fact differently. This is tested:
-   `full_and_light_profiles_give_the_same_report` (`src/program/dep_summary.rs`) and
+   fact empty but must never compute any other fact differently. Two tests cover
+   this, and only for resolution: `full_and_light_profiles_give_the_same_report`
+   (`src/program/dep_summary.rs`) compares the resolution report text, and
    `cdo_light_and_full_profiles_give_the_same_report_and_answers`
-   (`src/program/dep_cache.rs`). A new profile field extends both tests.
+   (`src/program/dep_cache.rs`) does the same on CDO but runs **only under
+   `scripts/cdo-gate`**. Neither compares IR fields. A new profile field extends both,
+   and adds its own assertion for the fact it skips (for a lowered field, a
+   field-by-field diff of the lowered `AlFile` under both profiles).
 4. **Skip the fact where it is made.** Don't build it and then drop it. A skipped
-   fact should never be allocated (for example, the lowerer does not read the text at
-   all).
+   fact should never be allocated (for example, a `DependencyBodies::Summary` build
+   never keeps a dependency's bodies).
 5. **Reading an unbuilt fact fails loudly.** In debug builds and tests, reading a
    cell or field that was not declared panics with a message naming the missing
    declaration. The model to copy is `get_ordering_facts`:
@@ -78,17 +89,23 @@ lower level it depends on, and a mismatch fails loudly (see rule 5).
    same change. Otherwise the full context lacks the bit while the minimal one has it,
    and the test fails against correct code. Read the `DB_EFFECT_REVERSE_INDEX` doc
    before deciding.
-9. **A detector declares everything it reads.** Two tests guard this:
-   `every_detector_alone_declares_what_it_reads` (registry) runs each detector alone,
-   and the per-detector full-against-minimal parity test compares findings. Both must
-   stay green. Prove the declaration matters: remove the bit from `requires` and watch
-   a test fail (CLAUDE.md's discrimination-proof rule).
+9. **A detector declares everything it reads.** The per-detector full-against-minimal
+   parity test (`tests/gap/gap_detector_substrate_parity.rs`) compares findings and is
+   the general guard. `every_detector_alone_declares_what_it_reads` (registry) is
+   **narrow**: it runs each detector on a model with zero routines and only looks for
+   the `"substrate::ORDERING_FACTS"` panic text. It guards nothing else until you add
+   a needle (and, for a fact read per routine, a model with at least one routine).
+   Prove the declaration matters: remove the bit from `requires` and watch a test fail
+   (CLAUDE.md's discrimination-proof rule). If no test fails, the declaration is
+   unguarded: add the test, or say so.
 10. **Post-run reads go in `Plan::after_run`.** A command that reads a substrate after
     the detectors run (digest reads `TRANSACTION_SPANS`, events reads `SUMMARIES`)
     declares it there. `prepare` asserts each run's union holds it.
 
 ## Checklist: adding a build-profile field (level 1)
 
+0. Measure first. Is the fact's cost real (memory or time, a recorded number)? If
+   not, make it a plain field every profile keeps and stop here.
 1. Add the field to `BuildProfile` as an enum with a doc comment for each value. Set
    it in `FULL` (keeps everything) and `LIGHT`.
 2. Pass it to where the fact is made, so a skip never allocates (rule 4).
@@ -96,10 +113,23 @@ lower level it depends on, and a mismatch fails loudly (see rule 5).
    (rule 6).
 4. Make reading the field under a skipping profile panic in debug builds and tests
    (rule 5).
-5. Extend the two LIGHT-against-FULL tests: list the new field as allowed to differ,
-   and keep every other fact identical (rule 3).
+5. Extend the two LIGHT-against-FULL tests so every other fact stays identical, and
+   add an assertion for the skipped fact itself, since those tests compare only
+   resolution report text (rule 3).
 6. Check every call site that builds a graph still states its profile on purpose.
-   Search for `BuildProfile::`.
+   Search for `BuildProfile::`. For CLI commands, check `ProgramScope::profile`.
+
+## Checklist: adding a view need (level 1, built at assembly)
+
+1. Add a `bool` field to `ViewNeeds` (`src/engine/batch/job.rs`) and join it in
+   `union`. Keep it out of `ViewKey` unless it changes which workspace or universe
+   the view is.
+2. Set it only in the `demands()` of the jobs that read it. A detector-driven need is
+   set from the selected detectors' `requires`, so a default run stays unchanged.
+3. Thread it from `build_view_model` to where the fact is built at assembly.
+4. Store the fact as `Option` (`None` = not built) and panic in debug builds and
+   tests when a reader finds `None` (rule 5).
+5. Test that a default run builds none of it.
 
 ## Checklist: adding a substrate bit (level 2)
 
@@ -112,8 +142,9 @@ lower level it depends on, and a mismatch fails loudly (see rule 5).
 4. Accessor: panic with a "declare substrate::X" message when it is empty (rule 5).
 5. Declare it in each reading detector's `requires`, and in `Plan::after_run` for
    post-run readers (rules 9 and 10).
-6. If the bit needs a level-1 fact, the command that demands the bit must also pick a
-   profile that keeps that fact. Make the mismatch panic in debug builds and tests.
+6. If the bit needs a level-1 fact, the command that demands the bit must also declare
+   it (the `ViewNeeds` field, or a profile that keeps it). Make the mismatch panic in
+   debug builds and tests.
 
 ## Checklist: a new command (level 3)
 
@@ -124,16 +155,21 @@ what the plan needs, not `FULL` by habit, once a smaller profile is enough.
 
 ## Worked example in progress: intent evidence
 
-`docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 2, design only, not
-built) adds both kinds of declaration:
+`docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 3, design only, not
+built) shows each choice above:
 
-- **Level 1:** `BuildProfile::intent_text: Skip | Workspace | All`. It controls
-  whether the lowerer keeps label text, captions, tooltips and doc comments. `LIGHT`
-  uses `Skip` and `FULL` uses `All`. It joins `DepKey`.
-- **Level 2:** `substrate::RULES`, the per-routine "rejects when" rules and the
-  per-field writer index. It stays out of `ALL` and is added to the parity mask. Only
-  `d65-guard-bypass` (opt-in) and `alsem explain` demand it, so a default `analyze`
-  run costs what it did before.
+- **No gate for text.** Label text, captions, tooltips and doc comments are plain IR
+  fields every profile keeps. G52 already lowers label text for every build. Rev 2
+  had an `intent_text` profile field for them; rev 3 dropped it because nobody had
+  measured a cost. Memory is measured after the text lands, and only comments may get
+  a gate if the number says so.
+- **Level 1, `ViewNeeds::rules`:** the per-routine "rejects when" rules need full `if`
+  conditions, which only exist at assembly. `explain` always declares it; `analyze`
+  only when a selected detector requires `substrate::RULES`. Every other command and
+  a default `analyze` pay nothing.
+- **Level 2, `substrate::RULES`:** only the per-field writer index d65 reads, built
+  from the rules. It implies `ORDERING_FACTS`, stays out of `ALL`, and is added to
+  the parity mask.
 
 When that work starts, follow the spec's §4.1b, and update this example once it has
 landed.
