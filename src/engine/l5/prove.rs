@@ -29,7 +29,7 @@ use crate::engine::batch::job::{
 };
 use crate::engine::batch::output::JobOutput;
 use crate::engine::gate::format_json::serialize_document_value;
-use crate::engine::l4::effect_query_cli::{OwnerIndex, owner_qualified};
+use crate::engine::l4::effect_query_cli::{OwnerIndex, RECEIVER_TEMP_STATE, owner_qualified};
 use crate::engine::l5::conditionality::UNCONDITIONAL;
 use crate::engine::l5::digest_cli::{
     ChangedInput, DbTempStates, DigestEffectFull, DigestEntryFull, FullAnchor, finish_default_run,
@@ -564,6 +564,30 @@ fn writes_caller_dependent(eff: &DigestEffectFull) -> bool {
             .all(|s| *s == "known(true)" || s.starts_with("parameter-dependent"))
 }
 
+/// The `temp-state-depends-on-caller` blocker's text. A write whose every
+/// caller-dependent state is the routine's own implicit `Rec`
+/// ([`RECEIVER_TEMP_STATE`], G49) names that record: the routine has no
+/// parameter a reader could look up.
+fn caller_dependent_detail(eff: &DigestEffectFull) -> String {
+    let receiver_only = temp_states(eff)
+        .iter()
+        .filter(|s| s.starts_with("parameter-dependent"))
+        .all(|s| *s == RECEIVER_TEMP_STATE);
+    if receiver_only {
+        format!(
+            "{} on the implicit Rec: a table write only if the record the routine runs \
+             on is not temporary",
+            eff.effect_type
+        )
+    } else {
+        format!(
+            "{} on a record parameter: a table write only if the caller passes \
+             a record that is not temporary",
+            eff.effect_type
+        )
+    }
+}
+
 /// A reachable table write that names no table (no resource, not a boundary
 /// group, which names its resources) and is not known to write a temporary
 /// record. A group whose every resource cannot run (G33) names none any more,
@@ -655,11 +679,7 @@ fn evaluate_may_question(
             .filter(|e| is_table_write(e, table) && writes_caller_dependent(e))
             .map(|e| ProveBlocker {
                 kind: "temp-state-depends-on-caller",
-                detail: format!(
-                    "{} on a record parameter: a table write only if the caller passes \
-                     a record that is not temporary",
-                    e.effect_type
-                ),
+                detail: caller_dependent_detail(e),
                 anchor: Some(BlockerAnchor {
                     source_kind: e.evidence.source_kind.to_string(),
                     file: e.evidence.file.clone(),

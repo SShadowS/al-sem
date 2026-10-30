@@ -51,6 +51,7 @@ use crate::engine::l4::effect_query::{
     AncestorTouch, DbEffectQuery, TableTouch, UNKNOWN_TABLE_ID, is_unknown_table,
 };
 use crate::engine::session::{Cell, View, query_plan};
+use crate::program::body::features::RECEIVER_PARAM_INDEX;
 use crate::program::model::declaring::DeclaringObjects;
 use crate::program::model::workspace::{
     Model, ModelRecordOperation, ModelRoutine, table_by_id_preferring_real,
@@ -735,12 +736,24 @@ fn routine_ref_json(rr: &RoutineRef) -> Value {
     })
 }
 
+/// [`temp_state_str`]'s text for a state that depends on the routine's own
+/// implicit `Rec` (the receiver index).
+pub const RECEIVER_TEMP_STATE: &str = "parameter-dependent(rec)";
+
 /// The one renderer of the temp-state vocabulary (`query effects`, and
 /// `digest`/`prove`'s `detail.tempState`).
+///
+/// The reserved receiver index ([`RECEIVER_PARAM_INDEX`], `u32::MAX`, "the
+/// implicit `Rec` a table procedure or trigger runs on") renders as
+/// `parameter-dependent(rec)`: the raw `4294967295` is an internal sentinel,
+/// not a parameter position a person can find in the signature (G49).
 pub fn temp_state_str(t: &TempStateKind) -> String {
     match t {
         TempStateKind::Known(true) => "known(true)".to_string(),
         TempStateKind::Known(false) => "known(false)".to_string(),
+        TempStateKind::ParameterDependent(i) if *i == RECEIVER_PARAM_INDEX => {
+            RECEIVER_TEMP_STATE.to_string()
+        }
         TempStateKind::ParameterDependent(i) => format!("parameter-dependent({i})"),
         TempStateKind::Unknown => "unknown".to_string(),
     }

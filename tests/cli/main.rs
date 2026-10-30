@@ -159,6 +159,7 @@ mod cli_prove_temp_writes;
 mod cli_prove_throws_error;
 mod cli_prove_unknown_write_anchor;
 mod cli_query_differential;
+mod cli_receiver_temp_state;
 mod cli_record_integer_builtin_arg;
 mod cli_recordref_open_temporary;
 mod cli_s6_consumers;
