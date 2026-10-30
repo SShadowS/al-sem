@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (intent evidence)
+
+Spec: `docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 3).
+
+- **Step 1: label attributes and `TextConst` text are lowered.** `VarDecl::label`
+  (`LabelValue`) now also keeps a label's `Comment = '…'`, `MaxLength = n` and every
+  other `name = value` attribute (as written, in `other`), and a `TextConst`'s text
+  (the `ENU` value, else the first) with its other languages in `translations`. A
+  `TextConst` is never locked, so it is never a constant for G52's `Evaluate` rule.
+  No golden moves. Tests `label_attributes_and_text_consts_are_kept` (new) and
+  `label_declarations_carry_text_and_locked` (G52; now compares text and locked only).
+
 ### Fixed (G52)
 
 - **A statement `Evaluate` that provably cannot fail is no implicit error**

@@ -2325,10 +2325,15 @@ fn extract_var_decl(decl: RawNode, source: &str, out: &mut Vec<VarDecl>) {
 }
 
 /// The value of a label declaration (`Name: Label 'text', Locked = true;`): its
-/// `value` field, under a `Label` type. `None` for any other declaration. Locked
-/// only on an explicit `Locked = true` with no `Locked = false` beside it.
+/// `value` field and `label_attribute`s, under a `Label` type; or a `TextConst`'s
+/// `ml_value_list`. `None` for any other declaration. Locked only on an explicit
+/// `Locked = true` with no `Locked = false` beside it; a `TextConst` never is.
 fn label_value(decl: RawNode, ty: Option<&str>, source: &str) -> Option<crate::ir::LabelValue> {
-    if !ty.is_some_and(|t| t.eq_ignore_ascii_case("label")) {
+    let ty = ty?;
+    if ty.eq_ignore_ascii_case("textconst") {
+        return text_const_value(decl, source);
+    }
+    if !ty.eq_ignore_ascii_case("label") {
         return None;
     }
     let value = decl.field(FieldName::Value)?;
@@ -2336,31 +2341,96 @@ fn label_value(decl: RawNode, ty: Option<&str>, source: &str) -> Option<crate::i
         RawKind::StringLiteral => crate::ir::al_string_literal_text(value.text(source)),
         _ => None,
     };
+    let mut out = crate::ir::LabelValue {
+        text,
+        ..Default::default()
+    };
     let mut locked_true = false;
     let mut locked_false = false;
     for attr in decl.named_children() {
         if attr.kind() != RawKind::LabelAttribute {
             continue;
         }
-        let is_locked = attr
-            .field(FieldName::Name)
-            .is_some_and(|n| n.text(source).trim().eq_ignore_ascii_case("locked"));
-        if !is_locked {
+        let Some(name) = attr.field(FieldName::Name) else {
+            continue;
+        };
+        let name = name.text(source).trim();
+        let v = attr.field(FieldName::Value);
+        let raw = v.map(|v| v.text(source).trim()).unwrap_or("");
+        if name.eq_ignore_ascii_case("locked") {
+            match v {
+                Some(v) if v.kind() == RawKind::Boolean && raw.eq_ignore_ascii_case("true") => {
+                    locked_true = true
+                }
+                _ => locked_false = true,
+            }
             continue;
         }
-        match attr.field(FieldName::Value) {
-            Some(v)
-                if v.kind() == RawKind::Boolean
-                    && v.text(source).trim().eq_ignore_ascii_case("true") =>
-            {
-                locked_true = true
-            }
-            _ => locked_false = true,
+        // The first well-formed `Comment` / `MaxLength` fills its field; any
+        // other (a repeat, or a value of another kind) is kept as written.
+        if name.eq_ignore_ascii_case("comment")
+            && out.comment.is_none()
+            && let Some(c) = v
+                .filter(|v| v.kind() == RawKind::StringLiteral)
+                .and_then(|_| crate::ir::al_string_literal_text(raw))
+        {
+            out.comment = Some(c);
+            continue;
         }
+        if name.eq_ignore_ascii_case("maxlength")
+            && out.max_length.is_none()
+            && let Some(n) = v
+                .filter(|v| v.kind() == RawKind::Integer)
+                .and_then(|_| raw.parse::<u32>().ok())
+        {
+            out.max_length = Some(n);
+            continue;
+        }
+        out.other.push((name.to_string(), raw.to_string()));
     }
+    out.locked = locked_true && !locked_false;
+    Some(out)
+}
+
+/// A `TextConst`'s value (`Name: TextConst ENU = 'a', DEU = 'b';`): the `ENU`
+/// text, else the first pair's, as [`crate::ir::LabelValue::text`], and every
+/// other pair as a translation. `None` when the declaration has no pair.
+fn text_const_value(decl: RawNode, source: &str) -> Option<crate::ir::LabelValue> {
+    let list = decl
+        .named_children()
+        .into_iter()
+        .find(|c| c.kind() == RawKind::MlValueList)?;
+    let pairs: Vec<(String, String, Option<String>)> = list
+        .named_children()
+        .into_iter()
+        .filter(|p| p.kind() == RawKind::MlValuePair)
+        .map(|p| {
+            let lang = p
+                .field(FieldName::Language)
+                .map(|l| l.text(source).trim().to_string())
+                .unwrap_or_default();
+            let raw = p
+                .field(FieldName::Value)
+                .map(|v| v.text(source).trim().to_string())
+                .unwrap_or_default();
+            let text = crate::ir::al_string_literal_text(&raw);
+            (lang, raw, text)
+        })
+        .collect();
+    let main = pairs
+        .iter()
+        .position(|(l, _, _)| l.eq_ignore_ascii_case("enu"))
+        .or((!pairs.is_empty()).then_some(0))?;
+    let translations = pairs
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != main)
+        .map(|(_, (l, raw, text))| (l.clone(), text.clone().unwrap_or_else(|| raw.clone())))
+        .collect();
     Some(crate::ir::LabelValue {
-        text,
-        locked: locked_true && !locked_false,
+        text: pairs[main].2.clone(),
+        translations,
+        ..Default::default()
     })
 }
 
@@ -8051,17 +8121,15 @@ codeunit 50100 C
 "#;
         let af = parse(src);
         assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
-        let lv = |text: &str, locked: bool| {
-            Some(crate::ir::LabelValue {
-                text: Some(text.to_string()),
-                locked,
-            })
-        };
-        assert_eq!(af.objects[0].globals[0].label, lv("it's", true));
+        // G52 pins text and locked only; the other attributes are
+        // `label_attributes_and_text_consts_are_kept`'s.
+        let lv = |text: &str, locked: bool| Some((Some(text.to_string()), locked));
+        let tl = |l: &Option<crate::ir::LabelValue>| l.as_ref().map(|l| (l.text.clone(), l.locked));
+        assert_eq!(tl(&af.objects[0].globals[0].label), lv("it's", true));
         let labels: Vec<_> = af.objects[0].routines[0]
             .locals
             .iter()
-            .map(|l| (l.name.as_str(), l.label.clone()))
+            .map(|l| (l.name.as_str(), tl(&l.label)))
             .collect();
         assert_eq!(
             labels,
@@ -8073,6 +8141,79 @@ codeunit 50100 C
                 ("E", lv("e", true)),
                 ("N", None),
             ]
+        );
+    }
+
+    /// Intent evidence step 1: a label's `Comment`, `MaxLength` and any other
+    /// attribute, and a `TextConst`'s text and translations. Shapes checked
+    /// against `tree-sitter parse` (grammar `label_attribute`, `ml_value_list`).
+    #[test]
+    fn label_attributes_and_text_consts_are_kept() {
+        let src = r#"
+codeunit 50100 C
+{
+    var
+        L: Label 'x %1', Comment = '%1 = it''s no', MaxLength = 30, Locked = false, Foo = 3;
+        R: Label 'r', Comment = 'first', Comment = 'second', MaxLength = true;
+        V: Label @'verb', Comment = 'c';
+        T: TextConst DEU = 'Hallo %1', ENU = 'Hello %1', FRA = 'Ça va';
+        U: TextConst DEU = 'Nur';
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let label = |name: &str| {
+            af.objects[0]
+                .globals
+                .iter()
+                .find(|g| g.name == name)
+                .and_then(|g| g.label.clone())
+                .unwrap_or_else(|| panic!("{name} has a label value"))
+        };
+        let s = |x: &str| x.to_string();
+        let pair = |a: &str, b: &str| (s(a), s(b));
+        assert_eq!(
+            label("L"),
+            crate::ir::LabelValue {
+                text: Some(s("x %1")),
+                locked: false,
+                comment: Some(s("%1 = it's no")),
+                max_length: Some(30),
+                other: vec![pair("Foo", "3")],
+                translations: vec![],
+            }
+        );
+        assert_eq!(
+            label("R"),
+            crate::ir::LabelValue {
+                text: Some(s("r")),
+                comment: Some(s("first")),
+                other: vec![pair("Comment", "'second'"), pair("MaxLength", "true")],
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            label("V"),
+            crate::ir::LabelValue {
+                text: None,
+                comment: Some(s("c")),
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            label("T"),
+            crate::ir::LabelValue {
+                text: Some(s("Hello %1")),
+                translations: vec![pair("DEU", "Hallo %1"), pair("FRA", "Ça va")],
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            label("U"),
+            crate::ir::LabelValue {
+                text: Some(s("Nur")),
+                ..Default::default()
+            }
         );
     }
 

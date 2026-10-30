@@ -273,23 +273,39 @@ pub struct VarDecl {
     pub ty: Option<String>,
     pub temporary: bool,
     pub origin: Origin,
-    /// The text of a label declaration (`Name: Label 'text', Locked = true;`),
-    /// `None` for every other declaration. See [`LabelValue`].
+    /// The text of a label declaration (`Name: Label 'text', Locked = true;`) or
+    /// of a `TextConst` (`Name: TextConst ENU = 'text';`), `None` for every other
+    /// declaration. See [`LabelValue`].
     pub label: Option<LabelValue>,
 }
 
 /// What a label declaration's value is: the literal text with its quotes removed
-/// and every doubled `''` read as one `'`, and whether it is locked. A label that
-/// is not locked can be translated, so its text at run time may differ from this
-/// one; only a `locked` label's text is a constant (G52).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// and every doubled `''` read as one `'`, whether it is locked, and its other
+/// attributes. A label that is not locked can be translated, so its text at run
+/// time may differ from this one; only a `locked` label's text is a constant
+/// (G52). A `TextConst` is never locked.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LabelValue {
     /// The literal's text. `None` when the value is not a plain `'…'` string
-    /// literal (a verbatim `@'…'` string), so nothing can claim to know it.
+    /// literal (a verbatim `@'…'` string), so nothing can claim to know it. For a
+    /// `TextConst`: the `ENU` value, else the first value.
     pub text: Option<String>,
     /// True only when the declaration says `Locked = true` and nothing says
     /// `Locked = false`.
     pub locked: bool,
+    /// `Comment = '…'`, the text a developer wrote for translators (it often
+    /// says what each `%1` is). `None` when absent or not a plain literal.
+    pub comment: Option<String>,
+    /// `MaxLength = n`.
+    pub max_length: Option<u32>,
+    /// Every other `name = value` attribute, as written, in source order: a
+    /// `Comment` or `MaxLength` whose value is not of the expected kind, and
+    /// any name the grammar accepts but the fields above do not cover.
+    pub other: Vec<(String, String)>,
+    /// `TextConst` only: every `(language, text)` pair other than the one in
+    /// [`Self::text`], in source order. A pair whose value is no plain literal
+    /// keeps its raw text.
+    pub translations: Vec<(String, String)>,
 }
 
 /// The text of an AL string literal (`'it''s'` is `it's`), or `None` when `raw`
