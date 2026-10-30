@@ -1154,7 +1154,7 @@ pub(crate) fn direct_facts_for_routine(
                     (
                         v.name.as_str(),
                         v.declared_type.as_str(),
-                        v.label_constant.as_deref(),
+                        v.fixed_local.as_ref(),
                     )
                 }),
                 name,

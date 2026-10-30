@@ -14,16 +14,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing when `Source` is a constant no translation changes (a string
   literal, or a label declared `Locked = true`) and its text parses for
   `Target`'s declared type: a `Guid` in braced `{8-4-4-4-12}` form, or an
-  `Integer` of plain digits (optional leading `-`) in the 32-bit range.
-  Anything else stays a possible error: an unlocked label, a computed text,
-  another type, a target that is no plain variable, a third (format)
-  argument, or a label whose `#if` arms give different texts. Continia DO
+  `Integer` of plain digits (optional leading `-`) in AL's Integer range
+  (±2,147,483,647). Both variables must be LOCALS declared exactly once in
+  the routine, with no parameter or global of the same name: the IR keeps
+  both arms of an `#if`, so a global, a local declared twice, or a local
+  declared in one arm only (the other arm then sees the global) may have
+  another type or text in the compiled arm. Anything else stays a possible
+  error: an unlocked label, a global label, a computed text, another type,
+  a target that is no plain variable, or a third (format) argument. Continia DO
   reads notification ids this way (`CDO Conflict Notific. Handler`,
   `CDO DO-eDocs Notific. Handler`): claim OPRF-CORE-007.c4 (throws-error,
   expect no) now answers `no`; PLAT-SET-009.c1 (an `Evaluate` of computed
   text) still answers `yes`. To know a label's text, the lowerer now records
   it on `VarDecl.label` (`LabelValue`: text, locked), and the variable
-  symbol carries a locked label's text as `labelConstant`.
+  symbol carries `fixed_local` (set only for such a local, with a locked
+  label's text).
 
 ### Fixed (soundness of the guarded search; G47)
 

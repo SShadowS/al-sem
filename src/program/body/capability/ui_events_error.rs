@@ -13,7 +13,7 @@
 
 use super::super::features::PCallee;
 use super::super::features::PRoutine;
-use super::super::features::{PCallSite, PExpressionInfo};
+use super::super::features::{FixedLocal, PCallSite, PExpressionInfo};
 use super::{CapabilityExtra, CapabilityFact, CoverageReason, EventExtra, ExtractionContext};
 
 // ─── UI primitives ───────────────────────────────────────────────────────────
@@ -289,28 +289,32 @@ pub(crate) fn implicit_error_call(
 }
 
 /// For a variable name (lowercased): its declared type and the constant text it
-/// holds (a locked label's, [`crate::program::body::features::PVariableSymbol::label_constant`]),
-/// AGREED over every declaration of that name the routine sees. `None` when the
-/// name is no variable, or when two declarations of it (the arms of an `#if`)
-/// differ in either part, since either may be the one compiled.
+/// holds (a locked label's), known only for a FIXED local
+/// ([`crate::program::body::features::PVariableSymbol::fixed_local`]): one
+/// declaration, no parameter or global of that name. `None` for any other name.
+/// The IR keeps both arms of an `#if`, so a global, or a local declared twice,
+/// may have another type or text in the arm that is compiled; and a local
+/// declared once inside an `#if` may give way to a global of its name in the
+/// other arm.
 pub(crate) type VarFacts<'a> = dyn Fn(&str) -> Option<(String, Option<String>)> + 'a;
 
-/// [`VarFacts`] over a flat variable list of `(name, declared type, constant)`.
+/// [`VarFacts`] over a flat variable list of `(name, declared type, fixed local)`.
+/// Every entry of the name must be fixed (there is then exactly one).
 pub(crate) fn agreed_var_facts<'v>(
-    vars: impl Iterator<Item = (&'v str, &'v str, Option<&'v str>)>,
+    vars: impl Iterator<Item = (&'v str, &'v str, Option<&'v FixedLocal>)>,
     name: &str,
 ) -> Option<(String, Option<String>)> {
-    let mut agreed: Option<(&str, Option<&str>)> = None;
-    for (n, ty, constant) in vars {
+    let mut found = None;
+    for (n, ty, fixed) in vars {
         if !n.eq_ignore_ascii_case(name) {
             continue;
         }
-        match agreed {
-            Some(a) if a != (ty, constant) => return None,
-            _ => agreed = Some((ty, constant)),
+        if found.is_some() {
+            return None;
         }
+        found = Some((ty.to_string(), fixed?.constant.clone()));
     }
-    agreed.map(|(ty, c)| (ty.to_string(), c.map(str::to_string)))
+    found
 }
 
 /// G52: whether `Evaluate(Target, Source)` (two arguments, no format number)
@@ -361,10 +365,13 @@ fn is_braced_guid(s: &str) -> bool {
             .all(|(g, n)| g.len() == n && g.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
-/// Decimal digits, an optional leading `-`, within `i32`.
+/// Decimal digits, an optional leading `-`, within AL's Integer range
+/// (±2,147,483,647: unlike `i32`, `-2147483648` is outside it).
 fn is_plain_integer(s: &str) -> bool {
     let digits = s.strip_prefix('-').unwrap_or(s);
-    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) && s.parse::<i32>().is_ok()
+    !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && s.parse::<i32>().is_ok_and(|n| n != i32::MIN)
 }
 
 pub fn extract_error(
@@ -414,7 +421,7 @@ pub fn extract_error(
                 (
                     v.name.as_str(),
                     v.declared_type.as_str(),
-                    v.label_constant.as_deref(),
+                    v.fixed_local.as_ref(),
                 )
             }),
             name,
@@ -448,26 +455,29 @@ mod tests {
 
     #[test]
     fn evaluate_cannot_fail_only_on_a_constant_that_parses() {
-        let vars: Vec<(&str, &str, Option<&str>)> = vec![
-            ("id", "Guid", None),
-            ("n", "Integer", None),
-            ("d", "Date", None),
-            (
-                "tok",
-                "Label",
-                Some("{a7c3e1b4-9d2f-4a8e-b5c6-d7e8f9a0b1c2}"),
-            ),
-            ("txt", "Label", None),
-            ("seven", "Label", Some("7")),
-            // Declared twice with different texts (the arms of an `#if`).
-            (
-                "twice",
-                "Label",
-                Some("{a7c3e1b4-9d2f-4a8e-b5c6-d7e8f9a0b1c2}"),
-            ),
-            ("twice", "Label", Some("x")),
+        const G: &str = "{a7c3e1b4-9d2f-4a8e-b5c6-d7e8f9a0b1c2}";
+        let fixed = |c: Option<&str>| {
+            Some(FixedLocal {
+                constant: c.map(str::to_string),
+            })
+        };
+        let vars: Vec<(&str, &str, Option<FixedLocal>)> = vec![
+            ("id", "Guid", fixed(None)),
+            ("n", "Integer", fixed(None)),
+            ("d", "Date", fixed(None)),
+            ("tok", "Label", fixed(Some(G))),
+            ("txt", "Label", fixed(None)),
+            ("seven", "Label", fixed(Some("7"))),
+            // A global (or a local with a second `#if`-arm declaration):
+            // nothing fixed, whatever text one declaration shows.
+            ("gtok", "Label", None),
+            ("gid", "Guid", None),
+            // Two entries of one name: never answered.
+            ("twice", "Label", fixed(Some(G))),
+            ("twice", "Label", fixed(Some(G))),
         ];
-        let facts = |n: &str| agreed_var_facts(vars.iter().copied(), n);
+        let facts =
+            |n: &str| agreed_var_facts(vars.iter().map(|(n, t, f)| (*n, *t, f.as_ref())), n);
         let ok = |args: &[PExpressionInfo]| evaluate_cannot_fail(args, &facts);
         let lit = |s: &str| info("string_literal", s, None);
 
@@ -477,10 +487,17 @@ mod tests {
             lit("'{A7C3E1B4-9D2F-4A8E-B5C6-D7E8F9A0B1C2}'")
         ]));
         assert!(ok(&[ident("N"), ident("Seven")]));
-        assert!(ok(&[ident("N"), lit("'-2147483648'")]));
+        assert!(ok(&[ident("N"), lit("'-2147483647'")]));
+        assert!(ok(&[ident("N"), lit("'2147483647'")]));
 
+        assert!(
+            !ok(&[ident("N"), lit("'-2147483648'")]),
+            "outside AL's Integer"
+        );
         assert!(!ok(&[ident("Id"), ident("Txt")]), "unlocked label");
-        assert!(!ok(&[ident("Id"), ident("Twice")]), "#if arms disagree");
+        assert!(!ok(&[ident("Id"), ident("Twice")]), "two declarations");
+        assert!(!ok(&[ident("Id"), ident("GTok")]), "global label");
+        assert!(!ok(&[ident("GId"), ident("Tok")]), "global target");
         assert!(!ok(&[ident("Id"), ident("Seven")]), "7 is no Guid");
         assert!(!ok(&[ident("N"), ident("Tok")]), "a Guid is no Integer");
         assert!(!ok(&[ident("N"), lit("'2147483648'")]), "out of range");

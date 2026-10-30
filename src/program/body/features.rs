@@ -490,20 +490,25 @@ pub struct PVariableSymbol {
     pub initializer: Option<serde_json::Value>,
     #[serde(rename = "sourceAnchor")]
     pub source_anchor: PAnchor,
+    /// `Some` only for a LOCAL declared exactly once in its routine, with no
+    /// parameter and no object global of the same name (G52). The IR keeps both
+    /// arms of an `#if`, so only then is this declaration, its type and its value,
+    /// the one every compile of the routine sees. `None` for everything else.
+    #[serde(skip)]
+    pub fixed_local: Option<FixedLocal>,
+}
+
+/// What a [`PVariableSymbol::fixed_local`] knows beyond the declared type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FixedLocal {
     /// The text of a LOCKED label (`X: Label '…', Locked = true;`), the one kind
-    /// of variable whose value is a constant no translation can change (G52).
-    /// `None` for every other variable, an unlocked label included, and when two
-    /// declarations of the name (the arms of an `#if`) disagree.
-    #[serde(
-        rename = "labelConstant",
-        skip_serializing_if = "Option::is_none",
-        default
-    )]
-    pub label_constant: Option<String>,
+    /// of variable whose value is a constant no translation can change. `None`
+    /// for every other declaration, an unlocked label included.
+    pub constant: Option<String>,
 }
 
 /// The constant text a declaration gives its variable: a locked label's text,
-/// else `None` (see [`PVariableSymbol::label_constant`]).
+/// else `None` (see [`FixedLocal::constant`]).
 pub fn label_constant_of(label: Option<&al_syntax::ir::LabelValue>) -> Option<String> {
     label.filter(|l| l.locked).and_then(|l| l.text.clone())
 }

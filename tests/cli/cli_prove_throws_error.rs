@@ -125,6 +125,9 @@ codeunit 50181 "G20 Errors"
         exit(N);
     end;
 
+    // G52 controls: each may fail, or nothing proves it cannot.
+    // A global label: another `#if` arm may declare it with another text, and
+    // nothing here counts the global's declarations.
     procedure EvaluateGlobalLockedInteger(): Integer
     var
         N: Integer;
@@ -133,7 +136,25 @@ codeunit 50181 "G20 Errors"
         exit(N);
     end;
 
-    // G52 controls: each may fail, or nothing proves it cannot.
+    // A global target declared Guid in one arm and Integer in the other.
+    procedure EvaluateIntoPreprocGlobal()
+    begin
+        Evaluate(PreprocId, '{a7c3e1b4-9d2f-4a8e-b5c6-d7e8f9a0b1c2}');
+    end;
+
+    // A locked local declared in one arm only: in the other arm the name is
+    // the unlocked global label below.
+    procedure EvaluateLocalInOneArm(): Guid
+    var
+        Id: Guid;
+#if CLEAN99
+        ShadowTok: Label '{a7c3e1b4-9d2f-4a8e-b5c6-d7e8f9a0b1c2}', Locked = true;
+#endif
+    begin
+        Evaluate(Id, ShadowTok);
+        exit(Id);
+    end;
+
     procedure EvaluateUnlockedGuidLabel(): Guid
     var
         Id: Guid;
@@ -191,6 +212,12 @@ codeunit 50181 "G20 Errors"
 
     var
         SevenTok: Label '7', Locked = true;
+        ShadowTok: Label '{a7c3e1b4-9d2f-4a8e-b5c6-d7e8f9a0b1c2}';
+#if CLEAN99
+        PreprocId: Guid;
+#else
+        PreprocId: Integer;
+#endif
 }
 "#;
 
@@ -264,6 +291,9 @@ fn throws_error_sees_implicit_runtime_errors() {
         ("EvaluateIntegerOverflow", "Evaluate"),
         ("EvaluateDateLiteral", "Evaluate"),
         ("EvaluatePreprocLabel", "Evaluate"),
+        ("EvaluateGlobalLockedInteger", "Evaluate"),
+        ("EvaluateIntoPreprocGlobal", "Evaluate"),
+        ("EvaluateLocalInOneArm", "Evaluate"),
     ] {
         let r = prove(routine);
         assert_eq!(r["answer"], "yes", "{routine}: {r}");
@@ -293,7 +323,6 @@ fn throws_error_sees_implicit_runtime_errors() {
         "EvaluateLockedGuidLabel",
         "EvaluateGuidLiteral",
         "EvaluateIntegerLiteral",
-        "EvaluateGlobalLockedInteger",
     ] {
         let r = prove(routine);
         assert_eq!(r["answer"], "no", "{routine} raises no implicit error: {r}");

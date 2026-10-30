@@ -168,7 +168,7 @@ fn pass_2b_first_wins_on_name_collision() {
             parameter_index: None,
             initializer: None,
             scope: Some("local".to_string()),
-            label_constant: None,
+            fixed_local: None,
         },
         ModelVariable {
             name: "foo".to_string(),
@@ -177,7 +177,7 @@ fn pass_2b_first_wins_on_name_collision() {
             parameter_index: None,
             initializer: None,
             scope: Some("global".to_string()),
-            label_constant: None,
+            fixed_local: None,
         },
     ];
 
