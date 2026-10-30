@@ -84,6 +84,12 @@ pub struct Plan {
     /// report's coverage read). `prepare` asserts every run's union holds
     /// them, naming the missing bit (A2.10).
     after_run: u32,
+    /// The substrate bits the command reads off the view itself, outside any
+    /// detector run (rules-to-policy spec §2.6): `prepare` fills them as it
+    /// fills a run's, before the runs, so a batch's runs and the command share
+    /// one cell. Only the cells built from the model alone may be named
+    /// (`RULES`: `policy check` with a pin reads [`View::rules`]).
+    own: u32,
     /// Whose raw inherited facts the view's composition keeps (#160 step 6
     /// D3), fixed before it runs: the union of the jobs' requests (#277 D5).
     witness: WitnessRequest,
@@ -329,6 +335,7 @@ pub fn analyze_plan(detectors: Vec<Detector>, scope_primary: bool) -> Plan {
         runs: vec![(detectors, scope_primary)],
         need_l4: false,
         after_run: 0,
+        own: 0,
         witness: WitnessRequest::empty(),
         trees: vec![],
     }
@@ -364,6 +371,7 @@ pub fn digest_plan(detectors: Vec<Detector>, roots: BTreeSet<String>, tests: boo
         runs: vec![(detectors, true)],
         need_l4: true,
         after_run: substrate::TRANSACTION_SPANS,
+        own: 0,
         witness,
         trees,
     }
@@ -401,6 +409,7 @@ fn run_only_plan(detectors: Vec<Detector>) -> Plan {
         runs: vec![(detectors, true)],
         need_l4: false,
         after_run: 0,
+        own: 0,
         witness: WitnessRequest::empty(),
         trees: vec![],
     }
@@ -473,6 +482,7 @@ pub fn events_plan(detectors: Vec<Detector>) -> Plan {
         runs: vec![(detectors, true)],
         need_l4: false,
         after_run: substrate::SUMMARIES,
+        own: 0,
         witness: WitnessRequest::empty(),
         trees: vec![],
     }
@@ -481,12 +491,16 @@ pub fn events_plan(detectors: Vec<Detector>) -> Plan {
 /// `alsem policy check`: the run, then the rule engine off `det.summaries`
 /// and the view's raw facts of every primary routine (`View::raw`; #160
 /// step 6 Task 3). With no policy (`--no-policy`) no rule reads raw facts,
-/// so the request is empty (#277 E12-C5).
-pub fn policy_plan(detectors: Vec<Detector>, rules: bool) -> Plan {
+/// so the request is empty (#277 E12-C5). `pins` (a policy with a pin,
+/// rules-to-policy spec §2.6): the view also fills the per-field writer
+/// index (`substrate::RULES`, read through [`View::rules`]); without a pin it
+/// does not, so such a policy costs what it did before pins.
+pub fn policy_plan(detectors: Vec<Detector>, rules: bool, pins: bool) -> Plan {
     Plan {
         runs: vec![(detectors, true)],
         need_l4: false,
         after_run: substrate::SUMMARIES,
+        own: if pins { substrate::RULES } else { 0 },
         witness: if rules {
             WitnessRequest::primary()
         } else {
@@ -512,6 +526,7 @@ pub fn explain_plan(roots: BTreeSet<String>) -> Plan {
         runs: vec![],
         need_l4: false,
         after_run: 0,
+        own: 0,
         trees: vec![(
             JobId(0),
             TreeDemand {
@@ -532,6 +547,7 @@ pub fn query_plan() -> Plan {
         runs: vec![],
         need_l4: true,
         after_run: 0,
+        own: 0,
         witness: WitnessRequest::empty(),
         trees: vec![],
     }
@@ -549,6 +565,7 @@ impl Plan {
             runs: runs.into_iter().map(|r| (r, scope_primary)).collect(),
             need_l4,
             after_run,
+            own: 0,
             witness: WitnessRequest::empty(),
             trees: vec![],
         }
@@ -574,7 +591,7 @@ impl Plan {
 
     /// A view's ONE plan from its jobs' plans (#277 D5): every distinct run
     /// once (two jobs with one `RunKey` share it, D5.5), the union of the
-    /// requests (D5.1), `need_l4` and `after_run` ORed, and each job's tree
+    /// requests (D5.1), `need_l4`, `after_run` and `own` ORed, and each job's tree
     /// (a factory files it under `JobId(0)`) filed under the job's own id.
     /// One part is that part's plan with its tree under `job`.
     pub fn merge(parts: impl IntoIterator<Item = (JobId, Plan)>) -> Plan {
@@ -582,6 +599,7 @@ impl Plan {
             runs: vec![],
             need_l4: false,
             after_run: 0,
+            own: 0,
             witness: WitnessRequest::empty(),
             trees: vec![],
         };
@@ -594,6 +612,7 @@ impl Plan {
             }
             out.need_l4 |= part.need_l4;
             out.after_run |= part.after_run;
+            out.own |= part.own;
             out.witness = out.witness.union(&part.witness);
             out.trees
                 .extend(part.trees.into_iter().map(|(_, tree)| (job, tree)));
@@ -772,8 +791,14 @@ impl View {
         let fills = plan.fills();
         let [need_rel, need_raw, need_l4, need_det] =
             [Cell::Rel, Cell::Raw, Cell::L4, Cell::Det].map(|c| fills.contains(&c));
-        let need_ordering = union & substrate::ORDERING_FACTS != 0;
-        let need_rules = union & substrate::RULES != 0;
+        // Only model-only cells may be a command's own read (`Plan::own`).
+        assert!(
+            plan.own & !(substrate::ORDERING_FACTS | substrate::RULES) == 0,
+            "Plan::own names {}: only ORDERING_FACTS and RULES are built from the model alone",
+            bit_names(plan.own & !(substrate::ORDERING_FACTS | substrate::RULES))
+        );
+        let need_ordering = (union | plan.own) & substrate::ORDERING_FACTS != 0;
+        let need_rules = (union | plan.own) & substrate::RULES != 0;
         let need_derived = plan.needs_derived();
         let need_caps = plan.composes(self.det.is_some());
         // D3: the subjects are fixed once, before the one composition: a
@@ -1284,6 +1309,15 @@ impl View {
         self.raw.as_ref().expect("raw cell not filled")
     }
 
+    /// The per-field writer index, read by a command outside the runs
+    /// (`policy check` with a pin, rules-to-policy spec §2.6): its plan names
+    /// `substrate::RULES` in `Plan::own` (or a run requires it).
+    pub fn rules(&self) -> &RulesIndex {
+        self.rules
+            .as_ref()
+            .expect("rules cell not filled: declare substrate::RULES")
+    }
+
     /// `job`'s effects (#160 step 6 D7 (5); #277 D5.4), read by its query at
     /// (8).
     pub fn effects(&self, job: JobId) -> &DigestEffects {
@@ -1472,7 +1506,7 @@ mod tests {
             ("events", events_plan(vec![probe(0, noop)]), "SUMMARIES"),
             (
                 "policy",
-                policy_plan(vec![probe(0, noop)], true),
+                policy_plan(vec![probe(0, noop)], true, false),
                 "SUMMARIES",
             ),
         ] {
@@ -2084,7 +2118,7 @@ mod tests {
             (JobId(3), digest(&["b"])),
             (
                 JobId(4),
-                policy_plan(vec![probe(substrate::SUMMARIES, noop)], true),
+                policy_plan(vec![probe(substrate::SUMMARIES, noop)], true, false),
             ),
         ]);
         assert_eq!(u.runs.len(), 3, "one run per key");

@@ -1,0 +1,20 @@
+# al-sem policy: rules pinned by `alsem explain --emit-policy`.
+# Each entry is a rule that at least 3 writers, and at least 75 % of the
+# writers, of a table field apply (d65-guard-bypass's majority rule). `alsem
+# policy check` reports every writer of the field that does not apply it.
+# Keep the entries that are business rules and delete the rest; record a
+# deliberate exception with `except: { routine.name: <name> }`.
+version: 2
+rules:
+  # Pin Order.Amount: 6 of 8 writer(s) apply it (for example Pin Writers::SetOne, Pin Writers::SetTwo).
+  # Without it: Pin Writers::Bypass, Pin Writers::Collect.
+  - id: pin-pin-order-amount-testfield-a26942f8
+    title: "Writers of Pin Order.Amount apply: TestField: status <> ::open"
+    description: "rejects when O.Status <> O.Status::Open (TestField)"
+    severity: medium
+    when:
+      write.table: "Pin Order"
+      write.field: "Amount"
+    requires:
+      rule.kind: "TestField"
+      rule.atoms: "status <> ::open"

@@ -137,8 +137,31 @@ fn atom_key(a: &ConditionAtom, t: &str) -> Option<String> {
     }
 }
 
+/// A rule key (module doc): the rule's kind and its atoms on the written
+/// table, sorted and joined with ` and `. It prints as `<kind>: <atoms>`, the
+/// text in d65's finding ids. A policy pin (`requires: { rule.kind,
+/// rule.atoms }`, `engine::gate::policy`) names the same two parts, so the
+/// policy and d65 share one key (rules-to-policy spec §2.1).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RuleKey {
+    pub kind: &'static str,
+    pub atoms: String,
+}
+
+impl std::fmt::Display for RuleKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.kind, self.atoms)
+    }
+}
+
+/// The table part of a key: a table name as atoms compare it (quotes
+/// dropped, folded).
+pub(crate) fn table_key(table: &str) -> String {
+    ident(table)
+}
+
 /// A rule's key on table `t` (module doc): `None` when no atom is on `t`.
-pub(crate) fn rule_key(r: &PRule, t: &str) -> Option<String> {
+pub(crate) fn rule_key(r: &PRule, t: &str) -> Option<RuleKey> {
     let atoms: BTreeSet<String> = r
         .when
         .iter()
@@ -149,15 +172,14 @@ pub(crate) fn rule_key(r: &PRule, t: &str) -> Option<String> {
     if atoms.is_empty() {
         return None;
     }
-    Some(format!(
-        "{}: {}",
-        kind_text(r.kind),
-        atoms.into_iter().collect::<Vec<_>>().join(" and ")
-    ))
+    Some(RuleKey {
+        kind: kind_text(r.kind),
+        atoms: atoms.into_iter().collect::<Vec<_>>().join(" and "),
+    })
 }
 
 /// The keys (with one rule of each, as an example) of `rules` on `t`.
-fn keys<'a>(rules: impl Iterator<Item = &'a Inh>, t: &str) -> BTreeMap<String, &'a Inh> {
+fn keys<'a>(rules: impl Iterator<Item = &'a Inh>, t: &str) -> BTreeMap<RuleKey, &'a Inh> {
     let mut out = BTreeMap::new();
     for i in rules {
         if let Some(k) = rule_key(&i.rule, t) {
@@ -168,7 +190,8 @@ fn keys<'a>(rules: impl Iterator<Item = &'a Inh>, t: &str) -> BTreeMap<String, &
 }
 
 /// The keys `w` applies (module doc, "Applied"), each with an example rule.
-fn applied<'a>(w: &'a Writer, t: &str) -> BTreeMap<String, &'a Inh> {
+/// `t` is the field's table, as [`table_key`] gives it.
+pub(crate) fn applied<'a>(w: &'a Writer, t: &str) -> BTreeMap<RuleKey, &'a Inh> {
     // Every write: the intersection over the sites.
     let mut sites = w.sites.iter();
     let mut own = sites
@@ -194,41 +217,62 @@ fn applied<'a>(w: &'a Writer, t: &str) -> BTreeMap<String, &'a Inh> {
     own
 }
 
-/// d65 over one field: `(majority key, example rule, followers, the writers
-/// without it)`.
-type Majority<'a> = (String, &'a Inh, Vec<usize>, Vec<usize>);
+/// One key some writer of a field applies: the first follower's rule (an
+/// example), the writers that apply it and those that do not (indexes into
+/// `FieldWriters::writers`).
+pub(crate) struct KeyCount<'a> {
+    pub key: RuleKey,
+    pub example: &'a Inh,
+    pub followers: Vec<usize>,
+    pub missing: Vec<usize>,
+}
 
-fn majorities<'a>(f: &'a FieldWriters, t: &str) -> Vec<Majority<'a>> {
+impl KeyCount<'_> {
+    /// d65's majority bar: at least [`MIN_FOLLOWERS`] writers and at least
+    /// [`MIN_SHARE`] of all of them apply the key.
+    #[must_use]
+    pub fn is_majority(&self) -> bool {
+        let n = self.followers.len() + self.missing.len();
+        let share = self.followers.len() as f64 / n as f64;
+        self.followers.len() >= MIN_FOLLOWERS && share >= MIN_SHARE
+    }
+}
+
+/// Every key some writer of `f` applies, in key order. d65 reports the
+/// majority keys a writer misses ([`majorities`]); `explain --emit-policy`
+/// pins every majority key, a unanimous one included.
+pub(crate) fn key_counts(f: &FieldWriters) -> Vec<KeyCount<'_>> {
+    let t = table_key(&f.table);
     let n = f.writers.len();
-    let per: Vec<BTreeMap<String, &Inh>> = f.writers.iter().map(|w| applied(w, t)).collect();
-    let mut count: BTreeMap<&str, (Vec<usize>, &Inh)> = BTreeMap::new();
+    let per: Vec<BTreeMap<RuleKey, &Inh>> = f.writers.iter().map(|w| applied(w, &t)).collect();
+    let mut count: BTreeMap<&RuleKey, (Vec<usize>, &Inh)> = BTreeMap::new();
     for (wi, keys) in per.iter().enumerate() {
         for (k, i) in keys {
-            count
-                .entry(k.as_str())
-                .or_insert_with(|| (Vec::new(), i))
-                .0
-                .push(wi);
+            count.entry(k).or_insert_with(|| (Vec::new(), i)).0.push(wi);
         }
     }
-    let mut out = Vec::new();
-    for (k, (followers, example)) in count {
-        let share = followers.len() as f64 / n as f64;
-        if followers.len() < MIN_FOLLOWERS || share < MIN_SHARE {
-            continue;
-        }
-        let missing: Vec<usize> = (0..n).filter(|wi| !followers.contains(wi)).collect();
-        if missing.is_empty() {
-            continue;
-        }
-        out.push((k.to_string(), example, followers, missing));
-    }
-    out
+    count
+        .into_iter()
+        .map(|(k, (followers, example))| KeyCount {
+            key: k.clone(),
+            example,
+            missing: (0..n).filter(|wi| !followers.contains(wi)).collect(),
+            followers,
+        })
+        .collect()
+}
+
+/// d65 over one field: the majority keys some writer misses.
+fn majorities(f: &FieldWriters) -> Vec<KeyCount<'_>> {
+    key_counts(f)
+        .into_iter()
+        .filter(|c| c.is_majority() && !c.missing.is_empty())
+        .collect()
 }
 
 /// The rule as a reader sees it: "rejects when <condition> (<kind>)", the
 /// condition without the parts earlier checks add (as the key).
-fn rule_text(r: &PRule) -> String {
+pub(crate) fn rule_text(r: &PRule) -> String {
     let own: Vec<&str> = r
         .when_texts
         .iter()
@@ -265,13 +309,12 @@ pub fn detect_d65(
     let mut too_few = 0u64;
     let mut no_majority = 0u64;
     for f in &index.fields {
-        let t = ident(&f.table);
         candidates += f.writers.len();
         if f.writers.len() < MIN_FOLLOWERS {
             too_few += 1;
             continue;
         }
-        let found = majorities(f, &t);
+        let found = majorities(f);
         if found.is_empty() {
             no_majority += 1;
             continue;
@@ -281,7 +324,13 @@ pub fn detect_d65(
             let object = ctx.declaring.of(r).map_or("", |o| o.name.as_str());
             format!("{object}::{}", r.name)
         };
-        for (key, example, followers, missing) in found {
+        for KeyCount {
+            key,
+            example,
+            followers,
+            missing,
+        } in found
+        {
             let examples: Vec<String> = followers.iter().take(2).map(|&wi| name(wi)).collect();
             for wi in missing {
                 let w = &f.writers[wi];

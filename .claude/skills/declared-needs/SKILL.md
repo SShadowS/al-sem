@@ -103,6 +103,13 @@ depends on, and a mismatch fails loudly (see rule 5).
 10. **Post-run reads go in `Plan::after_run`.** A command that reads a substrate after
     the detectors run (digest reads `TRANSACTION_SPANS`, events reads `SUMMARIES`)
     declares it there. `prepare` asserts each run's union holds it.
+11. **A command's own read of a model-only cell goes in `Plan::own`.** A cell built
+    from the model alone (`RULES`, `ORDERING_FACTS`) that a command reads itself, with
+    no detector requiring it, is named in its plan's `own` bits; `prepare` fills it
+    before the runs, so a batch's runs share it, and refuses any other bit. Read it
+    through the `View` accessor (`View::rules()`, which panics "declare
+    substrate::RULES"). Set the bit, and the level-1 need under it, only when the
+    command's input asks for it (`policy check`: only for a policy with a pin).
 
 ## Checklist: adding a build-profile field (level 1)
 
@@ -218,3 +225,13 @@ proof the declaration matters: d65 with `requires: 0` fails
 needs that the body walk drops (`ModifyAll`'s field) was added beside the serialized
 rows (`ModelRecordOperation::modify_all_field`, read at assembly from the IR), not to
 them, so no serialized output and no other detector's input moved.
+
+**Landed (step 7, `2026-10-30-rules-to-policy-design.md`):** a need can depend on a
+command's INPUT, not only on the command. `policy check` reads the writer index only
+when the loaded policy has a pin (`PolicyDoc::has_pins`): `PolicyJob::needs()` sets
+`ViewNeeds::rules` and `policy_plan(.., pins)` sets `Plan::own = substrate::RULES`
+(rule 11) only then, and `reads()` keeps `Cell::Rules` only then. Tests build the view
+from `PolicyJob::demands` and assert the bundled policy builds no rules and a pin
+policy builds them; dropping either declaration fails a test with the declaration's
+own panic text. `explain --emit-policy` declares `rules` without `card_text` and no
+plan: it builds the index itself, as `explain --table/--field` does.

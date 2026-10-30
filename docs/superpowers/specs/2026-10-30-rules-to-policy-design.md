@@ -51,9 +51,9 @@ A pin uses exactly what d65 uses, never a second copy:
 ```yaml
 version: 2
 rules:
-  # Guard Order.Amount: 4 of 5 writers apply it (for example Guard Writers::FollowAssign
-  # and Guard Writers::FollowValidate). Without it: Guard Writers::BypassAmount.
-  - id: pin-guard-order-amount-testfield-3f9c0a12
+  # Guard Order.Amount: 4 of 5 writer(s) apply it (for example Guard Writers::FollowAssign, Guard Writers::FollowValidate).
+  # Without it: Guard Writers::BypassAmount.
+  - id: pin-guard-order-amount-testfield-851b4754
     title: "Writers of Guard Order.Amount apply: TestField: status <> ::open"
     description: "rejects when O.Status <> O.Status::Open (TestField)"
     severity: medium
@@ -61,7 +61,7 @@ rules:
       write.table: "Guard Order"
       write.field: "Amount"
     requires:
-      rule.kind: TestField
+      rule.kind: "TestField"
       rule.atoms: "status <> ::open"
 ```
 
@@ -170,7 +170,8 @@ anchors), not at the routine's declaration; `affectedTables` names the table; an
 its evidence has one step per violating write ("writes T.F (assign) without a rule
 that matches requires"). Root cause: the entry's `message`, else "R writes T.F
 without the rule this policy pins: <description>". JSON, SARIF and human output
-are unchanged in shape. `policy explain` prints a `Requires:` block for a pin.
+are unchanged in shape. `policy explain` prints a `Requires:` block for a pin (and
+"Coverage gate: none (a pin)").
 
 A d65 inline suppression (`// al-sem-ignore d65-guard-bypass`) is d65's, not the
 policy's: a policy records an exception with `except`.
@@ -205,3 +206,32 @@ policy's: a policy records an exception with `except`.
   `when`, `facts` on a pin: each refused with its message.
 - Discrimination proofs (Edit, run, fail, revert, pass): drop the conditional
   needs; count `MayNotStop` as applied; change the emitted key away from d65's.
+
+## 5. As built (2026-10-30)
+
+Built as designed. Where to find it:
+
+- d65 split: `RuleKey`, `table_key`, `applied`, `KeyCount` / `key_counts`,
+  `rule_text` (`src/engine/l5/detectors/d65.rs`).
+- Emitter and its job: `src/engine/l5/emit_policy.rs` (`EmitPolicyJob`,
+  `emit_policy`, `pin_id`); `explain::find_field` is the table/field lookup both
+  modes share; CLI `plan_emit_policy` (`src/bin/alsem.rs`).
+- Fields and scopes: `predicate_fields.rs` (`FieldScope::{Write, Rule}`,
+  `WriteFact`, `RuleFact`); applicability reads them unknown
+  (`predicate_evaluator.rs`).
+- Loader: `policy_loader.rs` (`check_pin_shape`, versions 1–2;
+  `POLICY_FORMAT_VERSION` in `policy_types.rs`, with `Rule::requires` and
+  `PolicyDoc::has_pins`).
+- Engine: `policy_engine.rs` (`PinIndex`, `run_pin`, `emit_pin_finding`).
+- Needs: `PolicyJob::needs` / `reads` (`pipeline.rs`); `Plan::own`,
+  `policy_plan(.., pins)`, `View::rules` (`src/engine/session.rs`); `prepare`
+  refuses an `own` bit other than `ORDERING_FACTS` / `RULES`.
+- Tests: `tests/cli/cli_policy_pins.rs`. Discrimination proofs, each made with
+  Edit and reverted: `needs()` with `rules: false` failed 4 tests ("rules not
+  built: declare ViewNeeds::rules" and `only_a_pin_policy_builds_rules`), with
+  `rules: true` failed `only_a_pin_policy_builds_rules` ("the bundled policy built
+  rules"); `policy_plan` with `own: 0` failed 3 ("rules cell not filled: declare
+  substrate::RULES"); keeping `MayNotStop` rules in the index failed 4 (the
+  `Collect` writer no longer found; d65's own count drops to 4); emitting the
+  whole key text as `rule.atoms` failed the round trip (every writer flagged) and
+  2 goldens.

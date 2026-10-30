@@ -216,8 +216,14 @@ fn field_tristate(
     let Some(def) = get_field_def(field) else {
         return Tristate::Unknown;
     };
-    // Applicability: a fact-scoped field cannot be decided without a fact.
-    if mode == EvalMode::Applicability && def.scope == FieldScope::Fact {
+    // Applicability: a fact-scoped field cannot be decided without a fact, nor
+    // a pin's write or rule field without its write fact or applied key.
+    if mode == EvalMode::Applicability
+        && matches!(
+            def.scope,
+            FieldScope::Fact | FieldScope::Write | FieldScope::Rule
+        )
+    {
         return Tristate::Unknown;
     }
     let fv = evaluate_field(def, ctx);

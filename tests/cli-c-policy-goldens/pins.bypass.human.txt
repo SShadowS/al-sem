@@ -1,0 +1,8 @@
+Policy check — explicit:emit.policy-pins.yaml
+
+Rule summaries:
+	pin-pin-order-amount-testfield-a26942f8: evaluated=8 matched=2 passed=6 skipped(coverage)=0 skipped(unknown)=0 findings=2
+
+Findings (2):
+	[medium] policy-pin-pin-order-amount-testfield-a26942f8 — Writers of Pin Order.Amount apply: TestField: status <> ::open
+	[medium] policy-pin-pin-order-amount-testfield-a26942f8 — Writers of Pin Order.Amount apply: TestField: status <> ::open

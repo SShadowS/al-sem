@@ -268,6 +268,20 @@ deliberate exception; mark an exception with
 `// al-sem-ignore d65-guard-bypass: <reason>` on the line above the write. Only
 writers in your own app are counted.
 
+A rule you have confirmed can be pinned, so every later writer must apply it:
+
+```bash
+alsem explain <ws> --table "Sales Header" --field Status --emit-policy > al-sem.policy.yaml
+alsem explain <ws> --emit-policy                           # the majority rules of every field
+alsem policy check <ws>                                    # reports each writer that skips a pinned rule
+```
+
+`--emit-policy` writes each majority rule (the same rule and the same bar as
+`d65-guard-bypass`) as a policy entry; with `--table/--field` it also writes the
+rules fewer writers apply, commented out, so you can confirm one by hand. Delete the
+entries that are not real rules, and record a deliberate exception with
+`except: { routine.name: <name> }`.
+
 **"What changed between two versions?"**
 
 ```bash
@@ -289,7 +303,9 @@ alsem cache prune --dry-run                             # tidy ~/.al-sem/cache/
 `policy` is worth a look even though the name is dull: it enforces team rules that no
 generic checker knows about — "no `Commit` in an event subscriber", "no HTTP calls from a
 table trigger", "install codeunits must not write business data". Those three ship in the
-bundled default rule set; you can add your own in a YAML file.
+bundled default rule set; you can add your own in a YAML file. Format version 2 adds
+pins: a rule with `requires:` that every writer of a field must apply (see
+`explain --emit-policy` above). Version 1 files still load.
 
 ## Why you can trust the answers
 

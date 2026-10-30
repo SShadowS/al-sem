@@ -701,14 +701,29 @@ differs from the text above, and why:
   check; an `Other`-only majority (no finding) and a field with no majority
   (3 of 5).
 
-### 4.6 Part E: from evidence to policy (later)
+### 4.6 Part E: from evidence to policy
 
 A rule confirmed by a human can be pinned. `alsem explain --emit-policy` writes the
 majority rules of a table field as `al-sem.policy.yaml` entries, and `policy check`
-then enforces them like the bundled rules. This needs new predicate fields in
-`src/engine/gate/policy/predicate_fields.rs` (`rule.kind`, `rule.atom`). It is
-designed only after Parts A–D land, because the predicate shape should follow what
-triage shows real rules look like.
+then enforces them like the bundled rules. Designed after Parts A–D landed, in its
+own spec: `docs/superpowers/specs/2026-10-30-rules-to-policy-design.md`.
+
+*As built (step 7)*, as that spec says, with these points worth knowing here:
+
+- **One key.** A pin names d65's rule key in two parts, `rule.kind` and
+  `rule.atoms` (not `rule.atom`): the atoms are compared as exact text, because a
+  rule with one more atom fires in fewer cases, and "contains this atom" would count
+  that weaker rule as applied. d65's `majorities` was split into `key_counts` (every
+  key some writer applies) and the bar, so the emitter and d65 read one function.
+- **Format version 2.** A pin is a rule with `requires:` (a predicate over one key a
+  writer applies); its `when` selects write facts with `write.table` /
+  `write.field`. Version 1 files load unchanged.
+- **Needs.** `policy check` declares `ViewNeeds::rules` and the writer index
+  (`Plan::own = substrate::RULES`, a new plan field for a substrate a command reads
+  outside any run) only for a policy with a pin.
+- **Hand confirmation.** Triage on Continia DO found a majority rule on few fields,
+  so `--table/--field --emit-policy` also writes every key below the bar,
+  commented out, with its counts.
 
 ## 5. Gaps (what the card cannot see)
 
@@ -812,7 +827,7 @@ Following CLAUDE.md:
 | 4 | Part C: `alsem explain --routine`, `--diff` and `--table/--field`, own rules plus existing effects, tests and events | new `cli-explain` family. *Done:* `tests/cli-explain-goldens/` (18 goldens, 9 cases × human and JSON); the new fixture `ws-explain` added lines to the l2 snapshot and the r4f root-class summary, a new r2c event-graph golden, and two policy-facts oracle cases; no other golden moved |
 | 5 | Part B2: inherited and caller rules; ~~`substrate::RULES` implies `ORDERING_FACTS`~~ (not needed, 4.3 as built) | cli-explain. *Done:* 12 new goldens (fixture `ws-explain-calls`, 6 routines × human and JSON) and the step-4 goldens now show the computed lists; the new fixture added lines to the l2 snapshot and the r4f root-class summary, a new r2c golden and two policy-facts oracle cases |
 | 6 | Part D: `substrate::RULES` writer index, `d65-guard-bypass` opt-in, the registry-test extension, then the CDO triage | r4. *Done:* new `ws-d65` r4 golden (5 findings); the d65 row in every `all`-slot detector-stats golden and its SARIF rule in the gate goldens; the `ws-explain-calls` callers added for the on-path fix move the l2 snapshot, the r4f root-class summary and the `calls.*` explain goldens; `explain.field-status` lists `ReopenAll` and each write's rules. The triage ran on the Continia DO workspace (`docs/detector-audit.md`); the CDO triage is still owed |
-| 7 | Part E: policy emission (separate spec) | — |
+| 7 | Part E: policy emission (separate spec, `2026-10-30-rules-to-policy-design.md`) | — expected. *Done:* new goldens only: `tests/cli-explain-goldens/emit.*.yaml` (3) and `tests/cli-c-policy-goldens/pins.*` (4), over `ws-d65` and the new `tests/fixtures/policy-pins/{bypass,fixed}`; policy format version 1 still loads, so no existing golden moved |
 
 Steps 1–4 already give an agent the main win: the rules and messages on what it is
 about to change. Steps 5–6 make the card trustworthy across calls and add the check.

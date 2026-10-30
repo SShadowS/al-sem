@@ -650,6 +650,12 @@ struct ExplainCli {
     #[arg(long = "field")]
     field: Option<String>,
 
+    /// Write the majority rules as `al-sem.policy.yaml` pins (policy version
+    /// 2) instead of cards: of `--table/--field` (with the rules below the
+    /// bar commented out), or, alone, of every field the workspace writes.
+    #[arg(long = "emit-policy", default_value_t = false)]
+    emit_policy: bool,
+
     /// Output format: human | json. Defaults to human.
     #[arg(long = "format", default_value = "human")]
     format: String,
@@ -2108,6 +2114,9 @@ fn plan_explain(e: ExplainCli) -> Planned {
             1,
         );
     }
+    if e.emit_policy {
+        return plan_emit_policy(e);
+    }
     let mode = if let Some(selector) = &e.routine {
         ExplainMode::Routine(selector.clone())
     } else if let Some(diff) = &e.diff {
@@ -2164,6 +2173,50 @@ fn plan_explain(e: ExplainCli) -> Planned {
                 single_app: e.single_app,
             };
             Box::new(ExplainJob::new(req, e.format == "human", e.out.as_deref()))
+        },
+    )
+}
+
+/// `alsem explain --emit-policy` (rules-to-policy spec §2.5): with
+/// `--table/--field` that field, alone every field. `--routine` / `--diff`
+/// with it, and a `--format` other than the default (the output is always
+/// YAML), are flag misuse (exit 3). The job exits 0 with a document and 2
+/// for an unknown table or field.
+fn plan_emit_policy(e: ExplainCli) -> Planned {
+    use al_sem::engine::l5::emit_policy::{EmitPolicyJob, EmitPolicyRequest, EmitScope};
+    if e.routine.is_some() || e.diff.is_some() {
+        return failed(
+            "al-sem: explain: --emit-policy goes with --table/--field or alone, not with \
+             --routine or --diff",
+            exit::CONFIG_ERROR,
+            1,
+        );
+    }
+    if e.format != "human" {
+        return failed(
+            "al-sem: explain: --emit-policy writes YAML; --format does not apply",
+            exit::CONFIG_ERROR,
+            1,
+        );
+    }
+    let scope = match (&e.table, &e.field) {
+        (Some(table), Some(field)) => EmitScope::Field {
+            table: table.clone(),
+            field: field.clone(),
+        },
+        _ => EmitScope::Workspace,
+    };
+    ready(
+        &e.workspace.clone(),
+        WorkspaceNeeds::default(),
+        move |slot, inputs| {
+            let (e, inputs) = hold(slot, (e, inputs));
+            let req = EmitPolicyRequest {
+                inputs,
+                scope,
+                single_app: e.single_app,
+            };
+            Box::new(EmitPolicyJob::new(req, e.out.as_deref()))
         },
     )
 }

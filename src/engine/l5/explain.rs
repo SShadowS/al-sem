@@ -67,7 +67,8 @@ use crate::program::body::rules::{
 use crate::program::model::declaring::DeclaringObjects;
 use crate::program::model::role::Role;
 use crate::program::model::workspace::{
-    CardAction, Model, ModelObject, ModelRoutine, table_by_id_preferring_real,
+    CardAction, Model, ModelField, ModelObject, ModelRoutine, ModelTable,
+    table_by_id_preferring_real,
 };
 use al_syntax::IdentifierFoldExt;
 
@@ -295,39 +296,40 @@ fn selector_diagnostic(selector: &str, d: &ChangedRootsDiagnostic) -> Diagnostic
 
 /// `--table/--field`: the table by `query touches`' selector, the field by
 /// name (case-insensitive) or number, then every writer of it.
-fn resolve_field(model: &Model, table: &str, field: &str) -> Resolved {
-    let not_found = |json: Value, human: String| Resolved {
-        roots: vec![],
-        diagnostics: vec![Diagnostic { json, human }],
-        field: None,
-        unresolved: true,
-    };
+/// `--table/--field`'s target: the table by `query touches`' selector, the
+/// field by name (case-insensitive) or number. `Err`: the diagnostic's JSON
+/// and its human line (`explain --emit-policy` reads the same lookup).
+pub(crate) fn find_field<'m>(
+    model: &'m Model,
+    table: &str,
+    field: &str,
+) -> Result<(&'m ModelTable, &'m ModelField), (Value, String)> {
     let t = match resolve_table_selector(model, table) {
         Resolution::Resolved(t) => t,
         Resolution::Unmatched => {
-            return not_found(
+            return Err((
                 json!({ "kind": "table-not-found", "table": table }),
                 format!("explain: no table of the program has the name, number or id '{table}'"),
-            );
+            ));
         }
         Resolution::Ambiguous(candidates) => {
-            return not_found(
+            return Err((
                 json!({ "kind": "table-ambiguous", "table": table, "candidates": candidates }),
                 format!(
                     "explain: '{table}' names {} tables ({}); pass its id",
                     candidates.len(),
                     candidates.join(", ")
                 ),
-            );
+            ));
         }
     };
     let tables = table_by_id_preferring_real(&model.workspace.tables);
-    let Some(mt) = tables.get(t.id.as_str()) else {
+    let Some(mt) = tables.get(t.id.as_str()).copied() else {
         // The `unknown` bucket: not a table, so it has no fields.
-        return not_found(
+        return Err((
             json!({ "kind": "field-not-found", "table": t.id, "field": field }),
             format!("explain: '{}' is not a table with fields", t.id),
-        );
+        ));
     };
     let number: Option<i64> = field.trim().parse().ok();
     let want = field.trim().to_lowercase();
@@ -337,10 +339,25 @@ fn resolve_field(model: &Model, table: &str, field: &str) -> Resolved {
         .find(|f| f.name.to_lowercase() == want)
         .or_else(|| number.and_then(|n| mt.fields.iter().find(|f| f.field_number == n)))
     else {
-        return not_found(
+        return Err((
             json!({ "kind": "field-not-found", "table": mt.name, "field": field }),
             format!("explain: table '{}' has no field '{field}'", mt.name),
-        );
+        ));
+    };
+    Ok((mt, mf))
+}
+
+fn resolve_field(model: &Model, table: &str, field: &str) -> Resolved {
+    let (mt, mf) = match find_field(model, table, field) {
+        Ok(found) => found,
+        Err((json, human)) => {
+            return Resolved {
+                roots: vec![],
+                diagnostics: vec![Diagnostic { json, human }],
+                field: None,
+                unresolved: true,
+            };
+        }
     };
     let mut writers: BTreeMap<String, Vec<(WriteKind, PAnchor)>> = BTreeMap::new();
     for w in field_writes(model) {

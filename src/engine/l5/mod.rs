@@ -166,6 +166,7 @@ pub mod fingerprint_cli;
 // Intent evidence step 4 — `alsem explain`: one evidence card per routine
 // (own rules, effects, page actions, events, tests, gaps), and the field
 // writers its `--table/--field` mode lists.
+pub mod emit_policy;
 pub mod explain;
 pub mod field_writers;
 // Intent evidence step 5: rules across calls (inherited, caller and table-

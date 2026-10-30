@@ -241,7 +241,8 @@ fn yaml_value_display(v: &Value) -> String {
 }
 
 /// Collect the field scopes referenced by a predicate set. al-sem `collectScopes`.
-fn collect_scopes(preds: &[Predicate]) -> Vec<FieldScope> {
+/// The loader reads it too, to check a pin's shape (policy version 2).
+pub(crate) fn collect_scopes(preds: &[Predicate]) -> Vec<FieldScope> {
     let mut out: Vec<FieldScope> = Vec::new();
     for p in preds {
         collect_scopes_one(p, &mut out);
@@ -275,6 +276,8 @@ fn scopes_join(scopes: &[FieldScope]) -> String {
             FieldScope::Routine => "routine",
             FieldScope::Fact => "fact",
             FieldScope::Model => "model",
+            FieldScope::Write => "write",
+            FieldScope::Rule => "rule",
         })
         .collect::<Vec<_>>()
         .join("/")

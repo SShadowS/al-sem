@@ -13,15 +13,19 @@
 
 use std::collections::HashMap;
 
-use crate::engine::gate::policy::policy_types::{PolicyDoc, Rule, RuleRunSummary};
+use crate::engine::gate::policy::policy_types::{PolicyDoc, Predicate, Rule, RuleRunSummary};
 use crate::engine::gate::policy::predicate_evaluator::{
     Tristate, evaluate_applicability, evaluate_result,
 };
-use crate::engine::gate::policy::predicate_fields::{FieldEvalContext, FieldIndexes};
+use crate::engine::gate::policy::predicate_fields::{
+    FieldEvalContext, FieldIndexes, RuleFact, WriteFact,
+};
 use crate::engine::l4::capability_cone::CapabilityFact;
+use crate::engine::l5::detectors::d65::{RuleKey, applied, table_key};
 use crate::engine::l5::finding::{Evidence, Finding, FindingConfidence, SourceAnchor};
 use crate::engine::l5::fingerprint::FingerprintIndex;
 use crate::engine::l5::full_summary::FullRoutineSummary;
+use crate::engine::l5::rules_index::{RulesIndex, WriteSite};
 use crate::program::model::declaring::DeclaringObjects;
 use crate::program::model::events::EventSymbol;
 use crate::program::model::workspace::{ModelEntities, ModelRoutine, ModelTable};
@@ -124,6 +128,63 @@ pub struct PolicyModel<'a> {
     /// `Cell::Raw` under `WitnessRequest::primary()`).
     pub raw: &'a HashMap<String, Vec<CapabilityFact>>,
     pub fingerprint_index: FingerprintIndex<'a>,
+    /// The pins' read of the writer index: `Some` only for a policy with a
+    /// pin ([`PolicyDoc::has_pins`]), whose view filled `substrate::RULES`.
+    pub pins: Option<PinIndex<'a>>,
+}
+
+/// One writer of one field, as a pin reads it: the field's names, the
+/// writer's writes of it, and the rule keys it applies (d65's `applied`).
+pub struct PinFact<'a> {
+    pub table_id: &'a str,
+    pub table: &'a str,
+    pub field: &'a str,
+    pub sites: &'a [WriteSite],
+    pub keys: Vec<RuleKey>,
+}
+
+/// The writer index as pins read it (rules-to-policy spec §2.1): per routine
+/// (stable id), each field it writes, with the keys it applies there. The
+/// keys are d65's, computed by d65's own `applied` over the same index d65
+/// reads, so a pin and d65 agree on what a writer applies.
+pub struct PinIndex<'a> {
+    by_writer: HashMap<&'a str, Vec<PinFact<'a>>>,
+    /// The cross-call walk was cut short: a writer with no matching key is
+    /// unknown, not a violation.
+    pub truncated: bool,
+}
+
+impl<'a> PinIndex<'a> {
+    #[must_use]
+    pub fn new(index: &'a RulesIndex) -> PinIndex<'a> {
+        let mut by_writer: HashMap<&'a str, Vec<PinFact<'a>>> = HashMap::new();
+        for f in &index.fields {
+            let t = table_key(&f.table);
+            for w in &f.writers {
+                by_writer
+                    .entry(w.stable_id.as_str())
+                    .or_default()
+                    .push(PinFact {
+                        table_id: &f.table_id,
+                        table: &f.table,
+                        field: &f.field,
+                        sites: &w.sites,
+                        keys: applied(w, &t).into_keys().collect(),
+                    });
+            }
+        }
+        PinIndex {
+            by_writer,
+            truncated: index.truncated,
+        }
+    }
+
+    /// The fields `routine` writes, in index order (table id, field).
+    fn facts_of(&self, routine: &ModelRoutine) -> &[PinFact<'a>] {
+        self.by_writer
+            .get(routine.stable_routine_id.as_str())
+            .map_or(&[], Vec::as_slice)
+    }
 }
 
 impl<'a> PolicyModel<'a> {
@@ -172,6 +233,17 @@ impl<'a> PolicyModel<'a> {
             summaries,
             raw,
             fingerprint_index,
+            pins: None,
+        }
+    }
+
+    /// The model with the pins' read of `rules` (a policy with a pin; the
+    /// view filled `substrate::RULES` for it).
+    #[must_use]
+    pub fn with_pins(self, rules: &'a RulesIndex) -> Self {
+        PolicyModel {
+            pins: Some(PinIndex::new(rules)),
+            ..self
         }
     }
 }
@@ -220,6 +292,22 @@ pub fn run_policy_engine(model: &PolicyModel, policy: &PolicyDoc) -> RunOutput {
         let unknown_policy = pick_unknown(rule, policy);
         let mut rule_findings: Vec<Finding> = Vec::new();
 
+        if let Some(requires) = &rule.requires {
+            run_pin(
+                rule,
+                requires,
+                unknown_policy,
+                &sorted_routines,
+                model,
+                &mut summary,
+                &mut rule_findings,
+            );
+            summary.findings_emitted = rule_findings.len();
+            findings.extend(rule_findings);
+            rule_summaries.push(summary);
+            continue;
+        }
+
         for routine in &sorted_routines {
             summary.routines_evaluated += 1;
 
@@ -229,6 +317,8 @@ pub fn run_policy_engine(model: &PolicyModel, policy: &PolicyDoc) -> RunOutput {
             let app_ctx = FieldEvalContext {
                 routine,
                 fact: None,
+                write: None,
+                rule: None,
                 indexes: &model.field_indexes,
             };
             if evaluate_applicability(&rule.when, &app_ctx) == Tristate::False {
@@ -296,6 +386,8 @@ pub fn run_policy_engine(model: &PolicyModel, policy: &PolicyDoc) -> RunOutput {
                 let ctx = FieldEvalContext {
                     routine,
                     fact: Some(fact),
+                    write: None,
+                    rule: None,
                     indexes: &model.field_indexes,
                 };
                 let when_result = evaluate_result(&rule.when, &ctx);
@@ -349,6 +441,183 @@ pub struct RunOutput {
     pub rule_summaries: Vec<RuleRunSummary>,
     pub findings: Vec<Finding>,
     pub diagnostics: Vec<PolicyDiagnostic>,
+}
+
+/// One pin over the routines (rules-to-policy spec §2.2). Per routine, as a
+/// fact rule: the applicability and structural `except` skips on its routine
+/// fields; then per write fact (one field it writes), `when` and `except` in
+/// full. A selected write is satisfied when some key the writer applies makes
+/// `requires` true; a routine with an unsatisfied write violates the pin. No
+/// coverage gate (the loader refuses `requireCoverage` on a pin: it is about
+/// capability facts). When the writer index was cut short, a write with no
+/// matching key is unknown, and `onUnknown` decides.
+fn run_pin(
+    rule: &Rule,
+    requires: &Predicate,
+    unknown_policy: &str,
+    routines: &[&ModelRoutine],
+    model: &PolicyModel,
+    summary: &mut RuleRunSummary,
+    out: &mut Vec<Finding>,
+) {
+    let pins = model.pins.as_ref().expect(
+        "policy: a pin needs the writer index (declare substrate::RULES in the policy plan)",
+    );
+    for routine in routines {
+        summary.routines_evaluated += 1;
+        let base = FieldEvalContext {
+            routine,
+            fact: None,
+            write: None,
+            rule: None,
+            indexes: &model.field_indexes,
+        };
+        if evaluate_applicability(&rule.when, &base) == Tristate::False {
+            continue;
+        }
+        if let Some(except) = &rule.except
+            && evaluate_applicability(except, &base) == Tristate::True
+        {
+            continue;
+        }
+        let mut violated: Vec<&PinFact> = Vec::new();
+        let mut saw_unknown = false;
+        for fact in pins.facts_of(routine) {
+            let write = Some(WriteFact {
+                table: fact.table,
+                field: fact.field,
+            });
+            let wctx = FieldEvalContext { write, ..base };
+            match evaluate_result(&rule.when, &wctx) {
+                Tristate::False => continue,
+                Tristate::Unknown => {
+                    saw_unknown = true;
+                    continue;
+                }
+                Tristate::True => {}
+            }
+            if let Some(except) = &rule.except
+                && evaluate_result(except, &wctx) == Tristate::True
+            {
+                continue;
+            }
+            let mut satisfied = false;
+            for k in &fact.keys {
+                let rctx = FieldEvalContext {
+                    rule: Some(RuleFact {
+                        kind: k.kind,
+                        atoms: &k.atoms,
+                    }),
+                    ..wctx
+                };
+                match evaluate_result(requires, &rctx) {
+                    Tristate::True => {
+                        satisfied = true;
+                        break;
+                    }
+                    Tristate::Unknown => saw_unknown = true,
+                    Tristate::False => {}
+                }
+            }
+            if satisfied {
+                continue;
+            }
+            if pins.truncated {
+                saw_unknown = true;
+            } else {
+                violated.push(fact);
+            }
+        }
+        if !violated.is_empty() {
+            summary.routines_matched += 1;
+            out.push(emit_pin_finding(rule, routine, model, &violated));
+        } else if saw_unknown {
+            summary.routines_skipped_unknown += 1;
+            if unknown_policy == "fail-closed" {
+                out.push(emit_unknown_finding(rule, routine, model));
+            }
+        } else {
+            summary.routines_passed += 1;
+        }
+    }
+}
+
+/// A pin's finding: at the writer's first violating write (where d65
+/// anchors), one evidence step per violating field.
+fn emit_pin_finding(
+    rule: &Rule,
+    routine: &ModelRoutine,
+    model: &PolicyModel,
+    violated: &[&PinFact],
+) -> Finding {
+    let root_cause_key = format!("policy-{}/{}", rule.id, routine.id);
+    let anchor_of =
+        |f: &PinFact| crate::engine::l5::detectors::anchor_of(&f.sites[0].anchor, routine);
+    let primary_location = anchor_of(violated[0]);
+    let fields: Vec<String> = violated
+        .iter()
+        .map(|f| format!("{}.{}", f.table, f.field))
+        .collect();
+    let root_cause = rule.message.clone().unwrap_or_else(|| {
+        format!(
+            "{} writes {} without the rule this policy pins{}",
+            routine.name,
+            fields.join(", "),
+            rule.description
+                .as_deref()
+                .map(|d| format!(": {d}"))
+                .unwrap_or_default()
+        )
+    });
+    let evidence = violated
+        .iter()
+        .map(|f| crate::engine::l5::finding::EvidenceStep {
+            routine_id: routine.id.clone(),
+            operation_id: None,
+            callsite_id: None,
+            loop_id: None,
+            source_anchor: anchor_of(f),
+            note: format!(
+                "writes {}.{} ({}) without a rule that matches requires",
+                f.table,
+                f.field,
+                f.sites[0].kind.as_str()
+            ),
+        })
+        .collect();
+    let mut tables: Vec<&str> = violated.iter().map(|f| f.table_id).collect();
+    tables.dedup();
+    let mut finding = Finding {
+        id: root_cause_key.clone(),
+        root_cause_key,
+        detector: format!("policy-{}", rule.id),
+        title: rule.title.clone().unwrap_or_else(|| rule.id.clone()).into(),
+        root_cause,
+        severity: rule.severity.clone(),
+        confidence: FindingConfidence {
+            level: "likely".to_string(),
+            capped_by: None,
+            evidence: Vec::new(),
+        },
+        primary_location,
+        evidence_path: evidence,
+        additional_paths: None,
+        affected_objects: vec![routine.object_id.as_str().into()],
+        affected_tables: tables.into_iter().map(Into::into).collect(),
+        fix_options: Vec::new(),
+        provenance: vec![Evidence {
+            source: "tree-sitter",
+            note: None,
+        }],
+        actionable_anchor: None,
+        fingerprint: None,
+        event_kind: None,
+        cross_extension_subscribers: None,
+        cohort_contexts: None,
+        loose_subject: None,
+    };
+    finding.fingerprint = Some(model.fingerprint_index.fingerprint_of(&finding));
+    finding
 }
 
 // ---------------------------------------------------------------------------

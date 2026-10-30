@@ -1,0 +1,68 @@
+# al-sem policy: rules pinned by `alsem explain --emit-policy`.
+# Each entry is a rule that at least 3 writers, and at least 75 % of the
+# writers, of a table field apply (d65-guard-bypass's majority rule). `alsem
+# policy check` reports every writer of the field that does not apply it.
+# Keep the entries that are business rules and delete the rest; record a
+# deliberate exception with `except: { routine.name: <name> }`.
+version: 2
+rules:
+  # Guard Order.Amount: 4 of 5 writer(s) apply it (for example Guard Writers::FollowAssign, Guard Writers::FollowValidate).
+  # Without it: Guard Writers::BypassAmount.
+  - id: pin-guard-order-amount-testfield-851b4754
+    title: "Writers of Guard Order.Amount apply: TestField: status <> ::open"
+    description: "rejects when O.Status <> O.Status::Open (TestField)"
+    severity: medium
+    when:
+      write.table: "Guard Order"
+      write.field: "Amount"
+    requires:
+      rule.kind: "TestField"
+      rule.atoms: "status <> ::open"
+  # Guard Order.Discount: 3 of 4 writer(s) apply it (for example Guard Writers::FollowAssign, Guard Writers::FollowValidate).
+  # Without it: Guard Writers::ResetDiscount.
+  - id: pin-guard-order-discount-testfield-7b8fcff9
+    title: "Writers of Guard Order.Discount apply: TestField: status <> ::open"
+    description: "rejects when O.Status <> O.Status::Open (TestField)"
+    severity: medium
+    when:
+      write.table: "Guard Order"
+      write.field: "Discount"
+    requires:
+      rule.kind: "TestField"
+      rule.atoms: "status <> ::open"
+  # Guard Order.Note: 3 of 4 writer(s) apply it (for example Guard Writers::FollowAssign, Guard Writers::FollowValidate).
+  # Without it: Guard Writers::CollectNote.
+  - id: pin-guard-order-note-testfield-470d417a
+    title: "Writers of Guard Order.Note apply: TestField: status <> ::open"
+    description: "rejects when O.Status <> O.Status::Open (TestField)"
+    severity: medium
+    when:
+      write.table: "Guard Order"
+      write.field: "Note"
+    requires:
+      rule.kind: "TestField"
+      rule.atoms: "status <> ::open"
+  # Guard Order.Price: 3 of 4 writer(s) apply it (for example Guard Writers::FollowAssign, Guard Writers::FollowValidate).
+  # Without it: Guard Writers::BypassModifyAll.
+  - id: pin-guard-order-price-testfield-eda8b5ef
+    title: "Writers of Guard Order.Price apply: TestField: status <> ::open"
+    description: "rejects when O.Status <> O.Status::Open (TestField)"
+    severity: medium
+    when:
+      write.table: "Guard Order"
+      write.field: "Price"
+    requires:
+      rule.kind: "TestField"
+      rule.atoms: "status <> ::open"
+  # Guard Order.Quantity: 3 of 4 writer(s) apply it (for example Guard Writers::FollowAssign, Guard Writers::FollowValidate).
+  # Without it: Guard Writers::BypassBranch.
+  - id: pin-guard-order-quantity-testfield-4a4f33dc
+    title: "Writers of Guard Order.Quantity apply: TestField: status <> ::open"
+    description: "rejects when O.Status <> O.Status::Open (TestField)"
+    severity: medium
+    when:
+      write.table: "Guard Order"
+      write.field: "Quantity"
+    requires:
+      rule.kind: "TestField"
+      rule.atoms: "status <> ::open"

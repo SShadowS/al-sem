@@ -7,7 +7,14 @@
 //! `policy root must be a map` / generic message — never asserted by a golden.
 //!
 //! Validation contract (mirrors loadPolicyFromString):
-//!   - `version` must be the integer **1**.
+//!   - `version` must be the integer **1** or **2**. Version 2 (rules-to-policy
+//!     spec `docs/superpowers/specs/2026-10-30-rules-to-policy-design.md` §2.4)
+//!     adds pins: a rule with `requires`, and the `write.*` / `rule.*` fields.
+//!     A version 1 file using either is refused ("needs policy version 2").
+//!   - a pin's shape: `when` names a write field and no capability field;
+//!     `except` names no capability or rule field; `requires` names rule fields
+//!     only; `facts` and `requireCoverage` are refused on a pin. A rule that is
+//!     not a pin names no write or rule field.
 //!   - all predicate values are string-only (enforced by the compiler).
 //!   - duplicate keys → error (serde_yaml rejects duplicate mapping keys by default).
 //!   - anchors/aliases are rejected (al-sem `maxAliasCount: 0`); serde_yaml expands
@@ -16,10 +23,11 @@
 use serde_yaml::Value;
 
 use crate::engine::gate::policy::policy_types::{
-    ALLOWED_COVERAGE, ALLOWED_FACTS, ALLOWED_SEVERITIES, ALLOWED_UNKNOWN, PolicyDefaults,
-    PolicyDoc, Rule,
+    ALLOWED_COVERAGE, ALLOWED_FACTS, ALLOWED_SEVERITIES, ALLOWED_UNKNOWN, POLICY_FORMAT_VERSION,
+    PolicyDefaults, PolicyDoc, Predicate, Rule,
 };
-use crate::engine::gate::policy::predicate_compiler::compile_predicate;
+use crate::engine::gate::policy::predicate_compiler::{collect_scopes, compile_predicate};
+use crate::engine::gate::policy::predicate_fields::FieldScope;
 
 /// Result of a load attempt. al-sem `LoadResult`.
 pub enum LoadResult {
@@ -65,7 +73,70 @@ const ALLOWED_RULE_FIELDS: &[&str] = &[
     "requireCoverage",
     "onUnknown",
     "facts",
+    "requires",
 ];
+
+/// The scopes a predicate names.
+fn scopes_of(p: &Predicate) -> Vec<FieldScope> {
+    collect_scopes(std::slice::from_ref(p))
+}
+
+/// A pin's shape (module doc), or why the rule is not one. `version` is the
+/// file's; a pin, or a write or rule field, needs version 2.
+fn check_pin_shape(
+    path: &str,
+    version: Option<i64>,
+    when: &Predicate,
+    except: Option<&Predicate>,
+    requires: Option<&Predicate>,
+    raw: &serde_yaml::Mapping,
+) -> Result<(), String> {
+    let when_s = scopes_of(when);
+    let except_s = except.map(scopes_of).unwrap_or_default();
+    let pin_fields = |s: &[FieldScope]| {
+        s.iter()
+            .any(|x| matches!(x, FieldScope::Write | FieldScope::Rule))
+    };
+    let Some(requires) = requires else {
+        if pin_fields(&when_s) || pin_fields(&except_s) {
+            return Err(format!(
+                "{path}: write.* and rule.* fields are for a pin (a rule with requires)"
+            ));
+        }
+        return Ok(());
+    };
+    if !matches!(version, Some(v) if v >= 2) {
+        return Err(format!("{path}.requires: needs policy version 2"));
+    }
+    if !scopes_of(requires).iter().all(|s| *s == FieldScope::Rule) {
+        return Err(format!("{path}.requires: only rule.* fields"));
+    }
+    if !when_s.contains(&FieldScope::Write) {
+        return Err(format!("{path}.when: a pin names a write.* field"));
+    }
+    if when_s
+        .iter()
+        .any(|s| matches!(s, FieldScope::Fact | FieldScope::Rule))
+    {
+        return Err(format!(
+            "{path}.when: a pin reads routine and write.* fields only"
+        ));
+    }
+    if except_s
+        .iter()
+        .any(|s| matches!(s, FieldScope::Fact | FieldScope::Rule))
+    {
+        return Err(format!(
+            "{path}.except: a pin reads routine and write.* fields only"
+        ));
+    }
+    for key in ["facts", "requireCoverage"] {
+        if get(raw, key).is_some() {
+            return Err(format!("{path}.{key}: does not apply to a pin"));
+        }
+    }
+    Ok(())
+}
 
 fn mapping_keys(m: &serde_yaml::Mapping) -> Vec<String> {
     m.iter()
@@ -142,11 +213,18 @@ pub fn load_policy_from_string(yaml: &str) -> LoadResult {
     // `01` is a STRING in YAML 1.2 core (serde_yaml agrees) → errors in both; it is
     // corpus-invisible (the only `version` value in the differential is the literal
     // `1`), so this is not byte-checked.
-    let version_ok =
-        matches!(get(&top, "version"), Some(Value::Number(n)) if n.as_f64() == Some(1.0));
-    if !version_ok {
+    //
+    // Version 2 (rules-to-policy spec §2.4) is read the same way: any Number
+    // whose value is 1.0 or 2.0. `version` is `None` when it is neither.
+    let version: Option<i64> = match get(&top, "version") {
+        Some(Value::Number(n)) => {
+            (1..=POLICY_FORMAT_VERSION).find(|v| n.as_f64() == Some(*v as f64))
+        }
+        _ => None,
+    };
+    if version.is_none() {
         errors.push(format!(
-            "policy version must be 1 (got {})",
+            "policy version must be 1 or 2 (got {})",
             version_display(get(&top, "version"))
         ));
     }
@@ -287,6 +365,23 @@ pub fn load_policy_from_string(yaml: &str) -> LoadResult {
             },
         };
 
+        let requires = match get(r, "requires") {
+            None => None,
+            Some(rq_raw) => match compile_predicate(rq_raw, &format!("{path}.requires")) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    errors.push(e);
+                    continue;
+                }
+            },
+        };
+        if let Err(e) =
+            check_pin_shape(&path, version, &when, except.as_ref(), requires.as_ref(), r)
+        {
+            errors.push(e);
+            continue;
+        }
+
         rules.push(Rule {
             id,
             title: get(r, "title").and_then(as_str).map(|s| s.to_string()),
@@ -300,6 +395,7 @@ pub fn load_policy_from_string(yaml: &str) -> LoadResult {
             require_coverage,
             on_unknown,
             facts,
+            requires,
         });
     }
 
@@ -309,7 +405,7 @@ pub fn load_policy_from_string(yaml: &str) -> LoadResult {
 
     let has_defaults = defaults.on_unknown.is_some() || defaults.require_coverage.is_some();
     let policy = PolicyDoc {
-        version: 1,
+        version: version.expect("no error, so a known version"),
         description: get(&top, "description")
             .and_then(as_str)
             .map(|s| s.to_string()),

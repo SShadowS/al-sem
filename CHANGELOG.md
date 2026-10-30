@@ -192,6 +192,41 @@ Spec: `docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 3).
     thresholds (N = 2, p = 0.5) it would give 5, all deliberate import/upgrade
     writes, so N = 3, p = 0.75 stay. The CDO-baseline triage is still owed; d65
     stays opt-in.
+- **Step 7: pin a rule in the policy** (spec
+  `docs/superpowers/specs/2026-10-30-rules-to-policy-design.md`).
+  - *`alsem explain --emit-policy`* writes the majority rules of
+    `--table T --field F` (or, alone, of every field the workspace writes) as
+    `al-sem.policy.yaml` entries. Each entry is one d65 rule key (d65's own
+    `rule_key`, `applied` and bar, N = 3 and p = 0.75; d65's `majorities` was
+    split so both read `key_counts`), kept even when every writer applies it.
+    Its id hangs on the key alone, so fixing a bypass keeps the ids; the counts
+    and examples go in a comment. With `--table/--field`, each key below the bar
+    is written commented out, ready to confirm by hand. Unknown table or field
+    exits 2; `--routine`/`--diff`/`--format` with it exit 3. It builds the rules
+    and no card text, and no plan.
+  - *Policy format version 2.* A rule may have `requires:`, a predicate over one
+    rule key a writer applies. Such a rule (a pin) selects write facts (a writer
+    and one field it writes) with `when`, and a writer violates it when no key it
+    applies satisfies `requires`. New predicate fields `write.table`,
+    `write.field` (glob), `rule.kind` (enum) and `rule.atoms` (exact text, as d65
+    forms it: a rule with one more atom is a weaker rule). The loader reads
+    versions 1 and 2 (the error is now "policy version must be 1 or 2"), refuses a
+    pin or a write/rule field in version 1, and checks a pin's shape; `facts` and
+    `requireCoverage` do not apply to a pin. Version 1 files load as before, so no
+    existing golden moved.
+  - *`policy check`* runs a pin over the same writer index d65 reads (so a
+    `MayNotStop` rule is never applied), anchoring a finding at the writer's first
+    violating write. A truncated cross-call walk makes a missing key unknown
+    (`onUnknown`). `policy explain` prints a `Requires:` block.
+  - *Declared needs.* `PolicyJob` asks `ViewNeeds::rules` and the writer index
+    only for a policy with a pin: `Plan` gains `own` (substrate bits a command
+    reads itself, outside any run; `prepare` fills them before the runs) and
+    `View::rules()` (panics "declare substrate::RULES"). A policy without a pin
+    costs what it did before.
+  - Tests and goldens: `cli_policy_pins` (new); `tests/cli-explain-goldens/emit.*`
+    (3) and `tests/cli-c-policy-goldens/pins.*` (4); new fixtures
+    `tests/fixtures/policy-pins/{bypass,fixed}` (`FIXTURE_ROOTS` fixtures 48 -> 50).
+    On `ws-d65` the emitted pins flag exactly d65's five writes.
 
 ### Fixed (G52)
 
