@@ -1663,6 +1663,20 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
              that name or number"
         ));
     }
+    // G47: the same for an event no publisher of the program declares.
+    if let ProveQuestion::PublishesEvent { event } = &parsed_question
+        && !resolved
+            .events
+            .graph
+            .events
+            .iter()
+            .any(|e| e.event_name.eq_ignore_ascii_case(event.trim()))
+    {
+        return Err(format!(
+            "prove: unknown event '{event}' in '{question_text}': no publisher of the program \
+             declares an event of that name"
+        ));
+    }
     // G25: caller-dependent writes asked in the callers' frames, while the
     // bundle is alive.
     let via_callers = query_full

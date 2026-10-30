@@ -406,10 +406,38 @@ pub(crate) struct LiteralReach<'a> {
     /// globals, whose tables a search state carries.
     rel_params: RelevantParams,
     rel_globals: RelevantGlobals<'a>,
+    /// The cone's DIRECT facts by kind, (effect type, resource id), each as
+    /// (routine stable id, the operation or call site it sits at; `""` none).
+    direct_by_kind: DirectByKind<'a>,
 }
 
+/// An effect kind: (effect type, resource id).
+type Kind<'a> = (&'static str, Option<&'a str>);
+
+/// Per kind, its direct facts as (routine stable id, site).
+type DirectByKind<'a> = HashMap<Kind<'a>, Vec<(&'a str, &'a str)>>;
+
 impl<'a> LiteralReach<'a> {
-    pub(crate) fn new(edges: &'a [SnapshotGraphEdge], model: &'a Model) -> Self {
+    pub(crate) fn new(
+        edges: &'a [SnapshotGraphEdge],
+        facts: &'a [crate::engine::l5::snapshot::SnapshotCapabilityFact],
+        model: &'a Model,
+    ) -> Self {
+        let mut direct_by_kind: DirectByKind = HashMap::new();
+        for f in facts.iter().filter(|f| f.provenance == "direct") {
+            let Some(kind) = crate::engine::l5::digest::effect_type_of(f) else {
+                continue;
+            };
+            let site = f
+                .witness_operation_id
+                .as_deref()
+                .or(f.witness_callsite_id.as_deref())
+                .unwrap_or("");
+            direct_by_kind
+                .entry((kind, f.resource_id.as_deref()))
+                .or_default()
+                .push((f.subject.as_str(), site));
+        }
         let routines = &model.workspace.routines;
         let by_id: HashMap<&str, &ModelRoutine> =
             routines.iter().map(|r| (r.id.as_str(), r)).collect();
@@ -498,6 +526,7 @@ impl<'a> LiteralReach<'a> {
             guards,
             rel_params,
             rel_globals,
+            direct_by_kind,
         }
     }
 
@@ -785,35 +814,33 @@ impl<'a> LiteralReach<'a> {
             return (out, dead_resources);
         };
         for (i, e) in effects.iter().enumerate() {
-            // G46/G48/G44: a group is one crossing into a dependency (its
-            // boundary identity is that call site or operation). It cannot run
-            // when the crossing itself cannot, or when no fact merged into it
-            // can, whatever the facts are: UI, events, commits as well as table
-            // writes (whose resources the per-resource pruning below cuts one
-            // by one). A group with a fact that names no operation is kept.
+            // G48: a group is one crossing into a dependency (its boundary
+            // identity is that call site or operation). It cannot run when the
+            // crossing itself cannot, whatever its facts are: UI, events,
+            // commits as well as table writes. Its merged facts do NOT decide
+            // it: the cone keeps one representative fact per kind per root, so
+            // a dead representative says nothing of the kind's other origins.
             if e.boundary_group {
                 let crossing_dead = e
                     .evidence_callsite_id
                     .as_deref()
                     .or(e.evidence_operation_id.as_deref())
                     .is_some_and(|site| self.op_dead(&reached, site));
-                let facts_dead = e.group_fact_ops.as_ref().is_some_and(|ops| {
-                    !ops.is_empty() && ops.iter().all(|op| self.op_dead(&reached, op))
-                });
-                if crossing_dead || facts_dead {
+                if crossing_dead {
                     out.insert(i);
                     continue;
                 }
             }
+            // An effect's (or a group resource's) merged facts are the cone's
+            // representatives, one per kind per root: a dead representative
+            // says nothing of the kind's other origins. So a kind is judged by
+            // EVERY direct fact of it in the root's reach ([`Self::kind_dead`]).
+            let kind = e.effect_type.as_str();
             if e.boundary_group {
                 let dead: Vec<String> = e
-                    .group_resource_ops
+                    .group_resources
                     .iter()
-                    .filter(|(_, ops)| {
-                        ops.as_ref().is_some_and(|ops| {
-                            !ops.is_empty() && ops.iter().all(|op| self.op_dead(&reached, op))
-                        })
-                    })
+                    .filter(|(r, _)| self.kind_dead(&reached, (kind, Some(r.as_str()))))
                     .map(|(r, _)| r.clone())
                     .collect();
                 if !dead.is_empty() {
@@ -821,16 +848,46 @@ impl<'a> LiteralReach<'a> {
                 }
                 continue;
             }
-            if e.origin_operation_ids.is_empty() {
-                continue;
-            }
-            if e.origin_operation_ids
+            let resource = e
+                .detail
                 .iter()
-                .all(|op| self.op_dead(&reached, op))
-            {
+                .find(|(k, _)| k == "resourceId")
+                .map(|(_, v)| v.as_str());
+            if self.kind_dead(&reached, (kind, resource)) {
                 out.insert(i);
             }
         }
         (out, dead_resources)
+    }
+
+    /// Whether no direct fact of `kind` (effect type, resource id) can run
+    /// from the root: at least one sits in a routine the root reaches with
+    /// guards ignored (else the graph does not explain the effect, and nothing
+    /// is concluded), and none sits in a reached state of its routine where its
+    /// site can run. A routine reached only through code that cannot run has
+    /// no state, so its facts count as dead.
+    fn kind_dead(&self, reached: &Reached<'a>, kind: (&str, Option<&str>)) -> bool {
+        let Some(facts) = self.direct_by_kind.get(&kind) else {
+            return false;
+        };
+        let mut any_reached = false;
+        for &(subject, site) in facts {
+            if !reached.0.contains(subject) {
+                continue;
+            }
+            any_reached = true;
+            // A fact with no site cannot be shown dead.
+            if site.is_empty() {
+                return false;
+            }
+            let live = reached
+                .1
+                .get(subject)
+                .is_some_and(|bs| bs.iter().any(|b| !self.dead_at(subject, site, b)));
+            if live {
+                return false;
+            }
+        }
+        any_reached
     }
 }

@@ -1,4 +1,0 @@
---- Codeunit D34 Demo::DirectCommitInLoop ---
-  question: publishes-event:OnAfterPost
-  answer:   no
-  obligations: all clear

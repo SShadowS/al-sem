@@ -1311,7 +1311,11 @@ pub(crate) fn digest_effects_each(
     // G23, prove's read only: effects a root cannot reach once literal Boolean
     // arguments are followed through recursive SCCs, where the cone drops guards.
     if gaps_in_cone {
-        let reach = crate::engine::l5::literal_reach::LiteralReach::new(&tree.typed_edges, model);
+        let reach = crate::engine::l5::literal_reach::LiteralReach::new(
+            &tree.typed_edges,
+            &tree.capability_facts,
+            model,
+        );
         // G35: how each group resource is reached inside the dependency.
         let group_paths = crate::engine::l5::group_path::GroupPaths::new(&tree.typed_edges, model);
         for entry in &mut all_entries {
