@@ -106,6 +106,10 @@ fn a_field_guarded_recordref_write_writes_only_tables_with_the_field() {
     assert_eq!(answer("Update", "FG Doc"), "yes");
     assert_eq!(answer("Update", "FG Log"), "no");
     assert_eq!(answer("Update", "FG Other"), "no");
+    // Asked by number, the same answers (G40: by number the guard was not
+    // read, and `FG Log` answered `unknown`).
+    assert_eq!(answer("Update", "50401"), "yes");
+    assert_eq!(answer("Update", "50402"), "no");
     // Through the caller that hands it the RecordRef.
     assert_eq!(answer("SetHandled", "FG Log"), "no");
     // Controls: no guard, or a guard the RecordRef is rebound past.

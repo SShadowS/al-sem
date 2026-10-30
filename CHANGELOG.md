@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writes Customer and runs its field `OnValidate`. On DO: workspace calls 4
   more resolve to source, dependency bodies 29 more (catalog fallbacks that
   were really record methods). Test `cli_prove_table_names`.
+- **G36's field guard reads a `writes-table:` table asked by number too**
+  (G40 follow-up). It matched the asked table by name only, so Continia DO's
+  HAND-CORE-002.c5 answered `no` for `writes-table:CDO Send Code` but
+  `unknown` (`unknown-table-write`) for `writes-table:6175300`, the same
+  table. Both now answer `no`, the claim's expected answer: the only write
+  that could reach the table sits behind `if not R.FieldExist(N) then exit;`
+  and CDO Send Code has no field N. Test `cli_prove_field_guarded_write`
+  (by-number assertions).
 
 ### Added
 

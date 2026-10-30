@@ -167,11 +167,17 @@ pub(crate) fn resolve_field_guarded_writes(
         return out;
     }
     let tables = &model.workspace.tables;
-    // Every table of that name (a name can repeat across apps, as `prove`'s
-    // own name match allows).
+    // Every table of that name or number (a name or number can repeat across
+    // apps), as `prove`'s own match allows: asked by number, Continia DO's
+    // HAND-CORE-002.c5 (`writes-table:6175300`, CDO Send Code) answered
+    // `unknown` where the same table by name answered `no`.
     let asked: Vec<&crate::program::model::workspace::ModelTable> = tables
         .iter()
-        .filter(|t| !t.is_extension_stub && t.name.eq_ignore_ascii_case(table))
+        .filter(|t| {
+            !t.is_extension_stub
+                && (t.name.eq_ignore_ascii_case(table.trim())
+                    || t.id.rsplit('/').next() == Some(table.trim()))
+        })
         .collect();
     if asked.is_empty() {
         return out;
