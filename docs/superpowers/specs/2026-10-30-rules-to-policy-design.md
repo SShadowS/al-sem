@@ -187,6 +187,11 @@ policy's: a policy records an exception with `except`.
   per field.
 - Merging a new emission into an existing policy file: the emitter writes a new
   document; a team copies the entries it confirms.
+- Literal table names in `write.table`: the field is a glob, like the policy's other
+  name fields, so a table whose name contains `*` or `?` matches more tables than
+  itself. The emitter writes the name as it is. No table in the Continia DO
+  workspace uses either character (checked 2026-10-30); a pin on such a table should
+  be checked by hand.
 
 ## 4. Tests
 
