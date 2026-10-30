@@ -3542,6 +3542,7 @@ mod tests {
             ty: Some(ty.to_string()),
             temporary: false,
             origin: test_origin(),
+            label: None,
         }
     }
 

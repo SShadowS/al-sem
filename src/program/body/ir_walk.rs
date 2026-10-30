@@ -2825,6 +2825,7 @@ pub fn ir_variables(
                 end_column: 0,
                 syntax_kind: "parameter".to_string(),
             },
+            label_constant: None,
         });
     }
 
@@ -2842,6 +2843,12 @@ pub fn ir_variables(
             .body
             .and_then(|b| ir_first_assignment_value(file, b, &lc))
             .map(|val| ir_classify_rhs(file, val, source));
+        let label_constant = agreed_label_constant(
+            routine
+                .locals
+                .iter()
+                .filter(|o| o.name.eq_ignore_ascii_case(&lc)),
+        );
         out.push(PVariableSymbol {
             name: lc,
             declared_type,
@@ -2850,6 +2857,7 @@ pub fn ir_variables(
             parameter_index: None,
             initializer,
             source_anchor: anchor(&v.origin, "variable_declaration"),
+            label_constant,
         });
     }
 
@@ -2887,12 +2895,16 @@ pub fn ir_object_globals(
     use super::scope::canonicalize_type_text;
     let mut out: Vec<PVariableSymbol> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    for g in &file.objects[object_idx].globals {
+    let globals = &file.objects[object_idx].globals;
+    for g in globals {
         let lc = g.name.to_ascii_lowercase();
         if !seen.insert(lc.clone()) {
             continue;
         }
+        let label_constant =
+            agreed_label_constant(globals.iter().filter(|o| o.name.eq_ignore_ascii_case(&lc)));
         out.push(PVariableSymbol {
+            label_constant,
             name: lc,
             declared_type: canonicalize_type_text(g.ty.as_deref().unwrap_or("")),
             scope: "global".to_string(),
@@ -2910,6 +2922,25 @@ pub fn ir_object_globals(
         });
     }
     out
+}
+
+/// The constant text of one variable name over EVERY declaration of it in one
+/// scope (the IR keeps both arms of an `#if`, so a name can be declared twice):
+/// `Some` only when each declaration is a locked label with that same text. One
+/// arm with another text, or no constant at all, gives `None`, since either arm
+/// may be the one compiled (G52).
+fn agreed_label_constant<'a>(
+    decls: impl Iterator<Item = &'a al_syntax::ir::VarDecl>,
+) -> Option<String> {
+    let mut agreed: Option<String> = None;
+    for d in decls {
+        let c = super::features::label_constant_of(d.label.as_ref())?;
+        match &agreed {
+            Some(a) if *a != c => return None,
+            _ => agreed = Some(c),
+        }
+    }
+    agreed
 }
 
 // ---- routine envelope metadata (attributes / attributes_parsed) ----

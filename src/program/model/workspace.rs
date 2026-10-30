@@ -338,6 +338,10 @@ pub struct ModelVariable {
     /// that lack the L2 symbol (defensive). Additive — ModelVariable is not
     /// Serialize-derived. Consumed by d57 (global-collection growth).
     pub scope: Option<String>,
+    /// Forwarded from [`crate::program::body::features::PVariableSymbol::label_constant`]:
+    /// a locked label's text. Read by the implicit-error rule for a statement
+    /// `Evaluate` (G52).
+    pub label_constant: Option<String>,
 }
 
 /// A routine's lexical variable list — **params → locals → non-shadowed object
@@ -1267,6 +1271,7 @@ fn project_ir(
                     parameter_index: g.parameter_index,
                     initializer: g.initializer,
                     scope: Some(g.scope),
+                    label_constant: g.label_constant,
                 })
                 .collect::<Vec<_>>(),
         );
@@ -1451,6 +1456,7 @@ fn project_ir(
                     parameter_index: v.parameter_index,
                     initializer: v.initializer.clone(),
                     scope: Some(v.scope.clone()),
+                    label_constant: v.label_constant.clone(),
                 })
                 .collect();
             let variables = RoutineVariables::new(own_variables, Arc::clone(&object_globals));
@@ -2839,6 +2845,7 @@ mod tests {
             parameter_index: None,
             initializer: None,
             scope: Some(scope.to_string()),
+            label_constant: None,
         }
     }
 

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (G52)
+
+- **A statement `Evaluate` that provably cannot fail is no implicit error**
+  (G52, refines G50). `Evaluate(Target, Source)` with two arguments raises
+  nothing when `Source` is a constant no translation changes (a string
+  literal, or a label declared `Locked = true`) and its text parses for
+  `Target`'s declared type: a `Guid` in braced `{8-4-4-4-12}` form, or an
+  `Integer` of plain digits (optional leading `-`) in the 32-bit range.
+  Anything else stays a possible error: an unlocked label, a computed text,
+  another type, a target that is no plain variable, a third (format)
+  argument, or a label whose `#if` arms give different texts. Continia DO
+  reads notification ids this way (`CDO Conflict Notific. Handler`,
+  `CDO DO-eDocs Notific. Handler`): claim OPRF-CORE-007.c4 (throws-error,
+  expect no) now answers `no`; PLAT-SET-009.c1 (an `Evaluate` of computed
+  text) still answers `yes`. To know a label's text, the lowerer now records
+  it on `VarDecl.label` (`LabelValue`: text, locked), and the variable
+  symbol carries a locked label's text as `labelConstant`.
+
 ### Fixed (soundness of the guarded search; G47)
 
 - **The guarded search (G23/G33/G48) no longer drops an effect on the strength

@@ -3853,30 +3853,35 @@ mod tests {
                     ty: Some("Record Customer".into()),
                     temporary: false,
                     origin: o.clone(),
+                    label: None,
                 },
                 VarDecl {
                     name: "J".into(),
                     ty: Some("JsonObject".into()),
                     temporary: false,
                     origin: o.clone(),
+                    label: None,
                 },
                 VarDecl {
                     name: "RecTmp".into(),
                     ty: Some("Record Customer temporary".into()),
                     temporary: true,
                     origin: o.clone(),
+                    label: None,
                 },
                 VarDecl {
                     name: "Iface".into(),
                     ty: Some("Interface \"IMyInterface\"".into()),
                     temporary: false,
                     origin: o.clone(),
+                    label: None,
                 },
                 VarDecl {
                     name: "EnumVar".into(),
                     ty: Some("Enum \"Color\"".into()),
                     temporary: false,
                     origin: o.clone(),
+                    label: None,
                 },
             ],
             attributes: vec![],
@@ -5489,6 +5494,7 @@ mod tests {
                 ty: Some("Record \"AmbTable\"".into()),
                 temporary: false,
                 origin: o.clone(),
+                label: None,
             }],
             attributes: vec![],
             attributes_parsed: vec![],
@@ -6187,6 +6193,7 @@ mod tests {
             ty: Some("Codeunit \"MyCodeunit\"".into()),
             temporary: false,
             origin: o,
+            label: None,
         }];
 
         let result = infer_receiver_type(
@@ -6272,6 +6279,7 @@ mod tests {
             ty: Some("JsonObject".into()),
             temporary: false,
             origin: o,
+            label: None,
         }];
 
         // Should resolve via the PARAM (Codeunit "MyCodeunit"), not the global (JsonObject)
@@ -6306,6 +6314,7 @@ mod tests {
                 ty: Some("Record \"NonExistentTable\"".into()),
                 temporary: false,
                 origin: o.clone(),
+                label: None,
             }],
             attributes: vec![],
             attributes_parsed: vec![],
@@ -6356,6 +6365,7 @@ mod tests {
                 ty: Some("Record Customer".into()),
                 temporary: false,
                 origin: o.clone(),
+                label: None,
             }],
             attributes: vec![],
             attributes_parsed: vec![],
@@ -7377,6 +7387,7 @@ codeunit 50100 "C"
             ty: Some(ty.into()),
             temporary: false,
             origin: test_origin(),
+            label: None,
         }
     }
 

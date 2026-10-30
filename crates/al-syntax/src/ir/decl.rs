@@ -273,4 +273,39 @@ pub struct VarDecl {
     pub ty: Option<String>,
     pub temporary: bool,
     pub origin: Origin,
+    /// The text of a label declaration (`Name: Label 'text', Locked = true;`),
+    /// `None` for every other declaration. See [`LabelValue`].
+    pub label: Option<LabelValue>,
+}
+
+/// What a label declaration's value is: the literal text with its quotes removed
+/// and every doubled `''` read as one `'`, and whether it is locked. A label that
+/// is not locked can be translated, so its text at run time may differ from this
+/// one; only a `locked` label's text is a constant (G52).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LabelValue {
+    /// The literal's text. `None` when the value is not a plain `'…'` string
+    /// literal (a verbatim `@'…'` string), so nothing can claim to know it.
+    pub text: Option<String>,
+    /// True only when the declaration says `Locked = true` and nothing says
+    /// `Locked = false`.
+    pub locked: bool,
+}
+
+/// The text of an AL string literal (`'it''s'` is `it's`), or `None` when `raw`
+/// is not one plain, well-formed `'…'` literal.
+pub fn al_string_literal_text(raw: &str) -> Option<String> {
+    let inner = raw.strip_prefix('\'')?.strip_suffix('\'')?;
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c == '\'' {
+            // Inside the literal a quote only appears doubled.
+            if chars.next() != Some('\'') {
+                return None;
+            }
+        }
+        out.push(c);
+    }
+    Some(out)
 }

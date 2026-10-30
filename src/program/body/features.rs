@@ -490,6 +490,22 @@ pub struct PVariableSymbol {
     pub initializer: Option<serde_json::Value>,
     #[serde(rename = "sourceAnchor")]
     pub source_anchor: PAnchor,
+    /// The text of a LOCKED label (`X: Label '…', Locked = true;`), the one kind
+    /// of variable whose value is a constant no translation can change (G52).
+    /// `None` for every other variable, an unlocked label included, and when two
+    /// declarations of the name (the arms of an `#if`) disagree.
+    #[serde(
+        rename = "labelConstant",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
+    pub label_constant: Option<String>,
+}
+
+/// The constant text a declaration gives its variable: a locked label's text,
+/// else `None` (see [`PVariableSymbol::label_constant`]).
+pub fn label_constant_of(label: Option<&al_syntax::ir::LabelValue>) -> Option<String> {
+    label.filter(|l| l.locked).and_then(|l| l.text.clone())
 }
 
 /// How a field access uses the field (#14).
