@@ -319,3 +319,81 @@ fn a_boundary_group_behind_a_dead_crossing_is_dropped_whole() {
         assert_ne!(dead["answer"], "yes", "{question}: {dead}");
     }
 }
+
+/// The cone keeps ONE fact per kind per root (the nearest), so an effect's
+/// merged origins are that representative's. Here the nearer write (in a
+/// recursive routine, guarded by a literal `false`) cannot run, and the
+/// farther one can: the guarded search must not drop the effect for its dead
+/// representative (it answered a false `no`).
+#[test]
+fn a_dead_representative_does_not_hide_a_live_write_of_the_same_kind() {
+    const SOURCE: &str = r#"table 50800 "RP T"
+{
+    fields { field(1; Code; Code[20]) { } }
+    keys { key(PK; Code) { } }
+}
+codeunit 50801 "RP"
+{
+    procedure Root()
+    begin
+        Near(false, 3);
+        Far1();
+    end;
+
+    procedure NearOnly()
+    begin
+        Near(false, 3);
+    end;
+
+    local procedure Near(Write: Boolean; N: Integer)
+    var
+        T: Record "RP T";
+    begin
+        if Write then
+            T.Insert();
+        if N > 0 then
+            Near(Write, N - 1);
+    end;
+
+    local procedure Far1()
+    begin
+        Far2();
+    end;
+
+    local procedure Far2()
+    var
+        T: Record "RP T";
+    begin
+        T.Insert();
+    end;
+}
+"#;
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"52525252-0000-4000-8000-000000000052","name":"RP","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(ws.join("src/a.al"), SOURCE).unwrap();
+    let prove = |routine: &str| -> serde_json::Value {
+        let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .arg("prove")
+            .arg(&ws)
+            .args([routine, "writes-table:RP T", "--deterministic"])
+            .env("RUST_LOG", "off")
+            .output()
+            .unwrap();
+        serde_json::from_slice::<serde_json::Value>(&out.stdout)
+            .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)))["payload"]
+            ["result"]
+            .clone()
+    };
+    // Precondition: the literal `false` alone does cut the guarded write.
+    let near = prove("NearOnly");
+    assert_eq!(near["answer"], "no", "precondition: {near}");
+    // Far2's write runs.
+    let root = prove("Root");
+    assert_eq!(root["answer"], "yes", "{root}");
+}
