@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (G49)
+
+- **A temp state that depends on the routine's own `Rec` now reads
+  `parameter-dependent(rec)`, not `parameter-dependent(4294967295)`.** The
+  receiver index (`RECEIVER_PARAM_INDEX`, `u32::MAX`) means "the implicit `Rec`
+  a table procedure or trigger runs on"; the raw number leaked into every text
+  rendering of a temp state: `query effects` (JSON and human),
+  `digest`'s and `prove`'s `detail.tempState`. On DO it showed for the
+  `CDO Setup` `Modify` calls in `CDO Setup.AssignUniqueFolder`. The one
+  renderer, `effect_query_cli::temp_state_str`, now names the receiver; the
+  internal representation, structured JSON (`parameterIndex`) and effect keys
+  are unchanged. `prove`'s `temp-state-depends-on-caller` blocker now says
+  "on the implicit Rec: a table write only if the record the routine runs on
+  is not temporary" when the write's only caller-dependent state is the
+  receiver, instead of "on a record parameter". Pinned by
+  `tests/cli/cli_receiver_temp_state.rs` on the new fixture
+  `tests/fixtures/g49-receiver` (compiled clean with alc 18.0).
+
 ### Fixed (soundness of the guarded search; G47)
 
 - **The guarded search (G23/G33/G48) no longer drops an effect on the strength
