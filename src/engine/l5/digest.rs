@@ -3255,6 +3255,9 @@ pub struct DigestEffectResult {
     /// G33: per group resource, its facts' originating operations (`None`
     /// when one fact names none). Not serialized; empty off a group.
     pub group_resource_ops: Vec<(String, Option<Vec<String>>)>,
+    /// G46: a boundary group's every fact's originating operation (`None`
+    /// when one names none, and off a group). Not serialized.
+    pub group_fact_ops: Option<Vec<String>>,
     /// G33: the group resources the root cannot reach once literal and table
     /// arguments are followed ([`crate::engine::l5::literal_reach`]): prove
     /// matches none of them. Set only for `prove`'s read; not serialized.
@@ -3887,6 +3890,9 @@ fn digest_one_root<'i>(
             /// G33: a group's facts' originating operations per resource;
             /// `None` once one of its facts names no operation.
             group_ops: BTreeMap<String, Option<BTreeSet<String>>>,
+            /// G46: every merged fact's originating operation, whatever the
+            /// fact (UI, event, commit, write); `None` once one names none.
+            group_all_ops: Option<BTreeSet<String>>,
             /// A group's facts that name no resource (an unresolved table
             /// write in the dependency): the group's resource list is then
             /// not the whole of what it writes.
@@ -4106,6 +4112,21 @@ fn digest_one_root<'i>(
                     if acc.group.is_some() && fact.resource_id.is_none() {
                         acc.group_unresolved += 1;
                     }
+                    if acc.group.is_some() {
+                        // A call-borne fact (a `Message`, an event raise) names
+                        // its call site rather than an operation.
+                        let origin = fact
+                            .witness_operation_id
+                            .as_ref()
+                            .or(fact.witness_callsite_id.as_ref());
+                        match (origin, acc.group_all_ops.as_mut()) {
+                            (Some(op), Some(set)) => {
+                                set.insert(op.clone());
+                            }
+                            (None, _) => acc.group_all_ops = None,
+                            _ => {}
+                        }
+                    }
                     if let (Some((_, resources)), Some(r)) = (&mut acc.group, &fact.resource_id) {
                         resources.entry(r.clone()).or_insert_with(|| {
                             resource_display_of(fact, &idx.stable_id_to_display)
@@ -4162,6 +4183,7 @@ fn digest_one_root<'i>(
                         },
                         group: bnd.clone().map(|b| (b, BTreeMap::new())),
                         group_ops: BTreeMap::new(),
+                        group_all_ops: Some(BTreeSet::new()),
                         group_unresolved: 0,
                     };
                     merge(&mut acc);
@@ -4327,6 +4349,11 @@ fn digest_one_root<'i>(
                     .into_iter()
                     .map(|(r, ops)| (r, ops.map(|s| s.into_iter().collect())))
                     .collect(),
+                group_fact_ops: if boundary_group {
+                    acc.group_all_ops.map(|s| s.into_iter().collect())
+                } else {
+                    None
+                },
                 literal_unreachable: false,
                 dead_group_resources: Vec::new(),
                 group_resource_paths: Vec::new(),

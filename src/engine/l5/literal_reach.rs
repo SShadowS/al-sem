@@ -441,6 +441,8 @@ impl<'a> LiteralReach<'a> {
             }
             for cs in &r.call_sites {
                 op_owner.insert(cs.operation_id.as_str(), r.stable_routine_id.as_str());
+                // G46: a boundary group's crossing is named by call site id.
+                op_owner.insert(cs.id.as_str(), r.stable_routine_id.as_str());
             }
         }
         let table_names = model
@@ -783,6 +785,26 @@ impl<'a> LiteralReach<'a> {
             return (out, dead_resources);
         };
         for (i, e) in effects.iter().enumerate() {
+            // G46/G48/G44: a group is one crossing into a dependency (its
+            // boundary identity is that call site or operation). It cannot run
+            // when the crossing itself cannot, or when no fact merged into it
+            // can, whatever the facts are: UI, events, commits as well as table
+            // writes (whose resources the per-resource pruning below cuts one
+            // by one). A group with a fact that names no operation is kept.
+            if e.boundary_group {
+                let crossing_dead = e
+                    .evidence_callsite_id
+                    .as_deref()
+                    .or(e.evidence_operation_id.as_deref())
+                    .is_some_and(|site| self.op_dead(&reached, site));
+                let facts_dead = e.group_fact_ops.as_ref().is_some_and(|ops| {
+                    !ops.is_empty() && ops.iter().all(|op| self.op_dead(&reached, op))
+                });
+                if crossing_dead || facts_dead {
+                    out.insert(i);
+                    continue;
+                }
+            }
             if e.boundary_group {
                 let dead: Vec<String> = e
                     .group_resource_ops

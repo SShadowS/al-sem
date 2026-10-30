@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (G48, part of G44/G46)
+
+- **A boundary group whose crossing into the dependency cannot run is
+  dropped whole**, its UI, event and COMMIT facts too (G48). The guarded
+  search (`literal_reach`) cut a group only per table resource, so non-table
+  facts behind a dead guard stayed. A group is one crossing (its boundary
+  identity is that call site), so when every reached state of its routine
+  rules the crossing out, none of it runs. A group is also dropped when every
+  merged fact's origin (operation, or call site for a call-borne fact) is
+  dead. Continia DO: PRNT-QUEU-006.c8 (`publishes-event:
+  OnBeforeAutoSendOnPostingSalesInvoice`, expect `no`) moves from a
+  contradicted `yes` to `unknown`. Not yet enough for G46/G44: their facts
+  are inside the dependency, and a call-borne fact names the root's first hop
+  rather than its origin there. Test
+  `cli_prove_table_branches::a_boundary_group_behind_a_dead_crossing_is_dropped_whole`.
+
 ### Fixed (G42/G43)
 
 - **The G34 exit guard reads the set form `if not (R.Number in [Database::"A",

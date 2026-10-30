@@ -240,3 +240,82 @@ table 12 "Dep Batch"
     let dead = prove("Cust");
     assert_eq!(dead["answer"], "no", "{dead}");
 }
+
+/// G48/G46/G44: a boundary group whose crossing into the dependency cannot
+/// run is dropped whole, its event and COMMIT facts included, not only its
+/// table resources. The workspace calls `Dep Lib.Outer()` (which raises
+/// `OnDepEvent` and commits) only past `if RecRef.Number <> Database::Customer
+/// then exit;` (Continia DO: `CDO File.CalcSalesDisc`'s `Sales-Calc. Discount`
+/// run, reached with a posted service document, PRNT-QUEU-006.c8).
+#[test]
+fn a_boundary_group_behind_a_dead_crossing_is_dropped_whole() {
+    const LIB: &str = r#"codeunit 10 "Dep Lib"
+{
+    procedure Outer()
+    begin
+        OnDepEvent();
+        Commit();
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnDepEvent()
+    begin
+    end;
+}
+"#;
+    const GUARDED: &str = r#"codeunit 50180 "Ws Guarded"
+{
+    procedure FromCust(var Cust: Record Customer)
+    var
+        RecRef: RecordRef;
+    begin
+        RecRef.GetTable(Cust);
+        Guarded(RecRef);
+    end;
+
+    procedure FromFlag(var Flag: Record "Ws Flag")
+    var
+        RecRef: RecordRef;
+    begin
+        RecRef.GetTable(Flag);
+        Guarded(RecRef);
+    end;
+
+    local procedure Guarded(var RecRef: RecordRef)
+    var
+        Lib: Codeunit "Dep Lib";
+    begin
+        if RecRef.Number <> Database::Customer then
+            exit;
+        Lib.Outer();
+    end;
+}
+"#;
+    let t = tempfile::tempdir().unwrap();
+    crate::dep_dispatch_fixture::write_own_lib(t.path(), GUARDED, LIB);
+    let prove = |routine: &str, question: &str| -> serde_json::Value {
+        let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .arg("prove")
+            .arg(t.path())
+            .args([routine, question, "--deterministic"])
+            .env("RUST_LOG", "off")
+            .output()
+            .unwrap();
+        serde_json::from_slice::<serde_json::Value>(&out.stdout)
+            .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)))["payload"]
+            ["result"]
+            .clone()
+    };
+    for question in ["publishes-event:OnDepEvent", "may-commit"] {
+        // Precondition: through a Customer the group runs.
+        let live = prove("FromCust", question);
+        assert_eq!(live["answer"], "yes", "precondition: {question}: {live}");
+        assert!(
+            live["evidence"][0]["detail"]["boundary"].is_string(),
+            "precondition: {question}: a boundary group: {live}"
+        );
+        // Through a Ws Flag the crossing cannot run.
+        let dead = prove("FromFlag", question);
+        assert_ne!(dead["answer"], "yes", "{question}: {dead}");
+    }
+}
