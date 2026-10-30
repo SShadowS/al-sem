@@ -114,20 +114,9 @@ const PROVE_CORPUS: &[(&str, &str, &str, &str, u8)] = &[
         "writes-table:MC Customer",
         0,
     ),
-    (
-        "ws-d34",
-        "ws-d34.writes-table-customer",
-        "DirectCommitInLoop",
-        "writes-table:Customer",
-        0,
-    ),
-    (
-        "ws-d35",
-        "ws-d35.writes-table-customer",
-        "OnBeforePrintSafe",
-        "writes-table:Customer",
-        0,
-    ),
+    // ws-d34 / ws-d35 `writes-table:Customer`: no table of that name exists
+    // there, so the question is refused (G40), not a golden `no`; see
+    // `writes_table_of_an_unknown_table_is_refused`.
     // publishes-event
     (
         "ws-d8-commit-in-tx",
@@ -339,6 +328,25 @@ fn dummy_doc_exits_2() {
         .unwrap_or_else(|e| panic!("dummy-doc: run_prove_pipeline failed: {e}"));
 
     assert_eq!(exit, 2, "dummy-doc case must exit 2 (routine not resolved)");
+}
+
+/// G40: neither fixture declares or uses a `Customer` table, so
+/// `writes-table:Customer` names nothing. Their goldens used to say `no`,
+/// which a name that matches no write always gave, and which reads as proof.
+#[test]
+fn writes_table_of_an_unknown_table_is_refused() {
+    for (fixture, routine) in [
+        ("ws-d34", "DirectCommitInLoop"),
+        ("ws-d35", "OnBeforePrintSafe"),
+    ] {
+        match run_one(fixture, routine, "writes-table:Customer") {
+            Err(e) => assert!(
+                e.contains("unknown table 'Customer'"),
+                "{fixture}/{routine}: {e}"
+            ),
+            Ok((json, _, _)) => panic!("{fixture}/{routine}: answered instead of refusing: {json}"),
+        }
+    }
 }
 
 // Rust-owned goldens regenerated in-process via

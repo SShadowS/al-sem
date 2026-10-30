@@ -4,12 +4,15 @@
 //! never from the snapshot's identity table.
 //!
 //! The fixture holds a Table and a TableExtension with the SAME number (50100),
-//! the extension's file sorting after the table's, so the identity table keeps
-//! the extension's name at `<guid>:Table:50100`. A test that took the owner from
-//! the identity table would print `OD Item Ext` for the real table's routines.
-//! The two Interfaces check the declaration-only rows' display. Since #83 they
-//! have distinct ids (`<guid>:Interface:@ifoo`, `…:@ibar`), so they no longer
-//! catch an identity-table owner; the Table/TableExtension pair does.
+//! the extension's file sorting after the table's. Until G40 the identity table
+//! kept the extension's name at `<guid>:Table:50100`, so an owner taken from the
+//! identity table printed `OD Item Ext` for the real table's routines; the
+//! "Mutations (ii)" notes below date from then. Since G40 the identity table
+//! holds the real table's name there (`assert_identity_table_holds_table_name`
+//! pins that), so this pair no longer tells an identity-table owner from the
+//! Model's by the name alone. The two Interfaces check the declaration-only
+//! rows' display. Since #83 they have distinct ids (`<guid>:Interface:@ifoo`,
+//! `…:@ibar`), so they do not catch an identity-table owner either.
 
 use std::path::Path;
 use std::process::Command;
@@ -125,10 +128,12 @@ fn stable_id_of(ws: &Path, file: &str, display: &str) -> String {
     hits[0]["routine"]["stableId"].as_str().unwrap().to_string()
 }
 
-/// PRECONDITION shared by A1/A2/A4: the snapshot's identity table holds the
-/// EXTENSION's name at the real table's id, so an identity-table owner would be
-/// caught.
-fn assert_identity_table_holds_extension_name(ws: &Path) {
+/// Shared by A1/A2/A4: the snapshot's identity table holds the REAL table's
+/// name at its id, though tableextension 50100 shares the number (G40: the
+/// extension stub used to overwrite it, and `prove … writes-table:<name>`
+/// then matched none of the table's writes). Before G40 this asserted the
+/// overwrite, as the precondition for catching an identity-table owner.
+fn assert_identity_table_holds_table_name(ws: &Path) {
     let model_id = compute_gate_model_instance_id(ws).unwrap();
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).unwrap();
@@ -141,8 +146,8 @@ fn assert_identity_table_holds_extension_name(ws: &Path) {
         .position(|s| *s == key)
         .unwrap_or_else(|| panic!("precondition: `{key}` in identities: {:?}", ids.stable_ids));
     assert_eq!(
-        ids.display_names[at], "OD Item Ext",
-        "precondition: the extension stub overwrote the table's identity name"
+        ids.display_names[at], "OD Item",
+        "the extension stub must not overwrite the table's identity name"
     );
 }
 
@@ -157,7 +162,7 @@ fn digest_entries_name_their_owning_object() {
     let dir = tempfile::tempdir().unwrap();
     owner_workspace(dir.path());
     let ws = dir.path();
-    assert_identity_table_holds_extension_name(ws);
+    assert_identity_table_holds_table_name(ws);
 
     let mut got: Vec<(String, String, String)> = Vec::new();
     let mut want: Vec<(String, String, String)> = Vec::new();
@@ -238,7 +243,7 @@ fn fingerprint_block_names_its_owning_object() {
     let dir = tempfile::tempdir().unwrap();
     owner_workspace(dir.path());
     let ws = dir.path();
-    assert_identity_table_holds_extension_name(ws);
+    assert_identity_table_holds_table_name(ws);
     let id = stable_id_of(ws, "src/a_Table.al", "OnInsert");
     assert!(id.starts_with(&format!("{GUID}:Table:50100#")), "{id}");
 
@@ -280,7 +285,7 @@ fn prove_names_its_owning_object() {
     let dir = tempfile::tempdir().unwrap();
     owner_workspace(dir.path());
     let ws = dir.path();
-    assert_identity_table_holds_extension_name(ws);
+    assert_identity_table_holds_table_name(ws);
     let id = stable_id_of(ws, "src/a_Table.al", "OnInsert");
     assert!(id.starts_with(&format!("{GUID}:Table:50100#")), "{id}");
 

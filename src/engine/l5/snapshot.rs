@@ -1684,8 +1684,13 @@ pub(crate) fn derive_identity_table(resolved: &Model) -> SnapshotIdentityTable {
     for obj in &ws.objects {
         pairs.insert(to_stable_object_id(&obj.id), obj.name.clone());
     }
-    for tbl in &ws.tables {
-        pairs.insert(stable_table_id(&tbl.id), tbl.name.clone());
+    // G40: a REAL table wins an id collision with a `tableextension` stub
+    // (`ModelTable::is_extension_stub`): DO's `CDOReturnReceiptHeaderExt`
+    // (tableextension 6175291) displayed as table 6175291 "CDO Cust.Template
+    // Setup", so `prove … writes-table:CDO Cust.Template Setup` matched none
+    // of its writes.
+    for (id, tbl) in crate::program::model::workspace::table_by_id_preferring_real(&ws.tables) {
+        pairs.insert(stable_table_id(id), tbl.name.clone());
     }
     for r in &ws.routines {
         pairs.insert(r.stable_routine_id.clone(), r.name.clone());

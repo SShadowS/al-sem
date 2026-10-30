@@ -236,7 +236,12 @@ fn build_scope(
         .map(|v| v.name.to_ascii_lowercase())
         .chain(dataitems)
         .collect();
-    let implicit_rec = has_implicit_rec(o, source_table_name);
+    // G41: a report dataitem trigger's implicit `Rec` is the dataitem's record,
+    // so a bare `Modify(true)` / `Validate(F, V)` there operates on it (DO's
+    // `CDO Update Customer Setup`, `dataitem(Customer; Customer)` …
+    // `OnAfterGetRecord` … `Modify(true)`).
+    let implicit_rec =
+        has_implicit_rec(o, source_table_name) || routine.dataitem_source_table.is_some();
 
     let params_locals: Vec<String> = routine
         .params

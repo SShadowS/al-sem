@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (G40/G41, not yet re-verified on the DO claim set)
+
+- **`prove … writes-table:<name>` matched no write of a table numbered like a
+  table extension of the same app** (G40). The snapshot's identity table let
+  the extension stub's name overwrite the table's (Continia DO: tableextension
+  6175291 `CDOReturnReceiptHeaderExt` against table 6175291 "CDO Cust.Template
+  Setup"), so the table's name answered a false `no` while its number said
+  `yes`. A real table now wins the id (`table_by_id_preferring_real`).
+- **A `writes-table:` name or number that no table of the program has is
+  refused** (exit 1, `prove: unknown table …`), never answered `no` (G40).
+  The cli-b goldens `ws-d34`/`ws-d35 writes-table:Customer` recorded that
+  `no` for a table neither fixture has; they are now a refusal test.
+- **A bare `Modify(true)` / `Validate(…)` in a report dataitem trigger operates
+  on the dataitem's record** (G41): the trigger's implicit `Rec`, in the body
+  extraction and the resolver alike. DO's "CDO Update Customer Setup" now
+  writes Customer and runs its field `OnValidate`. On DO: workspace calls 4
+  more resolve to source, dependency bodies 29 more (catalog fallbacks that
+  were really record methods). Test `cli_prove_table_names`.
+
 ### Added
 
 - **The RecordRef value flow reads a `case R.Number` branch under the tables
