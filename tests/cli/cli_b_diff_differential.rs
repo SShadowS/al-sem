@@ -197,8 +197,13 @@ fn compose_ws(dir: &std::path::Path) -> CborValue {
             ..Default::default()
         },
     );
-    let resolved =
-        assemble_and_resolve_workspace_program(&inputs, &model_id, false).expect("resolve");
+    let resolved = assemble_and_resolve_workspace_program(
+        &inputs,
+        &model_id,
+        false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .expect("resolve");
     let opts = FullSnapshotOptions {
         inputs: &inputs,
         driver_version: VERSION_OVERRIDE,

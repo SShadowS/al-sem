@@ -628,6 +628,7 @@ mod tests {
             delete_allowed: None,
             source_anchor: None,
             declaration_only_routines: Vec::new(),
+            run_actions: None,
         };
         let symbols = SymbolTable::build(std::slice::from_ref(&page), &[]);
         let op = |name: &str| ModelRecordOperation {
@@ -651,6 +652,7 @@ mod tests {
             in_until_condition: false,
             in_statement_position: false,
             run_trigger: None,
+            modify_all_field: None,
         };
         let temp = Some(ts_known(true));
         // (is_implicit_rec, expected: Rec row temp, Rec op temp, xRec op temp)

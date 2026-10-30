@@ -877,6 +877,7 @@ mod tests {
             delete_allowed: None,
             source_anchor: None,
             declaration_only_routines: Vec::new(),
+            run_actions: None,
         }
     }
 
@@ -933,6 +934,9 @@ mod tests {
             originating_object: None,
             enclosing_member_range: None,
             entry_temp_guard_receiver: None,
+            rules: None,
+            rule_drafts: None,
+            card_text: None,
         }
     }
 

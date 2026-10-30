@@ -15,8 +15,9 @@ mod expr;
 mod stmt;
 
 pub use decl::{
-    AttributeIr, EnumValueDecl, FieldDecl, LabelValue, ObjectDecl, ObjectKind, ObjectProperty,
-    PageControl, Param, RoutineDecl, RoutineKind, VarDecl, al_string_literal_text,
+    ActionDecl, AttributeIr, EnumValueDecl, FieldDecl, LabelValue, ObjectDecl, ObjectKind,
+    ObjectProperty, PageControl, Param, RoutineDecl, RoutineKind, SourceComment, VarDecl,
+    al_string_literal_text,
 };
 pub use expr::{BinaryOp, Expr, ExprKind, Literal, TypeOp, UnaryOp};
 pub use stmt::{Block, BlockItem, CaseBranch, PreprocGroup, Stmt, StmtKind};
@@ -187,4 +188,11 @@ pub struct AlFile {
     pub ir: Ir,
     pub issues: Vec<SyntaxIssue>,
     pub parse_status: ParseStatus,
+    /// Every comment in the file, in source order, as written. Comments are
+    /// grammar `extras`, so the parse tree hangs them on whatever node is open,
+    /// not on the declaration they describe; position (line numbers) is what
+    /// ties a comment to code. The `doc` runs on routines, fields and actions are
+    /// read from this list, and a later pass reads a check's trailing comment
+    /// (`own_line == false`) or the comment above it from here.
+    pub comments: Vec<SourceComment>,
 }

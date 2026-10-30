@@ -1,0 +1,12 @@
+{
+  "cards": [],
+  "diagnostics": [
+    {
+      "kind": "routine-not-found",
+      "selector": "NoSuchRoutine"
+    }
+  ],
+  "mode": "routine",
+  "schema": "al-sem.explain/1",
+  "selector": "NoSuchRoutine"
+}

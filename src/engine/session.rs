@@ -22,6 +22,7 @@ use crate::engine::l5::detector_context::{
 };
 use crate::engine::l5::digest_cli::DigestEffects;
 use crate::engine::l5::registry::{self, Detector, RunOutput, substrate};
+use crate::engine::l5::rules_index::RulesIndex;
 use crate::engine::l5::snapshot::CapabilitySnapshot;
 use crate::engine::perf_trace as pt;
 use crate::program::model::role::Role;
@@ -57,6 +58,9 @@ pub struct View {
     /// One bit per [`Cell`] released; a released cell is never refilled.
     released: u16,
     ordering: Option<OrderingFactsMap>,
+    /// The per-field writer index (`substrate::RULES`), filled like
+    /// `ordering`: once, before the runs.
+    rules: Option<RulesIndex>,
     runs: BTreeMap<RunKey, Arc<RunOutput>>,
 }
 
@@ -80,6 +84,12 @@ pub struct Plan {
     /// report's coverage read). `prepare` asserts every run's union holds
     /// them, naming the missing bit (A2.10).
     after_run: u32,
+    /// The substrate bits the command reads off the view itself, outside any
+    /// detector run (rules-to-policy spec §2.6): `prepare` fills them as it
+    /// fills a run's, before the runs, so a batch's runs and the command share
+    /// one cell. Only the cells built from the model alone may be named
+    /// (`RULES`: `policy check` with a pin reads [`View::rules`]).
+    own: u32,
     /// Whose raw inherited facts the view's composition keeps (#160 step 6
     /// D3), fixed before it runs: the union of the jobs' requests (#277 D5).
     witness: WitnessRequest,
@@ -293,6 +303,9 @@ pub enum Cell {
     /// After step 9's `TreeRead`: #277 merged second, so its cell takes the
     /// next free bit (spec §9).
     Base,
+    /// The per-field writer index (`substrate::RULES`, intent-evidence step
+    /// 6). Last, so every older cell keeps its bit.
+    Rules,
 }
 
 impl Cell {
@@ -301,10 +314,11 @@ impl Cell {
     /// `Effects` (with `L4`) for its query, then releases both. `TreeRead` is
     /// here as `Raw` is: released whether filled or not (a fingerprint tree
     /// read is usually taken, and so released, first).
-    const ALL: [Cell; 6] = [
+    const ALL: [Cell; 7] = [
         Cell::Det,
         Cell::L4,
         Cell::Ordering,
+        Cell::Rules,
         Cell::Rel,
         Cell::Raw,
         Cell::TreeRead,
@@ -321,6 +335,7 @@ pub fn analyze_plan(detectors: Vec<Detector>, scope_primary: bool) -> Plan {
         runs: vec![(detectors, scope_primary)],
         need_l4: false,
         after_run: 0,
+        own: 0,
         witness: WitnessRequest::empty(),
         trees: vec![],
     }
@@ -356,6 +371,7 @@ pub fn digest_plan(detectors: Vec<Detector>, roots: BTreeSet<String>, tests: boo
         runs: vec![(detectors, true)],
         need_l4: true,
         after_run: substrate::TRANSACTION_SPANS,
+        own: 0,
         witness,
         trees,
     }
@@ -393,6 +409,7 @@ fn run_only_plan(detectors: Vec<Detector>) -> Plan {
         runs: vec![(detectors, true)],
         need_l4: false,
         after_run: 0,
+        own: 0,
         witness: WitnessRequest::empty(),
         trees: vec![],
     }
@@ -465,6 +482,7 @@ pub fn events_plan(detectors: Vec<Detector>) -> Plan {
         runs: vec![(detectors, true)],
         need_l4: false,
         after_run: substrate::SUMMARIES,
+        own: 0,
         witness: WitnessRequest::empty(),
         trees: vec![],
     }
@@ -473,12 +491,16 @@ pub fn events_plan(detectors: Vec<Detector>) -> Plan {
 /// `alsem policy check`: the run, then the rule engine off `det.summaries`
 /// and the view's raw facts of every primary routine (`View::raw`; #160
 /// step 6 Task 3). With no policy (`--no-policy`) no rule reads raw facts,
-/// so the request is empty (#277 E12-C5).
-pub fn policy_plan(detectors: Vec<Detector>, rules: bool) -> Plan {
+/// so the request is empty (#277 E12-C5). `pins` (a policy with a pin,
+/// rules-to-policy spec §2.6): the view also fills the per-field writer
+/// index (`substrate::RULES`, read through [`View::rules`]); without a pin it
+/// does not, so such a policy costs what it did before pins.
+pub fn policy_plan(detectors: Vec<Detector>, rules: bool, pins: bool) -> Plan {
     Plan {
         runs: vec![(detectors, true)],
         need_l4: false,
         after_run: substrate::SUMMARIES,
+        own: if pins { substrate::RULES } else { 0 },
         witness: if rules {
             WitnessRequest::primary()
         } else {
@@ -488,12 +510,44 @@ pub fn policy_plan(detectors: Vec<Detector>, rules: bool) -> Plan {
     }
 }
 
+/// `alsem explain` (intent-evidence spec §4.4): one tree over the cards'
+/// routines (stable ids), whose effects keep the test-coverage graph (the
+/// card's `tests`), and nothing else. No detector run and no `l4`: the card
+/// reads the raw per-root effects (types, resources, conditionality, witness
+/// paths), not digest's L4-joined `tempState` or its transaction context, and
+/// no analyzer diagnostics. No routine: nothing at all (the job answers with
+/// exit 2 and no card).
+pub fn explain_plan(roots: BTreeSet<String>) -> Plan {
+    if roots.is_empty() {
+        return Plan::merge(std::iter::empty());
+    }
+    let witness = WitnessRequest::roots(roots);
+    Plan {
+        runs: vec![],
+        need_l4: false,
+        after_run: 0,
+        own: 0,
+        trees: vec![(
+            JobId(0),
+            TreeDemand {
+                subjects: witness.clone(),
+                tests: true,
+                gaps_in_cone: false,
+                include_reads: false,
+                read: TreeRead::Effects,
+            },
+        )],
+        witness,
+    }
+}
+
 /// `alsem query`: no run, `l4` alone.
 pub fn query_plan() -> Plan {
     Plan {
         runs: vec![],
         need_l4: true,
         after_run: 0,
+        own: 0,
         witness: WitnessRequest::empty(),
         trees: vec![],
     }
@@ -511,6 +565,7 @@ impl Plan {
             runs: runs.into_iter().map(|r| (r, scope_primary)).collect(),
             need_l4,
             after_run,
+            own: 0,
             witness: WitnessRequest::empty(),
             trees: vec![],
         }
@@ -536,7 +591,7 @@ impl Plan {
 
     /// A view's ONE plan from its jobs' plans (#277 D5): every distinct run
     /// once (two jobs with one `RunKey` share it, D5.5), the union of the
-    /// requests (D5.1), `need_l4` and `after_run` ORed, and each job's tree
+    /// requests (D5.1), `need_l4`, `after_run` and `own` ORed, and each job's tree
     /// (a factory files it under `JobId(0)`) filed under the job's own id.
     /// One part is that part's plan with its tree under `job`.
     pub fn merge(parts: impl IntoIterator<Item = (JobId, Plan)>) -> Plan {
@@ -544,6 +599,7 @@ impl Plan {
             runs: vec![],
             need_l4: false,
             after_run: 0,
+            own: 0,
             witness: WitnessRequest::empty(),
             trees: vec![],
         };
@@ -556,6 +612,7 @@ impl Plan {
             }
             out.need_l4 |= part.need_l4;
             out.after_run |= part.after_run;
+            out.own |= part.own;
             out.witness = out.witness.union(&part.witness);
             out.trees
                 .extend(part.trees.into_iter().map(|(_, tree)| (job, tree)));
@@ -637,6 +694,7 @@ fn substrate_bit_name(bit: u32) -> &'static str {
         substrate::CLOSED_WORLD_TEMP => "CLOSED_WORLD_TEMP",
         substrate::DB_EFFECT_REVERSE_INDEX => "DB_EFFECT_REVERSE_INDEX",
         substrate::ORDERING_FACTS => "ORDERING_FACTS",
+        substrate::RULES => "RULES",
         _ => "an unnamed substrate bit",
     }
 }
@@ -686,6 +744,7 @@ impl View {
             det: None,
             released: 0,
             ordering: None,
+            rules: None,
             runs: BTreeMap::new(),
         }
     }
@@ -732,7 +791,14 @@ impl View {
         let fills = plan.fills();
         let [need_rel, need_raw, need_l4, need_det] =
             [Cell::Rel, Cell::Raw, Cell::L4, Cell::Det].map(|c| fills.contains(&c));
-        let need_ordering = union & substrate::ORDERING_FACTS != 0;
+        // Only model-only cells may be a command's own read (`Plan::own`).
+        assert!(
+            plan.own & !(substrate::ORDERING_FACTS | substrate::RULES) == 0,
+            "Plan::own names {}: only ORDERING_FACTS and RULES are built from the model alone",
+            bit_names(plan.own & !(substrate::ORDERING_FACTS | substrate::RULES))
+        );
+        let need_ordering = (union | plan.own) & substrate::ORDERING_FACTS != 0;
+        let need_rules = (union | plan.own) & substrate::RULES != 0;
         let need_derived = plan.needs_derived();
         let need_caps = plan.composes(self.det.is_some());
         // D3: the subjects are fixed once, before the one composition: a
@@ -753,6 +819,7 @@ impl View {
         // `release(Det)` would find no `CoreSummaries`.
         for (cell, needed) in [
             (Cell::Ordering, need_ordering),
+            (Cell::Rules, need_rules),
             (Cell::Rel, need_rel),
             (Cell::Det, need_det),
             (Cell::L4, need_l4),
@@ -802,6 +869,7 @@ impl View {
             det,
             released,
             ordering,
+            rules,
             runs,
         } = self;
         // Final panel F1-C2: the dependency calls (cross-app) are read only by
@@ -829,6 +897,10 @@ impl View {
         // wants it before the runs.
         if need_ordering && ordering.is_none() {
             *ordering = Some(dc::fill_ordering(model));
+        }
+        // The rules index reads the model alone too: before the runs.
+        if need_rules && rules.is_none() {
+            *rules = Some(dc::fill_rules(model));
         }
         if need_rel && rel.is_none() {
             *rel = Some(relation_of(target));
@@ -1088,6 +1160,7 @@ impl View {
                 ("L4", l4.is_some()),
                 ("Det", true),
                 ("Ordering", ordering.is_some()),
+                ("Rules", rules.is_some()),
             ]
             .into_iter()
             .filter_map(|(name, filled)| filled.then_some(name))
@@ -1103,7 +1176,8 @@ impl View {
                 continue;
             }
             // One context per run (its borrowed maps print per construction).
-            let ctx: DetectorContext<'_> = dc::detector_context(model, art, ordering.as_ref());
+            let ctx: DetectorContext<'_> =
+                dc::detector_context(model, art, ordering.as_ref(), rules.as_ref());
             // Rule 3: a run's summarize diagnostics come from ITS mask.
             let summarize: &[SummarizeDiagnostic] = if key.demanded & substrate::CORE_SUMMARIES != 0
             {
@@ -1132,6 +1206,7 @@ impl View {
             Cell::Det => self.det = None,
             Cell::L4 => self.l4 = None,
             Cell::Ordering => self.ordering = None,
+            Cell::Rules => self.rules = None,
             Cell::Rel => self.rel = None,
             Cell::Caps => self.caps = None,
             Cell::Raw => self.raw = None,
@@ -1192,6 +1267,7 @@ impl View {
             ("L4", self.l4.is_some()),
             ("Det", self.det.is_some()),
             ("Ordering", self.ordering.is_some()),
+            ("Rules", self.rules.is_some()),
         ]
         .into_iter()
         .filter_map(|(name, filled)| filled.then_some(name))
@@ -1231,6 +1307,15 @@ impl View {
     /// The witness subjects' raw inherited facts (#160 step 6 D2).
     pub fn raw(&self) -> &HashMap<String, Vec<CapabilityFact>> {
         self.raw.as_ref().expect("raw cell not filled")
+    }
+
+    /// The per-field writer index, read by a command outside the runs
+    /// (`policy check` with a pin, rules-to-policy spec §2.6): its plan names
+    /// `substrate::RULES` in `Plan::own` (or a run requires it).
+    pub fn rules(&self) -> &RulesIndex {
+        self.rules
+            .as_ref()
+            .expect("rules cell not filled: declare substrate::RULES")
     }
 
     /// `job`'s effects (#160 step 6 D7 (5); #277 D5.4), read by its query at
@@ -1421,7 +1506,7 @@ mod tests {
             ("events", events_plan(vec![probe(0, noop)]), "SUMMARIES"),
             (
                 "policy",
-                policy_plan(vec![probe(0, noop)], true),
+                policy_plan(vec![probe(0, noop)], true, false),
                 "SUMMARIES",
             ),
         ] {
@@ -1879,6 +1964,27 @@ mod tests {
     /// request and job 0's tree demand over them; a digest with no root
     /// (prove, or none resolved) has neither. A roots request scopes every
     /// row of each stable id.
+    /// `explain_plan` (intent evidence step 4): one effects tree with the
+    /// test-coverage graph over its routines, and no run and no `l4` (the card
+    /// reads neither); no routine, nothing at all.
+    #[test]
+    fn explain_plan_is_one_tests_tree_and_nothing_else() {
+        let roots: BTreeSet<String> = ["a:Codeunit:1#x".to_string()].into();
+        let p = explain_plan(roots.clone());
+        assert!(p.runs.is_empty() && !p.need_l4 && p.after_run == 0);
+        assert_eq!(p.witness, WitnessRequest::roots(roots.clone()));
+        assert!(
+            matches!(&p.trees[..], [(JobId(0), t)] if t.subjects == WitnessRequest::roots(roots)
+                && t.tests && !t.gaps_in_cone && !t.include_reads
+                && matches!(t.read, TreeRead::Effects)),
+            "{:?}",
+            p.trees
+        );
+        assert_eq!(p.fills(), vec![Cell::Rel, Cell::Raw]);
+        let p = explain_plan(BTreeSet::new());
+        assert!(p.trees.is_empty() && p.runs.is_empty() && p.fills().is_empty());
+    }
+
     #[test]
     fn digest_plan_asks_a_tree_only_for_roots() {
         let roots: BTreeSet<String> = ["a:Codeunit:1#x".to_string()].into();
@@ -2012,7 +2118,7 @@ mod tests {
             (JobId(3), digest(&["b"])),
             (
                 JobId(4),
-                policy_plan(vec![probe(substrate::SUMMARIES, noop)], true),
+                policy_plan(vec![probe(substrate::SUMMARIES, noop)], true, false),
             ),
         ]);
         assert_eq!(u.runs.len(), 3, "one run per key");
@@ -2241,6 +2347,7 @@ mod tests {
             v.released,
             Cell::Det.bit()
                 | Cell::Ordering.bit()
+                | Cell::Rules.bit()
                 | Cell::Rel.bit()
                 | Cell::Raw.bit()
                 | Cell::TreeRead.bit()
@@ -2403,6 +2510,7 @@ mod tests {
             Cell::Effects,
             Cell::TreeRead,
             Cell::Base,
+            Cell::Rules,
         ];
         for c in all {
             match c {
@@ -2415,7 +2523,8 @@ mod tests {
                 | Cell::Tree
                 | Cell::Effects
                 | Cell::TreeRead
-                | Cell::Base => assert_ne!(c.bit(), 0, "(f) {c:?} has a bit"),
+                | Cell::Base
+                | Cell::Rules => assert_ne!(c.bit(), 0, "(f) {c:?} has a bit"),
             }
         }
         let mask = all.iter().fold(0u16, |m, c| m | c.bit());
@@ -2430,8 +2539,11 @@ mod tests {
     /// deleting one arm of `substrate_bit_name` fails this.
     #[test]
     fn every_substrate_bit_has_a_name() {
-        let all = substrate::ALL | substrate::DB_EFFECT_REVERSE_INDEX | substrate::ORDERING_FACTS;
-        assert_eq!(all.count_ones(), 6, "precondition: six bits");
+        let all = substrate::ALL
+            | substrate::DB_EFFECT_REVERSE_INDEX
+            | substrate::ORDERING_FACTS
+            | substrate::RULES;
+        assert_eq!(all.count_ones(), 7, "precondition: seven bits");
         for i in 0..u32::BITS {
             let bit = 1u32 << i;
             if all & bit != 0 {

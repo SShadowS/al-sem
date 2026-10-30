@@ -1232,6 +1232,20 @@
       "routines": 0,
       "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
     },
+    "r0/ws-d65 cross": {
+      "any": 34,
+      "direct": 32,
+      "inherited": 2,
+      "routines": 15,
+      "sha256": "8248aa0c922c82ee0949354e416c631e68f2526f798c04a9843d433fff27a331"
+    },
+    "r0/ws-d65 single": {
+      "any": 34,
+      "direct": 32,
+      "inherited": 2,
+      "routines": 15,
+      "sha256": "8248aa0c922c82ee0949354e416c631e68f2526f798c04a9843d433fff27a331"
+    },
     "r0/ws-d7-event-cycle cross": {
       "any": 20,
       "direct": 4,
@@ -1679,6 +1693,34 @@
       "inherited": 3,
       "routines": 4,
       "sha256": "190abe748f5609eb4159ec17e6681f6aaff41340cb8318dd69a8d461b9405ee6"
+    },
+    "r0/ws-explain cross": {
+      "any": 30,
+      "direct": 13,
+      "inherited": 17,
+      "routines": 10,
+      "sha256": "3afe9c3298774c07c3bdd26f47e00fce81b39c5646d3398d8e31591be73bfc25"
+    },
+    "r0/ws-explain single": {
+      "any": 30,
+      "direct": 13,
+      "inherited": 17,
+      "routines": 10,
+      "sha256": "3afe9c3298774c07c3bdd26f47e00fce81b39c5646d3398d8e31591be73bfc25"
+    },
+    "r0/ws-explain-calls cross": {
+      "any": 78,
+      "direct": 40,
+      "inherited": 38,
+      "routines": 28,
+      "sha256": "ecf5b2fb77641488cab3a1bf2328261aaad9cec8caa8d714b11f43d58c649634"
+    },
+    "r0/ws-explain-calls single": {
+      "any": 78,
+      "direct": 40,
+      "inherited": 38,
+      "routines": 28,
+      "sha256": "ecf5b2fb77641488cab3a1bf2328261aaad9cec8caa8d714b11f43d58c649634"
     },
     "r0/ws-implicit-trigger cross": {
       "any": 6,
@@ -2589,6 +2631,20 @@
       "inherited": 0,
       "routines": 4,
       "sha256": "8ca5e69f65f5e243d8039c436efbaf9184d38511fb9b1175d34035f054bb1cb4"
+    },
+    "r0/ws-rules cross": {
+      "any": 43,
+      "direct": 42,
+      "inherited": 1,
+      "routines": 11,
+      "sha256": "23cbb83e7287d26a7bd70d2b80991661e6b9c5ba1a95a0bf08399355dc78fe69"
+    },
+    "r0/ws-rules single": {
+      "any": 43,
+      "direct": 42,
+      "inherited": 1,
+      "routines": 11,
+      "sha256": "23cbb83e7287d26a7bd70d2b80991661e6b9c5ba1a95a0bf08399355dc78fe69"
     },
     "r0/ws-sibling-member-triggers cross": {
       "any": 0,

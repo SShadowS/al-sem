@@ -1,0 +1,131 @@
+{
+  "al_sem_version": "cli-c-v1",
+  "generated_at": "0",
+  "kind": "policy.check",
+  "dependencies": {
+    "apps": [],
+    "mode": "crossApp"
+  },
+  "policySource": "explicit:emit.policy-pins.yaml",
+  "policyVersion": 2,
+  "ruleSummaries": [
+    {
+      "ruleId": "pin-pin-order-amount-testfield-a26942f8",
+      "routinesEvaluated": 8,
+      "routinesMatched": 2,
+      "routinesSkippedCoverage": 0,
+      "routinesSkippedUnknown": 0,
+      "routinesPassed": 6,
+      "findingsEmitted": 2
+    }
+  ],
+  "findings": [
+    {
+      "id": "policy-pin-pin-order-amount-testfield-a26942f8/d111dbf778c4d312/ae8cd4408ee23c9abc9ee9fbf3e40aae63dbb20b7cdd73cbad7afb787d65d71b",
+      "rootCauseKey": "policy-pin-pin-order-amount-testfield-a26942f8/d111dbf778c4d312/ae8cd4408ee23c9abc9ee9fbf3e40aae63dbb20b7cdd73cbad7afb787d65d71b",
+      "detector": "policy-pin-pin-order-amount-testfield-a26942f8",
+      "title": "Writers of Pin Order.Amount apply: TestField: status <> ::open",
+      "rootCause": "Bypass writes Pin Order.Amount without the rule this policy pins: rejects when O.Status <> O.Status::Open (TestField)",
+      "severity": "medium",
+      "confidence": {
+        "level": "likely",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/Writers.al",
+        "range": {
+          "startLine": 49,
+          "startColumn": 8,
+          "endLine": 49,
+          "endColumn": 16
+        },
+        "enclosingRoutineId": "d111dbf778c4d312/ae8cd4408ee23c9abc9ee9fbf3e40aae63dbb20b7cdd73cbad7afb787d65d71b",
+        "syntaxKind": "member_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "d111dbf778c4d312/ae8cd4408ee23c9abc9ee9fbf3e40aae63dbb20b7cdd73cbad7afb787d65d71b",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Writers.al",
+            "range": {
+              "startLine": 49,
+              "startColumn": 8,
+              "endLine": 49,
+              "endColumn": 16
+            },
+            "enclosingRoutineId": "d111dbf778c4d312/ae8cd4408ee23c9abc9ee9fbf3e40aae63dbb20b7cdd73cbad7afb787d65d71b",
+            "syntaxKind": "member_expression"
+          },
+          "note": "writes Pin Order.Amount (assign) without a rule that matches requires"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-0000000057a0/Codeunit/50701"
+      ],
+      "affectedTables": [
+        "11111111-0000-0000-0000-0000000057a0/table/50700"
+      ],
+      "fixOptions": [],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "ed6aa761d3d32805"
+    },
+    {
+      "id": "policy-pin-pin-order-amount-testfield-a26942f8/d111dbf778c4d312/ebed9fc83121248b2c18a2204bbfc023c0539bf1a8a6c073cb6bb05da845917c",
+      "rootCauseKey": "policy-pin-pin-order-amount-testfield-a26942f8/d111dbf778c4d312/ebed9fc83121248b2c18a2204bbfc023c0539bf1a8a6c073cb6bb05da845917c",
+      "detector": "policy-pin-pin-order-amount-testfield-a26942f8",
+      "title": "Writers of Pin Order.Amount apply: TestField: status <> ::open",
+      "rootCause": "Collect writes Pin Order.Amount without the rule this policy pins: rejects when O.Status <> O.Status::Open (TestField)",
+      "severity": "medium",
+      "confidence": {
+        "level": "likely",
+        "evidence": []
+      },
+      "primaryLocation": {
+        "sourceUnitId": "ws:src/Writers.al",
+        "range": {
+          "startLine": 60,
+          "startColumn": 8,
+          "endLine": 60,
+          "endColumn": 16
+        },
+        "enclosingRoutineId": "d111dbf778c4d312/ebed9fc83121248b2c18a2204bbfc023c0539bf1a8a6c073cb6bb05da845917c",
+        "syntaxKind": "member_expression"
+      },
+      "evidencePath": [
+        {
+          "routineId": "d111dbf778c4d312/ebed9fc83121248b2c18a2204bbfc023c0539bf1a8a6c073cb6bb05da845917c",
+          "sourceAnchor": {
+            "sourceUnitId": "ws:src/Writers.al",
+            "range": {
+              "startLine": 60,
+              "startColumn": 8,
+              "endLine": 60,
+              "endColumn": 16
+            },
+            "enclosingRoutineId": "d111dbf778c4d312/ebed9fc83121248b2c18a2204bbfc023c0539bf1a8a6c073cb6bb05da845917c",
+            "syntaxKind": "member_expression"
+          },
+          "note": "writes Pin Order.Amount (assign) without a rule that matches requires"
+        }
+      ],
+      "affectedObjects": [
+        "11111111-0000-0000-0000-0000000057a0/Codeunit/50701"
+      ],
+      "affectedTables": [
+        "11111111-0000-0000-0000-0000000057a0/table/50700"
+      ],
+      "fixOptions": [],
+      "provenance": [
+        {
+          "source": "tree-sitter"
+        }
+      ],
+      "fingerprint": "08fa7fa5539e32bf"
+    }
+  ],
+  "diagnostics": []
+}

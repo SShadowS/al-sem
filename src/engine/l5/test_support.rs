@@ -152,6 +152,9 @@ pub fn routine(id: &str, kind: &str) -> ModelRoutine {
         originating_object: None,
         enclosing_member_range: None,
         entry_temp_guard_receiver: None,
+        rules: None,
+        rule_drafts: None,
+        card_text: None,
     }
 }
 
@@ -364,6 +367,7 @@ pub fn record_op(
         in_until_condition,
         in_statement_position: false,
         run_trigger: None,
+        modify_all_field: None,
     }
 }
 
@@ -395,7 +399,7 @@ pub struct MinimalCtx<'a> {
 
 impl<'a> MinimalCtx<'a> {
     pub fn ctx(&self) -> DetectorContext<'_> {
-        DetectorContext::new(self.routines, self.objects, &[], &self.art, None)
+        DetectorContext::new(self.routines, self.objects, &[], &self.art, None, None)
     }
 
     /// The object rows the context's `declaring` index is built over (none by
@@ -985,7 +989,10 @@ codeunit 12 "Dep Rec Lib"
 pub fn dependency_half(ws: &std::path::Path) -> Vec<crate::program::model::calls::CallEdge> {
     let inputs = crate::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     let x = crate::program::model::program_calls::assemble_and_resolve_cross_app_program(
-        &inputs, "r0", false,
+        &inputs,
+        "r0",
+        false,
+        crate::program::model::workspace::AssemblyNeeds::BASE,
     )
     .unwrap_or_else(|_| panic!("cross-app model for {}", ws.display()));
     assert!(x.resolved.primary_app.is_some(), "primary app");

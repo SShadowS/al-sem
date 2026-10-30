@@ -1,0 +1,121 @@
+{
+  "cards": [
+    {
+      "effects": {
+        "commitSites": [],
+        "commits": "no",
+        "events": [
+          {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/post.al",
+              "line": 12,
+              "sourceKind": "source"
+            },
+            "conditionality": "unknown",
+            "event": "OnBeforePostOrder",
+            "eventId": "44444444-e491-0000-0000-0000000e4a11/Codeunit/50401/event/onbeforepostorder",
+            "via": [
+              "PostOrder",
+              "OnBeforePostOrder"
+            ]
+          }
+        ],
+        "ui": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Message",
+              "file": "ws:src/post.al",
+              "line": 18,
+              "sourceKind": "source"
+            },
+            "conditionality": "guarded-by-IsHandled",
+            "type": "UI_MESSAGE",
+            "via": [
+              "PostOrder"
+            ]
+          }
+        ],
+        "writes": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Order.Modify",
+              "file": "ws:src/post.al",
+              "line": 17,
+              "sourceKind": "source"
+            },
+            "conditionality": "guarded-by-IsHandled",
+            "fieldCaptions": {
+              "Status": "Order Status"
+            },
+            "fields": [
+              "Posted",
+              "Status"
+            ],
+            "op": "DB_MODIFY",
+            "table": "Explain Order",
+            "tableId": "44444444-e491-0000-0000-0000000e4a11/table/50400",
+            "via": [
+              "PostOrder"
+            ]
+          }
+        ]
+      },
+      "extensionPoints": [],
+      "gaps": [
+        {
+          "anchor": {
+            "column": 8,
+            "file": "ws:src/tests.al",
+            "line": 14,
+            "sourceKind": "source"
+          },
+          "callee": "Assert.ExpectedError",
+          "in": "PostUnreleasedFails",
+          "kind": "symbol-only-dependency",
+          "status": "external"
+        },
+        {
+          "anchor": {
+            "column": 8,
+            "file": "ws:src/tests.al",
+            "line": 15,
+            "sourceKind": "source"
+          },
+          "callee": "Assert.IsTrue",
+          "in": "PostUnreleasedFails",
+          "kind": "symbol-only-dependency",
+          "status": "external"
+        }
+      ],
+      "reachedFrom": [],
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/tests.al",
+          "line": 8,
+          "sourceKind": "source"
+        },
+        "doc": null,
+        "id": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50405#3c15575bee905cbf25ba36fc4fc75ff23321ea016139cee4950b359eee36c410",
+        "name": "PostUnreleasedFails",
+        "object": "Explain Tests",
+        "objectCaption": null,
+        "objectType": "Codeunit"
+      },
+      "rules": {
+        "callers": [],
+        "inherited": [],
+        "knownCallers": 0,
+        "own": []
+      },
+      "tests": []
+    }
+  ],
+  "diagnostics": [],
+  "mode": "routine",
+  "schema": "al-sem.explain/1",
+  "selector": "PostUnreleasedFails"
+}

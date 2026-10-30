@@ -380,6 +380,7 @@ mod tests {
             delete_allowed: None,
             source_anchor: None,
             declaration_only_routines: Vec::new(),
+            run_actions: None,
         }
     }
 
@@ -422,6 +423,9 @@ mod tests {
             originating_object: None,
             enclosing_member_range: None,
             entry_temp_guard_receiver: None,
+            rules: None,
+            rule_drafts: None,
+            card_text: None,
         }
     }
 
@@ -536,7 +540,7 @@ mod tests {
 
         let art = make_art(&routines, edges, dep_routine_ids, declared, app_versions);
         let resolved = empty_resolved_for(&routines, &objects);
-        let ctx = detector_context(&resolved, &art, None);
+        let ctx = detector_context(&resolved, &art, None, None);
 
         let output = detect_d17(&resolved, &ctx).unwrap();
         assert_eq!(output.findings.len(), 1, "should emit 1 finding");
@@ -591,7 +595,7 @@ mod tests {
 
         let art = make_art(&routines, edges, dep_routine_ids, declared, app_versions);
         let resolved = empty_resolved_for(&routines, &objects);
-        let ctx = detector_context(&resolved, &art, None);
+        let ctx = detector_context(&resolved, &art, None, None);
 
         let output = detect_d17(&resolved, &ctx).unwrap();
         assert_eq!(output.findings.len(), 1, "should emit 1 finding");

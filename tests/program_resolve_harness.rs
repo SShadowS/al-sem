@@ -11456,7 +11456,10 @@ fn cdo_i264_closed_interface_site_census() {
         .expect("model id");
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
     let model = al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
-        &inputs, &id, false,
+        &inputs,
+        &id,
+        false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
     .unwrap_or_else(|_| panic!("cross-app model"))
     .resolved;

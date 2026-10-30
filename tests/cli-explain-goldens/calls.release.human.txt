@@ -1,0 +1,16 @@
+Codeunit Calls Post::Release  ws:src/post.al:51
+  rules: none of its own
+  inherited rules: none
+  caller rule (applied by Codeunit Calls Post::ReleaseChecked; skipped by Codeunit Calls Post::ReleaseDirect, Codeunit Calls Post::ReleaseBranch, Codeunit Calls Post::ReleaseLoop, Codeunit Calls Post::ReleaseGuarded, Codeunit Calls Post::ReleaseElse): rejects when Order."No." = '': "The order has no number."  [Error ws:src/checks.al:5]
+  caller rule (applied by Codeunit Calls Post::ReleaseChecked; skipped by Codeunit Calls Post::ReleaseDirect, Codeunit Calls Post::ReleaseBranch, Codeunit Calls Post::ReleaseLoop, Codeunit Calls Post::ReleaseGuarded, Codeunit Calls Post::ReleaseElse): rejects when not (Order."No." = '') and Order.Amount is empty: (platform message)  [TestField ws:src/checks.al:7]
+  caller rule (applied by Codeunit Calls Post::ReleaseChecked; skipped by Codeunit Calls Post::ReleaseDirect, Codeunit Calls Post::ReleaseBranch, Codeunit Calls Post::ReleaseLoop, Codeunit Calls Post::ReleaseGuarded, Codeunit Calls Post::ReleaseElse): rejects when Order.Blocked: "The customer is blocked."  [Error ws:src/checks.al:14]
+  caller rule (applied by none, present in Codeunit Calls Post::ReleaseChecked but may not stop; skipped by Codeunit Calls Post::ReleaseChecked, Codeunit Calls Post::ReleaseDirect, Codeunit Calls Post::ReleaseBranch, Codeunit Calls Post::ReleaseLoop, Codeunit Calls Post::ReleaseGuarded, Codeunit Calls Post::ReleaseElse): rejects when Order.Amount < 0: "A negative amount is collected." (may not stop: the message is an ErrorInfo: when the error is collectible, execution goes on)  [Error ws:src/checks.al:31]
+  caller rule (applied by Codeunit Calls Post::ReleaseChecked; skipped by Codeunit Calls Post::ReleaseDirect, Codeunit Calls Post::ReleaseBranch, Codeunit Calls Post::ReleaseLoop, Codeunit Calls Post::ReleaseGuarded, Codeunit Calls Post::ReleaseElse): rejects when Order.Status = Order.Status::Posted: "A posted order cannot be released."  [Error ws:src/post.al:62]
+  caller rule (applied by Codeunit Calls Post::ReleaseGuarded; skipped by Codeunit Calls Post::ReleaseChecked, Codeunit Calls Post::ReleaseDirect, Codeunit Calls Post::ReleaseBranch, Codeunit Calls Post::ReleaseLoop, Codeunit Calls Post::ReleaseElse): rejects when Quick and Order.Blocked: "A blocked order cannot be released quickly."  [Error ws:src/post.al:102]
+  caller rule (applied by Codeunit Calls Post::ReleaseElse; skipped by Codeunit Calls Post::ReleaseChecked, Codeunit Calls Post::ReleaseDirect, Codeunit Calls Post::ReleaseBranch, Codeunit Calls Post::ReleaseLoop, Codeunit Calls Post::ReleaseGuarded): rejects when Order."No." = '': "An order without a number cannot be released."  [Error ws:src/post.al:111]
+  writes Calls Order [Status] (DB_MODIFY) at ws:src/post.al:54
+  commits: no
+  tests: none reach it
+  gap: table-trigger-rules-skipped (what modify on Calls Order, table Calls Order) at ws:src/post.al:54
+    skips Table Calls Order::OnModify: rejects when Blocked  [Error ws:src/order.al:24]
+

@@ -73,7 +73,17 @@ pub struct Rule {
     pub require_coverage: Option<String>,
     pub on_unknown: Option<String>,
     pub facts: Option<String>,
+    /// A pin's `requires` (policy version 2; rules-to-policy spec §2.2): a
+    /// predicate over one rule key a writer applies. `Some` makes the rule a
+    /// pin: its `when` selects write facts, and a selected writer violates it
+    /// when no key it applies satisfies `requires`.
+    pub requires: Option<Predicate>,
 }
+
+/// The newest policy format version this engine reads. Version 2 added pins
+/// (`requires` and the `write.*` / `rule.*` fields); version 1 is the format
+/// without them and is still read.
+pub const POLICY_FORMAT_VERSION: i64 = 2;
 
 /// Policy defaults block. al-sem `PolicyDoc.defaults`.
 #[derive(Debug, Clone, Default)]
@@ -89,6 +99,16 @@ pub struct PolicyDoc {
     pub description: Option<String>,
     pub defaults: Option<PolicyDefaults>,
     pub rules: Vec<Rule>,
+}
+
+impl PolicyDoc {
+    /// Whether some rule is a pin. Only then does `policy check` build the
+    /// routines' rules and the writer index (the loader keeps every write and
+    /// rule field inside a pin, so this is the one test).
+    #[must_use]
+    pub fn has_pins(&self) -> bool {
+        self.rules.iter().any(|r| r.requires.is_some())
+    }
 }
 
 /// Per-rule run counters. al-sem `RuleRunSummary` (the subset the engine emits —

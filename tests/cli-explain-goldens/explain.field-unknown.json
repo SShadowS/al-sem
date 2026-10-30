@@ -1,0 +1,16 @@
+{
+  "cards": [],
+  "diagnostics": [
+    {
+      "field": "NoSuchField",
+      "kind": "field-not-found",
+      "table": "Explain Order"
+    }
+  ],
+  "mode": "field",
+  "schema": "al-sem.explain/1",
+  "selector": {
+    "field": "NoSuchField",
+    "table": "Explain Order"
+  }
+}

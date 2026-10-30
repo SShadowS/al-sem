@@ -1,0 +1,24 @@
+{
+  "al_sem_version": "cli-c-v1",
+  "generated_at": "0",
+  "kind": "policy.check",
+  "dependencies": {
+    "apps": [],
+    "mode": "crossApp"
+  },
+  "policySource": "explicit:emit.policy-pins.yaml",
+  "policyVersion": 2,
+  "ruleSummaries": [
+    {
+      "ruleId": "pin-pin-order-amount-testfield-a26942f8",
+      "routinesEvaluated": 8,
+      "routinesMatched": 0,
+      "routinesSkippedCoverage": 0,
+      "routinesSkippedUnknown": 0,
+      "routinesPassed": 8,
+      "findingsEmitted": 0
+    }
+  ],
+  "findings": [],
+  "diagnostics": []
+}

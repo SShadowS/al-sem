@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# scripts/intent-cdo-check — the two intent-evidence checks that need the pinned
+# CDO baseline (spec docs/superpowers/specs/2026-10-29-intent-evidence-design.md
+# section 6): the CDO gate, and the d65-guard-bypass triage run at both scopes.
+#
+# The baseline exists only on the owner's Windows machine, so this script is run
+# there (Git Bash), from the repo root, on the docs/intent-evidence-spec branch:
+#
+#   scripts/intent-cdo-check U:/Git/DO-cdo-baseline/Cloud
+#
+# It writes everything into one folder (default target/intent-cdo-check/, or the
+# second argument) and prints a short summary. Send that folder back: the d65 JSON
+# files are what gets triaged into docs/detector-audit.md.
+#
+# Exit code: 0 when the CDO gate passed and both d65 runs produced a report,
+# 1 otherwise. Findings are not a failure: d65 is opt-in and only reports.
+set -uo pipefail
+
+ws="${1:-${CDO_WS:-}}"
+out="${2:-target/intent-cdo-check}"
+
+if [[ -z "$ws" ]]; then
+    echo "intent-cdo-check: usage: scripts/intent-cdo-check <cdo-workspace> [out-dir]" >&2
+    exit 2
+fi
+if [[ ! -e "$ws" ]]; then
+    echo "intent-cdo-check: error: workspace path does not exist: $ws" >&2
+    exit 2
+fi
+
+mkdir -p "$out" || exit 2
+summary="$out/summary.txt"
+: >"$summary"
+say() { echo "$*" | tee -a "$summary"; }
+
+say "intent-cdo-check: al-sem $(git rev-parse --short HEAD) on $(git rev-parse --abbrev-ref HEAD)"
+say "intent-cdo-check: workspace $ws ($(git -C "$ws" rev-parse --short HEAD 2>/dev/null || echo 'no git'))"
+if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+    say "intent-cdo-check: WARNING: the al-sem tree has uncommitted changes"
+fi
+
+status=0
+
+# 1. The CDO gate (its own script; ENFORCE_CDO_WS=1, so drift fails loudly).
+#    Logged to a file and judged by its own exit code, never through a pipe.
+say "intent-cdo-check: [1/2] running scripts/cdo-gate (several minutes)..."
+scripts/cdo-gate "$ws" >"$out/cdo-gate.log" 2>&1
+gate=$?
+if [[ $gate -eq 0 ]]; then
+    say "intent-cdo-check: cdo-gate PASSED"
+else
+    say "intent-cdo-check: cdo-gate FAILED (exit $gate), see $out/cdo-gate.log"
+    status=1
+fi
+
+# 2. d65 on the baseline, cross-app (analyze's default), at both scopes.
+say "intent-cdo-check: [2/2] building alsem (release-fast)..."
+if ! cargo build --profile release-fast --bin alsem >"$out/build.log" 2>&1; then
+    say "intent-cdo-check: build FAILED, see $out/build.log"
+    exit 1
+fi
+alsem="${CARGO_TARGET_DIR:-target}/release-fast/alsem"
+[[ -x "$alsem.exe" ]] && alsem="$alsem.exe"
+
+for scope in primary all; do
+    json="$out/d65-$scope.json"
+    "$alsem" analyze "$ws" --detector d65-guard-bypass --scope "$scope" --format json \
+        >"$json" 2>"$out/d65-$scope.stderr"
+    rc=$?
+    "$alsem" analyze "$ws" --detector d65-guard-bypass --scope "$scope" --format terminal \
+        >"$out/d65-$scope.txt" 2>/dev/null
+    if ! grep -q '"kind": "analyze-report"' "$json"; then
+        say "intent-cdo-check: d65 --scope $scope produced no report (exit $rc), see $out/d65-$scope.stderr"
+        status=1
+        continue
+    fi
+    # The detector's own count, from its `detectorStats` entry (keys are sorted,
+    # so `findingsEmitted` follows `detector`). Counting `"detector":` lines would
+    # also count that stats entry.
+    n=$(grep -A3 '"detector": "d65-guard-bypass"' "$json" |
+        grep -o '"findingsEmitted": [0-9]*' | head -n 1 | grep -o '[0-9]*$')
+    n="${n:-?}"
+    say "intent-cdo-check: d65 --scope $scope: $n finding(s) (analyze exit $rc)"
+done
+
+say "intent-cdo-check: done. Send back the folder: $out"
+exit $status

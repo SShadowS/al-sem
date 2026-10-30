@@ -210,7 +210,13 @@ fn hunk_on_assignment_line_is_a_changed_root() {
     let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
     let inputs =
         al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &crate::fingerprint_needs());
-    let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).unwrap();
+    let model = assemble_and_resolve_workspace_program(
+        &inputs,
+        &model_id,
+        false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .unwrap();
     let snap = compose_snapshot(&model);
     let on_row_8 =
         |file: &str, row: u32| file.to_lowercase().ends_with("src/posting.al") && row == 8;
@@ -1688,7 +1694,13 @@ fn file_with_only_opless_routines_is_matched() {
     let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
     let inputs =
         al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &crate::fingerprint_needs());
-    let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).unwrap();
+    let model = assemble_and_resolve_workspace_program(
+        &inputs,
+        &model_id,
+        false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .unwrap();
     let snap = compose_snapshot(&model);
     assert!(
         snap.operation_index.is_empty() && snap.callsite_index.is_empty(),
@@ -2170,7 +2182,13 @@ fn model_routine_declaration_start_includes_attributes() {
     let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
     let inputs =
         al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &crate::fingerprint_needs());
-    let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).unwrap();
+    let model = assemble_and_resolve_workspace_program(
+        &inputs,
+        &model_id,
+        false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .unwrap();
     let r = |name: &str| {
         model
             .workspace
@@ -2207,7 +2225,13 @@ fn declaration_start_line_claims_separated_and_multi_line_attributes() {
     let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
     let inputs =
         al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &crate::fingerprint_needs());
-    let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).unwrap();
+    let model = assemble_and_resolve_workspace_program(
+        &inputs,
+        &model_id,
+        false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .unwrap();
     let r = |name: &str| {
         model
             .workspace
@@ -2284,7 +2308,13 @@ fn quoted_interface_name_is_unescaped_in_the_id() {
     let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
     let inputs =
         al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &crate::fingerprint_needs());
-    let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).unwrap();
+    let model = assemble_and_resolve_workspace_program(
+        &inputs,
+        &model_id,
+        false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .unwrap();
     let quoted = model
         .workspace
         .objects
@@ -2311,7 +2341,13 @@ fn interface_object_rows_carry_declaration_only_routines() {
     let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
     let inputs =
         al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &crate::fingerprint_needs());
-    let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).unwrap();
+    let model = assemble_and_resolve_workspace_program(
+        &inputs,
+        &model_id,
+        false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .unwrap();
     let obj = |name: &str| {
         model
             .workspace

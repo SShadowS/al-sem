@@ -1,0 +1,74 @@
+{
+  "cards": [
+    {
+      "effects": {
+        "commitSites": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "commit",
+              "file": "ws:src/post.al",
+              "line": 26,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "via": []
+          }
+        ],
+        "commits": "yes",
+        "events": [],
+        "ui": [],
+        "writes": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Order.Modify",
+              "file": "ws:src/post.al",
+              "line": 25,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "fieldCaptions": {
+              "Status": "Order Status"
+            },
+            "fields": [
+              "Status"
+            ],
+            "op": "DB_MODIFY",
+            "table": "Explain Order",
+            "tableId": "44444444-e491-0000-0000-0000000e4a11/table/50400",
+            "via": []
+          }
+        ]
+      },
+      "extensionPoints": [],
+      "gaps": [],
+      "reachedFrom": [],
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/post.al",
+          "line": 22,
+          "sourceKind": "source"
+        },
+        "doc": "Archives without any check.",
+        "id": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50401#784c1883c3a487fed2627f93fb9437018e64ce687a18635d0bf7e49b484b411c",
+        "name": "Archive",
+        "object": "Explain Post",
+        "objectCaption": null,
+        "objectType": "Codeunit"
+      },
+      "rules": {
+        "callers": [],
+        "inherited": [],
+        "knownCallers": 0,
+        "own": []
+      },
+      "tests": []
+    }
+  ],
+  "diagnostics": [],
+  "mode": "routine",
+  "schema": "al-sem.explain/1",
+  "selector": "Archive"
+}

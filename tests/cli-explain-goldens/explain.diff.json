@@ -1,0 +1,294 @@
+{
+  "cards": [
+    {
+      "effects": {
+        "commitSites": [],
+        "commits": "no",
+        "events": [
+          {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/post.al",
+              "line": 12,
+              "sourceKind": "source"
+            },
+            "conditionality": "unknown",
+            "event": "OnBeforePostOrder",
+            "eventId": "44444444-e491-0000-0000-0000000e4a11/Codeunit/50401/event/onbeforepostorder",
+            "via": [
+              "OnBeforePostOrder"
+            ]
+          }
+        ],
+        "ui": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Message",
+              "file": "ws:src/post.al",
+              "line": 18,
+              "sourceKind": "source"
+            },
+            "conditionality": "guarded-by-IsHandled",
+            "type": "UI_MESSAGE",
+            "via": []
+          }
+        ],
+        "writes": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Order.Modify",
+              "file": "ws:src/post.al",
+              "line": 17,
+              "sourceKind": "source"
+            },
+            "conditionality": "guarded-by-IsHandled",
+            "fieldCaptions": {
+              "Status": "Order Status"
+            },
+            "fields": [
+              "Posted",
+              "Status"
+            ],
+            "op": "DB_MODIFY",
+            "table": "Explain Order",
+            "tableId": "44444444-e491-0000-0000-0000000e4a11/table/50400",
+            "via": []
+          }
+        ]
+      },
+      "extensionPoints": [
+        {
+          "anchor": {
+            "column": 8,
+            "file": "ws:src/post.al",
+            "line": 12,
+            "sourceKind": "source"
+          },
+          "conditionalOnAppSet": true,
+          "event": "OnBeforePostOrder",
+          "eventId": "44444444-e491-0000-0000-0000000e4a11/Codeunit/50401/event/onbeforepostorder",
+          "isHandled": true,
+          "subscriberRoutines": [
+            {
+              "app": "44444444-e491-0000-0000-0000000e4a11",
+              "conditional": false,
+              "id": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50403#4a41efe8fa6904400b08f5b28c40b0b711bc616b02d26da59dbd1c1e1ec9872a",
+              "routine": "Codeunit Explain Subscriber::HandleBeforePost",
+              "rules": []
+            }
+          ],
+          "subscribers": 1
+        }
+      ],
+      "gaps": [],
+      "reachedFrom": [
+        {
+          "action": "Post",
+          "actionKind": "action",
+          "anchor": {
+            "column": 12,
+            "file": "ws:src/card.al",
+            "line": 18,
+            "sourceKind": "source"
+          },
+          "caption": "P&ost",
+          "kind": "PageAction",
+          "object": "Explain Order Card",
+          "objectType": "Page",
+          "runObject": null,
+          "tooltip": "Post the order.",
+          "via": [
+            "OnAction",
+            "PostOrder"
+          ]
+        }
+      ],
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/post.al",
+          "line": 4,
+          "sourceKind": "source"
+        },
+        "doc": "Posts a released order.\nIt marks the order posted.",
+        "id": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50401#d2166489ad174cb2f8c763f785477e5a5160ade8e87e7435e965fed790061e77",
+        "name": "PostOrder",
+        "object": "Explain Post",
+        "objectCaption": null,
+        "objectType": "Codeunit"
+      },
+      "rules": {
+        "callers": [],
+        "inherited": [],
+        "knownCallers": 2,
+        "own": [
+          {
+            "anchor": {
+              "column": 12,
+              "file": "ws:src/post.al",
+              "line": 10,
+              "sourceKind": "source"
+            },
+            "comment": null,
+            "id": "d43dde0308e4c15c/373fb44213213995d73ed3dd9a09ef3a78ffe1d6f79da4a31031aa5640a85f7e/rule0",
+            "kind": "Error",
+            "message": {
+              "args": [
+                "Order.\"No.\""
+              ],
+              "candidates": [],
+              "labelComment": "%1 = order number",
+              "source": "Label",
+              "text": "Order %1 is not released.",
+              "var": "NotReleasedErr"
+            },
+            "stops": "always",
+            "stopsReason": null,
+            "when": [
+              {
+                "field": "Status",
+                "kind": "FieldCompare",
+                "op": "<>",
+                "recordVar": "Order",
+                "table": "Explain Order",
+                "value": "Order.Status::Released"
+              }
+            ],
+            "whenText": "Order.Status <> Order.Status::Released"
+          },
+          {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/post.al",
+              "line": 11,
+              "sourceKind": "source"
+            },
+            "comment": null,
+            "id": "d43dde0308e4c15c/373fb44213213995d73ed3dd9a09ef3a78ffe1d6f79da4a31031aa5640a85f7e/rule1",
+            "kind": "TestField",
+            "message": {
+              "args": [],
+              "candidates": [],
+              "labelComment": null,
+              "source": "Platform",
+              "text": null,
+              "var": null
+            },
+            "stops": "always",
+            "stopsReason": null,
+            "when": [
+              {
+                "field": "Status",
+                "kind": "FieldCompare",
+                "op": "=",
+                "recordVar": "Order",
+                "table": "Explain Order",
+                "value": "Order.Status::Released"
+              },
+              {
+                "field": "Amount",
+                "kind": "FieldEmpty",
+                "negated": false,
+                "recordVar": "Order",
+                "table": "Explain Order"
+              }
+            ],
+            "whenText": "not (Order.Status <> Order.Status::Released) and Order.Amount is empty"
+          }
+        ]
+      },
+      "tests": [
+        {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/tests.al",
+            "line": 8,
+            "sourceKind": "source"
+          },
+          "asserts": 3,
+          "id": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50405#3c15575bee905cbf25ba36fc4fc75ff23321ea016139cee4950b359eee36c410",
+          "test": "Codeunit Explain Tests::PostUnreleasedFails",
+          "viaEvent": false
+        }
+      ]
+    },
+    {
+      "effects": {
+        "commitSites": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "commit",
+              "file": "ws:src/post.al",
+              "line": 26,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "via": []
+          }
+        ],
+        "commits": "yes",
+        "events": [],
+        "ui": [],
+        "writes": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Order.Modify",
+              "file": "ws:src/post.al",
+              "line": 25,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "fieldCaptions": {
+              "Status": "Order Status"
+            },
+            "fields": [
+              "Status"
+            ],
+            "op": "DB_MODIFY",
+            "table": "Explain Order",
+            "tableId": "44444444-e491-0000-0000-0000000e4a11/table/50400",
+            "via": []
+          }
+        ]
+      },
+      "extensionPoints": [],
+      "gaps": [],
+      "reachedFrom": [],
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/post.al",
+          "line": 22,
+          "sourceKind": "source"
+        },
+        "doc": "Archives without any check.",
+        "id": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50401#784c1883c3a487fed2627f93fb9437018e64ce687a18635d0bf7e49b484b411c",
+        "name": "Archive",
+        "object": "Explain Post",
+        "objectCaption": null,
+        "objectType": "Codeunit"
+      },
+      "rules": {
+        "callers": [],
+        "inherited": [],
+        "knownCallers": 0,
+        "own": []
+      },
+      "tests": []
+    }
+  ],
+  "diagnostics": [
+    {
+      "endLine": 5,
+      "file": "src/order.al",
+      "kind": "hunk-outside-routines",
+      "startLine": 1
+    }
+  ],
+  "mode": "diff",
+  "schema": "al-sem.explain/1"
+}

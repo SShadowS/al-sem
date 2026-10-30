@@ -159,7 +159,13 @@ fn run_stats(fixture: &str, names: &[&str]) -> String {
         .collect();
 
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(&fixture_dir, &Default::default());
-    match assemble_and_resolve_workspace_program(&inputs, MODEL_INSTANCE_ID_DEFAULT, false) {
+    match assemble_and_resolve_workspace_program(
+        &inputs,
+        MODEL_INSTANCE_ID_DEFAULT,
+        false,
+        // What the selected detectors read (the `all` slot holds d65: rules).
+        al_sem::engine::l5::registry::assembly_needs(&selected),
+    ) {
         Some(resolved) => {
             let output = run_detectors(&resolved, &selected);
             serialize_detector_stats(&output.detector_stats)

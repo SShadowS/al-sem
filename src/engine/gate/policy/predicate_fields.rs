@@ -1,7 +1,10 @@
 //! Predicate field registry — port of al-sem `src/policy/predicate-fields.ts`.
 //!
 //! 16 fields across 3 scopes (routine / fact / model — al-sem has no model-scope
-//! field in the shipped registry, so only routine + fact appear). Each field
+//! field in the shipped registry, so only routine + fact appear), plus the 4
+//! pin fields of policy version 2 (`write.table`, `write.field`, `rule.kind`,
+//! `rule.atoms`; scopes write and rule; rules-to-policy spec
+//! `docs/superpowers/specs/2026-10-30-rules-to-policy-design.md` §2.3). Each field
 //! carries its `scope`, `value_shape` (drives the compiler's operator derivation),
 //! optional `enum_values` (validated at compile time), and an `evaluate` that
 //! reads the [`FieldEvalContext`] and returns a [`FieldValue`].
@@ -24,6 +27,27 @@ pub enum FieldScope {
     Fact,
     #[allow(dead_code)]
     Model,
+    /// One write fact of a pin (rules-to-policy spec §2.3): a writer and one
+    /// table field it writes. Read in a pin's `when` / `except`.
+    Write,
+    /// One rule key a writer applies (d65's key). Read in a pin's `requires`.
+    Rule,
+}
+
+/// A pin's write fact as the write fields read it: the written table's name
+/// and the field's name as the table declares it.
+#[derive(Debug, Clone, Copy)]
+pub struct WriteFact<'a> {
+    pub table: &'a str,
+    pub field: &'a str,
+}
+
+/// One rule key a writer applies, as the rule fields read it: its kind and
+/// its atoms on the written table (d65's `RuleKey`).
+#[derive(Debug, Clone, Copy)]
+pub struct RuleFact<'a> {
+    pub kind: &'a str,
+    pub atoms: &'a str,
 }
 
 /// Field value shape. al-sem `FieldValueShape` (the shipped subset; `numeric` /
@@ -70,10 +94,15 @@ pub struct FieldIndexes<'a> {
 }
 
 /// Evaluation context. al-sem `FieldEvalContext`. `fact` is `None` in applicability
-/// mode (fact-scope fields short-circuit to unknown before reading it).
+/// mode (fact-scope fields short-circuit to unknown before reading it). `write`
+/// and `rule` are a pin's (rules-to-policy spec §2.3): `write` while its `when`
+/// / `except` read a write fact, `rule` while its `requires` reads one applied
+/// key; `None` everywhere else, and a write or rule field then reads unknown.
 pub struct FieldEvalContext<'a> {
     pub routine: &'a ModelRoutine,
     pub fact: Option<&'a CapabilityFact>,
+    pub write: Option<WriteFact<'a>>,
+    pub rule: Option<RuleFact<'a>>,
     pub indexes: &'a FieldIndexes<'a>,
 }
 
@@ -177,7 +206,8 @@ const UI_KINDS: &[&str] = &[
     "requestPage",
 ];
 
-/// The 16-field registry (declaration order mirrors predicate-fields.ts).
+/// The registry: al-sem's 16 fields (declaration order mirrors
+/// predicate-fields.ts), then the 4 pin fields.
 pub const PREDICATE_FIELDS: &[PredicateFieldDef] = &[
     // ---- Routine-scope fields ----
     PredicateFieldDef {
@@ -277,6 +307,42 @@ pub const PREDICATE_FIELDS: &[PredicateFieldDef] = &[
         value_shape: FieldValueShape::EnumList,
         enum_values: Some(VIA_VALUES),
     },
+    // ---- Pin fields (policy version 2; rules-to-policy spec §2.3) ----
+    PredicateFieldDef {
+        name: "write.table",
+        scope: FieldScope::Write,
+        value_shape: FieldValueShape::Glob,
+        enum_values: None,
+    },
+    PredicateFieldDef {
+        name: "write.field",
+        scope: FieldScope::Write,
+        value_shape: FieldValueShape::Glob,
+        enum_values: None,
+    },
+    PredicateFieldDef {
+        name: "rule.kind",
+        scope: FieldScope::Rule,
+        value_shape: FieldValueShape::Enum,
+        enum_values: Some(RULE_KINDS),
+    },
+    // Exact text: a rule with one more atom fires in fewer cases (a weaker
+    // rule), so "contains this atom" would count it as applied.
+    PredicateFieldDef {
+        name: "rule.atoms",
+        scope: FieldScope::Rule,
+        value_shape: FieldValueShape::StringExact,
+        enum_values: None,
+    },
+];
+
+/// `rule.kind`'s values: d65's kind texts (`RuleKind`).
+const RULE_KINDS: &[&str] = &[
+    "Error",
+    "TestField",
+    "FieldError",
+    "ConfirmError",
+    "ConfirmExit",
 ];
 
 /// Look up a field definition by name. al-sem `getFieldDef`.
@@ -401,6 +467,23 @@ pub fn evaluate_field(def: &PredicateFieldDef, ctx: &FieldEvalContext) -> FieldV
         },
         "capability.via" => match ctx.fact {
             Some(f) => FieldValue::KnownStr(f.via.to_string()),
+            None => FieldValue::Unknown(UnknownReason::EvaluatorError),
+        },
+        // ---- pin fields ----
+        "write.table" => match ctx.write {
+            Some(w) => FieldValue::KnownStr(w.table.to_string()),
+            None => FieldValue::Unknown(UnknownReason::EvaluatorError),
+        },
+        "write.field" => match ctx.write {
+            Some(w) => FieldValue::KnownStr(w.field.to_string()),
+            None => FieldValue::Unknown(UnknownReason::EvaluatorError),
+        },
+        "rule.kind" => match ctx.rule {
+            Some(r) => FieldValue::KnownStr(r.kind.to_string()),
+            None => FieldValue::Unknown(UnknownReason::EvaluatorError),
+        },
+        "rule.atoms" => match ctx.rule {
+            Some(r) => FieldValue::KnownStr(r.atoms.to_string()),
             None => FieldValue::Unknown(UnknownReason::EvaluatorError),
         },
         // Unknown field name (compiler rejects these, but mirror the evaluator's

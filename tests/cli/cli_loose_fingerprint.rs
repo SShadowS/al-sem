@@ -1647,7 +1647,10 @@ codeunit 50302 Setter
     let id = al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id(&ws)
         .expect("model id");
     let m = al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
-        &inputs, &id, false,
+        &inputs,
+        &id,
+        false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
     .expect("model");
     let rid = |object: &str, name: &str| {

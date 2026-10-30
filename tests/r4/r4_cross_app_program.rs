@@ -12,6 +12,10 @@ use al_sem::program::node::ObjKey;
 use al_sem::program::resolve::edge::{Evidence, RouteTarget};
 use al_sem::program::resolve::full::build_context;
 
+/// What a default `analyze` assembles: no rules.
+const BASE: al_sem::program::model::workspace::AssemblyNeeds =
+    al_sem::program::model::workspace::AssemblyNeeds::BASE;
+
 const WS_GUID: &str = "aaaa1111-0000-0000-0000-0000000000a7";
 const DEP_GUID: &str = "bbbb2222-0000-0000-0000-0000000000a7";
 
@@ -280,6 +284,7 @@ fn the_cross_app_model_rows_are_workspace_then_abi_then_parsed_dependencies() {
             &ctx,
             None,
             &Default::default(),
+            BASE,
         )
         .expect("program model");
         // Rank of each routine's block: 0 workspace, 1 ABI, 2 parsed dependency.
@@ -347,7 +352,7 @@ fn the_cross_app_model_resolves_dependency_bodies_and_events() {
     use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     shared_name_workspace(dir.path());
-    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false)
+    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false, BASE)
         .expect("model")
         .resolved;
     let calls = m.calls.clone();
@@ -408,7 +413,7 @@ fn a_call_into_a_symbol_only_dependency_lands_on_its_model_row() {
     use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
     use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r3a5-fixtures/ws");
-    let m = assemble_and_resolve_cross_app_program(&read(&ws), MI, false)
+    let m = assemble_and_resolve_cross_app_program(&read(&ws), MI, false, BASE)
         .expect("model")
         .resolved;
     let calls = m.calls.clone();
@@ -704,7 +709,8 @@ fn an_app_that_depends_on_the_workspace_is_not_in_the_cross_app_model() {
     use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     friend_workspace(dir.path(), true);
-    let x = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false).expect("model");
+    let x =
+        assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false, BASE).expect("model");
     let apps: std::collections::BTreeSet<&str> = x
         .resolved
         .workspace
@@ -799,7 +805,6 @@ fn d44_anchors_on_the_workspace_subscriber() {
 fn without_dependencies_cross_app_mode_reports_what_single_app_mode_does() {
     use al_sem::engine::l5::detectors::registered_detectors;
     use al_sem::engine::l5::finding::{project_r4_findings, project_r4_findings_cross_app};
-    use al_sem::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls;
     let detectors = registered_detectors();
     let names: Vec<String> = detectors.iter().map(|d| d.name.clone()).collect();
     let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
@@ -811,7 +816,16 @@ fn without_dependencies_cross_app_mode_reports_what_single_app_mode_does() {
     dirs.sort();
     let (mut compared, mut differ) = (0, Vec::new());
     for ws in &dirs {
-        let Some(single) = assemble_and_resolve_workspace_with_program_calls(ws) else {
+        // Built with what every registered detector reads (d65: the rules),
+        // as the cross-app projection builds its base.
+        let Some(single) =
+            al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
+                &al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default()),
+                al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
+                false,
+                al_sem::engine::l5::registry::assembly_needs(&detectors),
+            )
+        else {
             continue;
         };
         let ids = |p: al_sem::engine::l5::finding::R4FindingsProjection| {
@@ -993,7 +1007,8 @@ fn the_cross_app_model_holds_the_demanded_dependency_routines() {
     use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     demand_workspace(dir.path());
-    let x = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false).expect("model");
+    let x =
+        assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false, BASE).expect("model");
     let ws = &x.resolved.workspace;
     let mut dep: Vec<&str> = ws
         .routines
@@ -1759,7 +1774,7 @@ fn a_run_of_a_dependency_page_without_entry_trigger_names_the_page() {
         )],
         "",
     );
-    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false)
+    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false, BASE)
         .expect("model")
         .resolved;
     let calls = m.calls.clone();
@@ -1893,7 +1908,7 @@ fn a_dependencys_if_duplicated_subscriber_gets_each_edge_once() {
         node(h[0]).is_some() && node(h[0]) == node(h[1]),
         "precondition: both H rows map to one node"
     );
-    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false)
+    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false, BASE)
         .expect("model")
         .resolved;
     let h_rows = m
@@ -2170,7 +2185,7 @@ fn event_graph_reads_node_of() {
         "precondition: Hb's two nodes subscribe to different events"
     );
 
-    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false)
+    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false, BASE)
         .expect("model")
         .resolved;
     let mut edges: Vec<(String, String, String)> = m
@@ -2278,7 +2293,7 @@ codeunit 50172 "Dep Ord"
         )],
         "",
     );
-    let x = assemble_and_resolve_cross_app_program(&read(dir), MI, false).expect("model");
+    let x = assemble_and_resolve_cross_app_program(&read(dir), MI, false, BASE).expect("model");
     let rows: Vec<usize> = x
         .resolved
         .workspace
@@ -2526,7 +2541,7 @@ codeunit 50173 "Dep Ret"
         )],
         "",
     );
-    let x = assemble_and_resolve_cross_app_program(&read(dir), MI, false).expect("model");
+    let x = assemble_and_resolve_cross_app_program(&read(dir), MI, false, BASE).expect("model");
     let rows: Vec<usize> = x
         .resolved
         .workspace

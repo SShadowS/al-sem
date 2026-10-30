@@ -818,6 +818,7 @@ fn single_app_model(ws: &Path) -> Model {
         &read_inputs(ws),
         &id,
         false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
     .expect("single-app model")
 }
@@ -830,6 +831,7 @@ fn cross_app_model(ws: &Path) -> Model {
         &read_inputs(ws),
         &id,
         false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
     .unwrap_or_else(|_| panic!("cross-app model"))
     .resolved

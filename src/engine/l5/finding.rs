@@ -950,21 +950,25 @@ fn stable_primary_location_key(f: &StableFinding) -> String {
 /// Mirrors al-sem's `projectR4Findings`: only findings from the detectors listed in
 /// `detector_names` are included in the output, matching the per-fixture golden scope.
 /// (al-sem passes `detectorNames` to `analyzeWorkspace({ detectors: selectedDetectors })`
-/// so only those detectors run; the Rust port runs all registered detectors and then
-/// filters to the named set — byte-equivalent for ANY requested detector set, because
-/// fingerprint and role-scope are per-finding, and the final stable re-sort is applied
-/// post-filter; the filter is not a single-detector-only crutch.)
+/// so only those detectors run. The Rust port runs only the named detectors of
+/// `detectors` too (intent-evidence step 6: before, it ran all of them and
+/// filtered the findings, which is byte-equivalent, because fingerprint and
+/// role-scope are per-finding and the final stable re-sort is applied
+/// post-filter — but it made every fixture's model pay for, and need, what
+/// any registered detector reads, such as d65's rules). `resolved` must hold
+/// what the named detectors read (`registry::assembly_needs`).
 pub fn project_r4_findings(
     resolved: &Model,
     detectors: &[Detector],
     fixture_name: &str,
     detector_names: &[String],
 ) -> R4FindingsProjection {
+    let selected = select_named(detectors, detector_names);
     let RunOutput {
         findings,
         d1_cohort_index,
         ..
-    } = run_detectors(resolved, detectors);
+    } = run_detectors(resolved, &selected);
 
     // Filter to only the named detectors (mirrors al-sem: only selected detectors run).
     let detector_name_set: std::collections::HashSet<&str> =
@@ -1024,6 +1028,15 @@ fn project_cohort_index(
     }
 }
 
+/// The detectors of `detectors` named in `names`, in `detectors`' order.
+fn select_named(detectors: &[Detector], names: &[String]) -> Vec<Detector> {
+    detectors
+        .iter()
+        .filter(|d| names.contains(&d.name))
+        .cloned()
+        .collect()
+}
+
 /// CROSS-APP variant of `project_r4_findings`: build the cross-app L4 base from a
 /// disk workspace (its `.alpackages` dep `.app`(s) read off disk), run the registered
 /// detectors in CROSS-APP mode (`run_detectors_cross_app` — `dep_routine_ids`-derived
@@ -1040,11 +1053,21 @@ pub fn project_r4_findings_cross_app(
     detector_names: &[String],
 ) -> R4FindingsProjection {
     let _total = crate::engine::perf_trace::span("crossapp", "crossapp.total");
+    // Only the named detectors run (as `project_r4_findings`), on a base
+    // that holds what they read.
+    let selected = select_named(detectors, detector_names);
     let base = {
         let _s = crate::engine::perf_trace::span("crossapp", "crossapp.base_total");
-        crate::engine::l4::capability_cone::build_cross_app_base(
-            &crate::program::inputs::WorkspaceInputs::read(workspace, &Default::default()),
+        let inputs = crate::program::inputs::WorkspaceInputs::read(workspace, &Default::default());
+        crate::engine::l4::capability_cone::build_cross_app_base_from(
+            crate::program::resolved::ResolvedProgram::build(
+                &inputs,
+                crate::program::resolved::ProgramScope::CrossApp,
+            ),
+            &inputs,
             model_instance_id,
+            false,
+            crate::engine::l5::registry::assembly_needs(&selected),
         )
         .ok()
     };
@@ -1065,7 +1088,7 @@ pub fn project_r4_findings_cross_app(
         ..
     } = {
         let _s = crate::engine::perf_trace::span("crossapp", "crossapp.run_detectors");
-        run_detectors_cross_app(&base, detectors, true)
+        run_detectors_cross_app(&base, &selected, true)
     };
 
     let _s_project = crate::engine::perf_trace::span("crossapp", "crossapp.project");

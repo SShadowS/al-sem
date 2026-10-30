@@ -322,6 +322,46 @@ pub fn compute_test_coverage(g: &CoverageGraph, changed: &[ChangedRoutine]) -> T
     }
 }
 
+/// Every `[Test]` procedure that reaches each of `subjects` over `g`, by the
+/// same search [`compute_test_coverage`] runs (one BFS per test root), where
+/// that one keeps only the first witness: `alsem explain` lists them all.
+/// Per subject, `(test id, via_event)` in test-id order; `via_event` is true
+/// when every shortest path from that test crosses an event. A subject no test
+/// reaches has no entry; test code itself is no subject.
+#[must_use]
+pub fn reaching_tests(
+    g: &CoverageGraph,
+    subjects: &BTreeSet<String>,
+) -> BTreeMap<String, Vec<(String, bool)>> {
+    let adj: HashMap<&str, Vec<(&str, bool)>> = g
+        .edges
+        .iter()
+        .map(|(from, tos)| {
+            let mut v: Vec<(&str, bool)> = tos.iter().map(|(t, e)| (t.as_str(), *e)).collect();
+            v.sort_unstable();
+            v.dedup();
+            (from.as_str(), v)
+        })
+        .collect();
+    let mut out: BTreeMap<String, Vec<(String, bool)>> = BTreeMap::new();
+    for root in &g.roots {
+        let levels = reach_from(root, &adj);
+        for s in subjects {
+            if g.roots.contains(s) || g.test_code.contains(s) {
+                continue;
+            }
+            if let Some(&[plain, crossed]) = levels.get(s.as_str()) {
+                let shortest = plain.into_iter().chain(crossed).min();
+                let via_event = plain.is_none_or(|p| Some(p) > shortest);
+                out.entry(s.clone())
+                    .or_default()
+                    .push((root.clone(), via_event));
+            }
+        }
+    }
+    out
+}
+
 /// A callsite-ledger status's bucket (spec §Incomplete traversal); `None` when
 /// the row is followed (its typed edges are the graph's edges).
 fn ledger_bucket(status: &str) -> Option<(bool, &'static str)> {

@@ -292,17 +292,12 @@ impl Job for PolicyJob<'_> {
         // #70: the cross-app base by default (rules see a dependency's table
         // names and the facts its code adds), the workspace alone under
         // `--single-app`.
-        ViewDemand::one(
-            self.opts.inputs,
-            self.opts.single_app,
-            false,
-            ViewNeeds::MODEL,
-        )
+        ViewDemand::one(self.opts.inputs, self.opts.single_app, false, self.needs())
     }
 
     fn resolve(&self, _: SideIx, _: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
         Ok(PlanPart {
-            plan: policy_plan(default_detectors(), self.policy.is_some()),
+            plan: policy_plan(default_detectors(), self.policy.is_some(), self.pins()),
             reads: self.reads().to_vec(),
             carry: None,
         })
@@ -331,13 +326,32 @@ impl Job for PolicyJob<'_> {
 }
 
 impl PolicyJob<'_> {
+    /// Whether the policy has a pin (rules-to-policy spec §2.6): only then
+    /// does the check build the routines' rules and the writer index.
+    fn pins(&self) -> bool {
+        self.policy.as_ref().is_some_and(PolicyDoc::has_pins)
+    }
+
+    /// The view's needs: the model, with the routines' rules only for a
+    /// policy with a pin (the writer index is built from them). A policy
+    /// without one costs what it did before pins.
+    #[must_use]
+    pub fn needs(&self) -> ViewNeeds {
+        ViewNeeds {
+            rules: self.pins(),
+            ..ViewNeeds::MODEL
+        }
+    }
+
     /// The cells the check reads after the run: `det.summaries`, and the
     /// view's witness pass (`Cell::Raw`: every primary routine's raw inherited
-    /// facts) only when a policy's rules run (D6.1; #277 final r1 FR-9).
+    /// facts) only when a policy's rules run (D6.1; #277 final r1 FR-9), and
+    /// the writer index (`Cell::Rules`) only for a pin.
     fn reads(&self) -> &'static [Cell] {
-        match self.policy {
-            Some(_) => &[Cell::Det, Cell::Raw],
-            None => &[Cell::Det],
+        match (&self.policy, self.pins()) {
+            (Some(_), true) => &[Cell::Det, Cell::Raw, Cell::Rules],
+            (Some(_), false) => &[Cell::Det, Cell::Raw],
+            (None, _) => &[Cell::Det],
         }
     }
 
@@ -404,6 +418,11 @@ impl PolicyJob<'_> {
                     &det.summaries,
                     view.raw(),
                 );
+                let model = if policy.has_pins() {
+                    model.with_pins(view.rules())
+                } else {
+                    model
+                };
                 let out = run_policy_engine(&model, policy);
                 PolicyRunResult {
                     policy_source: source,
@@ -566,7 +585,12 @@ pub fn run_policy_explain(opts: &PolicyExplainOptions) -> PolicyExplainOutcome {
         lines.push(format!("Title: {t}"));
     }
     lines.push(format!("Severity: {}", rule.severity));
-    lines.push(format!("Coverage gate: {coverage}"));
+    if rule.requires.is_some() {
+        // A pin reads writes and rules, not capability facts (spec §2.4).
+        lines.push("Coverage gate: none (a pin)".to_string());
+    } else {
+        lines.push(format!("Coverage gate: {coverage}"));
+    }
     lines.push(format!("On unknown: {on_unknown}"));
     lines.push(format!("Effective policy: {source}"));
     lines.push(String::new());
@@ -575,6 +599,10 @@ pub fn run_policy_explain(opts: &PolicyExplainOptions) -> PolicyExplainOutcome {
     if let Some(except) = &rule.except {
         lines.push("Except:".to_string());
         lines.push(predicate_to_json(except));
+    }
+    if let Some(requires) = &rule.requires {
+        lines.push("Requires:".to_string());
+        lines.push(predicate_to_json(requires));
     }
 
     PolicyExplainOutcome {

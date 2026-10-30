@@ -1924,7 +1924,9 @@ fn entry_to_value(entry: &DigestEntryFull) -> serde_json::Value {
     serde_json::Value::Object(m)
 }
 
-fn changed_roots_diagnostic_to_value(d: &ChangedRootsDiagnostic) -> serde_json::Value {
+/// One changed-roots diagnostic as digest's JSON writes it (`explain --diff`
+/// writes the same objects).
+pub(crate) fn changed_roots_diagnostic_to_value(d: &ChangedRootsDiagnostic) -> serde_json::Value {
     let mut m = serde_json::Map::new();
     m.insert("kind".into(), d.kind().into());
     match d {
@@ -1971,7 +1973,7 @@ fn changed_roots_diagnostic_to_value(d: &ChangedRootsDiagnostic) -> serde_json::
 /// One human line for a changed-roots diagnostic (#340):
 /// `changed-roots: <kind> <subject>[ <detail>]`, every string escaped so the
 /// diagnostic stays on one line.
-fn changed_roots_diagnostic_human(d: &ChangedRootsDiagnostic) -> String {
+pub(crate) fn changed_roots_diagnostic_human(d: &ChangedRootsDiagnostic) -> String {
     let list = |c: &[String]| {
         c.iter()
             .map(|s| escape_controls(s))

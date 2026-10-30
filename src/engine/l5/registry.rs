@@ -109,6 +109,27 @@ pub mod substrate {
     /// Not in [`ALL`]: a context built from `ALL` reads no ordering facts and
     /// so never pays for them.
     pub const ORDERING_FACTS: u32 = 1 << 6;
+    /// ⟨Intent evidence step 6⟩ The per-field writer index
+    /// ([`crate::engine::l5::rules_index::RulesIndex`]: every table field the
+    /// primary app writes, each writer with the rules in force at each write),
+    /// `ctx.get_rules_index()`, read by d65. Filled ONCE, before the parallel
+    /// detector loop (`detector_context::fill_rules`), iff the mask has this
+    /// bit; `get_rules_index` panics on an empty slot, in every build, like
+    /// `get_ordering_facts`.
+    ///
+    /// It is built from the routines' own rules, a level-1 fact
+    /// (`ViewNeeds::rules`, built at model assembly): the command that demands
+    /// this bit must build its model with them. `alsem analyze` does when a
+    /// selected detector requires this bit
+    /// (`registry::assembly_needs`); filling it from a model built without
+    /// rules panics ("rules not built: declare ViewNeeds::rules"). Its cost is
+    /// one cross-call rules walk (`l5::cross_rules`, bounded by its budget).
+    /// It does not imply `ORDERING_FACTS`: statement order comes from each
+    /// site's control context and anchor.
+    ///
+    /// Not in [`ALL`]: the many `build_detector_context(.., ALL)` callers build
+    /// models without rules and read no index.
+    pub const RULES: u32 = 1 << 7;
     /// Every substrate — the eager, pre-W1.0 behavior. Since #160 step 2 no
     /// command passes it: each builds its context in a `View` at the union of
     /// its runs' `requires`. The callers left are the parity tests' "full"
@@ -119,6 +140,21 @@ pub mod substrate {
     /// caller for a transpose none of them reads, and it springs the
     /// detector-parity trap — see its own doc.
     pub const ALL: u32 = SUMMARIES | CORE_SUMMARIES | TRANSACTION_SPANS | CLOSED_WORLD_TEMP;
+}
+
+/// The level-1 facts a model must hold for `detectors` to run on it: the
+/// rules (`ViewNeeds::rules`) when one of them requires [`substrate::RULES`],
+/// else the base rows. Every builder that runs a detector list it did not
+/// choose (the r4 projections, `aldump`'s detector modes, the switch dump)
+/// builds its model with these needs, so a rules-reading detector never meets
+/// a model without rules.
+#[must_use]
+pub fn assembly_needs(detectors: &[Detector]) -> crate::program::model::workspace::AssemblyNeeds {
+    let rules = detectors.iter().any(|d| d.requires & substrate::RULES != 0);
+    crate::program::model::workspace::AssemblyNeeds {
+        rules,
+        ..crate::program::model::workspace::AssemblyNeeds::BASE
+    }
 }
 
 /// A diagnostic emitted when a detector fails — returns `Err`, or (debug builds
@@ -1037,39 +1073,110 @@ mod tests {
         );
     }
 
+    /// A workspace with one table field written by a routine that has a rule
+    /// before the write (intent-evidence step 6): enough for a detector that
+    /// reads the rules index, or a routine's rules, to reach the read.
+    const ONE_WRITER: &[(&str, &str)] = &[
+        (
+            "src/T.al",
+            "table 50990 \"Needs T\" { fields { field(1; \"No.\"; Code[20]) { } \
+             field(2; Status; Option) { OptionMembers = Open,Released; } \
+             field(3; Amount; Decimal) { } } }",
+        ),
+        (
+            "src/C.al",
+            "codeunit 50991 \"Needs C\" { procedure SetAmount(var T: Record \"Needs T\") \
+             begin T.TestField(Status, T.Status::Open); T.Amount := 1; T.Modify(); end; }",
+        ),
+    ];
+
+    /// The [`ONE_WRITER`] model built with `needs`.
+    fn one_writer(needs: crate::program::model::workspace::AssemblyNeeds) -> Model {
+        let files: Vec<(String, String)> = ONE_WRITER
+            .iter()
+            .map(|(p, s)| (p.to_string(), s.to_string()))
+            .collect();
+        crate::program::model::program_calls::assemble_and_resolve_inline_program_with(
+            &files,
+            "99999999-0000-0000-0000-0000000ee651",
+            crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
+            needs,
+        )
+    }
+
     /// Pins the REAL declarations, not just the mechanism: every registered
     /// detector runs ALONE through `run_each`, so no other detector's `requires`
-    /// can trigger the fill on its behalf. A detector that reads the ordering
-    /// facts without declaring `substrate::ORDERING_FACTS` finds the slot empty,
-    /// panics in `get_ordering_facts` and shows up as a "threw" diagnostic.
-    /// d47/d49/d51 read the facts on their first line, so an empty workspace is
-    /// enough to reach the read.
+    /// can trigger the fill on its behalf. A detector that reads a substrate
+    /// slot without declaring its bit finds the slot empty, panics in the
+    /// accessor and shows up as a "threw" diagnostic naming the bit:
     ///
-    /// DISCRIMINATION PROOF (recorded 2026-10-04): setting d47's `requires` back
-    /// to `0` in `detectors/mod.rs` makes this FAIL naming d47; restoring it
+    /// - `substrate::ORDERING_FACTS` (`get_ordering_facts`): d47/d49/d51 read
+    ///   the facts on their first line;
+    /// - `substrate::RULES` (`get_rules_index`): d65 reads the index on its
+    ///   first line;
+    /// - `ViewNeeds::rules` (`ModelRoutine::rules`): a detector reading a
+    ///   routine's rules directly. Each detector's model is built with what its
+    ///   `requires` asks for (`assembly_needs`), so one that reads rules without
+    ///   declaring `RULES` meets a model without them.
+    ///
+    /// The model has one writer with a rule ([`ONE_WRITER`]), so a per-routine
+    /// read is reached (with zero routines, rules are never read).
+    ///
+    /// DISCRIMINATION PROOFS: (2026-10-04) setting d47's `requires` back to
+    /// `0` in `detectors/mod.rs` makes this FAIL naming d47; restoring it
     /// passes. (#160 Task 21: skipping `fill_ordering` in the shim makes it fail
-    /// naming d47/d49/d51.)
+    /// naming d47/d49/d51.) (2026-10-30, intent-evidence step 6) setting d65's
+    /// `requires` to `0` makes this FAIL naming d65 (the RULES needle);
+    /// restoring it passes.
     #[cfg(debug_assertions)]
     #[test]
     fn every_detector_alone_declares_what_it_reads() {
-        let resolved = empty_resolved();
+        let with_rules = one_writer(crate::program::model::workspace::AssemblyNeeds::RULES);
+        let without = one_writer(crate::program::model::workspace::AssemblyNeeds::BASE);
+        assert!(
+            with_rules
+                .workspace
+                .routines
+                .iter()
+                .any(|r| !r.rules().is_empty()),
+            "precondition: a routine with a rule"
+        );
+        let needles = [
+            "substrate::ORDERING_FACTS",
+            "substrate::RULES",
+            "ViewNeeds::rules",
+        ];
         let mut offenders = Vec::new();
         for detector in crate::engine::l5::detectors::registered_detectors() {
-            let owned = build_detector_context(&resolved, detector.requires);
+            let resolved = if assembly_needs(std::slice::from_ref(&detector)).rules {
+                &with_rules
+            } else {
+                &without
+            };
+            let owned = build_detector_context(resolved, detector.requires);
             let ctx = owned.ctx();
             let name = detector.name.clone();
-            let (_f, diagnostics, _s, _i) = run_each(&resolved, &ctx, &[detector]);
-            if diagnostics
-                .iter()
-                .any(|d| d.message.contains("substrate::ORDERING_FACTS"))
-            {
-                offenders.push(name);
+            let (_f, diagnostics, _s, _i) = run_each(resolved, &ctx, &[detector]);
+            for needle in needles {
+                if diagnostics.iter().any(|d| d.message.contains(needle)) {
+                    offenders.push(format!("{name} ({needle})"));
+                }
             }
         }
         assert!(
             offenders.is_empty(),
-            "undeclared ordering-facts readers: {offenders:?}"
+            "undeclared substrate / view-need readers: {offenders:?}"
         );
+    }
+
+    /// Filling `RULES` from a model built without rules panics (the
+    /// `declared-needs` skill, checklist step 6): "not built" never reads as
+    /// "no rules".
+    #[test]
+    #[should_panic(expected = "rules not built: declare ViewNeeds::rules")]
+    fn filling_rules_from_a_model_without_rules_panics() {
+        let without = one_writer(crate::program::model::workspace::AssemblyNeeds::BASE);
+        let _ = build_detector_context(&without, substrate::RULES);
     }
 
     /// `run_each` runs detectors in PARALLEL, so completion order and iteration

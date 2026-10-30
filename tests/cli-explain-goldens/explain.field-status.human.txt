@@ -1,0 +1,41 @@
+field: Explain Order.Status (caption "Order Status"): 3 writer(s)
+  Codeunit Explain Post::PostOrder: validate at ws:src/post.al:16
+    at ws:src/post.al:16: rejects when Order.Status <> Order.Status::Released: "Order %1 is not released."  [Error ws:src/post.al:10]
+    at ws:src/post.al:16: rejects when not (Order.Status <> Order.Status::Released) and Order.Amount is empty: (platform message)  [TestField ws:src/post.al:11]
+  Codeunit Explain Post::Archive: assign at ws:src/post.al:24
+    at ws:src/post.al:24: no rule
+  Codeunit Explain Post::ReopenAll: modify-all at ws:src/post.al:34
+    at ws:src/post.al:34: no rule
+
+Codeunit Explain Post::PostOrder  ws:src/post.al:4
+  doc: Posts a released order. / It marks the order posted.
+  rejects when Order.Status <> Order.Status::Released: "Order %1 is not released."  [Error ws:src/post.al:10]
+  rejects when not (Order.Status <> Order.Status::Released) and Order.Amount is empty: (platform message)  [TestField ws:src/post.al:11]
+  inherited rules: none
+  caller rules: none (2 known caller(s))
+  writes Explain Order [Posted, Status] (DB_MODIFY, guarded-by-IsHandled) at ws:src/post.al:17
+  commits: no
+  raises OnBeforePostOrder (unknown) at ws:src/post.al:12
+  extension point OnBeforePostOrder: 1 subscriber(s), IsHandled
+  UI_MESSAGE at ws:src/post.al:18
+  reached from page action Post on Page Explain Order Card (caption "P&ost") at ws:src/card.al:18
+  test Codeunit Explain Tests::PostUnreleasedFails (3 own assert(s))
+
+Codeunit Explain Post::Archive  ws:src/post.al:22
+  doc: Archives without any check.
+  rules: none of its own
+  inherited rules: none
+  caller rules: no known caller
+  writes Explain Order [Status] (DB_MODIFY) at ws:src/post.al:25
+  commits: yes
+  tests: none reach it
+
+Codeunit Explain Post::ReopenAll  ws:src/post.al:30
+  doc: A ModifyAll writer of Status: listed by --field since step 6.
+  rules: none of its own
+  inherited rules: none
+  caller rules: no known caller
+  writes Explain Order [Status] (DB_MODIFY) at ws:src/post.al:34
+  commits: no
+  tests: none reach it
+

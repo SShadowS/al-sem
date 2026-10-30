@@ -163,5 +163,18 @@ pub mod fingerprint_query;
 // cli-b/b3 — FINGERPRINT CLI pipeline (format dispatch, workspace loading).
 pub mod fingerprint_cli;
 
+// Intent evidence step 4 — `alsem explain`: one evidence card per routine
+// (own rules, effects, page actions, events, tests, gaps), and the field
+// writers its `--table/--field` mode lists.
+pub mod emit_policy;
+pub mod explain;
+pub mod field_writers;
+// Intent evidence step 5: rules across calls (inherited, caller and table-
+// trigger rules) for the evidence card.
+pub mod cross_rules;
+// Intent evidence step 6: the per-field writer index (`substrate::RULES`)
+// that d65 and `explain --table/--field` read.
+pub mod rules_index;
+
 #[cfg(test)]
 pub(crate) mod test_support;

@@ -1,0 +1,230 @@
+{
+  "cards": [
+    {
+      "effects": {
+        "commitSites": [],
+        "commits": "no",
+        "events": [],
+        "ui": [],
+        "writes": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Order.Modify",
+              "file": "ws:src/post.al",
+              "line": 32,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "fieldCaptions": {},
+            "fields": [],
+            "op": "DB_MODIFY",
+            "table": "Calls Order",
+            "tableId": "55555555-ca11-0000-0000-0000000ca115/table/50450",
+            "via": []
+          }
+        ]
+      },
+      "extensionPoints": [],
+      "gaps": [],
+      "reachedFrom": [],
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/post.al",
+          "line": 27,
+          "sourceKind": "source"
+        },
+        "doc": null,
+        "id": "55555555-ca11-0000-0000-0000000ca115:Codeunit:50453#aef46080399c78ccb6726ff58af3b4744ccc719dea00db794cc58cd11940b4b7",
+        "name": "ForwardPost",
+        "object": "Calls Post",
+        "objectCaption": null,
+        "objectType": "Codeunit"
+      },
+      "rules": {
+        "callers": [],
+        "inherited": [
+          {
+            "anchor": {
+              "column": 12,
+              "file": "ws:src/checks.al",
+              "line": 5,
+              "sourceKind": "source"
+            },
+            "comment": null,
+            "id": "bc117818cc986894/6ee2fa48f12646d4c89ff8f95d2fe95c6cb64a160c3ba4bc71ec6a3f9124d2ac/rule0",
+            "in": "Codeunit Calls Checks::CheckOrder",
+            "kind": "Error",
+            "message": {
+              "args": [],
+              "candidates": [],
+              "labelComment": null,
+              "source": "Literal",
+              "text": "The order has no number.",
+              "var": null
+            },
+            "stops": "always",
+            "stopsReason": null,
+            "trigger": null,
+            "via": [
+              "CheckOrder"
+            ],
+            "when": [
+              {
+                "field": "No.",
+                "kind": "FieldEmpty",
+                "negated": false,
+                "recordVar": "Order",
+                "table": "Calls Order"
+              }
+            ],
+            "whenText": "Order.\"No.\" = ''"
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "file": "ws:src/checks.al",
+              "line": 7,
+              "sourceKind": "source"
+            },
+            "comment": null,
+            "id": "bc117818cc986894/6ee2fa48f12646d4c89ff8f95d2fe95c6cb64a160c3ba4bc71ec6a3f9124d2ac/rule1",
+            "in": "Codeunit Calls Checks::CheckOrder",
+            "kind": "TestField",
+            "message": {
+              "args": [],
+              "candidates": [],
+              "labelComment": null,
+              "source": "Platform",
+              "text": null,
+              "var": null
+            },
+            "stops": "always",
+            "stopsReason": null,
+            "trigger": null,
+            "via": [
+              "CheckOrder"
+            ],
+            "when": [
+              {
+                "field": "No.",
+                "kind": "FieldEmpty",
+                "negated": true,
+                "recordVar": "Order",
+                "table": "Calls Order"
+              },
+              {
+                "index": 1,
+                "kind": "ParamBool",
+                "value": true
+              },
+              {
+                "field": "Amount",
+                "kind": "FieldEmpty",
+                "negated": false,
+                "recordVar": "Order",
+                "table": "Calls Order"
+              }
+            ],
+            "whenText": "not (Order.\"No.\" = '') and StrictMode and Order.Amount is empty"
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "file": "ws:src/checks.al",
+              "line": 14,
+              "sourceKind": "source"
+            },
+            "comment": null,
+            "id": "bc117818cc986894/35cf42a674cdde94ee00ea4cc3aae9520821b982c8185ca3e8aa2b7e060d6c58/rule0",
+            "in": "Codeunit Calls Checks::CheckCustomer",
+            "kind": "Error",
+            "message": {
+              "args": [],
+              "candidates": [],
+              "labelComment": null,
+              "source": "Literal",
+              "text": "The customer is blocked.",
+              "var": null
+            },
+            "stops": "always",
+            "stopsReason": null,
+            "trigger": null,
+            "via": [
+              "CheckOrder",
+              "CheckCustomer"
+            ],
+            "when": [
+              {
+                "anchor": {
+                  "column": 11,
+                  "file": "ws:src/checks.al",
+                  "line": 13,
+                  "sourceKind": "source"
+                },
+                "kind": "Other",
+                "text": "Order.Blocked"
+              }
+            ],
+            "whenText": "Order.Blocked"
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "file": "ws:src/order.al",
+              "line": 24,
+              "sourceKind": "source"
+            },
+            "comment": null,
+            "id": "bc117818cc986894/6a778fb0754896e3ed60caba4452ae07ea0cb49b23c2c21de0d5cc03a40b93d9/rule0",
+            "in": "Table Calls Order::OnModify",
+            "kind": "Error",
+            "message": {
+              "args": [],
+              "candidates": [],
+              "labelComment": null,
+              "source": "Literal",
+              "text": "A blocked order cannot change.",
+              "var": null
+            },
+            "stops": "always",
+            "stopsReason": null,
+            "trigger": {
+              "anchor": {
+                "column": 8,
+                "file": "ws:src/post.al",
+                "line": 32,
+                "sourceKind": "source"
+              },
+              "op": "Modify"
+            },
+            "via": [
+              "OnModify"
+            ],
+            "when": [
+              {
+                "anchor": {
+                  "column": 11,
+                  "file": "ws:src/order.al",
+                  "line": 23,
+                  "sourceKind": "source"
+                },
+                "kind": "Other",
+                "text": "Blocked"
+              }
+            ],
+            "whenText": "Blocked"
+          }
+        ],
+        "knownCallers": 0,
+        "own": []
+      },
+      "tests": []
+    }
+  ],
+  "diagnostics": [],
+  "mode": "routine",
+  "schema": "al-sem.explain/1",
+  "selector": "ForwardPost"
+}

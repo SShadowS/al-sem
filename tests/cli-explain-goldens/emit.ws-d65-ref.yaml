@@ -1,0 +1,21 @@
+# al-sem policy: rules pinned by `alsem explain --emit-policy`.
+# Each entry is a rule that at least 3 writers, and at least 75 % of the
+# writers, of a table field apply (d65-guard-bypass's majority rule). `alsem
+# policy check` reports every writer of the field that does not apply it.
+# Keep the entries that are business rules and delete the rest; record a
+# deliberate exception with `except: { routine.name: <name> }`.
+version: 2
+rules: []
+# No rule passes the bar. To pin one below, replace `rules: []` with
+# `rules:` and uncomment its entry.
+  # Below the bar: Guard Order.Ref: 1 of 4 writer(s) apply it (Guard Writers::RefOnly). To pin it, uncomment the entry.
+  # - id: pin-guard-order-ref-testfield-b4f609ed
+  #   title: "Writers of Guard Order.Ref apply: TestField: status <> ::open"
+  #   description: "rejects when O.Status <> O.Status::Open (TestField)"
+  #   severity: medium
+  #   when:
+  #     write.table: "Guard Order"
+  #     write.field: "Ref"
+  #   requires:
+  #     rule.kind: "TestField"
+  #     rule.atoms: "status <> ::open"

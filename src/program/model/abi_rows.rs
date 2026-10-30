@@ -62,6 +62,8 @@ pub(crate) fn dep_object_to_l3(o: &ProjectedObject) -> ModelObject {
         delete_allowed: o.page_props.delete_allowed,
         source_anchor: None,
         declaration_only_routines: Vec::new(),
+        // Set by the assembly when the view declares the card text.
+        run_actions: None,
     }
 }
 
@@ -77,6 +79,8 @@ fn dep_field_to_l3(f: &crate::engine::deps::projection::ProjectedField) -> Model
         field_class: f.field_class.clone(),
         data_type: f.data_type.clone(),
         is_blob_like: f.is_blob_like,
+        // A symbol-only field: no caption is read (spec open question 2).
+        captions: Vec::new(),
     }
 }
 
@@ -248,6 +252,12 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
         enclosing_member: None,
         originating_object: None,
         enclosing_member_range: None,
+        // Not built here: `append_dependency_rows` gives a symbol-only row its
+        // (empty) rules when the assembly declares them.
+        rules: None,
+        rule_drafts: None,
+        // Likewise the card text (`append_dependency_rows`).
+        card_text: None,
         entry_temp_guard_receiver: None,
     }
 }

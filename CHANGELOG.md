@@ -7,6 +7,233 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (intent evidence)
+
+Spec: `docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 3).
+
+- **Step 1: label attributes and `TextConst` text are lowered.** `VarDecl::label`
+  (`LabelValue`) now also keeps a label's `Comment = '…'`, `MaxLength = n` and every
+  other `name = value` attribute (as written, in `other`), and a `TextConst`'s text
+  (the `ENU` value, else the first) with its other languages in `translations`. A
+  `TextConst` is never locked, so it is never a constant for G52's `Evaluate` rule.
+  No golden moves. Tests `label_attributes_and_text_consts_are_kept` (new) and
+  `label_declarations_carry_text_and_locked` (G52; now compares text and locked only).
+- **Step 2: captions, tooltips, page actions and comments are lowered.** `FieldDecl`
+  gains `caption`, `tooltip`, `option_caption` (one text per `#if` arm: the
+  property's first string literal, `''` unescaped, so `Caption = 'x', Comment = 'c'`
+  gives `x`), `doc` and `origin`; table extension fields included. New
+  `ObjectDecl::actions` (`ActionDecl`: name, keyword, caption, tooltip, raw
+  `RunObject` values, and `triggers`, the indexes of its `OnAction` routines) holds
+  every `action` / `systemaction` / `fileuploadaction` / `customaction` of a page,
+  page extension or request page, nested in `area` / `group` / `add*` / `#if`.
+  `lookup_symbol_properties` (the LSP's `actionProperties`) now uses the same
+  action test, so it also finds the three other action kinds. `RoutineDecl::doc`,
+  `FieldDecl::doc` and `ActionDecl::doc` hold the run of lone `//` / `///` lines
+  directly above the declaration (by line number, since comments are grammar
+  extras; a blank line ends the run, a `#region` line does not), and new
+  `AlFile::comments` keeps every comment of the file as written, with trailing and
+  own-line comments told apart, for step 3's check comments. Plain IR facts in
+  every profile: measured +4.3 % peak memory on the DO workspace (comments alone
+  +2.0 %), +2.2 % on the 1000-file LSP corpus, so no gate (spec 4.1b). No golden
+  moves.
+- **Step 3: rules are built at model assembly, when a view asks for them.**
+  `ViewNeeds` gains `rules` (joined by `union`, kept out of `ViewKey`); no demand
+  sets it yet. `build_view_model` hands it to the assembly as the new
+  `AssemblyNeeds` (no default; `BASE` or `RULES`), which every assembly entry now
+  takes: `assemble_and_resolve_workspace_program`,
+  `assemble_and_resolve_cross_app_program`, `build_cross_app_base_from` and the
+  workspace.rs entries. The new body pass `program::body::rules` turns each
+  routine's IR into `PRule` rows (`Error`, `TestField`, `FieldError`,
+  `ConfirmError`, `ConfirmExit`): the condition as atoms (`FieldCompare`,
+  `FieldEmpty`, `ParamBool`, `CallResult`, `RecordFound`, `NoneOf`, `Other`) from
+  enclosing `if` (negated on `else`), `case` arms and `else` (`NoneOf`), earlier
+  `if C then exit;` and earlier `if C then <check>;`; the message (literal, label,
+  `TextConst`, `ErrorInfo`, platform or dynamic, with args, the label's comment and,
+  for a name the routine sees declared more than once, every candidate text); and
+  the check's comment. `stops` is settled after resolution, next to #288's dead-mark
+  trust and by the same per-site test: a bare `Error` that may bind to an own
+  `procedure Error`, or an `ErrorInfo` message, may not stop, and then adds no
+  `not C` to later checks. `ModelRoutine::rules` is `None` until built;
+  `ModelRoutine::rules()` panics on `None`. A default `analyze` builds none. #288's
+  one-argument `Error` proof now also accepts a `TextConst` (it is Text). The
+  lowerer now lowers date, time and datetime literals (`0D`) to their `Literal`
+  variants instead of `Unknown`. New fixture `tests/r0-corpus/ws-rules` (compiles
+  with alc 29); it adds its routines to the l2 snapshot and the r4f root-class
+  summary, and no other golden line moves.
+- **Step 4: `alsem explain`, the evidence card.** New command
+  `alsem explain <ws> --routine <name> | --diff <patch> | --table <T> --field <F>`
+  (`--format human|json`, `--out`, `--single-app`, `--diff-root`). Each card
+  (JSON schema `al-sem.explain/1`) holds the routine (id, object, object caption,
+  doc comment, anchor), its own rules (kind, whether it stops, condition atoms and
+  text, message with label text, args, label comment and candidates, comment,
+  anchor), its effects (table writes with the fields written and their captions,
+  conditionality and call path; `commits` no / may / yes with each commit site;
+  events raised; interactive UI), the page actions that reach it (caption,
+  tooltip, path), the events it raises itself with their subscriber count and
+  `IsHandled` (extension points), the tests that reach it (with each test's own
+  assert count), and its gaps (symbol-only calls, unresolved calls, unparsed
+  bodies, a cut cone, a text that differs by `#if` arm, a dependency field
+  caption that is not read). Every list is always present. Inherited and caller
+  rules are step 5: each card has `"inherited": []`, `"callers": []` and a
+  `cross-call-rules-not-computed` gap. `--routine` resolves as `prove` does
+  (not found or ambiguous: exit 2, with a diagnostic naming the candidates);
+  `--diff` resolves the same routines as `digest --diff` (same code, same diff
+  root; no routine: exit 2); `--table/--field` lists every workspace routine
+  that writes the field by assignment or `Validate` (new
+  `engine::l5::field_writers`; an unknown table or field exits 2). Cards are
+  sorted by anchor. Usage errors exit 1 (bad `--format`, no mode) or 3 (two
+  modes, `--table` without `--field`, `--diff-root` without `--diff`). It runs
+  as a batch job too. Wiring: `ViewNeeds` gains `card_text` and the `EXPLAIN`
+  preset (rules and card text); `AssemblyNeeds` gains `card_text` and
+  `EXPLAIN`; `ModelRoutine::card_text` (doc, object caption, the page actions
+  the routine is the trigger of, a test's own asserts) is built at assembly only
+  for it and its accessor panics when not built. `ModelField::captions` is a
+  plain fact (empty for a symbol-only dependency's field). New `explain_plan`:
+  one tree with the test-coverage graph, no detector run, no `l4`.
+  `test_coverage::reaching_tests` lists every test that reaches a routine.
+  `al_syntax::lower::leading_literal_text` is public. Limit: a `ModifyAll` is
+  not yet found as a field writer (its argument is not kept by the body walk).
+  New fixture `tests/r0-corpus/ws-explain` (it adds lines to the l2 snapshot,
+  the r4f root-class summary, a new r2c event-graph golden and two policy-facts
+  oracle cases); new golden family `tests/cli-explain-goldens/` under
+  `--test cli`, listed in `scripts/check-goldens`.
+- **Step 5: rules across calls in `alsem explain`.** New
+  `engine::l5::cross_rules`. `rules.inherited` now lists the rules of the
+  routines a card's routine calls, when the call is `unconditional-on-success`
+  (not under `asserterror`) and ends, in the source, before the routine's first
+  write (a callee that is itself the first write gives only the rules it runs
+  before its own first write); transitively, with the call path (`via`) and the
+  routine that holds the check (`in`). A write counts when it assigns a record
+  field or mutates a record (not a known-temporary one), or calls a routine that
+  may write (or has no body). A callee's `ParamBool` atom is rewritten across the
+  call: a contradicting literal drops the rule, a matching one drops the atom, a
+  forwarded parameter re-anchors it, any other argument becomes an `Other` atom;
+  a callee parameter that is assigned (or passed to a `var`) keeps its atom as
+  written (`param_guard`'s usability). A call to a `[TryFunction]` whose result is
+  used, a `Codeunit.Run`, an interface call with several implementers and an
+  unresolved call give no inheritance. Table triggers that a `Validate`, a
+  `Rename` or an `Insert`/`Modify`/`Delete(true)` runs (the resolver's
+  `implicit-trigger` edges with `fires: always`) are inherited with the write
+  named (`trigger`). `rules.callers` lists the rules each known caller runs
+  before every call into the routine, with `presentIn`, `appliedBy` (never for a
+  `MayNotStop` rule) and `skippedBy`; `rules.knownCallers` counts the callers.
+  The `cross-call-rules-not-computed` gap is gone. New gaps:
+  `table-trigger-rules-skipped` (a plain field assignment, `Modify()` /
+  `Modify(false)` or a non-literal RunTrigger, with the skipped triggers and
+  their rules), `error-collector` (a call to a `Log…` procedure of
+  `Error Message Management` / `Error Message`, a stated list), and
+  `cross-call-rules-truncated` (the walk's budget of 200,000 routine
+  expansions, or a chain of calls 512 deep, the walk's recursion limit; cycles
+  are cut, results memoised). Each extension point lists its
+  subscribers' own rules (`subscriberRoutines`, `conditionalOnAppSet`), never
+  merged into `inherited`. `reachedFrom` follows a page action's
+  `RunObject = Codeunit X` into that codeunit's `OnRun` (`runObject`). Wiring:
+  `PRule::when_texts` (each atom's text); `CardAction::run_object`;
+  `ModelObject::run_actions` (the `RunObject` actions, built at assembly behind
+  `ViewNeeds::card_text`, accessor panics when not built). Statement order comes
+  from the sites' control context and source anchors, so `RULES` does not need
+  `ORDERING_FACTS` (spec §4.1b, §4.3 updated). New fixture
+  `tests/r0-corpus/ws-explain-calls` (adds lines to the l2 snapshot, the r4f
+  root-class summary, a new r2c golden and two policy-facts oracle cases); 12
+  new goldens in `tests/cli-explain-goldens/`, and the step-4 goldens show the
+  computed lists.
+- **Step 6: `d65-guard-bypass` (opt-in) and the rules index behind it.**
+  - *A check counts only on the path.* Step 5 counted a caller's own check as
+    applied when it sat anywhere before the call, even in the other branch of an
+    `if` or in a loop body that may not run; d65 drops conditions that are not on
+    the written table, so that hid a real bypass. Each `PRule` now records where
+    it is on the path (`on_path`, `PRule::guards`): after the check to the end of
+    its block, in the `else` of an `if` whose `then` it directly is (only for a
+    check with no condition of its own: `Error`, `FieldError`, a `Confirm` exit;
+    a `TestField` is not evaluated there), and wherever its statement lifts out
+    of an `if`/`case` branch, `begin..end`, `repeat` or `with`, never out of a
+    `while`/`for`/`foreach` body, `try`, `asserterror` or `#if` arm.
+    `cross_rules` uses it for caller rules and "before the first write", and a
+    callee's `all` keeps only the checks passed on every path to its end
+    (`at_exit`). `explain`'s `appliedBy`/`skippedBy` follow it. `PRule` also gains
+    `when_earlier` (which atoms are an earlier check's `not C`).
+  - *`ModifyAll` writes a field.* `ModelRecordOperation::modify_all_field` holds a
+    `ModifyAll`'s first argument, read at assembly from the IR (never serialized),
+    so `fieldArguments` and every detector input stay as they were;
+    `explain --table/--field` and d65 list `ModifyAll` writers.
+  - *`substrate::RULES` (`1 << 7`)*: the per-field writer index
+    (`l5::rules_index`): each primary-app writer of each field with the rules in
+    force at each write (own on the path, the calls before it, the table triggers
+    it runs, and per known caller the rules it applies), `MayNotStop` rules left
+    out. Outside `ALL`; filled once before the detector loop (`fill_rules`, also a
+    `View` cell, `Cell::Rules`); `get_rules_index()` panics "declare
+    substrate::RULES"; filling it from a model without rules panics.
+    `registry::assembly_needs(detectors)` says what model a detector list needs;
+    `alsem analyze` builds the rules only when a selected detector requires
+    `RULES` (`ViewNeeds::analyze_for`), so a default run builds none.
+    `project_r4_findings[_cross_app]` now run only the named detectors, and every
+    builder that runs a detector list (aldump's `--r4-findings*`, the switch dump,
+    `build_analysis_model`) builds with its needs.
+  - *`d65-guard-bypass`*: rule key = kind plus the atoms on the written table
+    (record variable dropped, enum values by member; `Other`, parameter and call
+    atoms, and an earlier check's `not C`, form none); a key applied by at
+    least 3 writers and 75 % of them is a majority rule, and each writer without it
+    is a finding (`possible`, low) at its first write, with the rule, the follower
+    count and two examples. Opt-in: `--detector d65-guard-bypass` or the new
+    `--preset business-rules`. Suppress with `// al-sem-ignore d65-guard-bypass:
+    <reason>` above the write.
+  - `explain --table/--field` lists each write's effective rules (`sites[].rules`)
+    and each writer's `callerRules` / `knownCallers`, from the same index.
+  - Goldens: new `ws-d65` fixture and r4 golden (5 findings); the d65 row in every
+    `all`-slot detector-stats golden (cli-a json/stats) and its SARIF rule in the
+    gate goldens; new `ws-explain-calls` callers (`ReleaseBranch`, `ReleaseLoop`,
+    `ReleaseGuarded`, `ReleaseElse`, `CheckLines`) move the l2 snapshot, the r4f
+    root-class summary and the `calls.*` explain goldens (line shifts and the new
+    caller rules); `explain.field-status` gains `ReopenAll` (its `ModifyAll`) and
+    the rules per write. `FIXTURE_ROOTS` r0-corpus 220 -> 221.
+  - Triage (`docs/detector-audit.md`): on the Continia DO workspace d65 gives 0
+    findings at `--scope primary` and `--scope all` (722 written fields; 166 with
+    at least 3 writers, none with a majority rule that a writer skips). At looser
+    thresholds (N = 2, p = 0.5) it would give 5, all deliberate import/upgrade
+    writes, so N = 3, p = 0.75 stay. The CDO-baseline triage is still owed; d65
+    stays opt-in.
+- **Step 7: pin a rule in the policy** (spec
+  `docs/superpowers/specs/2026-10-30-rules-to-policy-design.md`).
+  - *`alsem explain --emit-policy`* writes the majority rules of
+    `--table T --field F` (or, alone, of every field the workspace writes) as
+    `al-sem.policy.yaml` entries. Each entry is one d65 rule key (d65's own
+    `rule_key`, `applied` and bar, N = 3 and p = 0.75; d65's `majorities` was
+    split so both read `key_counts`), kept even when every writer applies it.
+    Its id hangs on the key alone, so fixing a bypass keeps the ids; the counts
+    and examples go in a comment. With `--table/--field`, each key below the bar
+    is written commented out, ready to confirm by hand. Unknown table or field
+    exits 2; `--routine`/`--diff`/`--format` with it exit 3. It builds the rules
+    and no card text, and no plan.
+  - *Policy format version 2.* A rule may have `requires:`, a predicate over one
+    rule key a writer applies. Such a rule (a pin) selects write facts (a writer
+    and one field it writes) with `when`, and a writer violates it when no key it
+    applies satisfies `requires`. New predicate fields `write.table`,
+    `write.field` (glob), `rule.kind` (enum) and `rule.atoms` (exact text, as d65
+    forms it: a rule with one more atom is a weaker rule). The loader reads
+    versions 1 and 2 (the error is now "policy version must be 1 or 2"), refuses a
+    pin or a write/rule field in version 1, and checks a pin's shape; `facts` and
+    `requireCoverage` do not apply to a pin. Version 1 files load as before, so no
+    existing golden moved.
+  - *`policy check`* runs a pin over the same writer index d65 reads (so a
+    `MayNotStop` rule is never applied), anchoring a finding at the writer's first
+    violating write. A truncated cross-call walk makes a missing key unknown
+    (`onUnknown`). `policy explain` prints a `Requires:` block.
+  - *Declared needs.* `PolicyJob` asks `ViewNeeds::rules` and the writer index
+    only for a policy with a pin: `Plan` gains `own` (substrate bits a command
+    reads itself, outside any run; `prepare` fills them before the runs) and
+    `View::rules()` (panics "declare substrate::RULES"). A policy without a pin
+    costs what it did before.
+  - Tests and goldens: `cli_policy_pins` (new); `tests/cli-explain-goldens/emit.*`
+    (3) and `tests/cli-c-policy-goldens/pins.*` (4); new fixtures
+    `tests/fixtures/policy-pins/{bypass,fixed}` (`FIXTURE_ROOTS` fixtures 48 -> 50).
+    On `ws-d65` the emitted pins flag exactly d65's five writes.
+- **`scripts/intent-cdo-check <cdo-workspace> [out-dir]`** runs the two checks
+  that need the pinned CDO baseline (spec section 6): `scripts/cdo-gate`, and
+  d65 at `--scope primary` and `--scope all` (JSON and terminal). It writes
+  logs, reports and a `summary.txt` into one folder (default
+  `target/intent-cdo-check/`) and exits 1 only when the gate fails or a d65 run
+  gives no report. Trial-run on Continia DO: d65 0 findings at both scopes.
+
 ### Fixed (G52)
 
 - **A statement `Evaluate` that provably cannot fail is no implicit error**

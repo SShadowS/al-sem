@@ -1,0 +1,12 @@
+Codeunit Rules Checks::CheckOrder  ws:src/checks.al:7
+  doc: Checks an order before it is posted.
+  rejects when Order.Status <> Order.Status::Released: "You cannot post %1 %2 because it is not released."  [Error ws:src/checks.al:14]
+  rejects when not (Order.Status <> Order.Status::Released) and Order.Amount <= 0: "The amount must be positive."  [Error ws:src/checks.al:16]
+  rejects when not (Order.Status <> Order.Status::Released) and not (Order.Amount <= 0) and Order."Customer No." is empty: (platform message)  [TestField ws:src/checks.al:19]
+  rejects when not (Order.Status <> Order.Status::Released) and not (Order.Amount <= 0) and Order.Blocked <> false: (platform message)  [TestField ws:src/checks.al:20]
+  rejects when not (Order.Status <> Order.Status::Released) and not (Order.Amount <= 0) and not PostingPreview and Order."Posting Date" = 0D: "Order %1 has no posting date."  [Error ws:src/checks.al:24]
+  inherited rules: none
+  caller rules: no known caller
+  commits: no
+  tests: none reach it
+

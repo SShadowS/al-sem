@@ -98,6 +98,9 @@ fn routine(id: &str) -> ModelRoutine {
         originating_object: None,
         enclosing_member_range: None,
         entry_temp_guard_receiver: None,
+        rules: None,
+        rule_drafts: None,
+        card_text: None,
     }
 }
 
@@ -530,6 +533,7 @@ fn record_op(
         in_until_condition: false,
         in_statement_position: false,
         run_trigger: Some(true),
+        modify_all_field: None,
     }
 }
 

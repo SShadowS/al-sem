@@ -114,6 +114,10 @@ enum Commands {
     Digest(DigestCli),
     /// Prove an absence-safety question about a single routine (cli-b/b2).
     Prove(ProveCli),
+    /// Explain a routine: its own rules (checks with their conditions and
+    /// messages), what it writes, commits and raises, the page actions and
+    /// tests that reach it, and what the engine could not see.
+    Explain(ExplainCli),
     /// Fingerprint an AL workspace: root-classification capability summary (cli-b/b3).
     Fingerprint(FingerprintCli),
     /// Diff two capability snapshots (or workspaces): ABI/schema/events/capabilities/permissions (cli-b/b4).
@@ -616,6 +620,61 @@ struct ProveCli {
     closed_world: bool,
 }
 
+/// `ExplainCli` — arguments for `alsem explain <ws>` (intent-evidence spec
+/// §4.4). Exactly one of `--routine`, `--diff`, or `--table` with `--field`.
+#[derive(Parser)]
+struct ExplainCli {
+    /// Path to the AL workspace root.
+    workspace: String,
+
+    /// One routine: display name, `<owner>::<routine>` or stable id (as
+    /// `prove` reads it).
+    #[arg(long = "routine")]
+    routine: Option<String>,
+
+    /// A unified diff (a file, or `-` for stdin): one card per routine it
+    /// changes, the routines `digest --diff` resolves.
+    #[arg(long = "diff")]
+    diff: Option<String>,
+
+    /// The folder the diff's paths are relative to (as `digest --diff-root`).
+    #[arg(long = "diff-root")]
+    diff_root: Option<String>,
+
+    /// With `--field`: a table name, number or id (as `query touches`).
+    #[arg(long = "table")]
+    table: Option<String>,
+
+    /// With `--table`: a field name or number. One card per workspace routine
+    /// that writes it (assignment, `Validate`, `ModifyAll`).
+    #[arg(long = "field")]
+    field: Option<String>,
+
+    /// Write the majority rules as `al-sem.policy.yaml` pins (policy version
+    /// 2) instead of cards: of `--table/--field` (with the rules below the
+    /// bar commented out), or, alone, of every field the workspace writes.
+    #[arg(long = "emit-policy", default_value_t = false)]
+    emit_policy: bool,
+
+    /// Output format: human | json. Defaults to human.
+    #[arg(long = "format", default_value = "human")]
+    format: String,
+
+    /// Write output to a file instead of stdout.
+    #[arg(long = "out")]
+    out: Option<String>,
+
+    /// Analyse the workspace alone. The default loads the dependencies it requires
+    /// (as `analyze` and `graph` do), at more memory and time.
+    #[arg(long = "single-app", default_value_t = false)]
+    single_app: bool,
+
+    /// The run's diff-root decision, made once by a batch's parent and carried
+    /// to its worker ([`pin_diff_root`]); `None`: decide in `plan_explain`.
+    #[arg(skip)]
+    diff_root_decided: Option<Result<DiffRoot, String>>,
+}
+
 /// `FingerprintCli` — arguments for `alsem fingerprint <ws>`.
 #[derive(Parser)]
 struct FingerprintCli {
@@ -922,6 +981,7 @@ fn plan(command: Commands, in_batch: bool) -> Planned {
         Commands::Analyze(a) => plan_analyze(a, in_batch),
         Commands::Digest(d) => plan_digest(d),
         Commands::Prove(p) => plan_prove(p),
+        Commands::Explain(e) => plan_explain(e),
         Commands::Fingerprint(f) => plan_fingerprint(f),
         Commands::Diff(d) => plan_diff(d),
         Commands::Events(e) => match e.command {
@@ -1015,6 +1075,11 @@ fn job_paths(command: &Commands, streams: &JobStreams) -> JobPaths {
             (Some(&d.workspace), d.out.as_ref())
         }
         Commands::Prove(c) => (Some(&c.workspace), c.out.as_ref()),
+        Commands::Explain(e) => {
+            p.reads
+                .extend(e.diff.iter().filter(|f| *f != "-").map(PathBuf::from));
+            (Some(&e.workspace), e.out.as_ref())
+        }
         Commands::Fingerprint(f) if f.shard.is_some() => {
             p.writes
                 .extend(f.out.as_deref().map(|o| Target::Dir(PathBuf::from(o))));
@@ -1262,6 +1327,8 @@ fn job_kind(command: &Commands) -> Option<JobKind> {
         Commands::Digest(d) if d.include_reads => ("digest reads", universe(d.single_app)),
         Commands::Digest(d) => ("digest", universe(d.single_app)),
         Commands::Prove(p) => ("prove", universe(p.single_app)),
+        // No measured row yet: `explain` takes the table's largest (admission).
+        Commands::Explain(e) => ("explain", universe(e.single_app)),
         Commands::Fingerprint(f) => ("fingerprint", universe(fingerprint_single_app(f))),
         Commands::Diff(_) => ("diff", ViewUniverse::SingleApp),
         Commands::Events(e) => match &e.command {
@@ -1681,13 +1748,35 @@ fn pin_diff_root(
     command: &mut Commands,
     decided: Option<Result<DiffRoot, String>>,
 ) -> Option<Result<DiffRoot, String>> {
-    let Commands::Digest(d) = command else {
-        return None;
+    let (slot, root) = match command {
+        // The batch parse pinned `--changed` ([`pin_changed`]), so this asks
+        // the file system nothing more about it.
+        Commands::Digest(d) => {
+            let root = decided.unwrap_or_else(|| {
+                decide_diff_root(
+                    "digest",
+                    &d.workspace,
+                    d.diff_root.as_deref(),
+                    DigestInputs::of(d).reads_paths(),
+                )
+            });
+            (&mut d.diff_root_decided, root)
+        }
+        // `explain --diff` reads its diff paths as digest does (one decision).
+        Commands::Explain(e) => {
+            let root = decided.unwrap_or_else(|| {
+                decide_diff_root(
+                    "explain",
+                    &e.workspace,
+                    e.diff_root.as_deref(),
+                    e.diff.is_some(),
+                )
+            });
+            (&mut e.diff_root_decided, root)
+        }
+        _ => return None,
     };
-    // The batch parse pinned `--changed` ([`pin_changed`]), so this asks the
-    // file system nothing more about it.
-    let root = decided.unwrap_or_else(|| decide_diff_root(d, DigestInputs::of(d).reads_paths()));
-    d.diff_root_decided = Some(root.clone());
+    *slot = Some(root.clone());
     Some(root)
 }
 
@@ -1742,13 +1831,19 @@ impl DigestInputs {
 /// caller): the workspace, probing nothing. Every probe is recorded
 /// ([`plan_touch`]), so a batch job's reads hold `--diff-root` and the
 /// workspace even when the probe fails.
-fn decide_diff_root(d: &DigestCli, reads_paths: bool) -> Result<DiffRoot, String> {
+/// `command` names the command in an error line (`digest`, `explain`).
+fn decide_diff_root(
+    command: &str,
+    workspace: &str,
+    diff_root: Option<&str>,
+    reads_paths: bool,
+) -> Result<DiffRoot, String> {
     if !reads_paths {
         return Ok(DiffRoot::Workspace);
     }
-    plan_touch(Path::new(&d.workspace));
-    let canonical_ws = std::fs::canonicalize(&d.workspace);
-    let Some(root) = &d.diff_root else {
+    plan_touch(Path::new(workspace));
+    let canonical_ws = std::fs::canonicalize(workspace);
+    let Some(root) = diff_root else {
         let Ok(ws) = canonical_ws else {
             return Ok(DiffRoot::Workspace);
         };
@@ -1764,17 +1859,17 @@ fn decide_diff_root(d: &DigestCli, reads_paths: bool) -> Result<DiffRoot, String
         Ok(m) if m.is_dir() => {}
         Ok(_) => {
             return Err(format!(
-                "al-sem: digest: --diff-root '{root}' is not a folder"
+                "al-sem: {command}: --diff-root '{root}' is not a folder"
             ));
         }
-        Err(e) => return Err(format!("al-sem: digest: --diff-root '{root}': {e}")),
+        Err(e) => return Err(format!("al-sem: {command}: --diff-root '{root}': {e}")),
     }
     // A workspace that does not resolve is left to the load, which reports it
     // (exit 1) however it is spelled, as in auto mode.
     let Ok(ws) = canonical_ws else {
         return Ok(DiffRoot::Workspace);
     };
-    let lexical = std::path::absolute(&d.workspace)
+    let lexical = std::path::absolute(workspace)
         .ok()
         .zip(std::path::absolute(root).ok())
         .and_then(|(ws, r)| ws.strip_prefix(&r).ok().map(Path::to_path_buf))
@@ -1786,11 +1881,10 @@ fn decide_diff_root(d: &DigestCli, reads_paths: bool) -> Result<DiffRoot, String
         Some(rel) => rel,
         None => {
             let r = std::fs::canonicalize(root)
-                .map_err(|e| format!("al-sem: digest: --diff-root '{root}': {e}"))?;
+                .map_err(|e| format!("al-sem: {command}: --diff-root '{root}': {e}"))?;
             ws.strip_prefix(&r).map(Path::to_path_buf).map_err(|_| {
                 format!(
-                    "al-sem: digest: workspace '{}' is not inside --diff-root '{root}'",
-                    d.workspace
+                    "al-sem: {command}: workspace '{workspace}' is not inside --diff-root '{root}'"
                 )
             })?
         }
@@ -1877,11 +1971,9 @@ fn plan_digest(d: DigestCli) -> Planned {
     };
 
     // A batch's parent decided it (its workers get the decision); else now.
-    let diff_root = match d
-        .diff_root_decided
-        .clone()
-        .unwrap_or_else(|| decide_diff_root(&d, reads_paths))
-    {
+    let diff_root = match d.diff_root_decided.clone().unwrap_or_else(|| {
+        decide_diff_root("digest", &d.workspace, d.diff_root.as_deref(), reads_paths)
+    }) {
         Ok(r) => r,
         Err(line) => return failed(line, exit::CONFIG_ERROR, 1),
     };
@@ -1972,6 +2064,159 @@ fn plan_prove(p: ProveCli) -> Planned {
                 human: p.format == "human",
                 out: p.out.as_deref(),
             })
+        },
+    )
+}
+
+// ── explain command ─────────────────────────────────────────────────────────
+
+/// `alsem explain` (intent-evidence spec §4.4). Usage errors, before the
+/// workspace is read: a bad `--format` exits 1 (as digest's and prove's do);
+/// no mode exits 1 (as digest with no input); two modes, `--table` without
+/// `--field` (or the reverse), and `--diff-root` without `--diff` are flag
+/// misuse, exit 3; an unreadable diff exits 3 (digest's). The job then exits
+/// 0 with an answer and 2 when nothing resolved.
+fn plan_explain(e: ExplainCli) -> Planned {
+    use al_sem::engine::l5::explain::{ExplainJob, ExplainMode, ExplainRequest};
+    const VALID_EXPLAIN_FORMATS: &[&str] = &["human", "json"];
+    if !VALID_EXPLAIN_FORMATS.contains(&e.format.as_str()) {
+        return failed(
+            format!(
+                "al-sem explain: invalid --format '{}'. Expected: human | json",
+                e.format
+            ),
+            1,
+            1,
+        );
+    }
+    if e.table.is_some() != e.field.is_some() {
+        return failed(
+            "al-sem: explain: --table and --field go together",
+            exit::CONFIG_ERROR,
+            1,
+        );
+    }
+    let modes = [e.routine.is_some(), e.diff.is_some(), e.table.is_some()]
+        .iter()
+        .filter(|m| **m)
+        .count();
+    if modes > 1 {
+        return failed(
+            "al-sem: explain: give one of --routine, --diff, or --table with --field",
+            exit::CONFIG_ERROR,
+            1,
+        );
+    }
+    if e.diff_root.is_some() && e.diff.is_none() {
+        return failed(
+            "al-sem: explain: --diff-root needs --diff",
+            exit::CONFIG_ERROR,
+            1,
+        );
+    }
+    if e.emit_policy {
+        return plan_emit_policy(e);
+    }
+    let mode = if let Some(selector) = &e.routine {
+        ExplainMode::Routine(selector.clone())
+    } else if let Some(diff) = &e.diff {
+        let text = match diff.as_str() {
+            "-" => match stdin_text() {
+                Some(text) => text.to_string(),
+                None => {
+                    return failed(
+                        "al-sem: explain: failed to read diff from stdin",
+                        exit::CONFIG_ERROR,
+                        1,
+                    );
+                }
+            },
+            path => match FileInput::read_with(path.into(), &plan_read).text() {
+                Ok(s) => s.to_string(),
+                Err(err) => {
+                    return failed(
+                        format!("al-sem: explain: could not read diff file '{path}': {err}"),
+                        exit::CONFIG_ERROR,
+                        1,
+                    );
+                }
+            },
+        };
+        // A batch's parent decided it (its workers get the decision); else now.
+        let root = match e.diff_root_decided.clone().unwrap_or_else(|| {
+            decide_diff_root("explain", &e.workspace, e.diff_root.as_deref(), true)
+        }) {
+            Ok(r) => r,
+            Err(line) => return failed(line, exit::CONFIG_ERROR, 1),
+        };
+        ExplainMode::Diff { text, root }
+    } else if let (Some(table), Some(field)) = (&e.table, &e.field) {
+        ExplainMode::Field {
+            table: table.clone(),
+            field: field.clone(),
+        }
+    } else {
+        return failed(
+            "explain: one of --routine, --diff, or --table with --field is required",
+            1,
+            1,
+        );
+    };
+    ready(
+        &e.workspace.clone(),
+        WorkspaceNeeds::default(),
+        move |slot, inputs| {
+            let (e, inputs) = hold(slot, (e, inputs));
+            let req = ExplainRequest {
+                inputs,
+                mode,
+                single_app: e.single_app,
+            };
+            Box::new(ExplainJob::new(req, e.format == "human", e.out.as_deref()))
+        },
+    )
+}
+
+/// `alsem explain --emit-policy` (rules-to-policy spec §2.5): with
+/// `--table/--field` that field, alone every field. `--routine` / `--diff`
+/// with it, and a `--format` other than the default (the output is always
+/// YAML), are flag misuse (exit 3). The job exits 0 with a document and 2
+/// for an unknown table or field.
+fn plan_emit_policy(e: ExplainCli) -> Planned {
+    use al_sem::engine::l5::emit_policy::{EmitPolicyJob, EmitPolicyRequest, EmitScope};
+    if e.routine.is_some() || e.diff.is_some() {
+        return failed(
+            "al-sem: explain: --emit-policy goes with --table/--field or alone, not with \
+             --routine or --diff",
+            exit::CONFIG_ERROR,
+            1,
+        );
+    }
+    if e.format != "human" {
+        return failed(
+            "al-sem: explain: --emit-policy writes YAML; --format does not apply",
+            exit::CONFIG_ERROR,
+            1,
+        );
+    }
+    let scope = match (&e.table, &e.field) {
+        (Some(table), Some(field)) => EmitScope::Field {
+            table: table.clone(),
+            field: field.clone(),
+        },
+        _ => EmitScope::Workspace,
+    };
+    ready(
+        &e.workspace.clone(),
+        WorkspaceNeeds::default(),
+        move |slot, inputs| {
+            let (e, inputs) = hold(slot, (e, inputs));
+            let req = EmitPolicyRequest {
+                inputs,
+                scope,
+                single_app: e.single_app,
+            };
+            Box::new(EmitPolicyJob::new(req, e.out.as_deref()))
         },
     )
 }

@@ -1,0 +1,145 @@
+{
+  "cards": [
+    {
+      "effects": {
+        "commitSites": [],
+        "commits": "no",
+        "events": [],
+        "ui": [],
+        "writes": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Order.Modify",
+              "file": "ws:src/post.al",
+              "line": 40,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "fieldCaptions": {},
+            "fields": [],
+            "op": "DB_MODIFY",
+            "table": "Calls Order",
+            "tableId": "55555555-ca11-0000-0000-0000000ca115/table/50450",
+            "via": []
+          }
+        ]
+      },
+      "extensionPoints": [],
+      "gaps": [],
+      "reachedFrom": [],
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/post.al",
+          "line": 35,
+          "sourceKind": "source"
+        },
+        "doc": null,
+        "id": "55555555-ca11-0000-0000-0000000ca115:Codeunit:50453#7ed6f166e5191f834fed0fe3277ca6c5e998fbc7d82f551f688cb5509239d9ab",
+        "name": "PreviewPost",
+        "object": "Calls Post",
+        "objectCaption": null,
+        "objectType": "Codeunit"
+      },
+      "rules": {
+        "callers": [],
+        "inherited": [
+          {
+            "anchor": {
+              "column": 12,
+              "file": "ws:src/checks.al",
+              "line": 22,
+              "sourceKind": "source"
+            },
+            "comment": null,
+            "id": "bc117818cc986894/cfff78bb88a97eb35ce6e713a17fe8241650331986179593fdf3515aad6efe57/rule0",
+            "in": "Codeunit Calls Checks::CheckPreview",
+            "kind": "Error",
+            "message": {
+              "args": [],
+              "candidates": [],
+              "labelComment": null,
+              "source": "Literal",
+              "text": "A preview cannot post.",
+              "var": null
+            },
+            "stops": "always",
+            "stopsReason": null,
+            "trigger": null,
+            "via": [
+              "CheckPreview"
+            ],
+            "when": [
+              {
+                "anchor": {
+                  "column": 12,
+                  "file": "ws:src/checks.al",
+                  "line": 22,
+                  "sourceKind": "source"
+                },
+                "kind": "Other",
+                "text": "Preview"
+              }
+            ],
+            "whenText": "Preview"
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "file": "ws:src/order.al",
+              "line": 24,
+              "sourceKind": "source"
+            },
+            "comment": null,
+            "id": "bc117818cc986894/6a778fb0754896e3ed60caba4452ae07ea0cb49b23c2c21de0d5cc03a40b93d9/rule0",
+            "in": "Table Calls Order::OnModify",
+            "kind": "Error",
+            "message": {
+              "args": [],
+              "candidates": [],
+              "labelComment": null,
+              "source": "Literal",
+              "text": "A blocked order cannot change.",
+              "var": null
+            },
+            "stops": "always",
+            "stopsReason": null,
+            "trigger": {
+              "anchor": {
+                "column": 8,
+                "file": "ws:src/post.al",
+                "line": 40,
+                "sourceKind": "source"
+              },
+              "op": "Modify"
+            },
+            "via": [
+              "OnModify"
+            ],
+            "when": [
+              {
+                "anchor": {
+                  "column": 11,
+                  "file": "ws:src/order.al",
+                  "line": 23,
+                  "sourceKind": "source"
+                },
+                "kind": "Other",
+                "text": "Blocked"
+              }
+            ],
+            "whenText": "Blocked"
+          }
+        ],
+        "knownCallers": 0,
+        "own": []
+      },
+      "tests": []
+    }
+  ],
+  "diagnostics": [],
+  "mode": "routine",
+  "schema": "al-sem.explain/1",
+  "selector": "PreviewPost"
+}

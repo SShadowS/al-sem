@@ -68,7 +68,8 @@ pub fn dump_lines(ws: &Path) -> Dump {
                 .collect(),
         );
     }
-    let built = build_analysis_model(&inputs, true);
+    // Every registered detector runs below: the model holds what they read.
+    let built = build_analysis_model(&inputs, true, &registered_detectors());
     if let Ok(fc) = &built.fresh {
         d.insert("ledger".into(), rows(&fc.ledger));
     }
@@ -364,7 +365,7 @@ mod tests {
     /// and coverage ONLY through the functions the dump calls. Since #277 the
     /// model is the batch driver's one view builder (`run_view` calls
     /// `build_view_model`, which the dump's `build_analysis_model` calls with
-    /// the same `ViewNeeds::ANALYZE` analyze's demand states) and the coverage
+    /// the same `ViewNeeds::analyze_for` analyze's demand states) and the coverage
     /// the analyze job's compute (`analyze_view`). Inlining either back into
     /// the analyze path (the job's `impl Job` body included), or building a
     /// second model there, fails this.
@@ -393,13 +394,13 @@ mod tests {
         }
         assert_eq!(build.matches("build_view_model(").count(), 1);
         assert!(
-            dumped.contains("build_view_model(") && dumped.contains("ViewNeeds::ANALYZE"),
+            dumped.contains("build_view_model(") && dumped.contains("ViewNeeds::analyze_for("),
             "the dump builds through the view builder, with analyze's needs"
         );
         assert_eq!(path.matches("analysis_coverage(").count(), 1);
         assert_eq!(compute.matches("analysis_coverage(").count(), 1);
         assert!(
-            job.contains("ViewNeeds::ANALYZE"),
+            job.contains("ViewNeeds::analyze_for("),
             "analyze's view is built with the needs the dump builds with"
         );
         for banned in [

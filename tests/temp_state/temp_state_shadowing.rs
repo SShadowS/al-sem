@@ -96,6 +96,7 @@ fn make_routine_for_pass2b(variables: Vec<ModelVariable>) -> ModelRoutine {
         in_until_condition: false,
         in_statement_position: false,
         run_trigger: None,
+        modify_all_field: None,
     };
 
     ModelRoutine {
@@ -140,6 +141,9 @@ fn make_routine_for_pass2b(variables: Vec<ModelVariable>) -> ModelRoutine {
         originating_object: None,
         enclosing_member_range: None,
         entry_temp_guard_receiver: None,
+        rules: None,
+        rule_drafts: None,
+        card_text: None,
     }
 }
 

@@ -87,7 +87,7 @@ Point any command at the directory containing `app.json`. Dependencies are read 
 
 ## What `alsem analyze` finds
 
-54 checks in total: 40 run by default, 14 more are opt-in. A sample of what they cover:
+55 checks in total: 40 run by default, 15 more are opt-in. A sample of what they cover:
 
 | Check | Plain English |
 |-------|---------------|
@@ -124,8 +124,8 @@ Useful flags:
 | Flag | What it does |
 |------|--------------|
 | `--format terminal \| json \| sarif \| html \| pr-summary` | Default `auto`: terminal when you run it by hand, JSON when piped |
-| `--preset transaction-integrity` \| `--preset bcquality` | Run a themed bundle instead of the defaults |
-| `--detector d1-db-op-in-loop,d8-commit-in-transaction` | Run only the checks you name. This and `--preset` are how you reach the 14 opt-in checks; they're mutually exclusive |
+| `--preset transaction-integrity` \| `--preset bcquality` \| `--preset business-rules` | Run a themed bundle instead of the defaults |
+| `--detector d1-db-op-in-loop,d8-commit-in-transaction` | Run only the checks you name. This and `--preset` are how you reach the 15 opt-in checks; they're mutually exclusive |
 | `--min-severity high` | Drop everything below a severity |
 | `--group-by object \| routine \| table \| detector \| file` | Reorganize terminal output |
 | `--baseline al-sem.baseline.json` | Suppress findings listed in the file — adopt the tool on an old codebase without fixing 500 things first. `--update-baseline` rewrites it to the current state |
@@ -236,6 +236,52 @@ alsem prove <ws> PostDocument may-commit      # yes / no / unknown, with the rea
 `commits-on-success-path`, `writes-table:<table>`, `publishes-event:<event>`,
 `reaches-ui`, `throws-error`.
 
+**"Why is this code shaped like this?"** (for a person or an AI agent about to edit it)
+
+```bash
+alsem explain <ws> --routine PostDocument                  # the evidence card of one routine
+alsem explain <ws> --diff my.patch                         # one card per routine the diff changes
+alsem explain <ws> --table "Sales Header" --field Status   # every routine that writes the field, with its rules
+alsem explain <ws> --routine PostDocument --format json    # schema al-sem.explain/1, for agents
+```
+
+A card lists the routine's own checks as rules ("rejects when `Status <> Released`:
+'You cannot post…'", with the label text and its comment), the checks it inherits from
+the routines it always calls before its first write (with the call path, and with
+`true`/`false` arguments filled in), the table-trigger checks its `Validate` and
+`Modify(true)` run, the checks its callers make before calling it (and which callers
+skip them), what it writes (with field captions), whether it commits, the events it
+raises and their subscribers' own checks, the page actions that reach it (also through
+`RunObject`), the tests that reach it, and every gap: calls into apps without source,
+unresolved calls, unparsed code, table-trigger checks a plain assignment or `Modify()`
+skips, and calls to an error collector. `--diff` resolves the same routines
+`digest --diff` does. A name no routine has, or one that names several, exits 2.
+A caller's check counts only when every path to its call passes it: a check in the
+other branch of an `if`, or in a loop body, does not. `--table/--field` lists, for
+each write (assignment, `Validate` or `ModifyAll`), the checks in force at it, and the
+checks every caller makes.
+
+The same index drives an opt-in check, `d65-guard-bypass` (`--preset business-rules`):
+for each table field, a check that at least 3 writers and at least 75 % of all writers
+apply, and one writer does not, is reported at that writer. It is either a bug or a
+deliberate exception; mark an exception with
+`// al-sem-ignore d65-guard-bypass: <reason>` on the line above the write. Only
+writers in your own app are counted.
+
+A rule you have confirmed can be pinned, so every later writer must apply it:
+
+```bash
+alsem explain <ws> --table "Sales Header" --field Status --emit-policy > al-sem.policy.yaml
+alsem explain <ws> --emit-policy                           # the majority rules of every field
+alsem policy check <ws>                                    # reports each writer that skips a pinned rule
+```
+
+`--emit-policy` writes each majority rule (the same rule and the same bar as
+`d65-guard-bypass`) as a policy entry; with `--table/--field` it also writes the
+rules fewer writers apply, commented out, so you can confirm one by hand. Delete the
+entries that are not real rules, and record a deliberate exception with
+`except: { routine.name: <name> }`.
+
 **"What changed between two versions?"**
 
 ```bash
@@ -257,7 +303,9 @@ alsem cache prune --dry-run                             # tidy ~/.al-sem/cache/
 `policy` is worth a look even though the name is dull: it enforces team rules that no
 generic checker knows about — "no `Commit` in an event subscriber", "no HTTP calls from a
 table trigger", "install codeunits must not write business data". Those three ship in the
-bundled default rule set; you can add your own in a YAML file.
+bundled default rule set; you can add your own in a YAML file. Format version 2 adds
+pins: a rule with `requires:` that every writer of a field must apply (see
+`explain --emit-policy` above). Version 1 files still load.
 
 ## Why you can trust the answers
 

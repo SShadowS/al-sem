@@ -40,6 +40,7 @@ use crate::engine::l5::entry_points::AccessModifier;
 use crate::engine::l5::event_flow::{EventFlowIndexes, build_event_flow_indexes};
 use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::engine::l5::reverse_call_graph::{ReverseCallGraph, build_reverse_call_graph};
+use crate::engine::l5::rules_index::RulesIndex;
 use crate::engine::l5::transaction_spans::{TransactionSpan, compute_transaction_spans};
 use crate::engine::perf_trace as pt;
 use crate::program::body::features::PCallSite;
@@ -1064,6 +1065,9 @@ pub struct DetectorContext<'v> {
     /// builder demanded `substrate::ORDERING_FACTS` and filled it BEFORE the
     /// parallel detector loop (filling inside it can deadlock, see that bit).
     pub ordering: Option<&'v OrderingFactsMap>,
+    /// The per-field writer index d65 consumes. `Some` only when the builder
+    /// demanded `substrate::RULES` and filled it BEFORE the detector loop.
+    pub rules: Option<&'v RulesIndex>,
     pub routine_by_id: HashMap<&'v str, &'v ModelRoutine>,
     /// A routine's object is its DECLARING row (#279): an `#if`-split object
     /// has several rows under one id, so there is no id -> object map here.
@@ -1093,6 +1097,7 @@ impl<'v> DetectorContext<'v> {
         tables: &'v [ModelTable],
         art: &'v DetectorArtifacts,
         ordering: Option<&'v OrderingFactsMap>,
+        rules: Option<&'v RulesIndex>,
     ) -> Self {
         let _s = pt::span("context", "context.final_indexes");
         // #160 step 11b §4.6: the routine lookup is the projection's class P
@@ -1117,6 +1122,7 @@ impl<'v> DetectorContext<'v> {
         let ctx = DetectorContext {
             art,
             ordering,
+            rules,
             routine_by_id,
             declaring,
             table_by_id,
@@ -1141,6 +1147,14 @@ impl<'v> DetectorContext<'v> {
         self.ordering
             .expect("ordering cell not filled: declare substrate::ORDERING_FACTS")
     }
+
+    /// The per-field writer index (intent-evidence §4.5). The slot is filled
+    /// before the detectors run; a detector that reads it without declaring
+    /// `substrate::RULES` panics here, in every build.
+    pub fn get_rules_index(&self) -> &'v RulesIndex {
+        self.rules
+            .expect("rules index not filled: declare substrate::RULES")
+    }
 }
 
 /// The context over `model`'s rows.
@@ -1148,9 +1162,27 @@ pub fn detector_context<'v>(
     model: &'v Model,
     art: &'v DetectorArtifacts,
     ordering: Option<&'v OrderingFactsMap>,
+    rules: Option<&'v RulesIndex>,
 ) -> DetectorContext<'v> {
     let ws = &model.workspace;
-    DetectorContext::new(&ws.routines, &ws.objects, &ws.tables, art, ordering)
+    DetectorContext::new(&ws.routines, &ws.objects, &ws.tables, art, ordering, rules)
+}
+
+/// The per-field writer index of `model` (`substrate::RULES`). Call it
+/// BEFORE the parallel detector loop, never inside it. `model` must hold its
+/// routines' rules (`ViewNeeds::rules`): reading one without them panics.
+pub(crate) fn fill_rules(model: &Model) -> RulesIndex {
+    assert!(
+        !crate::engine::l5::registry::in_detector_loop(),
+        "the rules slot is filled before the detector loop, never inside it"
+    );
+    // Loud even when no routine writes a field: every row must carry its
+    // rules ("rules not built: declare ViewNeeds::rules" otherwise).
+    for r in &model.workspace.routines {
+        let _ = r.rules();
+    }
+    let _s = pt::span("context", "context.rules_index");
+    crate::big_stack::big_stack_pool().install(|| RulesIndex::build(model))
 }
 
 /// The ordering facts of `model`, computed on the big-stack pool (the fill
@@ -1180,13 +1212,19 @@ pub struct OwnedContext<'m> {
     model: &'m Model,
     art: DetectorArtifacts,
     ordering: Option<OrderingFactsMap>,
+    rules: Option<RulesIndex>,
     /// The solve the shim ran (`Some` iff the mask held `CORE_SUMMARIES`).
     l4: Option<L4Analysis>,
 }
 
 impl OwnedContext<'_> {
     pub fn ctx(&self) -> DetectorContext<'_> {
-        detector_context(self.model, &self.art, self.ordering.as_ref())
+        detector_context(
+            self.model,
+            &self.art,
+            self.ordering.as_ref(),
+            self.rules.as_ref(),
+        )
     }
 
     /// The `L4Analysis` this shim built, if any.
@@ -1256,6 +1294,7 @@ pub(crate) fn build_detector_context_with<'a>(
 ) -> OwnedContext<'a> {
     use crate::engine::l5::registry::substrate;
     let ordering = (demanded & substrate::ORDERING_FACTS != 0).then(|| fill_ordering(resolved));
+    let rules = (demanded & substrate::RULES != 0).then(|| fill_rules(resolved));
     // Cross-app the base's relation (its SCC included, no second Tarjan);
     // single-app one built here over every call.
     let rel = match base {
@@ -1272,6 +1311,7 @@ pub(crate) fn build_detector_context_with<'a>(
         model: resolved,
         art,
         ordering,
+        rules,
         l4,
     }
 }

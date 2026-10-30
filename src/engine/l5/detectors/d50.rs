@@ -538,6 +538,7 @@ mod tests {
             delete_allowed: None,
             source_anchor: None,
             declaration_only_routines: Vec::new(),
+            run_actions: None,
         }
     }
 
@@ -715,7 +716,7 @@ mod tests {
             calls: Default::default(),
             events: Default::default(),
         };
-        let ctx = detector_context(&resolved, &art, None);
+        let ctx = detector_context(&resolved, &art, None, None);
 
         let output = detect_d50(&resolved, &ctx).unwrap();
 

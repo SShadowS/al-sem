@@ -1,0 +1,6 @@
+Policy check — explicit:emit.policy-pins.yaml
+
+Rule summaries:
+	pin-pin-order-amount-testfield-a26942f8: evaluated=8 matched=0 passed=8 skipped(coverage)=0 skipped(unknown)=0 findings=0
+
+No policy findings.

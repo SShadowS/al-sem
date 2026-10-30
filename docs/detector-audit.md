@@ -73,3 +73,58 @@ FIX: net-effect (last SetRange/SetFilter/Reset by source position) for d41 (DONE
 6. **bugs**: ~~d4 id~~ (DONE), ~~d7 rootCause~~ (dropped-misdiagnosis), d7 anchor (deferred cross-app), ~~d12 dep gate~~ (DONE), ~~d50 Suppress~~ (dropped-no-such-enum), ~~d51 io_direction~~ (DONE) — small correctness fixes.
 7. **FN**: ~~d20 break~~ (DONE), ~~d22 implicit-Rec FlowField~~ (DONE — own session, full design), ~~d37 ModifyAll-not-persist~~ (DONE) — premise-narrowing fixes.
 8. **D** (RecordRef-as-op) — larger (L2 capture); **d34/d35 Unknown-skip**, **d14 internalsVisibleTo**, **d47/d48/d51 IsolatedStorage/TaskScheduler** — investigate/defer (open-world or schema).
+
+## d65-guard-bypass — triage on DO (2026-10-30, intent evidence step 6) — OPT-IN
+
+Spec `docs/superpowers/specs/2026-10-29-intent-evidence-design.md` §4.5. Workspace: the
+Continia DO checkout at `~/Projects/CONtinAI/work/ws/DO` (583 `.al` files, 10 `.app`
+packages; not a git checkout, so not a pinned baseline). **The pinned CDO baseline
+(`U:/Git/DO-cdo-baseline/Cloud`) is not on this machine: the CDO triage the spec asks
+for is still owed.** Build: `release-fast` at the step-6 tree. Default (cross-app) mode.
+
+| Run | Findings | Fields written | Fields with < 3 writers | Fields with ≥ 3 writers, no majority rule |
+|-----|----------|----------------|-------------------------|-------------------------------------------|
+| `--scope primary` | **0** | 722 (1,484 writer entries) | 556 | 166 |
+| `--scope all` | **0** | same | same | same |
+
+Both scopes give the same result by design: the index counts primary-app writers only
+(the spec's blind spot), so `--scope all` adds no dependency writer. **TP 0, FP 0; the FP
+rate is undefined (no finding).** Cost: 12.85 s / 3.44 GB peak against 12.70 s / 3.43 GB
+for the same run with only d63 selected (the rules and the index: ~0.15 s, no measurable
+memory).
+
+Why none: of the 751 writers of the 166 fields with at least 3 writers, 189 have any
+effective rule, and only 6 fields have a rule key on their own table at all (the rest
+check other tables, parameters or call results, which form no key). The one field where
+a key reaches 3 writers (`CDO Merge Table Field.Table`, 5 of 5) has no writer without
+it.
+
+**Threshold sensitivity (evidence for keeping N = 3, p = 0.75).** With a temporary
+override (not committed): N = 3, p = 0.5 also gives 0. N = 2, p = 0.5 gives 5, all
+triaged against source:
+
+| # | Writer (file:line) | Rule skipped | Verdict |
+|---|--------------------|--------------|---------|
+| 1 | `CDO E-MailTemplateImportExport.ImportXmlDocument` (`CDOEMailTemplateImportExport.Codeunit.al:845`) | `TestField("Dimension Code", '')` when `"Template Variant Field No." > 0` (field `OnValidate`, run by the 2 `Validate` writers) | Premise true (a plain assignment skips `OnValidate`); deliberate: the import copies an exported template field by field before `Insert` |
+| 2 | same, `:900` (`Linked to Field No.`) | `TestField("First Table in Report")` (`OnValidate`) | Premise true; deliberate import |
+| 3 | same, `:900` | `TestField("Linked to")` when `"Linked to Field No." <> 0` | Premise true; deliberate import (it sets `Linked to` on the line above) |
+| 4 | `CDO Ver. 2.0 Convert.ConvertTemplate` (`CDOVer20Convert.Codeunit.al:116`) | `TestField("First Table in Report")` | Premise true; deliberate upgrade conversion |
+| 5 | same | `TestField("Linked to")` | Premise true; deliberate upgrade conversion (sets `Linked to` just before) |
+
+All five are real deviations from the field's `OnValidate` rule and all five are
+intended (import and upgrade code writes stored values without validating them): the
+"deliberate exception" half of the spec's "a bug or a deliberate exception", and the
+`// al-sem-ignore d65-guard-bypass: <reason>` case. With 2 writers out of 3-4 the
+"majority" is no majority; lowering the thresholds would only add such pairs. **No
+tuning: N = 3, p = 0.75 stay.**
+
+**Root-cause fixes made during the build (fixture `tests/r0-corpus/ws-d65`, before the
+DO run):** (1) the rule key first included the `not C` that an earlier check adds to a
+later `TestField` (`if A or B then Error(..); TestField(..)`), so the same `TestField`
+had a different key in a writer with one more check before it: such atoms
+(`PRule::when_earlier`) no longer form a key. (2) A `TestField` directly in an `if`'s
+`then` counted as passed in the `else` (`if Quick then TestField(..) else <write>`): the
+`else` counts only for a check with no condition of its own (`Error`, `FieldError`).
+
+Stays **opt-in** (`--detector d65-guard-bypass`, `--preset business-rules`) whatever the
+rate, until the CDO triage.

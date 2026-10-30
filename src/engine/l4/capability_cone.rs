@@ -4039,7 +4039,10 @@ pub(crate) fn build_cross_app_base(
 }
 
 /// [`build_cross_app_base`] with `--no-roots-config` (#160 step 9 D1): the
-/// overlay is skipped when `no_roots_config`.
+/// overlay is skipped when `no_roots_config`. Both build the base rows only
+/// ([`crate::program::model::workspace::AssemblyNeeds::BASE`], what a default
+/// `analyze` builds); a view that needs more goes through
+/// [`build_cross_app_base_from`] with its own needs.
 pub(crate) fn build_cross_app_base_with(
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     model_instance_id: &str,
@@ -4053,6 +4056,7 @@ pub(crate) fn build_cross_app_base_with(
         inputs,
         model_instance_id,
         no_roots_config,
+        crate::program::model::workspace::AssemblyNeeds::BASE,
     )
 }
 
@@ -4063,6 +4067,7 @@ pub(crate) fn build_cross_app_base_from(
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     model_instance_id: &str,
     no_roots_config: bool,
+    needs: crate::program::model::workspace::AssemblyNeeds,
 ) -> Result<R3a5CrossAppBase, crate::program::model::program_calls::CrossAppFailure> {
     use crate::engine::l4::summary_runner::base_intraprocedural_summary;
     let mut x = crate::program::model::program_calls::cross_app_program_from(
@@ -4070,6 +4075,7 @@ pub(crate) fn build_cross_app_base_from(
         inputs,
         model_instance_id,
         no_roots_config,
+        needs,
     )?;
     if x.resolved.primary_app.is_none() {
         return Err(
@@ -6426,7 +6432,10 @@ mod step4_tests {
         // dependency map (its Primary map is filled, so the context was built).
         let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let single = crate::program::model::program_calls::assemble_and_resolve_workspace_program(
-            &inputs, "r0", false,
+            &inputs,
+            "r0",
+            false,
+            crate::program::model::workspace::AssemblyNeeds::BASE,
         )
         .expect("single-app model");
         let mut single = View::new(AnalysisTarget::SingleApp(Box::new(single)));
@@ -6503,6 +6512,7 @@ pub(crate) mod callsite_local_scan_tests {
             &crate::program::inputs::WorkspaceInputs::read(dir, &Default::default()),
             crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
             false,
+            crate::program::model::workspace::AssemblyNeeds::BASE,
         )
     }
 
@@ -6635,8 +6645,8 @@ codeunit 50111 "Cell Calls"
     /// a new fixture changes this one list (`exec_relation`'s parity test reads
     /// it too).
     pub(crate) const FIXTURE_ROOTS: [(&str, usize); 5] = [
-        ("r0-corpus", 217),
-        ("fixtures", 48),
+        ("r0-corpus", 221),
+        ("fixtures", 50),
         ("r3a4-fixtures", 1),
         ("r3a5-fixtures", 1),
         ("r2-5b-fixtures", 1),

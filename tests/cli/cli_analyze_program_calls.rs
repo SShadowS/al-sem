@@ -98,9 +98,13 @@ fn analyze_matches_the_detectors_over_the_program_model_on_r0_fixtures() {
     for name in ["ws-member-call-resolution", "ws-overload-callresult-guards"] {
         let ws = root.join(name);
         let inputs = al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
-        let model =
-            assemble_and_resolve_workspace_program(&inputs, MODEL_INSTANCE_ID_DEFAULT, false)
-                .expect("program model");
+        let model = assemble_and_resolve_workspace_program(
+            &inputs,
+            MODEL_INSTANCE_ID_DEFAULT,
+            false,
+            al_sem::engine::l5::registry::assembly_needs(&registered_detectors()),
+        )
+        .expect("program model");
         let want = harness_keys(&run_detectors(&model, &registered_detectors()).findings);
         assert!(
             !want.is_empty(),

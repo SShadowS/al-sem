@@ -41,6 +41,7 @@ fn chain_dep_artifact() -> al_sem::engine::deps::dep_artifact_l4::DependencyArti
         &al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default()),
         MODEL_INSTANCE_ID,
         false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
     .expect("cross-app model");
     al_sem::engine::deps::dep_artifact_l4::dep_artifacts_from_model(&x)

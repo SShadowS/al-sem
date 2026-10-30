@@ -13,6 +13,7 @@ pub mod l2_workspace;
 pub mod node_util;
 pub mod operation_order;
 pub mod record_op;
+pub mod rules;
 pub mod scope;
 
 /// Project the L2 `PFeatures` of a single named routine in a one-file source, via

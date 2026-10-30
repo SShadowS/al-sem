@@ -532,10 +532,15 @@ mod oracles {
         }
     }
 
+    /// Versions 1 and 2 (pins, intent evidence step 7) are read; any other is
+    /// refused (`cli_policy_pins` pins what version 2 adds).
     #[test]
-    fn loader_version_must_be_1() {
-        let e = load_err("version: 2\nrules: []\n");
-        assert!(e.contains("policy version must be 1 (got 2)"), "got {e}");
+    fn loader_version_must_be_1_or_2() {
+        let e = load_err("version: 3\nrules: []\n");
+        assert!(
+            e.contains("policy version must be 1 or 2 (got 3)"),
+            "got {e}"
+        );
     }
 
     /// Version coercion parity: a YAML scalar the parser yields as the *number* 1
@@ -557,7 +562,7 @@ mod oracles {
         }
         // Quoted "1" is a string → not === number 1 → errors (parity with al-sem).
         let e = load_err("version: \"1\"\nrules: []\n");
-        assert!(e.contains("policy version must be 1"), "got {e}");
+        assert!(e.contains("policy version must be 1 or 2"), "got {e}");
     }
 
     #[test]

@@ -15,13 +15,14 @@
 # commands dir — git never descends into a fully-ignored directory.
 .claude/*
 !.claude/commands/
-# Two versioned skills (moved out of CLAUDE.md); the rest of .claude/skills/ comes from the
+# Three versioned skills (moved out of CLAUDE.md); the rest of .claude/skills/ comes from the
 # owner's kraken tar and stays ignored. `!.claude/skills/` then `.claude/skills/*` so git
 # descends into the dir before the per-skill negations.
 !.claude/skills/
 .claude/skills/*
 !.claude/skills/grammar-upgrade/
 !.claude/skills/add-al-construct/
+!.claude/skills/declared-needs/
 tmpclaude-*
 
 # OS

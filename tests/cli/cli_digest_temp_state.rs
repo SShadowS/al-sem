@@ -472,7 +472,13 @@ fn a1c_cone_values_are_frame_correct() {
     let ws = tmp.path();
     let model_id = compute_gate_model_instance_id(ws).expect("model id");
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs());
-    let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).expect("model");
+    let model = assemble_and_resolve_workspace_program(
+        &inputs,
+        &model_id,
+        false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .expect("model");
     let snap = compose_snapshot(&model);
     let writes = snapshot_writes(&snap);
     let mut f = Vec::new();
@@ -717,7 +723,13 @@ fn a2h_fingerprint_witnesses_use_the_proofs() {
     let ws = tmp.path();
     let model_id = compute_gate_model_instance_id(ws).expect("model id");
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs());
-    let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).expect("model");
+    let model = assemble_and_resolve_workspace_program(
+        &inputs,
+        &model_id,
+        false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .expect("model");
     let snap = compose_snapshot(&model);
     let idx = build_fingerprint_indexes_pub(&snap);
     let display: BTreeMap<&str, &str> = snap
@@ -1050,7 +1062,13 @@ fn mixed_carrier_precondition() -> Vec<String> {
     let ws = tmp.path();
     let model_id = compute_gate_model_instance_id(ws).expect("model id");
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs());
-    let model = assemble_and_resolve_workspace_program(&inputs, &model_id, false).expect("model");
+    let model = assemble_and_resolve_workspace_program(
+        &inputs,
+        &model_id,
+        false,
+        al_sem::program::model::workspace::AssemblyNeeds::BASE,
+    )
+    .expect("model");
     let snap = compose_snapshot(&model);
     let display: BTreeMap<&str, &str> = snap
         .identities
