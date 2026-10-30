@@ -244,12 +244,30 @@ pub(crate) fn implicit_error_record_op(
 /// The implicit runtime error a CALL SITE may raise (G20): `FieldError`, which
 /// is no record operation, on a record (a variable declared `Record …`, by the
 /// extractor's own `receiver_type_of`, or the implicit `Rec` / `xRec`) or bare
-/// in table or page code. Anything else, an `HttpClient.Get` included: `None`.
+/// in table or page code. G50: a call whose optional Boolean "ok" result is
+/// discarded raises an error when it fails, as `Get` does: `Evaluate(X, Text)`
+/// as a statement (Continia DO's `CDO Functions.GetCDOVerAsInteger`), and
+/// `ReadFrom` on a JSON or XML value. Anything else, an `HttpClient.Get`
+/// included: `None`.
 pub(crate) fn implicit_error_call(
     callee: &PCallee,
+    in_statement_position: bool,
     receiver_type_of: &dyn Fn(&str) -> String,
 ) -> Option<&'static str> {
     match callee {
+        PCallee::Bare { name }
+            if in_statement_position && name.eq_ignore_ascii_case("evaluate") =>
+        {
+            Some("Evaluate")
+        }
+        PCallee::Member { receiver, method }
+            if in_statement_position && method.eq_ignore_ascii_case("readfrom") && {
+                let t = receiver_type_of(&receiver.to_ascii_lowercase()).to_ascii_lowercase();
+                t.starts_with("json") || t.starts_with("xml")
+            } =>
+        {
+            Some("ReadFrom")
+        }
         PCallee::Member { receiver, method } if method.eq_ignore_ascii_case("fielderror") => {
             let r = receiver.to_ascii_lowercase();
             let is_record = r == "rec"
@@ -306,7 +324,7 @@ pub fn extract_error(
     }
     let type_of = |name: &str| ctx.receiver_type_of(name);
     for cs in &ctx.features.call_sites {
-        if implicit_error_call(&cs.callee, &type_of).is_some() {
+        if implicit_error_call(&cs.callee, cs.in_statement_position, &type_of).is_some() {
             facts.push(implicit(None, Some(cs.id.clone())));
         }
     }
