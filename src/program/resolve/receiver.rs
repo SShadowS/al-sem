@@ -3892,6 +3892,7 @@ mod tests {
             enclosing_member: None,
             in_dataset_modify_context: false,
             preproc_context: Vec::new(),
+            doc: None,
             body: None,
             origin: o,
         }
@@ -4479,6 +4480,7 @@ mod tests {
             enclosing_member: None,
             in_dataset_modify_context: false,
             preproc_context: Vec::new(),
+            doc: None,
             body: None,
             origin: o,
         }
@@ -4631,6 +4633,7 @@ mod tests {
             enclosing_member: None,
             in_dataset_modify_context: false,
             preproc_context: Vec::new(),
+            doc: None,
             body: None,
             origin: o,
         }
@@ -5504,6 +5507,7 @@ mod tests {
             enclosing_member: None,
             in_dataset_modify_context: false,
             preproc_context: Vec::new(),
+            doc: None,
             body: None,
             origin: o,
         };
@@ -6324,6 +6328,7 @@ mod tests {
             enclosing_member: None,
             in_dataset_modify_context: false,
             preproc_context: Vec::new(),
+            doc: None,
             body: None,
             origin: o,
         };
@@ -6375,6 +6380,7 @@ mod tests {
             enclosing_member: None,
             in_dataset_modify_context: false,
             preproc_context: Vec::new(),
+            doc: None,
             body: None,
             origin: o,
         };
@@ -7376,6 +7382,7 @@ codeunit 50100 "C"
             enclosing_member: None,
             in_dataset_modify_context: false,
             preproc_context: Vec::new(),
+            doc: None,
             body: None,
             origin: o,
         }

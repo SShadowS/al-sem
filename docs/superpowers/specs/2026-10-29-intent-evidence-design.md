@@ -132,11 +132,39 @@ All changes are in `crates/al-syntax`, the only crate that reads the parse tree.
    the IR as `ActionDecl { name, caption, tooltip, run_object, trigger_routine }`,
    reusing what `lookup_symbol_properties` already parses so both paths agree.
    Table extension fields and page extension actions included.
+
+   *As built (step 2):* each text is the property's FIRST string literal, unescaped
+   (`Caption = 'It''s', Comment = 'c'` is a grammar `caption_value`, read as `It's`);
+   an arm whose value starts with no plain literal gives no entry. `FieldDecl` also
+   gained `doc` and `origin`. `ObjectDecl::actions: Vec<ActionDecl>` holds
+   `action`, `systemaction`, `fileuploadaction` and `customaction` declarations of
+   pages, page extensions and report request pages (`kind` keeps the keyword); a
+   page-extension `modify(X)` is not a declaration and gives none. `run_object` is a
+   `Vec` of raw values, one per `#if` arm, like `ObjectDecl::run_objects`.
+   `trigger_routine` became `triggers: Vec<usize>`: indexes into `ObjectDecl::routines`
+   of the triggers whose `enclosing_member` range is the action's own range (one per
+   `#if` arm when the trigger sits in one). Both this lowering and
+   `lookup_symbol_properties` decide what an action is with one shared test,
+   `lower::is_action_declaration`.
 3. **Comments.** Keep comments attached to a declaration: the run of `///` or `//`
    lines directly above a routine, field or action (a blank line breaks the run), and
    a trailing `//` on the same line as a statement that holds a check. Stored as
    `doc: Option<String>` on `RoutineDecl` / `FieldDecl` / `ActionDecl`, and as a
-   comment on the check (4.2). Free comments elsewhere are not kept.
+   comment on the check (4.2).
+
+   *As built (step 2):* comments are grammar `extras`, so the parse tree hangs each
+   one on whatever node is open (a `///` above `field(1; …)` is a child of
+   `fields_section`, not of the field). So adjacency is decided by line number, not
+   by tree parent, and the lowerer keeps **every** comment of the file once, as
+   written, in `AlFile::comments: Vec<SourceComment { text, block, own_line, origin }>`
+   (`own_line` is false for a trailing comment after code). The rules pass of step 3
+   needs this list to find a check's trailing comment and the comment above it,
+   which a per-declaration `doc` cannot give; that is why free comments are kept
+   after all. `doc` is the run of lone `//` lines ending on the line above the
+   declaration (for a routine, above its first attribute), top to bottom, joined
+   with `\n`, each without its marker (`///`, else `//`) and one following space. A
+   blank line, a code line or a `/* … */` comment ends the run; a `#region` /
+   `#endregion` line is skipped over.
 
 ### 4.1b Declared needs: who pays
 
@@ -165,6 +193,27 @@ this spec. If comments (the only text whose size grows with the source) cost mor
 than 5 % of either, gate **comments only** as a `BuildProfile` field, following the
 `declared-needs` level-1 checklist. Labels and captions are not gated in any case.
 `FULL` keeps everything either way.
+
+**Measured 2026-10-30** (step 2; before = `1de18d98`, after = the step 2 commit;
+`release-fast`, each binary built in its own target dir; peak RSS from
+`/usr/bin/time -v`, mean of 3 runs). The pinned CDO baseline
+(`U:/Git/DO-cdo-baseline/Cloud`) is not on the measuring machine, so the second
+workspace is the Continia DO checkout at `~/Projects/CONtinAI/work/ws/DO` (583 `.al`
+files, 10 `.app` packages, ~4,800 own-line `//` lines in its own source). To split
+the cost, a third build lowered everything except comments (`collect_comments`
+forced empty: no `AlFile::comments`, no `doc`); it was measured and not committed.
+
+| Run | Before | No comments | After | Delta, total | Delta, comments only |
+|---|---|---|---|---|---|
+| `aldump --program-call-graph-stats` on DO | 1,477.8 MB | 1,511.7 MB | 1,540.9 MB | +63.2 MB, **+4.3 %** | +29.2 MB, **+2.0 %** |
+| `al-call-hierarchy --project` (the LSP build path, `LspSnapshot::build_full_with`) on the 1000-file perf corpus | 59.7 MB | 61.1 MB | 61.0 MB | +1.3 MB, +2.2 % | ~0 (the corpus has no comments) |
+
+The stats JSON on DO is byte-identical before and after. Comments cost 2.0 %, under
+the 5 % bar, so **no gate is added**. The corpus has no captions or comments, so its
++1.3 MB is not text: it is the new fields and run-to-run noise (the no-comments
+build is within 0.1 MB of the full one). The LSP was measured through its CLI build
+mode, which builds the same snapshot the server builds at start-up, not through a
+running server.
 
 **Rules are an assembly need, declared through `ViewNeeds`.** Building rules walks
 every routine's IR, so it is not free. Rules are built at model assembly, where the
@@ -475,7 +524,7 @@ Following CLAUDE.md:
 | Step | Content | Goldens moved |
 |---|---|---|
 | 1 | Part A.1: extend `LabelValue` (comment, max length, other attributes) and add the `TextConst` arm | none expected: no projection serialises the new fields. Prove it with `check-goldens` |
-| 2 | Part A.2 and A.3: captions, tooltips, actions, doc comments. Then measure and record memory (4.1b) | l2 snapshot only if actions join the projection; the l2 snapshot's Debug digest moves with any new IR field |
+| 2 | Part A.2 and A.3: captions, tooltips, actions, doc comments. Then measure and record memory (4.1b) | l2 snapshot only if actions join the projection; the l2 snapshot's Debug digest moves with any new IR field. *Done:* none moved (the l2 digest is over projected L2 features, which do not read the new fields) |
 | 3 | Part B: `ViewNeeds::rules`, `PRule` for own rules at assembly; `TestField` gets a rule as well as its `StateOnly` class | l2, r4 via the new fixture |
 | 4 | Part C: `alsem explain --routine`, `--diff` and `--table/--field`, own rules plus existing effects, tests and events | new `cli-explain` family |
 | 5 | Part B2: inherited and caller rules; `substrate::RULES` implies `ORDERING_FACTS` | cli-explain |
@@ -488,7 +537,8 @@ about to change. Steps 5–6 make the card trustworthy across calls and add the 
 ## 8. Open questions
 
 1. Memory cost of the text fields on the LSP corpus and the CDO closure (step 2).
-   Decides only whether comments get a gate.
+   Decides only whether comments get a gate. *Answered 2026-10-30 (4.1b): comments
+   +2.0 % on DO, no gate. Re-measure on the pinned CDO baseline when it is at hand.*
 2. Does `SymbolReference.json` carry field `Caption` / `ToolTip` for symbol-only apps?
    Check on a real `.app` before promising captions for them.
 3. Should `explain --diff` be a flag on `digest` (`digest --diff p --explain`) rather

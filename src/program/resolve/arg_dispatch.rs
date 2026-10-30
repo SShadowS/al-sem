@@ -3563,6 +3563,7 @@ mod tests {
             enclosing_member: None,
             in_dataset_modify_context: false,
             preproc_context: Vec::new(),
+            doc: None,
             body: None,
             origin: test_origin(),
         }
@@ -3585,6 +3586,7 @@ mod tests {
             ir: al_syntax::ir::Ir::new(),
             issues: vec![],
             parse_status: al_syntax::ir::ParseStatus::Clean,
+            comments: vec![],
         }
     }
 

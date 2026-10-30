@@ -9,8 +9,8 @@
 use crate::casing::IdentifierFoldExt;
 use crate::ir::{
     AlFile, BinaryOp, Block, BlockId, BlockItem, CaseBranch, Expr, ExprId, ExprKind, Ir, Literal,
-    ObjectDecl, ObjectKind, Origin, Param, ParseStatus, Point, RoutineDecl, RoutineKind, Stmt,
-    StmtId, StmtKind, SyntaxIssue, TypeOp, UnaryOp, VarDecl,
+    ObjectDecl, ObjectKind, Origin, Param, ParseStatus, Point, RoutineDecl, RoutineKind,
+    SourceComment, Stmt, StmtId, StmtKind, SyntaxIssue, TypeOp, UnaryOp, VarDecl,
 };
 use crate::raw::{FieldName, RawKind, RawNode};
 
@@ -57,12 +57,117 @@ pub fn lower_file(root: RawNode, source: &str) -> AlFile {
     let mut issues = Vec::new();
     let mut objects = Vec::new();
     collect_objects(root, source, &mut ir, &mut issues, &mut objects);
+    let comments = collect_comments(root, source);
+    attach_docs(&mut objects, &comments, source);
     AlFile {
         objects,
         ir,
         issues,
         parse_status,
+        comments,
     }
+}
+
+/// Every comment in the file, in source order (see [`AlFile::comments`]), from
+/// one walk of the tree. Comments are grammar `extras`: they can sit under any
+/// node, so only a whole-tree walk finds them all.
+fn collect_comments(root: RawNode, source: &str) -> Vec<SourceComment> {
+    root.descendants_of_kinds(&["comment", "multiline_comment"])
+        .into_iter()
+        .map(|n| {
+            let start = n.byte_range().start;
+            let line_start = source[..start].rfind('\n').map_or(0, |i| i + 1);
+            SourceComment {
+                text: n.text(source).to_string(),
+                block: n.kind() == RawKind::MultilineComment,
+                own_line: source[line_start..start].trim().is_empty(),
+                origin: origin_of(n),
+            }
+        })
+        .collect()
+}
+
+/// Fill the `doc` of every routine, field and action from the file's comments
+/// (the rule is on [`RoutineDecl::doc`]). Adjacency is decided by line numbers,
+/// never by tree parent: the parse tree hangs a comment on whatever node is
+/// open, e.g. a `///` above `field(1; …)` is a child of `fields_section`.
+fn attach_docs(objects: &mut [ObjectDecl], comments: &[SourceComment], source: &str) {
+    if comments.is_empty() {
+        return;
+    }
+    // Rows that hold one `//` comment and nothing else.
+    let line_comments: std::collections::HashMap<u32, &str> = comments
+        .iter()
+        .filter(|c| !c.block && c.own_line)
+        .map(|c| (c.origin.start.row, c.text.as_str()))
+        .collect();
+    if line_comments.is_empty() {
+        return;
+    }
+    let lines: Vec<&str> = source.lines().collect();
+    let doc_above = |row: u32| doc_run_above(row, &line_comments, &lines);
+    for obj in objects {
+        for r in &mut obj.routines {
+            let row = r
+                .attributes_parsed
+                .iter()
+                .map(|a| a.origin.start.row)
+                .chain([r.origin.start.row])
+                .min()
+                .unwrap_or(r.origin.start.row);
+            r.doc = doc_above(row);
+        }
+        for f in &mut obj.fields {
+            f.doc = doc_above(f.origin.start.row);
+        }
+        for a in &mut obj.actions {
+            a.doc = doc_above(a.origin.start.row);
+        }
+    }
+}
+
+/// The doc run ending on the line just above `row` (see [`RoutineDecl::doc`]):
+/// walk up while each line is a lone `//` comment or a `#region` / `#endregion`
+/// line; anything else (blank, code, `/* */`, another directive) ends it.
+fn doc_run_above(
+    row: u32,
+    line_comments: &std::collections::HashMap<u32, &str>,
+    lines: &[&str],
+) -> Option<String> {
+    let mut run = Vec::new();
+    let mut r = row;
+    while r > 0 {
+        r -= 1;
+        if let Some(text) = line_comments.get(&r) {
+            run.push(doc_line(text));
+            continue;
+        }
+        let line = lines.get(r as usize).map_or("", |l| l.trim_start());
+        let is_region = |p: &str| {
+            line.get(..p.len())
+                .is_some_and(|h| h.eq_ignore_ascii_case(p))
+        };
+        if is_region("#region") || is_region("#endregion") {
+            continue;
+        }
+        break;
+    }
+    if run.is_empty() {
+        return None;
+    }
+    run.reverse();
+    Some(run.join("\n"))
+}
+
+/// One doc line: the comment without its marker (`///`, else `//`) and one space
+/// after it, trailing white space removed.
+fn doc_line(text: &str) -> &str {
+    let t = text.trim_end();
+    let body = t
+        .strip_prefix("///")
+        .or_else(|| t.strip_prefix("//"))
+        .unwrap_or(t);
+    body.strip_prefix(' ').unwrap_or(body)
 }
 
 /// Walk for top-level object declarations, descending namespaces and preproc
@@ -338,6 +443,19 @@ fn lower_object(
     let mut run_objects = Vec::new();
     collect_run_objects(node, source, &mut run_objects);
 
+    // Page actions (pages, page extensions, and a report's request page).
+    let mut actions = Vec::new();
+    if matches!(
+        kind,
+        ObjectKind::Page
+            | ObjectKind::PageExtension
+            | ObjectKind::Report
+            | ObjectKind::ReportExtension
+    ) {
+        collect_actions(node, source, &mut actions);
+        link_action_triggers(&mut actions, &routines);
+    }
+
     ObjectDecl {
         kind,
         id,
@@ -356,8 +474,121 @@ fn lower_object(
         keys,
         run_objects,
         enum_values,
+        actions,
         origin: origin_of(node),
     }
+}
+
+/// Whether `k` is an action declaration (see [`crate::ir::ObjectDecl::actions`]).
+/// Shared with [`crate::symbol_props`], so the LSP's on-demand action lookup and
+/// the IR agree on what an action is.
+pub(crate) fn is_action_declaration(k: RawKind) -> bool {
+    matches!(
+        k,
+        RawKind::ActionDeclaration
+            | RawKind::SystemactionDeclaration
+            | RawKind::FileuploadactionDeclaration
+            | RawKind::CustomactionDeclaration
+    )
+}
+
+/// Every action declaration under `node`, outside code, document order. An
+/// action holds no action, so a match is not descended.
+fn collect_actions(node: RawNode, source: &str, out: &mut Vec<crate::ir::ActionDecl>) {
+    for child in node.named_children() {
+        match child.kind() {
+            RawKind::CodeBlock => {}
+            k if is_action_declaration(k) => out.push(lower_action(child, source)),
+            _ => collect_actions(child, source, out),
+        }
+    }
+}
+
+/// Lower one action declaration. Its properties go through
+/// [`collect_properties`], so an `#if`-wrapped or whole-value `#if` property gives
+/// one value per arm, as for fields. `triggers` and `doc` are filled later.
+fn lower_action(node: RawNode, source: &str) -> crate::ir::ActionDecl {
+    let name = node
+        .field(FieldName::Name)
+        .map(|n| ident_text(n, source))
+        .unwrap_or_default();
+    let mut props = Vec::new();
+    for body in node.children_by_field(FieldName::Body) {
+        for member in body.named_children() {
+            collect_properties(member, source, &mut props);
+        }
+    }
+    let kind_str = node.kind_str();
+    crate::ir::ActionDecl {
+        name,
+        kind: kind_str.strip_suffix("_declaration").unwrap_or(kind_str),
+        caption: literal_values(&props, "caption"),
+        tooltip: literal_values(&props, "tooltip"),
+        run_object: props
+            .iter()
+            .filter(|p| p.name == "runobject" && !p.value.is_empty())
+            .map(|p| p.value.clone())
+            .collect(),
+        triggers: Vec::new(),
+        doc: None,
+        origin: origin_of(node),
+    }
+}
+
+/// Point each action at its triggers: the routines whose enclosing member is the
+/// action node itself (same byte range). `collect_routines` makes the innermost
+/// named node around a trigger its member, and that is the action declaration.
+fn link_action_triggers(actions: &mut [crate::ir::ActionDecl], routines: &[RoutineDecl]) {
+    if actions.is_empty() {
+        return;
+    }
+    let mut by_member: std::collections::HashMap<std::ops::Range<usize>, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (i, r) in routines.iter().enumerate() {
+        if r.kind == RoutineKind::Trigger
+            && let Some((_, member)) = &r.enclosing_member
+        {
+            by_member.entry(member.byte.clone()).or_default().push(i);
+        }
+    }
+    for a in actions {
+        a.triggers = by_member.get(&a.origin.byte).cloned().unwrap_or_default();
+    }
+}
+
+/// The text of each `name` property's value that starts with a plain string
+/// literal, one per `#if` arm (see [`crate::ir::FieldDecl::caption`]).
+fn literal_values(props: &[crate::ir::ObjectProperty], name: &str) -> Vec<String> {
+    props
+        .iter()
+        .filter(|p| p.name == name)
+        .filter_map(|p| leading_literal_text(&p.value))
+        .collect()
+}
+
+/// The text of the string literal a raw property value starts with, when the
+/// literal is the whole value or is followed by `,` (`'It''s', Comment = 'c'`
+/// gives `It's`; the grammar's `caption_value` is that literal followed by its
+/// attributes). `None` for any other value.
+fn leading_literal_text(raw: &str) -> Option<String> {
+    let bytes = raw.as_bytes();
+    if bytes.first() != Some(&b'\'') {
+        return None;
+    }
+    // `'` is ASCII, so every index below is a char boundary.
+    let mut i = 1;
+    loop {
+        match *bytes.get(i)? {
+            b'\'' if bytes.get(i + 1) == Some(&b'\'') => i += 2,
+            b'\'' => break,
+            _ => i += 1,
+        }
+    }
+    let rest = raw[i + 1..].trim_start();
+    if !rest.is_empty() && !rest.starts_with(',') {
+        return None;
+    }
+    crate::ir::al_string_literal_text(&raw[..=i])
 }
 
 /// Collect enum `value` declarations, descending preproc wrappers (every arm),
@@ -655,6 +886,11 @@ fn lower_field(node: RawNode, source: &str) -> crate::ir::FieldDecl {
         is_blob_like,
         obsolete_state,
         obsolete_reason,
+        caption: literal_values(&props, "caption"),
+        tooltip: literal_values(&props, "tooltip"),
+        option_caption: literal_values(&props, "optioncaption"),
+        doc: None,
+        origin: origin_of(node),
     }
 }
 
@@ -2196,6 +2432,7 @@ fn lower_routine<'t>(
         enclosing_member,
         in_dataset_modify_context,
         preproc_context,
+        doc: None,
         body,
         origin: origin_of(node),
     }
@@ -8225,5 +8462,345 @@ codeunit 50100 C
         assert_eq!(t("'a'b'"), None);
         assert_eq!(t("a"), None);
         assert_eq!(t("'"), None);
+    }
+
+    /// Intent evidence step 2: field `Caption` / `ToolTip` / `OptionCaption` text.
+    /// Shapes checked with `tree-sitter parse`: `Caption = 'x', Comment = 'c';` is
+    /// a `caption_value` (literal, then its attributes), a plain `ToolTip = 'x';`
+    /// is a bare `string_literal`, and a `#if` around the property is a
+    /// `preproc_conditional` in the field body.
+    #[test]
+    fn field_captions_tooltips_and_option_captions_reach_the_ir() {
+        let src = r#"
+table 50130 T
+{
+    fields
+    {
+        field(1; Status; Option)
+        {
+            Caption = 'It''s', Comment = 'c';
+            ToolTip = 'Tip';
+            OptionCaption = 'A,B', Locked = true;
+        }
+        field(2; Armed; Code[20])
+        {
+#if CLEAN
+            Caption = 'New';
+#else
+            Caption = 'Old';
+#endif
+        }
+        field(3; Bare; Integer) { }
+    }
+}
+tableextension 50131 TE extends Customer
+{
+    fields
+    {
+        field(50100; "Ext Field"; Text[30])
+        {
+            Caption = 'Ext ''Field''';
+            ToolTip = 'Says it''s here.', Comment = 'tt';
+        }
+        modify(Name)
+        {
+            Caption = 'Changed';
+        }
+    }
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let f = &af.objects[0].fields;
+        assert_eq!(f[0].caption, ["It's"], "first literal, `''` unescaped");
+        assert_eq!(f[0].tooltip, ["Tip"]);
+        assert_eq!(f[0].option_caption, ["A,B"]);
+        assert_eq!(f[1].caption, ["New", "Old"], "one per #if arm");
+        assert!(f[2].caption.is_empty() && f[2].tooltip.is_empty());
+        let te = &af.objects[1];
+        assert_eq!(te.kind, crate::ir::ObjectKind::TableExtension);
+        assert_eq!(te.fields.len(), 1, "a `modify(Name)` is no field");
+        assert_eq!(te.fields[0].caption, ["Ext 'Field'"]);
+        assert_eq!(te.fields[0].tooltip, ["Says it's here."]);
+    }
+
+    #[test]
+    fn leading_literal_text_reads_only_a_leading_literal() {
+        use super::leading_literal_text as t;
+        assert_eq!(t("'a''b', Comment = 'c'").as_deref(), Some("a'b"));
+        assert_eq!(t("'x'").as_deref(), Some("x"));
+        assert_eq!(t("'x' , Locked = true").as_deref(), Some("x"));
+        assert_eq!(t("Page \"C\""), None);
+        assert_eq!(t("'x' + 'y'"), None);
+        assert_eq!(t("'open"), None);
+    }
+
+    /// Page and page-extension actions: nested in `area` / `group` / `addlast`, in
+    /// `#if` arms, with caption, tooltip, `RunObject`, and the `OnAction` trigger
+    /// linked to its `RoutineDecl`. Shapes checked with `tree-sitter parse`
+    /// (`actions_section > action_body > action_area_section > action_body >
+    /// action_group_section > action_group_body > action_declaration`).
+    #[test]
+    fn page_actions_reach_the_ir_with_their_triggers() {
+        let src = r#"
+page 50132 P
+{
+    actions
+    {
+        area(Processing)
+        {
+            group(G)
+            {
+                action(Post)
+                {
+                    Caption = 'Post', Comment = 'x';
+                    ToolTip = 'Posts it.';
+                    RunObject = Page "Customer Card";
+                    trigger OnAction()
+                    begin
+                    end;
+                }
+            }
+#if CLEAN
+            action(A1)
+            {
+                Caption = 'New';
+                trigger OnAction()
+                begin
+                end;
+            }
+#else
+            action(A1)
+            {
+                Caption = 'Old';
+            }
+#endif
+            action(A2)
+            {
+                ToolTip =
+#if X
+                    'T1';
+#else
+                    'T2';
+#endif
+            }
+        }
+    }
+    procedure Helper()
+    begin
+    end;
+}
+pageextension 50133 PE extends "Customer List"
+{
+    actions
+    {
+        addlast(Processing)
+        {
+            action(Ext)
+            {
+                Caption = 'Ext';
+                trigger OnAction()
+                begin
+                end;
+            }
+        }
+        modify(Post)
+        {
+            Caption = 'Changed';
+        }
+    }
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let page = &af.objects[0];
+        let names: Vec<&str> = page.actions.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["Post", "A1", "A1", "A2"], "every #if arm");
+        let post = &page.actions[0];
+        assert_eq!(post.kind, "action");
+        assert_eq!(post.caption, ["Post"]);
+        assert_eq!(post.tooltip, ["Posts it."]);
+        assert_eq!(post.run_object, ["Page \"Customer Card\""]);
+        assert_eq!(post.triggers.len(), 1);
+        let on_action = &page.routines[post.triggers[0]];
+        assert_eq!(on_action.kind, crate::ir::RoutineKind::Trigger);
+        assert_eq!(
+            on_action.enclosing_member.as_ref().unwrap().1.byte,
+            post.origin.byte
+        );
+        assert_eq!(page.actions[1].caption, ["New"]);
+        assert_eq!(page.actions[1].triggers.len(), 1);
+        assert_eq!(page.actions[2].caption, ["Old"]);
+        assert!(
+            page.actions[2].triggers.is_empty(),
+            "the #else arm has none"
+        );
+        assert_ne!(
+            page.actions[1].triggers, post.triggers,
+            "each action its own trigger"
+        );
+        assert_eq!(page.actions[3].tooltip, ["T1", "T2"], "whole-value #if");
+        assert!(page.actions[3].run_object.is_empty());
+        let helper = page.routines.iter().position(|r| r.name == "Helper");
+        assert!(
+            page.actions
+                .iter()
+                .all(|a| !a.triggers.contains(&helper.unwrap())),
+            "a procedure is no action trigger"
+        );
+        let pe = &af.objects[1];
+        assert_eq!(pe.actions.len(), 1, "a `modify(Post)` is no declaration");
+        assert_eq!(pe.actions[0].name, "Ext");
+        assert_eq!(pe.actions[0].caption, ["Ext"]);
+        assert_eq!(pe.actions[0].triggers.len(), 1);
+        assert_eq!(
+            pe.routines[pe.actions[0].triggers[0]].kind,
+            crate::ir::RoutineKind::Trigger
+        );
+        // A codeunit has no actions.
+        let cu = parse("codeunit 50134 C\n{\n}\n");
+        assert!(cu.objects[0].actions.is_empty());
+    }
+
+    /// The LSP's on-demand action lookup and the IR read the same action: its
+    /// raw `Caption` value's leading literal is the IR caption.
+    #[test]
+    fn symbol_props_and_ir_agree_on_an_action() {
+        let src = "page 50135 P\n{\n    actions\n    {\n        area(Processing)\n        {\n            \
+                   fileuploadaction(Up)\n            {\n                Caption = 'Upload ''it''', \
+                   Comment = 'c';\n            }\n        }\n    }\n}\n";
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let a = &af.objects[0].actions[0];
+        assert_eq!(a.kind, "fileuploadaction");
+        let props = crate::lookup_symbol_properties(src, crate::SymbolDeclKind::Action, "Up")
+            .expect("the LSP lookup finds the same action");
+        let caption = props
+            .properties
+            .iter()
+            .find(|p| p.name == "Caption")
+            .expect("Caption");
+        assert_eq!(
+            super::leading_literal_text(&caption.value).as_deref(),
+            Some("Upload 'it'")
+        );
+        assert_eq!(a.caption, ["Upload 'it'"]);
+    }
+
+    /// Doc comments: the run of lone `//` / `///` lines directly above a routine
+    /// (from its first attribute), a field or an action. Comments are `extras`
+    /// and hang on whatever node is open (`tree-sitter parse`: the `///` above a
+    /// field is a child of `fields_section`, the one above an action a child of
+    /// `action_group_section`), so the run is read by line number.
+    #[test]
+    fn doc_comment_runs_attach_by_line() {
+        let src = r#"
+table 50136 T
+{
+    fields
+    {
+        /// Field doc
+        field(1; A; Integer) { }
+
+        // Not adjacent: a blank line follows.
+
+        field(2; B; Integer) { }
+    }
+}
+page 50137 P
+{
+    actions
+    {
+        area(Processing)
+        {
+            group(G)
+            {
+                // Doc one
+                /// Doc two
+                action(Post)
+                {
+                }
+            }
+        }
+    }
+
+    #region R
+    /// Proc doc
+    [Scope('OnPrem')]
+    procedure Attributed()
+    begin
+    end;
+    #endregion
+
+    /// Above a region
+    #region R2
+    procedure InRegion()
+    begin
+    end;
+    #endregion
+
+    // Broken run
+
+    procedure Q()
+    begin
+    end;
+
+    /* block */
+    procedure Blocked()
+    begin
+    end;
+    procedure Next()
+    begin
+    end; // trailing, not a doc
+    procedure After()
+    begin
+    end;
+}
+"#;
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let f = &af.objects[0].fields;
+        assert_eq!(f[0].doc.as_deref(), Some("Field doc"));
+        assert_eq!(f[1].doc, None, "a blank line breaks the run");
+        let p = &af.objects[1];
+        assert_eq!(p.actions[0].doc.as_deref(), Some("Doc one\nDoc two"));
+        let doc = |n: &str| p.routines.iter().find(|r| r.name == n).unwrap().doc.clone();
+        assert_eq!(
+            doc("Attributed").as_deref(),
+            Some("Proc doc"),
+            "read above the attribute"
+        );
+        assert_eq!(
+            doc("InRegion").as_deref(),
+            Some("Above a region"),
+            "a #region line does not break the run"
+        );
+        assert_eq!(doc("Q"), None, "a blank line breaks the run");
+        assert_eq!(doc("Blocked"), None, "a block comment is no doc line");
+        assert_eq!(doc("Next"), None);
+        assert_eq!(doc("After"), None, "a trailing comment is no doc line");
+    }
+
+    /// `AlFile::comments`: every comment once, in source order, as written, with
+    /// own-line versus trailing and line versus block told apart.
+    #[test]
+    fn file_comment_list_tells_trailing_from_own_line() {
+        let src = "codeunit 50138 C\n{\n    // own\n    procedure P()\n    begin\n        \
+                   Message('x'); // trailing\n        /* block */ Message('y');\n    end;\n}\n";
+        let af = parse(src);
+        assert_eq!(af.parse_status, crate::ir::ParseStatus::Clean);
+        let got: Vec<(&str, bool, bool, u32)> = af
+            .comments
+            .iter()
+            .map(|c| (c.text.as_str(), c.block, c.own_line, c.origin.start.row))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("// own", false, true, 2),
+                ("// trailing", false, false, 5),
+                ("/* block */", true, true, 6),
+            ]
+        );
     }
 }

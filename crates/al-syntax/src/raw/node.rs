@@ -92,6 +92,35 @@ impl<'t> RawNode<'t> {
     /// `call_expression`s share a start position, so only traversal order is
     /// well-defined, and L2 op/callsite numbering depends on it (spec INV-1).
     // Consumed by the lowerer (0d).
+    /// Every named descendant (this node included) whose raw grammar kind is in
+    /// `kinds`, in document order, found with one cursor walk of the subtree. A
+    /// match is not descended into.
+    pub(crate) fn descendants_of_kinds(self, kinds: &[&str]) -> Vec<RawNode<'t>> {
+        let mut out = Vec::new();
+        let mut cursor = self.node.walk();
+        loop {
+            let n = cursor.node();
+            let matched = n.is_named() && kinds.contains(&n.kind());
+            if matched {
+                out.push(RawNode::new(n));
+            }
+            if !matched && cursor.goto_first_child() {
+                continue;
+            }
+            loop {
+                if cursor.node() == self.node {
+                    return out;
+                }
+                if cursor.goto_next_sibling() {
+                    break;
+                }
+                if !cursor.goto_parent() {
+                    return out;
+                }
+            }
+        }
+    }
+
     #[allow(dead_code)]
     pub(crate) fn named_children(self) -> Vec<RawNode<'t>> {
         let mut cursor = self.node.walk();

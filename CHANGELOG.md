@@ -18,6 +18,24 @@ Spec: `docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 3).
   `TextConst` is never locked, so it is never a constant for G52's `Evaluate` rule.
   No golden moves. Tests `label_attributes_and_text_consts_are_kept` (new) and
   `label_declarations_carry_text_and_locked` (G52; now compares text and locked only).
+- **Step 2: captions, tooltips, page actions and comments are lowered.** `FieldDecl`
+  gains `caption`, `tooltip`, `option_caption` (one text per `#if` arm: the
+  property's first string literal, `''` unescaped, so `Caption = 'x', Comment = 'c'`
+  gives `x`), `doc` and `origin`; table extension fields included. New
+  `ObjectDecl::actions` (`ActionDecl`: name, keyword, caption, tooltip, raw
+  `RunObject` values, and `triggers`, the indexes of its `OnAction` routines) holds
+  every `action` / `systemaction` / `fileuploadaction` / `customaction` of a page,
+  page extension or request page, nested in `area` / `group` / `add*` / `#if`.
+  `lookup_symbol_properties` (the LSP's `actionProperties`) now uses the same
+  action test, so it also finds the three other action kinds. `RoutineDecl::doc`,
+  `FieldDecl::doc` and `ActionDecl::doc` hold the run of lone `//` / `///` lines
+  directly above the declaration (by line number, since comments are grammar
+  extras; a blank line ends the run, a `#region` line does not), and new
+  `AlFile::comments` keeps every comment of the file as written, with trailing and
+  own-line comments told apart, for step 3's check comments. Plain IR facts in
+  every profile: measured +4.3 % peak memory on the DO workspace (comments alone
+  +2.0 %), +2.2 % on the 1000-file LSP corpus, so no gate (spec 4.1b). No golden
+  moves.
 
 ### Fixed (G52)
 

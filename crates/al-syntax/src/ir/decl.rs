@@ -62,6 +62,52 @@ pub struct ObjectDecl {
     /// values inside `#if` wrappers included (every arm). Enum only (empty
     /// otherwise, including EnumExtension).
     pub enum_values: Vec<EnumValueDecl>,
+    /// Every page action declared anywhere in the object outside code, document
+    /// order: `action`, `systemaction`, `fileuploadaction` and `customaction`
+    /// declarations, nested in `area(…)` / `group(…)`, in page-extension `add*(…)`
+    /// blocks, in `#if` arms (every arm) and in a report's request page. A
+    /// page-extension `modify(X)` block is not a declaration and gives no entry.
+    pub actions: Vec<ActionDecl>,
+    pub origin: Origin,
+}
+
+/// One page action declaration (`action(Name) { … }` and its kin, see
+/// [`ObjectDecl::actions`]): the user gesture, what it says to the user, and the
+/// code it runs.
+pub struct ActionDecl {
+    /// The action name, unquoted, as written.
+    pub name: String,
+    /// The raw grammar keyword: `action`, `systemaction`, `fileuploadaction` or
+    /// `customaction`.
+    pub kind: &'static str,
+    /// `Caption` text(s), one per textually present `#if` arm (see
+    /// [`FieldDecl::caption`] for the text rule).
+    pub caption: Vec<String>,
+    /// `ToolTip` text(s), same rule.
+    pub tooltip: Vec<String>,
+    /// The raw `RunObject` value(s), one per `#if` arm, as in
+    /// [`ObjectDecl::run_objects`]: `Page "Customer Card"`, `Codeunit 50100`.
+    pub run_object: Vec<String>,
+    /// Indexes into [`ObjectDecl::routines`] of the triggers declared in this
+    /// action (its `OnAction`, one per `#if` arm when the trigger is in one).
+    /// Linked by the routine's [`RoutineDecl::enclosing_member`] range.
+    pub triggers: Vec<usize>,
+    /// The comment run directly above the action (see [`RoutineDecl::doc`]).
+    pub doc: Option<String>,
+    pub origin: Origin,
+}
+
+/// One comment in the source file, as written (see [`super::AlFile::comments`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceComment {
+    /// The comment text with its markers (`// x`, `/// x`, `/* x */`).
+    pub text: String,
+    /// `true` for a `/* … */` comment, `false` for a `//` line comment.
+    pub block: bool,
+    /// `true` when nothing but white space comes before the comment on its first
+    /// line. A `//` comment after code on the same line (a trailing comment) is
+    /// `false`.
+    pub own_line: bool,
     pub origin: Origin,
 }
 
@@ -103,6 +149,21 @@ pub struct FieldDecl {
     pub obsolete_state: Vec<String>,
     /// The field's `ObsoleteReason` text(s), quotes stripped, same arm rule.
     pub obsolete_reason: Vec<String>,
+    /// The field's `Caption` text(s), one per textually present `#if` arm. Each is
+    /// the property's first string literal, quotes removed and every doubled `''`
+    /// read as one `'` (`Caption = 'It''s', Comment = 'c';` gives `It's`). An arm
+    /// whose value does not start with a plain literal gives no entry.
+    pub caption: Vec<String>,
+    /// The field's `ToolTip` text(s), same rule.
+    pub tooltip: Vec<String>,
+    /// The field's `OptionCaption` text(s), same rule (the whole comma list as one
+    /// string: `A,B`).
+    pub option_caption: Vec<String>,
+    /// The comment run directly above the field (see [`RoutineDecl::doc`]).
+    pub doc: Option<String>,
+    /// The field declaration node's origin (for a field whose header is split
+    /// across `#if` arms, the split node's, which starts at the `#if`).
+    pub origin: Origin,
 }
 
 /// A single object-level `property` node (`name = value`). `name` is lowercased;
@@ -249,6 +310,15 @@ pub struct RoutineDecl {
     /// every build compiles. Overload selection drops a candidate whose
     /// conditions contradict the call site's build context.
     pub preproc_context: super::PreprocSymbols,
+    /// The run of `//` / `///` line comments directly above the declaration (its
+    /// first attribute, when it has one), top to bottom, joined with `\n`. Each
+    /// line loses its marker (`///`, else `//`) and one space after it; nothing
+    /// else is changed. The run is the comment lines that each stand alone on
+    /// their line, with no gap: a blank line or a code line ends it, a
+    /// `#region` / `#endregion` line is skipped over. `/* … */` comments are not
+    /// part of a run (they end it). `None` when there is no such run. The raw
+    /// comments, markers included, stay in [`super::AlFile::comments`].
+    pub doc: Option<String>,
     /// `None` for a forward/external declaration with no body.
     pub body: Option<BlockId>,
     pub origin: Origin,

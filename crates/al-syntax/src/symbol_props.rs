@@ -2,9 +2,12 @@
 //!
 //! Currently: per-`field` / per-`action` property extraction for two niche LSP
 //! requests (`field_properties` / `action_properties`). The IR models a table
-//! field's number/name/type/class but not its arbitrary properties, and does not
-//! model page actions at all — so rather than bloat the always-parsed IR for a
+//! field's number/name/type/class and its caption/tooltip text, and a page
+//! action's caption/tooltip/`RunObject`/triggers (`ObjectDecl::actions`), but not
+//! every property of either — so rather than bloat the always-parsed IR for a
 //! rarely-used request, these lookups walk the raw CST HERE and return OWNED data.
+//! Which nodes count as actions is one shared test
+//! (`crate::lower::is_action_declaration`), so both paths agree.
 //!
 //! This preserves the Phase-4 invariant: `al-syntax` is the only crate that links
 //! tree-sitter. No `tree_sitter::*` type (or raw grammar kind) ever crosses this
@@ -50,9 +53,11 @@ pub fn lookup_symbol_properties(
         .set_language(&crate::language::language())
         .expect("load AL grammar");
     let tree = parser.parse(source, None)?;
-    let want = match kind {
-        SymbolDeclKind::Field => RawKind::FieldDeclaration,
-        SymbolDeclKind::Action => RawKind::ActionDeclaration,
+    // An action is what the lowerer's `ObjectDecl::actions` holds (one shared
+    // test), so this lookup and the IR agree on which declarations are actions.
+    let want: fn(RawKind) -> bool = match kind {
+        SymbolDeclKind::Field => |k| k == RawKind::FieldDeclaration,
+        SymbolDeclKind::Action => crate::lower::is_action_declaration,
     };
     let target = clean_name(target_name);
     let root = RawNode::new(tree.root_node());
@@ -69,15 +74,15 @@ fn clean_name(s: &str) -> String {
     s.trim().trim_matches('"').to_lowercase()
 }
 
-/// Recursively locate the first declaration of `want` kind whose `name` field
+/// Recursively locate the first declaration of a `want` kind whose `name` field
 /// (cleaned) equals `target`.
 fn find_named_decl<'t>(
     node: RawNode<'t>,
-    want: RawKind,
+    want: fn(RawKind) -> bool,
     target: &str,
     source: &str,
 ) -> Option<RawNode<'t>> {
-    if node.kind() == want
+    if want(node.kind())
         && let Some(name_node) = node.field(FieldName::Name)
         && clean_name(name_node.text(source)) == target
     {
