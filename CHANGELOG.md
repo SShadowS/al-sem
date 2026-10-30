@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (G51)
+
+- **AL synthesized from transpiled C# keeps simple `if` conditions** (G51).
+  The translator used to replace every condition with the opaque local
+  `"alsem branch"`, so a guard in Continia Core (which ships only C#) could
+  never be pruned by a caller's literal argument. An `if` whose condition is
+  built only from Boolean parameters and locals the C# never writes, with `!`,
+  `&`/`&&`, `|`/`||` and parentheses, is now written out as AL (`if not
+  ShowError or ShowMessage then`), with every compound operand parenthesized.
+  This is exact: BC's `CStmtHit(n)` prefix returns `true`, and reads of
+  non-null `bool` variables cannot fail or have side effects, so C#'s
+  short-circuit operators and AL's `and`/`or` give the same value. A variable
+  qualifies only when the method never writes it (a parameter's prologue copy
+  and a local's `= default(bool)` aside): an assignment, a compound
+  assignment, `out`/`ref`, a by-reference `ByRef<bool>` wrapper (a `var`
+  argument) or a tuple deconstruction keeps it opaque, because the translator
+  drops assignments and the synthesized body would otherwise read a value the
+  C# does not have. `var` parameters, globals, comparisons, `^`, loop
+  conditions and `case` arms stay opaque. Such a Boolean is also passed bare
+  as an argument, so the requirement follows a forwarded flag (al-sem binds
+  only a bare identifier argument to the caller's parameter). Extraction
+  scheme 7. On Continia DO, Core's synthesized `if`s go from 3618 opaque to
+  3458 opaque and 160 written out; `Notification Mgt.MessageHandler`'s
+  `if ShowMessage then Message` is now pruned along `HasAccessToModule(…,
+  false)`, so EDOC-SEAL-005.c6 and PLAT-UPG-007.c6 (`reaches-ui`, expect `no`)
+  move from a wrong `yes` to `unknown` (coverage partial: two open-world
+  dispatches in the Continia System Application's HTTP code). Tests
+  `cli_prove_transpiled_guard` (a literal `false` through a forwarding routine
+  answers `no`; a reassigned flag stays `yes`) and the translator's
+  `writes_out_conditions_on_never_written_booleans_only` (every shape).
+
 ### Fixed (soundness of the guarded search; G47)
 
 - **The guarded search (G23/G33/G48) no longer drops an effect on the strength
