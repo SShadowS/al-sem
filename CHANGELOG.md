@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (cdo-gate memory)
+
+- **`scripts/cdo-gate` peaks at 10.5 GB, not 46.9 GB, and runs in ~3 min instead of
+  ~4.7.** Measured 2026-10-31 on Linux (22 cores, 93 GB), `cdo` profile, warm, as the
+  summed RSS of the processes (the whole gate after: 10.5 GB, 184 s, exit 0). The whole 46.9 GB came from one test,
+  `cdo_i264_closed_interface_site_census` (`program_resolve_harness`): it composed a
+  whole capability snapshot of the cross-app CDO model (`compose_snapshot`, whose
+  cone keeps every routine's raw inherited facts: 45.8 GB and 83 s with the test
+  alone) to read only the snapshot's call-site rows. New
+  `engine::l5::snapshot::compose_callsite_resolutions` derives those rows without
+  the cone (the test: 3.1 GB, 19 s). The typed-edge and call-site derivers now take
+  a cone-free `Ledger`, so the compiler keeps the two paths the same; the lib test
+  `callsite_resolutions_alone_equal_the_snapshot_rows` checks it on every
+  `tests/r0-corpus` and `tests/fixtures` app, single-app and cross-app.
+  `dependency_body_unknown_ceiling_on_cdo` reads the harness's shared CDO context
+  instead of building the same one again. Per phase, before -> after: harness
+  46.9 GB / 123 s -> 8.6 GB / 42 s; lsp 2.6 GB / 7 s -> 2.6 GB / 6 s;
+  l4_summary_differential 1.9 GB / 19 s -> 1.8 GB / 16 s; `--lib` 10.4 GB / 131 s ->
+  9.9 GB / 121 s. No assertion changed; the counts are the same (lib +1, the new test).
+
 ### Added (intent evidence)
 
 Spec: `docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 3).
@@ -233,6 +253,40 @@ Spec: `docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 3).
   logs, reports and a `summary.txt` into one folder (default
   `target/intent-cdo-check/`) and exits 1 only when the gate fails or a d65 run
   gives no report. Trial-run on Continia DO: d65 0 findings at both scopes.
+
+### Fixed (CDO gate, 2026-10-31)
+
+- **The ABI integrity check reads a source dependency's symbol-only control
+  add-ins.** Since b062706b the graph takes the control add-ins a dependency
+  WITH source declares only in its symbols, as SymbolOnly routines; the
+  check's independent raw index re-read only symbol-only dependencies, so each
+  of their procedures was an "unmapped" key. On the pinned CDO baseline that
+  was the System Application's legacy `Microsoft.Dynamics.Nav.Client.
+  WebPageViewer` (9 procedures; its source declares `WebPageViewer`): 9 -> 0
+  unmapped, 9 mapped. `abi_check::build_raw_abi_index_from_snapshot` now also
+  re-reads the add-ins of every non-workspace app with source. Test
+  `cli_dependency_symbol_control_addin::a_source_dependency_symbol_addin_maps_back_to_the_raw_abi`.
+- **CDO ratchets re-pinned to the 2026-10-28 engine changes, each movement
+  checked.** `scripts/cdo-gate` had failed 8 tests since the `continai-gaps`
+  merge. Measured against the last green commit (2a34ae70) on the pinned
+  baseline:
+  - primary/whole `ambiguousResolved` 23 -> 0: 20 sites pass `Rec`/`xRec` to an
+    overload pair that differs only by record type (b582bf82 types them as the
+    caller's table); 3 bind by argument type (CDN `IsSalesDocument`/
+    `IsPurchaseDocument(RecRef.Number)` -> `Integer`, `InitNewEntry(.., '', ..)` ->
+    `Code[20]`). All 23 picks checked against the source.
+  - compiler audit `ObjectRun` 147 -> 409 (262 new run pairs, 0 gone: lifecycle
+    triggers, 354f4618; `Page.Run(0, Rec)` lookup pages, 1176934a/cb4e95b3),
+    `ValidateTrigger` 40 -> 41 and `UnqualifiedRecordOp` 8 -> 10 (G41's report
+    dataitem `Rec`, 3cb3d4ea). `docs/al-compiler-callgraph-holes.md` A1 updated.
+  - cross-app adapter losses 18+18 -> none (8f738ecf: xmlport table elements are
+    record operations).
+  - #264 closed interface sites (12, 318) -> (29, 338): the run lifecycle demands
+    more Base Application code; the 17 new closed sites are all `IC Data
+    Exchange` over a non-extensible enum, 0 sites changed state.
+  - the CDO L4 whole-program and reverse-index digests re-frozen (log in
+    `tests/l4-summary-baseline/README.md`), and the capability-cone raw-fold
+    oracle's recursive-member pin 714 -> 784.
 
 ### Fixed (G52)
 

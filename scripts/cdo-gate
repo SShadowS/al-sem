@@ -56,6 +56,21 @@ status=0
 # harness shares ONE CDO context (`CDO_SHARED`, a `OnceLock`), calls no `set_var`, and
 # writes only in regen mode (one golden per test) or into its own tempdir; the `=1`
 # came with the script's first version (9d10a290) with no reason recorded.
+#
+# ⟨2026-10-31, memory⟩ Peak memory of each phase, measured on Linux (22 cores,
+# 93 GB), `cdo` profile, warm, as the summed RSS of the phase's processes
+# (a cgroup's `memory.peak` agreed within 1%), before -> after:
+#   program_resolve_harness   46.9 GB, 123 s -> 8.6 GB, 42 s
+#   lsp (2 tests)              2.6 GB,   7 s -> 2.6 GB,  6 s
+#   l4_summary_differential    1.9 GB,  19 s -> 1.8 GB, 16 s
+#   --lib                     10.4 GB, 131 s -> 9.9 GB, 121 s
+# One test made the 46.9 GB on its own: `cdo_i264_closed_interface_site_census`
+# composed a whole capability snapshot of the cross-app CDO model (45.8 GB, 83 s
+# alone) to read only its call-site rows. It now calls
+# `compose_callsite_resolutions` (3.1 GB, 19 s). The phases run one after
+# another, so the gate's peak is the largest phase: the lib's now, whose CDO
+# tests each build their own model (largest alone: capability_cone's
+# `derived_only_matches_raw_fold_on_cdo`, 4.2 GB, 82 s).
 echo "cdo-gate: running program_resolve_harness (--test-threads=4)..."
 if ! cargo test "${profile[@]}" --test program_resolve_harness -- --test-threads=4; then
     status=1

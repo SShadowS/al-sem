@@ -937,6 +937,10 @@ fn abi_ingestion_integrity_cdo_gate() {
     // reading a passing test output does not mistake "vacuous pass" for
     // "ABI coverage exercised on CDO".  When a workspace with SymbolOnly
     // public-routine deps is used, this gate WILL exercise the ABI path.
+    // Since b062706b CDO is no longer vacuous: the 9 procedures of the System
+    // Application's symbol-only add-in `Microsoft.Dynamics.Nav.Client.
+    // WebPageViewer` are SymbolOnly routines, re-read from a dependency WITH
+    // source (`build_raw_abi_index_from_snapshot`).
     if report.abi_routes_total == 0 {
         eprintln!(
             "NOTE: this CDO workspace has no SymbolOnly-dep routines (its deps ship \
@@ -1013,9 +1017,15 @@ fn abi_ingestion_integrity_cdo_gate() {
                 .filter(|o| o.tier == TrustTier::SymbolOnly)
                 .filter(|o| graph.routines.iter().any(|r| r.id.object == o.id))
                 .collect();
+            // Since b062706b a dependency WITH source also contributes the
+            // control add-ins it declares only in its symbols (SymbolOnly
+            // objects): on CDO exactly one, the System Application's legacy
+            // `Microsoft.Dynamics.Nav.Client.WebPageViewer` (9 procedures,
+            // all mapped back above).
             eprintln!(
                 "Task1 SymbolOnly-object diagnostic: {} SymbolOnly object(s) carry >=1 \
-                 surviving routine (expected 0 on CDO — its true-SymbolOnly surface is empty)",
+                 surviving routine (expected 1 on CDO: the System Application's \
+                 symbol-only add-in Microsoft.Dynamics.Nav.Client.WebPageViewer)",
                 symbolonly_objects_with_routines.len()
             );
             for o in symbolonly_objects_with_routines.iter().take(20) {
@@ -2902,7 +2912,25 @@ fn cdo_full_program_coverage_and_self_reported_metric() {
     // `getvalue/5`, `initnewentry/14`, ...). To rebuild the list: diff the
     // `task2_dump_argtype_dispatch_flips_on_cdo` dump at 39290e63 against
     // a4a25894 on the SAME warm CDO snapshot (as for the Task 3 note above).
-    const CDO_AMBIGUOUS_RESOLVED: usize = 23;
+    //
+    // 23 -> 0 on 2026-10-31, same pinned baseline, both scopes; unknown 0 -> 0.
+    // b582bf82 (an undeclared `Rec`/`xRec` argument is the object's implicit
+    // record) bound 20 of the 23: each passes `Rec`/`xRec` from a table to an
+    // overload pair that differs only by its record parameter (`SetTemplateFilter`,
+    // `SetEMailTemplateLineFilter`, `GetDocumentFolder`, `CreateReports`,
+    // `CreateAndSendMail`/7 and /8, `PrintDoc`, `SaveDoc`, `CreateDocuments`,
+    // `TemplLineReportLookup{Custom,Report}Layout`), and every pick is the overload
+    // whose record is the caller's own table: the only one AL accepts, since a
+    // record argument must be of the parameter's table. The last 3 bound in the
+    // argument-typing commits between e18f5053 and f8d6ff71: CDN's
+    // `IsPurchaseDocument`/`IsSalesDocument(DocHeaderRecRef.Number)` pick the
+    // `Integer` overload (over `Codeunit` and `Variant`), and
+    // `EMailLog.InitNewEntry(.., '', ..)` the one whose 5th parameter is
+    // `Code[20]` (over `Integer`). All 23 checked against the source: the
+    // `task3_dump_remaining_ambiguous_resolved_sites_on_cdo` list at 2a34ae70,
+    // then each site's route at 2efe7b6a. The compiler golden cannot check
+    // them: its pairs name a routine, not an overload.
+    const CDO_AMBIGUOUS_RESOLVED: usize = 0;
     assert_eq!(
         ph.ambiguous_resolved, CDO_AMBIGUOUS_RESOLVED,
         "primary ambiguousResolved count {} != the re-derived 2026-09-14 value {}          for the pinned bc3ccb18 baseline (was 0 on the unreproducible 2026-07-04          workspace) — these are closed same-arity overload candidate sets, not          resolution holes; investigate before updating this ratchet",
@@ -3964,17 +3992,37 @@ fn cdo_compiler_audit_explains_every_disagreement() {
             ),
             2,
         ),
+        // 147 -> 409 on 2026-10-31 (pair lists diffed at 2a34ae70 and
+        // 2efe7b6a; 262 new, 0 gone). The compiler graph has no run edges (A1
+        // in docs/al-compiler-callgraph-holes.md), so every program run pair is
+        // program-only. 224 new pairs reach a page's or report's lifecycle
+        // triggers besides its entry trigger (354f4618: OnAfterGetCurrRecord 82,
+        // OnAfterGetRecord 67, OnQueryClosePage 26, OnInit 17, OnClosePage 11,
+        // OnNewRecord 9, OnPreDataItem/OnPostDataItem/OnPostReport 4 each), and
+        // 38 reach an OnOpenPage not reached before, chiefly of the page
+        // `Page.Run(0, Rec)` opens: the lookup page of `Rec`'s table (1176934a
+        // workspace tables, cb4e95b3 dependency tables; e.g. CDOSetupWizard's
+        // drill-downs open Posted Sales Shipments, 142). The trigger list is
+        // `resolver::run_triggers` (may-execute; OnNewRecord runs only when the
+        // page starts a new record, e.g. a card opened on an empty set).
+        // Measured steps: 321 at 354f4618, 330 at e18f5053, 409 at c252ddc8.
         (
             (Side::ProgramOnly, EdgeClass::Run, Some(Verdict::ObjectRun)),
-            147,
+            409,
         ),
+        // 40 -> 41 and 8 -> 10 (3cb3d4ea, G41: a report dataitem trigger's bare
+        // record calls work on the dataitem's record). CDO Update Customer
+        // Setup's and CDO Update Vendor Setup's dataitem `OnAfterGetRecord` call
+        // a bare `Modify(true)` (Customer / Vendor `OnModify`, 2 pairs) and
+        // `Validate("CDO Automatic statement", ..)` (the table extension field's
+        // `OnValidate`, 1 pair).
         (
             (
                 Side::ProgramOnly,
                 EdgeClass::Trigger,
                 Some(Verdict::ValidateTrigger),
             ),
-            40,
+            41,
         ),
         (
             (
@@ -3982,7 +4030,7 @@ fn cdo_compiler_audit_explains_every_disagreement() {
                 EdgeClass::Trigger,
                 Some(Verdict::UnqualifiedRecordOp),
             ),
-            8,
+            10,
         ),
         (
             (
@@ -11276,13 +11324,20 @@ fn adapter_loses_nothing_cross_app_on_the_fixtures() {
 }
 
 /// #160 T2 (§5.2, 10A-3): the cross-app loss gate on the pinned CDO workspace.
-/// The losses are exactly R-RESIDUAL (spec §3.5) minus the 5 `caller_mismatch`
-/// sites of the first `#if` arm of `PageManagement.GetPurchaseHeaderPageID`,
-/// which step 11b's node-equality caller check pairs (11b spec §4.2, §5.8,
-/// A11b.3): 18 `shape_mismatch` (XmlPort table-element record ops the body
-/// walk misses) with their 18 `adapter_l3_fallback_sites`; set equality, so a
-/// new loss replacing a fixed one fails. Skips without `CDO_WS`; fails under
-/// `ENFORCE_CDO_WS=1`.
+/// It held R-RESIDUAL (spec §3.5) minus the 5 `caller_mismatch` sites of the
+/// first `#if` arm of `PageManagement.GetPurchaseHeaderPageID`, which step
+/// 11b's node-equality caller check pairs (11b spec §4.2, §5.8, A11b.3): 18
+/// `shape_mismatch` sites (XmlPort table-element record ops the body walk
+/// missed, Base Application `ICOutboxImpExp.XmlPort.al` lines 656-725) with
+/// their 18 `adapter_l3_fallback_sites`.
+///
+/// Empty since 2026-10-28 (measured: 18+18 at 2a34ae70, `[]` at c252ddc8 and
+/// 2efe7b6a). 8f738ecf made an xmlport table element named as a receiver
+/// (`ICOutboxTrans.Insert()`) a record operation, which is the shape the 18
+/// lacked. On the way, 354f4618 had raised them to 25+25 plus 1
+/// `adapter_multi_route_sites` (an XmlPort run reaching several triggers was
+/// an Exact edge with several routes); 8fec884e made such a run a multicast.
+/// Any loss now fails. Skips without `CDO_WS`; fails under `ENFORCE_CDO_WS=1`.
 #[test]
 fn adapter_cross_app_losses_on_cdo() {
     let Some(ws) = cdo_ws_or_enforce() else {
@@ -11293,57 +11348,13 @@ fn adapter_cross_app_losses_on_cdo() {
     assert!(census.program_sites > 0, "CDO precondition: program sites");
     assert_eq!(
         census.losses(),
-        vec![("shape_mismatch", 18), ("adapter_l3_fallback_sites", 18)],
+        Vec::<(&str, usize)>::new(),
         "CDO cross-app adapter losses"
     );
-    // The Base Application's app id (the same in every release).
-    const BASE_APP: &str = "437dbf0e-84ff-417a-965d-ed2bb9650972";
-    let got: std::collections::BTreeSet<(String, String, u32, u32, u32, u32)> = census
-        .unmatched
-        .iter()
-        .map(|u| {
-            let unit = u
-                .unit
-                .replace(&format!("dep:{BASE_APP}:"), "dep:<BaseApp>:");
-            (
-                u.reason.to_string(),
-                unit,
-                u.start_line,
-                u.start_col,
-                u.end_line,
-                u.end_col,
-            )
-        })
-        .collect();
-    assert_eq!(got.len(), census.unmatched.len(), "unique residual sites");
-    let xml = "dep:<BaseApp>:src/Finance/Intercompany/Outbox/ICOutboxImpExp.XmlPort.al";
-    let shape: [(u32, u32, u32); 18] = [
-        (656, 8, 33),
-        (657, 8, 35),
-        (658, 8, 33),
-        (659, 8, 36),
-        (660, 8, 37),
-        (661, 8, 36),
-        (662, 8, 37),
-        (663, 8, 33),
-        (664, 8, 37),
-        (665, 8, 31),
-        (666, 8, 35),
-        (671, 16, 38),
-        (679, 24, 48),
-        (689, 24, 46),
-        (698, 24, 49),
-        (707, 24, 50),
-        (716, 24, 49),
-        (725, 24, 50),
-    ];
-    let want: std::collections::BTreeSet<_> = shape
-        .iter()
-        .map(|&(l, s, e)| ("shape_mismatch".to_string(), xml.to_string(), l, s, l, e))
-        .collect();
-    assert_eq!(
-        got, want,
-        "CDO cross-app: the residual is R-RESIDUAL minus the 5 caller_mismatch sites"
+    assert!(
+        census.unmatched.is_empty(),
+        "CDO cross-app: no residual site: {:?}",
+        census.unmatched
     );
 }
 
@@ -11382,11 +11393,12 @@ fn adapter_cross_app_losses_on_cdo() {
 /// nodes became `Text`/`BigText` xmlport globals.
 #[test]
 fn dependency_body_unknown_ceiling_on_cdo() {
-    let Some(ws) = cdo_ws_or_enforce() else {
+    // The shared substrate is the same `build_context(&ws)` this test built
+    // for itself; sharing it saves one CDO build (2.3 GB, 9 s alone).
+    let Some(shared) = cdo_shared() else {
         return;
     };
-    let ctx = al_sem::program::resolve::full::build_context(&ws).expect("CDO context");
-    let res = ctx.resolve_dependency_bodies();
+    let res = shared.ctx.resolve_dependency_bodies();
     let edges: Vec<_> = res.edges.iter().map(|ce| ce.edge.clone()).collect();
     let h = al_sem::program::resolve::edge::Histogram::of_edges(&edges);
     assert!(
@@ -11445,6 +11457,21 @@ fn dependency_body_unknown_ceiling_on_cdo() {
 /// - Base App `ICInboxOutboxMgt.Codeunit.al:3416`, `:3445`, `:3558`
 ///   (`IC Data Exchange` over `IC Data Exchange Type`, a table field).
 ///
+/// 29 of 338 since 2026-10-28 (site lists diffed at 2a34ae70 and 2efe7b6a: 20
+/// new interface sites, 0 gone; 29 of 337 at 354f4618, 338 by c252ddc8). No
+/// site changed state: the cross-app model holds the dependency code the
+/// workspace demands, and the object-run lifecycle (354f4618: a run reaches
+/// OnAfterGetRecord and the dataitem triggers too) demands more Base
+/// Application code. The 17 new closed sites are the same `IC Data Exchange`
+/// over `IC Data Exchange Type` (`Extensible = false`) family as the
+/// `ICInboxOutboxMgt` sites above, each from a variable assigned
+/// `<IC Partner>."Data Exchange Type"`: `ICInboxOutboxMgt.Codeunit.al:2466`,
+/// `:2474`, `:2545`, `:2629`, `:2767`; `ICInboxOutboxSubscribers.Codeunit.al:59`,
+/// `:66`; `MoveICTranstoPartnerComp.Report.al:267`-`:280` (10 sites). The 3 new
+/// open sites are open as they should be: System App
+/// `EmailAccountImpl.Codeunit.al:219`, `:221` (`Email Connector`, an
+/// extensible enum) and `NoSeries.Page.al:342` (`No. Series - Single`).
+///
 /// A change of this number is a change of which sites close: re-triage them
 /// against the source before re-pinning (both directions).
 #[test]
@@ -11469,9 +11496,12 @@ fn cdo_i264_closed_interface_site_census() {
             .into_iter()
             .collect();
     closed.sort_unstable();
-    // The snapshot (prove/digest's view) must say the same.
-    let snapshot_closed = al_sem::engine::l5::snapshot::compose_snapshot(&model)
-        .callsite_resolutions
+    // The snapshot (prove/digest's view) must say the same. Its call-site rows
+    // alone: the same rows `compose_snapshot` emits (pinned by the lib test
+    // `callsite_resolutions_alone_equal_the_snapshot_rows`) without its cone,
+    // which on this cross-app model peaked at 46 GB and took 60 s of the
+    // test's 83 s (measured 2026-10-31, `cdo` profile, Linux).
+    let snapshot_closed = al_sem::engine::l5::snapshot::compose_callsite_resolutions(&model)
         .iter()
         .filter(|r| r.status == "polymorphic" && r.open_world == Some(false))
         .count();
@@ -11489,7 +11519,7 @@ fn cdo_i264_closed_interface_site_census() {
         .collect();
     assert_eq!(
         (closed.len(), interface_sites.len()),
-        (12, 318),
+        (29, 338),
         "closed interface sites (of all interface sites) on CDO; closed: {closed:#?}"
     );
 }

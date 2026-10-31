@@ -201,3 +201,24 @@ root-cause any movement before committing (the old solver is at the
   now requires `"E-Document Send Code"` loaded); a second routine gains
   `has_unresolved_calls`, because its ternary call (`eDocsFeatureEnabled`) is now visible to
   L3's legacy resolver, which this digest still uses and which cannot resolve it.
+- **2026-10-31, the `continai-gaps` merge** (be30f123, 2026-10-28). Whole-program
+  `eb68cefc…` -> `e58ca2fb…`; reverse index `ca9a0a94…` -> `9addc20a…`. Measured on the
+  pinned `bc3ccb18` baseline by dumping the canonical serializations (a throwaway hook)
+  at the commits named below. 5479 routines throughout, none added or removed.
+  - e28ae5be (G10, `[InternalEvent]` routines are event publishers) is the first move of
+    the whole-program digest (bisected; 39943661 matches `eb68cefc…`). It is a re-key
+    only: DO's `OnBeforeHasAccessToDO` and `OnBeforeHasExecutePermission` (codeunit
+    6175336) are now `event-publisher`s, which their routine id hashes, and their
+    summaries are unchanged (empty). No other routine moved.
+  - 2a34ae70 -> 2efe7b6a: 1634 routines moved. 327,209 effect keys added, 2835 gone.
+    Of the gone keys, 2832 are the same effect with temp state `u` now `t` (b582bf82:
+    a local RecordRef opened only temporary is temporary under branching) and 3 are
+    `CDO Copy E-Mail Template`'s `OnAfterGetRecord` ops renumbered by one (G41,
+    3cb3d4ea: its bare dataitem `CalcFields` is now `op0`). The added keys come from the
+    158 new combined-graph edges (0 removed): 116 page/report runs into lifecycle
+    triggers (354f4618, 1176934a, cb4e95b3), 41 calls the 23 once-ambiguous overload
+    sites now bind (b582bf82 and the argument-typing commits), and 1 implicit
+    `OnValidate` trigger (G41). 79 routines lose `has_unresolved_calls`.
+  - The reverse index's oracle comparison passed in the re-freezing run (it runs before
+    the digest). Per table, the ancestor lists only grew (33,640 -> 44,139 entries, 0
+    removed, the same 66 tables), from the same new edges.

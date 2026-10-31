@@ -295,7 +295,20 @@ pub fn abi_ingestion_integrity(edges: &[Edge], raw_abi_index: &RawAbiIndex) -> A
 // ---------------------------------------------------------------------------
 
 /// Build a `RawAbiIndex` from a snapshot by re-parsing the `SymbolReference`
-/// for every SymbolOnly dep that has an `app_path`.
+/// for every dependency that has an `app_path`: every object of a SymbolOnly
+/// dependency, and the control add-ins of a dependency WITH source.
+///
+/// The second part mirrors the graph build's step 2c
+/// (`abi_ingest::source_app_symbol_control_addins`): a source dependency's
+/// symbols can declare an add-in its source does not (the System
+/// Application's legacy `Microsoft.Dynamics.Nav.Client.WebPageViewer` beside
+/// its source `WebPageViewer`; Continia CDN's `CTS-CDN Refresh Timer`), and
+/// the build ingests that add-in's procedures as SymbolOnly routines. The
+/// index takes every add-in of such an app, not only the ones source lacks:
+/// which ones source lacks is the build's own decision, and deciding it here
+/// too would re-derive from the graph's side. An add-in source does declare
+/// gives Source-tier routines, which the check never looks up, so the extra
+/// entries can make no miss pass.
 ///
 /// # Independence guarantee
 ///
@@ -309,8 +322,9 @@ pub fn build_raw_abi_index_from_snapshot(
 ) -> RawAbiIndex {
     let mut pairs: Vec<(AppRef, SymbolReferenceAbi)> = Vec::new();
     for unit in &snap.apps {
-        if unit.source.is_some() {
-            continue; // source-bearing unit — not a dep boundary
+        // The workspace's own symbols are no dependency boundary.
+        if unit.source.is_some() && unit.id == snap.workspace_app {
+            continue;
         }
         let Some(app_ref) = apps.find(&unit.id) else {
             continue;
@@ -320,7 +334,13 @@ pub fn build_raw_abi_index_from_snapshot(
         };
         // Fresh re-parse — does NOT touch graph.routines / graph.objects.
         // Skip unreadable .app files (same behaviour as ingest_abi).
-        if let Ok(abi) = crate::program::abi_ingest::read_symbol_reference_from_app(path) {
+        if let Ok(mut abi) = crate::program::abi_ingest::read_symbol_reference_from_app(path) {
+            if unit.source.is_some() {
+                abi.objects.retain(|o| {
+                    object_kind_from_abi_type(&o.object_type)
+                        == crate::program::node::ObjectKind::ControlAddIn
+                });
+            }
             pairs.push((app_ref, abi));
         }
     }
