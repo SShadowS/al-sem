@@ -27,7 +27,7 @@ use crate::engine::perf_trace as pt;
 use crate::engine::session::{Cell, JobId, Plan, View};
 
 use job::{Doc, Job, JobFailure, LastReads, PlanPart, ResolveCx, SideDoc, ViewCx, ViewDemand};
-use output::{JobOutput, Stream, WriteAction, capture, replay, replay_on, write_error};
+use output::{JobOutput, Stream, Streams, WriteAction, capture, replay, replay_on, write_error};
 
 /// Run one job as its own process does (D1): through the driver, then its
 /// writes on the real streams in its standalone order (D2.3). Returns the exit.
@@ -161,8 +161,10 @@ fn write_job(b: u32, i: usize, job: &dyn Job, streams: &JobStreams, out: &JobOut
             replay_on(
                 out,
                 job.write_failure_exit(),
-                Stream(&mut stdout, &o),
-                Stream(&mut stderr, &e),
+                &mut Streams {
+                    stdout: Stream(&mut stdout, &o),
+                    stderr: Stream(&mut stderr, &e),
+                },
             )
         }
         _ => (job.write_failure_exit(), vec![]),

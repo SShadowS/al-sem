@@ -105,8 +105,10 @@ pub fn replay(out: &JobOutput, write_failure_exit: u8) -> u8 {
     replay_on(
         out,
         write_failure_exit,
-        Stream(&mut stdout, "stdout"),
-        Stream(&mut stderr, "stderr"),
+        &mut Streams {
+            stdout: Stream(&mut stdout, "stdout"),
+            stderr: Stream(&mut stderr, "stderr"),
+        },
     )
     .0
 }
@@ -123,27 +125,68 @@ impl Stream<'_> {
     }
 }
 
-/// [`replay`] onto `stdout` and `stderr` (a batch job's two files, D2.1). A
-/// failed write prints the write error line on the process's stderr (a
-/// failed stderr names itself, which a closed stream drops). Returns the exit
-/// and every file and directory written, in order.
+/// Where a job's writes go (context-server design r3 §10, §13 item 4): its
+/// two streams, its files and directories, and the write error line of the
+/// first failed write. [`Streams`] is the CLI's (and a batch job's): real
+/// streams, the file system, the error line on the process's stderr. A
+/// server's sink captures all of it, the error line included, so a failed
+/// write reaches its answer instead of its own stderr.
+pub trait Sink {
+    fn stdout(&mut self, bytes: &[u8]) -> Result<(), Failure>;
+    fn stderr(&mut self, bytes: &[u8]) -> Result<(), Failure>;
+    fn file(&mut self, path: &Path, bytes: &[u8]) -> Result<(), Failure>;
+    fn dir(&mut self, path: &Path) -> Result<(), Failure>;
+    /// The failed write's line (`al-sem: write error: <target>: <message>`).
+    fn write_error(&mut self, target: &str, e: &std::io::Error);
+}
+
+/// The CLI's sink: `stdout` and `stderr` (the process's, or a batch job's two
+/// files, D2.1), files and directories on the file system, and a failed
+/// write's line on the process's stderr (a failed stderr names itself, which
+/// a closed stream drops).
+pub struct Streams<'a> {
+    pub stdout: Stream<'a>,
+    pub stderr: Stream<'a>,
+}
+
+impl Sink for Streams<'_> {
+    fn stdout(&mut self, bytes: &[u8]) -> Result<(), Failure> {
+        self.stdout.write(bytes)
+    }
+    fn stderr(&mut self, bytes: &[u8]) -> Result<(), Failure> {
+        self.stderr.write(bytes)
+    }
+    fn file(&mut self, path: &Path, bytes: &[u8]) -> Result<(), Failure> {
+        write_file(path, bytes)
+    }
+    fn dir(&mut self, path: &Path) -> Result<(), Failure> {
+        create_dir(path)
+    }
+    fn write_error(&mut self, target: &str, e: &std::io::Error) {
+        write_error(target, e);
+    }
+}
+
+/// [`replay`] into `sink`, in order. The first failed action ends the list
+/// with the sink's write error line and returns `write_failure_exit`; else
+/// `out.exit`. Returns the exit and every file and directory written, in
+/// order.
 pub fn replay_on(
     out: &JobOutput,
     write_failure_exit: u8,
-    mut stdout: Stream<'_>,
-    mut stderr: Stream<'_>,
+    sink: &mut dyn Sink,
 ) -> (u8, Vec<PathBuf>) {
     let mut written = Vec::new();
     for action in &out.actions {
         let done = match action {
-            WriteAction::Stdout(bytes) => stdout.write(bytes),
-            WriteAction::Stderr(bytes) => stderr.write(bytes),
-            WriteAction::File(path, bytes) => write_file(path, bytes),
-            WriteAction::Dir(path) => create_dir(path),
+            WriteAction::Stdout(bytes) => sink.stdout(bytes),
+            WriteAction::Stderr(bytes) => sink.stderr(bytes),
+            WriteAction::File(path, bytes) => sink.file(path, bytes),
+            WriteAction::Dir(path) => sink.dir(path),
         };
         match (done, action) {
             (Err((target, e)), _) => {
-                write_error(&target, &e);
+                sink.write_error(&target, &e);
                 return (write_failure_exit, written);
             }
             (Ok(()), WriteAction::File(path, _) | WriteAction::Dir(path)) => {
@@ -156,7 +199,7 @@ pub fn replay_on(
 }
 
 /// A failed write: its target and error.
-type Failure = (String, std::io::Error);
+pub type Failure = (String, std::io::Error);
 
 /// Report a failed write of `target` on stderr.
 pub fn write_error(target: &str, e: &std::io::Error) {
@@ -220,4 +263,90 @@ pub(crate) fn capture<T>(f: impl FnOnce() -> T) -> (T, Vec<String>) {
 pub fn write_stderr(bytes: &[u8]) -> std::io::Result<()> {
     let mut err = std::io::stderr().lock();
     err.write_all(bytes).and_then(|()| err.flush())
+}
+
+/// A sink that keeps every write in memory, the failed write's line in its
+/// stderr: what a server answers with ([`crate::wire`]). Files are kept as
+/// bytes; creating them is the server's output policy (stage 2), not this.
+#[derive(Default, Debug)]
+pub struct Captured {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub files: Vec<(PathBuf, Vec<u8>)>,
+}
+
+impl Sink for Captured {
+    fn stdout(&mut self, bytes: &[u8]) -> Result<(), Failure> {
+        self.stdout.extend_from_slice(bytes);
+        Ok(())
+    }
+    fn stderr(&mut self, bytes: &[u8]) -> Result<(), Failure> {
+        self.stderr.extend_from_slice(bytes);
+        Ok(())
+    }
+    fn file(&mut self, path: &Path, bytes: &[u8]) -> Result<(), Failure> {
+        self.files.push((path.to_path_buf(), bytes.to_vec()));
+        Ok(())
+    }
+    fn dir(&mut self, _: &Path) -> Result<(), Failure> {
+        Ok(())
+    }
+    fn write_error(&mut self, target: &str, e: &std::io::Error) {
+        self.stderr
+            .extend_from_slice(format!("al-sem: write error: {target}: {e}\n").as_bytes());
+    }
+}
+
+#[cfg(test)]
+mod sink_tests {
+    use super::*;
+
+    /// [`Captured`] whose file writes fail.
+    struct NoFiles(Captured);
+
+    impl Sink for NoFiles {
+        fn stdout(&mut self, bytes: &[u8]) -> Result<(), Failure> {
+            self.0.stdout(bytes)
+        }
+        fn stderr(&mut self, bytes: &[u8]) -> Result<(), Failure> {
+            self.0.stderr(bytes)
+        }
+        fn file(&mut self, path: &Path, _: &[u8]) -> Result<(), Failure> {
+            Err((path.display().to_string(), std::io::Error::other("refused")))
+        }
+        fn dir(&mut self, path: &Path) -> Result<(), Failure> {
+            self.0.dir(path)
+        }
+        fn write_error(&mut self, target: &str, e: &std::io::Error) {
+            self.0.write_error(target, e);
+        }
+    }
+
+    /// r3 §10: a failed write's line goes through the sink, so a capturing
+    /// sink holds it (with the write-failure exit), and the writes after the
+    /// failure are not made.
+    #[test]
+    fn a_failed_write_is_captured_by_the_sink() {
+        let out = JobOutput {
+            actions: vec![
+                WriteAction::line("first"),
+                WriteAction::File("o.json".into(), b"{}".to_vec()),
+                WriteAction::Stdout(b"never".to_vec()),
+            ],
+            exit: 0,
+        };
+        let mut sink = NoFiles(Captured::default());
+        let (exit, written) = replay_on(&out, 2, &mut sink);
+        assert_eq!((exit, written), (2, vec![]));
+        assert_eq!(
+            String::from_utf8_lossy(&sink.0.stderr),
+            "first\nal-sem: write error: o.json: refused\n"
+        );
+        assert!(sink.0.stdout.is_empty());
+        // Everything succeeds: in order, files kept, the job's exit.
+        let mut all = Captured::default();
+        assert_eq!(replay_on(&out, 2, &mut all).0, 0);
+        assert_eq!(all.stdout, b"never");
+        assert_eq!(all.files, [(PathBuf::from("o.json"), b"{}".to_vec())]);
+    }
 }

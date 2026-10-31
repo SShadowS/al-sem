@@ -42,6 +42,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `plan_explain` deciding its own diff root → "planning canonicalized" panic;
   `reader_for` ignoring `inputs` → exit 2 instead of 0.
 
+### Added (context-server stage 0: the wire codec and the output sink)
+
+- **`al_sem::wire`, the exact-output codec** (context-server design r3 §3.2,
+  §4.3, §13 item 2; a library, no process yet). NDJSON frames (compact JSON,
+  one line, at most 16 MiB: `encode_frame`, `decode_frame`, `read_frame`). An
+  answer (`Answer`) is `kind: "cli"` (exit code, stdout, stderr lines) or
+  `kind: "failed"`, with `revision` always present and `null` allowed. A CLI's
+  stdout travels as `stdoutText` — a JSON string whose value is the stdout byte
+  for byte, embedded and trailing newlines included — **xor** `stdoutFile`
+  (path, length, SHA-256) when it is not UTF-8, over the request's inline cap
+  (`clamp_inline`: default 64 KiB, at most 4 MiB), or too large once escaped
+  for one frame; a frame with both or neither is refused on decode. Tests: the
+  exact bytes of a pretty document round-trip and the frame is one line;
+  three frames read back by real line framing; the xor rule; over-cap,
+  non-UTF-8 and escape-heavy (control characters) stdout go to a file with
+  their exact bytes and hash; frame limits on both sides. Discrimination
+  proofs, run and seen to fail, then reverted: trimming the stdout's trailing
+  newline → "exact bytes" fails; dropping the escaped-length check → the
+  control-character stdout is inlined and the file test fails; pretty-printed
+  frames → both framing tests fail (the encoder's own one-newline assertion).
+- **`output::Sink`**: `replay_on` writes through a sink (r3 §10, §13 item 4),
+  and the first failed write's `al-sem: write error:` line goes through the sink
+  too. `Streams` is the CLI's and a batch job's (real streams or the job's two
+  files, the file system, the error line on the process's stderr, as before);
+  `Captured` keeps everything in memory, the error line in its stderr. Test:
+  a failed file write's line is captured and the later writes are not made.
+  Discrimination proof: calling `write_error` directly instead of the sink →
+  the captured stderr lacks the line, the test fails; reverted.
+
 ### Added (`aldump --snapshot-memory`)
 
 - **`aldump --snapshot-memory <workspace> [--single-app] [--hash]` re-measures

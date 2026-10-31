@@ -63,3 +63,6 @@ pub mod telemetry;
 pub mod test_quality;
 /// Core AL object-type enum shared between lib and binary targets.
 pub mod types;
+/// The exact-output wire codec of the context server (NDJSON frames, a CLI
+/// answer's stdout as `stdoutText` or `stdoutFile`) — see the module doc.
+pub mod wire;
