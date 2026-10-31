@@ -11393,11 +11393,12 @@ fn adapter_cross_app_losses_on_cdo() {
 /// nodes became `Text`/`BigText` xmlport globals.
 #[test]
 fn dependency_body_unknown_ceiling_on_cdo() {
-    let Some(ws) = cdo_ws_or_enforce() else {
+    // The shared substrate is the same `build_context(&ws)` this test built
+    // for itself; sharing it saves one CDO build (2.3 GB, 9 s alone).
+    let Some(shared) = cdo_shared() else {
         return;
     };
-    let ctx = al_sem::program::resolve::full::build_context(&ws).expect("CDO context");
-    let res = ctx.resolve_dependency_bodies();
+    let res = shared.ctx.resolve_dependency_bodies();
     let edges: Vec<_> = res.edges.iter().map(|ce| ce.edge.clone()).collect();
     let h = al_sem::program::resolve::edge::Histogram::of_edges(&edges);
     assert!(
@@ -11495,9 +11496,12 @@ fn cdo_i264_closed_interface_site_census() {
             .into_iter()
             .collect();
     closed.sort_unstable();
-    // The snapshot (prove/digest's view) must say the same.
-    let snapshot_closed = al_sem::engine::l5::snapshot::compose_snapshot(&model)
-        .callsite_resolutions
+    // The snapshot (prove/digest's view) must say the same. Its call-site rows
+    // alone: the same rows `compose_snapshot` emits (pinned by the lib test
+    // `callsite_resolutions_alone_equal_the_snapshot_rows`) without its cone,
+    // which on this cross-app model peaked at 46 GB and took 60 s of the
+    // test's 83 s (measured 2026-10-31, `cdo` profile, Linux).
+    let snapshot_closed = al_sem::engine::l5::snapshot::compose_callsite_resolutions(&model)
         .iter()
         .filter(|r| r.status == "polymorphic" && r.open_world == Some(false))
         .count();

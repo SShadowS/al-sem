@@ -1289,6 +1289,36 @@ pub fn compose_snapshot(resolved: &Model) -> CapabilitySnapshot {
     compose_snapshot_from_base(resolved, &base, None)
 }
 
+/// The `callsite_resolutions` of [`compose_snapshot`], without the rest of the
+/// snapshot. They read only the call-site ledger ([`Ledger`]: the routines,
+/// the cut graph's typed edges, the calls), never the cone, so this builds the
+/// same cut graph `build_r3a3_source_only_base` does and skips the cone.
+///
+/// The cone is what a whole snapshot costs. Over the cross-app CDO model (33k
+/// routines) `compose_snapshot` peaked at 46 GB and took 60 s, almost all of it
+/// the raw inherited facts of every routine (measured 2026-10-31, Linux, `cdo`
+/// profile); a reader of the call-site rows alone should call this.
+pub fn compose_callsite_resolutions(resolved: &Model) -> Vec<SnapshotCallsiteResolution> {
+    let ws = &resolved.workspace;
+    let graph = crate::engine::l4::combined_graph::build_combined_graph(
+        ws,
+        &resolved.calls,
+        &resolved.events.graph,
+    );
+    let routine_to_stable = crate::engine::l4::capability_cone::routine_to_stable_of(ws);
+    let ledger = Ledger {
+        ws_routines: &ws.routines,
+        typed_edges: &graph.typed_edges,
+        calls: &resolved.calls.edges,
+        dependency_calls: &[],
+        routine_to_stable: &routine_to_stable,
+        bodyless_dependency: None,
+    };
+    let collided = CollidedRows::build(&ws.routines);
+    let (typed_edges, _) = derive_typed_edges(&ledger);
+    derive_callsite_resolutions(&ledger, &typed_edges, &collided)
+}
+
 /// [`compose_snapshot`] over an already-built source-only base, for a caller
 /// that reads the base too (`snapshot_full::compose_full_snapshot`): the base
 /// runs the whole cone and the producer solve, so it is built once.
@@ -1317,11 +1347,11 @@ pub fn compose_snapshot_from_base(
     let collided = CollidedRows::build(&base.ws_routines);
     let identities = derive_identity_table(resolved);
     let capability_facts = derive_capability_facts(&inp, |id| base.raw.get(id).map(Vec::as_slice));
-    let (typed_edges, skipped) = derive_typed_edges(&inp);
+    let (typed_edges, skipped) = derive_typed_edges(&inp.ledger());
     let raw = |id: &str| base.raw.get(id).map(Vec::as_slice);
     let operation_index = derive_operation_evidence(&inp, raw, &collided);
     let callsite_index = derive_callsite_evidence(&inp, raw, &collided);
-    let callsite_resolutions = derive_callsite_resolutions(&inp, &typed_edges, &collided);
+    let callsite_resolutions = derive_callsite_resolutions(&inp.ledger(), &typed_edges, &collided);
     let analysis_gaps = derive_analysis_gaps(resolved, &inp);
     let coverage = derive_coverage(&inp);
     let event_declarations = derive_event_declarations(&inp);
@@ -1381,6 +1411,33 @@ struct TreeInputs<'a> {
     /// `None` (a cut with no cross-app base) keeps the old rule: every
     /// body-less dependency row's app.
     source_less_apps: Option<&'a std::collections::HashSet<String>>,
+}
+
+/// The call-site ledger part of [`TreeInputs`]: everything the typed edges and
+/// the call-site resolutions read, and nothing of the cone (no direct facts,
+/// no coverage, no raw facts). Those two derivers take this type, so the
+/// compiler holds [`compose_callsite_resolutions`] to the same rows
+/// [`compose_snapshot`] emits without building the cone.
+struct Ledger<'a> {
+    ws_routines: &'a [ModelRoutine],
+    typed_edges: &'a [TypedEdge],
+    calls: &'a [CallEdge],
+    dependency_calls: &'a [CallEdge],
+    routine_to_stable: &'a HashMap<String, String>,
+    bodyless_dependency: Option<&'a std::collections::HashSet<&'a str>>,
+}
+
+impl<'a> TreeInputs<'a> {
+    fn ledger(&self) -> Ledger<'a> {
+        Ledger {
+            ws_routines: self.ws_routines,
+            typed_edges: self.typed_edges,
+            calls: self.calls,
+            dependency_calls: self.dependency_calls,
+            routine_to_stable: self.routine_to_stable,
+            bodyless_dependency: self.bodyless_dependency,
+        }
+    }
 }
 
 /// The lowercase guids of the dependency apps that ship no source
@@ -1527,8 +1584,8 @@ pub(crate) fn compose_tree(
             )
         }
     };
-    let (typed_edges, skipped) = derive_typed_edges(&inp);
-    let callsite_resolutions = derive_callsite_resolutions(&inp, &typed_edges, &collided);
+    let (typed_edges, skipped) = derive_typed_edges(&inp.ledger());
+    let callsite_resolutions = derive_callsite_resolutions(&inp.ledger(), &typed_edges, &collided);
     let analysis_gaps = derive_analysis_gaps(model, &inp);
     let coverage = derive_coverage(&inp);
     let event_declarations = derive_event_declarations(&inp);
@@ -1813,7 +1870,7 @@ where
 // The sort key is kind | stable-from | stable-to | edgeId; ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
-fn derive_typed_edges(inp: &TreeInputs<'_>) -> (Vec<SnapshotGraphEdge>, SkippedEdgeKeys) {
+fn derive_typed_edges(inp: &Ledger<'_>) -> (Vec<SnapshotGraphEdge>, SkippedEdgeKeys) {
     // callsite id -> (anchor, owning-routine internal id) for call-family anchors.
     let mut callsite_anchor: HashMap<&str, (&PAnchor, &str)> = HashMap::new();
     for r in inp.ws_routines {
@@ -2456,7 +2513,7 @@ fn map_dispatch_kind(dk: &str) -> &'static str {
 }
 
 fn derive_callsite_resolutions(
-    base: &TreeInputs<'_>,
+    base: &Ledger<'_>,
     typed_edges: &[SnapshotGraphEdge],
     collided: &CollidedRows<'_>,
 ) -> Vec<SnapshotCallsiteResolution> {
@@ -3394,6 +3451,66 @@ mod step6_tree_tests {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
+    /// `compose_callsite_resolutions` gives exactly the `callsite_resolutions`
+    /// of `compose_snapshot`, on every `tests/r0-corpus/` app dir, single-app
+    /// and cross-app (the CDO census in `program_resolve_harness` reads it on
+    /// a cross-app model in place of the whole snapshot).
+    #[test]
+    fn callsite_resolutions_alone_equal_the_snapshot_rows() {
+        use crate::program::model::program_calls::{
+            assemble_and_resolve_cross_app_program, assemble_and_resolve_workspace_program,
+        };
+        use crate::program::model::workspace::{AssemblyNeeds, MODEL_INSTANCE_ID_DEFAULT};
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+        // `tests/fixtures` too: `test-selection-graph` is the one with an
+        // interface closed over a non-extensible enum.
+        let mut dirs: Vec<std::path::PathBuf> = ["r0-corpus", "fixtures"]
+            .iter()
+            .flat_map(|d| walkdir::WalkDir::new(root.join(d)).max_depth(3))
+            .map(|e| e.unwrap().into_path())
+            .filter(|p| p.join("app.json").is_file())
+            .collect();
+        dirs.sort();
+        let (mut models, mut rows, mut closed) = (0usize, 0usize, 0usize);
+        let mut failures: Vec<String> = Vec::new();
+        for dir in &dirs {
+            let where_ = dir.strip_prefix(&root).unwrap_or(dir).display().to_string();
+            let inputs = crate::program::inputs::WorkspaceInputs::read(dir, &Default::default());
+            let single = assemble_and_resolve_workspace_program(
+                &inputs,
+                MODEL_INSTANCE_ID_DEFAULT,
+                false,
+                AssemblyNeeds::BASE,
+            );
+            let cross = assemble_and_resolve_cross_app_program(
+                &inputs,
+                MODEL_INSTANCE_ID_DEFAULT,
+                false,
+                AssemblyNeeds::BASE,
+            )
+            .ok()
+            .map(|r| r.resolved);
+            for (mode, m) in [("single-app", single), ("cross-app", cross)] {
+                let Some(m) = m else { continue };
+                models += 1;
+                let whole = compose_snapshot(&m).callsite_resolutions;
+                let alone = compose_callsite_resolutions(&m);
+                rows += whole.len();
+                closed += whole
+                    .iter()
+                    .filter(|r| r.status == "polymorphic" && r.open_world == Some(false))
+                    .count();
+                if format!("{whole:?}") != format!("{alone:?}") {
+                    failures.push(format!("{where_} ({mode}): the rows differ"));
+                }
+            }
+        }
+        assert!(models > 100, "precondition: {models} models composed");
+        assert!(rows > 0, "precondition: some call-site rows");
+        assert!(closed > 0, "precondition: a closed interface site");
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
     /// T6 (R6-4, spec §4.5): a hand-stated cone edge `R → A` at `csX`, a call
     /// site absent from `R`'s `call_sites`, carrying a pd link (R's state
     /// reached from A's seed across it). `derive_typed_edges` keeps no row for
@@ -3447,7 +3564,7 @@ mod step6_tree_tests {
             bodyless_dependency: None,
             source_less_apps: None,
         };
-        let (rows, skipped) = derive_typed_edges(&inp);
+        let (rows, skipped) = derive_typed_edges(&inp.ledger());
         assert!(rows.is_empty(), "no typedEdges row: {rows:?}");
         assert_eq!(skipped.len(), 1, "the row is recorded skipped");
 

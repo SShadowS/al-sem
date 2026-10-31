@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (cdo-gate memory)
+
+- **`scripts/cdo-gate` peaks at 10.5 GB, not 46.9 GB, and runs in ~3 min instead of
+  ~4.7.** Measured 2026-10-31 on Linux (22 cores, 93 GB), `cdo` profile, warm, as the
+  summed RSS of the processes (the whole gate after: 10.5 GB, 184 s, exit 0). The whole 46.9 GB came from one test,
+  `cdo_i264_closed_interface_site_census` (`program_resolve_harness`): it composed a
+  whole capability snapshot of the cross-app CDO model (`compose_snapshot`, whose
+  cone keeps every routine's raw inherited facts: 45.8 GB and 83 s with the test
+  alone) to read only the snapshot's call-site rows. New
+  `engine::l5::snapshot::compose_callsite_resolutions` derives those rows without
+  the cone (the test: 3.1 GB, 19 s). The typed-edge and call-site derivers now take
+  a cone-free `Ledger`, so the compiler keeps the two paths the same; the lib test
+  `callsite_resolutions_alone_equal_the_snapshot_rows` checks it on every
+  `tests/r0-corpus` and `tests/fixtures` app, single-app and cross-app.
+  `dependency_body_unknown_ceiling_on_cdo` reads the harness's shared CDO context
+  instead of building the same one again. Per phase, before -> after: harness
+  46.9 GB / 123 s -> 8.6 GB / 42 s; lsp 2.6 GB / 7 s -> 2.6 GB / 6 s;
+  l4_summary_differential 1.9 GB / 19 s -> 1.8 GB / 16 s; `--lib` 10.4 GB / 131 s ->
+  9.9 GB / 121 s. No assertion changed; the counts are the same (lib +1, the new test).
+
 ### Added (intent evidence)
 
 Spec: `docs/superpowers/specs/2026-10-29-intent-evidence-design.md` (rev 3).
