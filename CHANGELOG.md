@@ -27,6 +27,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/cli/cli_snapshot_memory.rs` (the JSON shape, rows = inherited + direct,
   `--hash` equal across two processes).
 
+### Changed (docs: a run's lifecycle is may-run)
+
+- **`resolver::run_triggers` now says its trigger set is may-run, and why
+  `OnNewRecord` is in it.** The 2026-10-28 entry below described the set as the
+  triggers a run reaches "with no user acting on a control". That holds for
+  `OnNewRecord` only sometimes: it runs when a new record is initialized, which
+  a run does by itself when an insertable card, document or worksheet opens on an
+  empty set (Base App journals rely on it for `SetUpNewLine`), and otherwise on
+  the user's New. It stays in the set: other members already depend on the data
+  (`OnAfterGetRecord` needs a record), leaving it out would let `prove` say `no`
+  about a write in it, and `alsem graph`'s lifecycle rule and d39 already treat
+  it as a page trigger. On CDO it accounts for 9 of the 409 object-run audit
+  pairs. Doc comment only; no behaviour change.
+
 ### Removed (cone-memory step 3, the frozen emission oracle)
 
 - **The T3(b) frozen-emission oracle is deleted, as the design's step 3

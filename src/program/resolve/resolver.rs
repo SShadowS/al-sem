@@ -2226,18 +2226,24 @@ fn entry_trigger_name(kind: ObjectKind) -> &'static str {
     }
 }
 
-/// The triggers a run of a page, report or XMLport reaches with no user acting
-/// on a control, as (object-level names, member-level names), folded; `None`
-/// for a codeunit (its `OnRun` alone, [`entry_trigger_name`]).
+/// The triggers a run of a page, report or XMLport MAY reach with no user
+/// acting on a control, as (object-level names, member-level names), folded;
+/// `None` for a codeunit (its `OnRun` alone, [`entry_trigger_name`]).
 ///
 /// A run is the object's whole lifecycle, not one trigger: a page's
 /// `OnAfterGetRecord` or `OnQueryClosePage` runs in every `RunModal`, and a
 /// report's dataitem triggers in every run. Only `OnOpenPage` was followed, so
 /// a `no` could miss a write in `OnAfterGetRecord`, and a page declaring only
 /// `OnQueryClosePage` (Continia DO's `CDO To Language PromptDialog`) left the
-/// run unresolved. Triggers a user's action runs (`OnAction`, a field's
-/// `OnValidate`, `OnInsertRecord`/`OnModifyRecord`/`OnDeleteRecord`) are not
-/// followed: platform entry points are not modelled (the call graph's
+/// run unresolved. The set is may-run: several triggers depend on the data
+/// (`OnAfterGetRecord` needs a record). `OnNewRecord` is one of them: it runs
+/// when a new record is initialized, which a run does by itself when an
+/// insertable card, document or worksheet opens on an empty set (Base App
+/// journals rely on it for `SetUpNewLine`), and otherwise on the user's New.
+/// Leaving it out would let `prove` say `no` about a write in it. Triggers
+/// only a user's action runs (`OnAction`, a field's `OnValidate`,
+/// `OnInsertRecord`/`OnModifyRecord`/`OnDeleteRecord`) are not followed:
+/// platform entry points are not modelled (the call graph's
 /// `platformEntryPointsNotModelled` assumption). A page part's triggers are
 /// not followed either.
 fn run_triggers(kind: ObjectKind) -> Option<(&'static [&'static str], &'static [&'static str])> {
