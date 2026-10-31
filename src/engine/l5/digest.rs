@@ -227,7 +227,36 @@ impl FingerprintIndexes<'_> {
     }
 }
 
+/// Whether a read of a tree applies rule B (spec 2026-10-23 §14.3.5): `On`, the
+/// tree's own rule (`CapabilitySnapshot::boundary`); `Off`, none, so a witness
+/// follows the code into every app (G31: a root inside a dependency). A
+/// parameter of the read, never a change to the tree (context-server design
+/// r3 §13 item 3): a tree read by several requests is never mutated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoundaryMode {
+    On,
+    Off,
+}
+
+impl BoundaryMode {
+    /// The rule a read of `snap` applies.
+    fn rule(self, snap: &CapabilitySnapshot) -> Option<&crate::engine::l5::snapshot::BoundaryRule> {
+        match self {
+            BoundaryMode::On => snap.boundary.as_ref(),
+            BoundaryMode::Off => None,
+        }
+    }
+}
+
 fn build_fingerprint_indexes(snap: &CapabilitySnapshot) -> FingerprintIndexes<'_> {
+    build_fingerprint_indexes_in(snap, BoundaryMode::On)
+}
+
+/// [`build_fingerprint_indexes`] under `boundary`.
+fn build_fingerprint_indexes_in(
+    snap: &CapabilitySnapshot,
+    boundary: BoundaryMode,
+) -> FingerprintIndexes<'_> {
     let mut stable_id_to_display: HashMap<String, String> = HashMap::new();
     let mut routine_display_by_id: HashMap<String, String> = HashMap::new();
 
@@ -297,7 +326,7 @@ fn build_fingerprint_indexes(snap: &CapabilitySnapshot) -> FingerprintIndexes<'_
         String,
         &crate::engine::l5::snapshot::SnapshotCoverageRecord,
     > = HashMap::new();
-    for rec in &snap.coverage {
+    for rec in snap.coverage.iter() {
         coverage_by_routine.insert(rec.subject.clone(), rec);
     }
 
@@ -346,7 +375,7 @@ fn build_fingerprint_indexes(snap: &CapabilitySnapshot) -> FingerprintIndexes<'_
         pd: &snap.pd_solution,
         typed_edges: &snap.typed_edges,
         capability_facts: &snap.capability_facts,
-        boundary: snap.boundary.as_ref(),
+        boundary: boundary.rule(snap),
         boundary_displays: HashMap::new(),
     };
     if idx.boundary.is_some() {
@@ -3413,11 +3442,13 @@ fn digest_query(
         isolated_event_ids,
         ordering_witness_only,
         false,
+        BoundaryMode::On,
     )
 }
 
 /// [`digest_query`] with `include_reads` (digest's `--include-reads`, #246):
-/// table reads become `DB_READ` effects (see [`digest_one_root`]).
+/// table reads become `DB_READ` effects (see [`digest_one_root`]), under
+/// `boundary`.
 fn digest_query_reads(
     snap: &CapabilitySnapshot,
     roots: &[String],
@@ -3425,6 +3456,7 @@ fn digest_query_reads(
     isolated_event_ids: Option<&std::collections::HashSet<String>>,
     ordering_witness_only: bool,
     include_reads: bool,
+    boundary: BoundaryMode,
 ) -> Vec<DigestEntryResult> {
     let mut entries = digest_query_with(
         snap,
@@ -3433,6 +3465,7 @@ fn digest_query_reads(
         isolated_event_ids,
         ordering_witness_only,
         include_reads,
+        boundary,
         |e| e,
     );
     // Sort entries by routineId.
@@ -3443,6 +3476,7 @@ fn digest_query_reads(
 /// [`digest_query`] with each root's entry passed through `reduce` on the worker
 /// that built it — a caller that keeps only a summary of each entry never holds
 /// every entry at once. Results are in `roots` order (unsorted).
+#[allow(clippy::too_many_arguments)]
 fn digest_query_with<T: Send>(
     snap: &CapabilitySnapshot,
     roots: &[String],
@@ -3450,11 +3484,12 @@ fn digest_query_with<T: Send>(
     isolated_event_ids: Option<&std::collections::HashSet<String>>,
     ordering_witness_only: bool,
     include_reads: bool,
+    boundary: BoundaryMode,
     reduce: impl Fn(DigestEntryResult) -> T + Sync,
 ) -> Vec<T> {
     let idx = {
         let _s = crate::engine::perf_trace::span("digest", "digest.fingerprint_indexes");
-        build_fingerprint_indexes(snap)
+        build_fingerprint_indexes_in(snap, boundary)
     };
 
     // callsiteById (&str-keyed) for the ordering engine's cross-hop substrate.
@@ -4828,6 +4863,7 @@ pub(crate) fn compute_digest_effects_for_ordering_over<T: Send>(
         isolated_opt,
         true,
         false,
+        BoundaryMode::On,
         reduce,
     )
 }
@@ -4883,6 +4919,18 @@ pub fn compute_digest_effects_cli(
     only: Option<&[String]>,
     include_reads: bool,
 ) -> Vec<DigestEntryResult> {
+    compute_digest_effects_cli_in(snap, resolved, only, include_reads, BoundaryMode::On)
+}
+
+/// [`compute_digest_effects_cli`] under `boundary`: the read applies the
+/// tree's rule B (`On`) or none (`Off`), the tree untouched.
+pub fn compute_digest_effects_cli_in(
+    snap: &CapabilitySnapshot,
+    resolved: &Model,
+    only: Option<&[String]>,
+    include_reads: bool,
+    boundary: BoundaryMode,
+) -> Vec<DigestEntryResult> {
     let mut roots = reportable_roots(resolved);
     if let Some(only) = only {
         let only: std::collections::HashSet<&str> = only.iter().map(String::as_str).collect();
@@ -4913,7 +4961,15 @@ pub fn compute_digest_effects_cli(
         Some(&isolated)
     };
     // No routineReturnSummaries — matches TS runDigestPipeline behavior.
-    digest_query_reads(snap, &roots, None, isolated_opt, false, include_reads)
+    digest_query_reads(
+        snap,
+        &roots,
+        None,
+        isolated_opt,
+        false,
+        include_reads,
+        boundary,
+    )
 }
 
 /// Project the R4-F digest-effects differential document, PRETTY-serialized with a
@@ -5715,14 +5771,15 @@ mod tests {
             identities: SnapshotIdentityTable {
                 stable_ids: vec![],
                 display_names: vec![],
-            },
+            }
+            .into(),
             capability_facts: vec![],
             typed_edges: vec![],
             operation_index: vec![],
             callsite_index: vec![],
             callsite_resolutions: vec![],
             analysis_gaps: vec![],
-            coverage: vec![],
+            coverage: vec![].into(),
             event_declarations: vec![],
             root_classifications: vec![],
             routine_order_frames: None,
@@ -7418,7 +7475,7 @@ codeunit 50410 DupProducer
             reasons: vec![],
             unknown_targets: vec![],
         };
-        snap.coverage = vec![opaque("Y"), opaque("Z")];
+        snap.coverage = vec![opaque("Y"), opaque("Z")].into();
         let f = insert_fact(
             "Root",
             "inherited",
@@ -7506,7 +7563,7 @@ codeunit 50410 DupProducer
     fn event_first_hop_does_not_seed_an_opaque_subscriber() {
         let mut snap = empty_snapshot();
         snap.capability_facts = vec![ordinary_carrier("W", "opw")];
-        snap.coverage = vec![opaque_coverage("O")];
+        snap.coverage = vec![opaque_coverage("O")].into();
         let out = event_witness(&mut snap, &["O", "W"], 1);
         assert_eq!(out.paths.len(), 1, "{:?}", out.diagnostics);
         let path = witness_hops_json(&out.paths[0].hops);
@@ -7544,7 +7601,7 @@ codeunit 50410 DupProducer
     #[test]
     fn event_first_hop_with_every_subscriber_pruned_is_terminal_not_found() {
         let mut snap = empty_snapshot();
-        snap.coverage = vec![opaque_coverage("O")];
+        snap.coverage = vec![opaque_coverage("O")].into();
         let out = event_witness(&mut snap, &["O"], HARD_PATH_CAP);
         assert!(out.paths.is_empty());
         assert!(out.incomplete);
@@ -7712,7 +7769,7 @@ codeunit 50410 DupProducer
             call_edge("Root", "Y", "cs-root"),
             call_edge("Root", "Z", "cs-root"),
         ];
-        snap.coverage = vec![opaque_coverage("Y"), opaque_coverage("Z")];
+        snap.coverage = vec![opaque_coverage("Y"), opaque_coverage("Z")].into();
         let out = witness_of(&snap, &root_insert("cs-root"), 1);
         assert_eq!(chains(&out), vec!["A"], "{:?}", out.diagnostics);
         assert!(out.truncated);
@@ -7824,8 +7881,9 @@ codeunit 50410 DupProducer
         use crate::engine::l5::snapshot::{SnapshotCallsiteEvidence, SnapshotOperationEvidence};
         let mut snap = empty_snapshot();
         for id in ["R#1", "A#1", "B#1", "W#1", "W2#1"] {
-            snap.identities.stable_ids.push(id.to_string());
-            snap.identities.display_names.push(id.to_string());
+            let ids = std::sync::Arc::make_mut(&mut snap.identities);
+            ids.stable_ids.push(id.to_string());
+            ids.display_names.push(id.to_string());
         }
         let mut inherited = root_insert("cs1").fields();
         inherited.subject = "R#1".to_string();
@@ -7896,8 +7954,9 @@ codeunit 50410 DupProducer
         use crate::engine::l5::snapshot::{SnapshotCallsiteEvidence, SnapshotOperationEvidence};
         let mut snap = empty_snapshot();
         for id in ["R#1", "S#1", "T#1"] {
-            snap.identities.stable_ids.push(id.to_string());
-            snap.identities.display_names.push(id.to_string());
+            let ids = std::sync::Arc::make_mut(&mut snap.identities);
+            ids.stable_ids.push(id.to_string());
+            ids.display_names.push(id.to_string());
         }
         let mut inherited = root_insert("cs1").fields();
         inherited.subject = "R#1".to_string();
@@ -7967,7 +8026,7 @@ codeunit 50410 DupProducer
             call_edge("M", "O", "cs-mo"),
             call_edge("M", "W", "cs-mw"),
         ];
-        snap.coverage = vec![opaque_coverage("O"), opaque_coverage("Z")];
+        snap.coverage = vec![opaque_coverage("O"), opaque_coverage("Z")].into();
         let f = root_insert("cs-root");
         let capped = witness_of(&snap, &f, 1);
         assert_eq!(chains(&capped), vec!["A"]);
@@ -7997,14 +8056,14 @@ codeunit 50410 DupProducer
             call_edge("M", "O", "cs-mo"),
             call_edge("M", "W", "cs-mw"),
         ];
-        beside.coverage = vec![opaque_coverage("O")];
+        beside.coverage = vec![opaque_coverage("O")].into();
         let out = witness_of(&beside, &f, HARD_PATH_CAP);
         assert_eq!(chains(&out), vec!["M>W"]);
         assert!(!has_diag(&out, "opaque-or-unresolved-boundary"));
         // A4-01: no carrier anywhere; the opaque seed is the one witness.
         let mut lone = empty_snapshot();
         lone.typed_edges = vec![call_edge("Root", "Z", "cs-root")];
-        lone.coverage = vec![opaque_coverage("Z")];
+        lone.coverage = vec![opaque_coverage("Z")].into();
         let out = witness_of(&lone, &f, HARD_PATH_CAP);
         assert_eq!(chains(&out), vec!["Z(opaque)"]);
         assert!(has_diag(&out, "opaque-or-unresolved-boundary"));
@@ -8228,7 +8287,7 @@ codeunit 50410 DupProducer
             call_edge("B", "W1", "cs-bw"),
             call_edge("C", "W2", "cs-cw"),
         ];
-        s3.coverage = vec![opaque_coverage("Z")];
+        s3.coverage = vec![opaque_coverage("Z")].into();
         fixtures.push(("(3) lengths", s3));
         // (5) An opaque seed beside carriers at `dmin = 2` (A4-01).
         let mut s5 = empty_snapshot();
@@ -8240,7 +8299,7 @@ codeunit 50410 DupProducer
             call_edge("A", "W", "cs-aw"),
             call_edge("B", "W", "cs-bw"),
         ];
-        s5.coverage = vec![opaque_coverage("Z")];
+        s5.coverage = vec![opaque_coverage("Z")].into();
         fixtures.push(("(5) opaque beside carriers", s5));
 
         let f = root_insert("cs-root");
@@ -8444,7 +8503,8 @@ codeunit 50102 "W10 Merge"
         snap.identities = SnapshotIdentityTable {
             stable_ids: ids.iter().map(|p| p.0.clone()).collect(),
             display_names: ids.iter().map(|p| p.1.clone()).collect(),
-        };
+        }
+        .into();
         snap.boundary = Some(crate::engine::l5::snapshot::BoundaryRule {
             dependency_app: deps
                 .iter()

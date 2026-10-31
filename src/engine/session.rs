@@ -943,18 +943,20 @@ impl View {
                 source_less: crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
             });
             let mut map = raw.take().expect("raw filled above");
-            // G16: consecutive `Effects` readers with the same flags (and no
-            // `--tests`) share ONE tree over the union of their subjects. A
-            // reader's entries and cones off it equal those off a tree over
-            // its own roots (`prove_scoped_equals_unscoped`). Each tree is a
-            // whole-program snapshot, so one per job cost a derive and its
-            // tables per job: 408 `prove` jobs over a program with Base
-            // Application's source grew past 40 GB before the first output.
+            // G16: consecutive `Effects` readers with the same flags share ONE
+            // tree over the union of their subjects. A reader's entries and
+            // cones off it equal those off a tree over its own roots
+            // (`prove_scoped_equals_unscoped`). Each tree is a whole-program
+            // snapshot, so one per job cost a derive and its tables per job:
+            // 408 `prove` jobs over a program with Base Application's source
+            // grew past 40 GB before the first output. `--tests` (digest's,
+            // and every explain's) is a read parameter (context-server design
+            // r3 §6.12): the coverage graph reads only the tree's whole-program
+            // sections, so the group builds it once and shares it.
             let groups: Vec<Vec<usize>> = {
                 let shares = |a: &TreeDemand, b: &TreeDemand| {
                     matches!((&a.read, &b.read), (TreeRead::Effects, TreeRead::Effects))
-                        && !a.tests
-                        && !b.tests
+                        && a.tests == b.tests
                         && a.gaps_in_cone == b.gaps_in_cone
                         && a.include_reads == b.include_reads
                 };
@@ -1050,22 +1052,8 @@ impl View {
                 let (job, demand) = &plan.trees[group[0]];
                 let roots = &demand.subjects.ids;
                 match &demand.read {
-                    TreeRead::Effects if demand.tests => {
-                        // `--tests` keeps its own tree: never grouped.
-                        let t = tree.as_mut().expect("tree filled above");
-                        let roots: Vec<String> = roots.iter().cloned().collect();
-                        let out = crate::engine::l5::digest_cli::digest_effects(
-                            t,
-                            model,
-                            &roots,
-                            demand.tests,
-                            demand.gaps_in_cone,
-                            demand.include_reads,
-                        );
-                        effects.insert(*job, out);
-                    }
                     TreeRead::Effects => {
-                        let t = tree.as_mut().expect("tree filled above");
+                        let t = tree.as_ref().expect("tree filled above");
                         let roots: Vec<Vec<String>> = group
                             .iter()
                             .map(|&m| plan.trees[m].1.subjects.ids.iter().cloned().collect())
@@ -1075,8 +1063,10 @@ impl View {
                             t,
                             model,
                             &readers,
+                            demand.tests,
                             demand.gaps_in_cone,
                             demand.include_reads,
+                            crate::engine::l5::digest_cli::BoundaryMode::On,
                         );
                         for (&m, out) in group.iter().zip(outs) {
                             effects.insert(plan.trees[m].0, out);

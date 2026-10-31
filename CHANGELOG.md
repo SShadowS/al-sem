@@ -42,6 +42,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `plan_explain` deciding its own diff root → "planning canonicalized" panic;
   `reader_for` ignoring `inputs` → exit 2 instead of 0.
 
+### Changed (context-server stage 0: one tree for grouped explain; pure tree reads)
+
+- **Consecutive `explain` jobs on one view share ONE tree and ONE test-coverage
+  graph** (context-server design r3 §6.12). G16's grouping in `View::prepare`
+  excluded every reader with `tests` (every explain, and `digest --tests`);
+  `tests` is now a read parameter: readers group when their flags are equal,
+  and `digest_effects_each` builds the `CoverageGraph` once per tree and hands
+  every reader an `Arc` (`DigestEffects::coverage_graph:
+  Option<Arc<CoverageGraph>>`). The graph reads only the tree's whole-program
+  sections, so it is the same over any subject set; every job's bytes equal its
+  standalone run. New trace counter `build.coverage_graph`.
+- **A tree read never mutates the tree** (r3 §13 item 3). `digest_effects_each`
+  takes `&CapabilitySnapshot` and a `BoundaryMode` (`On`: the tree's rule B,
+  a dependency root still read with it off as G31 says; `Off`: none), threaded
+  as a parameter to the fingerprint indexes (`compute_digest_effects_cli_in`)
+  instead of taking and restoring `tree.boundary`. `CapabilitySnapshot::coverage`
+  and `::identities` are `Arc` fields handed out as `Arc` clones instead of
+  `std::mem::take` (the inventory read, which owns its tree, edits them through
+  `Arc::make_mut` on a unique `Arc`: no copy). No CLI output moves.
+- Tests: `cli_batch_plan::batch_explain_jobs_share_one_tree` (five explain jobs:
+  two routines, one named by two jobs, a test routine, a `--diff`, both formats
+  → `build.snapshot` 1 and `build.coverage_graph` 1, each job equal to its
+  standalone run); `tests_rule_b::a_tree_read_is_a_pure_read` (two reads of one
+  tree answer the same and share its coverage and identities by pointer; an
+  `Off` read gives the cut's per-resource effect and leaves the tree's rule).
+  Discrimination proofs, run and seen to fail, then reverted: the old predicate
+  (`!a.tests && !b.tests`) → counters (5, 5); `BoundaryMode::Off` answering the
+  tree's rule → the grouped effect instead of `DB_MODIFY - Customer`; copying
+  the coverage instead of an `Arc` clone → the pointer check fails.
+
 ### Added (context-server stage 0: the wire codec and the output sink)
 
 - **`al_sem::wire`, the exact-output codec** (context-server design r3 §3.2,

@@ -32,8 +32,9 @@ use crate::engine::l4::effect_store::SummaryBundle;
 use crate::engine::l4::routine_interner::SolveIx;
 use crate::engine::l5::conditionality::EffectConditionality;
 use crate::engine::l5::diff_parser::{DiffFileKind, HunkChange, parse_unified_diff};
+pub use crate::engine::l5::digest::BoundaryMode;
 use crate::engine::l5::digest::{
-    DigestEntryResult, compute_digest_effects_cli, is_known_temp_state,
+    DigestEntryResult, compute_digest_effects_cli_in, is_known_temp_state,
 };
 use crate::engine::l5::snapshot::{
     CapabilitySnapshot, SnapshotCoverageRecord, SnapshotIdentityTable,
@@ -1143,8 +1144,9 @@ pub struct DigestEffects {
     pub unresolved: BTreeMap<String, UnresolvedCone>,
     pub coverage: Arc<Vec<SnapshotCoverageRecord>>,
     pub identities: Arc<SnapshotIdentityTable>,
-    /// `--tests` (#254): the test-coverage graph over the same tree.
-    pub coverage_graph: Option<crate::engine::l5::test_coverage::CoverageGraph>,
+    /// `--tests` (#254): the test-coverage graph over the same tree, one per
+    /// tree, shared by every reader that asked for it.
+    pub coverage_graph: Option<Arc<crate::engine::l5::test_coverage::CoverageGraph>>,
 }
 
 /// A root's unresolved cone: its items and the traversal block (depth,
@@ -1204,40 +1206,56 @@ fn count_gaps_in_cone(
     count
 }
 
-/// [`DigestEffects`] of `roots` off `tree`: `tests`' coverage graph (#254), the
-/// S4 entries and each root's unresolved cone are computed first, then the
-/// identity table and the coverage are moved out (the tree's other readers are
-/// done with them). `gaps_in_cone`: prove's plan, which counts each cone's
-/// analysis gaps. `include_reads`: digest's `--include-reads` (#246).
+/// [`DigestEffects`] of `roots` off `tree`, one reader ([`digest_effects_each`]
+/// with rule B as the tree states it).
+#[cfg(test)]
 pub(crate) fn digest_effects(
-    tree: &mut CapabilitySnapshot,
+    tree: &CapabilitySnapshot,
     model: &Model,
     roots: &[String],
     tests: bool,
     gaps_in_cone: bool,
     include_reads: bool,
 ) -> DigestEffects {
-    let coverage_graph =
-        tests.then(|| crate::engine::l5::test_coverage::CoverageGraph::from_snapshot(tree, model));
-    let mut out = digest_effects_each(tree, model, &[roots], gaps_in_cone, include_reads);
-    let mut one = out.pop().expect("one reader, one result");
-    one.coverage_graph = coverage_graph;
-    one
+    let mut out = digest_effects_each(
+        tree,
+        model,
+        &[roots],
+        tests,
+        gaps_in_cone,
+        include_reads,
+        BoundaryMode::On,
+    );
+    out.pop().expect("one reader, one result")
 }
 
-/// [`digest_effects`] (without `--tests`) for several readers of ONE tree, in
-/// order (G16): each reader's S4 entries and unresolved cones off the same
-/// tree, then the identity table and the coverage moved out once and shared.
-/// Over a tree whose subjects include a reader's roots, a reader's entries and
-/// cones are those of a tree over its roots alone
-/// (`prove_scoped_equals_unscoped`, `t3_digest_scoped_equals_unscoped`).
+/// [`DigestEffects`] for several readers of ONE tree, in order (G16): each
+/// reader's S4 entries and unresolved cones off the same tree, and the tree's
+/// whole-program parts shared by every reader as `Arc` clones: its identity
+/// table and coverage, and with `tests` (#254) its test-coverage graph, built
+/// ONCE per tree (context-server design r3 §6.12, §13 item 3). The tree is
+/// only read: a second read of the same tree answers the same. Over a tree
+/// whose subjects include a reader's roots, a reader's entries and cones are
+/// those of a tree over its roots alone (`prove_scoped_equals_unscoped`,
+/// `t3_digest_scoped_equals_unscoped`); the coverage graph reads only the
+/// tree's whole-program sections (`CoverageGraph::from_snapshot`), so it is
+/// the same over any subject set. `boundary`: rule B as the tree states it
+/// (`On`; a root inside a dependency is still read with it off, G31) or off
+/// for every root. `gaps_in_cone`: prove's plan, which counts each cone's
+/// analysis gaps. `include_reads`: digest's `--include-reads` (#246).
 pub(crate) fn digest_effects_each(
-    tree: &mut CapabilitySnapshot,
+    tree: &CapabilitySnapshot,
     model: &Model,
     readers: &[&[String]],
+    tests: bool,
     gaps_in_cone: bool,
     include_reads: bool,
+    boundary: BoundaryMode,
 ) -> Vec<DigestEffects> {
+    let coverage_graph = tests.then(|| {
+        crate::engine::perf_trace::counter_delta("build.coverage_graph", 1);
+        Arc::new(crate::engine::l5::test_coverage::CoverageGraph::from_snapshot(tree, model))
+    });
     let gap_subjects: Vec<&str> = if gaps_in_cone {
         tree.analysis_gaps
             .iter()
@@ -1293,19 +1311,20 @@ pub(crate) fn digest_effects_each(
             .as_ref()
             .is_some_and(|b| b.dependency_app.contains_key(r))
     };
-    let (dependency_roots, workspace_roots): (Vec<String>, Vec<String>) =
-        all.iter().cloned().partition(is_dependency_root);
+    let (dependency_roots, workspace_roots): (Vec<String>, Vec<String>) = match boundary {
+        BoundaryMode::On => all.iter().cloned().partition(is_dependency_root),
+        BoundaryMode::Off => (Vec::new(), all.clone()),
+    };
     let mut all_entries =
-        compute_digest_effects_cli(tree, model, Some(&workspace_roots), include_reads);
+        compute_digest_effects_cli_in(tree, model, Some(&workspace_roots), include_reads, boundary);
     if !dependency_roots.is_empty() {
-        let rule_b = tree.boundary.take();
-        all_entries.extend(compute_digest_effects_cli(
+        all_entries.extend(compute_digest_effects_cli_in(
             tree,
             model,
             Some(&dependency_roots),
             include_reads,
+            BoundaryMode::Off,
         ));
-        tree.boundary = rule_b;
         all_entries.sort_by(|a, b| a.routine_id.cmp(&b.routine_id));
     }
     // G23, prove's read only: effects a root cannot reach once literal Boolean
@@ -1378,15 +1397,13 @@ pub(crate) fn digest_effects_each(
         })
         .collect();
     drop(gap_subjects);
-    let coverage = Arc::new(std::mem::take(&mut tree.coverage));
-    let identities = Arc::new(std::mem::take(&mut tree.identities));
     read.into_iter()
         .map(|(entries, unresolved)| DigestEffects {
             entries,
             unresolved,
-            coverage: Arc::clone(&coverage),
-            identities: Arc::clone(&identities),
-            coverage_graph: None,
+            coverage: Arc::clone(&tree.coverage),
+            identities: Arc::clone(&tree.identities),
+            coverage_graph: coverage_graph.clone(),
         })
         .collect()
 }
