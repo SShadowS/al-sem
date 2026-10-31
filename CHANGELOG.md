@@ -67,6 +67,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `prove.group_paths`, `prove.reach_effects`, and `digest.unresolved_cones`,
   `digest.coverage_graph`; for explain's render: `explain.indexes` (the
   `Indexes` and `CrossRules` builds), `explain.reaching_tests`, `explain.cards`.
+- **Measured on CDO** (`DO-cdo-baseline/Cloud` `bc3ccb18`, cross-app,
+  release-fast, `/usr/bin/time -v`, shared 22-core machine), ten routines
+  (`IssueReminder`, `DocHandle`, `VendorLedgerSendToQueue`,
+  `BackgroundPdfWithFP`, `PurchaseHeaderGetLogInfo`, `ComputeAffectedCount`,
+  `GetPayload`, `SetInfo`, `SendToQueue`, `FindFirstViableOutputProfileCode`):
+  ten separate runs of the parent binary 243.3 s in total (22.7–28.1 s each,
+  peak 3.43–3.48 GB); ONE multi-root call 27.06 s, peak 3.47 GB; a batch of the
+  ten single-routine jobs 60.70 s before (ten `snapshot.derive`, 19.2 s) and
+  34.74 s after (one derive, 2.5 s; one coverage graph), peak 3.47 → 3.44 GB.
+  The multi-root call's per-request work past the composition: derive 2.55 s
+  + roots 3.26 s + unresolved cones 0.35 s + coverage graph 0.10 s + render
+  0.78 s ≈ 7.0 s, inside the design's 7–8 s hypothesis (one tree ~2.1 s +
+  slowest root ≤ 4.2 s); the composition (5.5 s) and model (≈14 s) are per
+  view. Equality: the multi-root document's ten cards equal the ten separate
+  runs' cards, and every job's stdout of both batches equals its separate run
+  byte for byte. In the new batch each job still pays its own
+  `explain.indexes` (10 × 0.8 s).
 - **Card render is not parallelized** (a deviation from r3 §6.12's "renders in
   parallel", measured): on CDO cross-app, 9 cards cost `explain.cards` 28.6 ms
   in total, while the per-job `explain.indexes` (one `Indexes::new` plus one
