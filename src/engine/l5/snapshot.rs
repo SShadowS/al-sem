@@ -1792,23 +1792,81 @@ fn snapshot_fact(f: &CapabilityFact, subject: &str) -> SnapshotCapabilityFact {
     }
 }
 
-fn capability_fact_sort_key(f: &SnapshotCapabilityFact) -> String {
+/// The eight fields of the table's sort key, in key order: the order is
+/// `cmp_joined` over these, i.e. the byte order of their `|`-join, never a
+/// field-by-field (tuple) order (see `engine::joined_key`).
+fn capability_fact_sort_fields(f: &SnapshotCapabilityFact) -> [&str; 8] {
     [
-        f.subject.clone(),
-        f.op.clone(),
-        f.resource_kind.clone(),
-        f.resource_id.clone().unwrap_or_default(),
-        f.confidence.clone(),
-        f.provenance.clone(),
-        f.witness_callsite_id.clone().unwrap_or_default(),
-        f.witness_operation_id.clone().unwrap_or_default(),
+        f.subject.as_str(),
+        f.op.as_str(),
+        f.resource_kind.as_str(),
+        f.resource_id.as_deref().unwrap_or_default(),
+        f.confidence.as_str(),
+        f.provenance.as_str(),
+        f.witness_callsite_id.as_deref().unwrap_or_default(),
+        f.witness_operation_id.as_deref().unwrap_or_default(),
     ]
-    .join("|")
+}
+
+/// A placeholder row: no heap allocation. [`derive_capability_facts`]
+/// pre-sizes its one output Vec with these and overwrites every one.
+fn blank_snapshot_fact() -> SnapshotCapabilityFact {
+    SnapshotCapabilityFact {
+        subject: String::new(),
+        op: String::new(),
+        resource_kind: String::new(),
+        resource_id: None,
+        resource_arg_source: None,
+        confidence: String::new(),
+        provenance: String::new(),
+        via: String::new(),
+        witness_operation_id: None,
+        witness_callsite_id: None,
+        extra: None,
+        witness_first_hop_operation_id: None,
+        witness_first_hop_event_id: None,
+    }
+}
+
+/// One emitted routine's rows before projection: its direct facts, then its
+/// raw inherited facts, under its snapshot subject.
+struct RowGroup<'a, R> {
+    subject: String,
+    direct: &'a [CapabilityFact],
+    raw: Option<R>,
+}
+
+impl<R: std::borrow::Borrow<[CapabilityFact]>> RowGroup<'_, R> {
+    fn len(&self) -> usize {
+        self.direct.len() + self.raw.as_ref().map_or(0, |r| r.borrow().len())
+    }
 }
 
 /// `take_raw(id)` hands each emitted id's raw inherited facts over, borrowed
 /// (the cut base) or by move (the tree drains its subjects: each Vec drops
 /// once its facts are emitted).
+///
+/// The order is the documented key (`capability_fact_sort_fields`) compared as
+/// one `|`-joined string, STABLE over the emission order: per emitted id, its
+/// direct facts in `direct_full` order, then its raw facts in cone order, ids
+/// in `ws_routines` order. Ties in the key are observable (the table order is
+/// serialized, and `derive_pd_arena` takes the FIRST direct row per
+/// `(subject, operation)`), so the emission order must survive the sort.
+///
+/// How, without a key String per row or a flattened copy (cone-memory design
+/// step 0, 2026-10-31): when no emitted subject contains `|`, the strings
+/// `subject + "|"` are prefix-free across distinct subjects, so the joined key
+/// `subject|rest` orders first by `subject + "|"` and only then by `rest`. The
+/// groups are therefore ordered by `subject + "|"` (stable: groups of one
+/// subject, two internal ids with one stable id, keep emission order), each
+/// group is projected straight into its slice of ONE pre-sized Vec, and each
+/// subject's slice is stable-sorted by the seven remaining fields, slices in
+/// parallel. The comparison is by `subject + "|"`, NOT by the bare subject:
+/// `a` and `ab` join to `a|…` and `ab|…`, and `ab` sorts first.
+///
+/// `stable_routine_id` passes an unmapped internal id through, so a subject
+/// can contain `|`; then grouping is not exact (`a` and `a|b` interleave) and
+/// one global stable sort over all eight fields runs instead.
 fn derive_capability_facts<R>(
     inp: &TreeInputs<'_>,
     mut take_raw: impl FnMut(&str) -> Option<R>,
@@ -1816,46 +1874,106 @@ fn derive_capability_facts<R>(
 where
     R: std::borrow::Borrow<[CapabilityFact]> + Send,
 {
+    use crate::engine::joined_key::cmp_joined;
     use rayon::prelude::*;
-    // Per-routine emission is independent; indexed par_iter + sequential flatten
-    // preserves the exact sequential emission order (ties in the sort key below are
-    // resolved by the STABLE sort from this input order — do not reorder).
     // The facts are per id (`direct_full`, coverage, raw), so the rows of a
     // collided id would emit equal copies: each id is emitted once, at its first
     // row (class K, #160 step 11b §4.6).
     // Only routines with a cone entry contribute (mirrors composeSnapshot:
     // facts come from `r.summary`, present iff the cone ran for the routine).
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let first_rows: Vec<(&ModelRoutine, Option<R>)> = inp
+    let groups: Vec<RowGroup<'_, R>> = inp
         .ws_routines
         .iter()
         .filter(|r| seen.insert(r.id.as_str()) && inp.coverage.contains_key(&r.id))
-        .map(|r| (r, take_raw(&r.id)))
-        .collect();
-    let per_routine: Vec<Vec<SnapshotCapabilityFact>> = first_rows
-        .into_par_iter()
-        .map(|(r, raw)| {
-            let subject = stable_routine_id(&r.id, inp.routine_to_stable);
-            let mut v: Vec<SnapshotCapabilityFact> = Vec::new();
-            if let Some(direct) = inp.direct_full.get(&r.id) {
-                for f in direct {
-                    v.push(snapshot_fact(f, &subject));
-                }
-            }
-            if let Some(raw) = raw {
-                for f in raw.borrow() {
-                    v.push(snapshot_fact(f, &subject));
-                }
-            }
-            v
+        .map(|r| RowGroup {
+            subject: stable_routine_id(&r.id, inp.routine_to_stable),
+            direct: inp.direct_full.get(&r.id).map_or(&[], Vec::as_slice),
+            raw: take_raw(&r.id),
         })
         .collect();
-    let mut all: Vec<SnapshotCapabilityFact> = per_routine.into_iter().flatten().collect();
-    // sort_by_cached_key: identical order to sort_by_key (same key, both stable),
-    // but the 8-field join("|") String is built ONCE per fact instead of per
-    // comparison (~128k facts on CDO).
-    all.sort_by_cached_key(capability_fact_sort_key);
-    all
+    // The delimiter check reads the EMITTED subject strings, not the map.
+    let split = !groups.iter().any(|g| g.subject.contains('|'));
+    let mut order: Vec<usize> = (0..groups.len()).collect();
+    if split {
+        // Stable: equal subjects keep their emission order.
+        order.sort_by(|&x, &y| {
+            cmp_joined(
+                &[groups[x].subject.as_str(), ""],
+                &[groups[y].subject.as_str(), ""],
+            )
+        });
+    }
+    // The subject runs in output order, as row counts (split mode only).
+    let mut runs: Vec<usize> = Vec::new();
+    if split {
+        let mut prev: Option<&str> = None;
+        for &gi in &order {
+            let g = &groups[gi];
+            match runs.last_mut() {
+                Some(n) if prev == Some(g.subject.as_str()) => *n += g.len(),
+                _ => runs.push(g.len()),
+            }
+            prev = Some(g.subject.as_str());
+        }
+    }
+    let total: usize = groups.iter().map(RowGroup::len).sum();
+
+    // ONE Vec of the exact total, filled in place: each group's rows go into
+    // its own slice, groups in parallel; a drained group's raw Vec drops as
+    // soon as its slice is written.
+    let mut rows: Vec<SnapshotCapabilityFact> = Vec::with_capacity(total);
+    (0..total)
+        .into_par_iter()
+        .map(|_| blank_snapshot_fact())
+        .collect_into_vec(&mut rows);
+    {
+        let mut groups: Vec<Option<RowGroup<'_, R>>> = groups.into_iter().map(Some).collect();
+        let mut rest: &mut [SnapshotCapabilityFact] = &mut rows;
+        let mut jobs: Vec<(RowGroup<'_, R>, &mut [SnapshotCapabilityFact])> =
+            Vec::with_capacity(order.len());
+        for &gi in &order {
+            let g = groups[gi].take().expect("each group is placed once");
+            let (head, tail) = std::mem::take(&mut rest).split_at_mut(g.len());
+            rest = tail;
+            jobs.push((g, head));
+        }
+        debug_assert!(rest.is_empty(), "the groups fill the table exactly");
+        jobs.into_par_iter().for_each(|(g, out)| {
+            let raw: &[CapabilityFact] = g.raw.as_ref().map_or(&[], |r| r.borrow());
+            for (slot, f) in out.iter_mut().zip(g.direct.iter().chain(raw)) {
+                *slot = snapshot_fact(f, &g.subject);
+            }
+        });
+    }
+
+    if split {
+        // Every row of a run shares the subject, so the joined key reduces to
+        // the seven remaining fields.
+        let mut slices: Vec<&mut [SnapshotCapabilityFact]> = Vec::with_capacity(runs.len());
+        let mut rest: &mut [SnapshotCapabilityFact] = &mut rows;
+        for n in runs {
+            let (head, tail) = std::mem::take(&mut rest).split_at_mut(n);
+            rest = tail;
+            slices.push(head);
+        }
+        slices.into_par_iter().for_each(|s| {
+            s.sort_by(|a, b| {
+                cmp_joined(
+                    &capability_fact_sort_fields(a)[1..],
+                    &capability_fact_sort_fields(b)[1..],
+                )
+            });
+        });
+    } else {
+        rows.sort_by(|a, b| {
+            cmp_joined(
+                &capability_fact_sort_fields(a),
+                &capability_fact_sort_fields(b),
+            )
+        });
+    }
+    rows
 }
 
 // ---------------------------------------------------------------------------
@@ -3734,5 +3852,420 @@ mod step6_tree_tests {
             b.pd_solution.states.is_empty(),
             "Z's state is outside the arena's scope"
         );
+    }
+}
+
+/// T6 (cone-memory design §4.2/§10, step 0): `derive_capability_facts`'s
+/// subject-split sort and its delimiter fallback against a verbatim copy of
+/// the OLD derivation (per-routine Vecs, a flatten, and a stable
+/// `sort_by_cached_key` on the `|`-joined 8-field key String). Every row is
+/// hand-stated; no production code produces the preconditions.
+#[cfg(test)]
+mod step0_sort_tests {
+    use super::*;
+    use crate::engine::l4::pd_solve::{ConeArena, ConeState, Producer};
+    use crate::engine::l4::summary::TempState;
+    use crate::engine::l5::test_support::{coverage, fact, routine};
+    use std::sync::Arc;
+
+    /// The old key, verbatim (before step 0).
+    fn legacy_sort_key(f: &SnapshotCapabilityFact) -> String {
+        [
+            f.subject.clone(),
+            f.op.clone(),
+            f.resource_kind.clone(),
+            f.resource_id.clone().unwrap_or_default(),
+            f.confidence.clone(),
+            f.provenance.clone(),
+            f.witness_callsite_id.clone().unwrap_or_default(),
+            f.witness_operation_id.clone().unwrap_or_default(),
+        ]
+        .join("|")
+    }
+
+    /// The old `derive_capability_facts`, verbatim but sequential (its
+    /// indexed par_iter + flatten preserved this exact emission order).
+    fn legacy_derive(
+        inp: &TreeInputs<'_>,
+        raw: &HashMap<String, Vec<CapabilityFact>>,
+    ) -> Vec<SnapshotCapabilityFact> {
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut all: Vec<SnapshotCapabilityFact> = Vec::new();
+        for r in inp.ws_routines {
+            if !(seen.insert(r.id.as_str()) && inp.coverage.contains_key(&r.id)) {
+                continue;
+            }
+            let subject = stable_routine_id(&r.id, inp.routine_to_stable);
+            if let Some(direct) = inp.direct_full.get(&r.id) {
+                for f in direct {
+                    all.push(snapshot_fact(f, &subject));
+                }
+            }
+            if let Some(raw) = raw.get(&r.id) {
+                for f in raw {
+                    all.push(snapshot_fact(f, &subject));
+                }
+            }
+        }
+        all.sort_by_cached_key(legacy_sort_key);
+        all
+    }
+
+    /// A hand-stated fact; `payload` lands in `witness_first_hop_event_id`,
+    /// a field outside the sort key, so rows can tie on all 8 key fields and
+    /// still be told apart.
+    fn cf(
+        op: &'static str,
+        rid: &str,
+        provenance: &'static str,
+        wop: Option<&str>,
+        payload: &str,
+    ) -> CapabilityFact {
+        let mut f = fact(op, "table", Some(rid));
+        f.provenance = provenance;
+        f.witness_operation_id = wop.map(str::to_string);
+        f.witness_first_hop_event_id = Some(payload.to_string());
+        f
+    }
+
+    struct Case {
+        ws_routines: Vec<ModelRoutine>,
+        direct_full: HashMap<String, Vec<CapabilityFact>>,
+        raw: HashMap<String, Vec<CapabilityFact>>,
+        routine_to_stable: HashMap<String, String>,
+        coverage: HashMap<String, CoverageRecord>,
+    }
+
+    impl Case {
+        fn new(ids: &[&str], map: &[(&str, &str)]) -> Self {
+            Case {
+                ws_routines: ids.iter().map(|id| routine(id, "procedure")).collect(),
+                direct_full: HashMap::new(),
+                raw: HashMap::new(),
+                routine_to_stable: map
+                    .iter()
+                    .map(|(a, b)| (a.to_string(), b.to_string()))
+                    .collect(),
+                coverage: ids
+                    .iter()
+                    .map(|id| (id.to_string(), coverage("complete")))
+                    .collect(),
+            }
+        }
+
+        /// (new rows, old rows), the new ones taken through the DRAIN form
+        /// (raw moved in), as the tree builds them.
+        fn run(&self) -> (Vec<SnapshotCapabilityFact>, Vec<SnapshotCapabilityFact>) {
+            let event_graph = EventGraph::default();
+            let inp = TreeInputs {
+                ws_routines: &self.ws_routines,
+                typed_edges: &[],
+                calls: &[],
+                dependency_calls: &[],
+                event_graph: &event_graph,
+                direct_full: &self.direct_full,
+                coverage: &self.coverage,
+                routine_to_stable: &self.routine_to_stable,
+                bodyless_dependency: None,
+                source_less_apps: None,
+            };
+            let mut drain = self.raw.clone();
+            let new = derive_capability_facts(&inp, |id| drain.remove(id));
+            // The borrow form must give the same table.
+            let borrowed = derive_capability_facts(&inp, |id| self.raw.get(id).map(Vec::as_slice));
+            assert_eq!(
+                format!("{borrowed:?}"),
+                format!("{new:?}"),
+                "borrow and drain forms agree"
+            );
+            (new, legacy_derive(&inp, &self.raw))
+        }
+
+        /// The producer index `derive_pd_arena` picks for `(owner, op)`: one
+        /// seed state of a producer owned by `owner`.
+        fn producer_fact(&self, rows: &[SnapshotCapabilityFact], owner: &str, op: &str) -> usize {
+            let event_graph = EventGraph::default();
+            let inp = TreeInputs {
+                ws_routines: &self.ws_routines,
+                typed_edges: &[],
+                calls: &[],
+                dependency_calls: &[],
+                event_graph: &event_graph,
+                direct_full: &self.direct_full,
+                coverage: &self.coverage,
+                routine_to_stable: &self.routine_to_stable,
+                bodyless_dependency: None,
+                source_less_apps: None,
+            };
+            let cone = ConeArena {
+                producers: vec![Producer {
+                    fact: Arc::new(fact("insert", "table", Some("T"))),
+                    owner: Arc::from(owner),
+                    operation_id: op.to_string(),
+                }],
+                states: vec![ConeState {
+                    producer: 0,
+                    routine: Arc::from(owner),
+                    t: TempState::Known(false),
+                    reqs: Vec::new(),
+                    seed: true,
+                    dist: 0,
+                    links: 0..0,
+                }],
+                links: Vec::new(),
+                edges: Vec::new(),
+                by_routine: [(Arc::from(owner), vec![0])].into_iter().collect(),
+            };
+            let arena = derive_pd_arena(&inp, &cone, None, &[], rows, &SkippedEdgeKeys::new());
+            arena.states[0].producer_fact
+        }
+    }
+
+    fn payloads(rows: &[SnapshotCapabilityFact]) -> Vec<String> {
+        rows.iter()
+            .map(|r| {
+                format!(
+                    "{}|{}|{}",
+                    r.subject,
+                    r.resource_id.as_deref().unwrap_or(""),
+                    r.witness_first_hop_event_id.as_deref().unwrap_or("")
+                )
+            })
+            .collect()
+    }
+
+    /// The split path: no emitted subject contains `|`.
+    ///
+    /// * `P`: 64 direct rows in a scrambled op order, every op class a
+    ///   COMPLETE 8-field tie of 16 rows with distinct payloads (room for an
+    ///   unstable sort to move them); its `insert` rows carry one operation id,
+    ///   so `derive_pd_arena`'s producer must be the FIRST emitted of them.
+    ///   Plus inherited raw rows that tie among themselves.
+    /// * `A`→`a` and `AB`→`ab`: the subject-prefix trap (`ab|…` < `a|…`).
+    /// * `a` also holds resource ids `x` then `xy`: the field prefix trap
+    ///   inside one subject (`xy` sorts first).
+    /// * `I1`, `I2` → `dup` (two internal ids, one stable id), with `X`
+    ///   between them in model order; their rows tie across the two ids.
+    /// * `D` appears twice in the model: its rows emit once.
+    ///
+    /// DISCRIMINATION (each made with Edit, run, reverted): `sort_unstable_by`
+    /// in the slice sort; a tuple (field-wise) compare of the seven fields;
+    /// ordering groups by the bare subject. Each fails this test.
+    #[test]
+    fn t6_split_sort_equals_the_old_joined_key_sort() {
+        let mut c = Case::new(
+            &["P", "AB", "A", "I1", "X", "I2", "D", "D"],
+            &[
+                ("P", "p"),
+                ("A", "a"),
+                ("AB", "ab"),
+                ("I1", "dup"),
+                ("I2", "dup"),
+                ("X", "x"),
+                ("D", "d"),
+            ],
+        );
+        const OPS: [&str; 4] = ["read", "insert", "modify", "delete"];
+        let p_direct: Vec<CapabilityFact> = (0..64)
+            .map(|i| {
+                let op = OPS[(i * 7 + 3) % 4];
+                let wop = (op == "insert").then_some("opP");
+                cf(op, "T", "direct", wop, &format!("p{i:02}"))
+            })
+            .collect();
+        c.direct_full.insert("P".into(), p_direct);
+        c.raw.insert(
+            "P".into(),
+            (0..12)
+                .map(|i| {
+                    cf(
+                        OPS[(i * 5) % 4],
+                        "U",
+                        "inherited",
+                        None,
+                        &format!("r{i:02}"),
+                    )
+                })
+                .collect(),
+        );
+        c.direct_full.insert(
+            "A".into(),
+            vec![
+                cf("read", "x", "direct", None, "a0"),
+                cf("read", "xy", "direct", None, "a1"),
+            ],
+        );
+        c.direct_full
+            .insert("AB".into(), vec![cf("read", "x", "direct", None, "ab0")]);
+        for (id, n) in [("I1", "i1"), ("I2", "i2")] {
+            c.direct_full.insert(
+                id.into(),
+                (0..3)
+                    .map(|k| cf("read", "T", "direct", None, &format!("{n}-{k}")))
+                    .collect(),
+            );
+        }
+        c.direct_full
+            .insert("X".into(), vec![cf("read", "T", "direct", None, "x0")]);
+        c.direct_full.insert(
+            "D".into(),
+            vec![
+                cf("read", "T", "direct", None, "d0"),
+                cf("read", "T", "direct", None, "d1"),
+            ],
+        );
+
+        let (new, old) = c.run();
+        // Preconditions, stated on the OLD output: the traps are live.
+        let old_p = payloads(&old);
+        let pos = |p: &str| old_p.iter().position(|s| s == p).expect(p);
+        assert!(
+            pos("ab|x|ab0") < pos("a|x|a0"),
+            "precondition: ab sorts before a"
+        );
+        assert!(
+            pos("a|xy|a1") < pos("a|x|a0"),
+            "precondition: xy sorts before x"
+        );
+        assert!(
+            pos("dup|T|i1-2") < pos("dup|T|i2-0"),
+            "precondition: I1's ties first"
+        );
+        assert_eq!(
+            old_p.iter().filter(|s| s.starts_with("d|")).count(),
+            2,
+            "precondition: the duplicated id emits once"
+        );
+        assert!(
+            !old.iter().any(|r| r.subject.contains('|')),
+            "precondition: the split path runs"
+        );
+        assert_eq!(new.len(), old.len(), "row count");
+        assert_eq!(payloads(&new), old_p, "row order (payloads)");
+        assert_eq!(format!("{new:?}"), format!("{old:?}"), "every field");
+
+        // The pd producer: the FIRST emitted `insert` of P, at the same index.
+        let first_insert = (0..64).find(|i| OPS[(i * 7 + 3) % 4] == "insert").unwrap();
+        let (ni, oi) = (
+            c.producer_fact(&new, "P", "opP"),
+            c.producer_fact(&old, "P", "opP"),
+        );
+        assert_eq!(ni, oi, "derive_pd_arena's producer index");
+        assert_eq!(
+            new[ni].witness_first_hop_event_id.as_deref(),
+            Some(format!("p{first_insert:02}").as_str()),
+            "the producer row is the first emitted tie"
+        );
+    }
+
+    /// Whole-corpus equivalence: on every `tests/r0-corpus` and
+    /// `tests/fixtures` app, single-app and cross-app, the new derivation
+    /// gives the old table field for field, and the pd arena built on it
+    /// (producer indexes, links, per-routine states) is the old one.
+    #[test]
+    fn t6_every_corpus_app_gives_the_old_table_and_pd_arena() {
+        use crate::engine::l4::capability_cone::build_r3a3_source_only_base;
+        use crate::program::model::program_calls::{
+            assemble_and_resolve_cross_app_program, assemble_and_resolve_workspace_program,
+        };
+        use crate::program::model::workspace::{AssemblyNeeds, MODEL_INSTANCE_ID_DEFAULT};
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+        let mut dirs: Vec<std::path::PathBuf> = ["r0-corpus", "fixtures"]
+            .iter()
+            .flat_map(|d| walkdir::WalkDir::new(root.join(d)).max_depth(3))
+            .map(|e| e.unwrap().into_path())
+            .filter(|p| p.join("app.json").is_file())
+            .collect();
+        dirs.sort();
+        let (mut models, mut rows, mut inherited, mut states) = (0usize, 0usize, 0usize, 0usize);
+        let mut failures: Vec<String> = Vec::new();
+        for dir in &dirs {
+            let where_ = dir.strip_prefix(&root).unwrap_or(dir).display().to_string();
+            let inputs = crate::program::inputs::WorkspaceInputs::read(dir, &Default::default());
+            let single = assemble_and_resolve_workspace_program(
+                &inputs,
+                MODEL_INSTANCE_ID_DEFAULT,
+                false,
+                AssemblyNeeds::BASE,
+            );
+            let cross = assemble_and_resolve_cross_app_program(
+                &inputs,
+                MODEL_INSTANCE_ID_DEFAULT,
+                false,
+                AssemblyNeeds::BASE,
+            )
+            .ok()
+            .map(|r| r.resolved);
+            for (mode, m) in [("single-app", single), ("cross-app", cross)] {
+                let Some(m) = m else { continue };
+                models += 1;
+                let base = build_r3a3_source_only_base(&m);
+                let inp = TreeInputs {
+                    ws_routines: &base.ws_routines,
+                    typed_edges: &base.graph.typed_edges,
+                    calls: &base.calls.edges,
+                    dependency_calls: &[],
+                    event_graph: &base.event_graph,
+                    direct_full: &base.direct_full,
+                    coverage: &base.coverage,
+                    routine_to_stable: &base.routine_to_stable,
+                    bodyless_dependency: None,
+                    source_less_apps: None,
+                };
+                let new = derive_capability_facts(&inp, |id| base.raw.get(id).map(Vec::as_slice));
+                let old = legacy_derive(&inp, &base.raw);
+                rows += old.len();
+                inherited += old.iter().filter(|r| r.provenance == "inherited").count();
+                if format!("{new:?}") != format!("{old:?}") {
+                    failures.push(format!("{where_} ({mode}): the tables differ"));
+                    continue;
+                }
+                let (edges, skipped) = derive_typed_edges(&inp.ledger());
+                let arena = |facts: &[SnapshotCapabilityFact]| {
+                    let a = derive_pd_arena(&inp, &base.pd_solution, None, &edges, facts, &skipped);
+                    let by: std::collections::BTreeMap<_, _> = a.by_routine.iter().collect();
+                    format!("{:?} {:?} {by:?}", a.states, a.links)
+                };
+                states += base.pd_solution.states.len();
+                if arena(&new) != arena(&old) {
+                    failures.push(format!("{where_} ({mode}): the pd arenas differ"));
+                }
+            }
+        }
+        assert!(models > 100, "precondition: {models} models composed");
+        assert!(inherited > 0, "precondition: {rows} rows, some inherited");
+        assert!(states > 0, "precondition: some producer states");
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// The fallback: the unmapped internal id `a|b` passes through
+    /// `stable_routine_id` as the subject, and its row sorts BETWEEN two rows
+    /// of subject `a` (`a|a…` < `a|b|…` < `a|c…`), so grouping by subject
+    /// cannot be exact. DISCRIMINATION: skipping the delimiter scan (always
+    /// split) fails this test.
+    #[test]
+    fn t6_a_delimiter_subject_takes_the_global_sort() {
+        let mut c = Case::new(&["A", "a|b", "B"], &[("A", "a"), ("B", "b")]);
+        c.direct_full.insert(
+            "A".into(),
+            vec![
+                cf("read", "T", "direct", None, "a-read"),
+                cf("commit", "T", "direct", None, "a-commit"),
+                cf("assert", "T", "direct", None, "a-assert"),
+            ],
+        );
+        c.direct_full
+            .insert("a|b".into(), vec![cf("x", "T", "direct", None, "ab-x")]);
+        c.direct_full
+            .insert("B".into(), vec![cf("read", "T", "direct", None, "b-read")]);
+        let (new, old) = c.run();
+        let subjects: Vec<&str> = old.iter().map(|r| r.subject.as_str()).collect();
+        assert_eq!(
+            subjects,
+            ["a", "a|b", "a", "a", "b"],
+            "precondition: the `|` subject interleaves with `a`"
+        );
+        assert_eq!(payloads(&new), payloads(&old), "row order (payloads)");
+        assert_eq!(format!("{new:?}"), format!("{old:?}"), "every field");
     }
 }

@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (capability snapshot sort, cone-memory step 0)
+
+- **The capability snapshot's sort no longer builds a key `String` per row or a
+  flattened copy of the rows; the output is byte-identical.** Cross-app CDO
+  `compose_snapshot` (the CDO baseline at `bc3ccb18`, clean; Linux, 22 cores, 93 GB,
+  `release`-thin-LTO probe = `release-fast`, `/usr/bin/time -v`, one run each, quiet
+  machine): peak RSS **46.8 GB -> 33.4 GB**, whole run 101 s -> 79 s; the
+  `compose_snapshot_from_base` phase 32.8 s -> 18.0 s, its live-heap peak
+  37.6 GiB -> 27.9 GiB (transient over the result 8.8 GiB -> 0.09 GiB).
+  `derive_capability_facts` (`src/engine/l5/snapshot.rs`) now orders the emitted
+  routines by `subject + "|"`, projects each one's rows straight into its slice of
+  ONE pre-sized Vec (in parallel; a drained raw Vec drops as its slice is written),
+  and stable-sorts each subject's slice in parallel on the seven remaining key fields.
+  This is exact because `subject + "|"` is prefix-free when no subject contains `|`;
+  the check reads the EMITTED subjects (`stable_routine_id` passes unmapped ids
+  through), and any `|` falls back to one global stable sort. New
+  `engine::joined_key::cmp_joined` compares field lists as their `|`-join, byte for
+  byte, without allocating (comparing fields one by one is a different order:
+  `a`/`ab` join to `a|…`/`ab|…`, and `ab` sorts first). The cone's `sort_inherited`
+  and policy's fact sort use it too, still stable.
+  Proof: the whole serialized snapshot document of the cross-app FULL model on CDO
+  (9,463,055,195 bytes of JSON, every field of the `project_r4f_snapshot` envelope)
+  hashes the same with BLAKE3 before and after
+  (`3b480fbf53066d4d071422ee4b9390f768da655687600860937e95c2c2a2ddaf`), and so does the
+  pd arena `derive_pd_arena` builds on it (2,822,661 states, 3,928,044 links, producer
+  indexes included). No golden was regenerated.
+  Tests: `joined_key::tests::t2_*` (named cases and all 46,656 pairs of three-field
+  keys over `{"", a, ab, |, a|, b}` against `join("|")`); `snapshot::step0_sort_tests`
+  against a verbatim copy of the old derivation: hand-stated rows with 16-way complete
+  8-field ties of distinct payloads, subjects `a`/`ab`, field values `x`/`xy`, two
+  internal ids on one stable id, a duplicated internal id, the `derive_pd_arena`
+  producer among tied direct rows, an unmapped `a|b` subject that interleaves with `a`
+  (the fallback), and every `tests/r0-corpus` + `tests/fixtures` app single- and
+  cross-app (table and pd arena). Discrimination, each break made and reverted with
+  Edit: `sort_unstable_by` in the slice sort -> the tie test fails (pass after
+  revert); a field-wise compare -> the tie test fails, and the corpus test fails on
+  `ws-r2a-record-types` and `ws-rules` (both modes); grouping by the bare subject ->
+  fails (`a` before `ab`); no delimiter fallback -> the `a|b` test fails; in
+  `cmp_joined`, a field-wise answer at a prefix -> both T2 tests fail; dropping the
+  virtual `|` -> both T2 tests fail. All pass after each revert.
+
 ### Changed (cdo-gate memory)
 
 - **`scripts/cdo-gate` peaks at 10.5 GB, not 46.9 GB, and runs in ~3 min instead of

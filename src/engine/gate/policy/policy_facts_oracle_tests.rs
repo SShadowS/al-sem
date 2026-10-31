@@ -62,7 +62,7 @@ fn mode_rules() -> Vec<Rule> {
 }
 
 fn render(mut facts: Vec<&CapabilityFact>) -> Vec<String> {
-    facts.sort_by_cached_key(|f| fact_sort_key(f));
+    sort_facts(&mut facts);
     facts.iter().map(|f| format!("{f:?}")).collect()
 }
 

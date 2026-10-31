@@ -13,6 +13,7 @@ pub mod gate;
 pub mod ids;
 /// #222: the incremental L4 host (`IncrementalHost`).
 pub mod incremental;
+pub(crate) mod joined_key;
 pub mod l4;
 pub mod l5;
 /// Permanent, env-gated performance tracing (spec 2026-07-18). Zero-cost when

@@ -1795,14 +1795,10 @@ fn retag(rep: &CapabilityFact, subject: &str, edge: &TypedOutEdge) -> Capability
     }
 }
 
-/// Sort key for the final capabilityFactsInherited array. Mirrors
-/// `inheritedOutputSortKey`.
-fn inherited_output_sort_key(f: &CapabilityFact) -> String {
-    // ⟨C1 Task 4⟩ Borrowed throughout — `join` copies into the one output
-    // String either way, so the seven per-call clones this used to make were
-    // pure waste (this runs once per fact per `sort_inherited`). Byte-identical:
-    // `as_deref().unwrap_or_default()` is `""` for `None`, exactly what
-    // `clone().unwrap_or_default()` produced.
+/// The fields of the final capabilityFactsInherited array's sort key, in key
+/// order (mirrors `inheritedOutputSortKey`). The order is their `|`-JOINED
+/// byte order (`cmp_joined`), never a field-by-field order: `None` is `""`.
+fn inherited_output_sort_fields(f: &CapabilityFact) -> [&str; 7] {
     [
         f.op,
         f.resource_kind,
@@ -1812,11 +1808,17 @@ fn inherited_output_sort_key(f: &CapabilityFact) -> String {
         f.witness_callsite_id.as_deref().unwrap_or_default(),
         f.witness_operation_id.as_deref().unwrap_or_default(),
     ]
-    .join("|")
 }
 
+/// Stable, by the joined key; compared in place (no key String per fact,
+/// cone-memory design step 0).
 fn sort_inherited(mut facts: Vec<CapabilityFact>) -> Vec<CapabilityFact> {
-    facts.sort_by_key(inherited_output_sort_key);
+    facts.sort_by(|a, b| {
+        crate::engine::joined_key::cmp_joined(
+            &inherited_output_sort_fields(a),
+            &inherited_output_sort_fields(b),
+        )
+    });
     facts
 }
 

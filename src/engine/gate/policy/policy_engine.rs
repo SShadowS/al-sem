@@ -83,8 +83,9 @@ fn passes_coverage_gate(coverage_status: Option<&str>, gate: &str) -> bool {
     }
 }
 
-/// `factSortKey(f)` — joins 8 fields with `|`, undefined→"".
-fn fact_sort_key(f: &CapabilityFact) -> String {
+/// `factSortKey(f)`'s 8 fields, undefined→"". The key is their `|`-JOINED
+/// byte order (`cmp_joined`), never a field-by-field order.
+fn fact_sort_fields(f: &CapabilityFact) -> [&str; 8] {
     [
         f.op,
         f.resource_kind,
@@ -95,7 +96,13 @@ fn fact_sort_key(f: &CapabilityFact) -> String {
         f.via,
         f.witness_callsite_id.as_deref().unwrap_or(""),
     ]
-    .join("|")
+}
+
+/// Stable sort by `factSortKey`, compared in place (no key String per fact).
+fn sort_facts(facts: &mut [&CapabilityFact]) {
+    facts.sort_by(|a, b| {
+        crate::engine::joined_key::cmp_joined(&fact_sort_fields(a), &fact_sort_fields(b))
+    });
 }
 
 /// Select facts for a rule's `facts` mode. al-sem `selectFacts`.
@@ -373,7 +380,7 @@ pub fn run_policy_engine(model: &PolicyModel, policy: &PolicyDoc) -> RunOutput {
                 ),
             };
             let mut facts = select_facts(rule, direct, raw);
-            facts.sort_by_cached_key(|f| fact_sort_key(f));
+            sort_facts(&mut facts);
             if facts.is_empty() {
                 summary.routines_passed += 1;
                 continue;
