@@ -169,6 +169,7 @@ mod cli_recordref_open_temporary;
 mod cli_s6_consumers;
 mod cli_sarif_rule_catalog;
 mod cli_secrettext_arg;
+mod cli_snapshot_memory;
 mod cli_snapshot_schema4;
 mod cli_source_dependencies;
 mod cli_split_object_readers;

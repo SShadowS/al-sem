@@ -65,7 +65,8 @@ fn usage() -> ExitCode {
          <workspace-or-.app>\n\
          \x20      aldump --switch-dump <workspace> <out-dir>\n\
          \x20      aldump --dump-dependency-source <workspace> <out-dir>\n\
-         \x20      aldump --switch-compare <dump-dir-A> <dump-dir-B> [--sample N] [--width N]"
+         \x20      aldump --switch-compare <dump-dir-A> <dump-dir-B> [--sample N] [--width N]\n\
+         \x20      aldump --snapshot-memory <workspace> [--single-app] [--hash]"
     );
     ExitCode::FAILURE
 }
@@ -259,6 +260,280 @@ fn compiler_oracle_cmd(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// `aldump --snapshot-memory <workspace> [--single-app] [--hash]`: measure
+/// `compose_snapshot` (the cone base, then the snapshot from it) on the model
+/// `alsem analyze` builds, cross-app by default (the full model: workspace plus
+/// the dependency code it demands) or the workspace alone with `--single-app`.
+/// Re-measures the cone-memory targets
+/// (`docs/superpowers/specs/2026-10-31-cone-memory-design.md`, "Re-measuring").
+///
+/// Prints one JSON object on stdout: per-phase wall time and resident memory,
+/// the build's census marks, the counts that size the structures (inherited
+/// and direct facts, their shared tables, snapshot rows and tables, the
+/// producer-solve arena) and their row sizes. With `--hash`, also BLAKE3 of
+/// every serialized snapshot section, of the whole document (the sections
+/// concatenated in order) and of the producer-solve arena, which the document
+/// omits: a memory change that must keep the output byte-identical compares
+/// them before and after.
+///
+/// Memory is the process's resident set (`VmRSS`/`VmHWM` from
+/// `/proc/self/status`; `null` where that file does not exist), not live heap:
+/// a counting allocator would be `aldump`'s global allocator for every mode,
+/// adding two atomic operations to each allocation of every run, the timed
+/// north-star command included. Live heap by phase stays with
+/// `tools/census-probe`. `--hash` streams ~9.5 GB of JSON through BLAKE3 on
+/// CDO and raises peak RSS a little; take the reference peak from a run
+/// without it, under `/usr/bin/time -v`.
+///
+/// Needs (the `declared-needs` skill): the scope fixes the build profile
+/// (cross-app → `FULL`, single-app → summary bodies) and the assembly needs
+/// are `AssemblyNeeds::BASE`, what a default `analyze` builds, under the
+/// workspace's gate model-instance id, so the counts and hashes are those of
+/// the model a real run composes from.
+fn snapshot_memory_cmd(args: &[String]) -> ExitCode {
+    use al_sem::engine::l4::capability_cone::{CapabilityFact, build_r3a3_source_only_base};
+    use al_sem::engine::l5::snapshot::{SnapshotCapabilityFact, compose_snapshot_from_base};
+    use serde_json::{Value, json};
+    use std::sync::{Mutex, OnceLock};
+    use std::time::Instant;
+
+    const USAGE: &str = "usage: aldump --snapshot-memory <workspace> [--single-app] [--hash]";
+    let (mut single_app, mut hash, mut ws) = (false, false, None);
+    for a in args {
+        match a.as_str() {
+            "--single-app" => single_app = true,
+            "--hash" => hash = true,
+            _ if ws.is_none() && !a.starts_with("--") => ws = Some(PathBuf::from(a)),
+            _ => {
+                eprintln!("aldump: error: unexpected argument {a:?}\n{USAGE}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let Some(ws) = ws else {
+        eprintln!("{USAGE}");
+        return ExitCode::FAILURE;
+    };
+
+    /// A `/proc/self/status` field in KiB (`None` off Linux).
+    fn status_kib(key: &str) -> Option<u64> {
+        let s = std::fs::read_to_string("/proc/self/status").ok()?;
+        let line = s.lines().find(|l| l.starts_with(key))?;
+        line.split_whitespace().nth(1)?.parse().ok()
+    }
+    static START: OnceLock<Instant> = OnceLock::new();
+    static MARKS: Mutex<Vec<Value>> = Mutex::new(Vec::new());
+    fn on_mark(name: &'static str) {
+        let secs = START.get().map_or(0.0, |t| t.elapsed().as_secs_f64());
+        let row = json!({ "name": name, "secs": secs, "rssKiB": status_kib("VmRSS:") });
+        MARKS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(row);
+    }
+    START.get_or_init(Instant::now);
+    // The hook is set only in this mode; every other run pays one atomic load
+    // per mark, as before.
+    let _ = al_sem::census_hook::HOOK.set(on_mark);
+    let mut phases: Vec<Value> = Vec::new();
+    let mut end_phase = |name: &str, t: Instant| {
+        phases.push(json!({
+            "name": name,
+            "secs": t.elapsed().as_secs_f64(),
+            "rssKiB": status_kib("VmRSS:"),
+            "peakRssKiB": status_kib("VmHWM:"),
+        }));
+    };
+
+    let t = Instant::now();
+    let Some(id) = al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id(&ws)
+    else {
+        eprintln!(
+            "aldump: error: {}: no app.json or unreadable workspace",
+            ws.display()
+        );
+        return ExitCode::FAILURE;
+    };
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
+    let needs = al_sem::program::model::workspace::AssemblyNeeds::BASE;
+    let model = if single_app {
+        al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
+            &inputs, &id, false, needs,
+        )
+    } else {
+        al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
+            &inputs, &id, false, needs,
+        )
+        .ok()
+        .map(|p| p.resolved)
+    };
+    let Some(model) = model else {
+        eprintln!("aldump: error: {}: the model did not build", ws.display());
+        return ExitCode::FAILURE;
+    };
+    end_phase("model", t);
+
+    let t = Instant::now();
+    let base = build_r3a3_source_only_base(&model);
+    end_phase("coneBase", t);
+
+    let t = Instant::now();
+    let snap = compose_snapshot_from_base(&model, &base, None);
+    end_phase("composeSnapshot", t);
+
+    let tables = base.raw.tables();
+    let snap_tables = snap
+        .capability_facts
+        .first()
+        .map_or((0, 0, 0), SnapshotCapabilityFact::table_lens);
+    let pd = &snap.pd_solution;
+    let counts = json!({
+        "modelRoutines": model.workspace.routines.len(),
+        "modelCalls": model.calls.edges.len(),
+        "coneTypedEdges": base.graph.typed_edges.len(),
+        "routinesWithInherited": base.raw.len(),
+        "inheritedFacts": base.raw.total_facts(),
+        "inheritedTables": {
+            "subjects": tables.subjects.len(),
+            "reps": tables.reps.len(),
+            "hops": tables.hops.len(),
+        },
+        "directFacts": base.direct_full.values().map(Vec::len).sum::<usize>(),
+        "coneCoverage": base.coverage.len(),
+        "snapshot": {
+            "capabilityFacts": snap.capability_facts.len(),
+            "tables": {
+                "subjects": snap_tables.0,
+                "reps": snap_tables.1,
+                "hops": snap_tables.2,
+            },
+            "typedEdges": snap.typed_edges.len(),
+            "operationIndex": snap.operation_index.len(),
+            "callsiteIndex": snap.callsite_index.len(),
+            "callsiteResolutions": snap.callsite_resolutions.len(),
+            "coverage": snap.coverage.len(),
+        },
+        "pdArena": {
+            "states": pd.states.len(),
+            "links": pd.links.len(),
+            "routines": pd.by_routine.len(),
+        },
+    });
+
+    let hashes = if hash {
+        let t = Instant::now();
+        /// A BLAKE3 sink that counts the bytes it is fed.
+        struct B3(blake3::Hasher, u64);
+        impl std::io::Write for B3 {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.update(b);
+                self.1 += b.len() as u64;
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut doc = B3(blake3::Hasher::new(), 0);
+        let mut sections: Vec<Value> = Vec::new();
+        let mut section = |name: &str, v: &dyn erased::Ser| -> Result<(), serde_json::Error> {
+            let mut one = B3(blake3::Hasher::new(), 0);
+            v.write_json(&mut one)?;
+            v.write_json(&mut doc)?;
+            sections.push(json!({
+                "name": name,
+                "bytes": one.1,
+                "blake3": one.0.finalize().to_hex().to_string(),
+            }));
+            Ok(())
+        };
+        // The document's sections, in its order (the cone-memory spec §9).
+        let written = (|| {
+            section("identities", &snap.identities)?;
+            section("capabilityFacts", &snap.capability_facts)?;
+            section("typedEdges", &snap.typed_edges)?;
+            section("operationIndex", &snap.operation_index)?;
+            section("callsiteIndex", &snap.callsite_index)?;
+            section("callsiteResolutions", &snap.callsite_resolutions)?;
+            section("analysisGaps", &snap.analysis_gaps)?;
+            section("coverage", &snap.coverage)?;
+            section("eventDeclarations", &snap.event_declarations)?;
+            section("rootClassifications", &snap.root_classifications)?;
+            section("routineOrderFrames", &snap.routine_order_frames)
+        })();
+        if let Err(e) = written {
+            eprintln!("aldump: error: serializing the snapshot: {e}");
+            return ExitCode::FAILURE;
+        }
+        // The producer-solve arena (not serialized): each state, the links,
+        // then the per-routine membership in key order. Its Debug forms are
+        // part of the hash, so a changed derive moves it: compare it only
+        // across a change that keeps those types.
+        let mut ph = blake3::Hasher::new();
+        for s in &pd.states {
+            ph.update(
+                format!(
+                    "{}|{:?}|{}|{}|{:?}\n",
+                    s.producer_fact, s.temp_state, s.routine, s.seed, s.links
+                )
+                .as_bytes(),
+            );
+        }
+        ph.update(format!("{:?}\n", pd.links).as_bytes());
+        let by: std::collections::BTreeMap<_, _> = pd.by_routine.iter().collect();
+        ph.update(format!("{by:?}").as_bytes());
+        end_phase("hash", t);
+        json!({
+            "sections": sections,
+            "document": { "bytes": doc.1, "blake3": doc.0.finalize().to_hex().to_string() },
+            "pdArena": { "blake3": ph.finalize().to_hex().to_string() },
+        })
+    } else {
+        Value::Null
+    };
+
+    let marks = std::mem::take(
+        &mut *MARKS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    let out = json!({
+        "scope": if single_app { "singleApp" } else { "crossApp" },
+        "phases": phases,
+        "marks": marks,
+        "peakRssKiB": status_kib("VmHWM:"),
+        "counts": counts,
+        "rowBytes": {
+            "capabilityFact": std::mem::size_of::<CapabilityFact>(),
+            "snapshotCapabilityFact": std::mem::size_of::<SnapshotCapabilityFact>(),
+        },
+        "hash": hashes,
+    });
+    match serde_json::to_string_pretty(&out) {
+        Ok(s) => {
+            println!("{s}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("aldump: error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Object-safe JSON writing for `--snapshot-memory`'s per-section hashing
+/// (`serde::Serialize` itself is not object safe).
+mod erased {
+    pub trait Ser {
+        fn write_json(&self, w: &mut dyn std::io::Write) -> Result<(), serde_json::Error>;
+    }
+    impl<T: serde::Serialize> Ser for T {
+        fn write_json(&self, w: &mut dyn std::io::Write) -> Result<(), serde_json::Error> {
+            serde_json::to_writer(w, self)
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let code = run_main();
     // The process-cumulative cone census, once, after every cone the mode
@@ -278,6 +553,7 @@ fn run_main() -> ExitCode {
         Some("--dump-dependency-source") => return dump_dependency_source_cmd(&raw[1..]),
         Some("--switch-compare") => return switch_compare_cmd(&raw[1..]),
         Some("--compiler-oracle") => return compiler_oracle_cmd(&raw[1..]),
+        Some("--snapshot-memory") => return snapshot_memory_cmd(&raw[1..]),
         _ => {}
     }
     let mut l2 = false;

@@ -615,6 +615,14 @@ impl SnapshotCapabilityFact {
         &self.tables
     }
 
+    /// The lengths of the shared tables this row indexes: `(subjects, reps,
+    /// hops)`. Every row of one snapshot shares one set of tables, so any row
+    /// gives the snapshot's (`aldump --snapshot-memory` reports them).
+    pub fn table_lens(&self) -> (usize, usize, usize) {
+        let t = &self.tables;
+        (t.subjects.len(), t.reps.len(), t.hops.len())
+    }
+
     /// The hop index: `NO_HOP` on a direct row (T0).
     #[cfg(test)]
     pub(crate) fn hop_index(&self) -> u32 {

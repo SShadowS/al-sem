@@ -749,3 +749,42 @@ no golden regenerated; no declared-needs change; the sort trap and
    contract and oracle plan are accepted.
 2. Keep the probe: commit it as `tools/cone-probe` in step 3 so §7 can be re-measured.
 3. The ordering-cell kind-scoped build (§6): file after step 2's measurements.
+
+## 13. Re-measuring
+
+The throwaway probe of §2.1 is now a committed `aldump` mode. It replaces the
+`tools/cone-probe` plan of §8 step 3 and §12 item 2. It builds the same model (the gate
+model-instance id, `AssemblyNeeds::BASE`; cross-app by default, `--single-app` for the
+workspace alone). It runs `build_r3a3_source_only_base` and `compose_snapshot_from_base`
+as timed phases and prints JSON: phases (wall time, `VmRSS`, `VmHWM`), census marks,
+counts (inherited and direct facts, `InheritedTables` and snapshot table sizes, snapshot
+rows, pd arena) and row sizes. `--hash` adds BLAKE3 per serialized section, of the whole
+document and of the pd arena (the §9 comparison). It reports RSS, not live heap: a
+counting allocator would become `aldump`'s global allocator for every mode. Live heap
+stays with `tools/census-probe`.
+
+```
+cargo build --profile release-fast --bin aldump
+/usr/bin/time -v target/release-fast/aldump --snapshot-memory $CDO_WS        # peak RSS
+target/release-fast/aldump --snapshot-memory $CDO_WS --hash                  # hashes
+target/release-fast/aldump --snapshot-memory $CDO_WS --single-app
+```
+
+Reference values (master `93634d11`, after step 3; CDO `bc3ccb18`; release-fast; Linux,
+22 cores; 2026-10-31):
+
+| Run | Peak RSS | Wall | Facts |
+|---|--:|--:|---|
+| cross-app | **5.29 GB** (the step-2 probe: 5.28 GB) | 54 s | 17,017,608 inherited + 39,429 direct = 17,057,037 rows |
+| cross-app `--hash` | 5.36 GB (hashing adds ~0.07 GB; take peak RSS from the run without it) | 110 s | same |
+| single-app | 0.82 GB | 6.3 s | 162,651 inherited + 4,717 direct |
+
+Cross-app tables: `InheritedTables` 33,285 subjects, 27,477 reps, 38,081 hops; snapshot
+tables 33,285, 66,906, 38,081; pd arena 2,822,661 states, 3,928,044 links, 9,049
+routines. Hashes, equal to the step-2 probe's:
+
+- document (9,463,055,195 bytes): `3b480fbf53066d4d071422ee4b9390f768da655687600860937e95c2c2a2ddaf`
+- pd arena: `76fd29acd662d9bbae6fc899876c94b0ff05e951b288610403e6f52c238b8c98`
+
+The pd-arena hash includes `Debug` forms (`TempStateKind`, ranges, the sorted
+`by_routine` map), so compare it only across changes that keep those types.
