@@ -42,6 +42,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `plan_explain` deciding its own diff root → "planning canonicalized" panic;
   `reader_for` ignoring `inputs` → exit 2 instead of 0.
 
+### Added (context-server stage 0: `explain --routine` repeatable; spans)
+
+- **`alsem explain --routine` may be given more than once** (context-server
+  design r3 §6.12; review r1 #16). Each selector resolves alone as one
+  `--routine` always did (prove's code and `routine-not-found` /
+  `routine-ambiguous` wording); one tree serves every routine; the cards are
+  the union, sorted by anchor, each routine once (a selector given twice is one
+  selector; a name and its stable id give one card); the diagnostics are per
+  selector in input order; exit 0 when any card, 2 when none (mixed → 0 with
+  the diagnostics). One distinct selector writes the single-routine document
+  byte for byte as before (`"selector"`; every existing golden unchanged); two
+  or more write `"selectors": [..]` in its place, the rest of the document as
+  `--diff` writes it. Human mode: the cards, then the diagnostics. `--help`
+  states it. Tests (`cli_explain_differential`): two selectors give the single
+  runs' cards in anchor order, JSON and human; a repeated selector writes the
+  single run's bytes in both formats, a name plus its stable id one card; mixed
+  found/unknown/ambiguous → exit 0, one card, both diagnostics in order; none
+  found → exit 2. Discrimination proofs, run and seen to fail, then reverted:
+  rendering without collapsing repeated selectors → "a repeated selector is the
+  single document" fails; exit 2 whenever any selector is unmatched → the mixed
+  case's exit 0 fails.
+- **Spans** for prove's post-root work (r3 §13 item 6): `prove.literal_reach`,
+  `prove.group_paths`, `prove.reach_effects`, and `digest.unresolved_cones`,
+  `digest.coverage_graph`; for explain's render: `explain.indexes` (the
+  `Indexes` and `CrossRules` builds), `explain.reaching_tests`, `explain.cards`.
+- **Card render is not parallelized** (a deviation from r3 §6.12's "renders in
+  parallel", measured): on CDO cross-app, 9 cards cost `explain.cards` 28.6 ms
+  in total, while the per-job `explain.indexes` (one `Indexes::new` plus one
+  `CrossRules::new`) cost 792 ms. The "≈0.85 s per card" the design read from
+  the spec's traces is that per-job build, paid once per explain job, not per
+  card; a multi-root explain pays it once. `CrossRules` also carries a run-wide
+  expansion budget and memo shared by the cards, so a parallel render would
+  need per-card walk state for no measurable gain.
+
 ### Changed (context-server stage 0: one tree for grouped explain; pure tree reads)
 
 - **Consecutive `explain` jobs on one view share ONE tree and ONE test-coverage

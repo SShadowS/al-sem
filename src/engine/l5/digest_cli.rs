@@ -1253,6 +1253,7 @@ pub(crate) fn digest_effects_each(
     boundary: BoundaryMode,
 ) -> Vec<DigestEffects> {
     let coverage_graph = tests.then(|| {
+        let _s = crate::engine::perf_trace::span("digest", "digest.coverage_graph");
         crate::engine::perf_trace::counter_delta("build.coverage_graph", 1);
         Arc::new(crate::engine::l5::test_coverage::CoverageGraph::from_snapshot(tree, model))
     });
@@ -1329,14 +1330,23 @@ pub(crate) fn digest_effects_each(
     }
     // G23, prove's read only: effects a root cannot reach once literal Boolean
     // arguments are followed through recursive SCCs, where the cone drops guards.
+    // Spans (context-server design r3 §13 item 6): prove's post-root work,
+    // untraced until now (0.94 s measured for one root on CDO).
     if gaps_in_cone {
-        let reach = crate::engine::l5::literal_reach::LiteralReach::new(
-            &tree.typed_edges,
-            &tree.capability_facts,
-            model,
-        );
+        let reach = {
+            let _s = crate::engine::perf_trace::span("digest", "prove.literal_reach");
+            crate::engine::l5::literal_reach::LiteralReach::new(
+                &tree.typed_edges,
+                &tree.capability_facts,
+                model,
+            )
+        };
         // G35: how each group resource is reached inside the dependency.
-        let group_paths = crate::engine::l5::group_path::GroupPaths::new(&tree.typed_edges, model);
+        let group_paths = {
+            let _s = crate::engine::perf_trace::span("digest", "prove.group_paths");
+            crate::engine::l5::group_path::GroupPaths::new(&tree.typed_edges, model)
+        };
+        let _s = crate::engine::perf_trace::span("digest", "prove.reach_effects");
         for entry in &mut all_entries {
             if entry.effects.iter().any(|e| e.boundary_group)
                 && let Some(tree) = reach.live_tree(&entry.routine_id)
@@ -1366,6 +1376,7 @@ pub(crate) fn digest_effects_each(
             }
         }
     }
+    let unresolved_span = crate::engine::perf_trace::span("digest", "digest.unresolved_cones");
     let read: Vec<(Vec<DigestEntryResult>, BTreeMap<String, UnresolvedCone>)> = readers
         .iter()
         .map(|roots| {
@@ -1396,6 +1407,7 @@ pub(crate) fn digest_effects_each(
             (entries, unresolved)
         })
         .collect();
+    drop(unresolved_span);
     drop(gap_subjects);
     read.into_iter()
         .map(|(entries, unresolved)| DigestEffects {

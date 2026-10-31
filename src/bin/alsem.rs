@@ -629,10 +629,15 @@ struct ExplainCli {
     /// Path to the AL workspace root.
     workspace: String,
 
-    /// One routine: display name, `<owner>::<routine>` or stable id (as
-    /// `prove` reads it).
+    /// A routine: display name, `<owner>::<routine>` or stable id (as `prove`
+    /// reads it). Repeatable: one tree serves every routine, one card per
+    /// routine found (sorted, each once: a selector given twice, or two naming
+    /// one routine, give one card), a diagnostic per selector that names none
+    /// or several. Exit 0 when any card, 2 when none. One selector writes the
+    /// single-routine document; two or more write `"selectors": [..]` in its
+    /// place.
     #[arg(long = "routine")]
-    routine: Option<String>,
+    routine: Vec<String>,
 
     /// A unified diff (a file, or `-` for stdin): one card per routine it
     /// changes, the routines `digest --diff` resolves.
@@ -2104,7 +2109,7 @@ fn plan_explain(e: ExplainCli, cx: &PlanCx) -> Planned {
             1,
         );
     }
-    let modes = [e.routine.is_some(), e.diff.is_some(), e.table.is_some()]
+    let modes = [!e.routine.is_empty(), e.diff.is_some(), e.table.is_some()]
         .iter()
         .filter(|m| **m)
         .count();
@@ -2125,8 +2130,8 @@ fn plan_explain(e: ExplainCli, cx: &PlanCx) -> Planned {
     if e.emit_policy {
         return plan_emit_policy(e);
     }
-    let mode = if let Some(selector) = &e.routine {
-        ExplainMode::Routine(selector.clone())
+    let mode = if !e.routine.is_empty() {
+        ExplainMode::Routines(e.routine.clone())
     } else if let Some(diff) = &e.diff {
         let text = match diff.as_str() {
             "-" => match cx.stdin_text() {
@@ -2190,7 +2195,7 @@ fn plan_explain(e: ExplainCli, cx: &PlanCx) -> Planned {
 /// for an unknown table or field.
 fn plan_emit_policy(e: ExplainCli) -> Planned {
     use al_sem::engine::l5::emit_policy::{EmitPolicyJob, EmitPolicyRequest, EmitScope};
-    if e.routine.is_some() || e.diff.is_some() {
+    if !e.routine.is_empty() || e.diff.is_some() {
         return failed(
             "al-sem: explain: --emit-policy goes with --table/--field or alone, not with \
              --routine or --diff",
