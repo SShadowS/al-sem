@@ -21,6 +21,7 @@ use crate::engine::gate::policy::predicate_fields::{
     FieldEvalContext, FieldIndexes, RuleFact, WriteFact,
 };
 use crate::engine::l4::capability_cone::CapabilityFact;
+use crate::engine::l4::inherited_facts::{FactRef, InheritedFacts, InheritedSlice};
 use crate::engine::l5::detectors::d65::{RuleKey, applied, table_key};
 use crate::engine::l5::finding::{Evidence, Finding, FindingConfidence, SourceAnchor};
 use crate::engine::l5::fingerprint::FingerprintIndex;
@@ -85,21 +86,21 @@ fn passes_coverage_gate(coverage_status: Option<&str>, gate: &str) -> bool {
 
 /// `factSortKey(f)`'s 8 fields, undefined→"". The key is their `|`-JOINED
 /// byte order (`cmp_joined`), never a field-by-field order.
-fn fact_sort_fields(f: &CapabilityFact) -> [&str; 8] {
+fn fact_sort_fields<'a>(f: &FactRef<'a>) -> [&'a str; 8] {
     [
-        f.op,
-        f.resource_kind,
-        f.resource_id.as_deref().unwrap_or(""),
-        f.witness_operation_id.as_deref().unwrap_or(""),
-        f.confidence,
-        f.provenance,
-        f.via,
-        f.witness_callsite_id.as_deref().unwrap_or(""),
+        f.op(),
+        f.resource_kind(),
+        f.resource_id().unwrap_or(""),
+        f.witness_operation_id().unwrap_or(""),
+        f.confidence(),
+        f.provenance(),
+        f.via(),
+        f.witness_callsite_id().unwrap_or(""),
     ]
 }
 
 /// Stable sort by `factSortKey`, compared in place (no key String per fact).
-fn sort_facts(facts: &mut [&CapabilityFact]) {
+fn sort_facts(facts: &mut [FactRef<'_>]) {
     facts.sort_by(|a, b| {
         crate::engine::joined_key::cmp_joined(&fact_sort_fields(a), &fact_sort_fields(b))
     });
@@ -107,20 +108,29 @@ fn sort_facts(facts: &mut [&CapabilityFact]) {
 
 /// Select facts for a rule's `facts` mode. al-sem `selectFacts`.
 ///
-/// The ONE consumer of RAW inherited `CapabilityFact` objects (it matches their
+/// The ONE consumer of RAW inherited facts (it matches their
 /// `op`/`resource_kind`/`resource_id`/`confidence`/… fields against the rule
 /// predicate). `direct` is the routine's direct facts, `raw` its inherited ones:
-/// the policy view's witness pass (#160 step 6 Task 3, `View::raw`).
+/// the policy view's witness pass (#160 step 6 Task 3, `View::raw`). Both are
+/// borrowed: an inherited fact is read through its accessors and never
+/// materialized (the loop is rule-outer, so a per-rule materialization would
+/// clone every primary routine's inherited facts once per rule).
 fn select_facts<'a>(
     rule: &Rule,
     direct: &'a [CapabilityFact],
-    raw: &'a [CapabilityFact],
-) -> Vec<&'a CapabilityFact> {
+    raw: Option<InheritedSlice<'a>>,
+) -> Vec<FactRef<'a>> {
+    let direct = || direct.iter().map(FactRef::Direct);
+    let raw = || {
+        raw.into_iter()
+            .flat_map(|s| s.iter())
+            .map(FactRef::Inherited)
+    };
     match rule.facts.as_deref().unwrap_or("any") {
-        "direct" => direct.iter().collect(),
-        "inherited" => raw.iter().collect(),
+        "direct" => direct().collect(),
+        "inherited" => raw().collect(),
         // "any"
-        _ => direct.iter().chain(raw).collect(),
+        _ => direct().chain(raw()).collect(),
     }
 }
 
@@ -133,7 +143,7 @@ pub struct PolicyModel<'a> {
     pub summaries: &'a HashMap<String, FullRoutineSummary>,
     /// Every evaluated routine's raw inherited facts, by id (the view's
     /// `Cell::Raw` under `WitnessRequest::primary()`).
-    pub raw: &'a HashMap<String, Vec<CapabilityFact>>,
+    pub raw: &'a InheritedFacts,
     pub fingerprint_index: FingerprintIndex<'a>,
     /// The pins' read of the writer index: `Some` only for a policy with a
     /// pin ([`PolicyDoc::has_pins`]), whose view filled `substrate::RULES`.
@@ -208,7 +218,7 @@ impl<'a> PolicyModel<'a> {
         events: &'a [EventSymbol],
         root_classifications: &'a [crate::engine::root_classification::RootClassification],
         summaries: &'a HashMap<String, FullRoutineSummary>,
-        raw: &'a HashMap<String, Vec<CapabilityFact>>,
+        raw: &'a InheritedFacts,
     ) -> Self {
         // One classification per id (class P, #160 step 11b §4.6).
         let root_kinds_by_routine_id: HashMap<&str, &[String]> =
@@ -367,11 +377,11 @@ pub fn run_policy_engine(model: &PolicyModel, policy: &PolicyDoc) -> RunOutput {
             // an evaluated routine; reading it as "no inherited facts" would
             // let `facts: inherited|any` pass unseen. `direct` never reads it.
             let raw = match model.raw.get(routine.id.as_str()) {
-                Some(v) => v.as_slice(),
+                Some(v) => Some(v),
                 None if summary_for_routine.is_none()
                     || rule.facts.as_deref() == Some("direct") =>
                 {
-                    &[][..]
+                    None
                 }
                 None => panic!(
                     "policy: routine {} has a summary but no raw inherited facts \
@@ -386,10 +396,10 @@ pub fn run_policy_engine(model: &PolicyModel, policy: &PolicyDoc) -> RunOutput {
                 continue;
             }
 
-            let mut matched_facts: Vec<&CapabilityFact> = Vec::new();
+            let mut matched_facts: Vec<FactRef<'_>> = Vec::new();
             let mut saw_unknown = false;
 
-            for fact in &facts {
+            for &fact in &facts {
                 let ctx = FieldEvalContext {
                     routine,
                     fact: Some(fact),
@@ -653,7 +663,7 @@ fn emit_match_finding(
     rule: &Rule,
     routine: &ModelRoutine,
     model: &PolicyModel,
-    matched: &[&CapabilityFact],
+    matched: &[FactRef<'_>],
 ) -> Finding {
     let root_cause_key = format!("policy-{}/{}", rule.id, routine.id);
     let primary_location = build_primary_location(routine);
@@ -674,19 +684,21 @@ fn emit_match_finding(
         note: first_note,
     });
     for fact in matched {
-        let suffix = match &fact.resource_id {
+        let suffix = match fact.resource_id() {
             Some(rid) => format!(", resourceId={rid}"),
             None => String::new(),
         };
         evidence.push(crate::engine::l5::finding::EvidenceStep {
             routine_id: routine.id.clone(),
-            operation_id: fact.witness_operation_id.clone(),
-            callsite_id: fact.witness_callsite_id.clone(),
+            operation_id: fact.witness_operation_id().map(str::to_string),
+            callsite_id: fact.witness_callsite_id().map(str::to_string),
             loop_id: None,
             source_anchor: primary_location.clone(),
             note: format!(
                 "matched on capability.op={}, resourceKind={}{}",
-                fact.op, fact.resource_kind, suffix
+                fact.op(),
+                fact.resource_kind(),
+                suffix
             ),
         });
     }

@@ -1012,3 +1012,148 @@ pub fn dependency_half(ws: &std::path::Path) -> Vec<crate::program::model::calls
         .cloned()
         .collect()
 }
+
+/// The app guid of [`write_single_app`]'s workspaces.
+pub const SINGLE_APP_GUID: &str = "cccc1031-0000-0000-0000-000000000001";
+
+/// A single-app workspace (no dependency) at `ws` with `files` (path, text).
+pub fn write_single_app(ws: &std::path::Path, files: &[(&str, &str)]) {
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        format!(
+            r#"{{"id":"{SINGLE_APP_GUID}","name":"Single","publisher":"probe","version":"1.0.0.0","runtime":"13.0","idRanges":[{{"from":50100,"to":50199}}]}}"#
+        ),
+    )
+    .unwrap();
+    for (path, text) in files {
+        std::fs::write(ws.join(path), text).unwrap();
+    }
+}
+
+/// Cone-memory step 1, T4: one inherited fact per first-hop kind.
+/// * call hop: `Caller -> Runner`, whose own `Codeunit.Run` fact carries
+///   RUNNER's call-site witness;
+/// * trigger hop: `Inserter`'s `C.Insert(true)` fires `Cust.OnInsert`, whose
+///   `O.Modify()` the inserter inherits (no call site; first-hop op id);
+/// * event hop: the publisher `OnT4` dispatches to `Handle`, whose `O.Modify()`
+///   it inherits (no call site; first-hop event id).
+pub const T4_FILES: [(&str, &str); 3] = [
+    (
+        "src/Tab.al",
+        r#"table 50100 Cust
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+    keys { key(PK; "No.") { } }
+
+    trigger OnInsert()
+    var
+        O: Record Other;
+    begin
+        O.Modify();
+    end;
+}
+
+table 50101 Other
+{
+    fields
+    {
+        field(1; "No."; Code[20]) { }
+    }
+    keys { key(PK; "No.") { } }
+}
+"#,
+    ),
+    (
+        "src/Code.al",
+        r#"codeunit 50100 "T4 Target"
+{
+    trigger OnRun()
+    begin
+    end;
+}
+
+codeunit 50101 T4
+{
+    procedure Caller()
+    begin
+        Runner();
+    end;
+
+    procedure Runner()
+    begin
+        Codeunit.Run(Codeunit::"T4 Target");
+    end;
+
+    procedure Inserter()
+    var
+        C: Record Cust;
+    begin
+        C.Insert(true);
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnT4()
+    begin
+    end;
+}
+"#,
+    ),
+    (
+        "src/Sub.al",
+        r#"codeunit 50102 "T4 Sub"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::T4, 'OnT4', '', false, false)]
+    local procedure Handle()
+    var
+        O: Record Other;
+    begin
+        O.Modify();
+    end;
+}
+"#,
+    ),
+];
+
+/// Cone-memory step 1, T8: `Writer` owns a parameter-dependent producer and
+/// inherits NOTHING (an explicitly composed subject with an empty entry);
+/// `Caller` reaches the producer through the solve.
+pub const T8_FILES: [(&str, &str); 2] = [
+    (
+        "src/Tab.al",
+        "table 50100 Cust\n{\n    fields\n    {\n        field(1; \"No.\"; Code[20]) { }\n    }\n    keys { key(PK; \"No.\") { } }\n}\n",
+    ),
+    (
+        "src/Code.al",
+        r#"codeunit 50100 T8
+{
+    procedure Writer(var R: Record Cust)
+    begin
+        R.Insert();
+    end;
+
+    procedure Caller()
+    var
+        C: Record Cust;
+    begin
+        Writer(C);
+    end;
+}
+"#,
+    ),
+];
+
+/// The inline model of `files` (the [`write_single_app`] app guid).
+pub fn inline_model(files: &[(&str, &str)]) -> Model {
+    let files: Vec<(String, String)> = files
+        .iter()
+        .map(|(p, t)| (p.to_string(), t.to_string()))
+        .collect();
+    crate::program::model::program_calls::assemble_and_resolve_inline_program_default(
+        &files,
+        SINGLE_APP_GUID,
+    )
+}

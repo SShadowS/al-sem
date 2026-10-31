@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (compact inherited facts in the cone, cone-memory step 1)
+
+- **The cone stores each inherited capability fact as an 8-byte ref into shared
+  tables, not as an owned copy; every output is byte-identical.** Design:
+  `docs/superpowers/specs/2026-10-31-cone-memory-design.md` revision 2, step 1. New
+  `engine::l4::inherited_facts`: `InheritedRef { rep: u32, hop: u32 }` indexes
+  `InheritedTables` (reps interned by `Arc` identity, the table holding a strong
+  `Arc` per entry; first hops interned by content `(subject, via, callsite,
+  operation_id, event_id)`, `None` kept apart from `Some("")`; indexes are checked
+  `u32` and never `NO_HOP = u32::MAX`). `InheritedFacts` keeps one entry per composed
+  subject, empty ones included (missing and empty stay different); drains move owned
+  keys and clone the tables' `Arc`. Readers see a fact through the borrowed
+  `InheritedFactRef` / `FactRef` (direct or inherited), whose accessors restate
+  `retag`'s rules; `materialize()` is the one owned builder (the old `retag`).
+  `dedup_direct` mints each direct rep's `Arc` once, and the selection walks carry
+  `&Arc` reps; the selection itself is unchanged (singleton min-distance through
+  `candidate_wins`, recursive first-seen BFS, producer entries replacing a pick in
+  place). Readers moved to the borrowed view: `View::raw`, `TreeRaw::{Drain,
+  Borrow}`, `SubjectRaw`, policy (`FieldEvalContext.fact: Option<FactRef>`, the fact
+  sort, `emit_match_finding`; nothing in policy materializes), the snapshot's
+  capability rows and both evidence indexes, `derive_permissions` /
+  `make_required_perm`, the `witness.raw_bytes` census (now refs + tables: on CDO
+  cross-app policy 6,966,269,866 -> 90,300,386 bytes); `project_r3a3` /
+  `project_r3a5_from_parts` materialize per subject. The snapshot row type is
+  unchanged (that is step 2); its rows are built from the accessors, not from a
+  materialized fact.
+- Measured on the pinned CDO baseline (`bc3ccb18`, Linux, 22 cores, 93 GB,
+  `release-fast`, `/usr/bin/time -v`, quiet machine; before = step 0 `cb280c58`):
+  cross-app `alsem policy check` (bundled policy) peak RSS **9.49 GB -> 3.44 GB**
+  (target <= 3.5 GB; 32 s -> 30 s); single-app policy 0.78 GB -> 0.78 GB; `alsem
+  analyze --preset transaction-integrity` cross-app 6.01 / 5.92 GB -> 5.30 / 5.58 GB
+  (two runs each, no regression), single-app 4.01-4.46 GB -> 4.18-4.62 GB over four
+  runs each (glibc noise; this path builds no raw). The full-model
+  `compose_snapshot` probe: peak RSS 33.4 GB -> 20.4 GB, the base phase's retained
+  heap 12.70 GiB -> 1.29 GiB (17,017,608 inherited facts: raw freed 163 MiB, about
+  10 B per fact with the tables: 27,477 reps, 38,081 hops, 33,285 subjects, exactly
+  the design's census); the snapshot rows (13.3 GiB) are step 2's. Single-app probe
+  0.80 GB (target <= 0.95 GB).
+- Equality proofs: no golden regenerated, `scripts/check-goldens` green (forced
+  run). On CDO the full-model snapshot document hashes the same as step 0 (BLAKE3
+  `3b480fbf53066d4d071422ee4b9390f768da655687600860937e95c2c2a2ddaf`, 9,463,055,195
+  bytes), and so does the pd arena (`76fd29ac…c98`, 2,822,661 states). Byte-equal
+  (`cmp`) before/after with `--deterministic`: `policy check` cross-app and
+  `--single-app` with the bundled policy and with a policy whose four rules read
+  inherited facts (cross-app output 8,059,019,869 bytes, 9,261 findings, 9,014,611
+  evidence steps), `analyze --preset transaction-integrity` both modes, `digest`
+  over three files, and two `prove` questions, all cross-app.
+- Tests (each break made with Edit, run, reverted with Edit, run green):
+  `capability_cone::cone_memory_step1_tests` T0 (index sentinel: drop the `NO_HOP`
+  assert -> fails), T1 (`materialize` = the frozen `retag` over call / trigger /
+  event hops with a rep carrying stale first-hop ids and its own call site;
+  accessors = `materialize`: keep the rep's first-hop op in `materialize` -> fails;
+  `witness_callsite_id()` returns the rep's -> fails, and T4a in both T4 tests),
+  T3(b) (every `tests/r0-corpus` and `tests/fixtures` app, single-app and cross-app
+  FULL model, plus one literal model for the producer-replacement class the fixtures
+  lack: 543 models, 2,927 subjects, 1,118 facts compared field by field with a
+  frozen `legacy_raw_oracle` that carries its own `candidate_wins`, `retag` and
+  string-key sort, audited by a grep test; production `candidate_wins` preferring
+  the larger distance -> 4 models fail; emitting the previous pick's hop -> 12
+  models fail; content interning without the subject -> 2; `None` call site
+  interned as `Some("")` -> 92), T3b (first-seen pick kept at distance 3 over a
+  later distance-2 candidate: compare on distance -> fails, while T3(b) stays green
+  on the fixtures; producer replacement keeps the pick's slot: push instead -> fails),
+  T7 (one rep across subjects and a guarded/unguarded entry; identical hop content of
+  two subjects -> two hops: intern without the subject -> the subject-contract
+  assertion fires; one call site with two targets -> one hop: intern by edge
+  address -> fails, T3(b) green; `None` vs `Some("")` -> two hops: merge them ->
+  fails); T4 (`snapshot_full::cone_memory_t4_tests` and policy's
+  `t4_policy_evidence_carries_the_first_hop_witnesses`: call / trigger / event hop
+  witnesses in the snapshot row, the permission row and the finding evidence;
+  first-hop op or event accessor returning the rep's -> fails); T8
+  (`inherited_facts::tests`, `step6_tree_tests::t8_*`, policy's `t8_*`: drains and
+  borrows keep empty entries, share the tables, subjects borrow from the tables, an
+  empty subject keeps its pd states in a tree; drop empty entries at emission ->
+  policy's "summary but no raw inherited facts" panic fires and the tree loses the
+  subject's pd states). T5 (a counting-allocator test crate) is not added in this
+  step; the probe numbers above stand in for it.
+
 ### Changed (capability snapshot sort, cone-memory step 0)
 
 - **The capability snapshot's sort no longer builds a key `String` per row or a

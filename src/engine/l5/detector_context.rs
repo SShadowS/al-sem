@@ -1400,7 +1400,7 @@ pub(crate) struct CapabilityAnalysis {
 /// be 0). An id is non-primary when any of its rows has `Role::Dependency`.
 pub(crate) fn witness_non_primary_members(
     model: &Model,
-    raw: &HashMap<String, Vec<CapabilityFact>>,
+    raw: &crate::engine::l4::inherited_facts::InheritedFacts,
 ) -> usize {
     use crate::program::model::role::Role;
     let dependency: std::collections::HashSet<&str> = model
@@ -1410,9 +1410,7 @@ pub(crate) fn witness_non_primary_members(
         .filter(|r| model.routine_role(r) == Role::Dependency)
         .map(|r| r.id.as_str())
         .collect();
-    raw.keys()
-        .filter(|id| dependency.contains(id.as_str()))
-        .count()
+    raw.keys().filter(|id| dependency.contains(id)).count()
 }
 
 /// The one composition (#160 step 6 D1, D2): `compose_cone_over_graph` over
@@ -1424,7 +1422,10 @@ pub(crate) fn compose_capabilities(
     typed: &[crate::engine::l4::combined_graph::TypedEdge],
     inputs: DetConeInputs,
     scope: ConeScope,
-) -> (CapabilityAnalysis, HashMap<String, Vec<CapabilityFact>>) {
+) -> (
+    CapabilityAnalysis,
+    crate::engine::l4::inherited_facts::InheritedFacts,
+) {
     let ws = &model.workspace;
     let DetConeInputs {
         nodes,
@@ -1453,18 +1454,11 @@ pub(crate) fn compose_capabilities(
     drop(coverage_in);
     if crate::engine::census::enabled() {
         let non_primary = witness_non_primary_members(model, &outcome.raw);
-        // Bytes of the pass's `raw` map (#277 P-N9): key heap + each fact
-        // vector's capacity + every fact's owned heap. Map slots not counted.
-        let raw_bytes: u64 = outcome
-            .raw
-            .iter()
-            .map(|(k, v)| {
-                (k.len() + v.capacity() * std::mem::size_of::<CapabilityFact>()) as u64
-                    + v.iter()
-                        .map(crate::engine::l4::cone_census::capability_fact_heap_bytes)
-                        .sum::<u64>()
-            })
-            .sum();
+        // Bytes of the pass's `raw` map (#277 P-N9): key heap + each ref
+        // vector's capacity + the shared rep/hop/subject tables once
+        // (cone-memory step 1: 8 bytes per fact, so far below the owned
+        // facts' old count). Map slots not counted.
+        let raw_bytes: u64 = outcome.raw.census_bytes();
         eprintln!(
             "[retained-census] witness.members={} witness.non_primary_members={non_primary} witness.raw_bytes={raw_bytes}",
             outcome.raw.len()

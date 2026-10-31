@@ -513,9 +513,13 @@ fn step6_t8_a_primary_witness_request_materializes_no_dependency_member() {
         all.contains_key(&inner),
         "precondition: the All composition gives Inner raw"
     );
-    let go_raw = raw.get(&go).expect("Go is a subject");
+    let go_raw = raw.get(&go).expect("Go is a subject").materialize();
     assert!(!go_raw.is_empty(), "Go inherits Inner's write");
-    assert_eq!(Some(go_raw), all.get(&go), "Go's raw equals the All run's");
+    assert_eq!(
+        Some(go_raw),
+        all.get(&go).map(|s| s.materialize()),
+        "Go's raw equals the All run's"
+    );
 }
 
 // ---------------------------------------------------------------------------

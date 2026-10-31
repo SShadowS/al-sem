@@ -1015,11 +1015,11 @@ fn c3_dead_trigger_insert_is_no_commit() {
     );
 }
 
-/// The snapshot base's raw inherited facts of `name`.
-fn raw_of<'b>(m: &Model, base: &'b R3a3SourceBase, name: &str) -> &'b [CapabilityFact] {
+/// The snapshot base's raw inherited facts of `name`, materialized.
+fn raw_of(m: &Model, base: &R3a3SourceBase, name: &str) -> Vec<CapabilityFact> {
     base.raw
         .get(&row(m, name).id)
-        .map(Vec::as_slice)
+        .map(|s| s.materialize())
         .unwrap_or_default()
 }
 
@@ -1067,7 +1067,8 @@ fn c5_live_witness_survives() {
         .id
         .clone();
     let base = build_r3a3_source_only_base(&m);
-    let commits: Vec<(&str, Option<&str>)> = raw_of(&m, &base, "OnLiveWitness")
+    let live = raw_of(&m, &base, "OnLiveWitness");
+    let commits: Vec<(&str, Option<&str>)> = live
         .iter()
         .filter(|f| f.op == "commit")
         .map(|f| (f.subject.as_str(), f.witness_callsite_id.as_deref()))
