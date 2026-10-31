@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed (cone-memory step 3, the frozen emission oracle)
+
+- **The T3(b) frozen-emission oracle is deleted, as the design's step 3
+  plans, now that the CDO comparisons for steps 1 and 2 are recorded** (the
+  snapshot document and pd-arena hashes and the byte-equal command outputs
+  under steps 1 and 2 above). Gone from `capability_cone`: the test-only hook
+  in `compose_inherited_cones` that ran a verbatim copy of the pre-step-1
+  selection (`inherited_facts_for_singleton`, `inherited_facts_by_bfs`,
+  `emit_picks`, `candidate_wins`, the string-key sort) beside the production
+  emission, its stats, `t3_raw_equals_the_frozen_emission_on_fixtures` and
+  `t3_oracle_audit_names_only_frozen_code`. Kept: the frozen `retag` (T1's
+  oracle, `legacy_raw_oracle::frozen::retag`); T7 (i)'s guarded-entry
+  precondition now reads the production raw (N's `G(false)` gets nothing).
+  Raw equality stays pinned by the byte-compared r3a3/r3a5/r4f goldens, the
+  snapshot corpus test (T3(c)) and T3b. The step-3 census rewrite is in step 2
+  (`snapshot.capability_facts`) and step 1 (`witness.raw_bytes`);
+  `cone_census::facts_tally` reads only owned direct facts and fixture-supplied
+  inherited ones, so it needed no change.
+
 ### Changed (16-byte capability snapshot rows, cone-memory step 2)
 
 - **A row of `CapabilitySnapshot::capability_facts` is a 16-byte handle into

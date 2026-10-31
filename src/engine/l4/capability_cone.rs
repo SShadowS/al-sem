@@ -1789,7 +1789,8 @@ fn merge_cone(dst: &mut ConeFacts, key: &Arc<str>, entry: ConeFactEntry) {
 // `|`) now live on the compact form (cone-memory step 1):
 // `InheritedFactRef::materialize` is `retag`, its accessors restate the same
 // rules, and `InheritedBuilder::sort` is `sort_inherited` over refs. The old
-// owned versions are frozen in `legacy_raw_oracle` (test only).
+// owned `retag` is frozen in `legacy_raw_oracle::frozen` (test only, T1's
+// oracle).
 
 /// Per-routine direct facts grouped by dedup key (canonical rep per key, one
 /// shared `Arc` each: [`dedup_direct`]).
@@ -3015,27 +3016,6 @@ fn compose_inherited_cones(
                     &mut raw_out,
                 )
             };
-            // T3(b): under the test hook, the frozen pre-step-1 emission runs
-            // over the same immutable inputs and must equal this output.
-            #[cfg(test)]
-            if mode.wants_raw() {
-                legacy_raw_oracle::check(
-                    m,
-                    recursive,
-                    &inherited,
-                    raw_out.tables(),
-                    legacy_raw_oracle::Inputs {
-                        g,
-                        direct,
-                        scc_id_by_routine: &scc.scc_id_by_routine,
-                        cones: &fact_cones,
-                        caller: routines_by_id.get(m.as_str()).copied(),
-                        caller_frame: frames.get(m),
-                        routines_by_id,
-                        own: own_entries(m),
-                    },
-                );
-            }
             if recursive {
                 crate::engine::l5::detector_context::cones_census::add(
                     &crate::engine::l5::detector_context::cones_census::BFS_CALLS,
@@ -3229,172 +3209,15 @@ fn coverage_record(m: &str, cov: &RoutineDirectCoverage, ccone: &CoverageCone) -
     }
 }
 
-/// Cone-memory design T3(b): the raw emission as it was BEFORE step 1, frozen,
-/// run beside the production emission under a test hook. Test only.
-///
-/// [`frozen`] holds verbatim copies of the pre-step-1 `retag`,
-/// `capability_via_for_edge_kind`, `inherited_output_sort_key`,
-/// `sort_inherited`, `candidate_wins`, the raw half of
-/// `inherited_facts_for_singleton`, `inherited_facts_by_bfs` and `emit_picks`
-/// (census lines and the derived half dropped; counters added). Its shared
-/// calls are immutable inputs this design does not change: the graph `g`,
-/// `scc_id_by_routine`, the cones, `direct` (its values became `Arc`s; the copy
-/// reads through them), the pd `own` entries, `base_key_of`, `frame_bound`,
-/// `substitute_entry` and `inherited_fact_key`. It must not call the new
-/// selection, interning or comparison code;
-/// `t3_oracle_audit_names_only_frozen_code` greps it. Stated limit: it shares cone construction, so it does not verify it
-/// (the goldens and the CDO comparisons cover that boundary).
+/// Cone-memory design T1's oracle: `retag` and `capability_via_for_edge_kind`
+/// as they were before step 1, frozen. Test only. (The T3(b) emission oracle
+/// `legacy_raw_oracle`, a frozen copy of the pre-step-1 selection run beside
+/// the production emission, was deleted in step 3 once the CDO comparisons for
+/// steps 1 and 2 were recorded, as the design's §8 plans.)
 #[cfg(test)]
 pub(crate) mod legacy_raw_oracle {
-    use super::{CapabilityFact, ConeFacts, ModelRoutine, RoutineDirectFacts, TypedEdgeGraph};
-    use crate::engine::l4::inherited_facts::{InheritedRef, InheritedTables, views};
-    use std::cell::RefCell;
-    use std::collections::HashMap;
-
-    /// What one hooked run saw.
-    #[derive(Debug, Default, Clone)]
-    pub(crate) struct OracleStats {
-        pub compositions: u64,
-        pub singleton_subjects: u64,
-        pub recursive_subjects: u64,
-        pub facts: u64,
-        /// Guarded cone entries carried per edge into a singleton's candidates.
-        pub guarded_entries: u64,
-        pub trigger_hops: u64,
-        pub event_hops: u64,
-        /// In-place producer replacements in the recursive walk, and the
-        /// members with at least one.
-        pub producer_replacements: u64,
-        pub members_with_replacement: u64,
-        /// Every mismatching subject; `mismatches` keeps the first 20.
-        pub mismatch_total: u64,
-        pub mismatches: Vec<String>,
-    }
-
-    thread_local! {
-        static STATE: RefCell<Option<OracleStats>> = const { RefCell::new(None) };
-    }
-
-    /// Run `f` with the hook on; return its result and what the hook saw.
-    pub(crate) fn run<T>(f: impl FnOnce() -> T) -> (T, OracleStats) {
-        STATE.with(|s| *s.borrow_mut() = Some(OracleStats::default()));
-        let out = f();
-        let stats = STATE
-            .with(|s| s.borrow_mut().take())
-            .expect("the hook's stats");
-        (out, stats)
-    }
-
-    /// How many mismatches the running hook has recorded so far (all of them,
-    /// not only the first 20 it keeps).
-    pub(crate) fn mismatch_count() -> u64 {
-        STATE.with(|s| s.borrow().as_ref().map_or(0, |st| st.mismatch_total))
-    }
-
-    /// Count one composition (the caller of [`run`] calls it per model).
-    pub(crate) fn note_composition() {
-        STATE.with(|s| {
-            if let Some(st) = s.borrow_mut().as_mut() {
-                st.compositions += 1;
-            }
-        });
-    }
-
-    /// The immutable inputs both emissions read.
-    pub(super) struct Inputs<'g, 'r> {
-        pub g: &'g TypedEdgeGraph,
-        pub direct: &'g RoutineDirectFacts,
-        pub scc_id_by_routine: &'g HashMap<String, usize>,
-        pub cones: &'g HashMap<usize, ConeFacts>,
-        pub caller: Option<&'r ModelRoutine>,
-        pub caller_frame: Option<&'r crate::engine::l4::param_guard::FrameGuards>,
-        pub routines_by_id: &'r HashMap<&'r str, &'r ModelRoutine>,
-        pub own: &'g [crate::engine::l4::pd_solve::ResolvedEntry<'g>],
-    }
-
-    /// With the hook on: compare `m`'s production raw (`new`, materialized
-    /// through `tables`) with the frozen emission, field by field.
-    pub(super) fn check(
-        m: &str,
-        recursive: bool,
-        new: &[InheritedRef],
-        tables: &InheritedTables,
-        i: Inputs<'_, '_>,
-    ) {
-        if STATE.with(|s| s.borrow().is_none()) {
-            return;
-        }
-        let mut c = frozen::Counters::default();
-        let old: Vec<CapabilityFact> = if recursive {
-            let picks = frozen::inherited_facts_by_bfs(
-                m,
-                i.g,
-                i.direct,
-                i.scc_id_by_routine,
-                i.cones,
-                i.own,
-                &mut c,
-            );
-            frozen::emit_picks(m, picks)
-        } else {
-            frozen::inherited_facts_for_singleton(
-                m,
-                i.g,
-                i.scc_id_by_routine,
-                i.cones,
-                i.caller,
-                i.caller_frame,
-                i.routines_by_id,
-                i.own,
-                &mut c,
-            )
-        };
-        let got = views(tables, new).materialize();
-        STATE.with(|s| {
-            let mut s = s.borrow_mut();
-            let st = s.as_mut().expect("checked above");
-            if recursive {
-                st.recursive_subjects += 1;
-            } else {
-                st.singleton_subjects += 1;
-            }
-            st.facts += old.len() as u64;
-            st.guarded_entries += c.guarded_entries;
-            st.producer_replacements += c.producer_replacements;
-            st.members_with_replacement += u64::from(c.producer_replacements > 0);
-            st.trigger_hops += old.iter().filter(|f| f.via == "implicit-trigger").count() as u64;
-            st.event_hops += old.iter().filter(|f| f.via == "event-dispatch").count() as u64;
-            st.mismatch_total += u64::from(got != old);
-            if got != old && st.mismatches.len() < 20 {
-                let at = got.iter().zip(&old).position(|(a, b)| a != b);
-                st.mismatches.push(format!(
-                    "{m} ({}): new {} facts, old {}; first difference at {at:?}: new {:?} old {:?}",
-                    if recursive { "recursive" } else { "singleton" },
-                    got.len(),
-                    old.len(),
-                    at.map(|k| &got[k]),
-                    at.map(|k| &old[k]),
-                ));
-            }
-        });
-    }
-
-    // BEGIN FROZEN (pre-step-1 emission; `t3_oracle_audit_names_only_frozen_code`
-    // reads this block)
-    pub(super) mod frozen {
-        use super::super::{
-            CapabilityFact, ConeFactEntry, ConeFacts, ModelRoutine, RoutineDirectFacts,
-            TypedEdgeGraph, TypedOutEdge, base_key_of, frame_bound, inherited_fact_key,
-            substitute_entry,
-        };
-        use std::collections::{BTreeMap, BTreeSet, HashMap};
-        use std::sync::Arc;
-
-        #[derive(Default)]
-        pub(in super::super) struct Counters {
-            pub guarded_entries: u64,
-            pub producer_replacements: u64,
-        }
+    pub(crate) mod frozen {
+        use super::super::{CapabilityFact, TypedOutEdge};
 
         fn capability_via_for_edge_kind(kind: &str) -> &'static str {
             match kind {
@@ -3422,238 +3245,7 @@ pub(crate) mod legacy_raw_oracle {
                 ..rep.clone()
             }
         }
-
-        fn inherited_output_sort_key(f: &CapabilityFact) -> String {
-            [
-                f.op,
-                f.resource_kind,
-                f.resource_id.as_deref().unwrap_or_default(),
-                f.confidence,
-                f.via,
-                f.witness_callsite_id.as_deref().unwrap_or_default(),
-                f.witness_operation_id.as_deref().unwrap_or_default(),
-            ]
-            .join("|")
-        }
-
-        fn sort_inherited(mut facts: Vec<CapabilityFact>) -> Vec<CapabilityFact> {
-            facts.sort_by_key(inherited_output_sort_key);
-            facts
-        }
-
-        fn candidate_wins(
-            dist: usize,
-            edge: &TypedOutEdge,
-            cur: Option<(usize, &TypedOutEdge)>,
-        ) -> bool {
-            match cur {
-                None => true,
-                Some((d, e)) => dist < d || (dist == d && edge.sort_key < e.sort_key),
-            }
-        }
-
-        #[allow(clippy::too_many_arguments)]
-        pub(in super::super) fn inherited_facts_for_singleton<'g>(
-            subject: &str,
-            g: &'g TypedEdgeGraph,
-            scc_id_by_routine: &HashMap<String, usize>,
-            cones: &'g HashMap<usize, ConeFacts>,
-            caller: Option<&ModelRoutine>,
-            caller_frame: Option<&crate::engine::l4::param_guard::FrameGuards>,
-            routines_by_id: &HashMap<&str, &ModelRoutine>,
-            own: &'g [crate::engine::l4::pd_solve::ResolvedEntry<'g>],
-            counters: &mut Counters,
-        ) -> Vec<CapabilityFact> {
-            struct Best<'a> {
-                rep: &'a CapabilityFact,
-                dist: usize,
-                edge: &'a TypedOutEdge,
-            }
-            let out_edges: &'g [TypedOutEdge] =
-                g.outgoing.get(subject).map(|v| v.as_slice()).unwrap_or(&[]);
-            let subst: Vec<Vec<(Arc<str>, ConeFactEntry)>> = out_edges
-                .iter()
-                .map(|edge| {
-                    let Some(ycone) = scc_id_by_routine.get(&edge.to).and_then(|yj| cones.get(yj))
-                    else {
-                        return Vec::new();
-                    };
-                    ycone
-                        .iter()
-                        .filter(|(_, e)| frame_bound(e))
-                        .filter_map(|(k, e)| {
-                            substitute_entry(
-                                k,
-                                e,
-                                edge,
-                                caller,
-                                routines_by_id.get(edge.to.as_str()).copied(),
-                                caller_frame,
-                                &[],
-                            )
-                        })
-                        .collect()
-                })
-                .collect();
-            counters.guarded_entries += subst.iter().map(Vec::len).sum::<usize>() as u64;
-            let own_keys: Vec<String> = own.iter().map(|e| inherited_fact_key(&e.rep)).collect();
-            let mut best: BTreeMap<&str, Best<'_>> = BTreeMap::new();
-            for (edge, edge_subst) in out_edges.iter().zip(&subst) {
-                let Some(yj) = scc_id_by_routine.get(&edge.to) else {
-                    continue;
-                };
-                let Some(ycone) = cones.get(yj) else {
-                    continue;
-                };
-                let entries = ycone
-                    .iter()
-                    .filter(|(_, e)| !frame_bound(e))
-                    .chain(edge_subst.iter().map(|(k, e)| (k, e)));
-                for (key, entry) in entries {
-                    let key = base_key_of(key, entry);
-                    let cand_dist = entry.dist + 1;
-                    let wins =
-                        candidate_wins(cand_dist, edge, best.get(&**key).map(|c| (c.dist, c.edge)));
-                    if wins {
-                        best.insert(
-                            &**key,
-                            Best {
-                                rep: &entry.rep,
-                                dist: cand_dist,
-                                edge,
-                            },
-                        );
-                    }
-                }
-            }
-            for (e, key) in own.iter().zip(&own_keys) {
-                if candidate_wins(
-                    e.dist,
-                    e.first_hop,
-                    best.get(key.as_str()).map(|c| (c.dist, c.edge)),
-                ) {
-                    best.insert(
-                        key,
-                        Best {
-                            rep: &e.rep,
-                            dist: e.dist,
-                            edge: e.first_hop,
-                        },
-                    );
-                }
-            }
-            let out: Vec<CapabilityFact> = best
-                .values()
-                .map(|b| retag(b.rep, subject, b.edge))
-                .collect();
-            sort_inherited(out)
-        }
-
-        pub(in super::super) fn inherited_facts_by_bfs<'g>(
-            subject: &str,
-            g: &'g TypedEdgeGraph,
-            direct: &'g RoutineDirectFacts,
-            scc_id_by_routine: &HashMap<String, usize>,
-            cones: &'g HashMap<usize, ConeFacts>,
-            own: &'g [crate::engine::l4::pd_solve::ResolvedEntry<'g>],
-            counters: &mut Counters,
-        ) -> Vec<(&'g CapabilityFact, &'g TypedOutEdge)> {
-            let my_scc = scc_id_by_routine.get(subject).copied();
-            let mut seen: BTreeMap<String, usize> = BTreeMap::new();
-            let mut picked: Vec<(&'g CapabilityFact, usize, &'g TypedOutEdge)> = Vec::new();
-            let mut visited: BTreeSet<String> = BTreeSet::new();
-            visited.insert(subject.to_string());
-
-            struct QI<'g> {
-                id: String,
-                first_hop: &'g TypedOutEdge,
-                hops: usize,
-            }
-            let mut queue: std::collections::VecDeque<QI<'g>> = std::collections::VecDeque::new();
-            let out_edges = |id: &str| -> &'g [TypedOutEdge] {
-                g.outgoing.get(id).map(|v| v.as_slice()).unwrap_or(&[])
-            };
-            for edge in out_edges(subject) {
-                if !visited.contains(&edge.to) {
-                    visited.insert(edge.to.clone());
-                    queue.push_back(QI {
-                        id: edge.to.clone(),
-                        first_hop: edge,
-                        hops: 1,
-                    });
-                }
-            }
-            while let Some(item) = queue.pop_front() {
-                let id = item.id;
-                let first_hop = item.first_hop;
-                if scc_id_by_routine.get(&id).copied() == my_scc {
-                    if let Some(byk) = direct.get(&id) {
-                        for (key, rep) in byk {
-                            if !seen.contains_key(key) {
-                                seen.insert(key.clone(), picked.len());
-                                picked.push((&**rep, item.hops, first_hop));
-                            }
-                        }
-                    }
-                    for edge in out_edges(&id) {
-                        if !visited.contains(&edge.to) {
-                            visited.insert(edge.to.clone());
-                            queue.push_back(QI {
-                                id: edge.to.clone(),
-                                first_hop,
-                                hops: item.hops + 1,
-                            });
-                        }
-                    }
-                } else {
-                    let their_scc = scc_id_by_routine.get(&id).copied();
-                    let ycone = their_scc.and_then(|yj| cones.get(&yj));
-                    if let Some(ycone) = ycone {
-                        for (key, entry) in ycone {
-                            let key = base_key_of(key, entry);
-                            if !seen.contains_key(&**key) {
-                                seen.insert(key.to_string(), picked.len());
-                                picked.push((&*entry.rep, item.hops + entry.dist, first_hop));
-                            }
-                        }
-                    }
-                }
-            }
-            for e in own {
-                let key = inherited_fact_key(&e.rep);
-                match seen.get(&key) {
-                    Some(&i) => {
-                        let (_, d, hop) = picked[i];
-                        if candidate_wins(e.dist, e.first_hop, Some((d, hop))) {
-                            picked[i] = (&*e.rep, e.dist, e.first_hop);
-                            counters.producer_replacements += 1;
-                        }
-                    }
-                    None => {
-                        seen.insert(key, picked.len());
-                        picked.push((&*e.rep, e.dist, e.first_hop));
-                    }
-                }
-            }
-            picked
-                .into_iter()
-                .map(|(rep, _, first_hop)| (rep, first_hop))
-                .collect()
-        }
-
-        pub(in super::super) fn emit_picks(
-            subject: &str,
-            picks: Vec<(&CapabilityFact, &TypedOutEdge)>,
-        ) -> Vec<CapabilityFact> {
-            sort_inherited(
-                picks
-                    .into_iter()
-                    .map(|(rep, first_hop)| retag(rep, subject, first_hop))
-                    .collect(),
-            )
-        }
     }
-    // END FROZEN
 }
 
 // ===========================================================================
@@ -8607,13 +8199,14 @@ codeunit 50100 C
 
 /// Cone-memory design step 1 (`docs/superpowers/specs/2026-10-31-cone-memory-design.md`
 /// §9): T0 (index sentinel), T1 (`materialize` = the old `retag`, accessors =
-/// `materialize`), T3(b) (raw = the frozen pre-step-1 emission over every
-/// fixture app, single-app and cross-app full model), T3b (the recursive
-/// walk's first-seen picks and in-place producer replacement) and T7
-/// (interning and subjects). Each states its precondition literally.
+/// `materialize`), T3b (the recursive walk's first-seen picks and in-place
+/// producer replacement) and T7 (interning and subjects). Each states its
+/// precondition literally. (T3(b), the frozen pre-step-1 emission compared
+/// over every fixture app, ran through steps 1 and 2 and was deleted in step
+/// 3.)
 #[cfg(test)]
 mod cone_memory_step1_tests {
-    use super::callsite_local_scan_tests::{FIXTURE_ROOTS, app_dirs, model, workspace_model};
+    use super::callsite_local_scan_tests::model;
     use super::*;
     use crate::engine::l4::cone_derived::scope_of;
     use crate::engine::l4::cone_derived::test_facts::{call_edge, fact};
@@ -8621,7 +8214,6 @@ mod cone_memory_step1_tests {
         InheritedFactRef, NO_HOP, table_ix, views as views_of,
     };
     use crate::engine::l4::pd_solve::ResolvedEntry;
-    use std::path::Path;
 
     type Direct = HashMap<String, Vec<CapabilityFact>>;
 
@@ -8763,179 +8355,12 @@ mod cone_memory_step1_tests {
         assert_eq!(trig.witness_operation_id.as_deref(), Some("H/op1"));
     }
 
-    // -- T3(b) --------------------------------------------------------------------
-
-    /// The recursive SCC {S, T}. S passes a physical local record to W, whose
-    /// `X.Insert()` is a parameter-dependent PRODUCER: the solve gives S an
-    /// own entry (insert Cust, physical) at distance 1 through `S -> W`. The
-    /// walk first picks the same key from D's direct `Y.Insert()` at distance
-    /// 1 through `S -> D`; `S -> W` has the smaller sort key, so the own entry
-    /// replaces that pick in place.
-    const T3_PRODUCER_SRC: &str = r#"
-codeunit 50100 C
-{
-    procedure S()
-    var
-        R: Record Cust;
-    begin
-        W(R);
-        D();
-        T();
-    end;
-
-    procedure T()
-    begin
-        S();
-    end;
-
-    procedure W(var X: Record Cust)
-    begin
-        X.Insert();
-    end;
-
-    procedure D()
-    var
-        Y: Record Cust;
-    begin
-        Y.Insert();
-    end;
-}
-"#;
-
-    /// T3(b): every fixture app under `tests/r0-corpus` and `tests/fixtures`,
-    /// single-app and cross-app FULL model (`assemble_and_resolve_cross_app_program`,
-    /// dependency callers in): each subject's materialized raw equals the frozen
-    /// pre-step-1 emission's owned raw, field by field. Preconditions on the
-    /// population. DISCRIMINATION (production code only): `candidate_wins`
-    /// preferring the larger distance; emitting the previous pick's hop.
-    #[test]
-    fn t3_raw_equals_the_frozen_emission_on_fixtures() {
-        let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
-        let mut failures: Vec<String> = Vec::new();
-        let mut models = 0usize;
-        let mut failing_models = std::collections::BTreeSet::new();
-        let ((), stats) = legacy_raw_oracle::run(|| {
-            for (root, want) in FIXTURE_ROOTS
-                .iter()
-                .filter(|(r, _)| ["r0-corpus", "fixtures"].contains(r))
-            {
-                let dirs = app_dirs(&tests.join(root), usize::MAX);
-                assert_eq!(dirs.len(), *want, "{root}: app dirs");
-                for dir in &dirs {
-                    let single = workspace_model(dir);
-                    let inputs =
-                        crate::program::inputs::WorkspaceInputs::read(dir, &Default::default());
-                    let cross = crate::program::model::program_calls::assemble_and_resolve_cross_app_program(
-                        &inputs,
-                        crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
-                        false,
-                        crate::program::model::workspace::AssemblyNeeds::BASE,
-                    )
-                    .ok()
-                    .map(|p| p.resolved);
-                    for (mode, m) in [("single-app", single), ("cross-app full", cross)] {
-                        let Some(m) = m else {
-                            failures.push(format!("{}: no {mode} model", dir.display()));
-                            continue;
-                        };
-                        let before = legacy_raw_oracle::mismatch_count();
-                        legacy_raw_oracle::note_composition();
-                        let _ = build_r3a3_source_only_base(&m);
-                        models += 1;
-                        if legacy_raw_oracle::mismatch_count() > before {
-                            failing_models.insert(format!("{} ({mode})", dir.display()));
-                        }
-                    }
-                }
-            }
-            // No fixture app has a recursive member whose producer entry
-            // replaces a walk pick (measured: 0 on the first run), so one
-            // literal model adds that class.
-            let before = legacy_raw_oracle::mismatch_count();
-            legacy_raw_oracle::note_composition();
-            let _ = build_r3a3_source_only_base(&model(T3_PRODUCER_SRC));
-            models += 1;
-            if legacy_raw_oracle::mismatch_count() > before {
-                failing_models.insert("T3_PRODUCER_SRC".to_string());
-            }
-        });
-        println!(
-            "T3(b): {models} models, {} failing; {stats:?}",
-            failing_models.len()
-        );
-        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
-        assert!(
-            stats.mismatches.is_empty(),
-            "{} model(s) differ from the frozen emission:\n{}",
-            failing_models.len(),
-            stats.mismatches.join("\n")
-        );
-        assert_eq!(stats.compositions as usize, models);
-        assert!(models > 100, "precondition: > 100 models ({models})");
-        assert!(stats.facts > 0, "precondition: inherited facts");
-        assert!(stats.guarded_entries > 0, "precondition: guarded entries");
-        assert!(stats.trigger_hops > 0, "precondition: trigger first hops");
-        assert!(stats.event_hops > 0, "precondition: event first hops");
-        assert!(
-            stats.recursive_subjects > 0,
-            "precondition: recursive members"
-        );
-        assert!(
-            stats.members_with_replacement > 0,
-            "precondition: recursive members with producer replacements"
-        );
-    }
-
-    /// T3(b)'s audit: the frozen block names none of the new selection,
-    /// interning or comparison code, carries its own copy of every selection
-    /// helper (`candidate_wins` included), and imports exactly the audited
-    /// immutable inputs.
-    #[test]
-    fn t3_oracle_audit_names_only_frozen_code() {
-        let src = include_str!("capability_cone.rs");
-        let begin = src.find("// BEGIN FROZEN").expect("the frozen block");
-        let end = src.find("// END FROZEN").expect("the frozen block's end");
-        let block = &src[begin..end];
-        for forbidden in [
-            "InheritedBuilder",
-            "InheritedRef",
-            "InheritedFacts",
-            "inherited_facts::",
-            "InheritedFactRef",
-            "FactRef",
-            "materialize",
-            "cmp_joined",
-            "joined_key",
-            "sort_fields",
-        ] {
-            assert!(
-                !block.contains(forbidden),
-                "the frozen oracle names new code: {forbidden}"
-            );
-        }
-        for own in [
-            "fn candidate_wins",
-            "fn retag",
-            "fn sort_inherited",
-            "fn inherited_output_sort_key",
-            "fn capability_via_for_edge_kind",
-            "fn inherited_facts_for_singleton",
-            "fn inherited_facts_by_bfs",
-            "fn emit_picks",
-        ] {
-            assert!(
-                block.contains(own),
-                "the frozen oracle carries its own {own}"
-            );
-        }
-        // Its shared imports are exactly the audited immutable inputs.
-        let imports = "use super::super::{\n            CapabilityFact, ConeFactEntry, ConeFacts, ModelRoutine, RoutineDirectFacts,\n            TypedEdgeGraph, TypedOutEdge, base_key_of, frame_bound, inherited_fact_key,\n            substitute_entry,\n        };";
-        assert!(
-            block.contains(imports),
-            "the frozen oracle's imports changed"
-        );
-        assert_eq!(block.matches("use super::super").count(), 1);
-    }
+    // (T3(b), the frozen-emission comparison over every fixture app, and its
+    // audit were deleted with `legacy_raw_oracle`'s emission copy in step 3,
+    // once the CDO comparisons of steps 1 and 2 were recorded. Raw equality
+    // stays pinned by the byte-compared r3a3/r3a5 goldens, the snapshot
+    // corpus test `snapshot::step0_sort_tests::t6_every_corpus_app_*` and
+    // T3b below.)
 
     // -- T3b ----------------------------------------------------------------------
 
@@ -9114,31 +8539,28 @@ codeunit 50100 C
     #[test]
     fn t7_one_rep_across_subjects_and_guards() {
         let m = model(GUARD_SRC);
-        let ((), stats) = legacy_raw_oracle::run(|| {
-            let base = build_r3a3_source_only_base(&m);
-            let [a, b, mm, n] = ["A", "B", "M", "N"].map(|r| id_of(&m, r));
-            assert!(
-                base.raw.get(&n).is_some_and(|s| s.is_empty()),
-                "precondition: N's G(false) contradicts the guard"
-            );
-            let (ra, rb, rm) = (
-                only_ref(&base.raw, &a),
-                only_ref(&base.raw, &b),
-                only_ref(&base.raw, &mm),
-            );
-            assert_eq!(
-                ra.rep, rm.rep,
-                "A (guard dropped) and M (guarded) share the rep"
-            );
-            assert_eq!(rb.rep, rm.rep, "B and M share the rep");
-            assert!(
-                ra.hop != rm.hop && rb.hop != rm.hop && ra.hop != rb.hop,
-                "three hops"
-            );
-        });
+        let base = build_r3a3_source_only_base(&m);
+        let [a, b, mm, n] = ["A", "B", "M", "N"].map(|r| id_of(&m, r));
+        // Precondition: G's write reaches its singleton callers through a
+        // GUARDED (frame-bound) entry: the same call with `false` gets
+        // nothing, so M's `true` took the substituted entry.
         assert!(
-            stats.guarded_entries > 0,
-            "precondition: M took a guarded entry"
+            base.raw.get(&n).is_some_and(|s| s.is_empty()),
+            "precondition: N's G(false) contradicts the guard"
+        );
+        let (ra, rb, rm) = (
+            only_ref(&base.raw, &a),
+            only_ref(&base.raw, &b),
+            only_ref(&base.raw, &mm),
+        );
+        assert_eq!(
+            ra.rep, rm.rep,
+            "A (guard dropped) and M (guarded) share the rep"
+        );
+        assert_eq!(rb.rep, rm.rep, "B and M share the rep");
+        assert!(
+            ra.hop != rm.hop && rb.hop != rm.hop && ra.hop != rb.hop,
+            "three hops"
         );
     }
 
