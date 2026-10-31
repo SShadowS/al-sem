@@ -68,8 +68,9 @@ use al_sem::engine::batch::job::{
 };
 use al_sem::engine::batch::manifest::{JobPaths, check_write_sets};
 use al_sem::engine::batch::output::{JobOutput, WriteAction, replay};
+use al_sem::engine::batch::plan_cx::{PlanCx, PlanReads};
 use al_sem::engine::batch::worker::{
-    PlanFiles, StdinRead, WorkerBatch, WorkerInput, WorkerJob, Workers, report_peak, run_workers,
+    WorkerBatch, WorkerInput, WorkerJob, Workers, report_peak, run_workers,
 };
 use al_sem::engine::batch::{JobLine, JobStreams, run_batch, run_standalone};
 use al_sem::engine::gate::cache_prune::{format_prune_report, prune_cache};
@@ -92,6 +93,7 @@ use al_sem::engine::l5::fingerprint_cli::{
 use al_sem::engine::l5::prove::{ProveJob, parse_question, question_ids};
 use al_sem::program::inputs::{FileInput, RequestInputs, WorkspaceNeeds};
 use clap::{Parser, Subcommand};
+use std::sync::Arc;
 
 const SEVERITY_VALUES: &[&str] = &["critical", "high", "medium", "low", "info"];
 
@@ -668,11 +670,6 @@ struct ExplainCli {
     /// (as `analyze` and `graph` do), at more memory and time.
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
-
-    /// The run's diff-root decision, made once by a batch's parent and carried
-    /// to its worker ([`pin_diff_root`]); `None`: decide in `plan_explain`.
-    #[arg(skip)]
-    diff_root_decided: Option<Result<DiffRoot, String>>,
 }
 
 /// `FingerprintCli` — arguments for `alsem fingerprint <ws>`.
@@ -823,16 +820,11 @@ struct DigestCli {
     #[arg(long = "include-reads", default_value_t = false)]
     include_reads: bool,
 
-    /// A batch's decision whether `--changed` names an existing diff file,
-    /// made once by the parent ([`pin_changed`]); `None`: ask the file system.
+    /// Whether `--changed` names an existing diff file, decided once by the
+    /// caller before planning ([`pin_changed`]; a batch's parent, and its
+    /// worker gets the decision). Planning never asks the file system.
     #[arg(skip)]
     changed_is_file: Option<bool>,
-
-    /// The run's diff-root decision ([`decide_diff_root`]), made once by the
-    /// parent and carried to its worker ([`pin_diff_root`], #77); `None`:
-    /// decide in `plan_digest`.
-    #[arg(skip)]
-    diff_root_decided: Option<Result<DiffRoot, String>>,
 }
 
 fn main() -> ExitCode {
@@ -861,7 +853,14 @@ fn main() -> ExitCode {
         Commands::Cache(CacheCli {
             command: CacheCommands::Prune(p),
         }) => run_cache_prune_cmd(p),
-        job => run_planned(plan(job, false)),
+        job => {
+            // The process's one request (context-server design r3 §4.3): the
+            // argv decoded, the request's file-system questions decided here
+            // (real stdin, the file system now), then planned.
+            let cx = PlanCx::new(&PlanReads::process());
+            let (job, cx) = decide(job, cx, None);
+            run_planned(plan(job, false, &cx), &cx)
+        }
     };
     // The process-cumulative cone census, once, after every cone the command
     // composed (#160 §4.1.7). One OnceLock read when off.
@@ -956,9 +955,20 @@ const FINGERPRINT_ROWS: WorkspaceNeeds = WorkspaceNeeds {
     fingerprint_rows: true,
 };
 
+/// The reader a request's jobs read their workspaces through: the run's own
+/// reads, holding the request's given workspace read ([`PlanCx::inputs`]) when
+/// it has one, so its job reads no workspace itself.
+fn reader_for(reads: Vec<(PathBuf, WorkspaceNeeds)>, cx: &PlanCx) -> WorkspaceReader {
+    let reader = WorkspaceReader::new(reads);
+    if let Some(inputs) = &cx.inputs {
+        reader.give(Arc::clone(inputs));
+    }
+    reader
+}
+
 /// Run a command as a batch of one (#277 D1).
-fn run_planned(planned: Planned) -> ExitCode {
-    let reader = WorkspaceReader::new(planned.reads());
+fn run_planned(planned: Planned, cx: &PlanCx) -> ExitCode {
+    let reader = reader_for(planned.reads(), cx);
     let slots = [Slot::new()];
     let jobs = make_jobs(vec![planned], &reader, &slots);
     ExitCode::from(run_standalone(&*jobs[0]))
@@ -975,13 +985,64 @@ fn failed(line: impl Into<String>, exit: u8, write_failure_exit: u8) -> Planned 
 
 /// A parsed command as a planned job. `batch`, `policy explain` and `cache
 /// prune` are no jobs: `main` runs them, and a manifest refuses them first.
-/// `in_batch`: a manifest job, whose `--format auto` is JSON (A12.3).
-fn plan(command: Commands, in_batch: bool) -> Planned {
+/// `in_batch`: a manifest job, whose `--format auto` is JSON (A12.3). `cx`:
+/// the request's planning context, the only way planning reads stdin or a
+/// file ([`PlanCx`]); its file-system questions were decided by the caller
+/// ([`decide`]), so planning probes nothing (`make_job` of context-server
+/// design r3 §4.3). A request given a workspace read ([`PlanCx::inputs`]) may
+/// read only that workspace, with no more than the read holds: anything else
+/// is refused (exit 3) before a job is made.
+fn plan(command: Commands, in_batch: bool, cx: &PlanCx) -> Planned {
+    let planned = plan_command(command, in_batch, cx);
+    if let Some(inputs) = &cx.inputs {
+        let given = cx.absolute(&inputs.workspace).ok();
+        for (path, needs) in planned.reads() {
+            if cx.absolute(&path).ok() != given || !inputs.holds(needs) {
+                return failed(
+                    format!(
+                        "al-sem: workspace '{}' is not the workspace this request reads ('{}')",
+                        path.display(),
+                        inputs.workspace.display()
+                    ),
+                    exit::CONFIG_ERROR,
+                    1,
+                );
+            }
+        }
+    }
+    planned
+}
+
+/// A batch parent's decisions for its worker's job: `--changed` names a diff
+/// file, and the diff root.
+type Shipped = (Option<bool>, Option<Result<DiffRoot, String>>);
+
+/// The decoded request's file-system questions, decided by its caller before
+/// planning (context-server design r3 §4.3; review r2 #16): whether
+/// `digest --changed` names a diff file ([`pin_changed`]) and the diff root
+/// ([`decide_diff_root`]), each through `cx` (so its probes are this request's
+/// touched reads), or as `shipped` when a batch's parent decided them for its
+/// worker.
+fn decide(mut command: Commands, mut cx: PlanCx, shipped: Option<Shipped>) -> (Commands, PlanCx) {
+    match shipped {
+        Some((changed, root)) => {
+            pin_changed(&mut command, changed, &cx);
+            cx.diff_root_decided = root;
+        }
+        None => {
+            pin_changed(&mut command, None, &cx);
+            cx.diff_root_decided = diff_root_of(&command, &cx);
+        }
+    }
+    (command, cx)
+}
+
+fn plan_command(command: Commands, in_batch: bool, cx: &PlanCx) -> Planned {
     match command {
         Commands::Analyze(a) => plan_analyze(a, in_batch),
-        Commands::Digest(d) => plan_digest(d),
+        Commands::Digest(d) => plan_digest(d, cx),
         Commands::Prove(p) => plan_prove(p),
-        Commands::Explain(e) => plan_explain(e),
+        Commands::Explain(e) => plan_explain(e, cx),
         Commands::Fingerprint(f) => plan_fingerprint(f),
         Commands::Diff(d) => plan_diff(d),
         Commands::Events(e) => match e.command {
@@ -989,7 +1050,7 @@ fn plan(command: Commands, in_batch: bool) -> Planned {
             EventsCommands::Chains(c) => plan_events_chains(c),
         },
         Commands::Policy(p) => match p.command {
-            PolicyCommands::Check(c) => plan_policy_check(c),
+            PolicyCommands::Check(c) => plan_policy_check(c, cx),
             PolicyCommands::Explain(_) => unreachable!("policy explain is no job"),
         },
         Commands::Query(q) => match q.command {
@@ -1146,13 +1207,17 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
     if let Err(line) = check_stream_dirs(&manifest, out_dir) {
         return usage(line);
     }
+    // The run's shared reads: one stdin read for every `--diff -` job, each
+    // file read once (D3), handed to the workers below. Each job is its own
+    // request ([`PlanCx`]) over them.
+    let reads = PlanReads::process();
     let mut parsed = Vec::new();
     for (bi, batch) in manifest.batches.iter().enumerate() {
         let mut commands = Vec::new();
         for (i, job) in batch.jobs.iter().enumerate() {
             match parse_job(&job.argv) {
                 Ok(mut c) => {
-                    pin_changed(&mut c, None);
+                    pin_changed(&mut c, None, &PlanCx::new(&reads));
                     commands.push(c);
                 }
                 Err(why) => return usage(format!("al-sem batch: batch {bi} job {i}: {why}")),
@@ -1167,16 +1232,15 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
     let (mut paths, mut kinds, mut planned, mut changed) = (vec![], vec![], vec![], vec![]);
     for (bi, (batch, commands)) in manifest.batches.iter().zip(parsed).enumerate() {
         let (mut plans, mut decided) = (Vec::new(), Vec::new());
-        for (i, (job, mut command)) in batch.jobs.iter().zip(commands).enumerate() {
+        for (i, (job, command)) in batch.jobs.iter().zip(commands).enumerate() {
             let (kind, mut written) = (job_kind(&command), job_paths(&command, &job.streams));
-            PLAN_TOUCHED.lock().expect("plan touches").clear();
-            // After the clear: the `.git` probes join this job's reads.
-            let root = pin_diff_root(&mut command, None);
-            decided.push((changed_is_file(&command), root));
-            let p = plan(command, true);
-            written
-                .reads
-                .append(&mut PLAN_TOUCHED.lock().expect("plan touches"));
+            // The job's own request: its diff-root probes (the `.git` checks)
+            // and its plan's reads join this job's reads.
+            let mut cx = PlanCx::new(&reads);
+            cx.diff_root_decided = diff_root_of(&command, &cx);
+            decided.push((changed_is_file(&command), cx.diff_root_decided.clone()));
+            let p = plan(command, true, &cx);
+            written.reads.append(&mut cx.take_touched());
             let written = match p {
                 Planned::Failed(_) => JobPaths {
                     reads: written.reads,
@@ -1212,11 +1276,7 @@ fn run_batch_cmd(b: BatchCli) -> ExitCode {
     }
     drop(planned);
     // The workers get the parent's one stdin read, if a job made it (D3).
-    let stdin = STDIN.get().map(|read| match read {
-        Some(text) => StdinRead::Text(text.clone()),
-        None => StdinRead::Failed,
-    });
-    let files = PLAN_FILES.lock().expect("plan files").clone();
+    let (stdin, files) = (reads.stdin_read(), reads.files());
     let batches: Vec<WorkerBatch> = manifest
         .batches
         .iter()
@@ -1265,20 +1325,17 @@ fn run_worker(b: u32) -> ExitCode {
         Ok(input) => input,
         Err(why) => return usage(format!("al-sem batch: worker {b}: {why}")),
     };
-    if let Some(read) = input.stdin {
-        let _ = STDIN.set(match read {
-            StdinRead::Text(text) => Some(text),
-            StdinRead::Failed => None,
-        });
-    }
-    *PLAN_FILES.lock().expect("plan files") = input.files;
+    // Seeded with the parent's stdin read and file reads: this process's
+    // own stdin was its batch input.
+    let reads = PlanReads::seeded(input.stdin, input.files);
     let mut planned = Vec::new();
     for (i, job) in input.jobs.iter().enumerate() {
         match parse_job(&job.argv) {
-            Ok(mut c) => {
-                pin_changed(&mut c, job.changed_is_file);
-                pin_diff_root(&mut c, job.diff_root.clone());
-                planned.push(plan(c, true));
+            Ok(c) => {
+                // Decided by the parent: the worker probes nothing.
+                let shipped = Some((job.changed_is_file, job.diff_root.clone()));
+                let (c, cx) = decide(c, PlanCx::new(&reads), shipped);
+                planned.push(plan(c, true, &cx));
             }
             Err(why) => return usage(format!("al-sem batch: batch {b} job {i}: {why}")),
         }
@@ -1483,7 +1540,7 @@ fn plan_query_effects(e: QueryEffectsCli) -> Planned {
 
 // ── policy check command ─────────────────────────────────────────────────────
 
-fn plan_policy_check(c: PolicyCheckCli) -> Planned {
+fn plan_policy_check(c: PolicyCheckCli, cx: &PlanCx) -> Planned {
     use al_sem::engine::gate::policy::pipeline::{
         PolicyCheck, PolicyCheckOptions, PolicyJob, policy_request,
     };
@@ -1506,8 +1563,8 @@ fn plan_policy_check(c: PolicyCheckCli) -> Planned {
         workspace,
         policy_request(c.policy.as_deref(), c.no_policy),
         None,
-        &plan_exists,
-        &plan_read,
+        &|p| cx.exists(p),
+        &|p| cx.read(p),
     );
     let check = match PolicyCheck::resolve(workspace, &request) {
         Ok(check) => check,
@@ -1658,70 +1715,19 @@ const GROUP_BY_VALUES: &[&str] = &["object", "routine", "table", "detector", "fi
 /// The exact stderr message emitted when `--order` is used with `digest`.
 const ORDER_REJECTION: &str = "al-sem: digest --order is not supported by the Rust engine";
 
-/// Stdin, read whole on the first ask; every `--diff -` job of the run gets
-/// the same text (#277 D3: one reader). `None`: the read failed. A batch's
-/// parent hands its read to every worker, which is seeded with it (FR-8).
-static STDIN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-
-/// [`STDIN`]'s text, read on the first ask.
-fn stdin_text() -> Option<&'static str> {
-    STDIN
-        .get_or_init(|| {
-            use std::io::Read;
-            let mut buf = String::new();
-            std::io::stdin().read_to_string(&mut buf).ok().map(|_| buf)
-        })
-        .as_deref()
-}
-
-/// What this run's plans read of the file system, once each (#277 final r2
-/// R2-1). A batch's parent hands it to every worker, which is seeded with it.
-static PLAN_FILES: std::sync::LazyLock<std::sync::Mutex<PlanFiles>> =
-    std::sync::LazyLock::new(Default::default);
-
-/// Every path the plan being made read or probed, in order: a batch's parent
-/// adds them to that job's reads (D2.4; #277 final r3 F1).
-static PLAN_TOUCHED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
-
-/// Record that the plan being made probed `path` ([`PLAN_TOUCHED`]), whatever
-/// the probe's outcome.
-fn plan_touch(path: &Path) {
-    PLAN_TOUCHED
-        .lock()
-        .expect("plan touches")
-        .push(path.to_path_buf());
-}
-
-/// `path`'s bytes as a plan reads them: read once per run ([`PLAN_FILES`]).
-/// The error keeps its text, not its kind.
-fn plan_read(path: &Path) -> std::io::Result<Vec<u8>> {
-    plan_touch(path);
-    let mut files = PLAN_FILES.lock().expect("plan files");
-    let read = files
-        .reads
-        .entry(path.to_path_buf())
-        .or_insert_with(|| std::fs::read(path).map_err(|e| e.to_string()));
-    read.clone().map_err(std::io::Error::other)
-}
-
-/// Whether `path` exists, as a plan asks it: answered once per run.
-fn plan_exists(path: &Path) -> bool {
-    plan_touch(path);
-    let mut files = PLAN_FILES.lock().expect("plan files");
-    *files
-        .exists
-        .entry(path.to_path_buf())
-        .or_insert_with(|| path.exists())
-}
+// Stdin, the plans' file reads and the paths a plan touched are the
+// request's planning context ([`PlanCx`]), never process state: a `OnceLock`
+// for stdin gave every later request of one process the first request's diff
+// (context-server design r2 §4.3; review r1 #3, r2 #16).
 
 /// Decide once whether `digest --changed` names an existing diff file
 /// (#277 final r1 FR-3): `decided` when a batch's parent decided it, else
-/// the file system now.
-fn pin_changed(command: &mut Commands, decided: Option<bool>) {
+/// the request's file system now.
+fn pin_changed(command: &mut Commands, decided: Option<bool>, cx: &PlanCx) {
     if let Commands::Digest(d) = command
         && let Some(value) = &d.changed
     {
-        d.changed_is_file = Some(decided.unwrap_or_else(|| Path::new(value).exists()));
+        d.changed_is_file = Some(decided.unwrap_or_else(|| cx.probe_exists(Path::new(value))));
     }
 }
 
@@ -1733,51 +1739,49 @@ fn changed_is_file(command: &Commands) -> Option<bool> {
     }
 }
 
-/// What `--changed <value>` names: a diff file as decided ([`pin_changed`]),
-/// else as the file system says now.
+/// What `--changed <value>` names: a diff file as decided by the caller
+/// ([`pin_changed`]); planning never asks the file system.
 fn detect_changed(d: &DigestCli, value: &str) -> ChangedAutoDetect {
-    auto_detect_changed_with(value, |p| {
-        d.changed_is_file.unwrap_or_else(|| Path::new(p).exists())
+    auto_detect_changed_with(value, |_| {
+        d.changed_is_file
+            .expect("the caller decides --changed before planning (pin_changed)")
     })
 }
 
-/// Decide a digest's diff root once (#77): `decided` when a batch's parent
-/// decided it (a worker never decides it again), else the file system now.
-/// Returns the decision, for the worker.
-fn pin_diff_root(
-    command: &mut Commands,
-    decided: Option<Result<DiffRoot, String>>,
-) -> Option<Result<DiffRoot, String>> {
-    let (slot, root) = match command {
-        // The batch parse pinned `--changed` ([`pin_changed`]), so this asks
-        // the file system nothing more about it.
-        Commands::Digest(d) => {
-            let root = decided.unwrap_or_else(|| {
-                decide_diff_root(
-                    "digest",
-                    &d.workspace,
-                    d.diff_root.as_deref(),
-                    DigestInputs::of(d).reads_paths(),
-                )
-            });
-            (&mut d.diff_root_decided, root)
-        }
+/// The request's diff root as its caller decided it ([`PlanCx::diff_root_decided`]).
+/// A plan that reads no changed path needs none (the workspace); one that does
+/// and finds none is a caller that skipped [`decide`]: planning never decides
+/// it itself.
+fn decided_root(cx: &PlanCx, reads_paths: bool) -> Result<DiffRoot, String> {
+    match &cx.diff_root_decided {
+        Some(root) => root.clone(),
+        None if !reads_paths => Ok(DiffRoot::Workspace),
+        None => panic!("the caller decides the diff root before planning (decide)"),
+    }
+}
+
+/// A digest's or explain's diff root (#77), decided once through `cx` (its
+/// probes are the request's touched reads); `None` for every other command.
+/// `--changed` must be pinned first ([`pin_changed`]).
+fn diff_root_of(command: &Commands, cx: &PlanCx) -> Option<Result<DiffRoot, String>> {
+    match command {
+        Commands::Digest(d) => Some(decide_diff_root(
+            "digest",
+            &d.workspace,
+            d.diff_root.as_deref(),
+            DigestInputs::of(d).reads_paths(),
+            cx,
+        )),
         // `explain --diff` reads its diff paths as digest does (one decision).
-        Commands::Explain(e) => {
-            let root = decided.unwrap_or_else(|| {
-                decide_diff_root(
-                    "explain",
-                    &e.workspace,
-                    e.diff_root.as_deref(),
-                    e.diff.is_some(),
-                )
-            });
-            (&mut e.diff_root_decided, root)
-        }
-        _ => return None,
-    };
-    *slot = Some(root.clone());
-    Some(root)
+        Commands::Explain(e) => Some(decide_diff_root(
+            "explain",
+            &e.workspace,
+            e.diff_root.as_deref(),
+            e.diff.is_some(),
+            cx,
+        )),
+        _ => None,
+    }
 }
 
 /// A digest's inputs with the `--changed` alias resolved (auto-detected into
@@ -1829,35 +1833,39 @@ impl DigestInputs {
 /// workspace that cannot be canonicalized: the workspace itself (auto mode
 /// never fails). No changed path read (`reads_paths`, decided once by the
 /// caller): the workspace, probing nothing. Every probe is recorded
-/// ([`plan_touch`]), so a batch job's reads hold `--diff-root` and the
-/// workspace even when the probe fails.
+/// ([`PlanCx::touch`]), so a batch job's reads hold `--diff-root` and the
+/// workspace even when the probe fails. Every probe (`canonicalize`,
+/// `metadata`, the `.git` checks, the current directory) is asked of the
+/// request's [`PlanCx`]: a captured input, never the process directly
+/// (review r2 #16).
 /// `command` names the command in an error line (`digest`, `explain`).
 fn decide_diff_root(
     command: &str,
     workspace: &str,
     diff_root: Option<&str>,
     reads_paths: bool,
+    cx: &PlanCx,
 ) -> Result<DiffRoot, String> {
     if !reads_paths {
         return Ok(DiffRoot::Workspace);
     }
-    plan_touch(Path::new(workspace));
-    let canonical_ws = std::fs::canonicalize(workspace);
+    cx.touch(Path::new(workspace));
+    let canonical_ws = cx.canonicalize(Path::new(workspace));
     let Some(root) = diff_root else {
         let Ok(ws) = canonical_ws else {
             return Ok(DiffRoot::Workspace);
         };
         return Ok(ws
             .ancestors()
-            .find(|dir| plan_exists(&dir.join(".git")))
+            .find(|dir| cx.exists(&dir.join(".git")))
             .and_then(|top| ws.strip_prefix(top).ok())
             .map_or(DiffRoot::Workspace, |rel| DiffRoot::below(rel, false)));
     };
     // Checked first, so a lexical containment cannot pass a missing root.
-    plan_touch(Path::new(root));
-    match std::fs::metadata(root) {
-        Ok(m) if m.is_dir() => {}
-        Ok(_) => {
+    cx.touch(Path::new(root));
+    match cx.is_dir(Path::new(root)) {
+        Ok(true) => {}
+        Ok(false) => {
             return Err(format!(
                 "al-sem: {command}: --diff-root '{root}' is not a folder"
             ));
@@ -1869,9 +1877,10 @@ fn decide_diff_root(
     let Ok(ws) = canonical_ws else {
         return Ok(DiffRoot::Workspace);
     };
-    let lexical = std::path::absolute(workspace)
+    let lexical = cx
+        .absolute(Path::new(workspace))
         .ok()
-        .zip(std::path::absolute(root).ok())
+        .zip(cx.absolute(Path::new(root)).ok())
         .and_then(|(ws, r)| ws.strip_prefix(&r).ok().map(Path::to_path_buf))
         .filter(|rel| {
             !rel.components()
@@ -1880,7 +1889,8 @@ fn decide_diff_root(
     let rel = match lexical {
         Some(rel) => rel,
         None => {
-            let r = std::fs::canonicalize(root)
+            let r = cx
+                .canonicalize(Path::new(root))
                 .map_err(|e| format!("al-sem: {command}: --diff-root '{root}': {e}"))?;
             ws.strip_prefix(&r).map(Path::to_path_buf).map_err(|_| {
                 format!(
@@ -1892,7 +1902,7 @@ fn decide_diff_root(
     Ok(DiffRoot::below(&rel, true))
 }
 
-fn plan_digest(d: DigestCli) -> Planned {
+fn plan_digest(d: DigestCli, cx: &PlanCx) -> Planned {
     // Reject --order (CONFIG_ERROR — a not-ported flag rejected cleanly rather than silently ignored)
     if d.order {
         return failed(ORDER_REJECTION, exit::CONFIG_ERROR, 1);
@@ -1948,7 +1958,7 @@ fn plan_digest(d: DigestCli) -> Planned {
     // Read diff input
     let diff_text: Option<String> = match diff_arg.as_deref() {
         None => None,
-        Some("-") => match stdin_text() {
+        Some("-") => match cx.stdin_text() {
             Some(text) => Some(text.to_string()),
             None => {
                 return failed(
@@ -1958,7 +1968,7 @@ fn plan_digest(d: DigestCli) -> Planned {
                 );
             }
         },
-        Some(path) => match FileInput::read_with(path.into(), &plan_read).text() {
+        Some(path) => match FileInput::read_with(path.into(), &|p| cx.read(p)).text() {
             Ok(s) => Some(s.to_string()),
             Err(e) => {
                 return failed(
@@ -1970,10 +1980,8 @@ fn plan_digest(d: DigestCli) -> Planned {
         },
     };
 
-    // A batch's parent decided it (its workers get the decision); else now.
-    let diff_root = match d.diff_root_decided.clone().unwrap_or_else(|| {
-        decide_diff_root("digest", &d.workspace, d.diff_root.as_deref(), reads_paths)
-    }) {
+    // Decided by the caller ([`decide`]; a batch worker gets its parent's).
+    let diff_root = match decided_root(cx, reads_paths) {
         Ok(r) => r,
         Err(line) => return failed(line, exit::CONFIG_ERROR, 1),
     };
@@ -2076,7 +2084,7 @@ fn plan_prove(p: ProveCli) -> Planned {
 /// `--field` (or the reverse), and `--diff-root` without `--diff` are flag
 /// misuse, exit 3; an unreadable diff exits 3 (digest's). The job then exits
 /// 0 with an answer and 2 when nothing resolved.
-fn plan_explain(e: ExplainCli) -> Planned {
+fn plan_explain(e: ExplainCli, cx: &PlanCx) -> Planned {
     use al_sem::engine::l5::explain::{ExplainJob, ExplainMode, ExplainRequest};
     const VALID_EXPLAIN_FORMATS: &[&str] = &["human", "json"];
     if !VALID_EXPLAIN_FORMATS.contains(&e.format.as_str()) {
@@ -2121,7 +2129,7 @@ fn plan_explain(e: ExplainCli) -> Planned {
         ExplainMode::Routine(selector.clone())
     } else if let Some(diff) = &e.diff {
         let text = match diff.as_str() {
-            "-" => match stdin_text() {
+            "-" => match cx.stdin_text() {
                 Some(text) => text.to_string(),
                 None => {
                     return failed(
@@ -2131,7 +2139,7 @@ fn plan_explain(e: ExplainCli) -> Planned {
                     );
                 }
             },
-            path => match FileInput::read_with(path.into(), &plan_read).text() {
+            path => match FileInput::read_with(path.into(), &|p| cx.read(p)).text() {
                 Ok(s) => s.to_string(),
                 Err(err) => {
                     return failed(
@@ -2142,10 +2150,8 @@ fn plan_explain(e: ExplainCli) -> Planned {
                 }
             },
         };
-        // A batch's parent decided it (its workers get the decision); else now.
-        let root = match e.diff_root_decided.clone().unwrap_or_else(|| {
-            decide_diff_root("explain", &e.workspace, e.diff_root.as_deref(), true)
-        }) {
+        // Decided by the caller ([`decide`]; a batch worker gets its parent's).
+        let root = match decided_root(cx, true) {
             Ok(r) => r,
             Err(line) => return failed(line, exit::CONFIG_ERROR, 1),
         };
@@ -2823,5 +2829,325 @@ mod tests {
             first.borrow().upgrade().is_none(),
             "the reader kept the read past the jobs' making"
         );
+    }
+
+    // ── request-scoped planning (context-server design r3 §4.3, T-plan) ──
+
+    use al_sem::engine::batch::plan_cx::{PROCESS_STDIN_READS, PlanFs, ProcessFs};
+    use al_sem::program::inputs::WorkspaceInputs;
+    use std::sync::atomic::Ordering;
+
+    /// A request over the process's file system whose stdin is `stdin`.
+    fn request(stdin: Option<&str>) -> PlanCx {
+        PlanCx::new(&PlanReads::request(
+            stdin.map(str::to_string),
+            Box::new(ProcessFs),
+        ))
+    }
+
+    /// The CLI's request: real stdin, the file system now.
+    fn cli_request() -> PlanCx {
+        PlanCx::new(&PlanReads::process())
+    }
+
+    /// `ws-explain`, absolute.
+    fn explain_ws() -> String {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/r0-corpus/ws-explain")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// A diff of `ws-explain` changing `PostOrder` only.
+    const DIFF_POST: &str = "--- a/src/post.al\n+++ b/src/post.al\n@@ -14,5 +14,5 @@\n         if IsHandled then\n             exit;\n-        Order.Posted := false;\n+        Order.Posted := true;\n         Order.Validate(Status, Order.Status::Posted);\n         Order.Modify(true);\n";
+
+    /// A diff of `ws-explain` changing `Archive` only.
+    const DIFF_ARCHIVE: &str = "--- a/src/post.al\n+++ b/src/post.al\n@@ -24,5 +24,5 @@\n     begin\n         Order.Status := Order.Status::Archived;\n-        Order.Modify(true);\n+        Order.Modify();\n         Commit();\n     end;\n";
+
+    /// `alsem <args>` decided and planned through `cx` and run through the
+    /// driver as a standalone run does, its writes held: (stdout bytes,
+    /// stderr bytes, exit).
+    fn run_through(args: &[&str], cx: PlanCx) -> (Vec<u8>, Vec<u8>, u8) {
+        let cli = Cli::try_parse_from(std::iter::once("alsem").chain(args.iter().copied()))
+            .expect("the argv parses");
+        let (command, cx) = decide(cli.command, cx, None);
+        let planned = plan(command, false, &cx);
+        let reader = reader_for(planned.reads(), &cx);
+        let slots = [Slot::new()];
+        let jobs = make_jobs(vec![planned], &reader, &slots);
+        let out = al_sem::engine::batch::standalone_output(&*jobs[0]);
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        for a in out.actions {
+            match a {
+                WriteAction::Stdout(b) => stdout.extend(b),
+                WriteAction::Stderr(b) => stderr.extend(b),
+                other => panic!("no file write expected: {other:?}"),
+            }
+        }
+        (stdout, stderr, out.exit)
+    }
+
+    /// T-plan: two `--diff -` requests made one after the other in ONE
+    /// process, each with its own diff text, answer their own bytes, and each
+    /// equals the same diff read from a file (the CLI's route). The process's
+    /// stdin is never read. Before, `--diff -` read a process `OnceLock`, so
+    /// the second request answered the first diff's cards.
+    #[test]
+    fn sequential_diff_requests_get_their_own_bytes() {
+        let ws = explain_ws();
+        let stdin_reads = PROCESS_STDIN_READS.load(Ordering::SeqCst);
+        let ask = |text: &str| {
+            run_through(
+                &["explain", &ws, "--diff", "-", "--format", "json"],
+                request(Some(text)),
+            )
+        };
+        let post = ask(DIFF_POST);
+        let archive = ask(DIFF_ARCHIVE);
+        assert_eq!((post.2, archive.2), (0, 0), "both resolve a routine");
+        assert_ne!(post.0, archive.0, "two diffs, two answers");
+        let names = |out: &[u8]| {
+            let doc: serde_json::Value = serde_json::from_slice(out).expect("JSON");
+            doc["cards"]
+                .as_array()
+                .expect("cards")
+                .iter()
+                .map(|c| c["routine"]["name"].as_str().unwrap_or("").to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&post.0), ["PostOrder"]);
+        assert_eq!(names(&archive.0), ["Archive"]);
+        // The oracle: the same diffs as files, through the CLI's context.
+        let dir = tempfile::tempdir().unwrap();
+        for (text, got) in [(DIFF_POST, &post), (DIFF_ARCHIVE, &archive)] {
+            let file = dir.path().join("d.diff");
+            std::fs::write(&file, text).unwrap();
+            let file = file.to_string_lossy().into_owned();
+            let cli = run_through(
+                &["explain", &ws, "--diff", &file, "--format", "json"],
+                cli_request(),
+            );
+            assert_eq!(&cli, got, "a request's bytes equal the CLI's");
+        }
+        assert_eq!(
+            PROCESS_STDIN_READS.load(Ordering::SeqCst),
+            stdin_reads,
+            "a request context never reads the process's stdin"
+        );
+    }
+
+    /// T-plan: a request that carries no diff text fails its `--diff -` as an
+    /// unreadable stdin does (exit 3), and never reads the process's stdin
+    /// (in a resident server that stream is the protocol).
+    #[test]
+    fn diff_stdin_without_text_never_reads_process_stdin() {
+        let ws = explain_ws();
+        let stdin_reads = PROCESS_STDIN_READS.load(Ordering::SeqCst);
+        let (stdout, stderr, exit) = run_through(&["explain", &ws, "--diff", "-"], request(None));
+        assert_eq!(exit, 3);
+        assert!(stdout.is_empty());
+        assert_eq!(
+            String::from_utf8_lossy(&stderr),
+            "al-sem: explain: failed to read diff from stdin\n"
+        );
+        assert_eq!(PROCESS_STDIN_READS.load(Ordering::SeqCst), stdin_reads);
+    }
+
+    /// T-plan: requests of ONE run planned at once on two threads, each
+    /// through its own context over the run's shared reads, record only their
+    /// own touched paths (a batch job's reads, D2.4). Before, one process list
+    /// took both plans' paths.
+    #[test]
+    fn concurrent_plans_keep_their_touched_paths() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
+        let dir = tempfile::tempdir().unwrap();
+        let side = |name: &str, ws: &str, text: &str| {
+            let diff = dir.path().join(format!("{name}.diff"));
+            std::fs::write(&diff, text).unwrap();
+            (root.join(ws), diff)
+        };
+        let a = side("a", "ws-explain", DIFF_POST);
+        let b = side("b", "ws-rules", DIFF_ARCHIVE);
+        let barrier = std::sync::Barrier::new(2);
+        let reads = PlanReads::process();
+        let plan_many = |(ws, diff): &(PathBuf, PathBuf)| {
+            barrier.wait();
+            let mut touched = Vec::new();
+            for _ in 0..100 {
+                let cli = Cli::try_parse_from([
+                    "alsem",
+                    "digest",
+                    &ws.to_string_lossy(),
+                    "--diff",
+                    &diff.to_string_lossy(),
+                ])
+                .unwrap();
+                let (command, cx) = decide(cli.command, PlanCx::new(&reads), None);
+                drop(plan(command, true, &cx));
+                touched.push(cx.take_touched());
+            }
+            touched
+        };
+        let (ta, tb) = std::thread::scope(|s| {
+            let ta = s.spawn(|| plan_many(&a));
+            let tb = s.spawn(|| plan_many(&b));
+            (ta.join().unwrap(), tb.join().unwrap())
+        });
+        for ((ws, diff), other, runs) in [(&a, &b, &ta), (&b, &a, &tb)] {
+            for touched in runs {
+                assert!(touched.contains(diff), "its diff: {touched:?}");
+                assert!(touched.contains(ws), "its workspace: {touched:?}");
+                assert!(
+                    !touched.contains(&other.1) && !touched.contains(&other.0),
+                    "another plan's path: {touched:?}"
+                );
+            }
+        }
+    }
+
+    /// Review r2 #16: the diff root's probes (`canonicalize`, the `.git`
+    /// checks, `metadata`, the current directory) are asked of the request's
+    /// context, never the process. A file system that exists only in the
+    /// context decides the root.
+    #[test]
+    fn diff_root_probes_are_the_requests_inputs() {
+        struct Virtual;
+        impl PlanFs for Virtual {
+            fn read(&self, _: &Path) -> std::io::Result<Vec<u8>> {
+                Err(std::io::Error::other("no file"))
+            }
+            fn exists(&self, path: &Path) -> bool {
+                path == Path::new("/virtual/repo/.git")
+            }
+            fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+                Ok(Path::new("/virtual/repo/apps").join(path))
+            }
+            fn is_dir(&self, path: &Path) -> std::io::Result<bool> {
+                Ok(path == Path::new("vroot"))
+            }
+            fn absolute(&self, path: &Path) -> std::io::Result<PathBuf> {
+                Ok(Path::new("/virtual/repo").join(path))
+            }
+            fn read_stdin(&self) -> Option<String> {
+                None
+            }
+        }
+        let cx = PlanCx::new(&PlanReads::request(None, Box::new(Virtual)));
+        // Auto mode: the nearest `.git` above the canonical workspace.
+        assert_eq!(
+            decide_diff_root("digest", "ws", None, true, &cx),
+            Ok(DiffRoot::GitTop("apps/ws".into()))
+        );
+        // `--diff-root`: a folder only the context has, then a lexical
+        // containment through the context's current directory.
+        assert_eq!(
+            decide_diff_root("digest", "vroot/ws", Some("vroot"), true, &cx),
+            Ok(DiffRoot::Explicit("ws".into()))
+        );
+        assert_eq!(
+            cx.take_touched(),
+            [
+                PathBuf::from("ws"),
+                PathBuf::from("/virtual/repo/apps/ws/.git"),
+                PathBuf::from("/virtual/repo/apps/.git"),
+                PathBuf::from("/virtual/repo/.git"),
+                PathBuf::from("vroot/ws"),
+                PathBuf::from("vroot"),
+            ]
+        );
+    }
+
+    /// r3 §4.3: `make_job` (planning) probes no file system. A request whose
+    /// caller decided the diff root and `--changed` plans `digest --diff -`
+    /// and `explain --diff -` over a file system that panics on every
+    /// question.
+    #[test]
+    fn planning_probes_no_file_system() {
+        struct Refuses;
+        impl PlanFs for Refuses {
+            fn read(&self, p: &Path) -> std::io::Result<Vec<u8>> {
+                panic!("planning read {}", p.display())
+            }
+            fn exists(&self, p: &Path) -> bool {
+                panic!("planning probed {}", p.display())
+            }
+            fn canonicalize(&self, p: &Path) -> std::io::Result<PathBuf> {
+                panic!("planning canonicalized {}", p.display())
+            }
+            fn is_dir(&self, p: &Path) -> std::io::Result<bool> {
+                panic!("planning asked metadata of {}", p.display())
+            }
+            fn absolute(&self, p: &Path) -> std::io::Result<PathBuf> {
+                panic!("planning made {} absolute", p.display())
+            }
+            fn read_stdin(&self) -> Option<String> {
+                panic!("planning read stdin")
+            }
+        }
+        for argv in [
+            ["alsem", "digest", "ws", "--diff", "-"],
+            ["alsem", "explain", "ws", "--diff", "-"],
+        ] {
+            let decoded = Cli::try_parse_from(argv).unwrap().command;
+            let reads = PlanReads::request(Some(DIFF_POST.into()), Box::new(Refuses));
+            let shipped = Some((None, Some(Ok(DiffRoot::GitTop("apps/ws".into())))));
+            let (decoded, cx) = decide(decoded, PlanCx::new(&reads), shipped);
+            let planned = plan(decoded, false, &cx);
+            assert!(matches!(planned, Planned::Ready { .. }), "{argv:?}");
+            assert!(cx.take_touched().is_empty(), "{argv:?}: no probe recorded");
+        }
+    }
+
+    /// r3 §4.3: a request given a workspace read (a resident revision's) makes
+    /// its job off that read, never reading the workspace again: the files
+    /// are changed on disk after the read and the answer still describes the
+    /// read. A request naming another workspace, or needing more than the read
+    /// holds, is refused (exit 3) before any job is made.
+    #[test]
+    fn a_given_workspace_read_answers_and_others_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("ws");
+        let src = PathBuf::from(explain_ws());
+        std::fs::create_dir_all(ws.join("src")).unwrap();
+        std::fs::copy(src.join("app.json"), ws.join("app.json")).unwrap();
+        for f in ["card.al", "order.al", "post.al", "tests.al"] {
+            std::fs::copy(src.join("src").join(f), ws.join("src").join(f)).unwrap();
+        }
+        let ws_s = ws.to_string_lossy().into_owned();
+        let inputs = WorkspaceInputs::read(&ws, &WorkspaceNeeds::default());
+        // After the read: `Archive` is renamed on disk.
+        let post = ws.join("src/post.al");
+        let text = std::fs::read_to_string(&post).unwrap();
+        assert_eq!(text.matches("procedure Archive(").count(), 1);
+        std::fs::write(
+            &post,
+            text.replace("procedure Archive(", "procedure Stored("),
+        )
+        .unwrap();
+        let argv = ["explain", &ws_s, "--routine", "Archive", "--format", "json"];
+        let given = |inputs: &Arc<WorkspaceInputs>| {
+            let mut cx = cli_request();
+            cx.inputs = Some(Arc::clone(inputs));
+            cx
+        };
+        let (out, err, exit) = run_through(&argv, given(&inputs));
+        assert_eq!(
+            exit,
+            0,
+            "the read still has Archive: {}",
+            String::from_utf8_lossy(&err)
+        );
+        assert!(String::from_utf8_lossy(&out).contains("\"name\": \"Archive\""));
+        // The CLI reads the disk now: no such routine.
+        assert_eq!(run_through(&argv, cli_request()).2, 2);
+        // Another workspace: refused.
+        let other = explain_ws();
+        let (out, err, exit) =
+            run_through(&["explain", &other, "--routine", "Archive"], given(&inputs));
+        assert_eq!((exit, out.is_empty()), (3, true));
+        assert!(String::from_utf8_lossy(&err).contains("is not the workspace this request reads"));
+        // More than the read holds (prove reads the fingerprint rows): refused.
+        let (_, _, exit) = run_through(&["prove", &ws_s, "Archive", "may-commit"], given(&inputs));
+        assert_eq!(exit, 3);
     }
 }

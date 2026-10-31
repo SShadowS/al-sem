@@ -265,6 +265,22 @@ impl WorkspaceReader {
         }
     }
 
+    /// Serve `inputs` as its workspace's read, made by the caller (a resident
+    /// revision's, context-server design r3 §4.3): a job on that workspace
+    /// reads nothing itself. The caller checked the job asks no more than the
+    /// read holds (`WorkspaceInputs::holds`); a job that does trips the
+    /// reader's own needs assertion.
+    pub fn give(&self, inputs: Arc<WorkspaceInputs>) {
+        let held = WorkspaceNeeds {
+            build_only: inputs.build_only,
+            fingerprint_rows: inputs.snapshot_inputs.is_some(),
+        };
+        self.read
+            .borrow_mut()
+            .insert(absolute(&inputs.workspace), (held, Arc::downgrade(&inputs)));
+        self.making.borrow_mut().push(inputs);
+    }
+
     /// Every job is made: the reader gives its reads up to them.
     pub fn made(&self) {
         self.making.borrow_mut().clear();

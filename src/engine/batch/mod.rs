@@ -14,6 +14,7 @@ pub mod admission;
 pub mod job;
 pub mod manifest;
 pub mod output;
+pub mod plan_cx;
 pub mod worker;
 
 use std::collections::HashSet;
@@ -32,14 +33,21 @@ use output::{JobOutput, Stream, WriteAction, capture, replay, replay_on, write_e
 /// writes on the real streams in its standalone order (D2.3). Returns the exit.
 pub fn run_standalone(job: &dyn Job) -> u8 {
     let _total = job.standalone_span().map(|name| pt::span(job.name(), name));
+    let out = standalone_output(job);
+    replay(&out, job.write_failure_exit())
+}
+
+/// One job through the driver as [`run_standalone`] runs it, its writes held
+/// instead of replayed: the bytes a standalone run would write, in order
+/// (a resident server's answer, context-server design r2 §4.3 step 7).
+pub fn standalone_output(job: &dyn Job) -> JobOutput {
     let mut done = None;
     drive(&[job], &mut |_, doc, lines| {
         done = Some((doc, lines));
         0
     });
     let (doc, lines) = done.expect("one document per job");
-    let out = serialize(0, job, doc, lines);
-    replay(&out, job.write_failure_exit())
+    serialize(0, job, doc, lines)
 }
 
 /// One job's document, through the driver: a library entry point's run. Its

@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (context-server stage 0: request-scoped planning)
+
+- **Planning reads no process state.** The `alsem` binary's three planning
+  globals (the `STDIN` `OnceLock`, `PLAN_FILES`, `PLAN_TOUCHED`) are gone. A
+  request's planning context `engine::batch::plan_cx::PlanCx` holds its
+  touched paths, its diff-root decision (`diff_root_decided`) and, when the
+  caller has one, the workspace read its job uses (`inputs`); `PlanReads` holds
+  what the requests of one run share (the one stdin read, each file read once).
+  Every file-system question goes through a `PlanFs` (`ProcessFs` for the CLI).
+  The order is the one of context-server design r3 §4.3: decode the argv (clap),
+  decide the request's file-system questions in the caller (`decide`: the diff
+  root via `decide_diff_root`, `digest --changed`), build the `PlanCx`, then plan
+  (`plan`, the design's `make_job`), which probes nothing. The `#[arg(skip)]`
+  `diff_root_decided` fields left `DigestCli`/`ExplainCli`; a batch worker's
+  shipped decisions go through the same `decide`. A request given a workspace
+  read (`PlanCx::inputs`, served by `WorkspaceReader::give`) reads no workspace
+  itself; an argv naming another workspace, or needing more than the read holds
+  (`WorkspaceInputs::holds`), is refused with exit 3. New
+  `engine::batch::standalone_output` returns a job's writes without replaying
+  them. No CLI output moves. Tests (bin `alsem`): two sequential `--diff -`
+  requests answer their own bytes, each equal to the same diff read from a file;
+  a request with no diff text fails `--diff -` with exit 3 and never reads the
+  process's stdin (`PROCESS_STDIN_READS`); two threads planning requests of one
+  run keep their own touched paths; the diff-root probes are asked of the
+  request's file system; planning over a file system that panics on every
+  question succeeds; a given workspace read answers after the disk changed, and
+  another workspace or a larger need is refused. Discrimination proofs, each
+  run and seen to fail, then reverted: a process-global `OnceLock` in
+  `stdin_text` → "two diffs, two answers" fails; `PlanReads::request(None)`
+  leaving stdin unset → exit 0 instead of 3; one shared touched list → the
+  concurrent test fails 3 of 3 runs; `std::fs::canonicalize` back in
+  `decide_diff_root` → `Workspace` instead of `GitTop("apps/ws")`;
+  `plan_explain` deciding its own diff root → "planning canonicalized" panic;
+  `reader_for` ignoring `inputs` → exit 2 instead of 0.
+
 ### Added (`aldump --snapshot-memory`)
 
 - **`aldump --snapshot-memory <workspace> [--single-app] [--hash]` re-measures
