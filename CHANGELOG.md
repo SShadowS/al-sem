@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (`aldump --snapshot-memory`)
+
+- **`aldump --snapshot-memory <workspace> [--single-app] [--hash]` re-measures
+  the cone-memory targets**, replacing the throwaway probe the cone-memory work
+  used (the spec's planned `tools/cone-probe`). It builds the model a default
+  `analyze` builds (cross-app by default; `AssemblyNeeds::BASE`), times the cone
+  base and `compose_snapshot_from_base`, and prints JSON: per-phase wall time and
+  `VmRSS`/`VmHWM`, census marks, the counts (inherited/direct facts, the
+  inherited and snapshot rep/hop tables, snapshot rows, the pd arena) and row
+  sizes. `--hash` adds BLAKE3 per serialized snapshot section, of the whole
+  document and of the pd arena. Live heap is left to `tools/census-probe`: a
+  counting allocator would have been the global allocator of every `aldump` run.
+  New public accessor `SnapshotCapabilityFact::table_lens`. Measured on CDO
+  (`bc3ccb18`, release-fast): cross-app peak RSS 5.29 GB (the step-2 probe:
+  5.28 GB), document BLAKE3 `3b480fbf…2ddaf` and pd arena `76fd29ac…8c98`, both
+  equal to the step-2 probe's; single-app 0.82 GB. Command and reference values:
+  `docs/superpowers/specs/2026-10-31-cone-memory-design.md` §13. Tests:
+  `tests/cli/cli_snapshot_memory.rs` (the JSON shape, rows = inherited + direct,
+  `--hash` equal across two processes).
+
 ### Changed (docs: a run's lifecycle is may-run)
 
 - **`resolver::run_triggers` now says its trigger set is may-run, and why

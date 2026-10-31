@@ -37,6 +37,8 @@ cargo build --release          # Optimized release (full LTO, cu=1 — ~4 min fo
                                # binaries are `--profile release-ship` (= release + panic = "abort")
 cargo build --profile release-fast  # Thin LTO — USE THIS for measurement/triage loops (alsem/aldump on DO);
                                     # full --release only for the SHA-pinned north-star measure, perf_bounds, benches
+                                    # `aldump --snapshot-memory <ws> [--single-app] [--hash]` under /usr/bin/time -v
+                                    # re-measures cone memory; reference values: cone-memory spec §13
 cargo build --profile cdo --bin aldump  # No LTO, incremental — for CORRECTNESS loops only (the CDO
                                     # unknown count, scripts/cdo-gate). ~1 min rebuild after an edit vs
                                     # ~2 min for release-fast. Never quote timings or memory from it.
