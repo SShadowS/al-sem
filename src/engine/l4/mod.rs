@@ -39,6 +39,9 @@ pub(crate) mod event_dispatch;
 // #160 step 4: the one execution relation a view builds (graph, SCC, the
 // dependency half's uncertainty), from one call split.
 pub mod exec_relation;
+// Cone-memory step 1: the cone's inherited facts as 8-byte refs into shared
+// tables, read through borrowed views (`InheritedFacts`, `FactRef`).
+pub mod inherited_facts;
 pub(crate) mod param_guard;
 // #69 D1 — the transitive producer solve: parameter-dependent writes resolved
 // in every routine's own frame, outside the shared capability cone.

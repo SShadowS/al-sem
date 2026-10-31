@@ -424,19 +424,20 @@ impl<'a> LiteralReach<'a> {
         model: &'a Model,
     ) -> Self {
         let mut direct_by_kind: DirectByKind = HashMap::new();
-        for f in facts.iter().filter(|f| f.provenance == "direct") {
+        // The strings are borrowed from the rows' tables, which the rows of
+        // `facts` keep alive for `'a`.
+        for f in facts.iter().filter(|f| f.provenance() == "direct") {
             let Some(kind) = crate::engine::l5::digest::effect_type_of(f) else {
                 continue;
             };
             let site = f
-                .witness_operation_id
-                .as_deref()
-                .or(f.witness_callsite_id.as_deref())
+                .witness_operation_id()
+                .or(f.witness_callsite_id())
                 .unwrap_or("");
             direct_by_kind
-                .entry((kind, f.resource_id.as_deref()))
+                .entry((kind, f.resource_id()))
                 .or_default()
-                .push((f.subject.as_str(), site));
+                .push((f.subject(), site));
         }
         let routines = &model.workspace.routines;
         let by_id: HashMap<&str, &ModelRoutine> =

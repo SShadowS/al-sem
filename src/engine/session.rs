@@ -6,16 +6,16 @@
 //! from a [`Plan`] that only this module's factories build. No interior
 //! mutability: every fill is on `&mut self`, every reader takes `&self` (rule 4).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use crate::engine::gate::run::AnalysisTarget;
 use crate::engine::l4::analysis::{
     CoreSummaries, L4Analysis, L4Request, build_l4, build_l4_controlled,
 };
-use crate::engine::l4::capability_cone::CapabilityFact;
 use crate::engine::l4::cone_derived::{ConeScope, WitnessScope};
 use crate::engine::l4::exec_relation::ExecRelation;
+use crate::engine::l4::inherited_facts::InheritedFacts;
 use crate::engine::l4::summary_runner::{Cancelled, L4Control, SolveOutcome, SummarizeDiagnostic};
 use crate::engine::l5::detector_context::{
     self as dc, CapabilityAnalysis, DetectorArtifacts, DetectorContext, OrderingFactsMap,
@@ -43,7 +43,7 @@ pub struct View {
     caps: Option<CapabilityAnalysis>,
     /// The witness subjects' raw inherited facts, from the same composition;
     /// filled only under a [`WitnessRequest`].
-    raw: Option<HashMap<String, Vec<CapabilityFact>>>,
+    raw: Option<InheritedFacts>,
     /// The tree being read (#160 step 6 D4; #277 D6.5): one at a time, filled
     /// from `caps` and `raw`, released by `prepare` once its read is done.
     tree: Option<CapabilitySnapshot>,
@@ -1025,13 +1025,12 @@ impl View {
                     // a standalone digest always did.
                     (TreeRaw::Drain(std::mem::take(&mut map)), vec![])
                 } else {
-                    let own = scope.iter().filter_map(|id| map.remove_entry(id)).collect();
+                    // Owned keys; the drained map shares the view's tables.
+                    let own = map.take_subjects(scope.iter().map(String::as_str));
                     (TreeRaw::Drain(own), vec![])
                 };
                 *tree = Some(compose_tree(model, r.cone(), calls, c, tree_raw, pd, &apps));
-                for id in done {
-                    map.remove(&id);
-                }
+                drop(map.take_subjects(done.iter().map(String::as_str)));
                 if last_tree {
                     if rest.is_empty() {
                         note_release(released, Cell::Raw);
@@ -1305,7 +1304,7 @@ impl View {
     }
 
     /// The witness subjects' raw inherited facts (#160 step 6 D2).
-    pub fn raw(&self) -> &HashMap<String, Vec<CapabilityFact>> {
+    pub fn raw(&self) -> &InheritedFacts {
         self.raw.as_ref().expect("raw cell not filled")
     }
 
@@ -1955,7 +1954,7 @@ mod tests {
             .map(|r| r.id.as_str())
             .collect();
         assert!(
-            !fill_and_post.is_empty() && fill_and_post.iter().all(|id| v.raw().contains_key(*id)),
+            !fill_and_post.is_empty() && fill_and_post.iter().all(|id| v.raw().contains_key(id)),
             "the later reader still finds the trees' primary subjects"
         );
     }

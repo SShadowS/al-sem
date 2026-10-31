@@ -61,9 +61,17 @@ fn mode_rules() -> Vec<Rule> {
     }
 }
 
-fn render(mut facts: Vec<&CapabilityFact>) -> Vec<String> {
-    facts.sort_by_cached_key(|f| fact_sort_key(f));
-    facts.iter().map(|f| format!("{f:?}")).collect()
+/// Each selected fact as the owned `CapabilityFact`'s `Debug` (an inherited
+/// one materialized here, in the test, never by policy), in policy's order.
+fn render(mut facts: Vec<FactRef<'_>>) -> Vec<String> {
+    sort_facts(&mut facts);
+    facts
+        .iter()
+        .map(|f| match f {
+            FactRef::Direct(f) => format!("{f:?}"),
+            FactRef::Inherited(v) => format!("{:?}", v.materialize()),
+        })
+        .collect()
 }
 
 /// A view prepared as `run_policy_check` prepares it, its run taken.
@@ -92,7 +100,7 @@ fn selected(ws: &Path, single_app: bool) -> Result<Selected, String> {
         let direct = summaries
             .get(r.id.as_str())
             .map_or(&[][..], |s| &s.capability_facts_direct);
-        let inherited = raw.get(r.id.as_str()).map_or(&[][..], Vec::as_slice);
+        let inherited = raw.get(r.id.as_str());
         let per = rules
             .iter()
             .map(|rule| {
@@ -259,7 +267,7 @@ fn policy_view_materializes_no_dependency_member() {
         raw.keys().collect::<BTreeSet<_>>()
     );
     assert_eq!(
-        raw.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        raw.keys().collect::<BTreeSet<_>>(),
         primary,
         "every primary routine, and only those, has raw"
     );
@@ -293,7 +301,7 @@ fn run_without_raw_of(drop: &str, policy: &str) -> RunOutput {
         "precondition: {drop} has a summary and inherited facts"
     );
     let mut raw = view.raw().clone();
-    raw.remove(&id);
+    let _removed = raw.take_subjects([id.as_str()]);
     let declaring =
         crate::program::model::declaring::DeclaringObjects::new(&model.workspace.objects);
     let classes = crate::engine::root_classification::classify_roots(&model.workspace, &declaring);
@@ -338,4 +346,195 @@ rules:
 ",
     );
     assert_eq!(out.rule_summaries.len(), 1);
+}
+
+/// The rule engine over `view`'s primary routines and its raw cell, as
+/// `pipeline.rs` builds it.
+fn run_on_view(view: &View, policy: &str) -> RunOutput {
+    let model = view.model();
+    let routines: Vec<ModelRoutine> = model
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| view.target().is_primary_routine(r))
+        .cloned()
+        .collect();
+    let det = view.det();
+    let declaring =
+        crate::program::model::declaring::DeclaringObjects::new(&model.workspace.objects);
+    let classes = crate::engine::root_classification::classify_roots(&model.workspace, &declaring);
+    let pm = PolicyModel::new(
+        &routines,
+        &model.workspace,
+        declaring,
+        &det.event_graph.events,
+        &classes,
+        &det.summaries,
+        view.raw(),
+    );
+    let doc = match load_policy_from_string(policy) {
+        LoadResult::Ok { policy, .. } => policy,
+        LoadResult::Err { errors, .. } => panic!("{errors:?}"),
+    };
+    run_policy_engine(&pm, &doc)
+}
+
+fn routine_named<'v>(view: &'v View, name: &str) -> &'v ModelRoutine {
+    let rs: Vec<&ModelRoutine> = view
+        .model()
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| r.name == name)
+        .collect();
+    assert_eq!(rs.len(), 1, "precondition: one routine {name}");
+    rs[0]
+}
+
+/// The evidence steps after the first (one per matched fact) of the finding
+/// of `rule` on `routine`.
+fn matched_steps<'o>(
+    out: &'o RunOutput,
+    rule: &str,
+    routine: &ModelRoutine,
+) -> &'o [crate::engine::l5::finding::EvidenceStep] {
+    let id = format!("policy-{rule}/{}", routine.id);
+    let f = out
+        .findings
+        .iter()
+        .find(|f| f.id == id)
+        .unwrap_or_else(|| panic!("a finding {id}"));
+    &f.evidence_path[1..]
+}
+
+/// Cone-memory step 1, T4 (policy half): policy reads each inherited fact
+/// through the compact view, and a finding's evidence carries the witnesses
+/// `retag` gave it. (a) call hop: `Caller`'s inherited `execute` cites
+/// CALLER's call site, not the one `Runner`'s own direct fact carries. (b)
+/// trigger hop: `Inserter`'s inherited `modify` cites no call site and the
+/// trigger's own operation. (c) event hop: `OnT4`'s inherited `modify` cites
+/// no call site and the subscriber's operation.
+/// DISCRIMINATION: `InheritedFactRef::witness_callsite_id()` returns the
+/// rep's call site → (a) fails.
+#[test]
+fn t4_policy_evidence_carries_the_first_hop_witnesses() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path().join("ws");
+    ts::write_single_app(&ws, &ts::T4_FILES);
+    let view = view_of(&ws, true).expect("single-app target");
+    let out = run_on_view(
+        &view,
+        "version: 1
+rules:
+  - id: t4-exec
+    severity: high
+    when:
+      capability.op: execute
+    facts: inherited
+  - id: t4-modify
+    severity: high
+    when:
+      capability.op: modify
+    facts: inherited
+",
+    );
+    let det = view.det();
+
+    // (a)
+    let (caller, runner) = (
+        routine_named(&view, "Caller"),
+        routine_named(&view, "Runner"),
+    );
+    let runner_cs = det.summaries[runner.id.as_str()]
+        .capability_facts_direct
+        .iter()
+        .find(|f| f.op == "execute")
+        .and_then(|f| f.witness_callsite_id.clone())
+        .expect("precondition: Runner's direct execute has its own call site");
+    let caller_cs = caller
+        .call_sites
+        .iter()
+        .find(|c| {
+            matches!(&c.callee, crate::program::body::features::PCallee::Bare { name } if name == "Runner")
+        })
+        .expect("precondition: Caller's call site to Runner")
+        .id
+        .clone();
+    let a = matched_steps(&out, "t4-exec", caller);
+    assert_eq!(a.len(), 1, "{a:?}");
+    assert_eq!(a[0].callsite_id.as_deref(), Some(caller_cs.as_str()));
+    assert_ne!(a[0].callsite_id.as_deref(), Some(runner_cs.as_str()));
+
+    // (b)
+    let ins = routine_named(&view, "Inserter");
+    let b = matched_steps(&out, "t4-modify", ins);
+    assert_eq!(b.len(), 1, "{b:?}");
+    assert_eq!(b[0].callsite_id, None, "a trigger hop has no call site");
+    let trig_op = b[0].operation_id.clone().expect("the trigger's operation");
+    assert!(
+        !ins.record_operations.iter().any(|o| o.id == trig_op),
+        "the operation is the trigger's, not the inserter's"
+    );
+
+    // (c)
+    let publisher = routine_named(&view, "OnT4");
+    let handle = routine_named(&view, "Handle");
+    let c = matched_steps(&out, "t4-modify", publisher);
+    assert_eq!(c.len(), 1, "{c:?}");
+    assert_eq!(c[0].callsite_id, None, "an event hop has no call site");
+    assert!(
+        handle
+            .record_operations
+            .iter()
+            .any(|o| Some(&o.id) == c[0].operation_id.as_ref()),
+        "the operation is the subscriber's Modify"
+    );
+}
+
+/// Cone-memory step 1, T8 (policy half): `Writer` is an explicitly composed
+/// subject with NO inherited facts (its raw entry is `Some(empty)`) and a
+/// summary; a `facts: inherited` rule evaluates it and passes it.
+/// DISCRIMINATION: drop empty entries at emission → policy's "summary but no
+/// raw inherited facts" panic fires here.
+#[test]
+fn t8_an_empty_subject_is_composed_not_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = dir.path().join("ws");
+    ts::write_single_app(&ws, &ts::T8_FILES);
+    let view = view_of(&ws, true).expect("single-app target");
+    let out = run_on_view(
+        &view,
+        "version: 1
+rules:
+  - id: t8-inherited
+    severity: high
+    when:
+      capability.op: insert
+    facts: inherited
+",
+    );
+    let (writer, caller) = (
+        routine_named(&view, "Writer"),
+        routine_named(&view, "Caller"),
+    );
+    assert!(
+        view.det().summaries.contains_key(writer.id.as_str()),
+        "precondition: Writer has a summary"
+    );
+    assert!(
+        view.raw().get(&writer.id).is_some_and(|s| s.is_empty()),
+        "Writer's entry is composed and empty"
+    );
+    assert_eq!(out.rule_summaries[0].routines_evaluated, 2);
+    assert!(
+        !out.findings
+            .iter()
+            .any(|f| f.id == format!("policy-t8-inherited/{}", writer.id)),
+        "Writer inherits nothing"
+    );
+    assert_eq!(
+        matched_steps(&out, "t8-inherited", caller).len(),
+        1,
+        "precondition: Caller inherits the producer's insert"
+    );
 }

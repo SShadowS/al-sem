@@ -31,8 +31,9 @@ use crate::engine::ids::{
     locale_compare, object_id_app_guid, object_signature_fingerprint, sha256_hex,
 };
 use crate::engine::l4::capability_cone::{
-    CapabilityFact, R3a5CrossAppBase, build_r3a3_source_only_base, routine_to_stable_of,
+    R3a5CrossAppBase, build_r3a3_source_only_base, routine_to_stable_of,
 };
+use crate::engine::l4::inherited_facts::FactRef;
 use crate::engine::l5::snapshot::{
     SnapshotAnalysisGap, compose_snapshot_from_base, stable_routine_id,
 };
@@ -332,30 +333,37 @@ fn one_capability_fact_to_cbor(
 ) -> CborValue {
     let mut m: IndexMap<String, CborValue> = IndexMap::new();
     // HEAD.
-    m.insert("subject".into(), CborValue::Text(f.subject.clone()));
-    m.insert("op".into(), CborValue::Text(f.op.clone()));
+    m.insert("subject".into(), CborValue::Text(f.subject().to_string()));
+    m.insert("op".into(), CborValue::Text(f.op().to_string()));
     m.insert(
         "resourceKind".into(),
-        CborValue::Text(f.resource_kind.clone()),
+        CborValue::Text(f.resource_kind().to_string()),
     );
-    if let Some(rid) = &f.resource_id {
-        m.insert("resourceId".into(), CborValue::Text(rid.clone()));
+    if let Some(rid) = f.resource_id() {
+        m.insert("resourceId".into(), CborValue::Text(rid.to_string()));
     }
-    if let Some(ras) = &f.resource_arg_source {
+    if let Some(ras) = f.resource_arg_source() {
         m.insert("resourceArgSource".into(), to_cbor_value(ras));
     }
-    m.insert("confidence".into(), CborValue::Text(f.confidence.clone()));
-    m.insert("provenance".into(), CborValue::Text(f.provenance.clone()));
-    m.insert("via".into(), CborValue::Text(f.via.clone()));
+    m.insert(
+        "confidence".into(),
+        CborValue::Text(f.confidence().to_string()),
+    );
+    m.insert(
+        "provenance".into(),
+        CborValue::Text(f.provenance().to_string()),
+    );
+    m.insert("via".into(), CborValue::Text(f.via().to_string()));
 
-    let is_inherited = f.provenance == "inherited";
-    let is_event = f.resource_kind == "event";
+    let is_inherited = f.provenance() == "inherited";
+    let is_event = f.resource_kind() == "event";
 
     // The witnessCallsiteId slot: present (Text|Undefined) for inherited facts,
     // present-only-when-Some for direct facts.
-    let witness_callsite_slot = |m: &mut IndexMap<String, CborValue>| match &f.witness_callsite_id {
+    let witness_callsite_slot = |m: &mut IndexMap<String, CborValue>| match f.witness_callsite_id()
+    {
         Some(wc) => {
-            m.insert("witnessCallsiteId".into(), CborValue::Text(wc.clone()));
+            m.insert("witnessCallsiteId".into(), CborValue::Text(wc.to_string()));
         }
         None if is_inherited => {
             m.insert("witnessCallsiteId".into(), CborValue::Undefined);
@@ -363,37 +371,40 @@ fn one_capability_fact_to_cbor(
         None => {}
     };
 
-    if let Some(wo) = &f.witness_operation_id {
+    if let Some(wo) = f.witness_operation_id() {
         // op-witness family: witnessOperationId, [extra], then witnessCallsiteId.
-        m.insert("witnessOperationId".into(), CborValue::Text(wo.clone()));
-        if let Some(extra) = &f.extra {
+        m.insert("witnessOperationId".into(), CborValue::Text(wo.to_string()));
+        if let Some(extra) = f.extra() {
             m.insert("extra".into(), to_cbor_value(extra));
         }
         witness_callsite_slot(&mut m);
     } else if is_event {
         // event family: extra first (direct has no witness), then witnessCallsiteId.
-        if let Some(extra) = &f.extra {
+        if let Some(extra) = f.extra() {
             m.insert("extra".into(), to_cbor_value(extra));
         }
         witness_callsite_slot(&mut m);
     } else {
         // callsite-witness family (http/ui/dispatch): witnessCallsiteId, extra.
         witness_callsite_slot(&mut m);
-        if let Some(extra) = &f.extra {
+        if let Some(extra) = f.extra() {
             m.insert("extra".into(), to_cbor_value(extra));
         }
     }
     // Last, present only on a trigger-first inherited fact, as in
     // `SnapshotCapabilityFact`'s JSON `Serialize` (#96 D5).
-    if let Some(op) = &f.witness_first_hop_operation_id {
+    if let Some(op) = f.witness_first_hop_operation_id() {
         m.insert(
             "witnessFirstHopOperationId".into(),
-            CborValue::Text(op.clone()),
+            CborValue::Text(op.to_string()),
         );
     }
     // Last, present only on an event-dispatch-first inherited fact (#98 D1).
-    if let Some(ev) = &f.witness_first_hop_event_id {
-        m.insert("witnessFirstHopEventId".into(), CborValue::Text(ev.clone()));
+    if let Some(ev) = f.witness_first_hop_event_id() {
+        m.insert(
+            "witnessFirstHopEventId".into(),
+            CborValue::Text(ev.to_string()),
+        );
     }
     CborValue::Map(m)
 }
@@ -990,18 +1001,21 @@ fn derive_permissions(
             }
         };
 
-        // facts = direct ∪ inherited.
-        let mut facts: Vec<&CapabilityFact> = Vec::new();
+        // facts = direct ∪ inherited, borrowed (an inherited fact through its
+        // accessors: no materialization).
+        let mut facts: Vec<FactRef<'_>> = Vec::new();
         if let Some(d) = base.direct_full.get(&r.id) {
-            facts.extend(d.iter());
+            facts.extend(d.iter().map(FactRef::Direct));
         }
-        facts.extend(base.raw.get(&r.id).into_iter().flatten());
+        if let Some(inh) = base.raw.get(&r.id) {
+            facts.extend(inh.iter().map(FactRef::Inherited));
+        }
 
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for f in facts {
-            if f.resource_kind == "table" && f.resource_id.is_some() {
-                let Some(right) = table_op_to_right(f.op) else {
+            if f.resource_kind() == "table" && f.resource_id().is_some() {
+                let Some(right) = table_op_to_right(f.op()) else {
                     continue;
                 };
                 // #13: a provably temporary record needs no TableData permission.
@@ -1010,10 +1024,10 @@ fn derive_permissions(
                 // witness). Safe since #33: the cone keys temp and physical facts
                 // apart, so a physical access is never hidden behind a temp one.
                 // Unknown / parameter-dependent temp state still requires.
-                if crate::engine::l4::cone_derived::fact_is_known_temp(f) {
+                if f.is_known_temp() {
                     continue;
                 }
-                let stable_table = stable_table_from_internal(f.resource_id.as_deref().unwrap());
+                let stable_table = stable_table_from_internal(f.resource_id().unwrap());
                 let key = format!("{stable_subject}|{stable_table}|{right}");
                 if !seen.insert(key) {
                     continue;
@@ -1026,17 +1040,16 @@ fn derive_permissions(
                     f,
                     &coverage,
                 ));
-            } else if f.op == "execute"
-                && f.resource_id.is_some()
-                && matches!(f.resource_kind, "codeunit" | "page" | "report")
+            } else if f.op() == "execute"
+                && f.resource_id().is_some()
+                && matches!(f.resource_kind(), "codeunit" | "page" | "report")
             {
-                let stable_obj =
-                    crate::engine::ids::to_stable_object_id(f.resource_id.as_deref().unwrap());
+                let stable_obj = crate::engine::ids::to_stable_object_id(f.resource_id().unwrap());
                 let key = format!("{stable_subject}|{stable_obj}|X");
                 if !seen.insert(key) {
                     continue;
                 }
-                let target_kind = match f.resource_kind {
+                let target_kind = match f.resource_kind() {
                     "codeunit" => "Codeunit",
                     "page" => "Page",
                     _ => "Report",
@@ -1084,7 +1097,7 @@ fn make_required_perm(
     target: &str,
     target_kind: &str,
     right: &str,
-    f: &CapabilityFact,
+    f: FactRef<'_>,
     coverage: &str,
 ) -> (String, CborValue) {
     let perm_key = format!("R|{subject}|{target}|{target_kind}|{right}");
@@ -1102,18 +1115,21 @@ fn make_required_perm(
     // first hop has no call site; its witness is the firing record op (#96 D5).
     // Through an `event-dispatch` first hop it is the dispatched event (#98 D1).
     let mut dfc: IndexMap<String, CborValue> = IndexMap::new();
-    dfc.insert("op".into(), CborValue::Text(f.op.into()));
-    if let Some(wc) = &f.witness_callsite_id {
-        dfc.insert("witnessCallsiteId".into(), CborValue::Text(wc.clone()));
+    dfc.insert("op".into(), CborValue::Text(f.op().into()));
+    if let Some(wc) = f.witness_callsite_id() {
+        dfc.insert("witnessCallsiteId".into(), CborValue::Text(wc.to_string()));
     }
-    if let Some(op) = &f.witness_first_hop_operation_id {
+    if let Some(op) = f.witness_first_hop_operation_id() {
         dfc.insert(
             "witnessFirstHopOperationId".into(),
-            CborValue::Text(op.clone()),
+            CborValue::Text(op.to_string()),
         );
     }
-    if let Some(ev) = &f.witness_first_hop_event_id {
-        dfc.insert("witnessFirstHopEventId".into(), CborValue::Text(ev.clone()));
+    if let Some(ev) = f.witness_first_hop_event_id() {
+        dfc.insert(
+            "witnessFirstHopEventId".into(),
+            CborValue::Text(ev.to_string()),
+        );
     }
     m.insert("derivedFromCapability".into(), CborValue::Map(dfc));
     m.insert("coverage".into(), CborValue::Text(coverage.into()));
@@ -1967,6 +1983,7 @@ fn write_insertion_json(v: &CborValue, indent: usize, out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::l4::capability_cone::CapabilityFact;
 
     /// #70 row 2e: one discovery for the loader, the closure digest and the
     /// fingerprint. Over a hand-built tree (a repository root holding an
@@ -2349,21 +2366,23 @@ page 50818 "T5 I-3 Wizard Alpha"
     #[test]
     fn trigger_first_fact_keeps_its_first_hop_op_in_cbor_and_permissions() {
         let op = "app/caller/op3".to_string();
-        let snap = crate::engine::l5::snapshot::SnapshotCapabilityFact {
-            subject: "s".to_string(),
-            op: "insert".to_string(),
-            resource_kind: "table".to_string(),
-            resource_id: Some("app/table/1".to_string()),
-            resource_arg_source: None,
-            confidence: "high".to_string(),
-            provenance: "inherited".to_string(),
-            via: "OnValidate".to_string(),
-            witness_operation_id: Some("app/trigger/op0".to_string()),
-            witness_callsite_id: None,
-            extra: None,
-            witness_first_hop_operation_id: Some(op.clone()),
-            witness_first_hop_event_id: None,
-        };
+        let snap: crate::engine::l5::snapshot::SnapshotCapabilityFact =
+            crate::engine::l5::snapshot::SnapshotFactFields {
+                subject: "s".to_string(),
+                op: "insert".to_string(),
+                resource_kind: "table".to_string(),
+                resource_id: Some("app/table/1".to_string()),
+                resource_arg_source: None,
+                confidence: "high".to_string(),
+                provenance: "inherited".to_string(),
+                via: "OnValidate".to_string(),
+                witness_operation_id: Some("app/trigger/op0".to_string()),
+                witness_callsite_id: None,
+                extra: None,
+                witness_first_hop_operation_id: Some(op.clone()),
+                witness_first_hop_event_id: None,
+            }
+            .into();
         let CborValue::Map(m) = one_capability_fact_to_cbor(&snap) else {
             panic!("a fact is a map");
         };
@@ -2391,7 +2410,14 @@ page 50818 "T5 I-3 Wizard Alpha"
             witness_first_hop_event_id: None,
             extra: None,
         };
-        let (_, row) = make_required_perm("s", "t", "TableData", "I", &fact, "complete");
+        let (_, row) = make_required_perm(
+            "s",
+            "t",
+            "TableData",
+            "I",
+            FactRef::Direct(&fact),
+            "complete",
+        );
         let CborValue::Map(row) = row else {
             panic!("a row is a map");
         };
@@ -2415,8 +2441,10 @@ page 50818 "T5 I-3 Wizard Alpha"
     #[test]
     fn event_first_fact_keeps_its_first_hop_event_in_cbor_and_permissions() {
         let ev = "app/Codeunit/1/event/onx".to_string();
-        let snap_fact = |first_hop_event: Option<String>, callsite: Option<String>| {
-            crate::engine::l5::snapshot::SnapshotCapabilityFact {
+        let snap_fact = |first_hop_event: Option<String>,
+                         callsite: Option<String>|
+         -> crate::engine::l5::snapshot::SnapshotCapabilityFact {
+            crate::engine::l5::snapshot::SnapshotFactFields {
                 subject: "s".to_string(),
                 op: "insert".to_string(),
                 resource_kind: "table".to_string(),
@@ -2431,6 +2459,7 @@ page 50818 "T5 I-3 Wizard Alpha"
                 witness_first_hop_operation_id: None,
                 witness_first_hop_event_id: first_hop_event,
             }
+            .into()
         };
         let CborValue::Map(m) = one_capability_fact_to_cbor(&snap_fact(Some(ev.clone()), None))
         else {
@@ -2470,7 +2499,8 @@ page 50818 "T5 I-3 Wizard Alpha"
             extra: None,
         };
         let dfc_of = |f: &CapabilityFact| {
-            let (_, row) = make_required_perm("s", "t", "TableData", "I", f, "complete");
+            let (_, row) =
+                make_required_perm("s", "t", "TableData", "I", FactRef::Direct(f), "complete");
             let CborValue::Map(mut row) = row else {
                 panic!("a row is a map");
             };
@@ -2499,7 +2529,7 @@ page 50818 "T5 I-3 Wizard Alpha"
 
     use crate::engine::l5::snapshot::{
         CapabilitySnapshot, PdArena, RoutineOrderFrames, SnapCapabilityExtra, SnapValueSource,
-        SnapshotCallsiteEvidence, SnapshotCapabilityFact, SnapshotIdentityTable,
+        SnapshotCallsiteEvidence, SnapshotFactFields, SnapshotIdentityTable,
         SnapshotOperationEvidence,
     };
     use crate::program::body::operation_order::{OperationOrder, ScopeFrame};
@@ -2568,8 +2598,9 @@ page 50818 "T5 I-3 Wizard Alpha"
         }
     }
 
-    fn fact(subject: &str) -> SnapshotCapabilityFact {
-        SnapshotCapabilityFact {
+    /// A row's fields: tests edit them, then convert with `.into()`.
+    fn fact(subject: &str) -> SnapshotFactFields {
+        SnapshotFactFields {
             subject: subject.to_string(),
             op: "insert".to_string(),
             resource_kind: "table".to_string(),
@@ -2643,7 +2674,7 @@ page 50818 "T5 I-3 Wizard Alpha"
         let mut f = fact(&p_routine());
         f.witness_operation_id = Some(d_op.to_string());
         f.witness_callsite_id = Some(d_cs.to_string());
-        core.capability_facts.push(f);
+        core.capability_facts.push(f.into());
         core.operation_index.push(op_row(d_op, &dr));
         core.callsite_index.push(cs_row(d_cs, &dr));
         core.routine_order_frames = Some(RoutineOrderFrames::from_entries(vec![(
@@ -2764,7 +2795,7 @@ page 50818 "T5 I-3 Wizard Alpha"
                 initializer: Box::new(tf(5)),
             }),
         });
-        core.capability_facts = vec![resource, body, storage, nested];
+        core.capability_facts = vec![resource.into(), body.into(), storage.into(), nested.into()];
         core.operation_index.push(op_row(d_op, &dr));
 
         let perm_fact = CapabilityFact {
@@ -2787,7 +2818,7 @@ page 50818 "T5 I-3 Wizard Alpha"
             &format!("{P}:Table:50100"),
             "TableData",
             "I",
-            &perm_fact,
+            FactRef::Direct(&perm_fact),
             "complete",
         );
         let perms = CborValue::Array(vec![perm_row]);
@@ -2850,7 +2881,7 @@ page 50818 "T5 I-3 Wizard Alpha"
             table_id: format!("{D}/table/7"),
             field_name: "No.".to_string(),
         });
-        core.capability_facts = vec![lit, tf];
+        core.capability_facts = vec![lit.into(), tf.into()];
         let perms = CborValue::Array(Vec::new());
         assert_eq!(occurrences(&core, &perms, &literal_id), 1, "precondition");
 
@@ -3299,7 +3330,7 @@ page 50818 "T5 I-3 Wizard Alpha"
             f.extra = Some(extra);
             f.witness_first_hop_operation_id = Some(s("mi/h/op1"));
             f.witness_first_hop_event_id = Some(s("mi/h::E"));
-            f
+            crate::engine::l5::snapshot::SnapshotCapabilityFact::from(f)
         };
         let mut facts = Vec::new();
         for (i, e) in extras.iter().enumerate() {
@@ -3491,5 +3522,158 @@ page 50818 "T5 I-3 Wizard Alpha"
             "precondition: every variant built ({seen} leaves)"
         );
         assert!(unlisted.is_empty(), "unclassified fields: {unlisted:?}");
+    }
+}
+
+/// Cone-memory step 1, T4 (snapshot and permission half): an inherited fact
+/// read through the compact view reaches the snapshot row and
+/// `make_required_perm` with the right witnesses for each first-hop kind. The
+/// policy half is in `policy_facts_oracle_tests`.
+#[cfg(test)]
+mod cone_memory_t4_tests {
+    use super::*;
+    use crate::engine::l5::snapshot::compose_snapshot_from_base;
+    use crate::engine::l5::test_support::{T4_FILES, inline_model};
+
+    fn routine<'m>(m: &'m Model, name: &str) -> &'m crate::program::model::workspace::ModelRoutine {
+        let rs: Vec<_> = m
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| r.name == name)
+            .collect();
+        assert_eq!(rs.len(), 1, "precondition: one routine {name}");
+        rs[0]
+    }
+
+    /// The `derivedFromCapability` of `subject`'s permission row on `target`.
+    fn dfc(perms: &CborValue, subject: &str, target: &str) -> IndexMap<String, CborValue> {
+        let CborValue::Array(rows) = perms else {
+            panic!("permissions are an array")
+        };
+        let found: Vec<IndexMap<String, CborValue>> = rows
+            .iter()
+            .filter_map(|r| match r {
+                CborValue::Map(m)
+                    if matches!(m.get("subject"), Some(CborValue::Text(s)) if s == subject)
+                        && matches!(m.get("target"), Some(CborValue::Text(t)) if t == target) =>
+                {
+                    match m.get("derivedFromCapability") {
+                        Some(CborValue::Map(d)) => Some(d.clone()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            found.len(),
+            1,
+            "one permission row of {subject} on {target}"
+        );
+        found.into_iter().next().unwrap()
+    }
+
+    fn text(d: &IndexMap<String, CborValue>, k: &str) -> Option<String> {
+        match d.get(k) {
+            Some(CborValue::Text(s)) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
+    /// T4a/b/c. (a) call hop: `Caller`'s inherited `execute` names CALLER's
+    /// call site, not `Runner`'s own. (b) trigger hop: `Inserter`'s inherited
+    /// `modify` has no call site, keeps the trigger's operation witness, and
+    /// carries its own `Insert` op as the first-hop op, in the row and the
+    /// permission. (c) event hop: `OnT4`'s inherited `modify` carries the
+    /// event as the first-hop event, in the row and the permission.
+    /// DISCRIMINATION: `witness_callsite_id()` returns the rep's call site →
+    /// (a) fails; `witness_first_hop_operation_id()` returns the rep's → (b)
+    /// fails; `witness_first_hop_event_id()` returns the rep's → (c) fails.
+    #[test]
+    fn t4_inherited_witnesses_reach_rows_and_permissions() {
+        let m = inline_model(&T4_FILES);
+        let base = build_r3a3_source_only_base(&m);
+        let snap = compose_snapshot_from_base(&m, &base, None);
+        let perms = derive_permissions(&m, &base);
+        let rows = |r: &crate::program::model::workspace::ModelRoutine, op: &str| {
+            snap.capability_facts
+                .iter()
+                .filter(|f| {
+                    f.subject() == r.stable_routine_id
+                        && f.provenance() == "inherited"
+                        && f.op() == op
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // (a) call hop.
+        let (caller, runner) = (routine(&m, "Caller"), routine(&m, "Runner"));
+        let caller_cs = caller
+            .call_sites
+            .iter()
+            .find(|c| {
+                matches!(&c.callee, crate::program::body::features::PCallee::Bare { name } if name == "Runner")
+            })
+            .expect("precondition: Caller's call site to Runner")
+            .id
+            .clone();
+        let runner_direct = &base.direct_full[&runner.id];
+        let runner_cs = runner_direct
+            .iter()
+            .find(|f| f.op == "execute")
+            .and_then(|f| f.witness_callsite_id.clone())
+            .expect("precondition: Runner's direct execute has its own call-site witness");
+        assert_ne!(caller_cs, runner_cs);
+        let a = rows(caller, "execute");
+        assert_eq!(a.len(), 1, "Caller inherits one execute: {a:?}");
+        assert_eq!(a[0].via(), "call");
+        assert_eq!(a[0].witness_callsite_id(), Some(caller_cs.as_str()));
+        // (An `execute` fact has no resource id, so it makes no permission
+        // row: `derive_permissions` needs one. The call site reaches policy's
+        // evidence instead, `policy_facts_oracle_tests`'s T4.)
+        assert_eq!(a[0].resource_id(), None);
+
+        // (b) trigger hop.
+        let ins = routine(&m, "Inserter");
+        let ins_op = ins
+            .record_operations
+            .iter()
+            .find(|o| o.op == "Insert")
+            .expect("precondition: Inserter's Insert op")
+            .id
+            .clone();
+        let b = rows(ins, "modify");
+        assert_eq!(b.len(), 1, "Inserter inherits one modify: {b:?}");
+        assert_eq!(b[0].via(), "implicit-trigger");
+        assert_eq!(b[0].witness_callsite_id(), None);
+        assert_eq!(b[0].witness_first_hop_operation_id(), Some(ins_op.as_str()));
+        let trig_op = b[0]
+            .witness_operation_id()
+            .expect("the trigger's op")
+            .to_string();
+        assert_ne!(trig_op, ins_op, "witness_operation_id stays the trigger's");
+        let other = stable_table_from_internal(b[0].resource_id().unwrap());
+        let d = dfc(&perms, &ins.stable_routine_id, &other);
+        assert_eq!(text(&d, "witnessFirstHopOperationId"), Some(ins_op));
+        assert_eq!(text(&d, "witnessCallsiteId"), None);
+
+        // (c) event hop.
+        let publisher = routine(&m, "OnT4");
+        let c = rows(publisher, "modify");
+        assert_eq!(c.len(), 1, "OnT4 inherits one modify: {c:?}");
+        assert_eq!(c[0].via(), "event-dispatch");
+        assert_eq!(c[0].witness_callsite_id(), None);
+        let ev = c[0]
+            .witness_first_hop_event_id()
+            .expect("the dispatched event")
+            .to_string();
+        assert!(
+            ev.contains("OnT4") || ev.to_lowercase().contains("ont4"),
+            "event id {ev}"
+        );
+        let d = dfc(&perms, &publisher.stable_routine_id, &other);
+        assert_eq!(text(&d, "witnessFirstHopEventId"), Some(ev));
+        assert_eq!(text(&d, "witnessCallsiteId"), None);
     }
 }

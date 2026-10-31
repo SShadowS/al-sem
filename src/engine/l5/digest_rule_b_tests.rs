@@ -317,12 +317,12 @@ fn an_event_boundary_group_is_in_the_may_relations() {
     let mut fact = tree
         .capability_facts
         .iter()
-        .find(|f| f.subject == call_http && f.provenance == "inherited" && f.op == "send")
+        .find(|f| f.subject() == call_http && f.provenance() == "inherited" && f.op() == "send")
         .expect("precondition: CallHttp's inherited HTTP send fact")
-        .clone();
+        .fields();
     fact.subject = root.clone();
     fact.witness_callsite_id = Some(cs);
-    tree.capability_facts.push(fact);
+    tree.capability_facts.push(fact.into());
     let entries = crate::engine::l5::digest::compute_digest_effects_cli(
         &tree,
         model,
@@ -830,9 +830,9 @@ fn fingerprint_witness_boundary_trigger_and_event() {
         let mut fact = tree
             .capability_facts
             .iter()
-            .find(|f| f.subject == call_http && f.provenance == "inherited" && f.op == "send")
+            .find(|f| f.subject() == call_http && f.provenance() == "inherited" && f.op() == "send")
             .expect("precondition: CallHttp's inherited HTTP send fact")
-            .clone();
+            .fields();
         fact.subject = root.clone();
         // (the boundary identity, its anchor file and line)
         let (want_id, want_file, want_line) = match arm {
@@ -896,7 +896,7 @@ fn fingerprint_witness_boundary_trigger_and_event() {
                 )
             }
         };
-        tree.capability_facts.push(fact);
+        tree.capability_facts.push(fact.into());
         let primary = primary_stable_ids(model);
         let result = fingerprint_query(
             &tree,
@@ -921,7 +921,7 @@ fn fingerprint_witness_boundary_trigger_and_event() {
             .rendered_facts
             .iter()
             .enumerate()
-            .find(|(_, f)| f.op == "send" && f.provenance == "inherited")
+            .find(|(_, f)| f.op() == "send" && f.provenance() == "inherited")
             .unwrap_or_else(|| panic!("{arm}: precondition: the send fact is rendered"));
         let w = block
             .witnesses
@@ -1190,7 +1190,7 @@ fn fingerprint_query_scoped_equals_unscoped() {
                     .blocks
                     .iter()
                     .flat_map(|b| &b.rendered_facts)
-                    .filter(|f| f.provenance == "inherited")
+                    .filter(|f| f.provenance() == "inherited")
                     .count();
                 if got != want {
                     failures.push(format!("{name} (single-app {single}): {root}"));
@@ -1280,7 +1280,7 @@ fn inventory_reads_a_tree_with_no_raw_facts() {
     assert!(
         tree.capability_facts
             .iter()
-            .all(|f| f.provenance != "inherited"),
+            .all(|f| f.provenance() != "inherited"),
         "precondition: no inherited fact in a tree of an empty request"
     );
     let keys = assemble_full_snapshot(

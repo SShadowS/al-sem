@@ -362,7 +362,7 @@ fn swap_surfaces(m: &Model, id: &str) -> Vec<(&'static str, Vec<String>)> {
     let facts: Vec<String> = snapshot
         .capability_facts
         .iter()
-        .filter(|f| f.subject == stable)
+        .filter(|f| f.subject() == stable)
         .map(|f| dbg(f))
         .collect();
     let mut once = facts.clone();

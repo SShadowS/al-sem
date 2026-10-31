@@ -23,24 +23,21 @@ use al_sem::engine::l5::fingerprint_cli::{
 };
 use al_sem::engine::l5::fingerprint_query::{WitnessLimit, format_hop};
 use al_sem::engine::l5::snapshot::{
-    SnapshotCapabilityFact, SnapshotCoverageRecord, SnapshotGraphEdge, SnapshotRange,
-    SnapshotSourceAnchor,
+    SnapshotCapabilityFact, SnapshotCoverageRecord, SnapshotFactFields, SnapshotGraphEdge,
+    SnapshotRange, SnapshotSourceAnchor,
 };
 
 // ===========================================================================
 // Helpers — minimal builders for hand-built witness inputs.
 // ===========================================================================
 
-/// `ROOT`'s witness of `f` at `cap`, with fresh per-root caches.
-fn witness(
-    f: &SnapshotCapabilityFact,
-    idx: &FingerprintIndexesPub,
-    cap: usize,
-) -> WitnessOutcomePub {
+/// `ROOT`'s witness of the row `f` states, at `cap`, with fresh per-root caches.
+fn witness(f: &SnapshotFactFields, idx: &FingerprintIndexesPub, cap: usize) -> WitnessOutcomePub {
     let widx = witness_index(idx);
+    let f: SnapshotCapabilityFact = f.clone().into();
     reconstruct_witness_paths_pub(
         "ROOT",
-        f,
+        &f,
         &widx,
         cap,
         &mut HopCache::default(),
@@ -68,8 +65,9 @@ fn empty_idx() -> FingerprintIndexesPub<'static> {
     }
 }
 
-fn fact(provenance: &str, op: &str, kind: &str) -> SnapshotCapabilityFact {
-    SnapshotCapabilityFact {
+/// A row's fields: tests edit them; [`witness`] converts them to a row.
+fn fact(provenance: &str, op: &str, kind: &str) -> SnapshotFactFields {
+    SnapshotFactFields {
         subject: "ROOT".to_string(),
         op: op.to_string(),
         resource_kind: kind.to_string(),
@@ -566,7 +564,7 @@ fn item7_path_limit_reached_detail_cap() {
         let mut term = fact("direct", "modify", "table");
         term.subject = routine.to_string();
         idx.direct_facts_by_routine
-            .insert(routine.to_string(), vec![term]);
+            .insert(routine.to_string(), vec![term.into()]);
     }
     let mut f = fact("inherited", "modify", "table");
     f.via = "call".to_string();

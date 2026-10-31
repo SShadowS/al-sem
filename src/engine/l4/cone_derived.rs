@@ -1275,7 +1275,11 @@ mod tests {
             scope_of::both(),
         );
 
-        let root_inherited = out.raw.get("r/root").expect("root cone");
+        let root_inherited = out
+            .raw
+            .get("r/root")
+            .map(|s| s.materialize())
+            .expect("root cone");
         assert_eq!(
             root_inherited.len(),
             2,
@@ -1386,7 +1390,11 @@ mod tests {
             scope_of::both(),
         );
 
-        let root_inherited = out.raw.get("r/root").expect("root cone");
+        let root_inherited = out
+            .raw
+            .get("r/root")
+            .map(|s| s.materialize())
+            .expect("root cone");
         assert_eq!(
             root_inherited.len(),
             2,
@@ -1447,7 +1455,7 @@ mod tests {
             scope_of::both(),
         );
 
-        let a_inherited = out.raw.get("r/a").expect("a cone");
+        let a_inherited = out.raw.get("r/a").map(|s| s.materialize()).expect("a cone");
         assert_eq!(
             a_inherited.len(),
             2,
@@ -1709,10 +1717,13 @@ mod tests {
             );
         }
         // `Both` still returns the raw Vec unchanged.
-        assert_eq!(both.raw["r/root"].len(), 2);
+        let raw_of = |o: &crate::engine::l4::capability_cone::ConeOutcome| {
+            o.raw.get("r/root").map(|s| s.materialize())
+        };
+        assert_eq!(raw_of(&both).map(|v| v.len()), Some(2));
 
         // RawOnly: the raw Vec is byte-identical to `Both`'s; no row is folded.
-        assert_eq!(raw_only.raw["r/root"], both.raw["r/root"]);
+        assert_eq!(raw_of(&raw_only), raw_of(&both));
         assert!(raw_only.derived.is_empty());
     }
 

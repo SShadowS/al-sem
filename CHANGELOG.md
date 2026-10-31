@@ -7,6 +7,226 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed (cone-memory step 3, the frozen emission oracle)
+
+- **The T3(b) frozen-emission oracle is deleted, as the design's step 3
+  plans, now that the CDO comparisons for steps 1 and 2 are recorded** (the
+  snapshot document and pd-arena hashes and the byte-equal command outputs
+  under steps 1 and 2 above). Gone from `capability_cone`: the test-only hook
+  in `compose_inherited_cones` that ran a verbatim copy of the pre-step-1
+  selection (`inherited_facts_for_singleton`, `inherited_facts_by_bfs`,
+  `emit_picks`, `candidate_wins`, the string-key sort) beside the production
+  emission, its stats, `t3_raw_equals_the_frozen_emission_on_fixtures` and
+  `t3_oracle_audit_names_only_frozen_code`. Kept: the frozen `retag` (T1's
+  oracle, `legacy_raw_oracle::frozen::retag`); T7 (i)'s guarded-entry
+  precondition now reads the production raw (N's `G(false)` gets nothing).
+  Raw equality stays pinned by the byte-compared r3a3/r3a5/r4f goldens, the
+  snapshot corpus test (T3(c)) and T3b. The step-3 census rewrite is in step 2
+  (`snapshot.capability_facts`) and step 1 (`witness.raw_bytes`);
+  `cone_census::facts_tally` reads only owned direct facts and fixture-supplied
+  inherited ones, so it needed no change.
+
+### Changed (16-byte capability snapshot rows, cone-memory step 2)
+
+- **A row of `CapabilitySnapshot::capability_facts` is a 16-byte handle into
+  shared tables, not an owned copy of the fact; every output is
+  byte-identical.** Design: `docs/superpowers/specs/2026-10-31-cone-memory-design.md`
+  revision 2, step 2 (§4.3). `SnapshotCapabilityFact` is now `{ Arc<SnapTables>,
+  rep: u32, hop: u32 }` (a `const` assert pins 16 bytes); `hop == NO_HOP` marks a
+  direct row. `SnapTables` holds the stable subjects (one per emission group,
+  interned), one `SnapRep` per direct fact and per distinct raw rep (projected
+  once, memoised by raw index) and one `SnapHop` per raw first hop. The subject
+  contract: every row's subject comes from its emission group; a hop row takes
+  the subject of the group that projects it (debug builds check the raw hop's
+  own subject maps to it), and a second group emitting the same raw hop is a bug
+  (asserted). Readers call accessors (`subject()`, `op()`, ... `extra()`,
+  `fields()`) that borrow from the handle's tables; `Vec<&Fact>`, indexing,
+  `clone()` (one refcount bump), `retain` and the table-order scans are
+  unchanged. The rows are written in output order into one exact-size Vec
+  (sequentially: every row clones the one table `Arc`) and each subject's slice
+  is sorted as in step 0. Migrated: digest (and prove/fingerprint through it),
+  `fingerprint_query`, the CBOR fact serializer, `key_classes::retain`,
+  `ordering_engine`'s last-wins HTTP scan, `literal_reach` (borrowed strings
+  straight from the accessors), `derive_pd_arena`, `ordering_kept_roots`.
+  `SnapshotFactFields` is the old owned layout: hand-built rows convert from it
+  with `.into()` (a one-row private table), and mutation-style tests edit
+  `fields()` and convert back, never touching shared tables. The
+  `snapshot.capability_facts` census bucket now counts the rows plus each table
+  set once (it counted only the row buffer before: 456 B per row).
+- Measured on the pinned CDO baseline (`bc3ccb18`, Linux, 22 cores, 93 GB,
+  `release-fast`, `/usr/bin/time -v`; before = step 1 `bf2de5ad`): the
+  full-model cross-app `compose_snapshot` probe peak RSS **20.4 GB -> 5.28 GB**
+  (target <= 6 GB), live-heap peak 16.1 GiB -> **3.41 GiB** (target <= 4.5 GiB),
+  `snapshot.capability_facts` 13.0 GiB -> 342 MiB for 17,057,037 rows (21 B per
+  row with the tables), compose phase 17.6 s -> 7.7 s, whole probe 72 s -> 67 s;
+  single-app probe 0.80 GB -> 0.78 GB (target <= 0.95 GB). Commands, before ->
+  after: cross-app `alsem policy check` 3.44 GB -> 3.44 GB (33.6 s -> 29.3 s; the
+  ordinary policy reads raw facts, not snapshot rows), single-app 0.77 -> 0.77
+  GB; `alsem analyze --preset transaction-integrity` cross-app 6.46 / 5.39 GB ->
+  5.85 / 6.39 GB (two runs each, 56-58 s both; the production cut builds few
+  rows), single-app 4.44 / 4.32 GB -> 3.99 / 5.24 GB. That RSS spread is the
+  allocator's, so the live heap was measured too (a scratch `alsem` build whose
+  global allocator counts the bytes requested from mimalloc; not committed):
+  analyze single-app peak live heap 4.17 GB -> **3.10 GB**, cross-app 5.20 GB ->
+  **4.64 GB**, outputs byte-equal.
+- Equality: no golden regenerated; `scripts/check-goldens` green. On CDO the
+  full-model snapshot document hashes as in steps 0 and 1 (BLAKE3
+  `3b480fbf53066d4d071422ee4b9390f768da655687600860937e95c2c2a2ddaf`,
+  9,463,055,195 bytes) and so does the pd arena (`76fd29ac…c98`, 2,822,661
+  states). Byte-equal (`cmp`, `--deterministic`) with step 1's recorded outputs:
+  `policy check` cross-app and `--single-app` with the bundled policy and with
+  the inherited-facts policy (cross-app output 8,059,019,869 bytes), `analyze
+  --preset transaction-integrity` both modes (two runs each), `digest` over three
+  files and the two `prove` questions, cross-app; the bundled-policy and analyze
+  runs also against fresh `bf2de5ad` runs.
+- Tests (each break made with Edit, run, reverted with Edit, run green):
+  `snapshot::cone_memory_step2_tests` T0 (16 bytes; direct rows report
+  `NO_HOP`, inherited rows a hop; a stated row is direct-form: direct rows built
+  with hop 0 -> fails), T1 on snapshot rows (a rep with its own call site and
+  stale first-hop ids through a call, a trigger and an event hop, plus a direct
+  fact, against the old owned rows from the materialized facts, fields and
+  serialized JSON: `witness_callsite_id()` returning the rep's on an inherited
+  row -> fails, and T3(c) on 190 corpus models; `provenance()` returning the
+  rep's -> fails, T3(c) on 204), T7 (i) one rep row per raw rep (a rep per row ->
+  3 rep rows, fails; every output test stays green), T7 (ii) identical hop
+  content of two subjects, now observable in the rows (interning raw hops
+  without the subject -> step 1's subject-contract assertion fires; with it
+  disabled, the snapshot's "raw first hop's subject is not its emitting
+  group's" assertion fires; with that and the shared-hop assertion disabled too,
+  B's row reads subject `a#` and the row-subject assertion fails), row edits
+  never touch shared tables. T3(c) (`step0_sort_tests::t6_every_corpus_app_*`,
+  every `tests/r0-corpus` and `tests/fixtures` app, single-app and cross-app):
+  the handle table equals the old owned rows built from the materialized raw,
+  field by field and as serialized JSON, and gives the same pd-arena producer
+  indexes and digest `facts_by_routine` buckets (`via()` returning the rep's ->
+  fails on 204 models). T6 still discriminates on the handle rows
+  (`sort_unstable_by` in the slice sort -> `t6_split_*` fails). T5, new test
+  crate `tests/cone_memory_bound.rs` with a counting global allocator: 400
+  callers of one shared routine writing 40 tables (48,000 inherited facts) cost
+  13.0 B per raw inherited fact (bound 16) and 22.4 B per snapshot row (bound
+  32), measured as what dropping each frees; breaks: a raw rep interned per fact
+  as its own owned copy -> 723 B/fact, fails; a snapshot rep row per row -> 845
+  B/row, fails.
+
+### Changed (compact inherited facts in the cone, cone-memory step 1)
+
+- **The cone stores each inherited capability fact as an 8-byte ref into shared
+  tables, not as an owned copy; every output is byte-identical.** Design:
+  `docs/superpowers/specs/2026-10-31-cone-memory-design.md` revision 2, step 1. New
+  `engine::l4::inherited_facts`: `InheritedRef { rep: u32, hop: u32 }` indexes
+  `InheritedTables` (reps interned by `Arc` identity, the table holding a strong
+  `Arc` per entry; first hops interned by content `(subject, via, callsite,
+  operation_id, event_id)`, `None` kept apart from `Some("")`; indexes are checked
+  `u32` and never `NO_HOP = u32::MAX`). `InheritedFacts` keeps one entry per composed
+  subject, empty ones included (missing and empty stay different); drains move owned
+  keys and clone the tables' `Arc`. Readers see a fact through the borrowed
+  `InheritedFactRef` / `FactRef` (direct or inherited), whose accessors restate
+  `retag`'s rules; `materialize()` is the one owned builder (the old `retag`).
+  `dedup_direct` mints each direct rep's `Arc` once, and the selection walks carry
+  `&Arc` reps; the selection itself is unchanged (singleton min-distance through
+  `candidate_wins`, recursive first-seen BFS, producer entries replacing a pick in
+  place). Readers moved to the borrowed view: `View::raw`, `TreeRaw::{Drain,
+  Borrow}`, `SubjectRaw`, policy (`FieldEvalContext.fact: Option<FactRef>`, the fact
+  sort, `emit_match_finding`; nothing in policy materializes), the snapshot's
+  capability rows and both evidence indexes, `derive_permissions` /
+  `make_required_perm`, the `witness.raw_bytes` census (now refs + tables: on CDO
+  cross-app policy 6,966,269,866 -> 90,300,386 bytes); `project_r3a3` /
+  `project_r3a5_from_parts` materialize per subject. The snapshot row type is
+  unchanged (that is step 2); its rows are built from the accessors, not from a
+  materialized fact.
+- Measured on the pinned CDO baseline (`bc3ccb18`, Linux, 22 cores, 93 GB,
+  `release-fast`, `/usr/bin/time -v`, quiet machine; before = step 0 `cb280c58`):
+  cross-app `alsem policy check` (bundled policy) peak RSS **9.49 GB -> 3.44 GB**
+  (target <= 3.5 GB; 32 s -> 30 s); single-app policy 0.78 GB -> 0.78 GB; `alsem
+  analyze --preset transaction-integrity` cross-app 6.01 / 5.92 GB -> 5.30 / 5.58 GB
+  (two runs each, no regression), single-app 4.01-4.46 GB -> 4.18-4.62 GB over four
+  runs each (glibc noise; this path builds no raw). The full-model
+  `compose_snapshot` probe: peak RSS 33.4 GB -> 20.4 GB, the base phase's retained
+  heap 12.70 GiB -> 1.29 GiB (17,017,608 inherited facts: raw freed 163 MiB, about
+  10 B per fact with the tables: 27,477 reps, 38,081 hops, 33,285 subjects, exactly
+  the design's census); the snapshot rows (13.3 GiB) are step 2's. Single-app probe
+  0.80 GB (target <= 0.95 GB).
+- Equality proofs: no golden regenerated, `scripts/check-goldens` green (forced
+  run). On CDO the full-model snapshot document hashes the same as step 0 (BLAKE3
+  `3b480fbf53066d4d071422ee4b9390f768da655687600860937e95c2c2a2ddaf`, 9,463,055,195
+  bytes), and so does the pd arena (`76fd29ac…c98`, 2,822,661 states). Byte-equal
+  (`cmp`) before/after with `--deterministic`: `policy check` cross-app and
+  `--single-app` with the bundled policy and with a policy whose four rules read
+  inherited facts (cross-app output 8,059,019,869 bytes, 9,261 findings, 9,014,611
+  evidence steps), `analyze --preset transaction-integrity` both modes, `digest`
+  over three files, and two `prove` questions, all cross-app.
+- Tests (each break made with Edit, run, reverted with Edit, run green):
+  `capability_cone::cone_memory_step1_tests` T0 (index sentinel: drop the `NO_HOP`
+  assert -> fails), T1 (`materialize` = the frozen `retag` over call / trigger /
+  event hops with a rep carrying stale first-hop ids and its own call site;
+  accessors = `materialize`: keep the rep's first-hop op in `materialize` -> fails;
+  `witness_callsite_id()` returns the rep's -> fails, and T4a in both T4 tests),
+  T3(b) (every `tests/r0-corpus` and `tests/fixtures` app, single-app and cross-app
+  FULL model, plus one literal model for the producer-replacement class the fixtures
+  lack: 543 models, 2,927 subjects, 1,118 facts compared field by field with a
+  frozen `legacy_raw_oracle` that carries its own `candidate_wins`, `retag` and
+  string-key sort, audited by a grep test; production `candidate_wins` preferring
+  the larger distance -> 4 models fail; emitting the previous pick's hop -> 12
+  models fail; content interning without the subject -> 2; `None` call site
+  interned as `Some("")` -> 92), T3b (first-seen pick kept at distance 3 over a
+  later distance-2 candidate: compare on distance -> fails, while T3(b) stays green
+  on the fixtures; producer replacement keeps the pick's slot: push instead -> fails),
+  T7 (one rep across subjects and a guarded/unguarded entry; identical hop content of
+  two subjects -> two hops: intern without the subject -> the subject-contract
+  assertion fires; one call site with two targets -> one hop: intern by edge
+  address -> fails, T3(b) green; `None` vs `Some("")` -> two hops: merge them ->
+  fails); T4 (`snapshot_full::cone_memory_t4_tests` and policy's
+  `t4_policy_evidence_carries_the_first_hop_witnesses`: call / trigger / event hop
+  witnesses in the snapshot row, the permission row and the finding evidence;
+  first-hop op or event accessor returning the rep's -> fails); T8
+  (`inherited_facts::tests`, `step6_tree_tests::t8_*`, policy's `t8_*`: drains and
+  borrows keep empty entries, share the tables, subjects borrow from the tables, an
+  empty subject keeps its pd states in a tree; drop empty entries at emission ->
+  policy's "summary but no raw inherited facts" panic fires and the tree loses the
+  subject's pd states). T5 (a counting-allocator test crate) is not added in this
+  step; the probe numbers above stand in for it.
+
+### Changed (capability snapshot sort, cone-memory step 0)
+
+- **The capability snapshot's sort no longer builds a key `String` per row or a
+  flattened copy of the rows; the output is byte-identical.** Cross-app CDO
+  `compose_snapshot` (the CDO baseline at `bc3ccb18`, clean; Linux, 22 cores, 93 GB,
+  `release`-thin-LTO probe = `release-fast`, `/usr/bin/time -v`, one run each, quiet
+  machine): peak RSS **46.8 GB -> 33.4 GB**, whole run 101 s -> 79 s; the
+  `compose_snapshot_from_base` phase 32.8 s -> 18.0 s, its live-heap peak
+  37.6 GiB -> 27.9 GiB (transient over the result 8.8 GiB -> 0.09 GiB).
+  `derive_capability_facts` (`src/engine/l5/snapshot.rs`) now orders the emitted
+  routines by `subject + "|"`, projects each one's rows straight into its slice of
+  ONE pre-sized Vec (in parallel; a drained raw Vec drops as its slice is written),
+  and stable-sorts each subject's slice in parallel on the seven remaining key fields.
+  This is exact because `subject + "|"` is prefix-free when no subject contains `|`;
+  the check reads the EMITTED subjects (`stable_routine_id` passes unmapped ids
+  through), and any `|` falls back to one global stable sort. New
+  `engine::joined_key::cmp_joined` compares field lists as their `|`-join, byte for
+  byte, without allocating (comparing fields one by one is a different order:
+  `a`/`ab` join to `a|…`/`ab|…`, and `ab` sorts first). The cone's `sort_inherited`
+  and policy's fact sort use it too, still stable.
+  Proof: the whole serialized snapshot document of the cross-app FULL model on CDO
+  (9,463,055,195 bytes of JSON, every field of the `project_r4f_snapshot` envelope)
+  hashes the same with BLAKE3 before and after
+  (`3b480fbf53066d4d071422ee4b9390f768da655687600860937e95c2c2a2ddaf`), and so does the
+  pd arena `derive_pd_arena` builds on it (2,822,661 states, 3,928,044 links, producer
+  indexes included). No golden was regenerated.
+  Tests: `joined_key::tests::t2_*` (named cases and all 46,656 pairs of three-field
+  keys over `{"", a, ab, |, a|, b}` against `join("|")`); `snapshot::step0_sort_tests`
+  against a verbatim copy of the old derivation: hand-stated rows with 16-way complete
+  8-field ties of distinct payloads, subjects `a`/`ab`, field values `x`/`xy`, two
+  internal ids on one stable id, a duplicated internal id, the `derive_pd_arena`
+  producer among tied direct rows, an unmapped `a|b` subject that interleaves with `a`
+  (the fallback), and every `tests/r0-corpus` + `tests/fixtures` app single- and
+  cross-app (table and pd arena). Discrimination, each break made and reverted with
+  Edit: `sort_unstable_by` in the slice sort -> the tie test fails (pass after
+  revert); a field-wise compare -> the tie test fails, and the corpus test fails on
+  `ws-r2a-record-types` and `ws-rules` (both modes); grouping by the bare subject ->
+  fails (`a` before `ab`); no delimiter fallback -> the `a|b` test fails; in
+  `cmp_joined`, a field-wise answer at a prefix -> both T2 tests fail; dropping the
+  virtual `|` -> both T2 tests fail. All pass after each revert.
+
 ### Changed (cdo-gate memory)
 
 - **`scripts/cdo-gate` peaks at 10.5 GB, not 46.9 GB, and runs in ~3 min instead of

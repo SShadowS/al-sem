@@ -1091,7 +1091,7 @@ fn key_class_behaviour() {
     let call_chain = stable(model, "CallChain");
     let core = compose_snapshot(model);
     assert!(
-        core.capability_facts.iter().any(|f| f.subject == inner),
+        core.capability_facts.iter().any(|f| f.subject() == inner),
         "precondition: Inner has capability facts in memory"
     );
     assert!(
@@ -1102,14 +1102,14 @@ fn key_class_behaviour() {
         !core
             .capability_facts
             .iter()
-            .any(|f| f.subject == call_chain),
+            .any(|f| f.subject() == call_chain),
         "spec deviation recorded: CallChain has no in-memory fact on the cut; \
          if it now has one, assert CallChain's facts stay"
     );
     let primary_facts = core
         .capability_facts
         .iter()
-        .filter(|f| starts_ci(&f.subject, dd::WS_GUID))
+        .filter(|f| starts_ci(f.subject(), dd::WS_GUID))
         .count();
     assert!(primary_facts > 0, "precondition: primary facts in memory");
     let snap = json(&compose(&b));
@@ -1178,9 +1178,8 @@ fn key_class_evidence() {
         "precondition: CallChain's typed edge references Outer"
     );
     assert!(
-        core.capability_facts.iter().any(|f| f.subject == touch
-            && f.resource_id
-                .as_deref()
+        core.capability_facts.iter().any(|f| f.subject() == touch
+            && f.resource_id()
                 .is_some_and(|r| r.eq_ignore_ascii_case(&dep_table))),
         "precondition: TouchCust's fact names {dep_table}"
     );
@@ -1400,9 +1399,8 @@ fn closure_fields_are_classified_and_closed() {
                 compose_snapshot(model)
                     .capability_facts
                     .iter()
-                    .any(|f| f.subject == touch
-                        && f.resource_id
-                            .as_deref()
+                    .any(|f| f.subject() == touch
+                        && f.resource_id()
                             .is_some_and(|r| r.eq_ignore_ascii_case(&dep_table))),
                 "precondition: TouchCust's fact carries resourceId {dep_table}"
             );

@@ -36,6 +36,7 @@ use super::cone_derived::{
     ConeDerivedBuilder, ConeDerivedStore, ConeScope, FoldedRow, MemberMode, WitnessScope,
     fact_is_known_temp,
 };
+use super::inherited_facts::{InheritedBuilder, InheritedFacts, InheritedRef};
 use super::scc::{Scc, SccInputGraph, SccResult, tarjan_scc};
 use crate::engine::ids::to_stable_object_id;
 use crate::program::body::capability::table_commit;
@@ -1306,7 +1307,7 @@ fn edge_sort_key(e: &TypedOutEdge) -> String {
 
 /// Map a typed-edge kind to the inherited `via`. Mirrors
 /// `capabilityViaForEdgeKind`.
-fn capability_via_for_edge_kind(kind: &str) -> &'static str {
+pub(crate) fn capability_via_for_edge_kind(kind: &str) -> &'static str {
     match kind {
         "direct-call" | "variable-typed-call" | "interface-dispatch" => "call",
         "object-run-resolved" | "object-run-unresolved" => "object-run",
@@ -1673,18 +1674,24 @@ fn is_producer(f: &CapabilityFact) -> bool {
 /// A routine's raw direct facts deduplicated by [`inherited_fact_key`]
 /// (canonical rep per key: min `rep_key`), producers excluded. The ONE builder
 /// of the cone's `direct` map.
-fn dedup_direct(facts: &[CapabilityFact]) -> BTreeMap<String, CapabilityFact> {
-    let mut byk: BTreeMap<String, CapabilityFact> = BTreeMap::new();
+///
+/// Each rep is minted ONCE here as an `Arc` (cone-memory step 1): the cone
+/// entries ([`fact_cone_for_scc`]) and the recursive walk's sibling picks share
+/// it, so the inherited-facts interner sees one identity per direct rep.
+fn dedup_direct(facts: &[CapabilityFact]) -> BTreeMap<String, Arc<CapabilityFact>> {
+    let mut byk: BTreeMap<String, &CapabilityFact> = BTreeMap::new();
     for f in facts.iter().filter(|f| !is_producer(f)) {
         let k = inherited_fact_key(f);
         match byk.get(&k) {
             Some(cur) if rep_key(f) >= rep_key(cur) => {}
             _ => {
-                byk.insert(k, f.clone());
+                byk.insert(k, f);
             }
         }
     }
-    byk
+    byk.into_iter()
+        .map(|(k, f)| (k, Arc::new(f.clone())))
+        .collect()
 }
 
 /// The `parameter-dependent` index of a table fact, if it has one.
@@ -1777,51 +1784,17 @@ fn merge_cone(dst: &mut ConeFacts, key: &Arc<str>, entry: ConeFactEntry) {
     }
 }
 
-/// Re-tag a representative direct fact as an inherited fact on `subject` via a
-/// first-hop edge. Mirrors `retag`.
-fn retag(rep: &CapabilityFact, subject: &str, edge: &TypedOutEdge) -> CapabilityFact {
-    CapabilityFact {
-        subject: subject.to_string(),
-        provenance: "inherited",
-        via: capability_via_for_edge_kind(&edge.kind),
-        witness_callsite_id: edge.callsite.clone(),
-        // Set for EVERY edge, never inherited from `rep` (#96 D5, N4): the op
-        // id of a trigger first hop, `None` otherwise, so a stale op id cannot
-        // leak through `..rep.clone()`.
-        witness_first_hop_operation_id: edge.operation_id.clone(),
-        // Same rule for the event id of an event-dispatch first hop (#98 D1).
-        witness_first_hop_event_id: edge.event_id.clone(),
-        ..rep.clone()
-    }
-}
+// `retag` (re-tag a rep as an inherited fact on a subject through a first-hop
+// edge) and `sort_inherited` (stable, by `inheritedOutputSortKey` joined with
+// `|`) now live on the compact form (cone-memory step 1):
+// `InheritedFactRef::materialize` is `retag`, its accessors restate the same
+// rules, and `InheritedBuilder::sort` is `sort_inherited` over refs. The old
+// owned `retag` is frozen in `legacy_raw_oracle::frozen` (test only, T1's
+// oracle).
 
-/// Sort key for the final capabilityFactsInherited array. Mirrors
-/// `inheritedOutputSortKey`.
-fn inherited_output_sort_key(f: &CapabilityFact) -> String {
-    // ⟨C1 Task 4⟩ Borrowed throughout — `join` copies into the one output
-    // String either way, so the seven per-call clones this used to make were
-    // pure waste (this runs once per fact per `sort_inherited`). Byte-identical:
-    // `as_deref().unwrap_or_default()` is `""` for `None`, exactly what
-    // `clone().unwrap_or_default()` produced.
-    [
-        f.op,
-        f.resource_kind,
-        f.resource_id.as_deref().unwrap_or_default(),
-        f.confidence,
-        f.via,
-        f.witness_callsite_id.as_deref().unwrap_or_default(),
-        f.witness_operation_id.as_deref().unwrap_or_default(),
-    ]
-    .join("|")
-}
-
-fn sort_inherited(mut facts: Vec<CapabilityFact>) -> Vec<CapabilityFact> {
-    facts.sort_by_key(inherited_output_sort_key);
-    facts
-}
-
-/// Per-routine direct facts grouped by dedup key (canonical rep per key).
-type RoutineDirectFacts = HashMap<String, BTreeMap<String, CapabilityFact>>;
+/// Per-routine direct facts grouped by dedup key (canonical rep per key, one
+/// shared `Arc` each: [`dedup_direct`]).
+type RoutineDirectFacts = HashMap<String, BTreeMap<String, Arc<CapabilityFact>>>;
 
 /// Minimal per-routine direct coverage the cone roll-up needs.
 struct DirectCoverage {
@@ -1857,8 +1830,9 @@ type ClosedRowMemo = HashMap<usize, FoldedRow>;
 ///
 /// ⟨C1⟩ `best` holds BORROWED representatives/edges (it used to clone both on
 /// every win): the winners' fields are read identically whether borrowed or
-/// cloned, and only the survivors are cloned — by `retag`, and only when `mode`
-/// wants the raw Vec.
+/// cloned. Cone-memory step 1: a rep is borrowed as its owning `&Arc`, and the
+/// survivors are interned into `out` as 8-byte refs (no `CapabilityFact` is
+/// built), only when `mode` wants the raw Vec.
 ///
 /// #160 step 7b: `best` is built only for the raw Vec. Under a derived-only
 /// [`MemberMode`] there is no scan: the derived row comes from
@@ -1877,9 +1851,10 @@ fn inherited_facts_for_singleton<'g>(
     derived: &mut ConeDerivedBuilder,
     memo: &mut ClosedRowMemo,
     stats: &mut ComposeStats,
-) -> Vec<CapabilityFact> {
+    out: &mut InheritedBuilder,
+) -> Vec<InheritedRef> {
     struct Best<'a> {
-        rep: &'a CapabilityFact,
+        rep: &'a Arc<CapabilityFact>,
         dist: usize,
         edge: &'a TypedOutEdge,
     }
@@ -2137,16 +2112,17 @@ fn inherited_facts_for_singleton<'g>(
     // Only the raw half reaches here (a scope with no raw member returned
     // above).
     let _t = crate::engine::l5::detector_context::cones_census::start();
-    let out: Vec<CapabilityFact> = best
+    let subject_ix = out.subject(subject);
+    let mut refs: Vec<InheritedRef> = best
         .values()
-        .map(|b| retag(b.rep, subject, b.edge))
+        .map(|b| out.fact(subject_ix, b.rep, b.edge))
         .collect();
-    let sorted = sort_inherited(out);
+    out.sort(&mut refs);
     crate::engine::l5::detector_context::cones_census::add_since(
         &crate::engine::l5::detector_context::cones_census::SGL_RAW_NANOS,
         _t,
     );
-    sorted
+    refs
 }
 
 /// Set-correct path for routines in recursive SCCs. Mirrors
@@ -2177,11 +2153,12 @@ fn inherited_facts_by_bfs<'g>(
     scc_id_by_routine: &HashMap<String, usize>,
     cones: &'g HashMap<usize, ConeFacts>,
     own: &'g [super::pd_solve::ResolvedEntry<'g>],
-) -> Vec<(&'g CapabilityFact, &'g TypedOutEdge)> {
+) -> Vec<(&'g Arc<CapabilityFact>, &'g TypedOutEdge)> {
     let my_scc = scc_id_by_routine.get(subject).copied();
-    // key -> index into `picked`; `picked` keeps emission order.
+    // key -> index into `picked`; `picked` keeps emission order. A pick holds
+    // its rep's owning `Arc` (cone-memory step 1), so the interner can keep it.
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
-    let mut picked: Vec<(&'g CapabilityFact, usize, &'g TypedOutEdge)> = Vec::new();
+    let mut picked: Vec<(&'g Arc<CapabilityFact>, usize, &'g TypedOutEdge)> = Vec::new();
     let mut visited: BTreeSet<String> = BTreeSet::new();
     visited.insert(subject.to_string());
 
@@ -2284,23 +2261,25 @@ fn inherited_facts_by_bfs<'g>(
         .collect()
 }
 
-/// A recursive member's RAW inherited output from its BFS picks (retagged,
+/// A recursive member's RAW inherited output from its BFS picks (interned,
 /// sorted). The derived row never reads the picks in production: it folds the
 /// member's Cone-SCC set (#160 step 7a). Empty unless the mode wants raw.
 fn emit_picks(
     subject: &str,
-    picks: Vec<(&CapabilityFact, &TypedOutEdge)>,
+    picks: Vec<(&Arc<CapabilityFact>, &TypedOutEdge)>,
     mode: MemberMode,
-) -> Vec<CapabilityFact> {
+    out: &mut InheritedBuilder,
+) -> Vec<InheritedRef> {
     if !mode.wants_raw() {
         return Vec::new();
     }
-    sort_inherited(
-        picks
-            .into_iter()
-            .map(|(rep, first_hop)| retag(rep, subject, first_hop))
-            .collect(),
-    )
+    let subject_ix = out.subject(subject);
+    let mut refs: Vec<InheritedRef> = picks
+        .into_iter()
+        .map(|(rep, first_hop)| out.fact(subject_ix, rep, first_hop))
+        .collect();
+    out.sort(&mut refs);
+    refs
 }
 
 /// Distinct successor SCCs per SCC (cross-SCC edges only). Mirrors
@@ -2381,7 +2360,9 @@ fn fact_cone_for_scc(
                 // (121,387 per 8020 run), not once per merge — every merge below
                 // and in every predecessor cone then shares this allocation.
                 let base: Arc<str> = Arc::from(key.as_str());
-                let rep = Arc::new(f.clone());
+                // The `Arc` `dedup_direct` minted: the BFS sibling path and
+                // every cone entry share it (cone-memory step 1).
+                let rep = Arc::clone(f);
                 let rep_key_s: Arc<str> = Arc::from(rep_key(f));
                 for reqs in req_sets {
                     let (k, guard) = with_reqs(Arc::clone(&base), reqs);
@@ -2644,6 +2625,7 @@ pub(crate) struct ComposeStats {
 #[cfg(test)]
 pub(crate) mod raw_fold_hook {
     use super::{CapabilityFact, ConeDerivedBuilder, ConeDerivedStore};
+    use crate::engine::l4::inherited_facts::{InheritedRef, InheritedTables, views};
     use std::cell::RefCell;
 
     thread_local! {
@@ -2662,16 +2644,19 @@ pub(crate) mod raw_fold_hook {
         (out, oracle.finish())
     }
 
-    /// At emission: with the hook on, fold `raw ∪ direct` for `id` and keep
-    /// an empty Vec; otherwise return `raw` unchanged.
+    /// At emission: with the hook on, fold `raw ∪ direct` for `id` (`raw`
+    /// materialized through `tables`) and keep an empty Vec; otherwise return
+    /// `raw` unchanged.
     pub(super) fn offer(
         id: &str,
-        raw: Vec<CapabilityFact>,
+        raw: Vec<InheritedRef>,
+        tables: &InheritedTables,
         direct: Option<&Vec<CapabilityFact>>,
-    ) -> Vec<CapabilityFact> {
+    ) -> Vec<InheritedRef> {
         ORACLE.with(|o| match o.borrow_mut().as_mut() {
             Some(b) => {
-                b.fold_routine(id, raw.iter().chain(direct.into_iter().flatten()));
+                let owned = views(tables, &raw).materialize();
+                b.fold_routine(id, owned.iter().chain(direct.into_iter().flatten()));
                 Vec::new()
             }
             None => raw,
@@ -2683,7 +2668,7 @@ pub(crate) mod raw_fold_hook {
 /// the producer arena and the stats.
 type ComposedCones = (
     HashMap<String, CoverageRecord>,
-    HashMap<String, Vec<CapabilityFact>>,
+    InheritedFacts,
     ConeDerivedStore,
     super::pd_solve::ConeArena,
     ComposeStats,
@@ -2725,7 +2710,9 @@ fn compose_inherited_cones(
         )
     });
     let mut coverage_out: HashMap<String, CoverageRecord> = HashMap::new();
-    let mut raw_out: HashMap<String, Vec<CapabilityFact>> = HashMap::new();
+    // Cone-memory step 1: the raw half is interned as 8-byte refs into shared
+    // rep / hop / subject tables; no inherited `CapabilityFact` is built.
+    let mut raw_out = InheritedBuilder::default();
     let mut derived = ConeDerivedBuilder::default();
 
     // #69 D1: the producers (raw direct facts, in node order) leave the shared
@@ -3004,7 +2991,7 @@ fn compose_inherited_cones(
                     stats.scc_set_entries_folded += set.len() as u64;
                 }
                 let out = match picks {
-                    Some(picks) => emit_picks(m, picks, mode),
+                    Some(picks) => emit_picks(m, picks, mode, &mut raw_out),
                     None => Vec::new(),
                 };
                 crate::engine::l5::detector_context::cones_census::add_since(
@@ -3026,6 +3013,7 @@ fn compose_inherited_cones(
                     &mut derived,
                     &mut memo,
                     &mut stats,
+                    &mut raw_out,
                 )
             };
             if recursive {
@@ -3060,9 +3048,11 @@ fn compose_inherited_cones(
                 );
             }
             #[cfg(test)]
-            let inherited = raw_fold_hook::offer(m, inherited, direct_raw.get(m));
+            let inherited = raw_fold_hook::offer(m, inherited, raw_out.tables(), direct_raw.get(m));
             let _t_emit = crate::engine::l5::detector_context::cones_census::start();
             coverage_out.insert(m.clone(), coverage_record(m, cov, &ccone));
+            // Every member in raw scope gets an entry, an empty one included:
+            // "composed, nothing inherited" is not "never composed".
             if mode.wants_raw() {
                 raw_out.insert(m.clone(), inherited);
             }
@@ -3192,7 +3182,13 @@ fn compose_inherited_cones(
             std::sync::atomic::Ordering::Relaxed,
         );
     }
-    (coverage_out, raw_out, derived.finish(), arena, stats)
+    (
+        coverage_out,
+        raw_out.finish(),
+        derived.finish(),
+        arena,
+        stats,
+    )
 }
 
 /// Member `m`'s coverage record from its direct coverage and its SCC's cone.
@@ -3213,6 +3209,45 @@ fn coverage_record(m: &str, cov: &RoutineDirectCoverage, ccone: &CoverageCone) -
     }
 }
 
+/// Cone-memory design T1's oracle: `retag` and `capability_via_for_edge_kind`
+/// as they were before step 1, frozen. Test only. (The T3(b) emission oracle
+/// `legacy_raw_oracle`, a frozen copy of the pre-step-1 selection run beside
+/// the production emission, was deleted in step 3 once the CDO comparisons for
+/// steps 1 and 2 were recorded, as the design's §8 plans.)
+#[cfg(test)]
+pub(crate) mod legacy_raw_oracle {
+    pub(crate) mod frozen {
+        use super::super::{CapabilityFact, TypedOutEdge};
+
+        fn capability_via_for_edge_kind(kind: &str) -> &'static str {
+            match kind {
+                "direct-call" | "variable-typed-call" | "interface-dispatch" => "call",
+                "object-run-resolved" | "object-run-unresolved" => "object-run",
+                "event-dispatch" => "event-dispatch",
+                "implicit-trigger" => "implicit-trigger",
+                "dependency-export" => "dependency",
+                _ => "call",
+            }
+        }
+
+        pub(in super::super) fn retag(
+            rep: &CapabilityFact,
+            subject: &str,
+            edge: &TypedOutEdge,
+        ) -> CapabilityFact {
+            CapabilityFact {
+                subject: subject.to_string(),
+                provenance: "inherited",
+                via: capability_via_for_edge_kind(&edge.kind),
+                witness_callsite_id: edge.callsite.clone(),
+                witness_first_hop_operation_id: edge.operation_id.clone(),
+                witness_first_hop_event_id: edge.event_id.clone(),
+                ..rep.clone()
+            }
+        }
+    }
+}
+
 // ===========================================================================
 // CONE ENTRY — a public cone entry (it once served R3b's Salsa layer, deleted
 // with salsa in #221). WRAPS the full cone (typed-edge graph build + Tarjan SCC +
@@ -3230,7 +3265,8 @@ pub struct ConeOutcome {
     pub coverage: HashMap<String, CoverageRecord>,
     /// Per-routine RAW inherited facts, one entry per member whose raw half
     /// ran (`scope.raw` contains it), APART from coverage (#160 step 6 D1).
-    pub raw: HashMap<String, Vec<CapabilityFact>>,
+    /// Compact (cone-memory step 1): 8-byte refs into shared tables.
+    pub raw: InheritedFacts,
     /// The compact derived substrate. Empty unless `scope.derived`.
     pub derived: ConeDerivedStore,
     /// The transitive producer solve (#69 D1), in cone (internal) ids.
@@ -4436,7 +4472,7 @@ pub(crate) fn project_r3a5_from_parts(
     dep_routine_ids: &BTreeSet<String>,
     core_summaries: &HashMap<String, crate::engine::l4::summary::RoutineSummary>,
     cone_coverage: &HashMap<String, CoverageRecord>,
-    cone_raw: &HashMap<String, Vec<CapabilityFact>>,
+    cone_raw: &InheritedFacts,
     direct_full: &HashMap<String, Vec<CapabilityFact>>,
     event_graph: &EventGraph,
     fixture_name: &str,
@@ -4486,11 +4522,13 @@ pub(crate) fn project_r3a5_from_parts(
 
         let (inherited_facts, coverage) = match cone_coverage.get(&r.id) {
             Some(cov) => {
+                // Materialized per subject (the projection reads every field).
                 let mut inh: Vec<PCapabilityFact> = cone_raw
                     .get(&r.id)
+                    .map(|s| s.materialize())
                     .into_iter()
                     .flatten()
-                    .map(|f| project_capability_fact(f, &map, &event_by_id))
+                    .map(|f| project_capability_fact(&f, &map, &event_by_id))
                     .collect();
                 inh.sort_by_key(capability_fact_sort_key);
 
@@ -4723,11 +4761,13 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
             .collect();
         direct_facts.sort_by_key(capability_fact_sort_key);
 
+        // Materialized per subject (the projection reads every field).
         let mut inherited_facts: Vec<PCapabilityFact> = cone_raw
             .get(&r.id)
+            .map(|s| s.materialize())
             .into_iter()
             .flatten()
-            .map(|f| project_capability_fact(f, &map, &event_by_id))
+            .map(|f| project_capability_fact(&f, &map, &event_by_id))
             .collect();
         inherited_facts.sort_by_key(capability_fact_sort_key);
 
@@ -4787,8 +4827,9 @@ pub struct R3a3SourceBase {
     pub direct_full: HashMap<String, Vec<CapabilityFact>>,
     /// Per-routine cone coverage, internal-id form (every routine of the cone).
     pub coverage: HashMap<String, CoverageRecord>,
-    /// Per-routine RAW inherited facts, internal-id form.
-    pub raw: HashMap<String, Vec<CapabilityFact>>,
+    /// Per-routine RAW inherited facts, internal-id form (compact refs into
+    /// shared tables, cone-memory step 1).
+    pub raw: InheritedFacts,
     /// Internal RoutineId → StableRoutineId.
     pub routine_to_stable: HashMap<String, String>,
     /// The producer solve (#69 D1), internal ids; the snapshot maps it (D2).
@@ -5175,7 +5216,8 @@ mod pd_uses_tests {
     fn singleton(mode: MemberMode, derived: &mut ConeDerivedBuilder) -> Vec<CapabilityFact> {
         let own = [own_entry()];
         let scc: HashMap<String, usize> = [("C".to_string(), 0)].into();
-        inherited_facts_for_singleton(
+        let mut out = InheritedBuilder::default();
+        let refs = inherited_facts_for_singleton(
             "C",
             &empty_graph(),
             &scc,
@@ -5188,7 +5230,18 @@ mod pd_uses_tests {
             derived,
             &mut HashMap::new(),
             &mut ComposeStats::default(),
-        )
+            &mut out,
+        );
+        crate::engine::l4::inherited_facts::views(out.tables(), &refs).materialize()
+    }
+
+    /// `rep` reached by subject `subject` through `edge`, through the
+    /// production interner and `materialize` (what `retag` was).
+    fn retag(rep: &CapabilityFact, subject: &str, edge: &TypedOutEdge) -> CapabilityFact {
+        let mut b = InheritedBuilder::default();
+        let s = b.subject(subject);
+        let r = b.fact(s, &Arc::new(rep.clone()), edge);
+        crate::engine::l4::inherited_facts::views(b.tables(), &[r]).materialize()[0].clone()
     }
 
     /// Use (a), singleton walk: the own entry is a candidate, and (b) the raw
@@ -6987,7 +7040,8 @@ mod scc_set_tests {
     /// ∪ its raw direct facts).
     fn raw_fold(raw: &ConeOutcome, direct_in: &Direct) -> ConeDerivedStore {
         let mut b = ConeDerivedBuilder::default();
-        for (id, r) in &raw.raw {
+        for (id, r) in raw.raw.iter() {
+            let r = r.materialize();
             b.fold_routine(id, r.iter().chain(direct_in.get(id).into_iter().flatten()));
         }
         b.finish()
@@ -7606,14 +7660,25 @@ codeunit 50100 C
     }
 
     /// One raw fact as `(op, kind, resource id, via, witness call site)`.
-    fn raw_row(f: &CapabilityFact) -> (&str, &str, Option<&str>, &str, Option<&str>) {
+    type RawRow<'a> = (&'a str, &'a str, Option<&'a str>, &'a str, Option<&'a str>);
+
+    fn raw_row(f: crate::engine::l4::inherited_facts::InheritedFactRef<'_>) -> RawRow<'_> {
         (
-            f.op,
-            f.resource_kind,
-            f.resource_id.as_deref(),
-            f.via,
-            f.witness_callsite_id.as_deref(),
+            f.op(),
+            f.resource_kind(),
+            f.resource_id(),
+            f.via(),
+            f.witness_callsite_id(),
         )
+    }
+
+    /// `id`'s raw rows ([`raw_row`]); panics when `id` has no entry.
+    fn raw_rows<'a>(raw: &'a InheritedFacts, id: &str) -> Vec<RawRow<'a>> {
+        raw.get(id)
+            .unwrap_or_else(|| panic!("no raw entry for {id}"))
+            .iter()
+            .map(raw_row)
+            .collect()
     }
 
     // -- T2 -------------------------------------------------------------------
@@ -7812,13 +7877,14 @@ codeunit 50100 C
             let raw = run(g, scope_of::raw_only());
             if label == "T1" {
                 for (mode, out) in [("Both", &both), ("RawOnly", &raw)] {
-                    let got: Vec<_> = out.raw["A"].iter().map(raw_row).collect();
+                    let got = raw_rows(&out.raw, "A");
                     assert_eq!(got, want, "T1 {mode}: A's raw inherited Vec");
                 }
             }
             for n in &g.1 {
                 assert_eq!(
-                    both.raw[n], raw.raw[n],
+                    both.raw.materialized(n),
+                    raw.raw.materialized(n),
                     "{label} {n}: Both's raw Vec equals RawOnly's"
                 );
             }
@@ -7895,7 +7961,7 @@ codeunit 50100 C
         let direct: Direct = [("W".to_string(), vec![insert("W", "t/W")])].into();
         let all = production(&typed, &nodes, &direct, scope_of::both());
         assert!(
-            !all.raw["R"].is_empty(),
+            !all.raw.materialized("R").is_empty(),
             "precondition: R inherits W's write"
         );
         // `derived: false` is `o`'s shape: M and W skip their walk entirely.
@@ -7910,8 +7976,8 @@ codeunit 50100 C
                 },
             );
             assert_eq!(
-                scoped.raw.get("R"),
-                all.raw.get("R"),
+                scoped.raw.get("R").map(|s| s.materialize()),
+                all.raw.get("R").map(|s| s.materialize()),
                 "derived={derived}: R's raw = the All run's"
             );
             assert!(
@@ -8107,7 +8173,7 @@ codeunit 50100 C
         ]
         .into();
         let both = production(&typed, &nodes, &direct, scope_of::both());
-        let raw = |id: &str| -> Vec<_> { both.raw[id].iter().map(raw_row).collect() };
+        let raw = |id: &str| raw_rows(&both.raw, id);
         assert_eq!(
             raw("A"),
             vec![
@@ -8128,5 +8194,447 @@ codeunit 50100 C
             derived.stats.singleton_scans, 0,
             "DerivedOnly built `best` for a singleton"
         );
+    }
+}
+
+/// Cone-memory design step 1 (`docs/superpowers/specs/2026-10-31-cone-memory-design.md`
+/// §9): T0 (index sentinel), T1 (`materialize` = the old `retag`, accessors =
+/// `materialize`), T3b (the recursive walk's first-seen picks and in-place
+/// producer replacement) and T7 (interning and subjects). Each states its
+/// precondition literally. (T3(b), the frozen pre-step-1 emission compared
+/// over every fixture app, ran through steps 1 and 2 and was deleted in step
+/// 3.)
+#[cfg(test)]
+mod cone_memory_step1_tests {
+    use super::callsite_local_scan_tests::model;
+    use super::*;
+    use crate::engine::l4::cone_derived::scope_of;
+    use crate::engine::l4::cone_derived::test_facts::{call_edge, fact};
+    use crate::engine::l4::inherited_facts::{
+        InheritedFactRef, NO_HOP, table_ix, views as views_of,
+    };
+    use crate::engine::l4::pd_solve::ResolvedEntry;
+
+    type Direct = HashMap<String, Vec<CapabilityFact>>;
+
+    fn strs(xs: &[&str]) -> Vec<String> {
+        xs.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn compose(typed: &[TypedEdge], nodes: &[&str], direct: &Direct) -> ConeOutcome {
+        compose_cone_over_graph(
+            typed,
+            &strs(nodes),
+            direct,
+            &HashMap::new(),
+            &[],
+            scope_of::raw_only(),
+        )
+    }
+
+    fn insert(subject: &str, t: &str) -> CapabilityFact {
+        fact(subject, "insert", "table", Some(t))
+    }
+
+    // -- T0 ---------------------------------------------------------------------
+
+    /// T0: a ref is 8 bytes (also a `const` assert in `inherited_facts`), and
+    /// an index is a checked `u32` that is never `NO_HOP` (`u32::MAX`).
+    /// DISCRIMINATION: drop `table_ix`'s `NO_HOP` assert → the `u32::MAX`
+    /// case does not panic → fails.
+    #[test]
+    fn t0_ref_size_and_reserved_index() {
+        assert_eq!(std::mem::size_of::<InheritedRef>(), 8);
+        assert_eq!(NO_HOP, u32::MAX);
+        assert_eq!(table_ix(0, "t"), 0);
+        assert_eq!(table_ix(u32::MAX as usize - 1, "t"), u32::MAX - 1);
+        for len in [u32::MAX as usize, u32::MAX as usize + 1] {
+            assert!(
+                std::panic::catch_unwind(|| table_ix(len, "t")).is_err(),
+                "table_ix({len}) must panic"
+            );
+        }
+    }
+
+    // -- T1 ---------------------------------------------------------------------
+
+    /// A rep carrying a STALE first-hop op id and event id and its OWN call-site
+    /// witness, plus an argument source and an extra: every rule of `retag`
+    /// has something to overwrite or keep.
+    fn t1_rep() -> CapabilityFact {
+        let mut f = fact("H", "insert", "table", Some("app/Table/1"));
+        f.resource_arg_source = Some(ValueSource::Literal {
+            value: "x".to_string(),
+        });
+        f.witness_operation_id = Some("H/op1".to_string());
+        f.witness_callsite_id = Some("H/cs9".to_string());
+        f.witness_first_hop_operation_id = Some("stale/op7".to_string());
+        f.witness_first_hop_event_id = Some("stale/event/e".to_string());
+        f.extra = Some(CapabilityExtra::Table {
+            record_variable_id: Some("v".to_string()),
+            temp_state: None,
+            op_subtype: Some("Insert".to_string()),
+        });
+        f
+    }
+
+    /// Every accessor of a view, as the owned fact's fields.
+    fn read(v: InheritedFactRef<'_>) -> CapabilityFact {
+        CapabilityFact {
+            subject: v.subject().to_string(),
+            op: v.op(),
+            resource_kind: v.resource_kind(),
+            resource_id: v.resource_id().map(str::to_string),
+            resource_arg_source: v.resource_arg_source().cloned(),
+            confidence: v.confidence(),
+            provenance: v.provenance(),
+            via: v.via(),
+            witness_operation_id: v.witness_operation_id().map(str::to_string),
+            witness_callsite_id: v.witness_callsite_id().map(str::to_string),
+            witness_first_hop_operation_id: v.witness_first_hop_operation_id().map(str::to_string),
+            witness_first_hop_event_id: v.witness_first_hop_event_id().map(str::to_string),
+            extra: v.extra().cloned(),
+        }
+    }
+
+    /// T1: over a call hop with a call site, an `implicit-trigger` hop with an
+    /// op id and an `event-dispatch` hop with an event id, `materialize` equals
+    /// the frozen pre-step-1 `retag`, and every accessor equals `materialize`.
+    /// DISCRIMINATION: `materialize` keeps the rep's first-hop op id → the
+    /// call and event hops fail; `witness_callsite_id()` returns the rep's call
+    /// site → the accessor comparison fails.
+    #[test]
+    fn t1_materialize_is_retag_and_accessors_agree() {
+        let rep = Arc::new(t1_rep());
+        let edges = [
+            TypedOutEdge::new(
+                "H".into(),
+                "direct-call".into(),
+                Some("C/cs1".into()),
+                None,
+                None,
+            ),
+            TypedOutEdge::new(
+                "H".into(),
+                "implicit-trigger".into(),
+                None,
+                None,
+                Some("C/op2".into()),
+            ),
+            TypedOutEdge::new(
+                "H".into(),
+                "event-dispatch".into(),
+                None,
+                Some("app/Codeunit/1/event/onx".into()),
+                None,
+            ),
+        ];
+        let mut b = InheritedBuilder::default();
+        let s = b.subject("C");
+        let refs: Vec<InheritedRef> = edges.iter().map(|e| b.fact(s, &rep, e)).collect();
+        let tables = b.tables();
+        for (edge, view) in edges.iter().zip(views_of(tables, &refs).iter()) {
+            let want = legacy_raw_oracle::frozen::retag(&rep, "C", edge);
+            assert_eq!(
+                view.materialize(),
+                want,
+                "{}: materialize = retag",
+                edge.kind
+            );
+            assert_eq!(read(view), want, "{}: accessors = materialize", edge.kind);
+        }
+        // Preconditions: the rules had something to change.
+        let call = legacy_raw_oracle::frozen::retag(&rep, "C", &edges[0]);
+        assert_eq!(call.witness_first_hop_operation_id, None);
+        assert_eq!(call.witness_callsite_id.as_deref(), Some("C/cs1"));
+        let trig = legacy_raw_oracle::frozen::retag(&rep, "C", &edges[1]);
+        assert_eq!(
+            trig.witness_callsite_id, None,
+            "a trigger hop clears the call site"
+        );
+        assert_eq!(trig.witness_operation_id.as_deref(), Some("H/op1"));
+    }
+
+    // (T3(b), the frozen-emission comparison over every fixture app, and its
+    // audit were deleted with `legacy_raw_oracle`'s emission copy in step 3,
+    // once the CDO comparisons of steps 1 and 2 were recorded. Raw equality
+    // stays pinned by the byte-compared r3a3/r3a5 goldens, the snapshot
+    // corpus test `snapshot::step0_sort_tests::t6_every_corpus_app_*` and
+    // T3b below.)
+
+    // -- T3b ----------------------------------------------------------------------
+
+    /// T3b (1): the recursive SCC {S, T}. S's first out-edge (cs/S1) reaches
+    /// D1, whose cone holds key K at dist 2 (D1 -> E1 -> F): hops + dist = 3,
+    /// encountered FIRST. A later candidate, through S -> T (cs/S2) -> D2,
+    /// holds K directly: 2 + 0 = 2. Today's walk keeps the first encounter.
+    /// DISCRIMINATION: compare on distance in the downstream branch → the
+    /// pick becomes cs/S2 → fails.
+    #[test]
+    fn t3b_recursive_walk_keeps_the_first_seen_pick() {
+        let typed = vec![
+            call_edge("S", "D1", "cs/S1"),
+            call_edge("S", "T", "cs/S2"),
+            call_edge("T", "S", "cs/T1"),
+            call_edge("T", "D2", "cs/T2"),
+            call_edge("D1", "E1", "cs/D1"),
+            call_edge("E1", "F", "cs/E1"),
+        ];
+        let direct: Direct = [
+            ("F".to_string(), vec![insert("F", "t/K")]),
+            ("D2".to_string(), vec![insert("D2", "t/K")]),
+        ]
+        .into();
+        let out = compose(&typed, &["S", "T", "D1", "D2", "E1", "F"], &direct);
+        assert_eq!(
+            out.stats.recursive_sccs, 1,
+            "precondition: {{S, T}} is recursive"
+        );
+        // Precondition: D1 has K at distance 2 (its own singleton witness is
+        // its edge to E1), so S's first encounter is at 1 + 2 = 3.
+        let d1 = out.raw.materialized("D1");
+        assert_eq!(
+            d1.iter()
+                .map(|f| f.witness_callsite_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("cs/D1")]
+        );
+        let s = out.raw.materialized("S");
+        assert_eq!(
+            s.iter()
+                .map(|f| (f.resource_id.as_deref(), f.witness_callsite_id.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![(Some("t/K"), Some("cs/S1"))],
+            "S keeps its FIRST-SEEN pick (dist 3), not the nearer cs/S2 (dist 2)"
+        );
+    }
+
+    /// T3b (2): a recursive member's producer entry replaces its walk pick IN
+    /// PLACE: the picks keep their positions. Called on the production walk
+    /// with literal inputs: sibling X's direct facts give picks [K1, K2] in
+    /// key order; an own entry under K1's key at the same distance with a
+    /// smaller first-hop sort key wins K1's slot.
+    /// DISCRIMINATION: push instead of replace → three picks → fails.
+    #[test]
+    fn t3b_producer_replacement_keeps_the_pick_position() {
+        let edge_cx = TypedOutEdge::new(
+            "X".into(),
+            "direct-call".into(),
+            Some("cs/CX".into()),
+            None,
+            None,
+        );
+        let edge_own = TypedOutEdge::new(
+            "P".into(),
+            "direct-call".into(),
+            Some("cs/A0".into()),
+            None,
+            None,
+        );
+        let g = TypedEdgeGraph {
+            nodes: strs(&["C", "X"]),
+            outgoing: [("C".to_string(), vec![edge_cx.clone()])].into(),
+            unresolved_sources: BTreeSet::new(),
+        };
+        let scc: HashMap<String, usize> = [("C".to_string(), 0), ("X".to_string(), 0)].into();
+        let k1 = insert("X", "t/1");
+        let k2 = insert("X", "t/2");
+        let direct: RoutineDirectFacts =
+            [("X".to_string(), dedup_direct(&[k1.clone(), k2.clone()]))].into();
+        let mut own_fact = k1.clone();
+        own_fact.subject = "P".into();
+        own_fact.witness_operation_id = Some("P/op1".into());
+        let own = [ResolvedEntry {
+            state: 0,
+            rep: Arc::new(own_fact),
+            dist: 1,
+            first_hop: &edge_own,
+        }];
+        let cones: HashMap<usize, ConeFacts> = HashMap::new();
+        // Precondition: the own entry wins K1 (same distance, smaller sort key).
+        assert!(edge_own.sort_key < edge_cx.sort_key);
+        let picks = inherited_facts_by_bfs("C", &g, &direct, &scc, &cones, &own);
+        let got: Vec<(Option<&str>, Option<&str>, &str)> = picks
+            .iter()
+            .map(|(rep, hop)| {
+                (
+                    rep.resource_id.as_deref(),
+                    rep.witness_operation_id.as_deref(),
+                    hop.callsite.as_deref().unwrap_or(""),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (Some("t/1"), Some("P/op1"), "cs/A0"),
+                (Some("t/2"), None, "cs/CX")
+            ],
+            "the producer took K1's slot; K2 kept its position"
+        );
+    }
+
+    // -- T7 -----------------------------------------------------------------------
+
+    /// The `scc_set_tests` T4 source: G's write is guarded by `Flag`; M (a
+    /// singleton) takes it through G's frame-bound entry (`substitute_entry`),
+    /// the recursive {A, B} through G's cone with the guard dropped.
+    const GUARD_SRC: &str = r#"
+codeunit 50100 C
+{
+    var
+        Rec2: Record Cust;
+
+    procedure A()
+    begin
+        B();
+    end;
+
+    procedure B()
+    begin
+        G(true);
+        A();
+    end;
+
+    procedure G(Flag: Boolean)
+    begin
+        if Flag then
+            Rec2.Modify();
+    end;
+
+    procedure N()
+    begin
+        G(false);
+    end;
+
+    procedure M()
+    begin
+        G(true);
+    end;
+}
+"#;
+
+    fn id_of(m: &Model, name: &str) -> String {
+        let ids: Vec<&str> = m
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| r.name == name)
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(ids.len(), 1, "precondition: one routine {name}");
+        ids[0].to_string()
+    }
+
+    /// The one ref of `id` (asserted).
+    fn only_ref(raw: &InheritedFacts, id: &str) -> InheritedRef {
+        let s = raw.get(id).unwrap_or_else(|| panic!("{id} has raw"));
+        assert_eq!(s.len(), 1, "precondition: {id} inherits one fact: {s:?}");
+        s.refs()[0]
+    }
+
+    /// T7 (i): one callee fact reached by several subjects through different
+    /// hops is ONE rep: M through G's GUARDED entry (carried per edge), A and
+    /// B through the same entry with the guard dropped. Their hops differ.
+    #[test]
+    fn t7_one_rep_across_subjects_and_guards() {
+        let m = model(GUARD_SRC);
+        let base = build_r3a3_source_only_base(&m);
+        let [a, b, mm, n] = ["A", "B", "M", "N"].map(|r| id_of(&m, r));
+        // Precondition: G's write reaches its singleton callers through a
+        // GUARDED (frame-bound) entry: the same call with `false` gets
+        // nothing, so M's `true` took the substituted entry.
+        assert!(
+            base.raw.get(&n).is_some_and(|s| s.is_empty()),
+            "precondition: N's G(false) contradicts the guard"
+        );
+        let (ra, rb, rm) = (
+            only_ref(&base.raw, &a),
+            only_ref(&base.raw, &b),
+            only_ref(&base.raw, &mm),
+        );
+        assert_eq!(
+            ra.rep, rm.rep,
+            "A (guard dropped) and M (guarded) share the rep"
+        );
+        assert_eq!(rb.rep, rm.rep, "B and M share the rep");
+        assert!(
+            ra.hop != rm.hop && rb.hop != rm.hop && ra.hop != rb.hop,
+            "three hops"
+        );
+    }
+
+    /// T7 (ii): A and B make hops with IDENTICAL (via, call site, op, event)
+    /// (a literal shared call-site id) to C. They get different hops, and
+    /// every view reports its own subject.
+    /// DISCRIMINATION: intern hops without the subject → one hop, and B's
+    /// view reports subject A → fails.
+    #[test]
+    fn t7_identical_hop_content_of_two_subjects_stays_apart() {
+        let typed = vec![
+            call_edge("A", "C", "cs/shared"),
+            call_edge("B", "C", "cs/shared"),
+        ];
+        let direct: Direct = [("C".to_string(), vec![insert("C", "t/C")])].into();
+        let out = compose(&typed, &["A", "B", "C"], &direct);
+        let (ra, rb) = (only_ref(&out.raw, "A"), only_ref(&out.raw, "B"));
+        assert_eq!(ra.rep, rb.rep, "precondition: one rep");
+        assert_ne!(ra.hop, rb.hop, "a hop belongs to its subject");
+        for id in ["A", "B"] {
+            let s = out.raw.get(id).unwrap();
+            assert!(
+                s.iter().all(|v| v.subject() == id),
+                "{id}'s views report {id}"
+            );
+            assert!(out.raw.materialized(id).iter().all(|f| f.subject == id));
+        }
+    }
+
+    /// T7 (iii): one subject, two edges from ONE call site to two targets (an
+    /// interface dispatch shape) → ONE hop: content, not the edge, is the key.
+    /// DISCRIMINATION: intern hops by edge address → two hops → fails.
+    #[test]
+    fn t7_one_call_site_two_targets_is_one_hop() {
+        let typed = vec![call_edge("A", "C", "cs/1"), call_edge("A", "D", "cs/1")];
+        let direct: Direct = [
+            ("C".to_string(), vec![insert("C", "t/C")]),
+            ("D".to_string(), vec![insert("D", "t/D")]),
+        ]
+        .into();
+        let out = compose(&typed, &["A", "C", "D"], &direct);
+        let s = out.raw.get("A").unwrap();
+        assert_eq!(s.len(), 2, "precondition: A inherits two facts");
+        assert_ne!(s.refs()[0].rep, s.refs()[1].rep, "precondition: two reps");
+        assert_eq!(s.refs()[0].hop, s.refs()[1].hop, "one hop");
+        assert_eq!(out.raw.tables().hops.len(), 1, "one hop row in the table");
+    }
+
+    /// T7 (iv): call sites `None` and `Some("")` are different hops.
+    /// DISCRIMINATION: intern `None` as `Some("")` → one hop → fails.
+    #[test]
+    fn t7_none_and_empty_call_sites_differ() {
+        let mut none = call_edge("A", "C", "");
+        none.callsite_id = None;
+        let empty = call_edge("A", "D", "");
+        let direct: Direct = [
+            ("C".to_string(), vec![insert("C", "t/C")]),
+            ("D".to_string(), vec![insert("D", "t/D")]),
+        ]
+        .into();
+        let out = compose(&[none, empty], &["A", "C", "D"], &direct);
+        let s = out.raw.get("A").unwrap();
+        assert_eq!(s.len(), 2, "precondition: A inherits two facts");
+        assert_ne!(
+            s.refs()[0].hop,
+            s.refs()[1].hop,
+            "None and Some(\"\") are two hops"
+        );
+        let sites: BTreeSet<Option<String>> = out
+            .raw
+            .materialized("A")
+            .into_iter()
+            .map(|f| f.witness_callsite_id)
+            .collect();
+        assert_eq!(sites, [None, Some(String::new())].into());
     }
 }

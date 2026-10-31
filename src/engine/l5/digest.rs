@@ -97,10 +97,10 @@ type Fact = crate::engine::l5::snapshot::SnapshotCapabilityFact;
 /// `prove … reaches-ui` counts it and the ordering engine no longer grades it as
 /// file I/O inside a transaction (it is not in `ORDERING_RELEVANT`).
 pub(crate) fn effect_type_of(fact: &Fact) -> Option<&'static str> {
-    if fact.op == "open" && fact.resource_kind == "ui" {
+    if fact.op() == "open" && fact.resource_kind() == "ui" {
         return Some("UI_HYPERLINK");
     }
-    map_op(&fact.op)
+    map_op(fact.op())
 }
 
 /// `resourceDisplayOf` (effect-taxonomy.ts).
@@ -108,8 +108,8 @@ fn resource_display_of(
     fact: &Fact,
     stable_id_to_display: &HashMap<String, String>,
 ) -> Option<String> {
-    let rid = fact.resource_id.as_ref()?;
-    if fact.resource_kind == "table" {
+    let rid = fact.resource_id()?;
+    if fact.resource_kind() == "table" {
         let parts: Vec<&str> = rid.split('/').collect();
         if parts.len() == 3 && parts[1] == "table" {
             let stable = format!("{}:Table:{}", parts[0], parts[2]);
@@ -121,7 +121,7 @@ fn resource_display_of(
         }
         return None;
     }
-    if fact.resource_kind == "event" {
+    if fact.resource_kind() == "event" {
         let marker = "/event/";
         if let Some(idx) = rid.rfind(marker) {
             let name = &rid[idx + marker.len()..];
@@ -142,15 +142,15 @@ fn effect_detail_of(
 ) -> Vec<(String, String)> {
     let mut detail: Vec<(String, String)> = Vec::new();
 
-    if let Some(rid) = &fact.resource_id {
-        detail.push(("resourceId".to_string(), rid.clone()));
+    if let Some(rid) = fact.resource_id() {
+        detail.push(("resourceId".to_string(), rid.to_string()));
     }
 
     if let Some(display) = resource_display_of(fact, stable_id_to_display) {
         detail.push(("resourceDisplay".to_string(), display));
     }
 
-    match &fact.extra {
+    match fact.extra() {
         Some(SnapCapabilityExtra::Event { event_class, .. }) => {
             // `fact.extra.eventClass !== undefined` — always present on the event variant.
             detail.push(("eventClass".to_string(), event_class.clone()));
@@ -159,13 +159,13 @@ fn effect_detail_of(
             detail.push(("method".to_string(), method.clone()));
         }
         Some(SnapCapabilityExtra::Storage { .. }) => {
-            detail.push(("storageOp".to_string(), fact.op.clone()));
+            detail.push(("storageOp".to_string(), fact.op().to_string()));
         }
         _ => {}
     }
 
-    if fact.resource_kind == "file" {
-        detail.push(("fileOp".to_string(), fact.op.clone()));
+    if fact.resource_kind() == "file" {
+        detail.push(("fileOp".to_string(), fact.op().to_string()));
     }
 
     detail
@@ -278,16 +278,16 @@ fn build_fingerprint_indexes(snap: &CapabilitySnapshot) -> FingerprintIndexes<'_
     let mut direct_facts_by_op_kind: HashMap<(String, String), Vec<&Fact>> = HashMap::new();
     for fact in &snap.capability_facts {
         facts_by_routine
-            .entry(fact.subject.clone())
+            .entry(fact.subject().to_string())
             .or_default()
             .push(fact);
-        if fact.provenance == "direct" {
+        if fact.provenance() == "direct" {
             direct_facts_by_routine
-                .entry(fact.subject.clone())
+                .entry(fact.subject().to_string())
                 .or_default()
                 .push(fact);
             direct_facts_by_op_kind
-                .entry((fact.op.clone(), fact.resource_kind.clone()))
+                .entry((fact.op().to_string(), fact.resource_kind().to_string()))
                 .or_default()
                 .push(fact);
         }
@@ -415,12 +415,12 @@ impl FirstHop<'_> {
 /// id (a direct fact with a callsite witness returns `Some(Callsite)`; only
 /// Case C, reached for inherited facts, acts on it).
 fn fact_first_hop(f: &Fact) -> Option<FirstHop<'_>> {
-    if let Some(op) = &f.witness_first_hop_operation_id {
+    if let Some(op) = f.witness_first_hop_operation_id() {
         Some(FirstHop::Op(op))
-    } else if let Some(ev) = &f.witness_first_hop_event_id {
+    } else if let Some(ev) = f.witness_first_hop_event_id() {
         Some(FirstHop::Event(ev))
     } else {
-        f.witness_callsite_id.as_deref().map(FirstHop::Callsite)
+        f.witness_callsite_id().map(FirstHop::Callsite)
     }
 }
 
@@ -660,29 +660,29 @@ fn build_direct_terminal(
 
 /// `terminalHopFromFact` (witness.ts) — terminal for the matched direct fact.
 fn terminal_hop_from_fact(fact: &Fact, idx: &FingerprintIndexes) -> WitnessHop {
-    if let Some(wo) = &fact.witness_operation_id {
-        let ev = idx.operation_by_id.get(wo.as_str()).copied();
+    if let Some(wo) = fact.witness_operation_id() {
+        let ev = idx.operation_by_id.get(wo).copied();
         return WitnessHop::Terminal {
             evidence_kind: TerminalKind::Operation,
-            operation_id: Some(wo.clone()),
+            operation_id: Some(wo.to_string()),
             callsite_id: None,
             display_text: ev
                 .map(|e| e.display_text.clone())
-                .unwrap_or_else(|| wo.clone()),
+                .unwrap_or_else(|| wo.to_string()),
             source_file: ev.map(|e| e.source_file.clone()),
             line: ev.map(|e| e.start_line),
             column: ev.map(|e| e.start_column),
         };
     }
-    if let Some(wc) = &fact.witness_callsite_id {
-        let ev = idx.callsite_by_id.get(wc.as_str()).copied();
+    if let Some(wc) = fact.witness_callsite_id() {
+        let ev = idx.callsite_by_id.get(wc).copied();
         return WitnessHop::Terminal {
             evidence_kind: TerminalKind::Callsite,
             operation_id: None,
-            callsite_id: Some(wc.clone()),
+            callsite_id: Some(wc.to_string()),
             display_text: ev
                 .map(|e| e.callee_display.clone())
-                .unwrap_or_else(|| wc.clone()),
+                .unwrap_or_else(|| wc.to_string()),
             source_file: ev.map(|e| e.source_file.clone()),
             line: ev.map(|e| e.start_line),
             column: ev.map(|e| e.start_column),
@@ -692,7 +692,7 @@ fn terminal_hop_from_fact(fact: &Fact, idx: &FingerprintIndexes) -> WitnessHop {
         evidence_kind: TerminalKind::Synthetic,
         operation_id: None,
         callsite_id: None,
-        display_text: format!("{} {}", fact.op, fact.resource_kind),
+        display_text: format!("{} {}", fact.op(), fact.resource_kind()),
         source_file: None,
         line: None,
         column: None,
@@ -856,26 +856,26 @@ fn edge_to_hop(edge: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> Option<Wit
 /// resourceArgSource compared via canonical JSON when both Some. dispatch → objectType
 /// compared (undefined-tolerant).
 fn fact_equivalent(a: &Fact, b: &Fact) -> bool {
-    if a.op != b.op {
+    if a.op() != b.op() {
         return false;
     }
-    if a.resource_kind != b.resource_kind {
+    if a.resource_kind() != b.resource_kind() {
         return false;
     }
-    if let (Some(ra), Some(rb)) = (&a.resource_id, &b.resource_id)
+    if let (Some(ra), Some(rb)) = (a.resource_id(), b.resource_id())
         && ra != rb
     {
         return false;
     }
-    if let (Some(sa), Some(sb)) = (&a.resource_arg_source, &b.resource_arg_source)
+    if let (Some(sa), Some(sb)) = (a.resource_arg_source(), b.resource_arg_source())
         && value_source_json(sa) != value_source_json(sb)
     {
         return false;
     }
     let oa = dispatch_object_type(a);
     let ob = dispatch_object_type(b);
-    let a_is_dispatch = matches!(&a.extra, Some(SnapCapabilityExtra::Dispatch { .. }));
-    let b_is_dispatch = matches!(&b.extra, Some(SnapCapabilityExtra::Dispatch { .. }));
+    let a_is_dispatch = matches!(a.extra(), Some(SnapCapabilityExtra::Dispatch { .. }));
+    let b_is_dispatch = matches!(b.extra(), Some(SnapCapabilityExtra::Dispatch { .. }));
     if a_is_dispatch || b_is_dispatch {
         // TS reads extra?.objectType on both; non-dispatch → undefined. Compare both
         // (undefined-tolerant: only the dispatch variant carries objectType).
@@ -887,7 +887,7 @@ fn fact_equivalent(a: &Fact, b: &Fact) -> bool {
 }
 
 fn dispatch_object_type(f: &Fact) -> Option<&str> {
-    match &f.extra {
+    match f.extra() {
         Some(SnapCapabilityExtra::Dispatch { object_type, .. }) => Some(object_type.as_str()),
         _ => None,
     }
@@ -921,7 +921,7 @@ fn is_bfs_carrier(d: &Fact, f: &Fact) -> bool {
         // leniency made one the witness of every same-op fact: Continia DO's
         // temporary `RecRef.Insert` was shown writing 156 tables that a
         // dependency boundary below it writes.
-        && !(f.resource_id.is_some() && d.resource_id.is_none())
+        && !(f.resource_id().is_some() && d.resource_id().is_none())
 }
 
 /// What [`enumerate_proofs`] found.
@@ -1052,8 +1052,8 @@ fn enumerate_proofs<'i>(
                 // As `is_bfs_carrier`: a producer naming a resource never
                 // witnesses a fact with none (an unresolved write was shown at
                 // a typed producer's operation), nor the other way round.
-                && idx.capability_facts[st.producer_fact].resource_id.is_some()
-                    == f.resource_id.is_some()
+                && idx.capability_facts[st.producer_fact].resource_id().is_some()
+                    == f.resource_id().is_some()
         })
         .map(|&s| Node {
             state: s,
@@ -1262,10 +1262,10 @@ struct CarrierKey {
 impl CarrierKey {
     fn of(fact: &Fact) -> CarrierKey {
         CarrierKey {
-            op: fact.op.clone(),
-            resource_kind: fact.resource_kind.clone(),
-            resource_id: fact.resource_id.clone(),
-            resource_arg_source_json: fact.resource_arg_source.as_ref().map(value_source_json),
+            op: fact.op().to_string(),
+            resource_kind: fact.resource_kind().to_string(),
+            resource_id: fact.resource_id().map(str::to_string),
+            resource_arg_source_json: fact.resource_arg_source().map(value_source_json),
             dispatch_object_type: dispatch_object_type(fact).map(str::to_string),
             known_temp: is_known_temp_snap(fact),
         }
@@ -1296,11 +1296,11 @@ impl<'i> CarrierCache<'i> {
         }
         let set: std::collections::HashSet<&'i str> = idx
             .direct_facts_by_op_kind
-            .get(&(fact.op.clone(), fact.resource_kind.clone()))
+            .get(&(fact.op().to_string(), fact.resource_kind().to_string()))
             .into_iter()
             .flatten()
             .filter(|d| is_bfs_carrier(d, fact))
-            .map(|d| d.subject.as_str())
+            .map(|d| d.subject())
             .collect();
         std::sync::Arc::clone(
             self.0
@@ -1829,14 +1829,17 @@ fn reconstruct_witness_paths<'i>(
 ) -> WitnessOutcomeExt {
     let mut diagnostics: Vec<(String, Option<String>)> = Vec::new();
 
-    if fact.provenance == "direct" {
+    if fact.provenance() == "direct" {
         // Case A: witnessOperationId → terminal "operation".
-        if let Some(wo) = &fact.witness_operation_id {
-            let ev = idx.operation_by_id.get(wo.as_str()).copied();
+        if let Some(wo) = fact.witness_operation_id() {
+            let ev = idx.operation_by_id.get(wo).copied();
             let hop = build_direct_terminal(TerminalKind::Operation, wo, ev, None);
             let incomplete = ev.is_none();
             if ev.is_none() {
-                diagnostics.push(("missing-operation-evidence".to_string(), Some(wo.clone())));
+                diagnostics.push((
+                    "missing-operation-evidence".to_string(),
+                    Some(wo.to_string()),
+                ));
             }
             return WitnessOutcomeExt {
                 paths: vec![WitnessPath {
@@ -1853,12 +1856,15 @@ fn reconstruct_witness_paths<'i>(
             };
         }
         // Case B: only witnessCallsiteId → terminal "callsite".
-        if let Some(wc) = &fact.witness_callsite_id {
-            let ev = idx.callsite_by_id.get(wc.as_str()).copied();
+        if let Some(wc) = fact.witness_callsite_id() {
+            let ev = idx.callsite_by_id.get(wc).copied();
             let hop = build_direct_terminal(TerminalKind::Callsite, wc, None, ev);
             let incomplete = ev.is_none();
             if ev.is_none() {
-                diagnostics.push(("missing-callsite-evidence".to_string(), Some(wc.clone())));
+                diagnostics.push((
+                    "missing-callsite-evidence".to_string(),
+                    Some(wc.to_string()),
+                ));
             }
             return WitnessOutcomeExt {
                 paths: vec![WitnessPath {
@@ -1881,7 +1887,7 @@ fn reconstruct_witness_paths<'i>(
                     evidence_kind: TerminalKind::Synthetic,
                     operation_id: None,
                     callsite_id: None,
-                    display_text: format!("{} {}", fact.op, fact.resource_kind),
+                    display_text: format!("{} {}", fact.op(), fact.resource_kind()),
                     source_file: None,
                     line: None,
                     column: None,
@@ -1893,7 +1899,7 @@ fn reconstruct_witness_paths<'i>(
             limit_hit: false,
             diagnostics: vec![(
                 "missing-witness-anchor".to_string(),
-                Some(fact.subject.clone()),
+                Some(fact.subject().to_string()),
             )],
             projected: None,
             twins: Vec::new(),
@@ -1912,7 +1918,10 @@ fn reconstruct_witness_paths<'i>(
             truncated: false,
             incomplete: true,
             limit_hit: false,
-            diagnostics: vec![("first-hop-not-found".to_string(), Some(fact.via.clone()))],
+            diagnostics: vec![(
+                "first-hop-not-found".to_string(),
+                Some(fact.via().to_string()),
+            )],
             projected: None,
             twins: Vec::new(),
             ends: Vec::new(),
@@ -3066,19 +3075,19 @@ fn dedupe_key(
         }
         _ => format!(
             "synthetic:{}:{}:{}",
-            fact.op,
-            fact.resource_kind,
-            fact.resource_id.clone().unwrap_or_default()
+            fact.op(),
+            fact.resource_kind(),
+            fact.resource_id().unwrap_or_default()
         ),
     };
-    let resource_id = fact.resource_id.clone().unwrap_or_default();
+    let resource_id = fact.resource_id().unwrap_or_default();
     // The temp class (#69 D3): a kt and an nt fact never merge into one effect.
     let class = if is_known_temp_snap(fact) { "kt" } else { "nt" };
     format!(
         "{}|{}|{}|{}|{}|{}",
         effect_type,
         anchor_id,
-        fact.resource_kind,
+        fact.resource_kind(),
         resource_id,
         detail_json(detail),
         class
@@ -3136,17 +3145,17 @@ fn detail_json(detail: &[(String, String)]) -> String {
 fn effect_fact_loop_identity(fact: &Fact, detail: &[(String, String)]) -> String {
     format!(
         "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
-        fact.provenance,
-        fact.op,
-        fact.resource_kind,
-        fact.resource_id.as_deref().unwrap_or(""),
-        fact.witness_callsite_id.as_deref().unwrap_or(""),
-        fact.witness_first_hop_operation_id.as_deref().unwrap_or(""),
-        fact.witness_first_hop_event_id.as_deref().unwrap_or(""),
-        fact.witness_operation_id.as_deref().unwrap_or(""),
-        fact.subject,
-        serde_json::to_string(&fact.resource_arg_source).unwrap_or_default(),
-        serde_json::to_string(&fact.extra).unwrap_or_default(),
+        fact.provenance(),
+        fact.op(),
+        fact.resource_kind(),
+        fact.resource_id().unwrap_or(""),
+        fact.witness_callsite_id().unwrap_or(""),
+        fact.witness_first_hop_operation_id().unwrap_or(""),
+        fact.witness_first_hop_event_id().unwrap_or(""),
+        fact.witness_operation_id().unwrap_or(""),
+        fact.subject(),
+        serde_json::to_string(&fact.resource_arg_source()).unwrap_or_default(),
+        serde_json::to_string(&fact.extra()).unwrap_or_default(),
         detail_json(detail),
     )
 }
@@ -3504,7 +3513,7 @@ fn digest_query_with<T: Send>(
 /// witness-BFS half of `digest_one_root`'s loop, so it stays cheap to recompute for
 /// an identity-duplicate fact whose BFS reconstruction is skipped.
 fn fact_temp_state_of(fact: &Fact) -> Option<SnapTempState> {
-    match &fact.extra {
+    match fact.extra() {
         Some(SnapCapabilityExtra::Table { temp_state, .. }) => temp_state.clone(),
         _ => None,
     }
@@ -3845,7 +3854,8 @@ fn digest_one_root<'i>(
         // stays read-blind, so ordering, prove and r4f never see one.
         let effect_type_with_reads = |f: &Fact| {
             effect_type_of(f).or_else(|| {
-                (include_reads && f.op == "read" && f.resource_kind == "table").then_some("DB_READ")
+                (include_reads && f.op() == "read" && f.resource_kind() == "table")
+                    .then_some("DB_READ")
             })
         };
 
@@ -3854,8 +3864,8 @@ fn digest_one_root<'i>(
             .iter()
             .copied()
             .filter(|f| {
-                if f.op == "execute"
-                    && matches!(&f.extra, Some(SnapCapabilityExtra::Dispatch { .. }))
+                if f.op() == "execute"
+                    && matches!(f.extra(), Some(SnapCapabilityExtra::Dispatch { .. }))
                 {
                     return false;
                 }
@@ -4103,21 +4113,21 @@ fn digest_one_root<'i>(
                         acc.via.fold_cond(c);
                     }
                     acc.via.truncated |= input_truncated;
-                    if acc.group.is_some() && fact.resource_id.is_none() {
+                    if acc.group.is_some() && fact.resource_id().is_none() {
                         acc.group_unresolved += 1;
                     }
-                    if let (Some((_, resources)), Some(r)) = (&mut acc.group, &fact.resource_id) {
-                        resources.entry(r.clone()).or_insert_with(|| {
+                    if let (Some((_, resources)), Some(r)) = (&mut acc.group, fact.resource_id()) {
+                        resources.entry(r.to_string()).or_insert_with(|| {
                             resource_display_of(fact, &idx.stable_id_to_display)
-                                .unwrap_or_else(|| r.clone())
+                                .unwrap_or_else(|| r.to_string())
                         });
                         let ops = acc
                             .group_ops
-                            .entry(r.clone())
+                            .entry(r.to_string())
                             .or_insert_with(|| Some(BTreeSet::new()));
-                        match (&fact.witness_operation_id, ops.as_mut()) {
+                        match (fact.witness_operation_id(), ops.as_mut()) {
                             (Some(op), Some(set)) => {
-                                set.insert(op.clone());
+                                set.insert(op.to_string());
                             }
                             (None, _) => *ops = None,
                             _ => {}
@@ -4133,7 +4143,7 @@ fn digest_one_root<'i>(
                     acc.temp_state = merged_temp;
                     if acc.group.is_none() {
                         acc.origin_operation_ids
-                            .extend(fact.witness_operation_id.iter().cloned());
+                            .extend(fact.witness_operation_id().map(str::to_string));
                     }
                     pos
                 } else {
@@ -4142,7 +4152,7 @@ fn digest_one_root<'i>(
                     let mut acc = AccumulatedEffect {
                         effect_type,
                         detail: detail.clone(),
-                        provenance: if fact.provenance == "direct" {
+                        provenance: if fact.provenance() == "direct" {
                             "direct"
                         } else {
                             "transitive"
@@ -4152,13 +4162,16 @@ fn digest_one_root<'i>(
                         evidence_callsite_id,
                         via: ViaWindow::default(),
                         temp_state: fact_temp_state.clone(),
-                        fact_subject: fact.subject.clone(),
+                        fact_subject: fact.subject().to_string(),
                         // A group names its resources, not the dependency's
                         // operations: no `detail.tempState` join (#65).
                         origin_operation_ids: if bnd.is_some() {
                             BTreeSet::new()
                         } else {
-                            fact.witness_operation_id.iter().cloned().collect()
+                            fact.witness_operation_id()
+                                .map(str::to_string)
+                                .into_iter()
+                                .collect()
                         },
                         group: bnd.clone().map(|b| (b, BTreeMap::new())),
                         group_ops: BTreeMap::new(),
@@ -4833,13 +4846,13 @@ pub(crate) fn ordering_kept_roots(
         // `effect_type_of`, not `map_op`: the same type the engine grades (G15).
         match effect_type_of(f) {
             Some("HTTP") | Some("FILE") => {
-                ext_io.insert(f.subject.as_str());
+                ext_io.insert(f.subject());
             }
             Some("UI_CONFIRM") | Some("UI_MESSAGE") | Some("UI_WINDOW_OPEN") => {
-                ui_sink.insert(f.subject.as_str());
+                ui_sink.insert(f.subject());
             }
             Some("DB_INSERT") | Some("DB_MODIFY") | Some("DB_DELETE") => {
-                db_write.insert(f.subject.as_str());
+                db_write.insert(f.subject());
             }
             _ => {}
         }
@@ -5446,7 +5459,7 @@ fn pub_idx_as_private<'i>(idx: &'i FingerprintIndexesPub<'_>) -> FingerprintInde
             let mut m: HashMap<(String, String), Vec<&Fact>> = HashMap::new();
             for v in idx.direct_facts_by_routine.values() {
                 for f in v {
-                    m.entry((f.op.clone(), f.resource_kind.clone()))
+                    m.entry((f.op().to_string(), f.resource_kind().to_string()))
                         .or_default()
                         .push(f);
                 }
@@ -5676,7 +5689,7 @@ mod tests {
         witness_operation_id: Option<&str>,
         witness_callsite_id: Option<&str>,
     ) -> Fact {
-        Fact {
+        crate::engine::l5::snapshot::SnapshotFactFields {
             subject: "root#sig".to_string(),
             op: op.to_string(),
             resource_kind: resource_kind.to_string(),
@@ -5691,6 +5704,7 @@ mod tests {
             witness_first_hop_operation_id: None,
             witness_first_hop_event_id: None,
         }
+        .into()
     }
 
     // -----------------------------------------------------------------------
@@ -6432,7 +6446,7 @@ mod tests {
                 .get(rid.as_str())
                 .cloned()
                 .unwrap_or_default();
-            for fact in facts.iter().filter(|f| f.provenance != "direct") {
+            for fact in facts.iter().filter(|f| f.provenance() != "direct") {
                 // The uncapped run's (paths, truncated, incomplete), for the
                 // cap-2 run's prefix oracle (#97).
                 let mut uncapped: Option<(Vec<String>, bool, bool)> = None;
@@ -6673,7 +6687,7 @@ codeunit 50101 "T7b Temp Classes"
         let inherited: Vec<&Fact> = snap
             .capability_facts
             .iter()
-            .filter(|f| f.provenance != "direct" && f.op == "insert")
+            .filter(|f| f.provenance() != "direct" && f.op() == "insert")
             .collect();
         let rest = |f: &Fact| CarrierKey {
             known_temp: false,
@@ -6764,8 +6778,10 @@ codeunit 50101 "T7b Temp Classes"
     #[test]
     fn is_first_hop_matches_an_event_fact_to_its_event_edge_only() {
         let ev = "app/Codeunit/1/event/onx";
-        let mut ev_fact = make_fact("insert", "table", Some("T"), "inherited", Some("op0"), None);
+        let mut ev_fact =
+            make_fact("insert", "table", Some("T"), "inherited", Some("op0"), None).fields();
         ev_fact.witness_first_hop_event_id = Some(ev.to_string());
+        let ev_fact: Fact = ev_fact.into();
         assert_eq!(fact_first_hop(&ev_fact), Some(FirstHop::Event(ev)));
 
         let same = event_edge("P", "S1", ev);
@@ -6784,8 +6800,9 @@ codeunit 50101 "T7b Temp Classes"
         assert!(is_first_hop(&call, &cs_fact));
         assert!(!is_first_hop(&same, &cs_fact));
 
-        let mut op_fact = make_fact("insert", "table", Some("T"), "inherited", None, None);
+        let mut op_fact = make_fact("insert", "table", Some("T"), "inherited", None, None).fields();
         op_fact.witness_first_hop_operation_id = Some("op9".to_string());
+        let op_fact: Fact = op_fact.into();
         assert_eq!(fact_first_hop(&op_fact), Some(FirstHop::Op("op9")));
         assert!(is_first_hop(&trig, &op_fact));
         assert!(!is_first_hop(&same, &op_fact));
@@ -6803,14 +6820,14 @@ codeunit 50101 "T7b Temp Classes"
         cs: Option<&str>,
         temp: SnapTempState,
     ) -> Fact {
-        let mut f = make_fact("insert", "table", Some("T"), provenance, op, cs);
+        let mut f = make_fact("insert", "table", Some("T"), provenance, op, cs).fields();
         f.subject = subject.to_string();
         f.extra = Some(SnapCapabilityExtra::Table {
             op_subtype: None,
             record_variable_id: None,
             temp_state: Some(temp),
         });
-        f
+        f.into()
     }
 
     fn state(
@@ -7269,7 +7286,7 @@ codeunit 50410 DupProducer
         let f = snap
             .capability_facts
             .iter()
-            .find(|f| &f.subject == root && f.provenance != "direct" && f.op == "insert")
+            .find(|f| f.subject() == root && f.provenance() != "direct" && f.op() == "insert")
             .expect("Root inherits H's insert");
         let idx = build_fingerprint_indexes(&snap);
         let out = reconstruct_witness_paths(
@@ -7454,8 +7471,10 @@ codeunit 50410 DupProducer
             None,
             None,
             SnapTempState::Known { value: false },
-        );
+        )
+        .fields();
         f.witness_first_hop_event_id = Some(EV.to_string());
+        let f: Fact = f.into();
         let idx = build_fingerprint_indexes(snap);
         reconstruct_witness_paths(
             "Root",
@@ -7765,9 +7784,9 @@ codeunit 50410 DupProducer
     #[test]
     fn w6b_depth_exceeded_is_per_fact() {
         let mut snap = empty_snapshot();
-        let mut modify_x = ordinary_carrier("X", "opx");
+        let mut modify_x = ordinary_carrier("X", "opx").fields();
         modify_x.op = "modify".to_string();
-        snap.capability_facts = vec![ordinary_carrier("W", "opw"), modify_x];
+        snap.capability_facts = vec![ordinary_carrier("W", "opw"), modify_x.into()];
         snap.typed_edges = vec![
             call_edge("Root", "A", "cs-root"),
             call_edge("A", "W", "cs-aw"),
@@ -7789,9 +7808,9 @@ codeunit 50410 DupProducer
         assert!(!a.incomplete);
         // (b) the second fact's only carrier is past `MAX_DEPTH`: it alone
         // carries the diagnostic.
-        let mut b_fact = root_insert("cs-root");
+        let mut b_fact = root_insert("cs-root").fields();
         b_fact.op = "modify".to_string();
-        let b = witness_of(&snap, &b_fact, HARD_PATH_CAP);
+        let b = witness_of(&snap, &b_fact.into(), HARD_PATH_CAP);
         assert!(b.paths.is_empty());
         assert!(has_diag(&b, "depth-exceeded"), "{:?}", b.diagnostics);
     }
@@ -7808,12 +7827,12 @@ codeunit 50410 DupProducer
             snap.identities.stable_ids.push(id.to_string());
             snap.identities.display_names.push(id.to_string());
         }
-        let mut inherited = root_insert("cs1");
+        let mut inherited = root_insert("cs1").fields();
         inherited.subject = "R#1".to_string();
         snap.capability_facts = vec![
             ordinary_carrier("W#1", "opw"),
             ordinary_carrier("W2#1", "opw2"),
-            inherited,
+            inherited.into(),
         ];
         snap.typed_edges = vec![
             call_edge("R#1", "A#1", "cs1"),
@@ -7880,9 +7899,9 @@ codeunit 50410 DupProducer
             snap.identities.stable_ids.push(id.to_string());
             snap.identities.display_names.push(id.to_string());
         }
-        let mut inherited = root_insert("cs1");
+        let mut inherited = root_insert("cs1").fields();
         inherited.subject = "R#1".to_string();
-        snap.capability_facts = vec![ordinary_carrier("T#1", "opw"), inherited];
+        snap.capability_facts = vec![ordinary_carrier("T#1", "opw"), inherited.into()];
         snap.typed_edges = vec![
             call_edge("R#1", "S#1", "cs1"),
             trigger_edge("S#1", "T#1", "opC"),
@@ -7996,18 +8015,18 @@ codeunit 50410 DupProducer
     #[test]
     fn w3_one_dag_per_root_and_first_hop() {
         let mut snap = empty_snapshot();
-        let mut modify_w = ordinary_carrier("W", "opm");
+        let mut modify_w = ordinary_carrier("W", "opm").fields();
         modify_w.op = "modify".to_string();
-        snap.capability_facts = vec![ordinary_carrier("W", "opw"), modify_w];
+        snap.capability_facts = vec![ordinary_carrier("W", "opw"), modify_w.into()];
         snap.typed_edges = vec![
             call_edge("Root", "A", "cs1"),
             call_edge("Root", "B", "cs2"),
             call_edge("A", "W", "cs-a"),
             call_edge("B", "W", "cs-b"),
         ];
-        let mut modify_cs1 = root_insert("cs1");
+        let mut modify_cs1 = root_insert("cs1").fields();
         modify_cs1.op = "modify".to_string();
-        let facts = [root_insert("cs1"), modify_cs1, root_insert("cs2")];
+        let facts = [root_insert("cs1"), modify_cs1.into(), root_insert("cs2")];
         let idx = build_fingerprint_indexes(&snap);
         let (mut hops, mut dags) = (HopCache::default(), DagCache::default());
         let carriers = CarrierCache::default();
@@ -8439,14 +8458,14 @@ codeunit 50102 "W10 Merge"
     /// `opid`, or inherited with first hop `cs`.
     fn rb_fact(subject: &str, op: &str, n: u32, opid: Option<&str>, cs: Option<&str>) -> Fact {
         let prov = if cs.is_some() { "inherited" } else { "direct" };
-        let mut f = make_fact(op, "table", Some(&format!("x/table/{n}")), prov, opid, cs);
+        let mut f = make_fact(op, "table", Some(&format!("x/table/{n}")), prov, opid, cs).fields();
         f.subject = format!("{subject}#");
         f.extra = Some(SnapCapabilityExtra::Table {
             op_subtype: None,
             record_variable_id: None,
             temp_state: Some(SnapTempState::Known { value: false }),
         });
-        f
+        f.into()
     }
 
     fn rb_call(from: &str, to: &str, cs: &str) -> SnapshotGraphEdge {

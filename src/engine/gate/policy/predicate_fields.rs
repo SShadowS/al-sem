@@ -16,7 +16,8 @@
 
 use std::collections::HashMap;
 
-use crate::engine::l4::capability_cone::{CapabilityExtra, CapabilityFact};
+use crate::engine::l4::capability_cone::CapabilityExtra;
+use crate::engine::l4::inherited_facts::FactRef;
 use crate::program::model::declaring::DeclaringObjects;
 use crate::program::model::workspace::{ModelObject, ModelRoutine, ModelTable};
 
@@ -100,7 +101,9 @@ pub struct FieldIndexes<'a> {
 /// key; `None` everywhere else, and a write or rule field then reads unknown.
 pub struct FieldEvalContext<'a> {
     pub routine: &'a ModelRoutine,
-    pub fact: Option<&'a CapabilityFact>,
+    /// The fact under evaluation, direct or inherited, borrowed (an inherited
+    /// fact is read through its accessors, never materialized).
+    pub fact: Option<FactRef<'a>>,
     pub write: Option<WriteFact<'a>>,
     pub rule: Option<RuleFact<'a>>,
     pub indexes: &'a FieldIndexes<'a>,
@@ -393,21 +396,21 @@ pub fn evaluate_field(def: &PredicateFieldDef, ctx: &FieldEvalContext) -> FieldV
         },
         // ---- fact-scope ----
         "capability.op" => match ctx.fact {
-            Some(f) => FieldValue::KnownStr(f.op.to_string()),
+            Some(f) => FieldValue::KnownStr(f.op().to_string()),
             None => FieldValue::Unknown(UnknownReason::EvaluatorError),
         },
         "capability.resourceKind" => match ctx.fact {
-            Some(f) => FieldValue::KnownStr(f.resource_kind.to_string()),
+            Some(f) => FieldValue::KnownStr(f.resource_kind().to_string()),
             None => FieldValue::Unknown(UnknownReason::EvaluatorError),
         },
         "capability.resource.table.name" => {
             let Some(f) = ctx.fact else {
                 return FieldValue::Unknown(UnknownReason::EvaluatorError);
             };
-            if f.resource_kind != "table" {
+            if f.resource_kind() != "table" {
                 return FieldValue::Unknown(UnknownReason::FieldNotApplicable);
             }
-            let Some(table_id) = f.resource_id.as_deref() else {
+            let Some(table_id) = f.resource_id() else {
                 return FieldValue::Unknown(UnknownReason::ResourceIdUnresolved);
             };
             match ctx.indexes.tables_by_id.get(table_id) {
@@ -419,10 +422,10 @@ pub fn evaluate_field(def: &PredicateFieldDef, ctx: &FieldEvalContext) -> FieldV
             let Some(f) = ctx.fact else {
                 return FieldValue::Unknown(UnknownReason::EvaluatorError);
             };
-            if f.resource_kind != "event" {
+            if f.resource_kind() != "event" {
                 return FieldValue::Unknown(UnknownReason::FieldNotApplicable);
             }
-            let Some(event_id) = f.resource_id.as_deref() else {
+            let Some(event_id) = f.resource_id() else {
                 return FieldValue::Unknown(UnknownReason::ResourceIdUnresolved);
             };
             match ctx.indexes.events_by_id.get(event_id) {
@@ -434,10 +437,10 @@ pub fn evaluate_field(def: &PredicateFieldDef, ctx: &FieldEvalContext) -> FieldV
             let Some(f) = ctx.fact else {
                 return FieldValue::Unknown(UnknownReason::EvaluatorError);
             };
-            if f.resource_kind != "http" {
+            if f.resource_kind() != "http" {
                 return FieldValue::Unknown(UnknownReason::FieldNotApplicable);
             }
-            match &f.extra {
+            match f.extra() {
                 Some(CapabilityExtra::Http { method, .. }) => FieldValue::KnownStr(method.clone()),
                 _ => FieldValue::Unknown(UnknownReason::FieldNotApplicable),
             }
@@ -446,10 +449,10 @@ pub fn evaluate_field(def: &PredicateFieldDef, ctx: &FieldEvalContext) -> FieldV
             let Some(f) = ctx.fact else {
                 return FieldValue::Unknown(UnknownReason::EvaluatorError);
             };
-            if f.resource_kind != "ui" {
+            if f.resource_kind() != "ui" {
                 return FieldValue::Unknown(UnknownReason::FieldNotApplicable);
             }
-            match f.op {
+            match f.op() {
                 "ui-confirm" => FieldValue::KnownStr("confirm".to_string()),
                 "ui-message" => FieldValue::KnownStr("message".to_string()),
                 "ui-error" => FieldValue::KnownStr("error".to_string()),
@@ -457,16 +460,16 @@ pub fn evaluate_field(def: &PredicateFieldDef, ctx: &FieldEvalContext) -> FieldV
             }
         }
         "capability.confidence" => match ctx.fact {
-            Some(f) => FieldValue::KnownStr(f.confidence.to_string()),
+            Some(f) => FieldValue::KnownStr(f.confidence().to_string()),
             None => FieldValue::Unknown(UnknownReason::EvaluatorError),
         },
         "capability.origin" => match ctx.fact {
             // Maps to CapabilityFact.provenance ("direct" | "inherited").
-            Some(f) => FieldValue::KnownStr(f.provenance.to_string()),
+            Some(f) => FieldValue::KnownStr(f.provenance().to_string()),
             None => FieldValue::Unknown(UnknownReason::EvaluatorError),
         },
         "capability.via" => match ctx.fact {
-            Some(f) => FieldValue::KnownStr(f.via.to_string()),
+            Some(f) => FieldValue::KnownStr(f.via().to_string()),
             None => FieldValue::Unknown(UnknownReason::EvaluatorError),
         },
         // ---- pin fields ----
