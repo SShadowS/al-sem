@@ -7532,9 +7532,19 @@ codeunit 50100 C
                 start.elapsed()
             );
             if mode == "cross-app" {
+                // 714 -> 784 on 2026-10-31, measured on the pinned baseline (the
+                // oracle itself agreed at every step). 714 -> 727 at e28ae5be
+                // (G10: `[InternalEvent]` routines are publishers, so their
+                // subscribers join a cycle; the largest SCC 479 -> 492, routines
+                // and SCC count unchanged; 39943661 is 714). 727 -> 784 between
+                // 2a34ae70 and 2efe7b6a: the run lifecycle, `Page.Run(0, Rec)`
+                // lookup pages and the newly bound overloads add edges, and the
+                // cross-app model demands more dependency code (routines 31,646 ->
+                // 33,287, recursive SCCs 67 -> 70, the largest 492 -> 524).
                 assert_eq!(
-                    stats.recursive_members_emitted, 714,
-                    "CDO cross-app recursive members emitted: step 0 counted 714 BFS calls; a \
+                    stats.recursive_members_emitted, 784,
+                    "CDO cross-app recursive members emitted: step 0 counted 714 BFS calls, \
+                     784 since the 2026-10-28 engine changes; a \
                      different number means the input moved and the spec's numbers are stale"
                 );
                 // T8' is the only real-code oracle for these classes (T7''s

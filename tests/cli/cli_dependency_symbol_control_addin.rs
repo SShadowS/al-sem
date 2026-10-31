@@ -50,9 +50,8 @@ const WS: &str = r#"codeunit 50310 "Ws Runner"
 }
 "#;
 
-#[test]
-fn a_dependency_usercontrol_resolves_against_its_symbol_only_addin() {
-    let t = tempfile::tempdir().unwrap();
+/// The workspace with the source dependency, written under `t`.
+fn write_workspace(t: &tempfile::TempDir) -> std::path::PathBuf {
     let ws = t.path().join("ws");
     std::fs::create_dir_all(ws.join("src")).unwrap();
     std::fs::write(
@@ -73,6 +72,13 @@ fn a_dependency_usercontrol_resolves_against_its_symbol_only_addin() {
         &[("src/DepTimerPage.Page.al", DEP_PAGE)],
         "",
     );
+    ws
+}
+
+#[test]
+fn a_dependency_usercontrol_resolves_against_its_symbol_only_addin() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = write_workspace(&t);
     let out = Command::new(env!("CARGO_BIN_EXE_aldump"))
         .args(["--dependency-bodies-stats"])
         .arg(&ws)
@@ -93,4 +99,20 @@ fn a_dependency_usercontrol_resolves_against_its_symbol_only_addin() {
         v["all"]
     );
     assert_eq!(v["all"]["unknown"], 0, "{}", v["unknownSites"]);
+}
+
+/// The add-in's procedures map back to the raw ABI. The graph holds them as
+/// SymbolOnly routines of a dependency WITH source; the ABI integrity check's
+/// raw index re-read only symbol-only dependencies, so each was an unmapped
+/// "ingestion bug" (on the pinned CDO baseline: the 9 procedures of the System
+/// Application's legacy `Microsoft.Dynamics.Nav.Client.WebPageViewer`).
+#[test]
+fn a_source_dependency_symbol_addin_maps_back_to_the_raw_abi() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = write_workspace(&t);
+    let report = al_sem::program::resolve::abi_check::run_abi_integrity_check(&ws);
+    // Precondition: the build ingested `Schedule` and `Cancel` as SymbolOnly
+    // routines, so the check has something to look up.
+    assert_eq!(report.abi_routes_total, 2, "{report:?}");
+    assert_eq!(report.abi_unmapped, 0, "{report:?}");
 }
