@@ -437,7 +437,7 @@ fn snapshot_writes(snap: &CapabilitySnapshot) -> BTreeMap<String, Vec<(String, S
         .collect();
     let mut out: BTreeMap<String, Vec<(String, String, String)>> = BTreeMap::new();
     for fact in &snap.capability_facts {
-        let Some(SnapCapabilityExtra::Table { temp_state, .. }) = &fact.extra else {
+        let Some(SnapCapabilityExtra::Table { temp_state, .. }) = fact.extra() else {
             continue;
         };
         let ts = match temp_state {
@@ -449,14 +449,16 @@ fn snapshot_writes(snap: &CapabilitySnapshot) -> BTreeMap<String, Vec<(String, S
             None => "none".to_string(),
         };
         let name = display
-            .get(fact.subject.as_str())
+            .get(fact.subject())
             .copied()
-            .unwrap_or(fact.subject.as_str());
+            .unwrap_or(fact.subject());
         // A display may be object-qualified; keep the routine part.
         let name = name.rsplit('.').next().unwrap_or(name).to_string();
-        out.entry(name)
-            .or_default()
-            .push((fact.op.clone(), ts, fact.provenance.clone()));
+        out.entry(name).or_default().push((
+            fact.op().to_string(),
+            ts,
+            fact.provenance().to_string(),
+        ));
     }
     out
 }
@@ -743,11 +745,11 @@ fn a2h_fingerprint_witnesses_use_the_proofs() {
         .capability_facts
         .iter()
         .find(|f| {
-            let name = display.get(f.subject.as_str()).copied().unwrap_or("");
+            let name = display.get(f.subject()).copied().unwrap_or("");
             name.rsplit('.').next() == Some("HelperUiTemp")
-                && f.op == "insert"
+                && f.op() == "insert"
                 && matches!(
-                    &f.extra,
+                    f.extra(),
                     Some(SnapCapabilityExtra::Table {
                         temp_state: Some(SnapTempState::Known { value: true }),
                         ..
@@ -757,7 +759,7 @@ fn a2h_fingerprint_witnesses_use_the_proofs() {
         .expect("HelperUiTemp's known-temporary insert fact");
     let widx = witness_index(&idx);
     let out = reconstruct_witness_paths_pub(
-        &fact.subject,
+        fact.subject(),
         fact,
         &widx,
         256,

@@ -53,15 +53,15 @@ fn compare_producers(
             let state = &arena.states[ix];
             // Supported ops on BOTH sides: a producer can be a read (`Get`).
             let fact = &snap.capability_facts[state.producer_fact];
-            let verb = fact.op.as_str();
+            let verb = fact.op();
             if !matches!(verb, "insert" | "modify" | "delete") {
                 *skipped.entry(format!("{label}:{verb}")).or_default() += 1;
                 continue;
             }
             let op = fact
-                .witness_operation_id
-                .clone()
-                .expect("a producer fact has its operation id");
+                .witness_operation_id()
+                .expect("a producer fact has its operation id")
+                .to_string();
             let t = &state.temp_state;
             producers.insert(op.clone());
             solve
@@ -77,21 +77,22 @@ fn compare_producers(
     // solve: a write producer the solve dropped entirely has no states and no
     // L4 rows read, and would otherwise compare equal (both empty).
     for fact in &snap.capability_facts {
-        if fact.provenance == "direct"
-            && matches!(fact.op.as_str(), "insert" | "modify" | "delete")
+        if fact.provenance() == "direct"
+            && matches!(fact.op(), "insert" | "modify" | "delete")
             && matches!(
-                &fact.extra,
+                fact.extra(),
                 Some(SnapCapabilityExtra::Table {
                     temp_state: Some(SnapTempState::ParameterDependent { .. }),
                     ..
                 })
             )
-            && let Some(op) = &fact.witness_operation_id
+            && let Some(op) = fact.witness_operation_id()
             && !producers.contains(op)
         {
             f.push(format!(
                 "[{label}] producer {op} ({} in {}) has no solve state",
-                fact.op, fact.subject
+                fact.op(),
+                fact.subject()
             ));
         }
     }

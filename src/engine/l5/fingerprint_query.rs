@@ -285,14 +285,14 @@ fn resolve_resource_display(
     fact: &SnapFact,
     stable_id_to_display: &HashMap<String, String>,
 ) -> (Option<String>, String, Option<SnapValueSource>) {
-    if let Some(rid) = &fact.resource_id {
+    if let Some(rid) = fact.resource_id() {
         let display = stable_id_to_display
             .get(rid)
             .cloned()
-            .unwrap_or_else(|| rid.clone());
-        return (Some(rid.clone()), display, None);
+            .unwrap_or_else(|| rid.to_string());
+        return (Some(rid.to_string()), display, None);
     }
-    if let Some(ras) = &fact.resource_arg_source {
+    if let Some(ras) = fact.resource_arg_source() {
         let display = render_value_source(ras);
         return (None, display, Some(ras.clone()));
     }
@@ -321,10 +321,10 @@ fn fact_evidence(
     if let Some(b) = paths.iter().find_map(|p| p.boundary.as_ref()) {
         return Some(FactEvidence::Boundary(b.clone()));
     }
-    let op_id = fact.witness_operation_id.as_ref()?;
-    let ev = idx.operation_by_id.get(op_id.as_str())?;
+    let op_id = fact.witness_operation_id()?;
+    let ev = idx.operation_by_id.get(op_id)?;
     Some(FactEvidence::Operation {
-        operation_id: op_id.clone(),
+        operation_id: op_id.to_string(),
         file: normalize_anchor_path(&ev.source_file),
         line: ev.start_line,
         column: ev.start_column,
@@ -379,7 +379,7 @@ fn build_block<'w>(
     } else {
         all_facts
             .iter()
-            .filter(|f| f.provenance == "direct")
+            .filter(|f| f.provenance() == "direct")
             .cloned()
             .collect()
     };
@@ -437,10 +437,10 @@ fn build_block<'w>(
     let mut by_kind: HashMap<&str, Vec<(usize, &SnapFact)>> = HashMap::new();
     for (fi, f) in rendered_facts.iter().enumerate() {
         // Dispatch facts go into dispatch summary, not a family.
-        if f.op == "execute" && matches!(&f.extra, Some(SnapCapabilityExtra::Dispatch { .. })) {
+        if f.op() == "execute" && matches!(f.extra(), Some(SnapCapabilityExtra::Dispatch { .. })) {
             continue;
         }
-        by_kind.entry(&f.resource_kind).or_default().push((fi, f));
+        by_kind.entry(f.resource_kind()).or_default().push((fi, f));
     }
 
     let mut families: Vec<BlockFamily> = Vec::new();
@@ -457,8 +457,8 @@ fn build_block<'w>(
             let key = id.clone().unwrap_or_else(|| display.clone());
             if let Some(&pos) = key_pos.get(&key) {
                 let r = &mut res_by_key[pos].1;
-                if !r.ops.contains(&f.op) {
-                    r.ops.push(f.op.clone());
+                if !r.ops.iter().any(|o| o == f.op()) {
+                    r.ops.push(f.op().to_string());
                 }
                 r.fact_indices.push(*fi);
             } else {
@@ -470,7 +470,7 @@ fn build_block<'w>(
                         id: id.clone(),
                         display: display.clone(),
                         source,
-                        ops: vec![f.op.clone()],
+                        ops: vec![f.op().to_string()],
                         fact_indices: vec![*fi],
                     },
                 ));
@@ -497,7 +497,7 @@ fn build_block<'w>(
 
     // mayCommit. `no` needs complete coverage over the facts the query renders
     // (#160 step 9 S9-3): the inherited coverage when inherited facts are shown.
-    let commit_fi = rendered_facts.iter().position(|f| f.op == "commit");
+    let commit_fi = rendered_facts.iter().position(|f| f.op() == "commit");
     let commit_coverage = if filters.include_inherited {
         &coverage.inherited_status
     } else {
@@ -518,13 +518,13 @@ fn build_block<'w>(
     let mut dispatch_resolved: Vec<DispatchInstance> = Vec::new();
     let mut dispatch_unresolved: Vec<DispatchInstance> = Vec::new();
     for f in &rendered_facts {
-        if f.op != "execute" {
+        if f.op() != "execute" {
             continue;
         }
-        let Some(SnapCapabilityExtra::Dispatch { object_type, .. }) = &f.extra else {
+        let Some(SnapCapabilityExtra::Dispatch { object_type, .. }) = f.extra() else {
             continue;
         };
-        let target_id = f.resource_id.clone();
+        let target_id = f.resource_id().map(str::to_string);
         let target_display = target_id
             .as_ref()
             .and_then(|id| idx.stable_id_to_display.get(id))
@@ -533,10 +533,10 @@ fn build_block<'w>(
             object_type: object_type.clone(),
             target_id: target_id.clone(),
             target_display,
-            confidence: f.confidence.clone(),
-            provenance: f.provenance.clone(),
-            via: f.via.clone(),
-            witness_callsite_id: f.witness_callsite_id.clone(),
+            confidence: f.confidence().to_string(),
+            provenance: f.provenance().to_string(),
+            via: f.via().to_string(),
+            witness_callsite_id: f.witness_callsite_id().map(str::to_string),
         };
         if target_id.is_some() {
             dispatch_resolved.push(inst);
@@ -562,13 +562,13 @@ fn build_block<'w>(
     let mut perm_map: Vec<(String, PermissionLine)> = Vec::new();
     let mut perm_pos: HashMap<String, usize> = HashMap::new();
     for f in &rendered_facts {
-        if f.resource_kind != "table" {
+        if f.resource_kind() != "table" {
             continue;
         }
-        let Some(rid_res) = &f.resource_id else {
+        let Some(rid_res) = f.resource_id() else {
             continue;
         };
-        let Some(right) = table_op_to_right(&f.op) else {
+        let Some(right) = table_op_to_right(f.op()) else {
             continue;
         };
         // #20: a provably temporary record needs no TableData permission. Per
@@ -582,7 +582,7 @@ fn build_block<'w>(
             .stable_id_to_display
             .get(rid_res)
             .cloned()
-            .unwrap_or_else(|| rid_res.clone());
+            .unwrap_or_else(|| rid_res.to_string());
         let key = format!("table|{rid_res}");
         if let Some(&pos) = perm_pos.get(&key) {
             let p = &mut perm_map[pos].1;
@@ -600,7 +600,7 @@ fn build_block<'w>(
                 key,
                 PermissionLine {
                     target_kind: "table",
-                    target_id: rid_res.clone(),
+                    target_id: rid_res.to_string(),
                     target_display,
                     rights: right.to_string(),
                     coverage: cov_status.clone(),
@@ -857,13 +857,13 @@ pub(crate) fn selector_failure_result(
 
 pub fn fact_id_of(f: &SnapFact) -> String {
     let key = [
-        f.subject.as_str(),
-        f.op.as_str(),
-        f.resource_kind.as_str(),
-        f.resource_id.as_deref().unwrap_or(""),
-        f.confidence.as_str(),
-        f.provenance.as_str(),
-        f.via.as_str(),
+        f.subject(),
+        f.op(),
+        f.resource_kind(),
+        f.resource_id().unwrap_or(""),
+        f.confidence(),
+        f.provenance(),
+        f.via(),
     ]
     .join("|");
     sha256_hex(&key)[..16].to_string()
@@ -1139,14 +1139,14 @@ fn fact_doc(block: &FingerprintBlock, fi: usize, workspace_root: &str) -> serde_
     let bw = block.witnesses.get(fi).filter(|w| w.fact_index == fi);
     let mut fj = serde_json::Map::new();
     fj.insert("factId".into(), fact_id_of(fact).into());
-    fj.insert("op".into(), fact.op.clone().into());
-    fj.insert("resourceKind".into(), fact.resource_kind.clone().into());
-    if let Some(ref rid) = fact.resource_id {
-        fj.insert("resourceId".into(), rid.clone().into());
+    fj.insert("op".into(), fact.op().into());
+    fj.insert("resourceKind".into(), fact.resource_kind().into());
+    if let Some(rid) = fact.resource_id() {
+        fj.insert("resourceId".into(), rid.into());
     }
-    fj.insert("provenance".into(), fact.provenance.clone().into());
-    fj.insert("confidence".into(), fact.confidence.clone().into());
-    fj.insert("via".into(), fact.via.clone().into());
+    fj.insert("provenance".into(), fact.provenance().into());
+    fj.insert("confidence".into(), fact.confidence().into());
+    fj.insert("via".into(), fact.via().into());
     if let Some(bw) = bw {
         fj.insert("witness".into(), project_witness_json(bw, workspace_root));
     }
@@ -1737,10 +1737,10 @@ pub fn format_terminal_hop(t: &TerminalHopInfo) -> String {
 }
 
 fn fact_description(f: &SnapFact) -> String {
-    if let Some(ref rid) = f.resource_id {
-        format!("{} {} {}", f.op, f.resource_kind, q(rid))
+    if let Some(rid) = f.resource_id() {
+        format!("{} {} {}", f.op(), f.resource_kind(), q(rid))
     } else {
-        format!("{} {}", f.op, f.resource_kind)
+        format!("{} {}", f.op(), f.resource_kind())
     }
 }
 
@@ -2175,20 +2175,23 @@ mod tests {
         };
         let (r, w) = ("app:Codeunit:1#r", "app:Codeunit:1#w");
         let mut snap = snap_with_identities(&[(r, "R"), (w, "W")]);
-        let fact = |subject: &str, op: &str, provenance: &str| SnapFact {
-            subject: subject.to_string(),
-            op: op.to_string(),
-            resource_kind: "table".to_string(),
-            resource_id: Some("T".to_string()),
-            resource_arg_source: None,
-            confidence: "static".to_string(),
-            provenance: provenance.to_string(),
-            via: "call".to_string(),
-            witness_operation_id: (provenance == "direct").then(|| format!("op-{op}")),
-            witness_callsite_id: (provenance != "direct").then(|| "cs1".to_string()),
-            extra: None,
-            witness_first_hop_operation_id: None,
-            witness_first_hop_event_id: None,
+        let fact = |subject: &str, op: &str, provenance: &str| -> SnapFact {
+            crate::engine::l5::snapshot::SnapshotFactFields {
+                subject: subject.to_string(),
+                op: op.to_string(),
+                resource_kind: "table".to_string(),
+                resource_id: Some("T".to_string()),
+                resource_arg_source: None,
+                confidence: "static".to_string(),
+                provenance: provenance.to_string(),
+                via: "call".to_string(),
+                witness_operation_id: (provenance == "direct").then(|| format!("op-{op}")),
+                witness_callsite_id: (provenance != "direct").then(|| "cs1".to_string()),
+                extra: None,
+                witness_first_hop_operation_id: None,
+                witness_first_hop_event_id: None,
+            }
+            .into()
         };
         snap.capability_facts = vec![
             fact(w, "insert", "direct"),

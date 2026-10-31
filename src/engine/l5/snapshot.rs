@@ -46,7 +46,9 @@ use crate::engine::l4::capability_cone::{
     build_r3a3_source_only_base,
 };
 use crate::engine::l4::combined_graph::TypedEdge;
-use crate::engine::l4::inherited_facts::{FactRef, InheritedFacts, InheritedSlice};
+use crate::engine::l4::inherited_facts::{
+    FactRef, InheritedFacts, InheritedSlice, InheritedTables, NO_HOP,
+};
 use crate::program::body::features::{PAnchor, PCallSite, PCallee, POperationSite};
 use crate::program::body::operation_order::{OperationOrder, ScopeFrame, apply_operation_order};
 use crate::program::model::calls::CallEdge;
@@ -139,7 +141,7 @@ fn snap_value_source(vs: &ValueSource) -> SnapValueSource {
 
 /// Ordered `CapabilityExtra` projection. al-sem `model/capability.ts` field order
 /// per kind. Internal recordVariableId kept verbatim.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind")]
 pub enum SnapCapabilityExtra {
     // Field order = al-sem model capability fact extraction object order:
@@ -187,7 +189,7 @@ pub enum SnapCapabilityExtra {
 
 /// Ordered temp-state projection. al-sem: `{kind:"known",value}` |
 /// `{kind:"parameter-dependent",parameterIndex}` | `{kind:"unknown"}`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind")]
 pub enum SnapTempState {
     #[serde(rename = "known")]
@@ -346,8 +348,135 @@ pub struct SnapshotIdentityTable {
 /// al-sem inherited = `{...rep, provenance, via, witnessCallsiteId}` — the new
 /// `witnessCallsiteId` key is APPENDED LAST when the rep had no witnessCallsiteId.
 /// A custom `Serialize` (below) emits the keys in this exact order.
-#[derive(Debug, Clone)]
+///
+/// Stored as a 16-byte handle into the snapshot's shared [`SnapTables`]
+/// (cone-memory design step 2, `docs/superpowers/specs/2026-10-31-cone-memory-design.md`
+/// §4.3): one `Arc` to the tables, a rep index and a hop index. `hop ==
+/// NO_HOP` marks a DIRECT row: every field is the rep's, its subject included.
+/// Otherwise the row is inherited: the subject, `via`, the call-site witness
+/// and both first-hop ids are the hop row's, `provenance` is `"inherited"`, and
+/// every other field is the rep's (`retag`'s rules). The accessors return
+/// strings borrowed from the tables, which the handle keeps alive. A row is
+/// never mutated: a test edits [`SnapshotFactFields`] and converts it back.
+#[derive(Clone)]
 pub struct SnapshotCapabilityFact {
+    tables: std::sync::Arc<SnapTables>,
+    rep: u32,
+    hop: u32,
+}
+
+const _: () = assert!(std::mem::size_of::<SnapshotCapabilityFact>() == 16);
+
+/// The shared tables every [`SnapshotCapabilityFact`] of one snapshot indexes.
+#[derive(Debug, Default)]
+pub struct SnapTables {
+    /// Stable ids of the emitted routines, interned (one per distinct
+    /// emission-group subject).
+    pub(crate) subjects: Vec<String>,
+    /// Inherited reps, projected once per distinct raw rep, and one row per
+    /// direct fact.
+    pub(crate) reps: Vec<SnapRep>,
+    /// First hops, projected once per raw hop; the subject is the emitting
+    /// group's.
+    pub(crate) hops: Vec<SnapHop>,
+}
+
+/// One rep row: a direct fact (every field is read, `subject` included) or an
+/// inherited rep (the subject, `provenance`, `via`, the call-site witness and
+/// both first-hop ids are not read: the hop row supplies them).
+#[derive(Debug, Clone)]
+pub struct SnapRep {
+    /// Into [`SnapTables::subjects`]; `NO_HOP` (unused) on an inherited rep.
+    subject: u32,
+    op: String,
+    resource_kind: String,
+    resource_id: Option<String>,
+    resource_arg_source: Option<SnapValueSource>,
+    confidence: String,
+    provenance: String,
+    via: String,
+    witness_operation_id: Option<String>,
+    witness_callsite_id: Option<String>,
+    witness_first_hop_operation_id: Option<String>,
+    witness_first_hop_event_id: Option<String>,
+    extra: Option<SnapCapabilityExtra>,
+}
+
+/// One first-hop row: what `retag` reads from the edge, and the subject of the
+/// emission group that projected it.
+#[derive(Debug, Clone)]
+pub struct SnapHop {
+    /// Into [`SnapTables::subjects`].
+    subject: u32,
+    via: String,
+    callsite: Option<String>,
+    operation_id: Option<String>,
+    event_id: Option<String>,
+}
+
+impl SnapRep {
+    /// A rep row from a fact read through its accessors; `subject` is the
+    /// emitting group's index for a direct fact, `NO_HOP` for an inherited rep.
+    fn of(f: FactRef<'_>, subject: u32) -> SnapRep {
+        SnapRep {
+            subject,
+            op: f.op().to_string(),
+            resource_kind: f.resource_kind().to_string(),
+            resource_id: f.resource_id().map(str::to_string),
+            resource_arg_source: f.resource_arg_source().map(snap_value_source),
+            confidence: f.confidence().to_string(),
+            provenance: f.provenance().to_string(),
+            via: f.via().to_string(),
+            witness_operation_id: f.witness_operation_id().map(str::to_string),
+            witness_callsite_id: f.witness_callsite_id().map(str::to_string),
+            witness_first_hop_operation_id: f.witness_first_hop_operation_id().map(str::to_string),
+            witness_first_hop_event_id: f.witness_first_hop_event_id().map(str::to_string),
+            extra: f.extra().map(snap_capability_extra),
+        }
+    }
+}
+
+impl SnapTables {
+    /// Heap bytes of the tables (the census): each buffer at capacity plus the
+    /// owned strings of every row (the nested value sources and extras
+    /// shallowly, at their inline size).
+    pub(crate) fn heap_bytes(&self) -> u64 {
+        let s = |s: &String| s.len() as u64;
+        let o = |s: &Option<String>| s.as_ref().map_or(0, |s| s.len() as u64);
+        let subjects: u64 = self.subjects.iter().map(s).sum::<u64>()
+            + (self.subjects.capacity() * std::mem::size_of::<String>()) as u64;
+        let reps: u64 = self
+            .reps
+            .iter()
+            .map(|r| {
+                s(&r.op)
+                    + s(&r.resource_kind)
+                    + o(&r.resource_id)
+                    + s(&r.confidence)
+                    + s(&r.provenance)
+                    + s(&r.via)
+                    + o(&r.witness_operation_id)
+                    + o(&r.witness_callsite_id)
+                    + o(&r.witness_first_hop_operation_id)
+                    + o(&r.witness_first_hop_event_id)
+            })
+            .sum::<u64>()
+            + (self.reps.capacity() * std::mem::size_of::<SnapRep>()) as u64;
+        let hops: u64 = self
+            .hops
+            .iter()
+            .map(|h| s(&h.via) + o(&h.callsite) + o(&h.operation_id) + o(&h.event_id))
+            .sum::<u64>()
+            + (self.hops.capacity() * std::mem::size_of::<SnapHop>()) as u64;
+        subjects + reps + hops
+    }
+}
+
+/// The owned fields of one capability row: the row layout before the handle.
+/// Tests and hand-built rows state a row as this and convert it with
+/// `.into()`; [`SnapshotCapabilityFact::fields`] returns it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotFactFields {
     pub subject: String,
     pub op: String,
     pub resource_kind: String,
@@ -370,19 +499,163 @@ pub struct SnapshotCapabilityFact {
 }
 
 impl SnapshotCapabilityFact {
+    fn rep_row(&self) -> &SnapRep {
+        &self.tables.reps[self.rep as usize]
+    }
+
+    /// The hop row; `None` on a direct row.
+    fn hop_row(&self) -> Option<&SnapHop> {
+        (self.hop != NO_HOP).then(|| &self.tables.hops[self.hop as usize])
+    }
+
+    /// The routine the row belongs to: the hop row's subject (the emitting
+    /// group's), else the direct rep's.
+    pub fn subject(&self) -> &str {
+        let ix = match self.hop_row() {
+            Some(h) => h.subject,
+            None => self.rep_row().subject,
+        };
+        &self.tables.subjects[ix as usize]
+    }
+    pub fn op(&self) -> &str {
+        &self.rep_row().op
+    }
+    pub fn resource_kind(&self) -> &str {
+        &self.rep_row().resource_kind
+    }
+    pub fn resource_id(&self) -> Option<&str> {
+        self.rep_row().resource_id.as_deref()
+    }
+    pub fn resource_arg_source(&self) -> Option<&SnapValueSource> {
+        self.rep_row().resource_arg_source.as_ref()
+    }
+    pub fn confidence(&self) -> &str {
+        &self.rep_row().confidence
+    }
+    /// `"inherited"` on an inherited row, else the rep's.
+    pub fn provenance(&self) -> &str {
+        match self.hop_row() {
+            Some(_) => "inherited",
+            None => &self.rep_row().provenance,
+        }
+    }
+    pub fn via(&self) -> &str {
+        match self.hop_row() {
+            Some(h) => &h.via,
+            None => &self.rep_row().via,
+        }
+    }
+    /// The rep's on every row (`retag` keeps it).
+    pub fn witness_operation_id(&self) -> Option<&str> {
+        self.rep_row().witness_operation_id.as_deref()
+    }
+    /// The hop's on an inherited row (`None` when the hop has none, never the
+    /// rep's), else the rep's.
+    pub fn witness_callsite_id(&self) -> Option<&str> {
+        match self.hop_row() {
+            Some(h) => h.callsite.as_deref(),
+            None => self.rep_row().witness_callsite_id.as_deref(),
+        }
+    }
+    pub fn witness_first_hop_operation_id(&self) -> Option<&str> {
+        match self.hop_row() {
+            Some(h) => h.operation_id.as_deref(),
+            None => self.rep_row().witness_first_hop_operation_id.as_deref(),
+        }
+    }
+    pub fn witness_first_hop_event_id(&self) -> Option<&str> {
+        match self.hop_row() {
+            Some(h) => h.event_id.as_deref(),
+            None => self.rep_row().witness_first_hop_event_id.as_deref(),
+        }
+    }
+    pub fn extra(&self) -> Option<&SnapCapabilityExtra> {
+        self.rep_row().extra.as_ref()
+    }
+
     /// The snapshot twin of `l4::cone_derived::fact_is_known_temp` (#20): the
     /// same rule, `l2::features::known_temp_suppresses`, reached through this
     /// carrier's projection. True only for a table fact whose temp state is
     /// exactly known/true.
     #[must_use]
     pub fn is_known_temp(&self) -> bool {
-        match &self.extra {
+        match self.extra() {
             Some(SnapCapabilityExtra::Table { temp_state, .. }) => {
                 crate::program::body::features::known_temp_suppresses(
                     temp_state.as_ref().and_then(SnapTempState::known_value),
                 )
             }
             _ => false,
+        }
+    }
+
+    /// The row's fields, owned.
+    pub fn fields(&self) -> SnapshotFactFields {
+        SnapshotFactFields {
+            subject: self.subject().to_string(),
+            op: self.op().to_string(),
+            resource_kind: self.resource_kind().to_string(),
+            resource_id: self.resource_id().map(str::to_string),
+            resource_arg_source: self.resource_arg_source().cloned(),
+            confidence: self.confidence().to_string(),
+            provenance: self.provenance().to_string(),
+            via: self.via().to_string(),
+            witness_operation_id: self.witness_operation_id().map(str::to_string),
+            witness_callsite_id: self.witness_callsite_id().map(str::to_string),
+            extra: self.extra().cloned(),
+            witness_first_hop_operation_id: self
+                .witness_first_hop_operation_id()
+                .map(str::to_string),
+            witness_first_hop_event_id: self.witness_first_hop_event_id().map(str::to_string),
+        }
+    }
+
+    /// The tables this row indexes (the census counts each table once).
+    pub(crate) fn tables(&self) -> &std::sync::Arc<SnapTables> {
+        &self.tables
+    }
+
+    /// The hop index: `NO_HOP` on a direct row (T0).
+    #[cfg(test)]
+    pub(crate) fn hop_index(&self) -> u32 {
+        self.hop
+    }
+}
+
+/// Prints the fields as they read, not the indexes.
+impl std::fmt::Debug for SnapshotCapabilityFact {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.fields().fmt(f)
+    }
+}
+
+/// A one-row private table holding `f` as a direct-form row: every accessor
+/// returns `f`'s field as stated, `provenance` included.
+impl From<SnapshotFactFields> for SnapshotCapabilityFact {
+    fn from(f: SnapshotFactFields) -> Self {
+        let rep = SnapRep {
+            subject: 0,
+            op: f.op,
+            resource_kind: f.resource_kind,
+            resource_id: f.resource_id,
+            resource_arg_source: f.resource_arg_source,
+            confidence: f.confidence,
+            provenance: f.provenance,
+            via: f.via,
+            witness_operation_id: f.witness_operation_id,
+            witness_callsite_id: f.witness_callsite_id,
+            witness_first_hop_operation_id: f.witness_first_hop_operation_id,
+            witness_first_hop_event_id: f.witness_first_hop_event_id,
+            extra: f.extra,
+        };
+        SnapshotCapabilityFact {
+            tables: std::sync::Arc::new(SnapTables {
+                subjects: vec![f.subject],
+                reps: vec![rep],
+                hops: Vec::new(),
+            }),
+            rep: 0,
+            hop: NO_HOP,
         }
     }
 }
@@ -392,53 +665,53 @@ impl Serialize for SnapshotCapabilityFact {
         use serde::ser::SerializeMap;
         let mut map = serializer.serialize_map(None)?;
         // HEAD.
-        map.serialize_entry("subject", &self.subject)?;
-        map.serialize_entry("op", &self.op)?;
-        map.serialize_entry("resourceKind", &self.resource_kind)?;
-        if let Some(rid) = &self.resource_id {
+        map.serialize_entry("subject", self.subject())?;
+        map.serialize_entry("op", self.op())?;
+        map.serialize_entry("resourceKind", self.resource_kind())?;
+        if let Some(rid) = self.resource_id() {
             map.serialize_entry("resourceId", rid)?;
         }
-        if let Some(ras) = &self.resource_arg_source {
+        if let Some(ras) = self.resource_arg_source() {
             map.serialize_entry("resourceArgSource", ras)?;
         }
-        map.serialize_entry("confidence", &self.confidence)?;
-        map.serialize_entry("provenance", &self.provenance)?;
-        map.serialize_entry("via", &self.via)?;
+        map.serialize_entry("confidence", self.confidence())?;
+        map.serialize_entry("provenance", self.provenance())?;
+        map.serialize_entry("via", self.via())?;
 
         // TAIL — per al-sem extractor construction order (see the struct doc).
-        let is_event = self.resource_kind == "event";
-        if let Some(wo) = &self.witness_operation_id {
+        let is_event = self.resource_kind() == "event";
+        if let Some(wo) = self.witness_operation_id() {
             // op-witness family (table/commit/error): witnessOperationId, [extra],
             // then [witnessCallsiteId] (appended last when inherited added it).
             map.serialize_entry("witnessOperationId", wo)?;
-            if let Some(extra) = &self.extra {
+            if let Some(extra) = self.extra() {
                 map.serialize_entry("extra", extra)?;
             }
-            if let Some(wc) = &self.witness_callsite_id {
+            if let Some(wc) = self.witness_callsite_id() {
                 map.serialize_entry("witnessCallsiteId", wc)?;
             }
         } else if is_event {
             // event family: extra first (direct has no witness), then
             // witnessCallsiteId last (inherited only).
-            if let Some(extra) = &self.extra {
+            if let Some(extra) = self.extra() {
                 map.serialize_entry("extra", extra)?;
             }
-            if let Some(wc) = &self.witness_callsite_id {
+            if let Some(wc) = self.witness_callsite_id() {
                 map.serialize_entry("witnessCallsiteId", wc)?;
             }
         } else {
             // callsite-witness family (http/ui/dispatch): witnessCallsiteId, extra.
-            if let Some(wc) = &self.witness_callsite_id {
+            if let Some(wc) = self.witness_callsite_id() {
                 map.serialize_entry("witnessCallsiteId", wc)?;
             }
-            if let Some(extra) = &self.extra {
+            if let Some(extra) = self.extra() {
                 map.serialize_entry("extra", extra)?;
             }
         }
-        if let Some(op) = &self.witness_first_hop_operation_id {
+        if let Some(op) = self.witness_first_hop_operation_id() {
             map.serialize_entry("witnessFirstHopOperationId", op)?;
         }
-        if let Some(ev) = &self.witness_first_hop_event_id {
+        if let Some(ev) = self.witness_first_hop_event_id() {
             map.serialize_entry("witnessFirstHopEventId", ev)?;
         }
         map.end()
@@ -1662,10 +1935,18 @@ fn census_snapshot(s: &CapabilitySnapshot) {
             .buf::<String>(s.identities.display_names.len())
             .strs(&s.identities.display_names),
     );
-    emit(
-        "snapshot.capability_facts",
-        Tally::default().buf::<SnapshotCapabilityFact>(s.capability_facts.len()),
-    );
+    // The 16-byte rows, plus each distinct table set they index once (one per
+    // composed snapshot; hand-built rows own a one-row table each).
+    let mut facts = Tally::default();
+    facts.buf::<SnapshotCapabilityFact>(s.capability_facts.len());
+    let mut seen: std::collections::HashSet<*const SnapTables> = std::collections::HashSet::new();
+    for f in &s.capability_facts {
+        if seen.insert(std::sync::Arc::as_ptr(f.tables())) {
+            facts.arc::<SnapTables>();
+            facts.bytes += f.tables().heap_bytes() as usize;
+        }
+    }
+    emit("snapshot.capability_facts", &mut facts);
     emit(
         "snapshot.typed_edges",
         Tally::default().buf::<SnapshotGraphEdge>(s.typed_edges.len()),
@@ -1774,12 +2055,12 @@ pub(crate) fn derive_identity_table(resolved: &Model) -> SnapshotIdentityTable {
 // Ordinal (M8 contract).
 // ---------------------------------------------------------------------------
 
-/// One table row from a direct or an inherited fact, read through its
-/// accessors (an inherited fact's are `retag`'s rules, so the row equals the
-/// one built from the materialized fact). The row's subject is the EMITTING
-/// routine's, never the fact's.
-fn snapshot_fact(f: FactRef<'_>, subject: &str) -> SnapshotCapabilityFact {
-    SnapshotCapabilityFact {
+/// The OLD owned row (before the step-2 handle) from a direct or an inherited
+/// fact, read through its accessors. The row's subject is the EMITTING
+/// routine's, never the fact's. Tests compare the handle rows with it.
+#[cfg(test)]
+fn snapshot_fact(f: FactRef<'_>, subject: &str) -> SnapshotFactFields {
+    SnapshotFactFields {
         subject: subject.to_string(),
         op: f.op().to_string(),
         resource_kind: f.resource_kind().to_string(),
@@ -1801,35 +2082,15 @@ fn snapshot_fact(f: FactRef<'_>, subject: &str) -> SnapshotCapabilityFact {
 /// field-by-field (tuple) order (see `engine::joined_key`).
 fn capability_fact_sort_fields(f: &SnapshotCapabilityFact) -> [&str; 8] {
     [
-        f.subject.as_str(),
-        f.op.as_str(),
-        f.resource_kind.as_str(),
-        f.resource_id.as_deref().unwrap_or_default(),
-        f.confidence.as_str(),
-        f.provenance.as_str(),
-        f.witness_callsite_id.as_deref().unwrap_or_default(),
-        f.witness_operation_id.as_deref().unwrap_or_default(),
+        f.subject(),
+        f.op(),
+        f.resource_kind(),
+        f.resource_id().unwrap_or_default(),
+        f.confidence(),
+        f.provenance(),
+        f.witness_callsite_id().unwrap_or_default(),
+        f.witness_operation_id().unwrap_or_default(),
     ]
-}
-
-/// A placeholder row: no heap allocation. [`derive_capability_facts`]
-/// pre-sizes its one output Vec with these and overwrites every one.
-fn blank_snapshot_fact() -> SnapshotCapabilityFact {
-    SnapshotCapabilityFact {
-        subject: String::new(),
-        op: String::new(),
-        resource_kind: String::new(),
-        resource_id: None,
-        resource_arg_source: None,
-        confidence: String::new(),
-        provenance: String::new(),
-        via: String::new(),
-        witness_operation_id: None,
-        witness_callsite_id: None,
-        extra: None,
-        witness_first_hop_operation_id: None,
-        witness_first_hop_event_id: None,
-    }
 }
 
 /// One emitted routine's rows before projection: its direct facts, then its
@@ -1843,6 +2104,126 @@ struct RowGroup<'a> {
 impl RowGroup<'_> {
     fn len(&self) -> usize {
         self.direct.len() + self.raw.as_ref().map_or(0, InheritedSlice::len)
+    }
+}
+
+/// Raw index → snapshot row, for one raw table set: a rep's `SnapRep` index,
+/// and a hop's `SnapHop` index with the emission group that projected it.
+/// `NO_HOP` marks "not projected yet".
+struct RawMemo<'r> {
+    raw: &'r InheritedTables,
+    reps: Vec<u32>,
+    hops: Vec<(u32, u32)>,
+}
+
+/// [`SnapTables`] under construction (design §4.3): subjects interned by
+/// string; one `SnapRep` per direct fact and per distinct raw rep; one
+/// `SnapHop` per raw hop, carrying the subject of the group that emits it.
+#[derive(Default)]
+struct SnapTablesBuilder<'r> {
+    tables: SnapTables,
+    subject_ix: HashMap<String, u32>,
+    memos: Vec<RawMemo<'r>>,
+}
+
+impl<'r> SnapTablesBuilder<'r> {
+    fn subject(&mut self, s: &str) -> u32 {
+        if let Some(&ix) = self.subject_ix.get(s) {
+            return ix;
+        }
+        let ix = crate::engine::l4::inherited_facts::table_ix(
+            self.tables.subjects.len(),
+            "snapshot subject",
+        );
+        self.tables.subjects.push(s.to_string());
+        self.subject_ix.insert(s.to_string(), ix);
+        ix
+    }
+
+    fn push_rep(&mut self, rep: SnapRep) -> u32 {
+        let ix =
+            crate::engine::l4::inherited_facts::table_ix(self.tables.reps.len(), "snapshot rep");
+        self.tables.reps.push(rep);
+        ix
+    }
+
+    /// The memo of `raw`'s tables (created on first sight).
+    fn memo_of(&mut self, raw: &'r InheritedTables) -> usize {
+        if let Some(i) = self.memos.iter().position(|m| std::ptr::eq(m.raw, raw)) {
+            return i;
+        }
+        self.memos.push(RawMemo {
+            raw,
+            reps: vec![NO_HOP; raw.reps.len()],
+            hops: vec![(NO_HOP, NO_HOP); raw.hops.len()],
+        });
+        self.memos.len() - 1
+    }
+
+    /// Project group `group`'s rows (subject index `subject`, stable subject
+    /// `stable`) into the tables. Returns the index of its first direct rep
+    /// and, when it has raw facts, its memo.
+    ///
+    /// The subject contract: every inherited row's subject is its GROUP's.
+    /// A raw hop is projected once, by the first group that emits it, with
+    /// that group's subject index; debug builds check that the raw hop's own
+    /// subject maps to the same stable id. A later group emitting the same
+    /// raw hop would read another routine's first hop: a bug, asserted.
+    fn project_group(
+        &mut self,
+        group: u32,
+        subject: u32,
+        g: &RowGroup<'r>,
+        routine_to_stable: &HashMap<String, String>,
+    ) -> (u32, Option<usize>) {
+        let direct_base =
+            crate::engine::l4::inherited_facts::table_ix(self.tables.reps.len(), "snapshot rep");
+        for f in g.direct {
+            self.push_rep(SnapRep::of(FactRef::Direct(f), subject));
+        }
+        let Some(raw) = &g.raw else {
+            return (direct_base, None);
+        };
+        let mi = self.memo_of(raw.tables());
+        for r in raw.refs() {
+            if self.memos[mi].reps[r.rep as usize] == NO_HOP {
+                let rep = &self.memos[mi].raw.reps[r.rep as usize];
+                let ix = self.push_rep(SnapRep::of(FactRef::Direct(rep), NO_HOP));
+                self.memos[mi].reps[r.rep as usize] = ix;
+            }
+            let (hop_ix, owner) = self.memos[mi].hops[r.hop as usize];
+            if hop_ix == NO_HOP {
+                let h = &self.memos[mi].raw.hops[r.hop as usize];
+                debug_assert_eq!(
+                    stable_routine_id(
+                        &self.memos[mi].raw.subjects[h.subject as usize],
+                        routine_to_stable
+                    ),
+                    g.subject,
+                    "snapshot: a raw first hop's subject is not its emitting group's"
+                );
+                let hop = SnapHop {
+                    subject,
+                    via: h.via.to_string(),
+                    callsite: h.callsite.clone(),
+                    operation_id: h.operation_id.clone(),
+                    event_id: h.event_id.clone(),
+                };
+                let ix = crate::engine::l4::inherited_facts::table_ix(
+                    self.tables.hops.len(),
+                    "snapshot hop",
+                );
+                self.tables.hops.push(hop);
+                self.memos[mi].hops[r.hop as usize] = (ix, group);
+            } else {
+                assert_eq!(
+                    owner, group,
+                    "snapshot: two emission groups share one raw first hop (subject {:?})",
+                    g.subject
+                );
+            }
+        }
+        (direct_base, Some(mi))
     }
 }
 
@@ -1862,9 +2243,10 @@ impl RowGroup<'_> {
 /// `subject|rest` orders first by `subject + "|"` and only then by `rest`. The
 /// groups are therefore ordered by `subject + "|"` (stable: groups of one
 /// subject, two internal ids with one stable id, keep emission order), each
-/// group is projected straight into its slice of ONE pre-sized Vec, and each
-/// subject's slice is stable-sorted by the seven remaining fields, slices in
-/// parallel. The comparison is by `subject + "|"`, NOT by the bare subject:
+/// group's rows are written in that order into ONE Vec of the exact total, and
+/// each subject's slice is stable-sorted by the seven remaining fields, slices
+/// in parallel. A row is a 16-byte handle into the snapshot's [`SnapTables`]
+/// (step 2), so no fact is copied per row. The comparison is by `subject + "|"`, NOT by the bare subject:
 /// `a` and `ab` join to `a|…` and `ab|…`, and `ab` sorts first.
 ///
 /// `stable_routine_id` passes an unmapped internal id through, so a subject
@@ -1919,33 +2301,45 @@ fn derive_capability_facts<'r>(
     }
     let total: usize = groups.iter().map(RowGroup::len).sum();
 
-    // ONE Vec of the exact total, filled in place: each group's rows go into
-    // its own slice, groups in parallel.
+    // The tables (cone-memory design step 2, §4.3), groups in output order:
+    // each group's subject interned, its direct facts one rep each, its raw
+    // reps and hops projected once (memoised by raw index).
+    let mut b = SnapTablesBuilder::default();
+    let placed: Vec<(u32, Option<usize>)> = order
+        .iter()
+        .map(|&gi| {
+            let g = &groups[gi];
+            let subject = b.subject(&g.subject);
+            let group = u32::try_from(gi).expect("emission groups fit u32");
+            b.project_group(group, subject, g, inp.routine_to_stable)
+        })
+        .collect();
+    let SnapTablesBuilder { tables, memos, .. } = b;
+    let tables = std::sync::Arc::new(tables);
+
+    // ONE Vec of the exact total, in output order: per group, its direct rows
+    // then its raw rows. Filled sequentially: every row clones the one table
+    // `Arc`, and parallel clones would contend on its count.
     let mut rows: Vec<SnapshotCapabilityFact> = Vec::with_capacity(total);
-    (0..total)
-        .into_par_iter()
-        .map(|_| blank_snapshot_fact())
-        .collect_into_vec(&mut rows);
-    {
-        let mut groups: Vec<Option<RowGroup<'_>>> = groups.into_iter().map(Some).collect();
-        let mut rest: &mut [SnapshotCapabilityFact] = &mut rows;
-        let mut jobs: Vec<(RowGroup<'_>, &mut [SnapshotCapabilityFact])> =
-            Vec::with_capacity(order.len());
-        for &gi in &order {
-            let g = groups[gi].take().expect("each group is placed once");
-            let (head, tail) = std::mem::take(&mut rest).split_at_mut(g.len());
-            rest = tail;
-            jobs.push((g, head));
+    for (&gi, &(direct_base, memo)) in order.iter().zip(&placed) {
+        let g = &groups[gi];
+        let n = u32::try_from(g.direct.len()).expect("direct facts fit u32");
+        rows.extend((0..n).map(|k| SnapshotCapabilityFact {
+            tables: std::sync::Arc::clone(&tables),
+            rep: direct_base + k,
+            hop: NO_HOP,
+        }));
+        if let (Some(raw), Some(mi)) = (&g.raw, memo) {
+            let m = &memos[mi];
+            rows.extend(raw.refs().iter().map(|r| SnapshotCapabilityFact {
+                tables: std::sync::Arc::clone(&tables),
+                rep: m.reps[r.rep as usize],
+                hop: m.hops[r.hop as usize].0,
+            }));
         }
-        debug_assert!(rest.is_empty(), "the groups fill the table exactly");
-        jobs.into_par_iter().for_each(|(g, out)| {
-            let direct = g.direct.iter().map(FactRef::Direct);
-            let raw = g.raw.iter().flat_map(|s| s.iter()).map(FactRef::Inherited);
-            for (slot, f) in out.iter_mut().zip(direct.chain(raw)) {
-                *slot = snapshot_fact(f, &g.subject);
-            }
-        });
     }
+    debug_assert_eq!(rows.len(), total, "the groups fill the table exactly");
+    drop((groups, placed, memos));
 
     if split {
         // Every row of a run shares the subject, so the joined key reduces to
@@ -2284,8 +2678,8 @@ fn derive_pd_arena(
     // (owner stable id, operation id) → the owner's direct fact.
     let mut direct_fact_ix: HashMap<(&str, &str), usize> = HashMap::new();
     for (ix, f) in capability_facts.iter().enumerate() {
-        if let ("direct", Some(op)) = (f.provenance.as_str(), f.witness_operation_id.as_deref()) {
-            direct_fact_ix.entry((f.subject.as_str(), op)).or_insert(ix);
+        if let ("direct", Some(op)) = (f.provenance(), f.witness_operation_id()) {
+            direct_fact_ix.entry((f.subject(), op)).or_insert(ix);
         }
     }
 
@@ -3404,7 +3798,7 @@ mod capability_fact_serialize_tests {
     }
 
     fn fact(resource_kind: &str, witness_op: Option<&str>) -> SnapshotCapabilityFact {
-        SnapshotCapabilityFact {
+        SnapshotFactFields {
             subject: "g:Codeunit:1#h".into(),
             op: "x".into(),
             resource_kind: resource_kind.into(),
@@ -3423,6 +3817,7 @@ mod capability_fact_serialize_tests {
             witness_first_hop_operation_id: None,
             witness_first_hop_event_id: None,
         }
+        .into()
     }
 
     #[test]
@@ -3552,7 +3947,7 @@ mod step6_tree_tests {
             with_inherited += usize::from(
                 cut.capability_facts
                     .iter()
-                    .any(|f| f.provenance == "inherited"),
+                    .any(|f| f.provenance() == "inherited"),
             );
             with_pd += usize::from(!cut.pd_solution.states.is_empty());
             for ((name, a), (_, b)) in fields(&cut).into_iter().zip(fields(&tree)) {
@@ -3721,7 +4116,7 @@ mod step6_tree_tests {
                 .map(|(r, s)| (std::sync::Arc::from(r), vec![s]))
                 .collect(),
         };
-        let facts = vec![snapshot_fact(FactRef::Direct(&producer_fact), "A#")];
+        let facts = vec![snapshot_fact(FactRef::Direct(&producer_fact), "A#").into()];
         let before = cones_census::PD_EDGE_UNMAPPED.load(Ordering::Relaxed);
         let arena = derive_pd_arena(&inp, &cone, None, &rows, &facts, &skipped);
         assert_eq!(
@@ -3823,7 +4218,9 @@ mod step6_tree_tests {
             )
         };
         let has_y = |s: &CapabilitySnapshot| {
-            s.capability_facts.iter().any(|f| f.subject == "stable::Y")
+            s.capability_facts
+                .iter()
+                .any(|f| f.subject() == "stable::Y")
                 || s.operation_index.iter().any(|o| o.operation_id == "op:y")
                 || s.callsite_index.iter().any(|c| c.callsite_id == "cs:y")
         };
@@ -3957,8 +4354,8 @@ mod step0_sort_tests {
     use crate::engine::l5::test_support::{coverage, fact, routine};
     use std::sync::Arc;
 
-    /// The old key, verbatim (before step 0).
-    fn legacy_sort_key(f: &SnapshotCapabilityFact) -> String {
+    /// The old key, verbatim (before step 0), on the old owned row.
+    fn legacy_sort_key(f: &SnapshotFactFields) -> String {
         [
             f.subject.clone(),
             f.op.clone(),
@@ -3973,13 +4370,14 @@ mod step0_sort_tests {
     }
 
     /// The old `derive_capability_facts`, verbatim but sequential (its
-    /// indexed par_iter + flatten preserved this exact emission order).
-    fn legacy_derive(
+    /// indexed par_iter + flatten preserved this exact emission order), on
+    /// the old owned rows (before the step-2 handle).
+    pub(super) fn legacy_derive(
         inp: &TreeInputs<'_>,
         raw: &HashMap<String, Vec<CapabilityFact>>,
-    ) -> Vec<SnapshotCapabilityFact> {
+    ) -> Vec<SnapshotFactFields> {
         let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        let mut all: Vec<SnapshotCapabilityFact> = Vec::new();
+        let mut all: Vec<SnapshotFactFields> = Vec::new();
         for r in inp.ws_routines {
             if !(seen.insert(r.id.as_str()) && inp.coverage.contains_key(&r.id)) {
                 continue;
@@ -4047,7 +4445,7 @@ mod step0_sort_tests {
         /// (new rows, old rows), the new ones taken through the DRAIN form
         /// (the entries moved into their own map), as the tree builds them;
         /// the old ones from the owned facts.
-        fn run(&self) -> (Vec<SnapshotCapabilityFact>, Vec<SnapshotCapabilityFact>) {
+        fn run(&self) -> (Vec<SnapshotCapabilityFact>, Vec<SnapshotFactFields>) {
             let event_graph = EventGraph::default();
             let inp = TreeInputs {
                 ws_routines: &self.ws_routines,
@@ -4116,7 +4514,7 @@ mod step0_sort_tests {
         }
     }
 
-    fn payloads(rows: &[SnapshotCapabilityFact]) -> Vec<String> {
+    fn payloads(rows: &[SnapshotFactFields]) -> Vec<String> {
         rows.iter()
             .map(|r| {
                 format!(
@@ -4127,6 +4525,17 @@ mod step0_sort_tests {
                 )
             })
             .collect()
+    }
+
+    /// The handle rows' fields, owned (comparable with the old rows).
+    pub(super) fn fields_of(rows: &[SnapshotCapabilityFact]) -> Vec<SnapshotFactFields> {
+        rows.iter().map(SnapshotCapabilityFact::fields).collect()
+    }
+
+    /// The old owned rows as handle rows (each a one-row table), for readers
+    /// that take the table.
+    fn handles(rows: &[SnapshotFactFields]) -> Vec<SnapshotCapabilityFact> {
+        rows.iter().cloned().map(Into::into).collect()
     }
 
     /// The split path: no emitted subject contains `|`.
@@ -4236,18 +4645,18 @@ mod step0_sort_tests {
             "precondition: the split path runs"
         );
         assert_eq!(new.len(), old.len(), "row count");
-        assert_eq!(payloads(&new), old_p, "row order (payloads)");
-        assert_eq!(format!("{new:?}"), format!("{old:?}"), "every field");
+        assert_eq!(payloads(&fields_of(&new)), old_p, "row order (payloads)");
+        assert_eq!(fields_of(&new), old, "every field");
 
         // The pd producer: the FIRST emitted `insert` of P, at the same index.
         let first_insert = (0..64).find(|i| OPS[(i * 7 + 3) % 4] == "insert").unwrap();
         let (ni, oi) = (
             c.producer_fact(&new, "P", "opP"),
-            c.producer_fact(&old, "P", "opP"),
+            c.producer_fact(&handles(&old), "P", "opP"),
         );
         assert_eq!(ni, oi, "derive_pd_arena's producer index");
         assert_eq!(
-            new[ni].witness_first_hop_event_id.as_deref(),
+            new[ni].witness_first_hop_event_id(),
             Some(format!("p{first_insert:02}").as_str()),
             "the producer row is the first emitted tie"
         );
@@ -4272,7 +4681,8 @@ mod step0_sort_tests {
             .filter(|p| p.join("app.json").is_file())
             .collect();
         dirs.sort();
-        let (mut models, mut rows, mut inherited, mut states) = (0usize, 0usize, 0usize, 0usize);
+        let (mut models, mut rows, mut inherited, mut states, mut subjects) =
+            (0usize, 0usize, 0usize, 0usize, 0usize);
         let mut failures: Vec<String> = Vec::new();
         for dir in &dirs {
             let where_ = dir.strip_prefix(&root).unwrap_or(dir).display().to_string();
@@ -4307,7 +4717,9 @@ mod step0_sort_tests {
                     bodyless_dependency: None,
                     source_less_apps: None,
                 };
-                let new = derive_capability_facts(&inp, |id| base.raw.get(id));
+                // The production snapshot: its table is the handle rows.
+                let snap = compose_snapshot_from_base(&m, &base, None);
+                let new = &snap.capability_facts;
                 let owned: HashMap<String, Vec<CapabilityFact>> = base
                     .raw
                     .iter()
@@ -4316,9 +4728,17 @@ mod step0_sort_tests {
                 let old = legacy_derive(&inp, &owned);
                 rows += old.len();
                 inherited += old.iter().filter(|r| r.provenance == "inherited").count();
-                if format!("{new:?}") != format!("{old:?}") {
+                if fields_of(new) != old {
                     failures.push(format!("{where_} ({mode}): the tables differ"));
                     continue;
+                }
+                // T3(c), step 2: the serialized table, the pd arena's producer
+                // indexes and digest's per-subject fact buckets, against the
+                // old owned rows (each its own one-row table).
+                let old_rows = handles(&old);
+                if serde_json::to_string(new).unwrap() != serde_json::to_string(&old_rows).unwrap()
+                {
+                    failures.push(format!("{where_} ({mode}): the serialized tables differ"));
                 }
                 let (edges, skipped) = derive_typed_edges(&inp.ledger());
                 let arena = |facts: &[SnapshotCapabilityFact]| {
@@ -4327,14 +4747,31 @@ mod step0_sort_tests {
                     format!("{:?} {:?} {by:?}", a.states, a.links)
                 };
                 states += base.pd_solution.states.len();
-                if arena(&new) != arena(&old) {
+                if arena(new) != arena(&old_rows) {
                     failures.push(format!("{where_} ({mode}): the pd arenas differ"));
+                }
+                let twin = CapabilitySnapshot {
+                    capability_facts: old_rows,
+                    ..snap.clone()
+                };
+                let by_routine = |s: &CapabilitySnapshot| {
+                    let idx = crate::engine::l5::digest::build_fingerprint_indexes_pub(s);
+                    idx.facts_by_routine
+                        .iter()
+                        .map(|(k, v)| (k.clone(), fields_of(v)))
+                        .collect::<std::collections::BTreeMap<_, _>>()
+                };
+                let (nb, ob) = (by_routine(&snap), by_routine(&twin));
+                subjects += nb.len();
+                if nb != ob {
+                    failures.push(format!("{where_} ({mode}): facts_by_routine differs"));
                 }
             }
         }
         assert!(models > 100, "precondition: {models} models composed");
         assert!(inherited > 0, "precondition: {rows} rows, some inherited");
         assert!(states > 0, "precondition: some producer states");
+        assert!(subjects > 0, "precondition: some fact buckets");
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
@@ -4365,7 +4802,308 @@ mod step0_sort_tests {
             ["a", "a|b", "a", "a", "b"],
             "precondition: the `|` subject interleaves with `a`"
         );
-        assert_eq!(payloads(&new), payloads(&old), "row order (payloads)");
-        assert_eq!(format!("{new:?}"), format!("{old:?}"), "every field");
+        assert_eq!(
+            payloads(&fields_of(&new)),
+            payloads(&old),
+            "row order (payloads)"
+        );
+        assert_eq!(fields_of(&new), old, "every field");
+    }
+}
+
+/// Cone-memory design step 2 (`docs/superpowers/specs/2026-10-31-cone-memory-design.md`
+/// §4.3, §9): the 16-byte row handle. T0 (size and the direct-row sentinel),
+/// the accessors against the OLD owned row built from the materialized fact
+/// (T1's rules on a snapshot row), T7 (one projection per raw rep and hop;
+/// every row's subject from its emission group, observable in the rows), and
+/// row edits through `SnapshotFactFields` never touching shared tables. The
+/// whole-corpus comparison (T3(c)) is `step0_sort_tests::t6_every_corpus_app_*`.
+#[cfg(test)]
+mod cone_memory_step2_tests {
+    use super::step0_sort_tests::{fields_of, legacy_derive};
+    use super::*;
+    use crate::engine::l4::capability_cone::{TypedOutEdge, compose_cone_over_graph};
+    use crate::engine::l4::cone_derived::scope_of;
+    use crate::engine::l4::cone_derived::test_facts::{call_edge, fact};
+    use crate::engine::l4::inherited_facts::InheritedBuilder;
+    use crate::engine::l5::test_support::{coverage, routine};
+
+    /// The emission inputs of `ids` (each mapped to `<id lowercase>#`).
+    struct Inputs {
+        ws_routines: Vec<ModelRoutine>,
+        direct_full: HashMap<String, Vec<CapabilityFact>>,
+        coverage: HashMap<String, CoverageRecord>,
+        routine_to_stable: HashMap<String, String>,
+        event_graph: EventGraph,
+    }
+
+    impl Inputs {
+        fn new(ids: &[&str], direct_full: HashMap<String, Vec<CapabilityFact>>) -> Self {
+            Inputs {
+                ws_routines: ids.iter().map(|id| routine(id, "procedure")).collect(),
+                direct_full,
+                coverage: ids
+                    .iter()
+                    .map(|id| (id.to_string(), coverage("complete")))
+                    .collect(),
+                routine_to_stable: ids
+                    .iter()
+                    .map(|id| (id.to_string(), format!("{}#", id.to_lowercase())))
+                    .collect(),
+                event_graph: EventGraph::default(),
+            }
+        }
+
+        fn tree(&self) -> TreeInputs<'_> {
+            TreeInputs {
+                ws_routines: &self.ws_routines,
+                typed_edges: &[],
+                calls: &[],
+                dependency_calls: &[],
+                event_graph: &self.event_graph,
+                direct_full: &self.direct_full,
+                coverage: &self.coverage,
+                routine_to_stable: &self.routine_to_stable,
+                bodyless_dependency: None,
+                source_less_apps: None,
+            }
+        }
+
+        /// (the handle rows, the OLD owned rows from the materialized raw).
+        fn rows(
+            &self,
+            raw: &InheritedFacts,
+        ) -> (Vec<SnapshotCapabilityFact>, Vec<SnapshotFactFields>) {
+            let inp = self.tree();
+            let new = derive_capability_facts(&inp, |id| raw.get(id));
+            let owned: HashMap<String, Vec<CapabilityFact>> = raw
+                .iter()
+                .map(|(k, s)| (k.to_string(), s.materialize()))
+                .collect();
+            (new, legacy_derive(&inp, &owned))
+        }
+    }
+
+    fn insert(subject: &str, t: &str) -> CapabilityFact {
+        fact(subject, "insert", "table", Some(t))
+    }
+
+    /// T0: a row is 16 bytes (also a `const` assert); a composed table's
+    /// direct rows report `NO_HOP` and its inherited rows a real hop; a row
+    /// stated as fields is a direct-form row.
+    /// DISCRIMINATION: direct rows built with hop 0 instead of `NO_HOP` →
+    /// fails.
+    #[test]
+    fn t0_row_size_and_the_direct_sentinel() {
+        assert_eq!(std::mem::size_of::<SnapshotCapabilityFact>(), 16);
+        let typed = vec![call_edge("A", "C", "cs/a")];
+        let direct: HashMap<String, Vec<CapabilityFact>> =
+            [("C".to_string(), vec![insert("C", "t/C")])].into();
+        let out = compose_cone_over_graph(
+            &typed,
+            &["A".to_string(), "C".to_string()],
+            &direct,
+            &HashMap::new(),
+            &[],
+            scope_of::raw_only(),
+        );
+        let inp = Inputs::new(&["A", "C"], direct);
+        let (rows, _) = inp.rows(&out.raw);
+        let kinds: Vec<(String, String, bool)> = rows
+            .iter()
+            .map(|r| {
+                (
+                    r.subject().to_string(),
+                    r.provenance().to_string(),
+                    r.hop_index() == NO_HOP,
+                )
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ("a#".to_string(), "inherited".to_string(), false),
+                ("c#".to_string(), "direct".to_string(), true),
+            ]
+        );
+        let stated: SnapshotCapabilityFact = rows[0].fields().into();
+        assert_eq!(stated.hop_index(), NO_HOP, "a stated row is direct-form");
+        assert_eq!(stated.fields(), rows[0].fields());
+    }
+
+    /// T1 on a snapshot row: one rep, carrying its OWN call-site witness and
+    /// STALE first-hop op and event ids, reached by `C` through a call hop, an
+    /// `implicit-trigger` hop and an `event-dispatch` hop, plus a direct fact
+    /// of `C`. Every handle row equals the OLD owned row built from the
+    /// materialized fact (and the direct fact), in the same order.
+    /// DISCRIMINATION: `witness_callsite_id()` returns the rep's on an
+    /// inherited row → fails; `provenance()` returns the rep's → fails.
+    #[test]
+    fn t1_handle_rows_equal_the_old_owned_rows() {
+        let mut rep = insert("H", "app/Table/1");
+        rep.resource_arg_source = Some(ValueSource::Literal {
+            value: "x".to_string(),
+        });
+        rep.witness_operation_id = Some("H/op1".to_string());
+        rep.witness_callsite_id = Some("H/cs9".to_string());
+        rep.witness_first_hop_operation_id = Some("stale/op7".to_string());
+        rep.witness_first_hop_event_id = Some("stale/event/e".to_string());
+        rep.extra = Some(CapabilityExtra::Table {
+            record_variable_id: Some("v".to_string()),
+            temp_state: None,
+            op_subtype: Some("Insert".to_string()),
+        });
+        let rep = std::sync::Arc::new(rep);
+        let edges = [
+            TypedOutEdge::new(
+                "H".into(),
+                "direct-call".into(),
+                Some("C/cs1".into()),
+                None,
+                None,
+            ),
+            TypedOutEdge::new(
+                "H".into(),
+                "implicit-trigger".into(),
+                None,
+                None,
+                Some("C/op2".into()),
+            ),
+            TypedOutEdge::new(
+                "H".into(),
+                "event-dispatch".into(),
+                None,
+                Some("app/Codeunit/1/event/onx".into()),
+                None,
+            ),
+        ];
+        let mut b = InheritedBuilder::default();
+        let s = b.subject("C");
+        let refs: Vec<_> = edges.iter().map(|e| b.fact(s, &rep, e)).collect();
+        b.insert("C".to_string(), refs);
+        let raw = b.finish();
+        let mut own = insert("C", "app/Table/2");
+        own.witness_operation_id = Some("C/op9".to_string());
+        let inp = Inputs::new(&["C"], [("C".to_string(), vec![own])].into());
+        let (new, old) = inp.rows(&raw);
+        assert_eq!(
+            new.len(),
+            4,
+            "precondition: one direct row, three inherited"
+        );
+        assert!(
+            old.iter()
+                .filter(|r| r.provenance == "inherited")
+                .all(|r| r.witness_callsite_id.as_deref() != Some("H/cs9")),
+            "precondition: no inherited row keeps the rep's call site"
+        );
+        assert_eq!(fields_of(&new), old, "every row, every field, in order");
+        assert_eq!(
+            serde_json::to_string(&new).unwrap(),
+            serde_json::to_string(
+                &old.iter()
+                    .cloned()
+                    .map(SnapshotCapabilityFact::from)
+                    .collect::<Vec<_>>()
+            )
+            .unwrap(),
+            "the serialized table (dynamic key order included)"
+        );
+    }
+
+    /// T7 (i) in the snapshot: A and B each inherit C's one fact through
+    /// their own hop. The tables hold ONE rep row for it (projected once, by
+    /// raw rep), C's direct rep row, and two hop rows.
+    /// DISCRIMINATION: project a rep per row (no memo) → three rep rows →
+    /// fails.
+    #[test]
+    fn t7_one_rep_row_per_raw_rep() {
+        let typed = vec![call_edge("A", "C", "cs/a"), call_edge("B", "C", "cs/b")];
+        let direct: HashMap<String, Vec<CapabilityFact>> =
+            [("C".to_string(), vec![insert("C", "t/C")])].into();
+        let out = compose_cone_over_graph(
+            &typed,
+            &["A", "B", "C"].map(String::from),
+            &direct,
+            &HashMap::new(),
+            &[],
+            scope_of::raw_only(),
+        );
+        let inp = Inputs::new(&["A", "B", "C"], direct);
+        let (rows, old) = inp.rows(&out.raw);
+        assert_eq!(fields_of(&rows), old);
+        let t = rows[0].tables();
+        assert!(
+            rows.iter().all(|r| std::sync::Arc::ptr_eq(r.tables(), t)),
+            "one table set"
+        );
+        assert_eq!(t.reps.len(), 2, "C's direct rep + one inherited rep");
+        assert_eq!(t.hops.len(), 2, "A's hop and B's hop");
+        assert_eq!(t.subjects, ["a#", "b#", "c#"], "one subject per group");
+    }
+
+    /// T7 (ii) in the snapshot: A and B make hops with IDENTICAL (via, call
+    /// site, op, event) to C. The rows carry their own subjects: each
+    /// inherited row's subject is its emission group's.
+    /// DISCRIMINATION: intern raw hops without the subject (one raw hop for
+    /// both) → the construction's "two emission groups share one raw first
+    /// hop" assertion fires; with that assertion also removed, B's row reads
+    /// subject `a#` and the subject assertion below fails.
+    #[test]
+    fn t7_identical_hop_content_rows_carry_their_own_subjects() {
+        let typed = vec![
+            call_edge("A", "C", "cs/shared"),
+            call_edge("B", "C", "cs/shared"),
+        ];
+        let direct: HashMap<String, Vec<CapabilityFact>> =
+            [("C".to_string(), vec![insert("C", "t/C")])].into();
+        let out = compose_cone_over_graph(
+            &typed,
+            &["A", "B", "C"].map(String::from),
+            &direct,
+            &HashMap::new(),
+            &[],
+            scope_of::raw_only(),
+        );
+        let inp = Inputs::new(&["A", "B", "C"], direct);
+        let (rows, _) = inp.rows(&out.raw);
+        let inherited: Vec<(&str, Option<&str>)> = rows
+            .iter()
+            .filter(|r| r.provenance() == "inherited")
+            .map(|r| (r.subject(), r.witness_callsite_id()))
+            .collect();
+        assert_eq!(
+            inherited,
+            vec![("a#", Some("cs/shared")), ("b#", Some("cs/shared"))],
+            "each inherited row carries its emitting routine's subject"
+        );
+    }
+
+    /// A row edit goes through `fields()` and `.into()`: the new row owns a
+    /// table of its own, and the composed rows (sharing one table set) read
+    /// as before.
+    #[test]
+    fn row_edits_never_touch_the_shared_tables() {
+        let typed = vec![call_edge("A", "C", "cs/a")];
+        let direct: HashMap<String, Vec<CapabilityFact>> =
+            [("C".to_string(), vec![insert("C", "t/C")])].into();
+        let out = compose_cone_over_graph(
+            &typed,
+            &["A".to_string(), "C".to_string()],
+            &direct,
+            &HashMap::new(),
+            &[],
+            scope_of::raw_only(),
+        );
+        let inp = Inputs::new(&["A", "C"], direct);
+        let (rows, _) = inp.rows(&out.raw);
+        let before = fields_of(&rows);
+        let mut f = rows[0].fields();
+        f.subject = "edited#".to_string();
+        f.witness_callsite_id = None;
+        let edited: SnapshotCapabilityFact = f.into();
+        assert_eq!(edited.subject(), "edited#");
+        assert!(!std::sync::Arc::ptr_eq(edited.tables(), rows[0].tables()));
+        assert_eq!(fields_of(&rows), before, "the composed rows are unchanged");
     }
 }

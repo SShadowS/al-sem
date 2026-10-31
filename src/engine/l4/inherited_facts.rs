@@ -253,6 +253,11 @@ impl<'a> InheritedSlice<'a> {
         self.refs
     }
 
+    /// The tables the refs index (the snapshot projects from them).
+    pub fn tables(&self) -> &'a InheritedTables {
+        self.tables
+    }
+
     pub fn iter(&self) -> impl ExactSizeIterator<Item = InheritedFactRef<'a>> + use<'a> {
         let tables = self.tables;
         self.refs.iter().map(move |r| tables.view(*r))

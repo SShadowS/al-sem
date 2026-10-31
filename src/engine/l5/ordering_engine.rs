@@ -203,17 +203,18 @@ impl<'s> OrderingIndex<'s> {
         let mut http_method_by_callsite_id = HashMap::new();
         let mut background_kickoff_callsite_ids = HashSet::new();
         for f in &snap.capability_facts {
-            if f.resource_kind == "http"
-                && let Some(wc) = &f.witness_callsite_id
-                && let Some(SnapCapabilityExtra::Http { method, .. }) = &f.extra
+            // Table order, last write wins: the scan order is the contract.
+            if f.resource_kind() == "http"
+                && let Some(wc) = f.witness_callsite_id()
+                && let Some(SnapCapabilityExtra::Http { method, .. }) = f.extra()
             {
-                http_method_by_callsite_id.insert(wc.as_str(), method.as_str());
+                http_method_by_callsite_id.insert(wc, method.as_str());
             }
-            if f.resource_kind == "background"
-                && f.op == "start"
-                && let Some(wc) = &f.witness_callsite_id
+            if f.resource_kind() == "background"
+                && f.op() == "start"
+                && let Some(wc) = f.witness_callsite_id()
             {
-                background_kickoff_callsite_ids.insert(wc.as_str());
+                background_kickoff_callsite_ids.insert(wc);
             }
         }
         OrderingIndex {

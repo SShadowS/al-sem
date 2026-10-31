@@ -781,7 +781,7 @@ pub(crate) fn filter_by_class(
     for (key, class) in SNAPSHOT_KEYS {
         match (class, *key) {
             (KeyClass::Header | KeyClass::Input | KeyClass::Gap | KeyClass::Evidence, _) => {}
-            (_, "capabilityFacts") => core.capability_facts.retain(|f| is_primary(&f.subject)),
+            (_, "capabilityFacts") => core.capability_facts.retain(|f| is_primary(f.subject())),
             (_, "coverage") => core.coverage.retain(|c| is_primary(&c.subject)),
             (_, "callsiteResolutions") => core.callsite_resolutions.retain(|r| is_primary(&r.from)),
             (_, "typedEdges") => core.typed_edges.retain(|e| is_primary(e.edge_from())),
