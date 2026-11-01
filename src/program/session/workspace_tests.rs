@@ -151,14 +151,23 @@ fn refresh_and_compare(s: &mut WorkspaceSession, ws: &Ws, what: &str) -> Refresh
         "{what}: program differs from cold: {}",
         first_diff(&a, &b)
     );
-    let model = crate::program::model::program_calls::cross_app_program_from(
-        Ok(program),
-        &inputs,
-        false,
-        AssemblyNeeds::RULES,
-    )
-    .unwrap_or_else(|e| panic!("{what}: session model: {e:?}"));
-    let cold = assemble_and_resolve_cross_app_program(&inputs, false, AssemblyNeeds::RULES)
+    compare_model(s, &inputs, Ok(program), AssemblyNeeds::RULES, what);
+    s.last_report().cloned().unwrap_or(report)
+}
+
+/// The session's model over `program` (its row cache in use), compared with
+/// a cold model build of the same inputs.
+fn compare_model(
+    s: &mut WorkspaceSession,
+    inputs: &Arc<WorkspaceInputs>,
+    program: Result<ResolvedProgram, String>,
+    needs: AssemblyNeeds,
+    what: &str,
+) {
+    let model = s
+        .refresh_model(program, inputs, false, needs)
+        .unwrap_or_else(|e| panic!("{what}: session model: {e:?}"));
+    let cold = assemble_and_resolve_cross_app_program(inputs, false, needs)
         .unwrap_or_else(|e| panic!("{what}: cold model: {e:?}"));
     let (a, b) = (model_text(&model), model_text(&cold));
     assert!(
@@ -166,7 +175,11 @@ fn refresh_and_compare(s: &mut WorkspaceSession, ws: &Ws, what: &str) -> Refresh
         "{what}: model differs from cold: {}",
         first_diff(&a, &b)
     );
-    report
+}
+
+/// What the last refresh's model assembly took from the row cache.
+fn rows(r: &RefreshReport) -> RowCacheStats {
+    r.rows.expect("the model was assembled through the session")
 }
 
 fn base_ws() -> Ws {
@@ -231,6 +244,15 @@ fn body_edit_reuses_every_other_resolution() {
         "no dependency witness moved: the dependency edges are shared, not copied"
     );
     assert!(r.copied_bytes > 0, "the reused resolutions were copied");
+    // T-rows: only the edited file is projected again; the other workspace
+    // files' and every dependency file's raw rows come from the cache.
+    let rs = rows(&r);
+    assert_eq!((rs.workspace_projected, rs.workspace_reused), (1, 3));
+    assert_eq!(rs.dependency_projected, 0);
+    assert!(
+        rs.dependency_reused > 0,
+        "precondition: dependency rows exist"
+    );
     // A second body edit in the caller's own file.
     ws.edit(
         "Caller.Codeunit.al",
@@ -380,6 +402,49 @@ fn dependency_raiser_and_subscriber_edits() {
     );
     let r = refresh_and_compare(&mut s, &ws, "second subscriber");
     assert_eq!(r.class, ChangeClass::Declaration);
+}
+
+/// The event-flow edges are rerun whole every revision (§6.5). The
+/// counterexample to every finer rule keyed on the PUBLISHER's file or on the
+/// class: text inserted above the workspace subscriber (B, its projection
+/// kept) moves its declaration, and the edge of the DEPENDENCY publisher
+/// `OnDepEvent` (whose file, package and projection are unchanged) carries
+/// the subscriber's span as its route witness, so the edge changes. Reusing
+/// the previous revision's event-flow edges under B, or recomputing only the
+/// publishers in changed files, would keep the stale span.
+#[test]
+fn event_flow_edge_of_an_unchanged_publisher_moves_under_b() {
+    use crate::program::resolve::edge::EdgeKind;
+    let ws = base_ws();
+    let edge = |ws: &Ws| {
+        let p = ResolvedProgram::build(&ws.inputs(), ProgramScope::CrossApp).unwrap();
+        let e: Vec<String> = p
+            .body()
+            .all_edges()
+            .filter(|e| {
+                e.edge.kind == EdgeKind::EventFlow && e.edge.from.name_lc.as_str() == "ondepevent"
+            })
+            .map(|e| format!("{:?}", e.edge))
+            .collect();
+        assert_eq!(e.len(), 1, "precondition: one edge for the publisher");
+        e[0].clone()
+    };
+    let mut s = WorkspaceSession::new();
+    refresh_and_compare(&mut s, &ws, "cold");
+    let before = edge(&ws);
+    ws.edit(
+        "Sub.Codeunit.al",
+        "    [EventSubscriber",
+        "\n\n\n    [EventSubscriber",
+    );
+    assert_ne!(
+        edge(&ws),
+        before,
+        "precondition: the unchanged publisher's edge moves with its subscriber"
+    );
+    let r = refresh_and_compare(&mut s, &ws, "lines above the subscriber");
+    assert_eq!(r.class, ChangeClass::BodyOnly);
+    assert_eq!(r.changed, vec!["src/Sub.Codeunit.al".to_string()]);
 }
 
 /// Several routines per file and a duplicate id (`#if` arms declare one
@@ -756,4 +821,211 @@ fn rematerialize_touches_only_source_witnesses() {
     let before = text(&others);
     assert!(rematerialize_witnesses(&mut others, &surface));
     assert_eq!(text(&others), before);
+}
+
+const SYM_GUID: &str = "5e550000-0000-4000-8000-0000000000ab";
+const SYM_SYMBOLS: &str = r#"{"Codeunits":[{"Id":71000,"Name":"Sym Lib","Methods":[{"Name":"S","Id":1},{"Name":"T","Id":2,"Parameters":[{"Name":"N","TypeDefinition":{"Name":"Integer"}}]}]}],"Tables":[{"Id":71001,"Name":"Sym T","Fields":[{"Id":1,"Name":"No.","TypeDefinition":{"Name":"Code","Subtype":{"Name":"20"}}}]}]}"#;
+const SYM_CALLER: &str = "codeunit 50150 \"Sym Caller\"\n{\n    procedure Go()\n    var\n        L: Codeunit \"Sym Lib\";\n        R: Record \"Sym T\";\n    begin\n        L.S();\n        R.FindFirst();\n    end;\n}\n";
+
+/// `base_ws` plus a SYMBOL-ONLY dependency (a package with a
+/// `SymbolReference.json` and no source), called by a workspace file, so the
+/// model holds an ABI block.
+fn ws_with_symbol_only_dependency() -> Ws {
+    use crate::engine::deps::app_package_zip::test_apps;
+    let ws = base_ws();
+    ws.write("SymCaller.Codeunit.al", SYM_CALLER);
+    std::fs::write(
+        ws.root.join("app.json"),
+        format!(
+            r#"{{"id":"{WS_GUID}","name":"Session Ws","publisher":"probe","version":"1.0.0.0","dependencies":[{{"id":"{DEP_GUID}","name":"Dep App","publisher":"Microsoft","version":"1.0.0.0"}},{{"id":"{SYM_GUID}","name":"Sym App","publisher":"Microsoft","version":"1.0.0.0"}}]}}"#
+        ),
+    )
+    .unwrap();
+    let manifest = test_apps::manifest_xml(SYM_GUID, "Sym App");
+    std::fs::write(
+        ws.root
+            .join(".alpackages")
+            .join("Microsoft_Sym App_1.0.0.0.app"),
+        test_apps::build_app(&[
+            ("NavxManifest.xml", manifest.as_bytes()),
+            ("SymbolReference.json", SYM_SYMBOLS.as_bytes()),
+        ]),
+    )
+    .unwrap();
+    ws
+}
+
+/// The ABI rows of the symbol-only dependency in the model (`dep:` units are
+/// the source-bearing dependency's; the workspace's are `ws:`).
+fn abi_routine_rows(x: &CrossAppProgram) -> usize {
+    x.resolved
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| r.app_guid.eq_ignore_ascii_case(SYM_GUID))
+        .count()
+}
+
+/// T-rows (§6.8 L3/L4): the ABI block of a symbol-only dependency is reused
+/// across B and S, and reprojected when the assembly needs change (a
+/// symbol-only row's `rule_drafts` / `card_text` follow the needs). Every
+/// step equals cold.
+#[test]
+fn abi_block_is_reused_while_its_inputs_hold() {
+    let ws = ws_with_symbol_only_dependency();
+    let mut s = WorkspaceSession::new();
+    let r = refresh_and_compare(&mut s, &ws, "cold");
+    assert!(!rows(&r).abi_reused, "the first assembly builds the block");
+    let inputs = ws.inputs();
+    let m = assemble_and_resolve_cross_app_program(&inputs, false, AssemblyNeeds::BASE).unwrap();
+    assert!(
+        abi_routine_rows(&m) > 0,
+        "precondition: the model holds the symbol-only dependency's rows"
+    );
+    ws.edit(
+        "SymCaller.Codeunit.al",
+        "        L.S();",
+        "        L.S();\n        L.S();",
+    );
+    let r = refresh_and_compare(&mut s, &ws, "body edit");
+    assert_eq!(r.class, ChangeClass::BodyOnly);
+    assert!(rows(&r).abi_reused);
+    ws.edit(
+        "SymCaller.Codeunit.al",
+        "    procedure Go()",
+        "    procedure Go2()",
+    );
+    let r = refresh_and_compare(&mut s, &ws, "declaration edit");
+    assert_eq!(r.class, ChangeClass::Declaration);
+    assert!(rows(&r).abi_reused);
+    // The needs change: BASE, then EXPLAIN, then BASE again, each through the
+    // session's cache and compared with cold.
+    for (needs, reused) in [
+        (AssemblyNeeds::BASE, false),
+        (AssemblyNeeds::EXPLAIN, false),
+        (AssemblyNeeds::EXPLAIN, true),
+        (AssemblyNeeds::BASE, false),
+    ] {
+        let inputs = ws.inputs();
+        let p = s.refresh_program(&inputs);
+        compare_model(&mut s, &inputs, p, needs, &format!("{needs:?}"));
+        let rs = rows(s.last_report().unwrap());
+        assert_eq!(rs.abi_reused, reused, "{needs:?}");
+        if reused {
+            assert_eq!(rs.workspace_projected, 0, "{needs:?}");
+        } else {
+            assert_eq!(rs.workspace_reused, 0, "{needs:?}: every file reprojected");
+        }
+    }
+}
+
+/// T-rows: the ABI block's other input, the package's `SymbolReference`, is
+/// not in its key; a changed symbol-only package is P, and the session drops
+/// its kept rows with the rest of its retained state, so the block is built
+/// again from the new package.
+#[test]
+fn symbol_only_package_change_rebuilds_the_abi_block() {
+    use crate::engine::deps::app_package_zip::test_apps;
+    let ws = ws_with_symbol_only_dependency();
+    let mut s = WorkspaceSession::new();
+    refresh_and_compare(&mut s, &ws, "cold");
+    let more = SYM_SYMBOLS.replace(
+        r#"{"Name":"S","Id":1}"#,
+        r#"{"Name":"S","Id":1},{"Name":"S2","Id":3}"#,
+    );
+    assert_ne!(more, SYM_SYMBOLS, "precondition: the package changes");
+    let manifest = test_apps::manifest_xml(SYM_GUID, "Sym App");
+    std::fs::write(
+        ws.root
+            .join(".alpackages")
+            .join("Microsoft_Sym App_1.0.0.0.app"),
+        test_apps::build_app(&[
+            ("NavxManifest.xml", manifest.as_bytes()),
+            ("SymbolReference.json", more.as_bytes()),
+        ]),
+    )
+    .unwrap();
+    let r = refresh_and_compare(&mut s, &ws, "symbol-only package change");
+    assert_eq!(r.class, ChangeClass::Package);
+    assert!(!rows(&r).abi_reused);
+}
+
+/// T-rows: a file's PARENS-LESS calls are an input of its rows that its own
+/// text does not decide. `L.V` (no parentheses) in an unchanged file is a call
+/// while `Val` declares a procedure `V`; renaming it (S) leaves the file's
+/// text and parse as they were but drops the read from the program's
+/// parens-less calls, so the file's kept rows must not be reused.
+#[test]
+fn parenless_calls_of_an_unchanged_file_change_under_s() {
+    let val = "codeunit 50109 \"Val\"\n{\n    procedure V(): Integer\n    begin\n        exit(1);\n    end;\n}\n";
+    let reader = "codeunit 50107 \"Reader\"\n{\n    procedure Go()\n    var\n        L: Codeunit \"Val\";\n        N: Integer;\n    begin\n        N := L.V;\n    end;\n}\n";
+    let ws = Ws::new(&[("Val.Codeunit.al", val), ("Reader.Codeunit.al", reader)]);
+    let parenless = |ws: &Ws| {
+        let p = ResolvedProgram::build(&ws.inputs(), ProgramScope::CrossApp).unwrap();
+        p.body()
+            .parenless_calls
+            .iter()
+            .filter(|((_, path), _)| path == "src/Reader.Codeunit.al")
+            .map(|(_, ids)| ids.len())
+            .sum::<usize>()
+    };
+    assert_eq!(
+        parenless(&ws),
+        1,
+        "precondition: `L.V` is a parens-less call"
+    );
+    let mut s = WorkspaceSession::new();
+    refresh_and_compare(&mut s, &ws, "cold");
+    ws.edit("Val.Codeunit.al", "    procedure V()", "    procedure V2()");
+    assert_eq!(parenless(&ws), 0, "precondition: the rename drops the call");
+    let r = refresh_and_compare(&mut s, &ws, "callee renamed");
+    assert_eq!(r.class, ChangeClass::Declaration);
+    assert!(
+        !r.changed.contains(&"src/Reader.Codeunit.al".to_string()),
+        "precondition: the reader's text is unchanged"
+    );
+    assert_eq!(rows(&r).workspace_projected, 2, "callee and reader");
+    ws.edit("Val.Codeunit.al", "    procedure V2()", "    procedure V()");
+    let r = refresh_and_compare(&mut s, &ws, "callee restored");
+    assert_eq!(rows(&r).workspace_projected, 2);
+}
+
+/// T-rows: a file added before the others in the file table shifts every
+/// later file's `FileIx` (each routine row's `file`, half of its sites'
+/// keys). Their kept rows are reused re-stamped with the current index (the
+/// one thing `project_ir` writes the index into), never with the old one, and
+/// the dependency files' rows (numbered after the workspace's) likewise.
+/// Equal to cold at each step.
+#[test]
+fn file_ix_shift_restamps_later_files() {
+    let ws = base_ws();
+    let mut s = WorkspaceSession::new();
+    refresh_and_compare(&mut s, &ws, "cold");
+    let ix = |ws: &Ws, path: &str| {
+        let p = ResolvedProgram::build(&ws.inputs(), ProgramScope::CrossApp).unwrap();
+        let ctx = &p.body().ctx;
+        ctx.file_ix(ctx.primary_app_ref, path)
+    };
+    let before = ix(&ws, "src/Sub.Codeunit.al");
+    ws.write(
+        "AAA.Codeunit.al",
+        "codeunit 50108 \"AAA\"\n{\n    procedure R()\n    begin\n    end;\n}\n",
+    );
+    assert_ne!(
+        ix(&ws, "src/Sub.Codeunit.al"),
+        before,
+        "precondition: the added file shifts a later file's index"
+    );
+    let r = refresh_and_compare(&mut s, &ws, "file added first");
+    assert_eq!(r.class, ChangeClass::Declaration);
+    let rs = rows(&r);
+    assert_eq!(
+        (rs.workspace_projected, rs.workspace_reused),
+        (1, 4),
+        "only the added file is projected; the shifted ones are re-stamped"
+    );
+    assert_eq!(rs.dependency_projected, 0);
+    ws.remove("AAA.Codeunit.al");
+    let r = refresh_and_compare(&mut s, &ws, "file removed");
+    assert_eq!(rows(&r).workspace_projected, 0);
 }

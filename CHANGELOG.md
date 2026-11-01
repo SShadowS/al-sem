@@ -7,6 +7,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Measured (context-server stage 4: refresh per change type)
+
+- On a temp copy of the CDO baseline (release-fast, `aldump --session-refresh
+  --verify`, the same shared machine, run back to back): every step's model
+  equals the cold build's. `revision.refresh` before (master 6c463893) →
+  after: **B 5.7–6.0 s → 2.43–2.53 s** (program 1.6–2.1 → 0.70–0.76 s;
+  model assembly ~2.5–3.0 → ~0.65 s; attach ~0.9–1.0 s unchanged, whole by
+  design); **S/F 10.1–11.4 s → 7.0–7.35 s** (dependency re-resolution
+  4.1–4.7 s of it, unchanged); P 13.9–14.1 s → 12.2–13.6 s (the cold model
+  build 11.7–12.4 s on the same binary). What remains of a B refresh, by
+  span: `preflight.snapshot_build` 0.35–0.39 s, `preflight.resolve_full`
+  0.19 s (`resolve.event_flow` 64–88 ms), `crossapp.demand` 0.17 s,
+  `l3.dependency_rows` 0.25 s (cloning the kept rows), `l3.finish_resolved`
+  0.27–0.30 s, `l3.row_nodes` 0.08 s, `crossapp.attach_program_calls`
+  0.90–1.0 s. `model.copied_bytes` per B unchanged at 15.5 MB (it counts
+  the program's reused resolutions, not the row copies). Peak RSS of the
+  whole driver run (session plus verifying cold builds) 5.46 → 6.50 GB:
+  the kept raw rows.
+
+### Fixed (graph assembly: platform publisher injection; stage-4 follow-ups)
+
+- **`inject_platform_event_publishers` scanned every routine of the graph
+  once per platform-event subscriber** to decide whether the table already
+  has a real publisher of that name (0.31–0.33 s of the 0.33–0.35 s
+  `preflight.assemble_graph` on CDO, every build and every session
+  revision; `graph.platform_publishers`). It now reads the run of
+  `(table, event)` in the sorted routine list (`NodeSet::run_by`; the id's
+  order starts with the object and the name), the same set the scan
+  filtered. Behaviour-preserving: every golden unchanged. New test
+  `platform_publisher_is_not_injected_over_a_real_one` states the rule
+  literally (a real publisher suppresses the synthetic, a same-named
+  non-publisher does not, a publisher on another table does not); break:
+  key the run on the table alone → it fails ("not a publisher").
+  With this the graph reassembly the design's `DeclSemantics` /
+  `DeclLocations` split was to avoid costs ~20 ms per revision
+  (`graph.extract` 8–12 ms, `graph.layer_index` 3–5 ms), so the split is
+  not built: rebuilding is exact and cheaper than keeping the parts.
+- **The session keeps each dependency file's routine ids**
+  (`RowCache::dependency_ids`, a pure function of the app and the parse,
+  checked by parse identity): the demanded slice and the rows' nodes are
+  looked up instead of hashing every dependency routine's id again each
+  revision (10,881 files on CDO). The cold assembly is unchanged. Break:
+  the slice from the ids ignores the demand → 10 session tests fail on
+  model equality.
+- **The event-flow edges stay whole** (design §6.5), now that they cost
+  64–75 ms per revision on CDO (they were 0.73–0.94 s, see the subscriber
+  tier fix below). No finer rule: a body-only edit above a workspace
+  subscriber changes the edge of an unchanged DEPENDENCY publisher (its
+  route witness is the subscriber's span), so neither reusing the edges
+  under B nor recomputing only the publishers in changed files is correct.
+  Counterexample test `event_flow_edge_of_an_unchanged_publisher_moves_under_b`
+  (its precondition shows the cold edge moving; the session equals cold).
+
+### Added (context-server stage 4: retained raw model rows)
+
+- **The workspace session keeps each file's raw model rows** (context-server
+  design §6.8 L3/L4, `program::model::row_cache`). The model assembly
+  projects every workspace file, every source-bearing dependency file (its
+  demanded slice) and every symbol-only dependency's ABI into rows; all are
+  pure functions of their inputs. A session's assembly
+  (`WorkspaceSession::refresh_model`, now what `refresh` runs) takes a
+  file's rows from the previous revision exactly when every input is equal:
+  the parse (by identity: a tree is reused only for byte-equal text, and a
+  dependency tree belongs to the tier), the text, the population (physical
+  rows / demanded slice), the parens-less calls, the needs, the app guid and
+  the source unit. The `FileIx` is kept symbolically: `project_ir` writes it
+  only into each routine row's `file`, so a reused copy is re-stamped with
+  the current index (a file add shifts every later file's, the dependency
+  files' included, which would otherwise reproject all 10,881 CDO dependency
+  files). The ABI block is kept with the
+  required-dependency list, the apps' `AppRef`s and the needs; the session
+  drops all kept rows on a P change, so a block never outlives its packages.
+  Row order, `RowNodes`, `finish_resolved`, the adapter, the event graph and
+  the three final passes are the cold pipeline's, run whole; each row's
+  program node is recomputed every revision. The cold assembly is unchanged
+  (no cache: it projects straight into the model, as before).
+  `RefreshReport.rows` (`RowCacheStats`) and `aldump --session-refresh`'s
+  `rows` field say what was projected and reused.
+- New spans: `l3.dependency_rows` (the dependency part of the assembly),
+  `graph.extract`, `graph.layer_index`, `graph.lookup_and_internal`,
+  `graph.platform_publishers` (inside `preflight.assemble_graph`).
+- Tests (T-rows): a body edit projects only its own file (the other
+  workspace files and every dependency file reused); the ABI block of a
+  symbol-only dependency is reused across B and S and rebuilt when the needs
+  change or its package changes (P); a file whose text is unchanged is
+  projected again when its parens-less calls change (a renamed callee, S),
+  and re-stamped, not projected, when an added file shifts its `FileIx`.
+  Discrimination (each break seen failing on model equality, then
+  reverted): key without the parens-less calls (the parens-less test
+  fails), reuse without the re-stamp (the file-add and `FileIx`-shift tests
+  fail), without the population (the demand W → D1 → D2
+  test fails), the ABI key without the needs and the file key without the
+  needs (the ABI-block test fails), keep the rows across P (the symbol-only
+  package test fails).
+
+### Fixed (event-flow edges: subscriber tier lookup)
+
+- `emit_event_flow_edges` found each subscriber route's tier by scanning
+  every routine of the graph from the front, once per route (0.7–0.9 s per
+  build on CDO; `resolve.event_flow`). It now takes the head of the
+  subscriber id's run in the sorted routine list (`NodeSet::run_by`), the
+  same routine the scan found (on an aliased id, the first in merged order).
+  Behaviour-preserving: every golden unchanged.
+
 ### Changed (the ABI-integrity check is a declared need)
 
 - **Only the readers of the ABI-integrity check compute it.** It re-reads

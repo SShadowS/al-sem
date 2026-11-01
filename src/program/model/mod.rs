@@ -23,6 +23,7 @@ pub mod program_calls;
 pub mod projection;
 pub mod record_types;
 pub mod role;
+pub mod row_cache;
 pub mod symbol_table;
 pub mod taxonomy;
 pub mod workspace;

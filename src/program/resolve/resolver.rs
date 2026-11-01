@@ -3736,12 +3736,16 @@ pub fn emit_event_flow_edges(graph: &ProgramGraph, surface: &DeclSurface) -> Vec
             .iter()
             .filter(|se| !routine_is_collapse_marked(&se.subscriber, graph))
             .map(|se| {
-                // Subscriber tier: look up from graph.routines (linear scan; subscriber
-                // lists are small in practice).
+                // Subscriber tier: the FIRST routine with the subscriber's id,
+                // in `graph.routines` order. The list is sorted by
+                // `RoutineNodeId`, so that is the head of the id's run (two
+                // binary searches), not a scan of every routine per route (the
+                // scan cost 0.7-0.9 s per build on CDO). Aliased routines share
+                // an id: the run's head is the one a scan from the front finds.
                 let sub_tier = graph
                     .routines
-                    .iter()
-                    .find(|r| r.id == se.subscriber)
+                    .run_by(|r| r.id.cmp(&se.subscriber))
+                    .next()
                     .map(|r| r.tier)
                     .unwrap_or(TrustTier::Workspace);
 

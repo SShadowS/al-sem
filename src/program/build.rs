@@ -438,6 +438,8 @@ pub fn assemble_program_graph(
     let mut routines: Vec<RoutineNode> = Vec::new();
     let mut workspace_rows = crate::program::physical::PhysicalIndex::default();
 
+    use crate::engine::perf_trace as pt;
+    let extract_span = pt::span("graph", "graph.extract");
     for (unit, pf) in (1u32..).zip(&ws_unit.files) {
         let (o0, r0) = (objects.len(), routines.len());
         extract_nodes(
@@ -459,10 +461,13 @@ pub fn assemble_program_graph(
     dedup_objects(&mut objects);
     routines.sort_by(|a, b| a.id.cmp(&b.id));
     dedup_routines_preserving_genuine_overloads(&mut routines);
+    drop(extract_span);
 
+    let index_span = pt::span("graph", "graph.layer_index");
     let objects = NodeSet::layered(Arc::clone(&dep.dep_objects), objects);
     let routines = NodeSet::layered(Arc::clone(&dep.dep_routines), routines);
     let obj_index = ObjectIndex::build(&objects);
+    drop(index_span);
 
     let mut graph = ProgramGraph {
         apps: dep.apps.clone(),
@@ -481,15 +486,21 @@ pub fn assemble_program_graph(
         abi_ingest_errors: dep.abi_ingest_errors.clone(),
         workspace_rows,
     };
-    graph.lookup_pages = source_lookup_pages(&graph);
-    graph.closed_internal_interfaces = closed_internal_interfaces(&graph, snap);
+    {
+        let _s = pt::span("graph", "graph.lookup_and_internal");
+        graph.lookup_pages = source_lookup_pages(&graph);
+        graph.closed_internal_interfaces = closed_internal_interfaces(&graph, snap);
+    }
 
     // ── Inject synthetic platform-event publishers ───────────────────────────
     // Binds subscribers to the table's implicit DB-trigger / validate events,
     // which have no publisher routine in source (see below). Must run AFTER
     // the full dep+workspace merge: a subscriber in one app can target a
     // publisher object living in another.
-    inject_platform_event_publishers(&mut graph);
+    {
+        let _s = pt::span("graph", "graph.platform_publishers");
+        inject_platform_event_publishers(&mut graph);
+    }
 
     graph
 }
@@ -777,11 +788,17 @@ pub(crate) fn inject_platform_event_publishers(graph: &mut ProgramGraph) {
                 continue; // already injected for this (table, event)
             }
             // Never shadow a real source publisher of the same name on the table.
-            let has_real_publisher = graph.routines.iter().any(|r| {
-                r.id.object == pub_obj.id
-                    && r.id.name_lc == args.event_name
-                    && r.publisher_kind.is_some()
-            });
+            // `graph.routines` is sorted by `RoutineNodeId`, whose order starts
+            // with `(object, name_lc)`: the routines of that pair are one run
+            // (two binary searches), not a scan of every routine per subscriber.
+            let has_real_publisher = graph
+                .routines
+                .run_by(|r| {
+                    r.id.object
+                        .cmp(&pub_obj.id)
+                        .then_with(|| r.id.name_lc.cmp(&args.event_name))
+                })
+                .any(|r| r.publisher_kind.is_some());
             if has_real_publisher {
                 continue;
             }
@@ -3130,5 +3147,87 @@ codeunit 50110 "Repro Obj Sub"
                 ("i".into(), ObjectRef::Id(2))
             ]
         );
+    }
+
+    /// A platform table event gets a synthetic publisher unless the table
+    /// already has a REAL publisher of that name (the run of `(table, name)`
+    /// in the sorted routine list). Stated literally: `T1` declares an
+    /// `[IntegrationEvent]` `OnAfterDeleteEvent` and a non-publisher
+    /// procedure `OnAfterModifyEvent`; `T2` declares nothing. Subscribers name
+    /// all three events: only `T1`'s real publisher suppresses its synthetic,
+    /// a same-named non-publisher does not, and a real publisher on another
+    /// table does not.
+    #[test]
+    fn platform_publisher_is_not_injected_over_a_real_one() {
+        let ws_id = layer_split_app_id("Ws");
+        let src = r#"
+table 50000 "T1"
+{
+    fields { field(1; "No."; Code[20]) { } }
+
+    [IntegrationEvent(false, false)]
+    procedure OnAfterDeleteEvent()
+    begin
+    end;
+
+    procedure OnAfterModifyEvent()
+    begin
+    end;
+}
+table 50001 "T2"
+{
+    fields { field(1; "No."; Code[20]) { } }
+}
+codeunit 50002 "Subs"
+{
+    [EventSubscriber(ObjectType::Table, Database::"T1", 'OnAfterDeleteEvent', '', false, false)]
+    local procedure A(var Rec: Record "T1")
+    begin
+    end;
+
+    [EventSubscriber(ObjectType::Table, Database::"T1", 'OnAfterModifyEvent', '', false, false)]
+    local procedure B(var Rec: Record "T1")
+    begin
+    end;
+
+    [EventSubscriber(ObjectType::Table, Database::"T2", 'OnAfterDeleteEvent', '', false, false)]
+    local procedure C(var Rec: Record "T2")
+    begin
+    end;
+}
+"#;
+        let snap = AppSetSnapshot {
+            apps: vec![layer_split_source_unit(
+                &ws_id,
+                TrustTier::Workspace,
+                vec![("Ws.al", src)],
+            )],
+            workspace_app: ws_id.clone(),
+            world: World::Closed,
+        };
+        let graph = build_program_graph(&snap, &AbiCache::new());
+        let platform = |table: i64, event: &str| {
+            graph
+                .routines
+                .iter()
+                .filter(|r| {
+                    r.id.object.key == crate::program::node::ObjKey::Id(table)
+                        && r.id.name_lc.as_str() == event
+                        && r.publisher_kind == Some(PublisherKind::Platform)
+                })
+                .count()
+        };
+        assert!(
+            graph
+                .routines
+                .iter()
+                .any(|r| r.id.name_lc.as_str() == "onafterdeleteevent"
+                    && r.publisher_kind.is_some()
+                    && r.publisher_kind != Some(PublisherKind::Platform)),
+            "precondition: T1 declares a real publisher"
+        );
+        assert_eq!(platform(50000, "onafterdeleteevent"), 0, "a real one");
+        assert_eq!(platform(50000, "onaftermodifyevent"), 1, "not a publisher");
+        assert_eq!(platform(50001, "onafterdeleteevent"), 1, "another table");
     }
 }
