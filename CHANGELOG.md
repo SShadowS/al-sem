@@ -92,6 +92,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same routine the scan found (on an aliased id, the first in merged order).
   Behaviour-preserving: every golden unchanged.
 
+### Changed (the ABI-integrity check is a declared need)
+
+- **Only the readers of the ABI-integrity check compute it.** It re-reads
+  every dependency's SymbolReference after the resolve (0.85 s on the CDO
+  baseline), and every cold cross-app command paid for it in
+  `ResolvedProgram::build`, which then dropped it. Now
+  `full::resolve_full_program_with` takes `abi_check::AbiIntegrity::{Check,
+  Skip}` with no default. Its readers declare `Check`: `aldump
+  --program-call-graph-stats` (through `resolve_full_program`, the stats
+  entry) and the CDO ratchet `cdo_full_program_coverage_and_self_reported_metric`.
+  The command builders (`fresh_program_from_snapshot_with`, behind
+  `ResolvedProgram::build`) and the workspace session declare `Skip`. The
+  session used to fill the report with zeros, which read like "no ABI routes".
+  `ProgramReport::abi_integrity` is now an `Option`, read through
+  `abi_integrity()`, which panics "ABI integrity not computed: resolve with
+  AbiIntegrity::Check". `ResolvedProgram::from_parts` asserts in debug builds
+  that nothing computed it. The applicability check and
+  `abi_ingestion_integrity_cdo_gate` run their own check and are unchanged.
+- Tests: `the_program_builders_skip_the_abi_integrity_check` and
+  `reading_an_unchecked_abi_integrity_panics` (`program::resolved`), and
+  `program_call_graph_stats_report_the_abi_integrity_check`
+  (`tests/cli/cli_parameterless_symbol_method.rs`, 3 routes, all mapped).
+  Discrimination: the stats entry with `Skip` fails the stats test (aldump
+  panics with the message); the command builder with `Check` fails the
+  builder test and 3 other `resolved` tests through the `from_parts` assert;
+  an accessor that returns an empty report fails the panic test; the session
+  with `Check` fails 15 session tests. Each passes again after the revert.
+- **Measured on CDO** (release-fast, `/usr/bin/time -v`, 3 alternating
+  rounds, shared machine with load around 7): the `resolve.abi_integrity`
+  span (0.85 s) is gone and `preflight.resolve_full` drops from 1.87 s to
+  1.00 s (`ALSEM_TRACE`, `analyze`). Wall time, before / after (median of 3):
+  `analyze` 23.5 / 21.7 s, `prove IssueReminder may-commit` 30.5 / 29.1 s,
+  `explain --routine IssueReminder` 31.5 / 26.0 s. These are noisy (one
+  before round ran 5 s slow on every command); the span is the exact saving.
+  Peak RSS is unchanged within noise (3.42–3.49 GB on both sides; `explain`
+  about 20 MB lower). Every command's stdout is byte-identical before and
+  after.
+
+### Fixed (flaky `engine_ask_prints_what_the_cli_prints`: a broken pipe in the test)
+
+- **The test, not the product, raced.** For its `--no-such-flag` case both
+  `alsem` and `alsem engine-ask` exit on the clap error without reading stdin
+  (`engine-ask` exits before it starts an engine child). The test wrote its
+  diff to their stdin with `.unwrap()`; when the process had already exited,
+  the write failed with a broken pipe (EPIPE) and the test panicked. It failed
+  only when the process won the race. The test helper (`run_with_stdin` in
+  `tests/cli/engine_host.rs`) now treats a broken pipe as the process's
+  outcome and compares exit and streams as usual; any other write error still
+  fails, as in `cli_batch_*`.
+- **The race is now pinned deterministically.**
+  `a_process_that_exits_before_reading_its_stdin_is_compared` writes 4 MiB,
+  far over any pipe buffer, so the write always meets the closed pipe. With
+  the broken-pipe arm removed it failed 3/3 (`write stdin: Broken pipe (os
+  error 32)`); restored, it passes.
+- **The product side was already correct, and is now pinned.** The front
+  end's failed request write (`EngineFront::call`) becomes an `engineError`
+  answer with the death recorded. No test reached that path. A new child test
+  hook, `exit-after-open` (`ALSEM_ENGINE_TEST_HOOK`), exits right after
+  answering `session/open`; `a_child_gone_before_the_request_write_fails_the_ask`
+  sends a 4 MiB ask to it and asserts the answer names the failed write. With
+  that path changed to a panic the test failed and every other `engine_host`
+  test still passed; restored, it passes.
+
 ### Added (context-server stage 4: `aldump --session-refresh`)
 
 - **`aldump --session-refresh <workspace-copy> [--file <rel>] [--verify]`**

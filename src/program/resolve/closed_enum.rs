@@ -1181,7 +1181,10 @@ enum 50106 "Other Kind" implements "Other Strategy"
         let ctx = crate::program::resolve::full::build_context_res(dir.path()).expect("context");
         let graph = ctx.graph();
         let index = super::ResolveIndex::build(graph);
-        let report = crate::program::resolve::full::resolve_full_program_with(&ctx);
+        let report = crate::program::resolve::full::resolve_full_program_with(
+            &ctx,
+            crate::program::resolve::abi_check::AbiIntegrity::Skip,
+        );
         let routes = &report
             .edges
             .iter()

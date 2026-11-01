@@ -47,7 +47,7 @@ use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::ObjectNode;
 use crate::program::profile::{BuildProfile, DependencyBodies};
 use crate::program::resolve::abi_check::{
-    AbiIntegrityReport, abi_ingestion_integrity, build_raw_abi_index_from_snapshot,
+    AbiIntegrity, AbiIntegrityReport, abi_ingestion_integrity, build_raw_abi_index_from_snapshot,
 };
 use crate::program::resolve::arg_dispatch::{self, ArgDispatchInfo};
 use crate::program::resolve::decl_surface::DeclSurface;
@@ -300,8 +300,11 @@ pub struct ProgramReport {
     /// Taxonomy'd histogram over PRIMARY-SCOPED edges only
     /// (edges whose `from.object.app == primary_app_ref`).
     pub primary_histogram: Histogram,
-    /// ABI ingestion integrity: `AbiSymbol` route keys vs. raw dep SymbolReference.
-    pub abi_integrity: AbiIntegrityReport,
+    /// ABI ingestion integrity: `AbiSymbol` route keys vs. raw dep
+    /// SymbolReference. `None` = not computed (the resolve declared
+    /// [`AbiIntegrity::Skip`]), never "no ABI routes": read it through
+    /// [`ProgramReport::abi_integrity`], which panics on `None`.
+    pub(crate) abi_integrity: Option<AbiIntegrityReport>,
     /// The workspace app's [`AppRef`] (use with [`is_primary_scope`]).
     pub primary_app_ref: AppRef,
     /// Count of publisher `EventFlow` edges SKIPPED by [`resolver::
@@ -330,6 +333,23 @@ pub struct ProgramReport {
     pub site_facts: HashMap<ObligationId, SiteFacts>,
     /// See [`ParenlessCalls`]: the workspace files' parens-less calls.
     pub parenless_calls: ParenlessCalls,
+}
+
+impl ProgramReport {
+    /// The ABI-integrity check of this resolve.
+    ///
+    /// # Panics
+    ///
+    /// When the resolve declared [`AbiIntegrity::Skip`] (every command build
+    /// and the workspace session do): "not computed" must never read as "no
+    /// ABI routes".
+    #[must_use]
+    pub fn abi_integrity(&self) -> &AbiIntegrityReport {
+        self.abi_integrity.as_ref().expect(
+            "ABI integrity not computed: resolve with AbiIntegrity::Check \
+             (resolve_full_program, or resolve_full_program_with(.., AbiIntegrity::Check))",
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1705,17 +1725,20 @@ pub(crate) fn rematerialize_witnesses(edges: &mut [ClassifiedEdge], surface: &De
 #[must_use]
 pub fn resolve_full_program(workspace_root: &Path) -> Option<ProgramReport> {
     let ctx = build_context(workspace_root)?;
-    Some(resolve_full_program_with(&ctx))
+    // The north-star stats entry: the whole report, the ABI-integrity check
+    // included (`aldump --program-call-graph-stats` prints it).
+    Some(resolve_full_program_with(&ctx, AbiIntegrity::Check))
 }
 
 /// The substrate-taking core of [`resolve_full_program`] (steps 5–8 of that
 /// function's documented pipeline). Callers that already hold a
 /// [`ProgramContext`] — e.g. a test harness that rebuilds the context once
 /// and resolves it many times — call this directly instead of paying
-/// `build_context`'s cost on every resolve.
+/// `build_context`'s cost on every resolve. `abi` declares whether the
+/// ABI-integrity check runs (see [`AbiIntegrity`]); it changes no other field.
 #[must_use]
-pub fn resolve_full_program_with(ctx: &ProgramContext) -> ProgramReport {
-    resolve_full_program_reusing(ctx, None, false).0
+pub fn resolve_full_program_with(ctx: &ProgramContext, abi: AbiIntegrity) -> ProgramReport {
+    resolve_full_program_reusing(ctx, None, false, abi).0
 }
 
 /// [`resolve_full_program_with`] for a workspace session (context-server
@@ -1728,6 +1751,7 @@ pub(crate) fn resolve_full_program_reusing(
     ctx: &ProgramContext,
     reuse: Option<&HashMap<String, Arc<FileResolution>>>,
     keep: bool,
+    abi: AbiIntegrity,
 ) -> (ProgramReport, Option<KeptResolutions>) {
     // ── Steps 1–4: shared setup (snapshot → graph → parse → primary app) ──────
     let ProgramContext {
@@ -1780,24 +1804,18 @@ pub(crate) fn resolve_full_program_reusing(
     };
 
     // ── Step 7: ABI integrity ─────────────────────────────────────────────────
-    // Build a raw ABI index from dep .app files (independent of graph nodes).
-    // A workspace session (`keep`) hands the report to
-    // `ResolvedProgram::from_parts`, which drops the ABI integrity, as the cold
-    // `ResolvedProgram::build` does: the session does not compute it (0.8-1.0 s
-    // on CDO). Every other caller gets it as before.
-    let abi_integrity = if keep {
-        AbiIntegrityReport {
-            abi_routes_total: 0,
-            abi_mapped: 0,
-            abi_unmapped: 0,
-            abi_unmapped_sites: Vec::new(),
+    // Build a raw ABI index from dep .app files (independent of graph nodes),
+    // only when the caller declared it reads the check (0.8-1.0 s on CDO):
+    // `AbiIntegrity`'s doc names who does.
+    let abi_integrity = match abi {
+        AbiIntegrity::Skip => None,
+        AbiIntegrity::Check => {
+            let _s = pt::span("resolve", "resolve.abi_integrity");
+            let raw_abi_index = build_raw_abi_index_from_snapshot(snap, &graph.apps);
+            // Collect all underlying edges for the ABI check.
+            let plain_edges: Vec<Edge> = edges.iter().map(|ce| ce.edge.clone()).collect();
+            Some(abi_ingestion_integrity(&plain_edges, &raw_abi_index))
         }
-    } else {
-        let _s = pt::span("resolve", "resolve.abi_integrity");
-        let raw_abi_index = build_raw_abi_index_from_snapshot(snap, &graph.apps);
-        // Collect all underlying edges for the ABI check.
-        let plain_edges: Vec<Edge> = edges.iter().map(|ce| ce.edge.clone()).collect();
-        abi_ingestion_integrity(&plain_edges, &raw_abi_index)
     };
 
     let event_flow_dual_publisher_alias_skips =
@@ -2550,7 +2568,9 @@ pub fn fresh_program_from_snapshot_with(
     let ctx = build_context_from_snapshot(snap, profile)?;
     let report = {
         let _s = pt::span("preflight", "preflight.resolve_full");
-        resolve_full_program_with(&ctx)
+        // The command builders: no command reads the ABI-integrity check
+        // (`ResolvedProgram::from_parts` asserts it was not computed).
+        resolve_full_program_with(&ctx, AbiIntegrity::Skip)
     };
     Ok((ctx, report))
 }
@@ -4897,7 +4917,7 @@ mod tests {
         )
         .expect("write C.al");
         let ctx = build_context(dir.path()).expect("build_context");
-        let report = resolve_full_program_with(&ctx);
+        let report = resolve_full_program_with(&ctx, AbiIntegrity::Skip);
         // (file, 0-based line) -> the op's label, as hand-stated above.
         let sites = [
             ("C.al", 7, "Rec.Insert", Some(true)),

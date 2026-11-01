@@ -55,7 +55,7 @@ use al_syntax::IdentifierFoldExt;
 use crate::program::node::{AppRef, ObjKey, ObjectKind, ObjectNodeId};
 use crate::program::node_extract::{AbiParams, ObjectNode};
 use crate::program::resolve::abi_check::{
-    RawAbiIndex, abi_ingestion_integrity, build_raw_abi_index_from_snapshot,
+    AbiIntegrity, RawAbiIndex, abi_ingestion_integrity, build_raw_abi_index_from_snapshot,
 };
 use crate::program::resolve::applicability::{
     RecordOpCtx, RecordOpKind, RunTrigger, implicit_trigger_route_applicable,
@@ -811,7 +811,7 @@ pub fn mint_fresh_golden_for_kind(workspace_root: &Path, kind: EdgeKind) -> Sema
     let Some(ctx) = build_context(workspace_root) else {
         return SemanticGolden::default();
     };
-    let report = resolve_full_program_with(&ctx);
+    let report = resolve_full_program_with(&ctx, AbiIntegrity::Skip);
     mint_fresh_golden_for_kind_on(&ctx, &report, kind)
 }
 
@@ -1438,7 +1438,8 @@ pub fn run_route_applicability(workspace_root: &Path) -> ApplicabilityReport {
     let Some(ctx) = build_context(workspace_root) else {
         return ApplicabilityReport::default();
     };
-    let report = resolve_full_program_with(&ctx);
+    // The applicability check runs its own ABI check over the edges.
+    let report = resolve_full_program_with(&ctx, AbiIntegrity::Skip);
     run_route_applicability_on(&ctx, &report)
 }
 

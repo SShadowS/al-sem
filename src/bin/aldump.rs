@@ -1537,7 +1537,7 @@ fn run_main() -> ExitCode {
         let h = &r.histogram;
         let ph = &r.primary_histogram;
         let cov = &r.coverage;
-        let abi = &r.abi_integrity;
+        let abi = r.abi_integrity();
 
         // Task 3: stratified `Unknown`-reason breakdown (charter §8). Purely
         // diagnostic — never changes `h`/`ph`/`cov` above. Rendered via
