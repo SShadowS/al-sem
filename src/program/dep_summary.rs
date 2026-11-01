@@ -467,7 +467,10 @@ codeunit 60002 "Plain Cu"
 
     /// The report fields both profiles must agree on, as comparable text.
     pub(crate) fn report_text(ctx: &crate::program::resolve::full::ProgramContext) -> String {
-        let r = crate::program::resolve::full::resolve_full_program_with(ctx);
+        let r = crate::program::resolve::full::resolve_full_program_with(
+            ctx,
+            crate::program::resolve::abi_check::AbiIntegrity::Skip,
+        );
         let edges: Vec<_> = r
             .edges
             .iter()
@@ -567,7 +570,11 @@ codeunit 60002 "Plain Cu"
             let snap = build_snapshot_res(&root).expect("snapshot");
             let ctx = build_context_from_snapshot(snap, profile).expect("context");
             assert_eq!(
-                resolve_full_program_with(&ctx).recovered_files,
+                resolve_full_program_with(
+                    &ctx,
+                    crate::program::resolve::abi_check::AbiIntegrity::Skip
+                )
+                .recovered_files,
                 expected,
                 "{profile:?}"
             );

@@ -254,7 +254,12 @@ impl WorkspaceSession {
         }
         let (report, kept) = {
             let _s = pt::span("preflight", "preflight.resolve_full");
-            f::resolve_full_program_reusing(&ctx, Some(&reuse_files), true)
+            f::resolve_full_program_reusing(
+                &ctx,
+                Some(&reuse_files),
+                true,
+                crate::program::resolve::abi_check::AbiIntegrity::Skip,
+            )
         };
         let kept = kept.expect("asked to keep the resolutions");
         let resolved_now = ws_files.len() - reuse_files.len() + kept.rematerialize_failures;

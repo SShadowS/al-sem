@@ -56,7 +56,12 @@ fn cdo_shared() -> Option<&'static CdoShared> {
             let ws = cdo_ws_or_enforce()?;
             let ctx = al_sem::program::resolve::full::build_context(&ws)
                 .expect("shared CDO substrate: build_context must succeed on CDO_WS");
-            let report = al_sem::program::resolve::full::resolve_full_program_with(&ctx);
+            // The CDO ratchets read the ABI-integrity check
+            // (`cdo_full_program_coverage_and_self_reported_metric`).
+            let report = al_sem::program::resolve::full::resolve_full_program_with(
+                &ctx,
+                AbiIntegrity::Check,
+            );
             Some(CdoShared { ctx, report })
         })
         .as_ref()
@@ -449,7 +454,8 @@ use al_sem::engine::deps::symbol_reference::{
 };
 use al_sem::program::node::AppRef;
 use al_sem::program::resolve::abi_check::{
-    AbiIntegrityReport, RawAbiIndex, abi_ingestion_integrity, run_abi_integrity_check_on,
+    AbiIntegrity, AbiIntegrityReport, RawAbiIndex, abi_ingestion_integrity,
+    run_abi_integrity_check_on,
 };
 use al_sem::program::resolve::edge::{
     AbiEventKind, AbiRoutineKey, AbiRoutineKind, BuiltinId, CanonicalSpan, DispatchShape, Edge,
@@ -1218,7 +1224,7 @@ fn resolve_full_program_with_matches_path_wrapper_on_fixture() {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/semantic-golden");
     let via_path = resolve_full_program(&fixture).expect("wrapper must succeed on fixture");
     let ctx = build_context(&fixture).expect("build_context must succeed on fixture");
-    let via_ctx = resolve_full_program_with(&ctx);
+    let via_ctx = resolve_full_program_with(&ctx, AbiIntegrity::Check);
 
     assert_eq!(
         via_path.histogram, via_ctx.histogram,
@@ -1439,9 +1445,11 @@ fn cdo_full_program_coverage_and_self_reported_metric() {
 
     // ── ABI ingestion integrity ──────────────────────────────────────────────
     assert_eq!(
-        report.abi_integrity.abi_unmapped, 0,
+        report.abi_integrity().abi_unmapped,
+        0,
         "ABI ingestion integrity: {} route key(s) not found in raw SymbolReference\n{:#?}",
-        report.abi_integrity.abi_unmapped, report.abi_integrity.abi_unmapped_sites
+        report.abi_integrity().abi_unmapped,
+        report.abi_integrity().abi_unmapped_sites
     );
 
     // ── ParseStatus::Recovered diagnostic (Task 3, preproc foundations
@@ -1621,9 +1629,9 @@ fn cdo_full_program_coverage_and_self_reported_metric() {
         ph.real_unknown_rate() * 100.0,
         report.coverage.parsed_obligations,
         report.coverage.classified_edges,
-        report.abi_integrity.abi_routes_total,
-        report.abi_integrity.abi_mapped,
-        report.abi_integrity.abi_unmapped,
+        report.abi_integrity().abi_routes_total,
+        report.abi_integrity().abi_mapped,
+        report.abi_integrity().abi_unmapped,
     );
 
     // ── Stratification invariant: sum(unknownByReason) == unknown count ──────
@@ -3350,7 +3358,8 @@ fn fixture_agrees_with_the_compiler_graph() {
     let golden = load_compiler_golden(&fixture_compiler_golden_path());
     assert!(golden.is_some(), "fixture-compiler-anon.json must load");
     let ctx = al_sem::program::resolve::full::build_context(&fixture).expect("fixture context");
-    let report = al_sem::program::resolve::full::resolve_full_program_with(&ctx);
+    let report =
+        al_sem::program::resolve::full::resolve_full_program_with(&ctx, AbiIntegrity::Skip);
     let audit = run_compiler_audit(&ctx, &report, &fixture, golden.as_ref(), no_drift, None);
     assert_eq!(
         (audit.compiler_pairs, audit.program_pairs, audit.agree),
@@ -3380,7 +3389,8 @@ fn fixture_audit_checks_first_lines_and_refuses_repeated_pairs() {
         "precondition: the fixture's one pair starts on line 22"
     );
     let ctx = al_sem::program::resolve::full::build_context(&fixture).expect("fixture context");
-    let report = al_sem::program::resolve::full::resolve_full_program_with(&ctx);
+    let report =
+        al_sem::program::resolve::full::resolve_full_program_with(&ctx, AbiIntegrity::Skip);
 
     let mut moved = golden.clone();
     moved.pairs[0].line = 21;
@@ -3521,7 +3531,8 @@ fn same_line_calls_swap_is_caught() {
     }
 
     let ctx = al_sem::program::resolve::full::build_context(&fixture).expect("fixture context");
-    let report = al_sem::program::resolve::full::resolve_full_program_with(&ctx);
+    let report =
+        al_sem::program::resolve::full::resolve_full_program_with(&ctx, AbiIntegrity::Skip);
     let run_edges: Vec<_> = report
         .edges
         .iter()

@@ -43,6 +43,11 @@ const SOURCE: &str = r#"codeunit 50271 "P Caller"
 "#;
 
 fn stats(ws: &Path) -> serde_json::Value {
+    all_stats(ws)["primaryScoped"].clone()
+}
+
+/// The whole `aldump --program-call-graph-stats` JSON.
+fn all_stats(ws: &Path) -> serde_json::Value {
     let out = Command::new(env!("CARGO_BIN_EXE_aldump"))
         .arg("--program-call-graph-stats")
         .arg(ws)
@@ -54,13 +59,11 @@ fn stats(ws: &Path) -> serde_json::Value {
         "aldump failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("stats JSON");
-    v["primaryScoped"].clone()
+    serde_json::from_slice(&out.stdout).expect("stats JSON")
 }
 
-#[test]
-fn a_symbol_method_without_parameters_matches_a_call_with_none() {
-    let t = tempfile::tempdir().unwrap();
+/// The workspace calling `System`'s three methods, written under `t`.
+fn write_workspace(t: &tempfile::TempDir) -> std::path::PathBuf {
     let ws = t.path().join("ws");
     std::fs::create_dir_all(ws.join("src")).unwrap();
     std::fs::write(
@@ -77,9 +80,30 @@ fn a_symbol_method_without_parameters_matches_a_call_with_none() {
         "29.0.0.0",
         SYSTEM_SYMBOLS,
     );
-    let s = stats(&ws);
+    ws
+}
+
+#[test]
+fn a_symbol_method_without_parameters_matches_a_call_with_none() {
+    let t = tempfile::tempdir().unwrap();
+    let s = stats(&write_workspace(&t));
     // The two parameterless calls and `DisableKey` reach the symbols; `.Get`
     // on the returned Dictionary is a built-in.
     assert_eq!(s["resolvedAbiExternal"], 3, "{s}");
     assert_eq!(s["unknown"], 0, "{s}");
+}
+
+/// The north-star stats still run the edge-side ABI-integrity check: the one
+/// consumer of `ProgramReport::abi_integrity()` outside the CDO ratchets (the
+/// command builders and the session skip it, `AbiIntegrity::Skip`). Its three
+/// `AbiSymbol` routes are the three calls above, each mapped back to the raw
+/// SymbolReference.
+#[test]
+fn program_call_graph_stats_report_the_abi_integrity_check() {
+    let t = tempfile::tempdir().unwrap();
+    let v = all_stats(&write_workspace(&t));
+    let abi = &v["abiIntegrity"];
+    assert_eq!(abi["abiRoutesTotal"], 3, "{abi}");
+    assert_eq!(abi["abiMapped"], 3, "{abi}");
+    assert_eq!(abi["abiUnmapped"], 0, "{abi}");
 }

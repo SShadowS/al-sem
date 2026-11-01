@@ -372,8 +372,14 @@ impl ResolvedProgram {
             ce.edge.from.object.app != ctx.primary_app_ref
                 && matches!(ce.obligation_id, ObligationId::CallSite { .. })
         }));
-        // Nothing reads the dispatch audit, the alias-skip count or the ABI
-        // integrity of this build: they drop here.
+        // Nothing reads the dispatch audit or the alias-skip count of this
+        // build: they drop here. Nothing reads its ABI integrity either, so
+        // both builders resolve with `AbiIntegrity::Skip` and never compute it
+        // (declared-needs rule 4: skip a fact where it is made).
+        debug_assert!(
+            report.abi_integrity.is_none(),
+            "ResolvedProgram drops the ABI-integrity check: resolve with AbiIntegrity::Skip"
+        );
         let ProgramReport {
             edges,
             coverage: coverage_contract,
@@ -525,6 +531,43 @@ fn edge_for_test(body: &ProgramBody, params_count: usize) -> ClassifiedEdge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The report behind every `ResolvedProgram` (`build_program_with_coverage_profiled`,
+    /// both profiles) never computes the ABI-integrity check: no command reads it
+    /// (declared-needs rule 4). `ResolvedProgram::build` succeeding under both
+    /// scopes is the other half: `from_parts` asserts the same in debug builds.
+    #[test]
+    fn the_program_builders_skip_the_abi_integrity_check() {
+        let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/r0-corpus/ws-cross-object-chain");
+        let inputs = WorkspaceInputs::read(&ws, &Default::default());
+        for scope in [ProgramScope::Workspace, ProgramScope::CrossApp] {
+            let (_, report, _) =
+                crate::program::resolve::full::build_program_with_coverage_profiled(
+                    &inputs,
+                    scope.profile(),
+                )
+                .expect("fixture builds");
+            assert!(report.abi_integrity.is_none(), "{scope:?}");
+            ResolvedProgram::build(&inputs, scope).expect("fixture builds");
+        }
+    }
+
+    /// Reading the check from a resolve that declared `AbiIntegrity::Skip`
+    /// panics, naming the declaration (rule 5): "not computed" never reads as
+    /// "no ABI routes".
+    #[test]
+    #[should_panic(expected = "ABI integrity not computed: resolve with AbiIntegrity::Check")]
+    fn reading_an_unchecked_abi_integrity_panics() {
+        let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/r0-corpus/ws-cross-object-chain");
+        let ctx = crate::program::resolve::full::build_context(&ws).expect("context");
+        let report = crate::program::resolve::full::resolve_full_program_with(
+            &ctx,
+            crate::program::resolve::abi_check::AbiIntegrity::Skip,
+        );
+        let _ = report.abi_integrity();
+    }
 
     /// Spec §4.3.2 / §8.3: `all_edges` yields `edges`, then
     /// `dependency_body_edges` (the order the projection's `conf` tie and the
