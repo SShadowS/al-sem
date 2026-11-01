@@ -7,6 +7,138 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (context-server stage 4: `aldump --session-refresh`)
+
+- **`aldump --session-refresh <workspace-copy> [--file <rel>] [--verify]`**
+  measures the workspace session per change type on a real workspace: cold,
+  no-op, body edit, prepended newlines, an added procedure, an added file and
+  an `app.json` byte, each followed by its restore, one JSON line per refresh
+  (class, files parsed/resolved, dependency bodies resolved again,
+  `copiedBytes`, `programMs`, `refreshMs`, resident set). `--verify` builds
+  each step's model cold and compares the two `write_model` fingerprints. It
+  edits the workspace, so it refuses one inside a git checkout (the pinned
+  CDO baseline is). `session::workspace::{write_program, write_model,
+  model_fingerprint}` are the equality projections the tests and the driver
+  share; `RefreshReport` gains `program_ms`.
+- **The dependency resolution is shared, not copied, across B.**
+  `DependencyBodyResolution.edges` and `.site_facts` are `Arc`s;
+  `ProgramBody` holds the dependency edges by `Arc` and its site facts as a
+  two-layer `SiteFactsMap` (workspace facts over the shared dependency facts;
+  reads answer what the merged map answered, the dependency entry winning a
+  common key) read through the `Copy` view `SiteFactsRef`, which `EdgeView`
+  and the adapter now carry. A session copies the reused dependency edges
+  only when a witness into a moved workspace declaration must change
+  (`full::witnesses_current`, then `Arc::make_mut` + re-materialization);
+  `RefreshReport.dependency_edges_copied` says which. On CDO
+  `model.copied_bytes` per B revision drops from 310 MB to 15.5 MB.
+- The session skips the ABI-integrity check, whose one consumer on its path
+  (`ResolvedProgram::from_parts`) drops it, as the cold `ResolvedProgram::build`
+  does (0.8–1.0 s on CDO); every other caller computes it as before.
+- New spans inside the resolve: `resolve.decl_surface`, `resolve.index`,
+  `resolve.files`, `resolve.event_flow`, `resolve.abi_integrity`.
+- **Measured on a temp copy of the CDO baseline** (release-fast,
+  `aldump --session-refresh --verify`, shared machine): every one of the 12
+  steps' models equals the cold build's (`equalToCold: true`). `revision.refresh`
+  per class: P (first build) 14.0 s, P (`app.json`) 12.5–12.7 s against a cold
+  model build of 13.3–15.8 s; S/F 9.5–10.8 s (dependency re-resolution
+  4.1–4.6 s of it); B 5.1–5.9 s (program 1.6–1.8 s; model assembly 2.4–2.9 s,
+  attach 0.9–1.0 s, demand 0.15–0.2 s; one noisy 9.1 s no-op). Per-file
+  resolution under B is 20–40 ms; `resolve.event_flow` is 0.73–0.94 s every
+  revision (the design assumed milliseconds). `model.copied_bytes`: 15.5 MB
+  per B, 0 for S/P. Peak RSS of the whole driver run (session plus the
+  verifying cold builds) 5.55 GB.
+
+### Added (context-server stage 4: the workspace session, retained parse and resolutions)
+
+- **`program::session::WorkspaceSession`**: the incremental cross-app model
+  (context-server design §6, a stage-4 prefix). `refresh(inputs, …)` turns
+  the state retained from the previous revision plus the next revision's
+  inputs into the next `CrossAppProgram`, under a `revision.refresh` span and
+  a `model.copied_bytes` counter; `refresh_program` stops at the program.
+  Retained: the dependency tier (held strongly, so the session's `DepCache`
+  keeps hitting it), each workspace file's parse (reused for byte-equal
+  text), its declaration projection and its pre-refinement `FileResolution`,
+  and the dependency bodies' resolution. Classes: **P** (first refresh,
+  `DepKey` changed, any root `app.json` byte changed, or a source
+  dependency's content hash changed) rebuilds; **S** (a projection changed,
+  or a file added, removed or renamed) re-resolves every workspace file and
+  every dependency body; **B** re-resolves only the changed files and reuses
+  the rest, re-materializing each reused route's `SourceSpan` witness through
+  the current declaration surface (`rematerialize_witnesses`: only a routine
+  route's `SourceSpan`; `AbiSymbol`, `None` and catalog witnesses untouched; a
+  routine the surface lacks is an invariant failure — debug panics, release
+  resolves the file again — never a zero-span witness). Every whole-program
+  step reruns whole, as the cold build runs it: graph assembly,
+  `close_holder_sites`, the event-flow edges, the demand, the model assembly,
+  the adapter, the event graph and the three final passes
+  (`cross_app_program_from`, unchanged).
+- Plumbing, behaviour-preserving for every cold caller:
+  `snapshot::parse::parse_unit_reusing` / `ParseReuse`,
+  `dep_summary::parse_for_build_reusing`,
+  `full::build_context_from_snapshot_reusing`,
+  `full::resolve_full_program_reusing` (with `KeptResolutions`),
+  `ResolvedProgram::from_parts` (now also what `ResolvedProgram::build`
+  assembles through). `ClassifiedEdge` derives `Clone, Debug`;
+  `FileResolution` and `DependencyBodyResolution` derive `Clone`.
+- Tests (`program::session::workspace::tests`, 16): after every edit the
+  session's program (every edge with its witnesses, site facts, parens-less
+  calls, meta) and model (rows, calls, bindings, events, diagnostics) equal a
+  cold build's, as text — body edits (callee and caller), newlines before a
+  callee (a workspace caller's and a DEPENDENCY caller's witness move),
+  declaration reorder, signature, return type and arity changes, file add /
+  rename / remove and a second implementer of a dependency interface, demand
+  W → D1 → D2 and contraction, a dependency raiser and subscriber edits,
+  duplicate ids across `#if` arms, the setter-argument holder refinement
+  X → Y → unprovable → back with the holder's file unchanged, a temp-proof
+  revocation and restoration in an unchanged subscriber, `[MethodId]` /
+  `[TryFunction]` through a `__alsem_mid_<n>` dispatch, enum extensibility
+  and implementation map, a package change (P), a `roots.config.json`-only
+  change (B, nothing re-resolved), `app.json` changes (P), including an
+  `internalsVisibleTo` friend that reopens an unchanged caller's G28 dispatch,
+  and the re-materialization guard itself. Discrimination (each break seen
+  failing, then reverted): skip workspace re-materialization (3 fail); skip
+  dependency re-materialization (the T-loc test fails); a zero-span fallback
+  on a miss, and a target-keyed rewrite of `AbiSymbol`/`None` (the guard test
+  fails); skip `close_holder_sites` when anything is reused (T-refine fails);
+  drop `method_id`/`try_function` from the projection (T-methodid fails);
+  reuse dependency resolutions across S (2 fail, one through the file-table
+  shift a file add causes); ignore the `app.json` identity (both `app.json`
+  tests fail, the G28 one on equality); reuse a parse by path alone (10 fail).
+
+### Added (context-server stage 4: the change-type classifier)
+
+- **`program::session::classify`**: the declaration projection of one
+  workspace file (context-server design §6.1) — blake3 over every
+  `ObjectNode`, `RoutineNode` and `RoutineMeta` the build's own extraction
+  (`summarize_file`) yields, in document order with multiplicity, every field
+  of every nested type, except the positional origins and
+  `RoutineNode.source_unit` (`EXCLUDED`). The encoding is the `Classify`
+  trait, implemented by exhaustive destructuring with no `..`, so a new field
+  does not compile until it is hashed or excluded (`DECL_PROJECTION_VERSION`).
+  `classify_files` gives B (every projection equal on the same paths) or S
+  (a projection changed, or a file was added, removed or renamed). Tests
+  (T-class, T-proj-guard): body edit and inserted newlines keep the
+  projection; a reorder, a parameter/return/`var`/name change, a duplicate,
+  `[MethodId]`, `[TryFunction]`, enum extensibility and implementation map,
+  a subscriber's target and the path each change it; origins and the
+  source-unit stamp do not reach the hash, every other field does.
+
+### Changed (context-server stage 4: the `complete(p)` index)
+
+- **`prove_event_param_temps` scans each publisher's own object only.** Rule 2
+  (`complete(p)`: no unresolved call in the publisher's object could name it)
+  scanned every row of the model once per local publisher; it now reads an
+  `object_id → rows` index built once (context-server design §6.8 L8).
+  Behaviour-preserving: same rows, pure predicate; every golden unchanged.
+  Measured on the CDO baseline (release-fast, `query touches`, three runs
+  each, interleaved): `attach.event_param_temps` 1,160–1,514 ms before (one
+  noisy 5,120 ms outlier) → 356–388 ms after; `crossapp.attach_program_calls`
+  1,984–2,583 → 1,148–1,393 ms. Output bytes identical. New test
+  `complete_reads_only_the_publishers_object` pins the per-object scope
+  (break: one bucket for all rows → fails); the existing
+  `event_param_temp_unresolved_sibling_raise_is_not_proven` fails when the
+  index holds no rows.
+
 ### Changed (the producer solve's arena is canonical: context-server stage 1b)
 
 - **`pd_solve::solve` returns its arena in rank order** (design r6 §6.10), so

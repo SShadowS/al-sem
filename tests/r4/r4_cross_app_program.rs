@@ -95,7 +95,7 @@ fn targets_of_dep_run(dir: &Path) -> Vec<(String, i64)> {
     let resolution = ctx.resolve_dependency_bodies();
     let graph = ctx.graph();
     let mut out = Vec::new();
-    for ce in &resolution.edges {
+    for ce in resolution.edges.iter() {
         let from = &ce.edge.from;
         if graph.apps.resolve(from.object.app).guid != DEP_GUID || from.name_lc != "work" {
             continue;

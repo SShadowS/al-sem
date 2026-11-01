@@ -104,13 +104,43 @@ pub fn parse_unit(unit: &AppUnit) -> Option<ParsedUnit> {
 }
 
 fn parse_unit_in_pool(unit: &AppUnit) -> Option<ParsedUnit> {
+    parse_unit_reusing_in_pool(unit, None)
+}
+
+/// A retained tree a build may take instead of parsing a file again
+/// (context-server design §6.3): given a file's virtual path and its text, the
+/// tree an earlier parse of byte-equal text produced, or `None`. A parse is a
+/// function of the text alone (`al_syntax::parse`), so a reused tree is the
+/// tree a fresh parse would give.
+pub type ParseReuse<'a> = dyn Fn(&str, &str) -> Option<Arc<al_syntax::ir::AlFile>> + Sync + 'a;
+
+/// [`parse_unit`], taking each file's tree from `reuse` when it has one. The
+/// rest of each [`ParsedFile`] (provenance, text) is this unit's, as a fresh
+/// parse gives.
+#[must_use]
+pub fn parse_unit_reusing(unit: &AppUnit, reuse: Option<&ParseReuse<'_>>) -> Option<ParsedUnit> {
+    crate::big_stack::big_stack_pool().install(|| parse_unit_reusing_in_pool(unit, reuse))
+}
+
+fn parse_unit_reusing_in_pool(
+    unit: &AppUnit,
+    reuse: Option<&ParseReuse<'_>>,
+) -> Option<ParsedUnit> {
     let source = unit.source.as_ref()?;
     #[cfg(test)]
     parse_log::record(unit);
     let files: Vec<ParsedFile> = source
         .files
         .par_iter()
-        .map(|f| parse_file(unit, f))
+        .map(|f| match reuse.and_then(|r| r(&f.virtual_path, &f.text)) {
+            Some(tree) => ParsedFile {
+                virtual_path: f.virtual_path.clone(),
+                file: tree,
+                provenance: unit.provenance.clone(),
+                text: Arc::clone(&f.text),
+            },
+            None => parse_file(unit, f),
+        })
         .collect();
     Some(ParsedUnit {
         app: unit.id.clone(),

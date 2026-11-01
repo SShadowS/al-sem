@@ -35,7 +35,20 @@ pub fn parse_for_build(
     profile: BuildProfile,
     skip_dependencies: bool,
 ) -> BuildParse {
-    parse_for_build_observed(snap, profile, skip_dependencies, None)
+    parse_for_build_observed(snap, profile, skip_dependencies, None, None)
+}
+
+/// [`parse_for_build`], taking each workspace file's tree from `reuse` when it
+/// has one (a workspace session's retained parse, context-server design §6.3).
+/// Dependency files are never reused here: a session holds their tier.
+#[must_use]
+pub fn parse_for_build_reusing(
+    snap: &AppSetSnapshot,
+    profile: BuildProfile,
+    skip_dependencies: bool,
+    reuse: Option<&crate::snapshot::parse::ParseReuse<'_>>,
+) -> BuildParse {
+    parse_for_build_observed(snap, profile, skip_dependencies, None, reuse)
 }
 
 /// Counts dependency trees alive at once, for the bound test. Production
@@ -51,6 +64,7 @@ pub(crate) fn parse_for_build_observed(
     profile: BuildProfile,
     skip_dependencies: bool,
     observe: Option<&LiveTrees>,
+    reuse: Option<&crate::snapshot::parse::ParseReuse<'_>>,
 ) -> BuildParse {
     use rayon::prelude::*;
     use std::sync::atomic::Ordering::SeqCst;
@@ -77,7 +91,7 @@ pub(crate) fn parse_for_build_observed(
                 // At most one unit matches (`snap.apps` is GUID-deduped
                 // upstream); the first one is the workspace, as before.
                 if workspace.is_none() {
-                    workspace = crate::snapshot::parse::parse_unit(unit);
+                    workspace = crate::snapshot::parse::parse_unit_reusing(unit, reuse);
                 }
                 continue;
             }
@@ -432,7 +446,7 @@ codeunit 60002 "Plain Cu"
         };
 
         let live = LiveTrees::default();
-        let parse = parse_for_build_observed(&snap, BuildProfile::LIGHT, false, Some(&live));
+        let parse = parse_for_build_observed(&snap, BuildProfile::LIGHT, false, Some(&live), None);
         let peak = live.peak.load(SeqCst);
 
         assert!(parse.dep_bodies.is_none(), "Summary keeps no bodies");

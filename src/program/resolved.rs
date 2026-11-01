@@ -100,12 +100,106 @@ pub struct ProgramBody {
     /// the event-flow edges of publishers in every app.
     edges: Vec<ClassifiedEdge>,
     /// `ProgramContext::resolve_dependency_bodies().edges`: one edge per dependency
-    /// call site. Empty under [`ProgramScope::Workspace`].
-    dependency_body_edges: Vec<ClassifiedEdge>,
-    /// Both sets' site facts, merged.
-    pub site_facts: HashMap<ObligationId, SiteFacts>,
+    /// call site. Empty under [`ProgramScope::Workspace`]. Shared, so a
+    /// workspace session reuses the dependency resolution without a copy.
+    dependency_body_edges: Arc<Vec<ClassifiedEdge>>,
+    /// Both sets' site facts: the workspace's over the dependency bodies'.
+    pub site_facts: SiteFactsMap,
     /// Both sets' parens-less calls, merged.
     pub parenless_calls: ParenlessCalls,
+}
+
+/// A program's site facts in two layers: the workspace resolution's (owned) and
+/// the dependency bodies' (shared by `Arc`, so a workspace session hands the
+/// retained ones to each revision without copying them, context-server design
+/// §6.6). Reads answer exactly what the one merged map
+/// (`workspace.extend(dependency)`) answered: on a common key the dependency
+/// entry wins. The two key sets are disjoint in practice (a key names its
+/// caller, and a dependency caller is never a workspace routine).
+#[derive(Default)]
+pub struct SiteFactsMap {
+    own: HashMap<ObligationId, SiteFacts>,
+    shared: Arc<HashMap<ObligationId, SiteFacts>>,
+}
+
+impl SiteFactsMap {
+    /// The workspace facts over the dependency facts.
+    #[must_use]
+    pub fn new(
+        own: HashMap<ObligationId, SiteFacts>,
+        shared: Arc<HashMap<ObligationId, SiteFacts>>,
+    ) -> Self {
+        SiteFactsMap { own, shared }
+    }
+
+    /// The borrowed view the adapter family reads.
+    #[must_use]
+    pub fn view(&self) -> SiteFactsRef<'_> {
+        SiteFactsRef {
+            own: &self.own,
+            shared: Some(&self.shared),
+        }
+    }
+
+    #[must_use]
+    pub fn get(&self, k: &ObligationId) -> Option<&SiteFacts> {
+        self.view().get(k)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&ObligationId, &SiteFacts)> {
+        self.view().iter()
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &SiteFacts> {
+        self.iter().map(|(_, v)| v)
+    }
+
+    /// Distinct keys.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.iter().count()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.own.is_empty() && self.shared.is_empty()
+    }
+}
+
+/// A borrowed [`SiteFactsMap`] (or a plain map, `shared: None`). `Copy`.
+#[derive(Clone, Copy)]
+pub struct SiteFactsRef<'r> {
+    own: &'r HashMap<ObligationId, SiteFacts>,
+    shared: Option<&'r HashMap<ObligationId, SiteFacts>>,
+}
+
+impl<'r> SiteFactsRef<'r> {
+    /// A view over one plain map.
+    #[must_use]
+    pub fn of(map: &'r HashMap<ObligationId, SiteFacts>) -> Self {
+        SiteFactsRef {
+            own: map,
+            shared: None,
+        }
+    }
+
+    #[must_use]
+    pub fn get(self, k: &ObligationId) -> Option<&'r SiteFacts> {
+        self.shared
+            .and_then(|s| s.get(k))
+            .or_else(|| self.own.get(k))
+    }
+
+    /// Every entry once: the shared layer's, then the owned entries it does
+    /// not shadow. Unordered, as a map's iteration is.
+    pub fn iter(self) -> impl Iterator<Item = (&'r ObligationId, &'r SiteFacts)> {
+        let shared = self.shared;
+        shared.into_iter().flat_map(|s| s.iter()).chain(
+            self.own
+                .iter()
+                .filter(move |(k, _)| shared.is_none_or(|s| !s.contains_key(*k))),
+        )
+    }
 }
 
 impl ProgramMeta {
@@ -128,7 +222,7 @@ impl ProgramBody {
     /// `edges`, then `dependency_body_edges` (the order is a contract, see the
     /// module doc).
     pub fn all_edges(&self) -> impl Iterator<Item = &ClassifiedEdge> + Clone {
-        self.edges.iter().chain(&self.dependency_body_edges)
+        self.edges.iter().chain(self.dependency_body_edges.iter())
     }
 
     /// The dependency bodies' call-site edges alone (every one a `CallSite`
@@ -164,7 +258,7 @@ impl ProgramBody {
             primary_app_ref: self.ctx.primary_app_ref,
             edges: &self.edges,
             dependency_body_edges: &self.dependency_body_edges,
-            site_facts: &self.site_facts,
+            site_facts: self.site_facts.view(),
         }
     }
 }
@@ -177,7 +271,7 @@ pub struct EdgeView<'r> {
     pub primary_app_ref: AppRef,
     edges: &'r [ClassifiedEdge],
     dependency_body_edges: &'r [ClassifiedEdge],
-    pub site_facts: &'r HashMap<ObligationId, SiteFacts>,
+    pub site_facts: SiteFactsRef<'r>,
 }
 
 impl<'r> EdgeView<'r> {
@@ -198,7 +292,7 @@ impl<'r> EdgeView<'r> {
             primary_app_ref,
             edges,
             dependency_body_edges,
-            site_facts,
+            site_facts: SiteFactsRef::of(site_facts),
         }
     }
 }
@@ -212,7 +306,7 @@ impl ProgramReport {
             primary_app_ref: self.primary_app_ref,
             edges: &self.edges,
             dependency_body_edges: &[],
-            site_facts: &self.site_facts,
+            site_facts: SiteFactsRef::of(&self.site_facts),
         }
     }
 }
@@ -234,23 +328,43 @@ impl ResolvedProgram {
     ) -> Result<ResolvedProgram, String> {
         use crate::engine::perf_trace as pt;
         let cross_app = scope == ProgramScope::CrossApp;
-        let (ctx, mut report, coverage) = {
+        let (ctx, report, coverage) = {
             let _s = cross_app.then(|| pt::span("crossapp", "crossapp.program_build_full"));
             crate::program::resolve::full::build_program_with_coverage_profiled(
                 inputs,
                 scope.profile(),
             )?
         };
-        let dependency_body_edges = if cross_app {
-            let dependency = {
-                let _s = pt::span("crossapp", "crossapp.resolve_dependency_bodies");
-                ctx.resolve_dependency_bodies()
-            };
-            report.site_facts.extend(dependency.site_facts);
-            report.parenless_calls.extend(dependency.parenless_calls);
-            dependency.edges
-        } else {
-            Vec::new()
+        let dependency = cross_app.then(|| {
+            let _s = pt::span("crossapp", "crossapp.resolve_dependency_bodies");
+            ctx.resolve_dependency_bodies()
+        });
+        Ok(ResolvedProgram::from_parts(
+            inputs, scope, ctx, report, coverage, dependency,
+        ))
+    }
+
+    /// One program from its parts: the context, the resolver's report, the
+    /// reduced coverage and, under [`ProgramScope::CrossApp`], the dependency
+    /// bodies' resolution (its edges kept apart, its site facts and parens-less
+    /// calls merged). [`Self::build`] and a workspace session
+    /// (`program::session::workspace`) both assemble through it, so the two
+    /// cannot drift.
+    pub(crate) fn from_parts(
+        inputs: &Arc<WorkspaceInputs>,
+        scope: ProgramScope,
+        ctx: ProgramContext,
+        mut report: ProgramReport,
+        coverage: FreshCoverage,
+        dependency: Option<crate::program::resolve::full::DependencyBodyResolution>,
+    ) -> ResolvedProgram {
+        debug_assert_eq!(dependency.is_some(), scope == ProgramScope::CrossApp);
+        let (dependency_body_edges, dependency_site_facts) = match dependency {
+            Some(dependency) => {
+                report.parenless_calls.extend(dependency.parenless_calls);
+                (dependency.edges, dependency.site_facts)
+            }
+            None => (Arc::default(), Arc::default()),
         };
         // What `ProgramBody::dependency_body_edges` promises its readers (the
         // graph's `dependencyBodies` histogram reads the slice as is).
@@ -273,7 +387,7 @@ impl ResolvedProgram {
             site_facts,
             parenless_calls,
         } = report;
-        Ok(ResolvedProgram {
+        ResolvedProgram {
             meta: ProgramMeta {
                 inputs: Arc::clone(inputs),
                 scope,
@@ -287,10 +401,10 @@ impl ResolvedProgram {
                 ctx,
                 edges,
                 dependency_body_edges,
-                site_facts,
+                site_facts: SiteFactsMap::new(site_facts, dependency_site_facts),
                 parenless_calls,
             },
-        })
+        }
     }
 
     /// What the build read and resolved, besides the body.
@@ -423,7 +537,7 @@ mod tests {
         let b = edge_for_test(&body, 202);
         let (a_from, b_from) = (a.edge.from.clone(), b.edge.from.clone());
         body.edges = vec![a];
-        body.dependency_body_edges = vec![b];
+        body.dependency_body_edges = Arc::new(vec![b]);
         let order = |it: &mut dyn Iterator<Item = &ClassifiedEdge>| {
             it.map(|e| e.edge.from.clone()).collect::<Vec<_>>()
         };

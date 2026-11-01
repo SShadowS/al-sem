@@ -22,6 +22,7 @@ pub mod profile;
 pub mod registry;
 pub mod resolve;
 pub mod resolved;
+pub mod session;
 pub mod sig_fp;
 pub mod site_key;
 pub mod source_deps;
