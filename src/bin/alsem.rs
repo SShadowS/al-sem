@@ -2698,8 +2698,7 @@ mod engine {
     use al_sem::engine::host::{AskParams, ChildStatus, Decisions, OpenParams};
     use al_sem::program::inputs::WorkspaceInputs;
     use al_sem::wire::{
-        FailedOutcome, Outcome, Spill, SpillKind, Stderr, Stdout, WireError, clamp_inline,
-        cli_outcome, stderr_bytes,
+        FailedOutcome, Outcome, Spill, Stderr, Stdout, WireError, clamp_inline, cli_outcome,
     };
     use std::collections::BTreeMap;
     use std::io::Write as _;
@@ -2793,8 +2792,7 @@ mod engine {
     /// One ask's outcome (see the module doc for the order).
     fn answer(ask: &AskParams, session: &Path, reads: &mut u64, spill: &Spill<'_>) -> Outcome {
         let inline = clamp_inline(ask.max_inline_bytes);
-        let cli = |out: &JobOutput| match cli_outcome(out, inline, |b| spill(SpillKind::Stdout, b))
-        {
+        let cli = |out: &JobOutput| match cli_outcome(out, inline, spill) {
             Ok(o) => o,
             Err(WireError::FileWrite(p)) => Outcome::failed(
                 FailedOutcome::RefusedPath,
@@ -2970,7 +2968,7 @@ mod engine {
                     },
                 };
                 let stderr = match stderr {
-                    Stderr::Lines(l) => stderr_bytes(&l),
+                    Stderr::Lines(l) => l.bytes().to_vec(),
                     Stderr::File(f) => match spilled(&f) {
                         Ok(b) => b,
                         Err(e) => return failed(format!("al-sem: engine-ask: {e}")),

@@ -63,7 +63,7 @@ fn usage() -> ExitCode {
          \x20      aldump --switch-dump <workspace> <out-dir>\n\
          \x20      aldump --dump-dependency-source <workspace> <out-dir>\n\
          \x20      aldump --switch-compare <dump-dir-A> <dump-dir-B> [--sample N] [--width N]\n\
-         \x20      aldump --snapshot-memory <workspace> [--single-app] [--hash]\n\
+         \x20      aldump --snapshot-memory <workspace> [--single-app] [--hash] [--pd-dump <file>]\n\
          \x20      aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--verify]"
     );
     ExitCode::FAILURE
@@ -489,7 +489,10 @@ fn compiler_oracle_cmd(args: &[String]) -> ExitCode {
 /// every serialized snapshot section, of the whole document (the sections
 /// concatenated in order) and of the producer-solve arena, which the document
 /// omits: a memory change that must keep the output byte-identical compares
-/// them before and after.
+/// them before and after. `--pd-dump <file>` writes the cone's producer-solve
+/// arena as `ConeArena::logical_lines` (internal ids, every index replaced by
+/// its identity), so a change to the solve's order can be compared as a
+/// reordering.
 ///
 /// Memory is the process's resident set (`VmRSS`/`VmHWM` from
 /// `/proc/self/status`; `null` where that file does not exist), not live heap:
@@ -512,12 +515,22 @@ fn snapshot_memory_cmd(args: &[String]) -> ExitCode {
     use std::sync::{Mutex, OnceLock};
     use std::time::Instant;
 
-    const USAGE: &str = "usage: aldump --snapshot-memory <workspace> [--single-app] [--hash]";
+    const USAGE: &str =
+        "usage: aldump --snapshot-memory <workspace> [--single-app] [--hash] [--pd-dump <file>]";
     let (mut single_app, mut hash, mut ws) = (false, false, None);
-    for a in args {
+    let mut pd_dump: Option<PathBuf> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
         match a.as_str() {
             "--single-app" => single_app = true,
             "--hash" => hash = true,
+            "--pd-dump" => match it.next() {
+                Some(p) => pd_dump = Some(PathBuf::from(p)),
+                None => {
+                    eprintln!("aldump: error: --pd-dump needs a file\n{USAGE}");
+                    return ExitCode::FAILURE;
+                }
+            },
             _ if ws.is_none() && !a.starts_with("--") => ws = Some(PathBuf::from(a)),
             _ => {
                 eprintln!("aldump: error: unexpected argument {a:?}\n{USAGE}");
@@ -597,6 +610,16 @@ fn snapshot_memory_cmd(args: &[String]) -> ExitCode {
     let t = Instant::now();
     let snap = compose_snapshot_from_base(&model, &base, None);
     end_phase("composeSnapshot", t);
+
+    if let Some(path) = &pd_dump {
+        // Untimed and after the timed phases: the dump is an inspection aid.
+        let mut text = base.pd_solution.logical_lines().join("\n");
+        text.push('\n');
+        if let Err(e) = std::fs::write(path, text) {
+            eprintln!("aldump: error: writing {}: {e}", path.display());
+            return ExitCode::FAILURE;
+        }
+    }
 
     let tables = base.raw.tables();
     let snap_tables = snap

@@ -2747,6 +2747,8 @@ fn compose_inherited_cones(
             operation_id: op.to_string(),
         })
         .collect();
+    #[cfg(test)]
+    let producers = super::pd_solve::test_shuffle::apply(producers);
     let _t_pd = crate::engine::l5::detector_context::cones_census::start();
     // A span beside the census timer (context-server design r3 §6.10: the
     // whole re-solve's cost decides whether the per-producer rule ships).

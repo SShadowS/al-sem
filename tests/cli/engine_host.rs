@@ -64,7 +64,7 @@ fn cli_answer(outcome: Outcome) -> (Vec<u8>, Vec<u8>, u8) {
         }
     };
     let stderr = match stderr {
-        Stderr::Lines(l) => al_sem::wire::stderr_bytes(&l),
+        Stderr::Lines(l) => l.bytes().to_vec(),
         Stderr::File(f) => std::fs::read(&f.path).expect("the spilled stderr"),
     };
     (stdout, stderr, exit_code)
@@ -302,6 +302,88 @@ mod faults {
         assert!(front.hello().is_none(), "the child was killed");
         assert_eq!(front.stats().deaths, 1);
         assert!(started.elapsed() < Duration::from_secs(30));
+    }
+
+    /// Wait (bounded) until the reader has ended the running child.
+    fn wait_for_exit(front: &EngineFront) {
+        let started = Instant::now();
+        while front.child_exited() != Some(true) {
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "the child was not ended: {:?}",
+                front.queue_stats()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Review r6 NEW 5 / design r7 §3: a child that floods small frames
+    /// (valid responses, distinct notifications, garbage lines) while the
+    /// front end reads nothing (started, no ask waiting) never grows the
+    /// queue past its bounds (1,024 frames, 64 MiB): the READER ends the
+    /// child with no ask involved and records why; the next request (here
+    /// `status`) fails with that reason as `protocol`, the death counted.
+    #[test]
+    fn a_flooding_child_is_ended_with_no_ask_waiting() {
+        use al_sem::engine::host::{QUEUE_BYTES, QUEUE_FRAMES};
+        for kind in ["response", "notify", "garbage"] {
+            let mut front = hooked(&format!("flood-after-open:{kind}:200000"));
+            front.ensure_started().expect("started");
+            wait_for_exit(&front);
+            let stats = front.queue_stats().expect("the child's queue");
+            assert!(stats.peak_frames <= QUEUE_FRAMES, "{kind}: {stats:?}");
+            assert!(stats.peak_bytes <= QUEUE_BYTES, "{kind}: {stats:?}");
+            let why = stats.failure.clone().expect("the reader recorded why");
+            assert!(why.starts_with("engine protocol error"), "{kind}: {why}");
+            if kind != "garbage" {
+                assert_eq!(
+                    stats.peak_frames, QUEUE_FRAMES,
+                    "{kind}: filled to the bound"
+                );
+                assert!(why.contains("queue bound"), "{kind}: {why}");
+            }
+            let err = front
+                .status()
+                .expect_err("the ended child fails the request");
+            assert!(err.contains(&why), "{kind}: {err}");
+            assert_eq!(
+                front.last_failure().map(|(o, _)| o),
+                Some(FailedOutcome::Protocol),
+                "{kind}"
+            );
+            assert_eq!(front.stats().deaths, 1, "{kind}");
+            assert!(front.hello().is_none(), "{kind}");
+        }
+    }
+
+    /// Progress notifications are coalesced per request: a child that sends
+    /// 200,000 of them for one request while the front end reads nothing
+    /// holds one queued frame, is not ended, and answers the next ask.
+    #[test]
+    fn a_progress_flood_is_coalesced_and_the_child_lives() {
+        let mut front = hooked("flood-after-open:progress:200000");
+        front.ensure_started().expect("started");
+        let started = Instant::now();
+        while front.queue_stats().expect("running").frames == 0 {
+            assert!(started.elapsed() < Duration::from_secs(30), "no flood");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        // Unread: one frame, however many came (the peak may also count the
+        // `session/open` response, taken just after the first progress).
+        let stats = front.queue_stats().expect("running");
+        assert_eq!(stats.frames, 1, "{stats:?}");
+        assert!(stats.peak_frames <= 2, "{stats:?}");
+        let argv = explain_argv();
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let expected = cli(&argv);
+        let answer = front.ask(explain());
+        assert_eq!(cli_answer(answer.outcome), expected);
+        // At most the newest progress beside the ask's own response.
+        let stats = front.queue_stats().expect("running");
+        assert!(stats.peak_frames <= 2, "{stats:?}");
+        assert_eq!(stats.failure, None);
+        assert_eq!(front.stats().deaths, 0);
     }
 
     /// A child frame that is not JSON kills the child: `protocol`.

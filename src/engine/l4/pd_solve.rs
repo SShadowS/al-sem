@@ -51,7 +51,8 @@ pub struct ConeState {
     /// Shortest link-path length to the seed (seed = 0).
     pub dist: usize,
     /// Range into `ConeArena::links`: this state's incoming links, deduplicated,
-    /// in edge order (`TypedOutEdge::sort_key`, then callee state).
+    /// in link rank (edge rank, which within one state is `sort_key` order,
+    /// then callee state rank; [`finalize`]).
     pub links: std::ops::Range<usize>,
 }
 
@@ -72,7 +73,12 @@ pub struct Producer {
     pub operation_id: String,
 }
 
-/// The whole solve, in cone ids.
+/// The whole solve, in cone ids, in canonical order (stage 1b, [`finalize`]):
+/// producers, edges, states and links are each in rank order, a rank reads
+/// only the solve's own (internal-id) identities, and every index is a
+/// position in that order. The indices are storage, never identity: nothing
+/// serializes them, and a projection (`snapshot::derive_pd_arena`) walks the
+/// states in rank order.
 #[derive(Debug, Clone, Default)]
 pub struct ConeArena {
     pub producers: Vec<Producer>,
@@ -83,6 +89,69 @@ pub struct ConeArena {
     pub edges: Vec<TypedOutEdge>,
     /// Internal routine id → its states (seed included), in state order.
     pub by_routine: HashMap<Arc<str>, Vec<StateIx>>,
+}
+
+impl ConeArena {
+    /// The arena as text with every index replaced by the identity it points
+    /// at: one line per producer, edge and state in storage order, then one
+    /// line per routine of `by_routine`, routines sorted. A state is named by
+    /// its solve key `(producer, routine, t, reqs)`, an edge by
+    /// `from|sort_key`, so two arenas that differ only in numbering give the
+    /// same lines up to their order. `aldump --snapshot-memory --pd-dump`
+    /// writes it, so a change to the solve's order can be checked against the
+    /// one before it as a pure reordering.
+    pub fn logical_lines(&self) -> Vec<String> {
+        // An edge's `from` is the routine of every state whose link crosses it.
+        let mut edge_from: Vec<&str> = vec![""; self.edges.len()];
+        for s in &self.states {
+            for l in &self.links[s.links.clone()] {
+                edge_from[l.edge] = &s.routine;
+            }
+        }
+        let edge = |e: usize| format!("{}|{}", edge_from[e], self.edges[e].sort_key);
+        let state = |ix: StateIx| {
+            let s = &self.states[ix];
+            let p = &self.producers[s.producer];
+            format!(
+                "{}|{} @{} t={:?} reqs={:?}",
+                p.owner, p.operation_id, s.routine, s.t, s.reqs
+            )
+        };
+        let mut out = Vec::with_capacity(
+            self.producers.len() + self.edges.len() + self.states.len() + self.by_routine.len(),
+        );
+        for p in &self.producers {
+            out.push(format!("producer {}|{}", p.owner, p.operation_id));
+        }
+        for e in 0..self.edges.len() {
+            out.push(format!("edge {}", edge(e)));
+        }
+        for (ix, s) in self.states.iter().enumerate() {
+            let links: Vec<String> = self.links[s.links.clone()]
+                .iter()
+                .map(|l| format!("{} <- {}", edge(l.edge), state(l.callee_state)))
+                .collect();
+            let first_hop = self.links[s.links.clone()]
+                .iter()
+                .find(|l| !s.seed && self.states[l.callee_state].dist + 1 == s.dist)
+                .map_or_else(|| "-".to_string(), |l| edge(l.edge));
+            out.push(format!(
+                "state {} seed={} dist={} first_hop={} links=[{}]",
+                state(ix),
+                s.seed,
+                s.dist,
+                first_hop,
+                links.join("; ")
+            ));
+        }
+        let mut routines: Vec<&Arc<str>> = self.by_routine.keys().collect();
+        routines.sort();
+        for r in routines {
+            let states: Vec<String> = self.by_routine[r].iter().map(|&s| state(s)).collect();
+            out.push(format!("routine {r}: [{}]", states.join("; ")));
+        }
+        out
+    }
 }
 
 /// D1.3: one non-seed state placed at its routine for uses (a) and (b). Its
@@ -240,9 +309,224 @@ fn rep_for(fact: &CapabilityFact, t: &TempState) -> CapabilityFact {
     rep
 }
 
-/// The transitive product-state solve over the typed graph's INCOMING edges.
-/// Deterministic: producers are taken in the given order, incoming edges in
-/// `(sort_key, from)` order, and states are numbered in BFS order.
+/// Producer rank (stage 1b): `(owner internal id, operation id)`, the
+/// producer's identity (`compose_inherited_cones` makes one producer per pair).
+/// Operation ids compare by [`op_id_cmp`].
+fn producer_cmp(a: &Producer, b: &Producer) -> std::cmp::Ordering {
+    a.owner
+        .cmp(&b.owner)
+        .then_with(|| op_id_cmp(&a.operation_id, &b.operation_id))
+}
+
+/// Operation ids (`"{routine}/opN"`) in source order: the routine part as a
+/// string, then the ordinal `N` as a number, then the whole id as a string
+/// (so the order stays total for an id of any other shape). As strings,
+/// `…/op10` sorts before `…/op8`; the solve's producers came in source order
+/// before stage 1b (`direct_raw` order), so on CDO a string order changed the
+/// winner of 21,424 equal-candidate ties among a routine's own entries
+/// (`capability_cone::candidate_wins` keeps the first), for no reason but the
+/// digit count. The ordinal keeps today's winner.
+fn op_id_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    fn split(id: &str) -> Option<(&str, u64)> {
+        let (routine, n) = id.rsplit_once("/op")?;
+        Some((routine, n.parse().ok()?))
+    }
+    match (split(a), split(b)) {
+        (Some(x), Some(y)) => x.cmp(&y).then_with(|| a.cmp(b)),
+        _ => a.cmp(b),
+    }
+}
+
+/// Edge rank (stage 1b): the whole `TypedOutEdge` identity in internal ids,
+/// `from` included (an arena edge does not store it). `from` and `sort_key`
+/// lead, so the links of one state (all out-edges of its routine) are in
+/// `sort_key` order: the order the first hop has always been picked in, and
+/// the tie-break [`super::capability_cone`]'s `candidate_wins` applies to a
+/// first hop. The remaining fields make the rank total even where two
+/// distinct edges would print one `sort_key`.
+fn edge_cmp(a: (&str, &TypedOutEdge), b: (&str, &TypedOutEdge)) -> std::cmp::Ordering {
+    let ((af, a), (bf, b)) = (a, b);
+    af.cmp(bf)
+        .then_with(|| a.sort_key.cmp(&b.sort_key))
+        .then_with(|| a.kind.cmp(&b.kind))
+        .then_with(|| a.to.cmp(&b.to))
+        .then_with(|| a.callsite.cmp(&b.callsite))
+        .then_with(|| a.event_id.cmp(&b.event_id))
+        .then_with(|| a.operation_id.cmp(&b.operation_id))
+}
+
+/// The reps of one solve: one `Arc` per `(producer, t)`.
+type Reps = HashMap<(usize, TempState), Arc<CapabilityFact>>;
+
+/// Stage 1b: the canonical arena. The solve discovers states, edges and links
+/// in an order that follows its inputs (producer order, the graph's hash-map
+/// order, discovery); this pass puts all of them in RANK order, which reads
+/// only the solve's own identities, and remaps every index:
+/// - producers by [`producer_cmp`];
+/// - edges by [`edge_cmp`], two edges with one identity becoming one;
+/// - states by `(producer rank, dist, routine internal id, t, reqs)`, total
+///   because `(producer, routine, t, reqs)` is the solve's state key and
+///   `dist` is the shortest distance (a function of the key). Internal ids,
+///   never stable ids: two routines with one stable id stay two states;
+/// - each state's links by `(edge rank, callee state rank)`, deduplicated;
+/// - `by_routine` and the resolved entries in state rank, each entry's first
+///   hop its lowest-ranked link to a state at `dist - 1`.
+///
+/// The one place the order is visible downstream: of a routine's own entries
+/// that tie under `capability_cone`'s `candidate_wins` (one fact key, one
+/// `dist`, one first-hop `sort_key`), the cone keeps the first. Before stage
+/// 1b that was the first discovered; now it is the lowest producer rank, then
+/// the most precise `t` (`Known < ParameterDependent < Unknown`). Measured on
+/// CDO (`bc3ccb18`): ranking the last tie by discovery instead of `(t, reqs)`
+/// reproduces every snapshot section byte for byte, and `(t, reqs)` changes
+/// 236 of 581,584 tie groups' winners, 224 to a state with the same rep (no
+/// output moves) and 12 from `Unknown` to `Known(false)` of the same producer.
+///
+/// The indices of the result are positions in that order and nothing else:
+/// no index from discovery survives. `first_hop` borrows the graph's edge; of
+/// two graph edges with one identity it borrows either (equal in every field,
+/// so nothing reads the difference). Every rank key is total, so the unstable
+/// sorts below give one result whatever their input order.
+///
+/// `names` is the solve's interner: every state's `routine` is one of its
+/// `Arc`s, so a routine's rank is looked up by pointer and the 2.8 M-state sort
+/// on CDO compares integers, not 80-byte ids.
+fn finalize<'g>(
+    producers: Vec<Producer>,
+    states: Vec<ConeState>,
+    raw_links: Vec<Vec<ConeLink>>,
+    edges: Vec<(&'g str, &'g TypedOutEdge)>,
+    names: &HashSet<Arc<str>>,
+) -> (ConeArena, ResolvedByRoutine<'g>, Reps) {
+    use std::cmp::Ordering;
+    /// `rank[old] = new` for a permutation `order` (`order[new] = old`).
+    fn ranks(order: &[usize]) -> Vec<usize> {
+        let mut rank = vec![0; order.len()];
+        for (new, &old) in order.iter().enumerate() {
+            rank[old] = new;
+        }
+        rank
+    }
+
+    let mut p_order: Vec<usize> = (0..producers.len()).collect();
+    p_order.sort_unstable_by(|&a, &b| producer_cmp(&producers[a], &producers[b]));
+    debug_assert!(
+        p_order
+            .windows(2)
+            .all(|w| producer_cmp(&producers[w[0]], &producers[w[1]]) != Ordering::Equal),
+        "two producers share an identity"
+    );
+    let p_rank = ranks(&p_order);
+
+    let mut e_order: Vec<usize> = (0..edges.len()).collect();
+    e_order.sort_unstable_by(|&a, &b| edge_cmp(edges[a], edges[b]));
+    let mut e_rank = vec![0; edges.len()];
+    let mut canon_edges: Vec<&'g TypedOutEdge> = Vec::with_capacity(edges.len());
+    for (i, &old) in e_order.iter().enumerate() {
+        if i == 0 || edge_cmp(edges[e_order[i - 1]], edges[old]) != Ordering::Equal {
+            canon_edges.push(edges[old].1);
+        }
+        e_rank[old] = canon_edges.len() - 1;
+    }
+
+    // Routine rank: internal ids in string order, keyed by the interned `Arc`.
+    let mut sorted_names: Vec<&Arc<str>> = names.iter().collect();
+    sorted_names.sort_unstable();
+    let r_rank: HashMap<*const u8, usize> = sorted_names
+        .iter()
+        .enumerate()
+        .map(|(rank, a)| (a.as_ptr(), rank))
+        .collect();
+    drop(sorted_names);
+    // `(producer rank, dist, routine rank)` per state, then `(t, reqs)`.
+    let head: Vec<(usize, usize, usize)> = states
+        .iter()
+        .map(|s| {
+            let r = *r_rank
+                .get(&s.routine.as_ptr())
+                .expect("a state's routine is interned");
+            (p_rank[s.producer], s.dist, r)
+        })
+        .collect();
+    drop(r_rank);
+    let mut s_order: Vec<StateIx> = (0..states.len()).collect();
+    s_order.sort_unstable_by(|&a, &b| {
+        let (x, y) = (&states[a], &states[b]);
+        head[a]
+            .cmp(&head[b])
+            .then_with(|| x.t.cmp(&y.t))
+            .then_with(|| x.reqs.cmp(&y.reqs))
+    });
+    drop(head);
+    let s_rank = ranks(&s_order);
+
+    let mut producers: Vec<Option<Producer>> = producers.into_iter().map(Some).collect();
+    let mut states: Vec<Option<ConeState>> = states.into_iter().map(Some).collect();
+    let mut raw_links = raw_links;
+    let mut arena = ConeArena {
+        producers: p_order
+            .iter()
+            .map(|&old| producers[old].take().expect("a permutation"))
+            .collect(),
+        states: Vec::with_capacity(states.len()),
+        links: Vec::with_capacity(raw_links.iter().map(Vec::len).sum()),
+        edges: canon_edges.iter().map(|&e| e.clone()).collect(),
+        by_routine: HashMap::new(),
+    };
+    for &old in &s_order {
+        let mut st = states[old].take().expect("a permutation");
+        st.producer = p_rank[st.producer];
+        let mut links: Vec<ConeLink> = std::mem::take(&mut raw_links[old])
+            .into_iter()
+            .map(|l| ConeLink {
+                callee_state: s_rank[l.callee_state],
+                edge: e_rank[l.edge],
+            })
+            .collect();
+        links.sort_unstable_by_key(|l| (l.edge, l.callee_state));
+        links.dedup_by_key(|l| (l.edge, l.callee_state));
+        let start = arena.links.len();
+        arena.links.extend(links);
+        st.links = start..arena.links.len();
+        arena
+            .by_routine
+            .entry(Arc::clone(&st.routine))
+            .or_default()
+            .push(arena.states.len());
+        arena.states.push(st);
+    }
+
+    let mut reps: Reps = HashMap::new();
+    let mut resolved: ResolvedByRoutine = HashMap::new();
+    for (ix, s) in arena.states.iter().enumerate() {
+        if s.seed {
+            continue;
+        }
+        let first_hop = canon_edges[arena.links[s.links.clone()]
+            .iter()
+            .find(|l| arena.states[l.callee_state].dist + 1 == s.dist)
+            .expect("a non-seed state has a shortest link")
+            .edge];
+        let rep = reps
+            .entry((s.producer, s.t.clone()))
+            .or_insert_with(|| Arc::new(rep_for(&arena.producers[s.producer].fact, &s.t)));
+        resolved
+            .entry(Arc::clone(&s.routine))
+            .or_default()
+            .push(ResolvedEntry {
+                state: ix,
+                rep: Arc::clone(rep),
+                dist: s.dist,
+                first_hop,
+            });
+    }
+    (arena, resolved, reps)
+}
+
+/// The transitive product-state solve over the typed graph's INCOMING edges,
+/// returned in canonical (rank) order ([`finalize`]): the result does not
+/// depend on the order of `producers`, of the graph's edges or of the model's
+/// routines.
 pub(crate) fn solve<'g>(
     producers: Vec<Producer>,
     g: &'g TypedEdgeGraph,
@@ -258,7 +542,7 @@ pub(crate) fn solve<'g>(
     if arena.producers.is_empty() {
         return (arena, HashMap::new());
     }
-    let mut incoming: HashMap<&str, Vec<(&str, &TypedOutEdge)>> = HashMap::new();
+    let mut incoming: HashMap<&str, Vec<(&'g str, &'g TypedOutEdge)>> = HashMap::new();
     for (from, list) in &g.outgoing {
         for e in list {
             incoming
@@ -275,8 +559,9 @@ pub(crate) fn solve<'g>(
     type Key = (usize, Arc<str>, TempState, Vec<Req>);
     let mut ix_of: HashMap<Key, StateIx> = HashMap::new();
     let mut raw_links: Vec<Vec<ConeLink>> = Vec::new();
-    // `ConeArena::edges` while solving: each distinct graph edge, by address.
-    let mut edges: Vec<&'g TypedOutEdge> = Vec::new();
+    // `ConeArena::edges` while solving: each distinct graph edge, by address,
+    // with its `from` (the edge rank reads it, [`finalize`]).
+    let mut edges: Vec<(&'g str, &'g TypedOutEdge)> = Vec::new();
     let mut edge_ix: HashMap<*const TypedOutEdge, usize> = HashMap::new();
     let mut names: HashSet<Arc<str>> = HashSet::new();
     let mut intern = |s: &str| -> Arc<str> {
@@ -287,7 +572,8 @@ pub(crate) fn solve<'g>(
         names.insert(Arc::clone(&a));
         a
     };
-    // States are appended in BFS order, so `arena.states` is its own queue.
+    // States are appended in BFS order, so `arena.states` is its own queue
+    // (so `dist` is the shortest distance); [`finalize`] then renumbers.
     fn push(
         arena: &mut ConeArena,
         ix_of: &mut HashMap<Key, StateIx>,
@@ -359,7 +645,7 @@ pub(crate) fn solve<'g>(
                 None => push(&mut arena, &mut ix_of, &mut raw_links, key, false, dist + 1),
             };
             let edge = *edge_ix.entry(std::ptr::from_ref(e)).or_insert_with(|| {
-                edges.push(e);
+                edges.push((r, e));
                 edges.len() - 1
             });
             raw_links[ix].push(ConeLink {
@@ -372,49 +658,10 @@ pub(crate) fn solve<'g>(
     drop(ix_of);
     drop(edge_ix);
 
-    let key_of = |l: &ConeLink| edges[l.edge].sort_key.as_str();
-    for (ix, mut links) in raw_links.into_iter().enumerate() {
-        links.sort_by(|a, b| {
-            key_of(a)
-                .cmp(key_of(b))
-                .then(a.callee_state.cmp(&b.callee_state))
-        });
-        links.dedup_by(|a, b| a.callee_state == b.callee_state && key_of(a) == key_of(b));
-        let start = arena.links.len();
-        arena.links.extend(links);
-        arena.states[ix].links = start..arena.links.len();
-        arena
-            .by_routine
-            .entry(Arc::clone(&arena.states[ix].routine))
-            .or_default()
-            .push(ix);
-    }
-
-    let mut reps: HashMap<(usize, TempState), Arc<CapabilityFact>> = HashMap::new();
-    let mut resolved: ResolvedByRoutine = HashMap::new();
-    for (ix, s) in arena.states.iter().enumerate() {
-        if s.seed {
-            continue;
-        }
-        let first_hop = edges[arena.links[s.links.clone()]
-            .iter()
-            .find(|l| arena.states[l.callee_state].dist + 1 == s.dist)
-            .expect("a non-seed state has a shortest link")
-            .edge];
-        let rep = reps
-            .entry((s.producer, s.t.clone()))
-            .or_insert_with(|| Arc::new(rep_for(&arena.producers[s.producer].fact, &s.t)));
-        resolved
-            .entry(Arc::clone(&s.routine))
-            .or_default()
-            .push(ResolvedEntry {
-                state: ix,
-                rep: Arc::clone(rep),
-                dist: s.dist,
-                first_hop,
-            });
-    }
-    arena.edges = edges.into_iter().cloned().collect();
+    let finalize_span = crate::engine::perf_trace::span("cone", "pd.finalize");
+    let (mut arena, mut resolved, reps) =
+        finalize(arena.producers, arena.states, raw_links, edges, &names);
+    drop(finalize_span);
     // Growth slack is up to half of each pushed `Vec`; the solve is read-only
     // from here on.
     arena.states.shrink_to_fit();
@@ -563,6 +810,42 @@ pub(crate) fn working_tally(
         arc_fact(&mut t, r);
     }
     t
+}
+
+/// Test hook (stage 1b, T-arena-canon on corpus apps): `compose_inherited_cones`
+/// permutes its producers by [`test_shuffle::SEED`] before the solve. The
+/// producers are the solve's only input whose order reaches it: the graph's
+/// nodes are sorted and the incoming edges re-sorted before the walk, so the
+/// model's routine and call order arrive canonical, and the edge numbering
+/// follows the producer order. Process-global, because the cone can run on
+/// rayon workers; a canonical solve makes it invisible to any other test.
+#[cfg(test)]
+pub(crate) mod test_shuffle {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// 0: no permutation.
+    pub(crate) static SEED: AtomicU64 = AtomicU64::new(0);
+    /// Serializes the tests that set [`SEED`].
+    pub(crate) static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A deterministic permutation of `v` (Fisher–Yates over xorshift64).
+    pub(crate) fn shuffled<T>(mut v: Vec<T>, seed: u64) -> Vec<T> {
+        let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        for i in (1..v.len()).rev() {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            v.swap(i, (x % (i as u64 + 1)) as usize);
+        }
+        v
+    }
+
+    pub(crate) fn apply<T>(v: Vec<T>) -> Vec<T> {
+        match SEED.load(Ordering::SeqCst) {
+            0 => v,
+            seed => shuffled(v, seed),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1144,6 +1427,355 @@ mod tests {
         assert_eq!(
             states_at(&arena, "C"),
             vec![(TempState::Known(false), vec![(0, false)])]
+        );
+    }
+
+    // ----- Stage 1b: the canonical arena (T-arena-canon) -----
+
+    /// Every index of `arena` and `resolved` as text: two solves print the same
+    /// only if their storage is the same, index for index, and their resolved
+    /// entries (state, dist, first hop, rep) are the same in the same order.
+    fn arena_bytes(arena: &ConeArena, resolved: &ResolvedByRoutine) -> String {
+        let mut s = String::new();
+        for p in &arena.producers {
+            s += &format!("P {}|{} {:?}\n", p.owner, p.operation_id, p.fact);
+        }
+        for e in &arena.edges {
+            s += &format!("E {e:?}\n");
+        }
+        for st in &arena.states {
+            s += &format!("S {st:?}\n");
+        }
+        for l in &arena.links {
+            s += &format!("L {l:?}\n");
+        }
+        let mut by: Vec<_> = arena.by_routine.iter().collect();
+        by.sort();
+        s += &format!("B {by:?}\n");
+        let mut rs: Vec<_> = resolved.iter().collect();
+        rs.sort_by(|a, b| a.0.cmp(b.0));
+        for (r, es) in rs {
+            for e in es {
+                s += &format!(
+                    "R {r} state={} dist={} hop={:?} rep={:?}\n",
+                    e.state, e.dist, e.first_hop, e.rep
+                );
+            }
+        }
+        s
+    }
+
+    /// The canonical form's invariants, read off the arena alone: every rank
+    /// strictly increasing, every reference pointing where its identity says,
+    /// `by_routine` and the resolved entries exactly the states of each routine
+    /// in rank order, each first hop the lowest-ranked shortest link.
+    fn assert_canonical(arena: &ConeArena, resolved: &ResolvedByRoutine) {
+        use std::cmp::Ordering::Less;
+        for w in arena.producers.windows(2) {
+            assert_eq!(producer_cmp(&w[0], &w[1]), Less, "producers out of rank");
+        }
+        // An edge's `from`: the routine of every state whose link crosses it.
+        let mut from: Vec<Option<&str>> = vec![None; arena.edges.len()];
+        for st in &arena.states {
+            for l in &arena.links[st.links.clone()] {
+                let f = from[l.edge].get_or_insert(&st.routine);
+                assert_eq!(*f, &*st.routine, "an edge has one `from`");
+                let callee = &arena.states[l.callee_state];
+                assert_eq!(
+                    arena.edges[l.edge].to, &*callee.routine,
+                    "link edge → callee"
+                );
+                assert_eq!(callee.producer, st.producer, "a link stays in one producer");
+            }
+            let links = &arena.links[st.links.clone()];
+            for w in links.windows(2) {
+                assert!(
+                    (w[0].edge, w[0].callee_state) < (w[1].edge, w[1].callee_state),
+                    "links out of rank or duplicated"
+                );
+            }
+        }
+        for i in 1..arena.edges.len() {
+            let (a, b) = (from[i - 1].unwrap(), from[i].unwrap());
+            assert_eq!(
+                edge_cmp((a, &arena.edges[i - 1]), (b, &arena.edges[i])),
+                Less,
+                "edges out of rank"
+            );
+        }
+        for w in arena.states.windows(2) {
+            let key = |s: &ConeState| {
+                (
+                    s.producer,
+                    s.dist,
+                    s.routine.clone(),
+                    s.t.clone(),
+                    s.reqs.clone(),
+                )
+            };
+            assert!(key(&w[0]) < key(&w[1]), "states out of rank");
+        }
+        let mut by: HashMap<&str, Vec<StateIx>> = HashMap::new();
+        for (ix, st) in arena.states.iter().enumerate() {
+            by.entry(&st.routine).or_default().push(ix);
+        }
+        assert_eq!(by.len(), arena.by_routine.len());
+        for (r, ixs) in &by {
+            assert_eq!(&arena.by_routine[*r], ixs, "by_routine of {r}");
+            let own: Vec<StateIx> = ixs
+                .iter()
+                .copied()
+                .filter(|&s| !arena.states[s].seed)
+                .collect();
+            let got: Vec<StateIx> = resolved
+                .get(*r)
+                .map_or(&[][..], Vec::as_slice)
+                .iter()
+                .map(|e| e.state)
+                .collect();
+            assert_eq!(got, own, "resolved entries of {r}");
+        }
+        for es in resolved.values() {
+            for e in es {
+                let st = &arena.states[e.state];
+                assert_eq!(e.dist, st.dist);
+                let first = arena.links[st.links.clone()]
+                    .iter()
+                    .find(|l| arena.states[l.callee_state].dist + 1 == st.dist)
+                    .unwrap();
+                assert_eq!(
+                    format!("{:?}", e.first_hop),
+                    format!("{:?}", arena.edges[first.edge]),
+                    "first hop"
+                );
+            }
+        }
+    }
+
+    use super::test_shuffle::shuffled;
+
+    /// T-arena-canon (a) on corpus apps (every fixture whose arena the stage-1b
+    /// change reordered): with the cone's producers permuted
+    /// ([`super::test_shuffle`]), the finalized arena's logical lines (storage
+    /// order included) and the rendered digest (its witnesses and `via_paths`
+    /// walk the arena) are the same bytes as unpermuted.
+    #[test]
+    fn corpus_arena_and_witnesses_are_independent_of_producer_order() {
+        use super::test_shuffle::{LOCK, SEED};
+        use std::sync::atomic::Ordering::SeqCst;
+        let _guard = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
+        let mut producers_seen = 0usize;
+        for ws in [
+            "ws-d37",
+            "ws-d40",
+            "ws-d65",
+            "ws-event-chains",
+            "ws-event-multi-sub-overlap",
+            "ws-explain",
+            "ws-explain-calls",
+            "ws-path-facts",
+        ] {
+            let model =
+                crate::program::model::program_calls::assemble_and_resolve_workspace_with_program_calls(
+                    &corpus.join(ws),
+                )
+                .expect("the corpus model builds");
+            let render = || {
+                let base = crate::engine::l4::capability_cone::build_r3a3_source_only_base(&model);
+                let digest = crate::engine::l5::digest::compute_digest_effects(&model);
+                (
+                    base.pd_solution.producers.len(),
+                    format!(
+                        "{}\n{digest:?}",
+                        base.pd_solution.logical_lines().join("\n")
+                    ),
+                )
+            };
+            SEED.store(0, SeqCst);
+            let (n, want) = render();
+            producers_seen += usize::from(n > 1);
+            for seed in 1..=6 {
+                SEED.store(seed, SeqCst);
+                let got = render().1;
+                SEED.store(0, SeqCst);
+                assert!(
+                    got == want,
+                    "{ws}: seed {seed} changed the arena or the digest"
+                );
+            }
+        }
+        assert!(
+            producers_seen >= 4,
+            "the fixtures must carry several producers"
+        );
+    }
+
+    /// A graph whose out-edge lists keep the given order (the solve must not
+    /// rely on them being sorted).
+    fn graph_as_given(edges: Vec<(&str, TypedOutEdge)>) -> TypedEdgeGraph {
+        let mut outgoing: HashMap<String, Vec<TypedOutEdge>> = HashMap::new();
+        let mut nodes: BTreeSet<String> = BTreeSet::new();
+        for (from, e) in edges {
+            nodes.insert(from.to_string());
+            nodes.insert(e.to.clone());
+            outgoing.entry(from.to_string()).or_default().push(e);
+        }
+        TypedEdgeGraph {
+            nodes: nodes.into_iter().collect(),
+            outgoing,
+            unresolved_sources: BTreeSet::new(),
+        }
+    }
+
+    /// `id` with one call site per `(site, callee param 0's argument)`.
+    fn calling(
+        id: &str,
+        sites: &[(&str, crate::program::body::features::PTempState)],
+    ) -> ModelRoutine {
+        let mut r = pd_routine(id);
+        for (cs, arg) in sites {
+            r.call_sites.push(pd_call_site(
+                cs,
+                "Callee",
+                vec![pd_arg_binding(0, Some(arg.clone()))],
+            ));
+        }
+        r
+    }
+
+    /// T-arena-canon (a), hand-stated: four producers (three at one owner,
+    /// whose ops `op1`, `op2`, `op10` order differently as strings), a cycle,
+    /// a diamond, two states of one routine with different `t`, two links into
+    /// one state across different edges, and one edge present twice in the
+    /// graph. Whatever the order of the producers and of the graph's edges,
+    /// the finalized arena and every resolved entry are the same bytes.
+    #[test]
+    fn solve_is_independent_of_input_order() {
+        let routines = [
+            calling(
+                "C",
+                &[
+                    ("cs1", pd_ts_known(true)),
+                    ("cs2", pd_ts_pd(0)),
+                    ("cs3", pd_ts_pd(0)),
+                ],
+            ),
+            calling("D", &[("d1", pd_ts_known(false)), ("d2", pd_ts_pd(0))]),
+            calling("E", &[("e1", pd_ts_pd(0)), ("e2", pd_ts_known(true))]),
+            calling("A", &[("a1", pd_ts_pd(0)), ("a2", pd_ts_pd(0))]),
+            calling("B", &[("b1", pd_ts_pd(0))]),
+            pd_routine("G"),
+            pd_routine("H"),
+        ];
+        let by_id: HashMap<&str, &ModelRoutine> =
+            routines.iter().map(|r| (r.id.as_str(), r)).collect();
+        let edges = vec![
+            ("C", edge("direct-call", Some("cs1"), "H")),
+            ("C", edge("direct-call", Some("cs2"), "H")),
+            // One graph edge twice: one arena edge, one link.
+            ("C", edge("direct-call", Some("cs2"), "H")),
+            ("C", edge("direct-call", Some("cs3"), "G")),
+            ("D", edge("direct-call", Some("d1"), "C")),
+            ("D", edge("direct-call", Some("d2"), "G")),
+            ("E", edge("direct-call", Some("e1"), "D")),
+            ("E", edge("direct-call", Some("e2"), "C")),
+            ("A", edge("direct-call", Some("a1"), "B")),
+            ("A", edge("direct-call", Some("a2"), "H")),
+            ("B", edge("direct-call", Some("b1"), "A")),
+        ];
+        let producers = || {
+            let mut out = vec![producer("H"), producer("G")];
+            for op in ["H/op10", "H/op2"] {
+                let mut p = producer("H");
+                p.operation_id = op.to_string();
+                Arc::make_mut(&mut p.fact).witness_operation_id = Some(op.to_string());
+                out.push(p);
+            }
+            out
+        };
+        let frames: HashMap<String, FrameGuards> = HashMap::new();
+        let g = graph_as_given(edges.clone());
+        let (arena, resolved) = solve(producers(), &g, &by_id, &frames);
+        assert_canonical(&arena, &resolved);
+        let want = arena_bytes(&arena, &resolved);
+        // The fixture exercises what it claims.
+        let ops: Vec<&str> = arena
+            .producers
+            .iter()
+            .map(|p| p.operation_id.as_str())
+            .collect();
+        assert_eq!(
+            ops,
+            ["G/op1", "H/op1", "H/op2", "H/op10"],
+            "op ids rank by ordinal"
+        );
+        assert_eq!(arena.edges.len(), 10, "the doubled edge is one arena edge");
+        assert!(states_at(&arena, "C").len() >= 2 && states_at(&arena, "D").len() >= 2);
+        for seed in 1..=24 {
+            let g = graph_as_given(shuffled(edges.clone(), seed));
+            let (a, r) = solve(shuffled(producers(), seed + 100), &g, &by_id, &frames);
+            assert_canonical(&a, &r);
+            assert_eq!(arena_bytes(&a, &r), want, "seed {seed}");
+        }
+    }
+
+    /// T-arena-canon (b), design r6 §6.10: two distinct INTERNAL routine ids
+    /// sharing one STABLE id (the internal key carries `routine_kind`, the
+    /// stable id does not), both reached from one producer with equal `dist`,
+    /// `t` and `reqs`. Both states survive and rank by internal id, whatever
+    /// the input order. The callsite ids are chosen so the solve DISCOVERS `X2`
+    /// first (`a` sorts before `b` in the incoming order): only the internal-id
+    /// rank puts `X1` first.
+    #[test]
+    fn solve_keeps_two_routines_that_share_a_stable_id() {
+        let mut x1 = calling("app/X1", &[("b", pd_ts_known(true))]);
+        let mut x2 = calling("app/X2", &[("a", pd_ts_known(true))]);
+        x1.kind = "procedure".to_string();
+        x2.kind = "trigger".to_string();
+        x1.stable_routine_id = "app:Codeunit:1#shared".to_string();
+        x2.stable_routine_id = x1.stable_routine_id.clone();
+        let h = pd_routine("H");
+        let by_id: HashMap<&str, &ModelRoutine> =
+            [("app/X1", &x1), ("app/X2", &x2), ("H", &h)].into();
+        let edges = vec![
+            ("app/X1", edge("direct-call", Some("b"), "H")),
+            ("app/X2", edge("direct-call", Some("a"), "H")),
+        ];
+        let frames: HashMap<String, FrameGuards> = HashMap::new();
+        let mut want: Option<String> = None;
+        for seed in 0..=8 {
+            let g = graph_as_given(shuffled(edges.clone(), seed));
+            let (arena, resolved) = solve(vec![producer("H")], &g, &by_id, &frames);
+            assert_canonical(&arena, &resolved);
+            let routines: Vec<&str> = arena.states.iter().map(|s| &*s.routine).collect();
+            assert_eq!(routines, ["H", "app/X1", "app/X2"], "seed {seed}");
+            let (s1, s2) = (&arena.states[1], &arena.states[2]);
+            assert_eq!((s1.dist, &s1.t, &s1.reqs), (s2.dist, &s2.t, &s2.reqs));
+            assert_eq!(resolved["app/X1"].len(), 1);
+            assert_eq!(resolved["app/X2"].len(), 1);
+            let bytes = arena_bytes(&arena, &resolved);
+            assert_eq!(
+                want.get_or_insert_with(|| bytes.clone()),
+                &bytes,
+                "seed {seed}"
+            );
+        }
+    }
+
+    #[test]
+    fn op_id_cmp_orders_by_ordinal_and_stays_total() {
+        use std::cmp::Ordering::*;
+        assert_eq!(op_id_cmp("r/op8", "r/op10"), Less);
+        assert_eq!(op_id_cmp("r/op10", "r/op10"), Equal);
+        assert_eq!(op_id_cmp("q/op10", "r/op1"), Less, "routine first");
+        assert_eq!(op_id_cmp("r/op01", "r/op1"), Less, "one ordinal, two ids");
+        assert_eq!(
+            op_id_cmp("r/opx", "r/op1"),
+            Greater,
+            "other shapes as strings"
         );
     }
 }
