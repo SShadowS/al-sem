@@ -24,13 +24,16 @@ states the contracts for the three landed-code fixes it asked for.
 | astra round 6 | GPT | **approve with changes**: dependency-aware `ensure_prepared` with a complete publication transaction; publisher-only zero-span fallback; three landed-code bugs (lossless stderr, frame recovery at the boundary, bounded front-end queue) |
 | Fable r7 = this document | Claude | applies the two design changes and states the three contracts |
 
-**Landed on master `c5dbed28`:** stage 0 (`PlanCx`, wire codec, explain grouping,
+**Landed on master `66ff3d93`:** stage 0 (`PlanCx`, wire codec, explain grouping,
 multi-root explain, `BoundaryMode`, prove spans), stage 1 (phase split of `View::prepare`
-with owned/borrowed inputs, measurement spans), the routine-id migration (per-app id
-prefix), the `Cu.Run(x)` resolver fix, and the stage-2 plumbing (owned package images,
-the engine child and its front end, hidden `alsem engine-host` / `alsem engine-ask`,
-`engine-test-hooks`). **In progress:** stage 1b (canonical arena order). Everything else
-below is the build order from here.
+with owned/borrowed inputs, measurement spans), stage 1b (canonical arena order, internal-id
+ranks), the routine-id migration (per-app id prefix), the `Cu.Run(x)` resolver fix, the
+stage-2 plumbing (owned package images, the engine child and its front end, hidden
+`alsem engine-host` / `alsem engine-ask`, `engine-test-hooks`) with the round-6 fixes
+(lossless stderr, boundary-safe frame recovery, bounded front-end queue), the ABI-integrity
+check as a declared need (`AbiIntegrity::{Check, Skip}`), and **stage 4** (the incremental
+model, `program::session`; see the as-built notes in §6.5, §6.13, §7 and §12). Everything
+else below is the build order from here.
 
 ## 0. Summary
 
@@ -497,7 +500,36 @@ are **measured** as the fresh path minus the pack path, end to end (wall and pea
   release the owning file's resolution is redone against the current semantics (which
   yields whatever cold yields, normally `Unknown(IndexIntegrationGap)`), never an invented
   zero-span source witness.
-- Event-flow edges are rerun whole every revision (declaration-level, milliseconds).
+- Event-flow edges are rerun whole every revision.
+
+**As built (stage 4, `program::session`).** Two parts of this section were deliberately
+not built, and the contract above holds without them:
+
+- **No `DeclSemantics` / `DeclLocations` split.** Graph reassembly cost 0.31–0.33 s, but
+  that was a scan of every routine per platform-event subscriber in
+  `inject_platform_event_publishers`. A run lookup on the cold path (`program/build.rs`,
+  same answer) cut it to about 20 ms, so the graph is rebuilt every revision, which is
+  exact. Witnesses keep their cold `Witness::SourceSpan` form and are recomputed from the
+  current declarations on every reused route, instead of being stored as
+  `Witness::Decl(rid)` and materialized late. The rules are the ones stated above: only
+  `SourceSpan` routes on routines are touched, `AbiSymbol`/`None` are left alone, a
+  missing routine is an invariant failure, and there is no zero-span fallback for callees.
+- **Event-flow edges stay whole, and cost 64–88 ms, not milliseconds-by-design.** The
+  0.73–0.94 s first measured was a scan of every routine per subscriber route in
+  `emit_event_flow_edges`; a run lookup (`resolve/resolver.rs`, same routine, first in
+  merged order) removed it on the cold path too. No finer rule is correct: the test
+  `event_flow_edge_of_an_unchanged_publisher_moves_under_b` shows a body-only edit above a
+  workspace subscriber moving the edge of an unchanged dependency publisher, because the
+  edge carries the subscriber's span.
+- **Any root `app.json` change is P.** A per-file resolution reads `app.json`
+  (`internalsVisibleTo`, test G28), so the A-S class of §6.1 is not split out.
+- **P detection uses stamps** (`DepKey`, the `app.json` bytes, source-dependency content
+  hashes); the stage-2 manifest and image hashes are not wired into the session yet.
+- **Per-file raw rows** (`program/model/row_cache.rs`) are reused only when every input is
+  equal: the parse (by identity), the text, the demanded population, the parenless calls,
+  the needs, the app and the source unit. The per-build `FileIx` is kept symbolically and
+  re-stamped on reuse. The ABI block is keyed by the dependency list, the apps' `AppRef`s
+  and the needs; all rows are dropped on P.
 
 ### 6.6 Resolution
 
@@ -622,6 +654,16 @@ Measured: three roots in one read cost +0.4–0.6 s over one; renders 0.93 s for
 | P | ≈ 21 s | ≈ 14–15 s model + composition |
 | `roots.config.json` | ≈ 21 s | < 1 s |
 
+**As built (stage 4), model published**, measured on a temporary copy of CDO
+(release-fast, `aldump --session-refresh --verify`, every step equal to the cold build):
+B **2.43–2.53 s** (was 5.7–6.0 s before the per-file rows); S/F **7.0–7.35 s**; P
+12.2–13.6 s (the cold model build on the same binary: 11.7–12.4 s). A B refresh still
+spends: snapshot build 0.35–0.39 s, resolve 0.19 s (event flow 64–88 ms), demand 0.17 s,
+dependency rows 0.25 s (cloning the kept rows), `finish_resolved` 0.27–0.30 s,
+`RowNodes` 0.08 s, attach 0.90–1.0 s. S still re-resolves every dependency body
+(4.1–4.7 s): the finer rule needs stage 6's recording facade and its audit.
+`model.copied_bytes` is 15.5 MB per B. "Analysis prepared" is stage 5's.
+
 ## 7. Memory
 
 Budgeted and reported by the child (`status`): retained floor, reserved, snapshots
@@ -631,6 +673,12 @@ of each kind ≤ 3 GB; peak ≤ one cold build (3.4–3.5 GB) — measured by T-
 the front end's `--max-children` (default 2) and `--total-budget`. Eviction order:
 dependency subjects' raw and rows, tree indexes, det and runs, cones (digests kept);
 never the model, relation, tier or L4 seed.
+
+**Measured cost of stage 4's retained rows:** about 1 GB. The peak of the whole
+`aldump --session-refresh --verify` run on CDO (session plus the verifying cold builds)
+rose from 5.46 GB to 6.50 GB. Stage 3's T-mem must account for it against the 3 GB
+resident target; dropping the dependency rows' copy (0.25 s per B) and sharing them
+instead is the first candidate if it does not fit.
 
 ## 8. The MCP front end (`alsem mcp`)
 
@@ -743,11 +791,9 @@ was seen to fail (CLAUDE.md). CDO-based tests run on a temporary copy of the bas
 
 | Stage | Content | Exit criterion and proof |
 |---|---|---|
-| 0, 1, ids, 2-plumbing | landed | — |
-| **1b** (in progress) | canonical arena with total internal-id ranks and the complete remapping pass | T-arena-canon; witness equality or accepted differences listed with the golden regeneration |
+| 0, 1, 1b, ids, 2-plumbing, 4 | landed (4 without the semantics/locations split; §6.5) | — |
 | **2 (completion)** | resident revision; `ensure_prepared` (§4.2); the full-manifest three-way check; `requestFiles`, deadlines, cancel, `notifyChanged`, enforcement, mandatory `diffRootDecided`; lossless stderr, boundary-safe frame recovery, bounded front-end queue; private-namespace outputs; `Answer::terminal`; exit 3 | T-order, T-prepared (cold roots), T-acquire-*, T-exit3, T-terminal, T-frame, T-stderr, T-frame-boundary, T-queue-bound, T-paths, T-fresh/T-manifest, T-tier, T-failed-build, T-pin, T-plan; measured sequential warm numbers per command |
 | 3 | admission with fill workers counted; eviction via snapshots; `latest-built`; watcher; idle; LSP | T-race, T-cancel, T-panic, T-mem, T-budget, T-lsp; resident ≤ 3 GB |
-| 4 | `Classify` projection; semantics/locations split with the two domains and the publisher-only fallback; L2c/L7 whole; ABI ordinals; `complete(p)` index; `revision.refresh` and copy counter | T-class, T-proj-guard, T-loc, T-methodid, T-demand-transitive, T-convert, T-abi-rows, T-rows, T-order-rows, T-refine, T-world, T-incr (model); refresh wall and copy bytes recorded |
 | 5 | seeded L4; cone store with Δ_pd_output and per-member coverage refresh; tree store with whole sections and per-section spans; retained stores integrated only after T-prepared's publication invariants pass | T-cone, T-cone-edge, T-pd-out, T-typed-edges, T-callsite-res, T-coverage, T-obj-only, T-tree, T-prepared (live), T-incr end to end |
 | 6 | declaration pack; finer dependency rule behind its audit | fresh − pack path measured end to end |
 
@@ -755,9 +801,9 @@ was seen to fail (CLAUDE.md). CDO-based tests run on a temporary copy of the bas
 
 | Measure | Target | Status |
 |---|---:|---|
-| model published after B | ≤ 2.5 s | hypothesis; gate set from `revision.refresh` |
-| model published after S/F/A-S | ≤ 9 s | hypothesis; ≥ 4.0–4.7 s measured |
-| model published after P | ≈ 14–15 s | measured (model build); analysis adds the composition |
+| model published after B | ≤ 2.5 s | measured 2.43–2.53 s (stage 4) |
+| model published after S/F | ≤ 9 s | measured 7.0–7.35 s (stage 4) |
+| model published after P | ≈ 14–15 s | measured 12.2–13.6 s (stage 4); analysis adds the composition |
 | analysis prepared after B | ≤ 1 s non-hub | hypothesis |
 | warm `query` | ≤ 0.1 s | measured |
 | warm `prove`, one root | roots 2.8–2.9 s + prove's 0.70–0.74 s + ≈ 0.25 s + first-use 0.6 s | measured spans; end-to-end is stage 2's number |
