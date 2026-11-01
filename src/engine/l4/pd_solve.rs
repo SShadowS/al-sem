@@ -85,6 +85,69 @@ pub struct ConeArena {
     pub by_routine: HashMap<Arc<str>, Vec<StateIx>>,
 }
 
+impl ConeArena {
+    /// The arena as text with every index replaced by the identity it points
+    /// at: one line per producer, edge and state in storage order, then one
+    /// line per routine of `by_routine`, routines sorted. A state is named by
+    /// its solve key `(producer, routine, t, reqs)`, an edge by
+    /// `from|sort_key`, so two arenas that differ only in numbering give the
+    /// same lines up to their order. `aldump --snapshot-memory --pd-dump`
+    /// writes it, so a change to the solve's order can be checked against the
+    /// one before it as a pure reordering.
+    pub fn logical_lines(&self) -> Vec<String> {
+        // An edge's `from` is the routine of every state whose link crosses it.
+        let mut edge_from: Vec<&str> = vec![""; self.edges.len()];
+        for s in &self.states {
+            for l in &self.links[s.links.clone()] {
+                edge_from[l.edge] = &s.routine;
+            }
+        }
+        let edge = |e: usize| format!("{}|{}", edge_from[e], self.edges[e].sort_key);
+        let state = |ix: StateIx| {
+            let s = &self.states[ix];
+            let p = &self.producers[s.producer];
+            format!(
+                "{}|{} @{} t={:?} reqs={:?}",
+                p.owner, p.operation_id, s.routine, s.t, s.reqs
+            )
+        };
+        let mut out = Vec::with_capacity(
+            self.producers.len() + self.edges.len() + self.states.len() + self.by_routine.len(),
+        );
+        for p in &self.producers {
+            out.push(format!("producer {}|{}", p.owner, p.operation_id));
+        }
+        for e in 0..self.edges.len() {
+            out.push(format!("edge {}", edge(e)));
+        }
+        for (ix, s) in self.states.iter().enumerate() {
+            let links: Vec<String> = self.links[s.links.clone()]
+                .iter()
+                .map(|l| format!("{} <- {}", edge(l.edge), state(l.callee_state)))
+                .collect();
+            let first_hop = self.links[s.links.clone()]
+                .iter()
+                .find(|l| !s.seed && self.states[l.callee_state].dist + 1 == s.dist)
+                .map_or_else(|| "-".to_string(), |l| edge(l.edge));
+            out.push(format!(
+                "state {} seed={} dist={} first_hop={} links=[{}]",
+                state(ix),
+                s.seed,
+                s.dist,
+                first_hop,
+                links.join("; ")
+            ));
+        }
+        let mut routines: Vec<&Arc<str>> = self.by_routine.keys().collect();
+        routines.sort();
+        for r in routines {
+            let states: Vec<String> = self.by_routine[r].iter().map(|&s| state(s)).collect();
+            out.push(format!("routine {r}: [{}]", states.join("; ")));
+        }
+        out
+    }
+}
+
 /// D1.3: one non-seed state placed at its routine for uses (a) and (b). Its
 /// guard requirements are its state's (`ConeState::reqs`).
 #[derive(Debug, Clone)]
