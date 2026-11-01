@@ -292,8 +292,20 @@ fn read_record() -> Record {
 }
 
 /// Mint (only with `IDS_PARENT_BASELINE_MINT=<commit>`) or compare.
+/// Both tests analyze every fixture in parallel. Their `par_iter` runs on the
+/// big-stack pool, as every engine call site that lowers AL source does
+/// (`al_sem::big_stack`): on rayon's default worker stack the lowerer
+/// overflowed on CI's runners (SIGABRT, "has overflowed its stack").
+fn on_big_stack<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    al_sem::big_stack::big_stack_pool().install(f)
+}
+
 #[test]
 fn parent_baseline_fingerprints_and_stable_ids_are_unchanged() {
+    on_big_stack(fingerprints_and_stable_ids_are_unchanged);
+}
+
+fn fingerprints_and_stable_ids_are_unchanged() {
     let fixtures = fixture_apps();
     if let Ok(commit) = std::env::var(MINT_ENV) {
         let fixtures: BTreeMap<String, FixtureRecord> = fixtures
@@ -376,6 +388,10 @@ fn parent_baseline_fingerprints_and_stable_ids_are_unchanged() {
 /// A baseline the parent minted still suppresses every finding.
 #[test]
 fn parent_minted_baselines_still_suppress_every_finding() {
+    on_big_stack(minted_baselines_still_suppress_every_finding);
+}
+
+fn minted_baselines_still_suppress_every_finding() {
     if std::env::var(MINT_ENV).is_ok() {
         return; // the record is being minted by the test above
     }

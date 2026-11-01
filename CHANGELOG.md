@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (CI: the parent-baseline tests overflowed their stack)
+
+- **CI has been red since the routine-id merge (`212e5f82`): both
+  `ids_parent_baseline` tests aborted with "has overflowed its stack" on
+  GitHub's runners**, while they passed locally. They analyze every fixture in
+  parallel on rayon's default worker threads, whose stack is too small there for
+  the recursive AL lowerer. They now run on the big-stack pool
+  (`al_sem::big_stack::big_stack_pool`), as every engine call site that lowers AL
+  source already does. Reproduced locally by shrinking the default thread stack
+  with `RUST_MIN_STACK=1048576` (the test binary built first, at the normal
+  stack): with the old direct call both tests abort with CI's exact error
+  (SIGABRT, "has overflowed its stack"); with the fix both pass (2 passed).
+
 ### Fixed (engine protocol: three stage-2 review findings, review r6 NEW 3-5)
 
 - **A CLI answer's stderr is exact (NEW 3).** The wire used to turn stderr
