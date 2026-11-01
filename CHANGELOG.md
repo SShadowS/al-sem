@@ -67,6 +67,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`r0`, `r1a`, `r1d`, `r2-5a` ×2, `r3a3`) swap the old prefix for the app scope
   and drop the `modelInstanceId` inputs. No gate SARIF, `r0`, `r2c`, `r2d`, `r3a1`,
   `r3a2`, `r3a4`, `l4-summary-baseline` or semantic-edges golden moved.
+- **CDO** (the pinned `bc3ccb18` baseline). The two frozen L4 digests
+  (`tests/l4-summary-baseline/cdo-*-digest.txt`) moved and are re-pinned: with
+  the scope temporarily forced back to the old `"r0"` prefix, both tests
+  reproduce the old digests byte for byte (README re-freeze log). A
+  `--baseline` file minted with the parent binary (2233 fingerprints, 2240
+  findings) suppresses every finding of the new binary, and both runs give the
+  same multiset of `(ruleId, fingerprint)`. The CDO SARIF is not byte-identical:
+  6 d43/d44 messages print internal ids, and 12 d44 results list the same
+  code-flow locations in another order. That order follows internal ids, and a
+  cross-app model now has one prefix per app instead of one shared prefix. CDO
+  provenance stamps are untouched.
 
 ### Changed (context-server stage 0: request-scoped planning)
 
