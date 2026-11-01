@@ -55,9 +55,13 @@ pub struct AppUnit {
     pub abi: Option<std::sync::Arc<ParsedAppPackage>>,
     /// Path to the `.app` file (None for the workspace unit).
     pub app_path: Option<PathBuf>,
-    /// `app_path`'s size + mtime, taken before its bytes were read (None for
-    /// the workspace unit) — keys the shared dependency tier.
+    /// `app_image`'s identity (None for the workspace unit) — keys the
+    /// shared dependency tier.
     pub app_stamp: Option<crate::dependencies::AppFileStamp>,
+    /// The package image the unit was loaded from (None for the workspace
+    /// and source-folder units): the graph build's ABI ingest and the
+    /// symbol-only model rows read it, never `app_path` again.
+    pub app_image: Option<std::sync::Arc<crate::app_image::AppImage>>,
 }
 
 /// The full set of apps visible in a workspace, keyed by identity.
@@ -296,6 +300,7 @@ impl SnapshotBuilder {
             abi: None,
             app_path: None,
             app_stamp: None,
+            app_image: None,
         };
 
         // ------------------------------------------------------------------
@@ -371,8 +376,7 @@ impl SnapshotBuilder {
             let mut providers: Vec<Box<dyn SourceProvider + '_>> = Vec::new();
             if dependency_source == DependencySource::Embedded {
                 providers.push(Box::new(EmbeddedAppProvider {
-                    app_path: rd.app_path.clone(),
-                    stamp: rd.stamp,
+                    image: std::sync::Arc::clone(&rd.image),
                     cache,
                     defer_text,
                 }));
@@ -433,6 +437,7 @@ impl SnapshotBuilder {
                 abi: Some(rd.package),
                 app_path: Some(rd.app_path.clone()),
                 app_stamp: rd.stamp,
+                app_image: Some(rd.image),
             });
         }
 
@@ -482,6 +487,7 @@ impl SnapshotBuilder {
                 abi: None,
                 app_path: None,
                 app_stamp: None,
+                app_image: None,
             });
         }
 
@@ -551,6 +557,170 @@ mod tests {
         out.write_all(&[0u8; 40]).unwrap(); // NAVX header (content unused)
         out.write_all(zip_bytes.get_ref()).unwrap();
         path
+    }
+
+    /// A workspace with one dependency package `Pub_Dep.app` at `version`
+    /// (written in place over any earlier one: same inode): (root, package).
+    fn workspace_with_dep(
+        dir: &std::path::Path,
+        version: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        write_app_json(dir);
+        let alpackages = dir.join(".alpackages");
+        std::fs::create_dir_all(&alpackages).unwrap();
+        let app = write_dep_version(&alpackages, version);
+        (dir.to_path_buf(), app)
+    }
+
+    const ACQUIRE_GUID: &str = "acacacac-1111-1111-1111-111111111111";
+
+    fn write_dep_version(alpackages: &std::path::Path, version: &str) -> std::path::PathBuf {
+        write_minimal_app(
+            alpackages,
+            "Pub_Dep.app",
+            ACQUIRE_GUID,
+            "Dep",
+            "Pub",
+            version,
+        )
+    }
+
+    /// The dependency unit's version, its package's blake3, and the version
+    /// its ABI (the graph build's read) reports, from a snapshot built over
+    /// `inputs`.
+    fn dep_as_built(inputs: &Arc<WorkspaceInputs>) -> (String, [u8; 32], usize) {
+        let builder = SnapshotBuilder {
+            workspace_root: inputs.workspace.clone(),
+            local_providers: vec![],
+        };
+        let (snap, _) = builder
+            .build_with_inputs(inputs, DependencySource::Symbols, &DepCache::default())
+            .expect("snapshot build");
+        let unit = snap
+            .apps
+            .iter()
+            .find(|u| u.id.guid == ACQUIRE_GUID)
+            .expect("the dependency loads");
+        let abi = crate::program::abi_ingest::load_symbol_reference(unit).expect("an ABI");
+        assert!(abi.error.is_none(), "{:?}", abi.error);
+        (
+            unit.id.version.clone(),
+            unit.app_stamp.expect("a stamp").content,
+            abi.objects.len(),
+        )
+    }
+
+    /// T-acquire (design r5 §5.2): every product of a package (its manifest,
+    /// its symbols, the ABI the graph build reads) is built from the image
+    /// the workspace read acquired, never by opening the path again. After
+    /// the read, the package is rewritten IN PLACE (same inode) with another
+    /// version, and in a second read it is deleted outright: the builds still
+    /// see the acquired bytes. Before images, the loader reopened the path
+    /// for each product: the first case built version 2's unit, the second
+    /// reported the dependency unreadable.
+    #[test]
+    fn package_products_are_built_from_the_acquired_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ws, app) = workspace_with_dep(dir.path(), "1.0.0.0");
+        let v1 = blake3::hash(&std::fs::read(&app).unwrap());
+        let inputs = WorkspaceInputs::read(&ws, &WorkspaceNeeds::build_only());
+        write_dep_version(&ws.join(".alpackages"), "2.0.0.0");
+        assert_ne!(
+            blake3::hash(&std::fs::read(&app).unwrap()),
+            v1,
+            "precondition: the file on disk changed"
+        );
+        let (version, content, objects) = dep_as_built(&inputs);
+        assert_eq!(version, "1.0.0.0", "the manifest came from the image");
+        assert_eq!(
+            content,
+            *v1.as_bytes(),
+            "the unit's identity is the image's"
+        );
+        assert_eq!(objects, 1, "the ABI came from the image");
+
+        let inputs = WorkspaceInputs::read(&ws, &WorkspaceNeeds::build_only());
+        std::fs::remove_file(&app).unwrap();
+        let (version, _, objects) = dep_as_built(&inputs);
+        assert_eq!(
+            (version.as_str(), objects),
+            ("2.0.0.0", 1),
+            "no path reopen"
+        );
+    }
+
+    /// T-acquire-inplace (design r5 §5.1, §5.2): the package is overwritten
+    /// in place with B while the workspace read consumes it, and restored to
+    /// A before the build ends. The disk reads A before and after, but the
+    /// products were built from B, and `M_consumed` (the images' hashes) says
+    /// so: the three-way check refuses the run. A retry that consumes A
+    /// passes. A check of before against after alone would have published B
+    /// as A.
+    #[test]
+    fn an_in_place_overwrite_and_restore_during_consumption_is_refused() {
+        use crate::app_image::{PackageManifest, check_consistent};
+        let dir = tempfile::tempdir().unwrap();
+        let (ws, app) = workspace_with_dep(dir.path(), "1.0.0.0");
+        let alpackages = ws.join(".alpackages");
+        let paths = vec![app.clone()];
+
+        let before = PackageManifest::observe(&paths);
+        write_dep_version(&alpackages, "2.0.0.0"); // B, in place
+        let inputs = WorkspaceInputs::read(&ws, &WorkspaceNeeds::build_only());
+        write_dep_version(&alpackages, "1.0.0.0"); // A restored, in place
+        let (version, _, _) = dep_as_built(&inputs);
+        let after = PackageManifest::observe(&paths);
+        assert_eq!(before, after, "precondition: the disk reads A both times");
+        assert_eq!(version, "2.0.0.0", "precondition: the products are B's");
+        let refused = check_consistent(&before, &inputs.closure.consumed(), &after)
+            .expect_err("B consumed while A was on disk before and after");
+        assert_eq!(refused.path, app);
+        assert_ne!(refused.consumed, refused.before);
+
+        // The retry consumes A: published, with A's identity.
+        let before = PackageManifest::observe(&paths);
+        let inputs = WorkspaceInputs::read(&ws, &WorkspaceNeeds::build_only());
+        let (version, _, _) = dep_as_built(&inputs);
+        let after = PackageManifest::observe(&paths);
+        assert_eq!(
+            check_consistent(&before, &inputs.closure.consumed(), &after),
+            Ok(())
+        );
+        assert_eq!(version, "1.0.0.0");
+    }
+
+    /// The read hands its image to the first build and keeps only the
+    /// identity; a second build of the same read re-reads the package and
+    /// accepts it only if its bytes are the ones the read acquired.
+    #[test]
+    fn a_second_build_of_one_read_gets_the_same_bytes_or_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ws, app) = workspace_with_dep(dir.path(), "1.0.0.0");
+        let inputs = WorkspaceInputs::read(&ws, &WorkspaceNeeds::build_only());
+        assert_eq!(dep_as_built(&inputs).0, "1.0.0.0");
+        assert_eq!(dep_as_built(&inputs).0, "1.0.0.0", "re-read, same bytes");
+        write_dep_version(&ws.join(".alpackages"), "2.0.0.0");
+        let builder = SnapshotBuilder {
+            workspace_root: ws.clone(),
+            local_providers: vec![],
+        };
+        let (snap, report) = builder
+            .build_with_inputs(&inputs, DependencySource::Symbols, &DepCache::default())
+            .expect("snapshot build");
+        assert!(
+            !snap.apps.iter().any(|u| u.id.guid == ACQUIRE_GUID),
+            "a changed package is not loaded under the read's identity"
+        );
+        let unreadable = &report.unreadable;
+        assert_eq!(unreadable.len(), 1, "{unreadable:?}");
+        assert_eq!(unreadable[0].path, app);
+        assert!(
+            unreadable[0]
+                .error
+                .contains("changed after the workspace read"),
+            "{}",
+            unreadable[0].error
+        );
     }
 
     fn write_app_json(dir: &std::path::Path) {

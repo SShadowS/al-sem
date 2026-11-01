@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use crate::app_image::AppImage;
 use crate::app_package::open_app_zip;
 use crate::engine::deps::symbol_reference::{
     AbiEventKind as SrAbiEventKind, AbiRoutine, AbiTable, SymbolReferenceAbi,
@@ -188,6 +189,7 @@ impl AbiCache {
         publisher: &str,
         version: &str,
         app_path: &Path,
+        image: Option<&Arc<AppImage>>,
     ) -> Arc<SymbolReferenceAbi> {
         {
             let map = self.inner.lock().unwrap();
@@ -210,7 +212,17 @@ impl AbiCache {
         // it through the SAME `error` field a JSON parse failure already
         // uses, so both failure modes surface through the one channel
         // `ingest_abi` propagates below.
-        let abi = read_symbol_reference_from_app(app_path).unwrap_or_else(|e| SymbolReferenceAbi {
+        // The unit's package image (the bytes the loader read); a unit that
+        // has only a path (a test's) is acquired here, once.
+        let read = match image {
+            Some(image) => read_symbol_reference_from_app(image),
+            None => AppImage::acquire(app_path)
+                .map_err(|e| {
+                    anyhow::Error::new(e).context(format!("open .app: {}", app_path.display()))
+                })
+                .and_then(|image| read_symbol_reference_from_app(&image)),
+        };
+        let abi = read.unwrap_or_else(|e| SymbolReferenceAbi {
             error: Some(format!("failed to read {}: {e:#}", app_path.display())),
             ..Default::default()
         });
@@ -230,8 +242,10 @@ impl AbiCache {
 // I/O helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn read_symbol_reference_from_app(path: &Path) -> anyhow::Result<SymbolReferenceAbi> {
-    let mut archive = open_app_zip(path)?;
+pub(crate) fn read_symbol_reference_from_app(
+    image: &Arc<AppImage>,
+) -> anyhow::Result<SymbolReferenceAbi> {
+    let mut archive = open_app_zip(image)?;
     // T2.2: belt-and-suspenders cap — reject a hostile declared size before
     // decompressing, then bound the read itself (a lying central directory).
     // Errors here propagate through the SAME `abi.error` channel as a JSON
@@ -403,12 +417,20 @@ pub struct AbiIngestResult {
 /// `.app` (engine-switch S7.2: the cross-app model's symbol-only rows). `None`
 /// when the unit has no `.app` path. A read failure gives the empty ABI, as in
 /// [`ingest_abi`], whose `error` the program's ledger already reports.
-// ponytail: reads the `.app` a second time (the graph build's `AbiCache` is not
-// kept); keep the build's cache in the dep tier if this shows up in a profile.
+// ponytail: parses the `.app` image's symbols a second time (the graph build's
+// `AbiCache` is not kept); keep the build's cache in the dep tier if this shows
+// up in a profile. The image is the unit's own: the file is not read again.
 pub fn load_symbol_reference(unit: &AppUnit) -> Option<Arc<SymbolReferenceAbi>> {
     let id = &unit.id;
     let path = unit.app_path.as_ref()?;
-    Some(AbiCache::new().get_or_load(&id.guid, &id.name, &id.publisher, &id.version, path))
+    Some(AbiCache::new().get_or_load(
+        &id.guid,
+        &id.name,
+        &id.publisher,
+        &id.version,
+        path,
+        unit.app_image.as_ref(),
+    ))
 }
 
 /// The graph id of an ABI object of app `app`: by number, or by folded name when it
@@ -451,7 +473,14 @@ fn load_abi(unit: &AppUnit, cache: &AbiCache) -> Option<Arc<SymbolReferenceAbi>>
         Some(cached)
     } else {
         let path = unit.app_path.as_ref()?;
-        Some(cache.get_or_load(&id.guid, &id.name, &id.publisher, &id.version, path))
+        Some(cache.get_or_load(
+            &id.guid,
+            &id.name,
+            &id.publisher,
+            &id.version,
+            path,
+            unit.app_image.as_ref(),
+        ))
     }
 }
 
@@ -832,13 +861,12 @@ mod tests {
 
         let entry = [b"\xEF\xBB\xBF".as_slice(), json.as_bytes(), &[0u8; 64]].concat();
         let app = test_apps::build_app(&[("SymbolReference.json", &entry)]);
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir
-            .path()
-            .join("Microsoft_Base Application_28.4.53241.53758.app");
-        std::fs::write(&path, test_apps::wrap_ready_to_run(&app)).unwrap();
+        let image = AppImage::from_bytes(
+            "Microsoft_Base Application_28.4.53241.53758.app",
+            test_apps::wrap_ready_to_run(&app),
+        );
 
-        let abi = read_symbol_reference_from_app(&path).expect("read");
+        let abi = read_symbol_reference_from_app(&image).expect("read");
         assert_eq!(abi, expected);
     }
 
@@ -1001,6 +1029,7 @@ mod tests {
             abi: None,
             app_path: None,
             app_stamp: None,
+            app_image: None,
         }
     }
 
@@ -1019,6 +1048,7 @@ mod tests {
             abi: None,
             app_path: None,
             app_stamp: None,
+            app_image: None,
         }
     }
 

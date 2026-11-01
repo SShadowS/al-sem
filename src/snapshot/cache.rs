@@ -1,11 +1,15 @@
 //! Content-addressed source cache for embedded `.app` extraction.
 //!
-//! The cache key is the blake3 hex of the whole `.app` file, so a changed
+//! The cache key is the blake3 hex of the whole `.app` image, so a changed
 //! app is always a different key — stale reads are structurally impossible.
+//! The entries are the one mapping of package-derived bytes allowed: sealed
+//! private files, written once and renamed into place, never modified.
 
-use crate::snapshot::embedded::{SourceFile, app_content_hash, extract_embedded_source};
+use crate::app_image::AppImage;
+use crate::snapshot::embedded::{SourceFile, extract_embedded_source};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Return the stable cache directory, creating it if necessary.
 ///
@@ -31,23 +35,24 @@ pub fn cache_dir() -> PathBuf {
 /// locals is written out, G51).
 pub const EXTRACTION_SCHEME: u32 = 7;
 
-/// Return embedded AL source for `app_path`, using the content-addressed
-/// on-disk cache when available.
+/// Return embedded AL source for the package `image`, using the
+/// content-addressed on-disk cache when available.
 ///
-/// On a cache miss the source is extracted, serialised as JSON, and written to
-/// `<cache_dir>/<blake3-hex>.s<EXTRACTION_SCHEME>.json`.  On a cache hit the JSON is deserialised
-/// directly — no zip I/O needed.
+/// On a cache miss the source is extracted from the image, serialised as JSON,
+/// and written to `<cache_dir>/<blake3-hex>.s<EXTRACTION_SCHEME>.json`.  On a
+/// cache hit the JSON is deserialised directly — no zip I/O needed.
 ///
 /// Returns `(files, content_hash)`.  `files` is empty for symbol-only apps
-/// (same semantics as [`extract_embedded_source`]).  The hash is always the
-/// blake3 hex of the whole `.app`, computed once and reused — callers must not
-/// call `app_content_hash` a second time.
+/// (same semantics as [`extract_embedded_source`]).  The hash is the image's
+/// blake3 hex ([`AppImage::content_hash`]): the key and the extraction come
+/// from the SAME bytes, so a package rewritten after its hash was taken can
+/// never be extracted under the old key (context-server design r5 §5.2).
 ///
 /// Cache I/O failures (unwritable dir, locked file, corrupt entry) are
 /// **non-fatal**: a warn is logged and extraction proceeds uncached.
-pub fn cached_source(app_path: &Path) -> Result<(Vec<SourceFile>, String)> {
-    let hash = app_content_hash(app_path)
-        .with_context(|| format!("content hash for {}", app_path.display()))?;
+pub fn cached_source(image: &Arc<AppImage>) -> Result<(Vec<SourceFile>, String)> {
+    let hash = image.content_hash().to_string();
+    let app_path = image.path();
 
     // The extraction scheme is part of the name, not the hash (the hash stays
     // the app's identity): a package with only transpiled C# extracts to
@@ -69,7 +74,7 @@ pub fn cached_source(app_path: &Path) -> Result<(Vec<SourceFile>, String)> {
     }
 
     // Cache miss (or corrupt hit) — extract then persist best-effort.
-    let files = extract_embedded_source(app_path)?;
+    let files = extract_embedded_source(image)?;
     if let Err(e) = persist_cache(&cache_file, &hash, &files) {
         log::warn!(
             "snapshot source cache write failed for {} ({e:#}); continuing uncached",

@@ -17,6 +17,9 @@
 /// (same pattern, see that comment below) instead of declaring its own
 /// `mod analysis;`.
 pub mod analysis;
+/// Owned-buffer `.app` acquisition: one image per package, every product built
+/// from it — see the module doc.
+pub mod app_image;
 pub mod app_package;
 /// Shared big-stack execution for anywhere the `al_syntax` lowerer runs (T2.1,
 /// stack-overflow hardening) — see the module doc.

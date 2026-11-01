@@ -276,7 +276,13 @@ pub struct ClosureEntries {
 #[must_use]
 pub fn dependency_closure_entries(workspace_root: &Path) -> ClosureEntries {
     let (files, unreadable) = crate::dependencies::discover_app_files(workspace_root);
-    dependency_closure_entries_from(workspace_root, &files, &unreadable)
+    dependency_closure_entries_from(workspace_root, &files, &unreadable, &|i| {
+        match std::fs::File::open(&files[i].path).and_then(|h| h.metadata()) {
+            Ok(m) if m.is_file() => Ok(()),
+            Ok(_) => Err("not a file".to_string()),
+            Err(e) => Err(e.to_string()),
+        }
+    })
 }
 
 /// The key of a package cache folder: `.alpackages/` for the workspace's own,
@@ -301,11 +307,14 @@ pub(crate) fn package_key(workspace_root: &Path, package: &Path) -> Option<Strin
 }
 
 /// [`dependency_closure_entries`] over a discovery already made (the
-/// `WorkspaceInputs`'s closure lists).
+/// `WorkspaceInputs`'s closure lists). `readable(i)`: whether `files[i]` could
+/// be read as a file (`Err`: the OS message), answered by the caller (the
+/// workspace read answers from its acquired images, opening nothing).
 pub(crate) fn dependency_closure_entries_from(
     workspace_root: &Path,
     files: &[crate::dependencies::DiscoveredAppFile],
     unreadable: &[(std::path::PathBuf, std::io::Error)],
+    readable: &dyn Fn(usize) -> Result<(), String>,
 ) -> ClosureEntries {
     // Every discovered folder should be `<ancestor>/.alpackages`; one that is
     // not is an explicit `OutsideWalk` error, never silently keyed as the own cache.
@@ -327,7 +336,7 @@ pub(crate) fn dependency_closure_entries_from(
             Err(err) => out.errors.push(err),
         }
     }
-    for f in files {
+    for (i, f) in files.iter().enumerate() {
         let key = match folder_key(&f.folder) {
             Ok(folder) => format!(
                 "{folder}{}",
@@ -338,14 +347,11 @@ pub(crate) fn dependency_closure_entries_from(
                 continue;
             }
         };
-        match std::fs::File::open(&f.path).and_then(|h| h.metadata()) {
-            Ok(m) if m.is_file() => out.entries.push((key, f.path.clone())),
-            Ok(_) => out
+        match readable(i) {
+            Ok(()) => out.entries.push((key, f.path.clone())),
+            Err(message) => out
                 .errors
-                .push((key, ClosureErrorKind::ReadFailed, "not a file".to_string())),
-            Err(e) => out
-                .errors
-                .push((key, ClosureErrorKind::ReadFailed, e.to_string())),
+                .push((key, ClosureErrorKind::ReadFailed, message)),
         }
     }
     out.entries.sort_by(|a, b| a.0.cmp(&b.0));

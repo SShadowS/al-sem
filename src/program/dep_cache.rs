@@ -1141,6 +1141,7 @@ mod tests {
             Some(AppFileStamp {
                 len,
                 modified: None,
+                content: [0; 32],
             })
         };
         let root = |hash: &str| {

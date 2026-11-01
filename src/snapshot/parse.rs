@@ -236,6 +236,7 @@ mod tests {
             abi: None,
             app_path: None,
             app_stamp: None,
+            app_image: None,
         }
     }
 

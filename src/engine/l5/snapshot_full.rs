@@ -1160,12 +1160,14 @@ pub struct SnapshotInput {
 ///   "dep-source", keyed by its path as the config spells it, hashed by its
 ///   content hash (its `app.json`, every file path and text); a config that
 ///   does not load → one "dep-source-unreadable".
-/// `None` = no row. The closure `.app` files are hashed here. Paths
-/// workspace-relative, forward-slash normalized. Sorted by (kind|path).
+/// `None` = no row. A closure `.app`'s hash is `package_sha256(path)`, the
+/// SHA-256 of the image the workspace read acquired (`None`: unreadable).
+/// Paths workspace-relative, forward-slash normalized. Sorted by (kind|path).
 pub(crate) fn derive_inputs_from_parts(
     workspace_dir: &std::path::Path,
     app_json: Option<&[u8]>,
     closure: crate::program::resolve::semantic_golden::ClosureEntries,
+    package_sha256: &dyn Fn(&std::path::Path) -> Option<String>,
     roots_config: Option<&[u8]>,
     coverage_yaml: Option<&[u8]>,
     source_deps: &crate::program::source_deps::SourceDependencies,
@@ -1192,7 +1194,7 @@ pub(crate) fn derive_inputs_from_parts(
         content_hash: crate::engine::ids::sha256_bytes_hex(kind.as_str().as_bytes()),
     };
     for (key, path) in closure.entries {
-        match hash_file(&path) {
+        match package_sha256(&path) {
             Some(hash) => out.push(SnapshotInput {
                 kind: "dep-package".into(),
                 path: key,
@@ -1255,11 +1257,6 @@ fn compute_workspace_fingerprint(inputs: &[SnapshotInput], driver_version: &str)
         .collect();
     lines.push(format!("alsemVersion\t{driver_version}"));
     sha256_hex(&lines.join("\n"))
-}
-
-fn hash_file(p: &std::path::Path) -> Option<String> {
-    let bytes = std::fs::read(p).ok()?;
-    Some(crate::engine::ids::sha256_bytes_hex(&bytes))
 }
 
 /// Forward-slash-normalized workspace-relative path.

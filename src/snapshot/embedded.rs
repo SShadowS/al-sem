@@ -1,8 +1,9 @@
 //! Extract embedded ShowMyCode `.al` source from a `.app` package.
 
-use crate::engine::deps::app_package_zip::open_app_file;
+use crate::app_image::AppImage;
+use crate::engine::deps::app_package_zip::open_app_image;
 use anyhow::{Context, Result};
-use std::path::Path;
+use std::sync::Arc;
 
 /// One embedded source file recovered from a `.app`.
 ///
@@ -19,27 +20,15 @@ pub struct SourceFile {
     pub text: std::sync::Arc<str>,
 }
 
-/// blake3 hex of the whole `.app` file (artifact identity).
-///
-/// Streamed through the hasher, never read whole: BaseApp's `.app` is ~105 MB.
-pub fn app_content_hash(app_path: &Path) -> Result<String> {
-    let file = std::fs::File::open(app_path)
-        .with_context(|| format!("read .app: {}", app_path.display()))?;
-    let mut hasher = blake3::Hasher::new();
-    hasher
-        .update_reader(file)
-        .with_context(|| format!("read .app: {}", app_path.display()))?;
-    Ok(hasher.finalize().to_hex().to_string())
-}
-
-/// Extract every `*.al` entry from the `.app`'s embedded zip. Returns an empty
-/// `Vec` if the app ships no source (symbol-only / runtime app). For a
-/// Ready-to-Run package, the source comes from its nested app.
+/// Extract every `*.al` entry from the `.app` image's embedded zip. Returns
+/// an empty `Vec` if the app ships no source (symbol-only / runtime app). For
+/// a Ready-to-Run package, the source comes from its nested app. The image's
+/// blake3 ([`AppImage::content_hash`]) is the package's content identity.
 ///
 /// Entry names are percent-decoded (the AL compiler URL-encodes them) and BOM
 /// is stripped before the text is decoded as UTF-8 (lossy).
-pub fn extract_embedded_source(app_path: &Path) -> Result<Vec<SourceFile>> {
-    let Some(mut archive) = open_app_file(app_path)? else {
+pub fn extract_embedded_source(image: &Arc<AppImage>) -> Result<Vec<SourceFile>> {
+    let Some(mut archive) = open_app_image(image)? else {
         return Ok(Vec::new());
     };
     let mut out = Vec::new();
@@ -142,6 +131,11 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    /// The package at `path`, acquired once and extracted from its image.
+    fn extract_at(path: &Path) -> Result<Vec<SourceFile>> {
+        extract_embedded_source(&AppImage::acquire(path)?)
+    }
+
     // Set CDO_APP to a real ShowMyCode .app to exercise extraction.
     fn cdo_app() -> Option<std::path::PathBuf> {
         std::env::var_os("CDO_APP")
@@ -154,7 +148,7 @@ mod tests {
         let Some(app) = cdo_app() else {
             return;
         };
-        let files = extract_embedded_source(&app).expect("extract");
+        let files = extract_at(&app).expect("extract");
         assert!(
             files.len() > 100,
             "ShowMyCode app should yield many .al files, got {}",
@@ -177,24 +171,23 @@ mod tests {
         let Some(app) = cdo_app() else {
             return;
         };
-        assert_eq!(
-            app_content_hash(&app).unwrap(),
-            app_content_hash(&app).unwrap()
-        );
-        assert_eq!(app_content_hash(Path::new(&app)).unwrap().len(), 64);
+        let hash = |p: &Path| AppImage::acquire(p).unwrap().content_hash().to_string();
+        assert_eq!(hash(&app), hash(&app));
+        assert_eq!(hash(&app).len(), 64);
     }
 
-    /// The streamed hash equals the old whole-file `blake3::hash` — it keys
-    /// the on-disk source cache, so it must not change.
+    /// The image's content hash equals the whole-file `blake3::hash` the
+    /// streamed hash gave before images — it keys the on-disk source cache,
+    /// so it must not change.
     #[test]
-    fn streamed_content_hash_equals_whole_file_hash() {
+    fn image_content_hash_equals_whole_file_hash() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("a.app");
         // Over blake3's 1 KiB chunk and 64 KiB reader buffer sizes.
         let bytes: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
         std::fs::write(&path, &bytes).unwrap();
         assert_eq!(
-            app_content_hash(&path).unwrap(),
+            AppImage::acquire(&path).unwrap().content_hash(),
             blake3::hash(&bytes).to_hex().to_string()
         );
     }
@@ -229,7 +222,7 @@ mod tests {
         let path = dir.path().join("bomb.app");
         std::fs::write(&path, &bytes).expect("write crafted .app");
 
-        let result = extract_embedded_source(&path);
+        let result = extract_at(&path);
         assert!(
             result.is_err(),
             "an oversized embedded .al entry must be rejected, not silently truncated"
@@ -252,7 +245,7 @@ mod tests {
             .join("Microsoft_Base Application_28.4.53241.53758.app");
         std::fs::write(&path, test_apps::wrap_ready_to_run(&app)).unwrap();
 
-        let files = extract_embedded_source(&path).expect("extract");
+        let files = extract_at(&path).expect("extract");
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].virtual_path, "src/Sales Post.Codeunit.al");
         assert_eq!(&*files[0].text, "codeunit 80 X { }");
@@ -308,7 +301,7 @@ public sealed class Codeunit50400 : NavCodeunit
                 ("bin/COD50400.cs", TRANSPILED_CS.as_bytes()),
             ],
         );
-        let files = extract_embedded_source(&app).expect("extract");
+        let files = extract_at(&app).expect("extract");
         let [f] = files.as_slice() else {
             panic!("one synthesized file: {files:?}")
         };
@@ -337,15 +330,11 @@ public sealed class Codeunit50400 : NavCodeunit
                 ("src/Poster.Codeunit.al", b"codeunit 50400 Poster { }"),
             ],
         );
-        let files = extract_embedded_source(&with_al).expect("extract");
+        let files = extract_at(&with_al).expect("extract");
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].virtual_path, "src/Poster.Codeunit.al");
         let t2 = tempfile::tempdir().unwrap();
         let cs_only = write_app(t2.path(), &[("bin/COD50400.cs", TRANSPILED_CS.as_bytes())]);
-        assert!(
-            extract_embedded_source(&cs_only)
-                .expect("extract")
-                .is_empty()
-        );
+        assert!(extract_at(&cs_only).expect("extract").is_empty());
     }
 }

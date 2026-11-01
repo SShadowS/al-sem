@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (dependency packages are read once, into owned images)
+
+- **Every product of a dependency `.app` is now built from one owned copy of
+  its bytes** (context-server design r5 §5.2, review r4 #9). The loader used
+  to open a package once per product: the manifest probe, the symbol read, the
+  source-cache hash, the extraction, the graph build's ABI read, the
+  cross-app model's symbol rows and the fingerprint row each opened the path
+  again (`snapshot/cache.rs` hashed the path, then reopened it to extract), so
+  a file rewritten in place between two opens gave products of two different
+  byte images under one identity. `WorkspaceInputs::read` now acquires each
+  package once (`app_image::AppImage`: one open, the whole file read and
+  blake3-hashed from the buffer); `extract_app_metadata`, `extract_app_symbols`,
+  `extract_app_package`, `extract_embedded_source`, `cached_source`,
+  `open_app_image` and the ABI readers take the image, never a path. No
+  read-only mapping of a user's `.app` is made (a mapping is not immutable).
+- **The identity of a package is its bytes.** `AppFileStamp` gains `content`,
+  the image's blake3, so the dependency tier, package and source caches
+  (`program::dep_cache`) hit only for the same bytes, not for the same size
+  and modification time.
+- **Where the bytes live.** The graph build and the cross-app model read a
+  package's symbols long after the loader, so an image lives as long as the
+  snapshot. Held on the heap the images sat on top of the build's peak
+  (CDO `prove IssueReminder may-commit`: +48 MB in a sampled run). An image of
+  1 MiB or more therefore moves, once hashed, into a **sealed private copy**:
+  an anonymous temp file (unlinked at creation on Unix), written once, read by
+  positional reads (design r5 §5.2 allows exactly this). A temp-disk failure
+  keeps the bytes in memory. The workspace read hands each image to the build
+  that consumes it and keeps only its identity; a second build of the same
+  read re-reads the file and accepts it only if the bytes are the same.
+- **`M_consumed`.** `ClosureEntries::consumed` lists the identities a read
+  acquired, and `app_image::check_consistent` compares them with stat-and-hash
+  passes before and after (`M_before == M_consumed == M_after`, r5 §5.1). An
+  in-place overwrite with B and restore to A during consumption reads A before
+  and after but is refused, because the consumed hash is B's (T-acquire-inplace).
+- Tests: `snapshot::tests::package_products_are_built_from_the_acquired_image`
+  (an in-place rewrite and a deletion after the read: the build still sees the
+  acquired bytes), `..::an_in_place_overwrite_and_restore_during_consumption_is_refused`,
+  `..::a_second_build_of_one_read_gets_the_same_bytes_or_none`,
+  `app_image::tests::*` (the private copy reads back exactly, by range and by
+  two readers at once). Discrimination: an `open_app_image` that re-reads the
+  path fails the first two; a check of before against after alone fails the
+  in-place test; a second build that skips the hash check fails the third.
+- Measured on CDO (`DO-cdo-baseline/Cloud`, release-fast, `/usr/bin/time -v`,
+  interleaved runs): `prove IssueReminder may-commit` 28.08–28.58 s, peak
+  3.44–3.46 GB (master `f009afc7`: 28.49–29.57 s, 3.43–3.47 GB); `digest
+  --routine IssueReminder --routine DocHandle --routine VendorLedgerSendToQueue
+  --include-reads --deterministic` (22.7 MB of JSON) 28.80–29.95 s, 3.44 GB
+  (master: 28.53–30.03 s, 3.43–3.44 GB). Output byte-identical (prove apart
+  from its `generatedAt`).
+
 ### Fixed (`Cu.Run(x)` reaches a declared procedure `Run`)
 
 - **A typed-receiver `Run` call with an argument binds to the procedure the

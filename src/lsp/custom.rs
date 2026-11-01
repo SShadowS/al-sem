@@ -941,6 +941,7 @@ mod tests {
             abi: None,
             app_path: None,
             app_stamp: None,
+            app_image: None,
         };
         ws_unit.declared_deps = vec![crate::dependencies::AppDependency {
             app_id: String::new(),
@@ -1003,6 +1004,7 @@ mod tests {
             abi: Some(std::sync::Arc::new(dep_package)),
             app_path: None,
             app_stamp: None,
+            app_image: None,
         };
 
         let snap = AppSetSnapshot {
