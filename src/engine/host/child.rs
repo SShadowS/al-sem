@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 use super::{AskParams, ChildStatus, Hello, MAX_ID_BYTES, Message, OpenParams, codes};
 use crate::wire::{
-    Answer, MAX_FRAME_BYTES, Outcome, SpillFile, SpillKind, WireError, bound_frame, decode_frame,
-    encode_frame, read_frame, skip_line,
+    Answer, MAX_FRAME_BYTES, Outcome, ReadFrame, SpillFile, SpillKind, bound_frame, decode_frame,
+    encode_frame, read_frame,
 };
 
 /// What a child computes per request.
@@ -26,7 +26,8 @@ pub trait Engine {
 
 /// Serve the protocol until the front end shuts the session down or closes
 /// the input. The hello goes first. A frame over the limit is answered with
-/// a parse error and the rest of its line discarded without holding it; a
+/// a parse error and the rest of its line, if any is left, discarded
+/// without holding it ([`crate::wire::Oversized::skip_rest`]); a
 /// frame that is not JSON, with a parse error; an id over [`MAX_ID_BYTES`],
 /// with an invalid-request error. Returns when the input ends (a child whose
 /// stdin closes exits) or after answering `session/shutdown`.
@@ -57,10 +58,12 @@ pub fn serve(
     let spills = std::cell::Cell::new(0u64);
     loop {
         let frame = match read_frame(&mut input) {
-            Ok(Some(frame)) => frame,
-            Ok(None) => return Ok(()),
-            Err(WireError::FrameTooLarge(_)) => {
-                skip_line(&mut input)?;
+            Ok(ReadFrame::Frame(frame)) => frame,
+            Ok(ReadFrame::Eof) => return Ok(()),
+            Ok(ReadFrame::Oversized(over)) => {
+                // Only what is left of THIS line: when its newline was the
+                // last byte read, the next byte already starts a request.
+                over.skip_rest(&mut input)?;
                 send(
                     &mut output,
                     &Message::error(
@@ -101,6 +104,15 @@ pub fn serve(
                 Ok(open) => match engine.open(&open) {
                     Ok(()) => {
                         output_root = Some(open.output_root);
+                        #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
+                        if let Some(super::test_hooks::Hook::FloodAfterOpen(kind, count)) = &hook {
+                            send(
+                                &mut output,
+                                &Message::response(id, serde_json::json!({"ok": true})),
+                            )?;
+                            flood(&mut output, *kind, *count)?;
+                            continue;
+                        }
                         Message::response(id, serde_json::json!({"ok": true}))
                     }
                     Err(why) => Message::error(id, codes::OPEN_FAILED, why),
@@ -233,6 +245,44 @@ fn inject_ask_fault(
         }
         _ => Ok(false),
     }
+}
+
+/// The flood of the `flood-after-open` hook: `count` small frames of `kind`,
+/// unasked. A front end that kills us ends it with a failed write.
+#[cfg(any(feature = "engine-test-hooks", debug_assertions))]
+fn flood(
+    output: &mut impl Write,
+    kind: super::test_hooks::Flood,
+    count: usize,
+) -> std::io::Result<()> {
+    use super::test_hooks::Flood;
+    // Let the front end take the `session/open` answer first: a failure
+    // the flood causes discards what is queued, that answer included.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    for i in 0..count {
+        match kind {
+            Flood::Response => send(
+                output,
+                &Message::response(serde_json::json!(0), serde_json::json!({})),
+            )?,
+            Flood::Notify => send(
+                output,
+                &Message::notification(&format!("engine/flood{i}"), serde_json::json!({})),
+            )?,
+            Flood::Progress => send(
+                output,
+                &Message::notification(
+                    super::PROGRESS_METHOD,
+                    serde_json::json!({"id": 7, "done": i}),
+                ),
+            )?,
+            Flood::Garbage => {
+                output.write_all(b"x\n")?;
+                output.flush()?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The child's protocol stream: the process's real stdout, with fd 1 then
@@ -386,6 +436,62 @@ mod tests {
         assert_eq!(replies[8].result, Some(serde_json::json!({"ok": true})));
         assert_eq!(replies.len(), 9, "nothing after shutdown");
         assert_eq!(stub.asks, 1);
+    }
+
+    /// Review r6 NEW 4: recovery from an oversized request line at every
+    /// boundary, each followed by a valid request whose response must
+    /// arrive. A request of exactly the limit (newline included) is served;
+    /// a line of the limit plus one byte INCLUDING its newline (the newline
+    /// is the last byte the bounded read takes) is refused and the next
+    /// request is NOT skipped; a longer line is refused and its rest
+    /// skipped; an oversized last line at end of input is refused and the
+    /// loop ends cleanly.
+    #[test]
+    fn serve_recovers_at_every_oversize_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let status = |id: u64, pad: usize| {
+            line(&Message::request(
+                serde_json::json!(id),
+                "session/status",
+                serde_json::json!({ "pad": "a".repeat(pad) }),
+            ))
+        };
+        let exact = {
+            let base = status(10, 0).len();
+            let f = status(10, MAX_FRAME_BYTES - base);
+            assert_eq!(f.len(), MAX_FRAME_BYTES, "precondition: exactly the limit");
+            f
+        };
+        let mut input = line(&open(dir.path()));
+        input.extend(exact);
+        // The limit plus one, newline included.
+        input.extend(vec![b'x'; MAX_FRAME_BYTES]);
+        input.push(b'\n');
+        input.extend(status(11, 0));
+        // Longer.
+        input.extend(vec![b'x'; MAX_FRAME_BYTES + 5]);
+        input.push(b'\n');
+        input.extend(status(12, 0));
+        // At end of input, no newline.
+        input.extend(vec![b'x'; MAX_FRAME_BYTES + 3]);
+        let (replies, _) = serve_all(&input);
+        let code = |m: &Message| m.error.as_ref().map(|e| e.code);
+        let ids: Vec<_> = replies.iter().map(|m| (m.id.clone(), code(m))).collect();
+        let parse = (None, Some(codes::PARSE_ERROR));
+        let ok = |id: u64| (Some(serde_json::json!(id)), None);
+        assert_eq!(
+            ids,
+            [
+                ok(1),
+                ok(10),
+                parse.clone(),
+                ok(11),
+                parse.clone(),
+                ok(12),
+                parse
+            ],
+            "{replies:?}"
+        );
     }
 
     /// The child bounds its own response: an answer whose message is over
