@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (the ABI-integrity check is a declared need)
+
+- **Only the readers of the ABI-integrity check compute it.** It re-reads
+  every dependency's SymbolReference after the resolve (0.85 s on the CDO
+  baseline), and every cold cross-app command paid for it in
+  `ResolvedProgram::build`, which then dropped it. Now
+  `full::resolve_full_program_with` takes `abi_check::AbiIntegrity::{Check,
+  Skip}` with no default. Its readers declare `Check`: `aldump
+  --program-call-graph-stats` (through `resolve_full_program`, the stats
+  entry) and the CDO ratchet `cdo_full_program_coverage_and_self_reported_metric`.
+  The command builders (`fresh_program_from_snapshot_with`, behind
+  `ResolvedProgram::build`) and the workspace session declare `Skip`. The
+  session used to fill the report with zeros, which read like "no ABI routes".
+  `ProgramReport::abi_integrity` is now an `Option`, read through
+  `abi_integrity()`, which panics "ABI integrity not computed: resolve with
+  AbiIntegrity::Check". `ResolvedProgram::from_parts` asserts in debug builds
+  that nothing computed it. The applicability check and
+  `abi_ingestion_integrity_cdo_gate` run their own check and are unchanged.
+- Tests: `the_program_builders_skip_the_abi_integrity_check` and
+  `reading_an_unchecked_abi_integrity_panics` (`program::resolved`), and
+  `program_call_graph_stats_report_the_abi_integrity_check`
+  (`tests/cli/cli_parameterless_symbol_method.rs`, 3 routes, all mapped).
+  Discrimination: the stats entry with `Skip` fails the stats test (aldump
+  panics with the message); the command builder with `Check` fails the
+  builder test and 3 other `resolved` tests through the `from_parts` assert;
+  an accessor that returns an empty report fails the panic test; the session
+  with `Check` fails 15 session tests. Each passes again after the revert.
+- **Measured on CDO** (release-fast, `/usr/bin/time -v`, 3 alternating
+  rounds, shared machine with load around 7): the `resolve.abi_integrity`
+  span (0.85 s) is gone and `preflight.resolve_full` drops from 1.87 s to
+  1.00 s (`ALSEM_TRACE`, `analyze`). Wall time, before / after (median of 3):
+  `analyze` 23.5 / 21.7 s, `prove IssueReminder may-commit` 30.5 / 29.1 s,
+  `explain --routine IssueReminder` 31.5 / 26.0 s. These are noisy (one
+  before round ran 5 s slow on every command); the span is the exact saving.
+  Peak RSS is unchanged within noise (3.42–3.49 GB on both sides; `explain`
+  about 20 MB lower). Every command's stdout is byte-identical before and
+  after.
+
 ### Added (context-server stage 4: `aldump --session-refresh`)
 
 - **`aldump --session-refresh <workspace-copy> [--file <rel>] [--verify]`**

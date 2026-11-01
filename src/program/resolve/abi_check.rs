@@ -175,6 +175,26 @@ pub struct UnmappedAbiSite {
     pub key: AbiRoutineKey,
 }
 
+/// Whether a whole-program resolve runs [`abi_ingestion_integrity`] over its
+/// edges (a declared need, see the `declared-needs` skill). There is no
+/// default: every caller of `full::resolve_full_program_with` states it.
+///
+/// The check re-reads every dependency's SymbolReference (0.8–1.0 s on the CDO
+/// baseline). Its readers are the north-star stats (`aldump
+/// --program-call-graph-stats`, through `full::resolve_full_program`) and the
+/// CDO ratchet tests; no command and no LSP path reads it, so the command
+/// builders (`full::fresh_program_from_snapshot_with`, behind
+/// `ResolvedProgram::build`) and the workspace session skip it. Skipping it
+/// changes no other fact of the report: it is computed from the edges after
+/// they are final.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AbiIntegrity {
+    /// Run the check; `ProgramReport::abi_integrity()` returns it.
+    Check,
+    /// Do not run it; `ProgramReport::abi_integrity()` panics.
+    Skip,
+}
+
 /// Report from [`abi_ingestion_integrity`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AbiIntegrityReport {
