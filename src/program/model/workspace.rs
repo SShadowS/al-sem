@@ -2099,7 +2099,7 @@ pub fn assemble_and_resolve_workspace_from_program(
     parenless: &crate::program::resolve::full::ParenlessCalls,
     needs: AssemblyNeeds,
 ) -> Option<ModelRows> {
-    let (ws, node_of) = assemble_l3_workspace_from_program(inputs, ctx, parenless, needs)?;
+    let (ws, node_of) = assemble_l3_workspace_from_program(inputs, ctx, parenless, needs, None)?;
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
     finish_resolved(ws, inputs, skip_roots_config, row_nodes)
 }
@@ -2117,7 +2117,8 @@ pub fn assemble_and_resolve_workspace_from_program_reversed_groups(
     parenless: &crate::program::resolve::full::ParenlessCalls,
     needs: AssemblyNeeds,
 ) -> Option<ModelRows> {
-    let (mut ws, mut node_of) = assemble_l3_workspace_from_program(inputs, ctx, parenless, needs)?;
+    let (mut ws, mut node_of) =
+        assemble_l3_workspace_from_program(inputs, ctx, parenless, needs, None)?;
     let mut by_id: HashMap<String, Vec<usize>> = HashMap::new();
     for (ri, r) in ws.routines.iter().enumerate() {
         by_id.entry(r.id.clone()).or_default().push(ri);
@@ -2158,8 +2159,43 @@ pub fn assemble_and_resolve_cross_app_from_program(
     parenless: &crate::program::resolve::full::ParenlessCalls,
     needs: AssemblyNeeds,
 ) -> Option<(ModelRows, AbiRowIds)> {
-    let (mut ws, mut node_of) = assemble_l3_workspace_from_program(inputs, ctx, parenless, needs)?;
-    let abi_rows = append_dependency_rows(&mut ws, &mut node_of, ctx, demand, parenless, needs);
+    assemble_and_resolve_cross_app_from_program_cached(
+        inputs,
+        skip_roots_config,
+        ctx,
+        demand,
+        parenless,
+        needs,
+        None,
+    )
+}
+
+/// [`assemble_and_resolve_cross_app_from_program`] for a workspace session
+/// (context-server design §6.8 L3/L4): with a [`RowCache`], every file whose
+/// projection inputs are all unchanged takes its raw rows from the cache
+/// instead of being projected again, and so does the ABI block; what was
+/// projected is kept for the next revision. The rows, their order and every
+/// step after them are the cold assembly's. `None` is the cold assembly.
+///
+/// [`RowCache`]: super::row_cache::RowCache
+pub(crate) fn assemble_and_resolve_cross_app_from_program_cached(
+    inputs: &crate::program::inputs::WorkspaceInputs,
+    skip_roots_config: bool,
+    ctx: &crate::program::resolve::full::ProgramContext,
+    demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
+    parenless: &crate::program::resolve::full::ParenlessCalls,
+    needs: AssemblyNeeds,
+    mut cache: Option<&mut super::row_cache::RowCache>,
+) -> Option<(ModelRows, AbiRowIds)> {
+    if let Some(c) = cache.as_deref_mut() {
+        c.last = super::row_cache::RowCacheStats::default();
+    }
+    let (mut ws, mut node_of) =
+        assemble_l3_workspace_from_program(inputs, ctx, parenless, needs, cache.as_deref_mut())?;
+    let abi_rows = {
+        let _s = pt::span("l3", "l3.dependency_rows");
+        append_dependency_rows(&mut ws, &mut node_of, ctx, demand, parenless, needs, cache)
+    };
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
     Some((
         finish_resolved(ws, inputs, skip_roots_config, row_nodes)?,
@@ -2205,6 +2241,7 @@ fn append_dependency_rows(
     demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
     parenless: &crate::program::resolve::full::ParenlessCalls,
     needs: AssemblyNeeds,
+    mut cache: Option<&mut super::row_cache::RowCache>,
 ) -> AbiRowIds {
     let bodies = ctx
         .dep_bodies()
@@ -2217,6 +2254,178 @@ fn append_dependency_rows(
         .collect();
     deps.sort_by(|a, b| a.app_path.cmp(&b.app_path));
 
+    // The ABI block, from the cache when its inputs are unchanged (see
+    // `row_cache`'s module doc: its packages cannot change while the cache
+    // lives).
+    let abi_apps: Vec<(
+        String,
+        Option<std::path::PathBuf>,
+        Option<crate::program::node::AppRef>,
+    )> = deps
+        .iter()
+        .filter(|u| u.source.is_none())
+        .map(|u| {
+            (
+                u.id.guid.clone(),
+                u.app_path.clone(),
+                ctx.graph().apps.find(&u.id),
+            )
+        })
+        .collect();
+    let abi_ids = match cache.as_deref_mut().and_then(|c| {
+        c.abi
+            .as_ref()
+            .filter(|a| a.apps == abi_apps && a.needs == needs)
+            .map(|a| (a, &mut c.last))
+    }) {
+        Some((a, last)) => {
+            last.abi_reused = true;
+            ws.objects.extend(a.rows.objects.iter().cloned());
+            ws.tables.extend(a.rows.tables.iter().cloned());
+            ws.routines.extend(a.rows.routines.iter().cloned());
+            node_of.extend(a.node_of.iter().cloned());
+            a.ids.clone()
+        }
+        None => {
+            let first_object = ws.objects.len();
+            let first_table = ws.tables.len();
+            let first_routine = ws.routines.len();
+            let ids = append_abi_rows(ws, node_of, ctx, &deps, needs);
+            if let Some(c) = cache.as_deref_mut() {
+                c.abi = Some(super::row_cache::CachedAbi {
+                    apps: abi_apps,
+                    needs,
+                    rows: ModelEntities {
+                        objects: ws.objects[first_object..].to_vec(),
+                        tables: ws.tables[first_table..].to_vec(),
+                        routines: ws.routines[first_routine..].to_vec(),
+                    },
+                    node_of: node_of[first_routine..].to_vec(),
+                    ids: ids.clone(),
+                });
+            }
+            ids
+        }
+    };
+
+    let mut seen: std::collections::HashSet<(crate::program::node::AppRef, String)> =
+        std::collections::HashSet::new();
+    for unit in deps.iter().filter(|u| u.source.is_some()) {
+        let Some(parsed) = bodies.iter().find(|b| b.app == unit.id) else {
+            continue;
+        };
+        let guid = &unit.id.guid;
+        let app = ctx.graph().apps.find(&unit.id);
+        let mut files: Vec<&crate::snapshot::parse::ParsedFile> = parsed.files.iter().collect();
+        files.sort_by(|a, b| a.virtual_path.cmp(&b.virtual_path));
+        for pf in files {
+            let population = match (demand, app) {
+                (Some(d), Some(app)) => demanded_population(&pf.file, app, d),
+                _ => whole_file_population(&pf.file),
+            };
+            let no_calls = std::collections::HashSet::new();
+            let calls = app
+                .and_then(|a| parenless.get(&(a, pf.virtual_path.clone())))
+                .unwrap_or(&no_calls);
+            let source_unit_id = format!("dep:{guid}:{}", pf.virtual_path);
+            let inputs = super::row_cache::ProjectionInputs {
+                tree: &pf.file,
+                text: &pf.text,
+                population: &population,
+                parenless: calls,
+                file: app.and_then(|a| ctx.file_ix(a, &pf.virtual_path)),
+                needs,
+                app_guid: guid,
+                source_unit_id: &source_unit_id,
+            };
+            // A file the graph has no app for is projected every time (it
+            // has no cache key); the cold assembly projects it the same way.
+            let key = app.map(|a| (a, pf.virtual_path.clone()));
+            let hit = match (cache.as_deref_mut(), &key) {
+                (Some(c), Some(k)) => {
+                    seen.insert(k.clone());
+                    match c.dependency.get(k).filter(|f| f.matches(&inputs)) {
+                        Some(f) => {
+                            c.last.dependency_reused += 1;
+                            let mut rows = f.rows_for(inputs.file);
+                            ws.objects.append(&mut rows.objects);
+                            ws.tables.append(&mut rows.tables);
+                            ws.routines.append(&mut rows.routines);
+                            Some(f.positions.clone())
+                        }
+                        None => None,
+                    }
+                }
+                _ => None,
+            };
+            let positions = match hit {
+                Some(p) => p,
+                None => {
+                    let cols = Utf16Cols::new(&pf.text);
+                    let project = |into: &mut ModelEntities| {
+                        project_ir(
+                            &pf.file,
+                            &population,
+                            &pf.text,
+                            guid,
+                            &source_unit_id,
+                            &cols,
+                            calls,
+                            inputs.file,
+                            needs,
+                            into,
+                        )
+                    };
+                    match (cache.as_deref_mut(), key) {
+                        (Some(c), Some(k)) => {
+                            let mut rows = ModelEntities {
+                                objects: Vec::new(),
+                                tables: Vec::new(),
+                                routines: Vec::new(),
+                            };
+                            let positions = project(&mut rows);
+                            ws.objects.extend(rows.objects.iter().cloned());
+                            ws.tables.extend(rows.tables.iter().cloned());
+                            ws.routines.extend(rows.routines.iter().cloned());
+                            c.last.dependency_projected += 1;
+                            c.dependency.insert(
+                                k,
+                                super::row_cache::CachedFile::new(&inputs, rows, positions.clone()),
+                            );
+                            positions
+                        }
+                        // The cold assembly projects straight into the model.
+                        _ => project(ws),
+                    }
+                }
+            };
+            node_of.extend(positions.into_iter().map(|(oi, ri)| {
+                app.map(|app| {
+                    let o = &pf.file.objects[oi];
+                    crate::program::sig_fp::source_routine_node_id(
+                        dep_object_node_id(app, o),
+                        &o.routines[ri],
+                    )
+                })
+            }));
+        }
+    }
+    if let Some(c) = cache {
+        c.dependency.retain(|k, _| seen.contains(k));
+    }
+    abi_ids
+}
+
+/// The symbol-only dependencies' rows, appended to `ws` as one block (objects,
+/// tables, routines), each row's ABI node to `node_of`; returns the join from a
+/// node to its row.
+fn append_abi_rows(
+    ws: &mut ModelEntities,
+    node_of: &mut Vec<Option<crate::program::node::RoutineNodeId>>,
+    ctx: &crate::program::resolve::full::ProgramContext,
+    deps: &[&crate::snapshot::AppUnit],
+    needs: AssemblyNeeds,
+) -> AbiRowIds {
     let mut objects = Vec::new();
     let mut tables = Vec::new();
     let mut routines = Vec::new();
@@ -2269,48 +2478,6 @@ fn append_dependency_rows(
         }
         for o in &mut ws.objects[first_abi_object..] {
             o.run_actions = Some(Vec::new());
-        }
-    }
-
-    for unit in deps.iter().filter(|u| u.source.is_some()) {
-        let Some(parsed) = bodies.iter().find(|b| b.app == unit.id) else {
-            continue;
-        };
-        let guid = &unit.id.guid;
-        let app = ctx.graph().apps.find(&unit.id);
-        let mut files: Vec<&crate::snapshot::parse::ParsedFile> = parsed.files.iter().collect();
-        files.sort_by(|a, b| a.virtual_path.cmp(&b.virtual_path));
-        for pf in files {
-            let cols = Utf16Cols::new(&pf.text);
-            let population = match (demand, app) {
-                (Some(d), Some(app)) => demanded_population(&pf.file, app, d),
-                _ => whole_file_population(&pf.file),
-            };
-            let no_calls = std::collections::HashSet::new();
-            let calls = app
-                .and_then(|a| parenless.get(&(a, pf.virtual_path.clone())))
-                .unwrap_or(&no_calls);
-            let positions = project_ir(
-                &pf.file,
-                &population,
-                &pf.text,
-                guid,
-                &format!("dep:{guid}:{}", pf.virtual_path),
-                &cols,
-                calls,
-                app.and_then(|a| ctx.file_ix(a, &pf.virtual_path)),
-                needs,
-                ws,
-            );
-            node_of.extend(positions.into_iter().map(|(oi, ri)| {
-                app.map(|app| {
-                    let o = &pf.file.objects[oi];
-                    crate::program::sig_fp::source_routine_node_id(
-                        dep_object_node_id(app, o),
-                        &o.routines[ri],
-                    )
-                })
-            }));
         }
     }
     ids.into_iter().filter_map(|(k, v)| Some((k, v?))).collect()
@@ -2410,6 +2577,7 @@ fn assemble_l3_workspace_from_program(
     ctx: &crate::program::resolve::full::ProgramContext,
     parenless: &crate::program::resolve::full::ParenlessCalls,
     needs: AssemblyNeeds,
+    cache: Option<&mut super::row_cache::RowCache>,
 ) -> Option<(
     ModelEntities,
     Vec<Option<crate::program::node::RoutineNodeId>>,
@@ -2454,18 +2622,17 @@ fn assemble_l3_workspace_from_program(
     type Fragment = (
         ModelEntities,
         Vec<Option<crate::program::node::RoutineNodeId>>,
+        // The rows projected now, for the cache (a session's miss only).
+        Option<super::row_cache::CachedFile>,
+        bool,
     );
+    // A session's cache is read in parallel and updated after the fold.
+    let kept = cache.as_deref().map(|c| &c.workspace);
     let fragments: Vec<Fragment> = crate::big_stack::big_stack_pool().install(|| {
         sorted
             .par_iter()
             .map(|(fname, pf)| {
                 let source_unit_id = format!("ws:{fname}");
-                let cols = Utf16Cols::new(&pf.text);
-                let mut ws = ModelEntities {
-                    objects: Vec::new(),
-                    tables: Vec::new(),
-                    routines: Vec::new(),
-                };
                 // Every parsed workspace file has its rows recorded; only a file
                 // with no declarations has none.
                 let pop = population.get(fname).unwrap_or_else(|| {
@@ -2478,18 +2645,50 @@ fn assemble_l3_workspace_from_program(
                 let calls = parenless
                     .get(&(ctx.primary_app_ref, pf.virtual_path.clone()))
                     .unwrap_or(&no_calls);
-                let positions = project_ir(
-                    &pf.file,
-                    pop,
-                    &pf.text,
-                    &app_guid,
-                    &source_unit_id,
-                    &cols,
-                    calls,
-                    ctx.file_ix(ctx.primary_app_ref, &pf.virtual_path),
+                let inputs = super::row_cache::ProjectionInputs {
+                    tree: &pf.file,
+                    text: &pf.text,
+                    population: pop,
+                    parenless: calls,
+                    file: ctx.file_ix(ctx.primary_app_ref, &pf.virtual_path),
                     needs,
-                    &mut ws,
-                );
+                    app_guid: &app_guid,
+                    source_unit_id: &source_unit_id,
+                };
+                let hit = kept
+                    .and_then(|k| k.get(*fname))
+                    .filter(|f| f.matches(&inputs));
+                let (ws, positions, fresh, reused) = match hit {
+                    Some(f) => (f.rows_for(inputs.file), f.positions.clone(), None, true),
+                    None => {
+                        let cols = Utf16Cols::new(&pf.text);
+                        let mut ws = ModelEntities {
+                            objects: Vec::new(),
+                            tables: Vec::new(),
+                            routines: Vec::new(),
+                        };
+                        let positions = project_ir(
+                            &pf.file,
+                            pop,
+                            &pf.text,
+                            &app_guid,
+                            &source_unit_id,
+                            &cols,
+                            calls,
+                            inputs.file,
+                            needs,
+                            &mut ws,
+                        );
+                        let fresh = kept.map(|_| {
+                            super::row_cache::CachedFile::new(
+                                &inputs,
+                                ws.clone(),
+                                positions.clone(),
+                            )
+                        });
+                        (ws, positions, fresh, false)
+                    }
+                };
                 let nodes = positions
                     .into_iter()
                     .map(|(oi, ri)| {
@@ -2501,7 +2700,7 @@ fn assemble_l3_workspace_from_program(
                         node_at.get(&at).map(|n| (*n).clone())
                     })
                     .collect();
-                (ws, nodes)
+                (ws, nodes, fresh, reused)
             })
             .collect()
     });
@@ -2511,11 +2710,26 @@ fn assemble_l3_workspace_from_program(
         routines: Vec::new(),
     };
     let mut node_of = Vec::new();
-    for (mut frag, nodes) in fragments {
+    let mut projected = Vec::new();
+    let mut reused_files = 0usize;
+    for ((fname, _), (mut frag, nodes, fresh, reused)) in sorted.iter().zip(fragments) {
         workspace.objects.append(&mut frag.objects);
         workspace.tables.append(&mut frag.tables);
         workspace.routines.append(&mut frag.routines);
         node_of.extend(nodes);
+        reused_files += usize::from(reused);
+        if let Some(f) = fresh {
+            projected.push(((*fname).to_string(), f));
+        }
+    }
+    if let Some(c) = cache {
+        // Files gone from this revision leave the cache; projected ones
+        // replace their entry.
+        let present: std::collections::HashSet<&str> = sorted.iter().map(|(n, _)| *n).collect();
+        c.workspace.retain(|k, _| present.contains(k.as_str()));
+        c.last.workspace_reused = reused_files;
+        c.last.workspace_projected = projected.len();
+        c.workspace.extend(projected);
     }
     Some((workspace, node_of))
 }

@@ -890,7 +890,21 @@ pub(crate) fn cross_app_program_from(
     skip_roots_config: bool,
     needs: AssemblyNeeds,
 ) -> Result<CrossAppProgram, CrossAppFailure> {
-    cross_app_program_census(program, inputs, skip_roots_config, needs).map(|(p, _)| p)
+    cross_app_program_census(program, inputs, skip_roots_config, needs, None).map(|(p, _)| p)
+}
+
+/// [`cross_app_program_from`] for a workspace session (context-server design
+/// §6.8): the model assembly takes every file's raw rows from `cache` when
+/// their inputs are unchanged (`row_cache`), and keeps what it projected.
+/// Every step after the rows is the cold pipeline's.
+pub(crate) fn cross_app_program_from_cached(
+    program: Result<ResolvedProgram, String>,
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+    skip_roots_config: bool,
+    needs: AssemblyNeeds,
+    cache: &mut crate::program::model::row_cache::RowCache,
+) -> Result<CrossAppProgram, CrossAppFailure> {
+    cross_app_program_census(program, inputs, skip_roots_config, needs, Some(cache)).map(|(p, _)| p)
 }
 
 /// The cross-app build up to the attach: the program, the demand the model was
@@ -916,15 +930,18 @@ pub(crate) fn cross_app_assemble(
         inputs,
         skip_roots_config,
         AssemblyNeeds::BASE,
+        None,
     )
 }
 
-/// [`cross_app_assemble`] over `program`, the build's own result.
+/// [`cross_app_assemble`] over `program`, the build's own result; a session
+/// passes its row cache.
 fn cross_app_assemble_from(
     program: Result<ResolvedProgram, String>,
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     skip_roots_config: bool,
     needs: AssemblyNeeds,
+    cache: Option<&mut crate::program::model::row_cache::RowCache>,
 ) -> Result<CrossAppAssembled, CrossAppFailure> {
     use crate::engine::perf_trace as pt;
     let program = program.map_err(CrossAppFailure::Build)?;
@@ -942,13 +959,14 @@ fn cross_app_assemble_from(
     };
     let assembled = {
         let _s = pt::span("crossapp", "crossapp.model_assembly");
-        crate::program::model::workspace::assemble_and_resolve_cross_app_from_program(
+        crate::program::model::workspace::assemble_and_resolve_cross_app_from_program_cached(
             inputs,
             skip_roots_config,
             ctx,
             Some(&demand),
             &body.parenless_calls,
             needs,
+            cache,
         )
     };
     let Some((rows, abi_rows)) = assembled else {
@@ -1006,6 +1024,7 @@ fn cross_app_program_census(
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     skip_roots_config: bool,
     needs: AssemblyNeeds,
+    cache: Option<&mut crate::program::model::row_cache::RowCache>,
 ) -> Result<(CrossAppProgram, SiteCensus), CrossAppFailure> {
     use crate::engine::perf_trace as pt;
     let CrossAppAssembled {
@@ -1013,7 +1032,7 @@ fn cross_app_program_census(
         demand,
         rows,
         abi_rows,
-    } = cross_app_assemble_from(program, inputs, skip_roots_config, needs)?;
+    } = cross_app_assemble_from(program, inputs, skip_roots_config, needs, cache)?;
     let body = program.body();
     let ctx = &body.ctx;
     let mut friends: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
@@ -1097,6 +1116,7 @@ pub fn adapter_census_for_workspace_cross_app(
         &inputs,
         false,
         AssemblyNeeds::BASE,
+        None,
     )
     .map(|(_, c)| c)
     .map_err(|e| format!("cross-app build of {}: {e:?}", workspace.display()))

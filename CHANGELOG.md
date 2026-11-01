@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (context-server stage 4: retained raw model rows)
+
+- **The workspace session keeps each file's raw model rows** (context-server
+  design §6.8 L3/L4, `program::model::row_cache`). The model assembly
+  projects every workspace file, every source-bearing dependency file (its
+  demanded slice) and every symbol-only dependency's ABI into rows; all are
+  pure functions of their inputs. A session's assembly
+  (`WorkspaceSession::refresh_model`, now what `refresh` runs) takes a
+  file's rows from the previous revision exactly when every input is equal:
+  the parse (by identity: a tree is reused only for byte-equal text, and a
+  dependency tree belongs to the tier), the text, the population (physical
+  rows / demanded slice), the parens-less calls, the needs, the app guid and
+  the source unit. The `FileIx` is kept symbolically: `project_ir` writes it
+  only into each routine row's `file`, so a reused copy is re-stamped with
+  the current index (a file add shifts every later file's, the dependency
+  files' included, which would otherwise reproject all 10,881 CDO dependency
+  files). The ABI block is kept with the
+  required-dependency list, the apps' `AppRef`s and the needs; the session
+  drops all kept rows on a P change, so a block never outlives its packages.
+  Row order, `RowNodes`, `finish_resolved`, the adapter, the event graph and
+  the three final passes are the cold pipeline's, run whole; each row's
+  program node is recomputed every revision. The cold assembly is unchanged
+  (no cache: it projects straight into the model, as before).
+  `RefreshReport.rows` (`RowCacheStats`) and `aldump --session-refresh`'s
+  `rows` field say what was projected and reused.
+- New spans: `l3.dependency_rows` (the dependency part of the assembly),
+  `graph.extract`, `graph.layer_index`, `graph.lookup_and_internal`,
+  `graph.platform_publishers` (inside `preflight.assemble_graph`).
+- Tests (T-rows): a body edit projects only its own file (the other
+  workspace files and every dependency file reused); the ABI block of a
+  symbol-only dependency is reused across B and S and rebuilt when the needs
+  change or its package changes (P); a file whose text is unchanged is
+  projected again when its parens-less calls change (a renamed callee, S),
+  and re-stamped, not projected, when an added file shifts its `FileIx`.
+  Discrimination (each break seen failing on model equality, then
+  reverted): key without the parens-less calls (the parens-less test
+  fails), reuse without the re-stamp (the file-add and `FileIx`-shift tests
+  fail), without the population (the demand W → D1 → D2
+  test fails), the ABI key without the needs and the file key without the
+  needs (the ABI-block test fails), keep the rows across P (the symbol-only
+  package test fails).
+
+### Fixed (event-flow edges: subscriber tier lookup)
+
+- `emit_event_flow_edges` found each subscriber route's tier by scanning
+  every routine of the graph from the front, once per route (0.7–0.9 s per
+  build on CDO; `resolve.event_flow`). It now takes the head of the
+  subscriber id's run in the sorted routine list (`NodeSet::run_by`), the
+  same routine the scan found (on an aliased id, the first in merged order).
+  Behaviour-preserving: every golden unchanged.
+
 ### Added (context-server stage 4: `aldump --session-refresh`)
 
 - **`aldump --session-refresh <workspace-copy> [--file <rel>] [--verify]`**

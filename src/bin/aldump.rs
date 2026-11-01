@@ -211,6 +211,15 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
             row["copiedBytes"] = json!(r.copied_bytes);
             row["programMs"] = json!(r.program_ms);
             row["refreshMs"] = json!(r.wall_ms);
+            if let Some(rows) = r.rows {
+                row["rows"] = json!({
+                    "workspaceProjected": rows.workspace_projected,
+                    "workspaceReused": rows.workspace_reused,
+                    "dependencyProjected": rows.dependency_projected,
+                    "dependencyReused": rows.dependency_reused,
+                    "abiReused": rows.abi_reused,
+                });
+            }
         }
         match out {
             Ok(model) => {

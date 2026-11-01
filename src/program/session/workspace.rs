@@ -35,6 +35,7 @@ use crate::engine::perf_trace as pt;
 use crate::program::dep_cache::{DepCache, DepKey, DepNodes};
 use crate::program::inputs::WorkspaceInputs;
 use crate::program::model::program_calls::{CrossAppFailure, CrossAppProgram};
+use crate::program::model::row_cache::{RowCache, RowCacheStats};
 use crate::program::model::workspace::AssemblyNeeds;
 use crate::program::profile::BuildProfile;
 use crate::program::resolve::full::{DependencyBodyResolution, FileResolution};
@@ -85,12 +86,18 @@ pub struct RefreshReport {
     /// The whole refresh, inputs given (the `revision.refresh` span); equal to
     /// `program_ms` after a `refresh_program` alone.
     pub wall_ms: u128,
+    /// What the model assembly took from the row cache (`None` until
+    /// [`WorkspaceSession::refresh_model`] ran for this revision).
+    pub rows: Option<RowCacheStats>,
 }
 
 /// The incremental cross-app workspace model.
 pub struct WorkspaceSession {
     dep_cache: DepCache,
     retained: Option<Retained>,
+    /// The raw model rows of the last revision (§6.8 L3/L4); dropped with the
+    /// retained state on a P change, so no kept row outlives its packages.
+    rows: RowCache,
     last: Option<RefreshReport>,
 }
 
@@ -106,6 +113,7 @@ impl WorkspaceSession {
         WorkspaceSession {
             dep_cache: DepCache::default(),
             retained: None,
+            rows: RowCache::default(),
             last: None,
         }
     }
@@ -128,15 +136,35 @@ impl WorkspaceSession {
         let start = std::time::Instant::now();
         let _s = pt::span("revision", "revision.refresh");
         let program = self.refresh_program(inputs);
-        let out = crate::program::model::program_calls::cross_app_program_from(
+        let out = self.refresh_model(program, inputs, skip_roots_config, needs);
+        if let Some(r) = self.last.as_mut() {
+            r.wall_ms = start.elapsed().as_millis();
+            pt::counter("model.copied_bytes", r.copied_bytes);
+        }
+        out
+    }
+
+    /// The cross-app model over `program` (the one [`Self::refresh_program`]
+    /// just returned): the cold model pipeline, with every file's raw rows
+    /// taken from the session's row cache when their inputs are unchanged
+    /// (§6.8 L3/L4, `model::row_cache`). Equal to
+    /// `cross_app_program_from(program, …)`.
+    pub fn refresh_model(
+        &mut self,
+        program: Result<ResolvedProgram, String>,
+        inputs: &Arc<WorkspaceInputs>,
+        skip_roots_config: bool,
+        needs: AssemblyNeeds,
+    ) -> Result<CrossAppProgram, CrossAppFailure> {
+        let out = crate::program::model::program_calls::cross_app_program_from_cached(
             program,
             inputs,
             skip_roots_config,
             needs,
+            &mut self.rows,
         );
         if let Some(r) = self.last.as_mut() {
-            r.wall_ms = start.elapsed().as_millis();
-            pt::counter("model.copied_bytes", r.copied_bytes);
+            r.rows = Some(self.rows.last_stats());
         }
         out
     }
@@ -171,6 +199,7 @@ impl WorkspaceSession {
             // P: a full rebuild. The old tier is released; the cache misses on
             // the new key and builds it from the packages.
             self.retained = None;
+            self.rows = RowCache::default();
         }
 
         // L0: the parse, reusing the tree of every byte-equal file.
@@ -352,6 +381,7 @@ impl WorkspaceSession {
             copied_bytes: copied.bytes as u64,
             program_ms: start.elapsed().as_millis(),
             wall_ms: start.elapsed().as_millis(),
+            rows: None,
         });
         Ok(program)
     }

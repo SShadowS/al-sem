@@ -438,6 +438,8 @@ pub fn assemble_program_graph(
     let mut routines: Vec<RoutineNode> = Vec::new();
     let mut workspace_rows = crate::program::physical::PhysicalIndex::default();
 
+    use crate::engine::perf_trace as pt;
+    let extract_span = pt::span("graph", "graph.extract");
     for (unit, pf) in (1u32..).zip(&ws_unit.files) {
         let (o0, r0) = (objects.len(), routines.len());
         extract_nodes(
@@ -459,10 +461,13 @@ pub fn assemble_program_graph(
     dedup_objects(&mut objects);
     routines.sort_by(|a, b| a.id.cmp(&b.id));
     dedup_routines_preserving_genuine_overloads(&mut routines);
+    drop(extract_span);
 
+    let index_span = pt::span("graph", "graph.layer_index");
     let objects = NodeSet::layered(Arc::clone(&dep.dep_objects), objects);
     let routines = NodeSet::layered(Arc::clone(&dep.dep_routines), routines);
     let obj_index = ObjectIndex::build(&objects);
+    drop(index_span);
 
     let mut graph = ProgramGraph {
         apps: dep.apps.clone(),
@@ -481,15 +486,21 @@ pub fn assemble_program_graph(
         abi_ingest_errors: dep.abi_ingest_errors.clone(),
         workspace_rows,
     };
-    graph.lookup_pages = source_lookup_pages(&graph);
-    graph.closed_internal_interfaces = closed_internal_interfaces(&graph, snap);
+    {
+        let _s = pt::span("graph", "graph.lookup_and_internal");
+        graph.lookup_pages = source_lookup_pages(&graph);
+        graph.closed_internal_interfaces = closed_internal_interfaces(&graph, snap);
+    }
 
     // ── Inject synthetic platform-event publishers ───────────────────────────
     // Binds subscribers to the table's implicit DB-trigger / validate events,
     // which have no publisher routine in source (see below). Must run AFTER
     // the full dep+workspace merge: a subscriber in one app can target a
     // publisher object living in another.
-    inject_platform_event_publishers(&mut graph);
+    {
+        let _s = pt::span("graph", "graph.platform_publishers");
+        inject_platform_event_publishers(&mut graph);
+    }
 
     graph
 }
