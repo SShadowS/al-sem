@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Measured (context-server stage 4: refresh per change type)
+
+- On a temp copy of the CDO baseline (release-fast, `aldump --session-refresh
+  --verify`, the same shared machine, run back to back): every step's model
+  equals the cold build's. `revision.refresh` before (master 6c463893) →
+  after: **B 5.7–6.0 s → 2.43–2.53 s** (program 1.6–2.1 → 0.70–0.76 s;
+  model assembly ~2.5–3.0 → ~0.65 s; attach ~0.9–1.0 s unchanged, whole by
+  design); **S/F 10.1–11.4 s → 7.0–7.35 s** (dependency re-resolution
+  4.1–4.7 s of it, unchanged); P 13.9–14.1 s → 12.2–13.6 s (the cold model
+  build 11.7–12.4 s on the same binary). What remains of a B refresh, by
+  span: `preflight.snapshot_build` 0.35–0.39 s, `preflight.resolve_full`
+  0.19 s (`resolve.event_flow` 64–88 ms), `crossapp.demand` 0.17 s,
+  `l3.dependency_rows` 0.25 s (cloning the kept rows), `l3.finish_resolved`
+  0.27–0.30 s, `l3.row_nodes` 0.08 s, `crossapp.attach_program_calls`
+  0.90–1.0 s. `model.copied_bytes` per B unchanged at 15.5 MB (it counts
+  the program's reused resolutions, not the row copies). Peak RSS of the
+  whole driver run (session plus verifying cold builds) 5.46 → 6.50 GB:
+  the kept raw rows.
+
 ### Fixed (graph assembly: platform publisher injection; stage-4 follow-ups)
 
 - **`inject_platform_event_publishers` scanned every routine of the graph
