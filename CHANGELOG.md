@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (context-server stage 4: the `complete(p)` index)
+
+- **`prove_event_param_temps` scans each publisher's own object only.** Rule 2
+  (`complete(p)`: no unresolved call in the publisher's object could name it)
+  scanned every row of the model once per local publisher; it now reads an
+  `object_id → rows` index built once (context-server design §6.8 L8).
+  Behaviour-preserving: same rows, pure predicate; every golden unchanged.
+  Measured on the CDO baseline (release-fast, `query touches`, three runs
+  each, interleaved): `attach.event_param_temps` 1,160–1,514 ms before (one
+  noisy 5,120 ms outlier) → 356–388 ms after; `crossapp.attach_program_calls`
+  1,984–2,583 → 1,148–1,393 ms. Output bytes identical. New test
+  `complete_reads_only_the_publishers_object` pins the per-object scope
+  (break: one bucket for all rows → fails); the existing
+  `event_param_temp_unresolved_sibling_raise_is_not_proven` fails when the
+  index holds no rows.
+
 ### Changed (the wire answer: outcome taxonomy and frame bounding)
 
 - **`wire::Answer` is the closed schema of context-server design r5 §8.3.**

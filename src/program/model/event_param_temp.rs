@@ -50,6 +50,16 @@ fn known_temp() -> PTempState {
     crate::program::body::scope::ts_known(true)
 }
 
+/// Every row index of each object id, in row order: the `complete(p)` index
+/// (context-server design §6.8 L8).
+fn rows_by_object(routines: &[ModelRoutine]) -> HashMap<&str, Vec<usize>> {
+    let mut by_object: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, r) in routines.iter().enumerate() {
+        by_object.entry(r.object_id.as_str()).or_default().push(i);
+    }
+    by_object
+}
+
 /// Prove and write the temporary subscriber parameters (see the module docs).
 pub fn prove_event_param_temps(resolved: &mut Model) {
     let (calls, events) = (resolved.calls.clone(), resolved.events.clone());
@@ -79,11 +89,17 @@ pub fn prove_event_param_temps(resolved: &mut Model) {
             }
         }
         let routine = |id: &str| index.get(id).map(|&i| &routines[i]);
+        // The rows of each object, in row order (context-server design §6.8 L8):
+        // `complete(p)` reads only the rows of `p`'s object, so it scans those
+        // instead of every row of the model per publisher. The predicate is
+        // pure, so the visiting order cannot change the answer.
+        let by_object = rows_by_object(routines);
         let complete = |p: &ModelRoutine| {
-            routines
+            by_object
+                .get(p.object_id.as_str())
+                .map_or(&[][..], Vec::as_slice)
                 .iter()
-                .enumerate()
-                .filter(|(_, q)| q.object_id == p.object_id)
+                .map(|&qi| (qi, &routines[qi]))
                 .all(|(qi, q)| {
                     !q.parse_incomplete
                         && q.call_sites.iter().all(|cs| {
@@ -174,5 +190,100 @@ pub fn prove_event_param_temps(resolved: &mut Model) {
                 cs.receiver_temp_state = Some(known_temp());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::program::model::program_calls::assemble_and_resolve_inline_program;
+
+    /// Rule 2 reads the publisher's OWN object only (`complete(p)` over the
+    /// `object_id → rows` index). Hand-stated: another codeunit holds an
+    /// unresolved bare call named like the publisher, `OnX(Rec)`; the
+    /// publisher's object raises it once with a temporary record. The proof
+    /// still holds. Break: index every row under one key (the scan then sees
+    /// the other object's unresolved `OnX`) -> the subscriber stays unproven.
+    #[test]
+    fn complete_reads_only_the_publishers_object() {
+        let src = r#"
+table 50890 "EI T"
+{
+    fields { field(1; "No."; Code[20]) { } }
+    keys { key(PK; "No.") { } }
+}
+
+codeunit 50890 "EI Pub"
+{
+    [IntegrationEvent(false, false)]
+    local procedure OnX(var Rec: Record "EI T")
+    begin
+    end;
+
+    procedure Raise()
+    var
+        Rec: Record "EI T" temporary;
+    begin
+        OnX(Rec);
+    end;
+}
+
+codeunit 50891 "EI Other"
+{
+    procedure Unrelated()
+    var
+        Rec: Record "EI T";
+    begin
+        OnX(Rec);
+    end;
+}
+
+codeunit 50892 "EI Sub"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"EI Pub", 'OnX', '', false, false)]
+    local procedure Handle(var Rec: Record "EI T")
+    begin
+        Rec.Insert();
+    end;
+}
+"#;
+        let m = assemble_and_resolve_inline_program(
+            &[("Ei.al".to_string(), src.to_string())],
+            "22222222-0000-0000-0000-0000000e1a01",
+        );
+        let routine = |name: &str| {
+            m.workspace
+                .routines
+                .iter()
+                .find(|r| r.name == name)
+                .unwrap_or_else(|| panic!("routine {name}"))
+        };
+        let other = routine("Unrelated");
+        assert!(
+            !m.calls
+                .edges
+                .iter()
+                .any(|e| e.from == other.id && e.to.is_some()),
+            "precondition: the other object's OnX call is unresolved"
+        );
+        assert!(
+            !m.events.graph.edges.is_empty(),
+            "precondition: Handle subscribes to OnX"
+        );
+        let handle = routine("Handle");
+        let params: Vec<_> = handle
+            .record_variables
+            .iter()
+            .filter(|rv| rv.is_parameter)
+            .collect();
+        assert!(
+            !params.is_empty(),
+            "precondition: Handle has a record parameter"
+        );
+        assert!(
+            params.iter().all(|rv| {
+                crate::program::body::features::temp_state_suppresses(Some(&rv.temp_state))
+            }),
+            "another object's unresolved OnX does not block the proof: {params:?}"
+        );
     }
 }
