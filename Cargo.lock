@@ -41,6 +41,7 @@ dependencies = [
  "flate2",
  "hmac",
  "indexmap",
+ "libc",
  "libmimalloc-sys",
  "log",
  "lru",

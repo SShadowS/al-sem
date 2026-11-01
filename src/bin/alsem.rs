@@ -148,6 +148,27 @@ enum Commands {
     /// on one workspace, or many large outputs that wait for a later job, can
     /// exceed it.
     Batch(BatchCli),
+    /// The engine child of a context-server front end (internal): speaks the
+    /// engine protocol on stdin/stdout (`al_sem::engine::host`).
+    #[command(hide = true, name = "engine-host")]
+    EngineHost,
+    /// Ask one command through an engine child, as a front end does
+    /// (internal): `alsem engine-ask -- <command line>` prints the answer's
+    /// exact stdout and stderr and exits with its exit code.
+    #[command(hide = true, name = "engine-ask")]
+    EngineAsk(EngineAskCli),
+}
+
+/// `EngineAskCli` — arguments for `alsem engine-ask`.
+#[derive(Parser)]
+struct EngineAskCli {
+    /// The inline stdout cap in bytes; a larger stdout comes back as a file.
+    #[arg(long = "max-inline")]
+    max_inline: Option<u64>,
+
+    /// The command line to ask, after `--`.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+    argv: Vec<String>,
 }
 
 /// `BatchCli` — arguments for `alsem batch <manifest>` (#277 D2.1).
@@ -852,6 +873,8 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let code = match cli.command {
         Commands::Batch(b) => run_batch_cmd(b),
+        Commands::EngineHost => engine::run_engine_host(),
+        Commands::EngineAsk(a) => engine::run_engine_ask(a),
         Commands::Policy(PolicyCli {
             command: PolicyCommands::Explain(e),
         }) => run_policy_explain_cmd(e),
@@ -1063,7 +1086,9 @@ fn plan_command(command: Commands, in_batch: bool, cx: &PlanCx) -> Planned {
             QueryCommands::Effects(e) => plan_query_effects(e),
         },
         Commands::Graph(g) => plan_graph(g),
-        Commands::Cache(_) | Commands::Batch(_) => unreachable!("no job"),
+        Commands::Cache(_) | Commands::Batch(_) | Commands::EngineHost | Commands::EngineAsk(_) => {
+            unreachable!("no job")
+        }
     }
 }
 
@@ -1073,6 +1098,8 @@ fn plan_command(command: Commands, in_batch: bool, cx: &PlanCx) -> Planned {
 fn refused(command: &Commands) -> Option<&'static str> {
     match command {
         Commands::Batch(_) => Some("batch"),
+        Commands::EngineHost => Some("engine-host"),
+        Commands::EngineAsk(_) => Some("engine-ask"),
         Commands::Cache(_) => Some("cache prune"),
         Commands::Policy(PolicyCli {
             command: PolicyCommands::Explain(_),
@@ -1178,7 +1205,11 @@ fn job_paths(command: &Commands, streams: &JobStreams) -> JobPaths {
             QueryCommands::Effects(e) => (Some(&e.workspace), e.out.as_ref()),
         },
         Commands::Graph(g) => (Some(&g.workspace), g.out.as_ref()),
-        Commands::Policy(_) | Commands::Cache(_) | Commands::Batch(_) => (None, None),
+        Commands::Policy(_)
+        | Commands::Cache(_)
+        | Commands::Batch(_)
+        | Commands::EngineHost
+        | Commands::EngineAsk(_) => (None, None),
     };
     p.workspaces.extend(workspace.map(PathBuf::from));
     p.writes.extend(out.map(file));
@@ -1405,7 +1436,11 @@ fn job_kind(command: &Commands) -> Option<JobKind> {
             QueryCommands::Effects(e) => ("query effects", universe(e.single_app)),
         },
         Commands::Graph(_) => ("graph", ViewUniverse::CrossApp),
-        Commands::Policy(_) | Commands::Cache(_) | Commands::Batch(_) => return None,
+        Commands::Policy(_)
+        | Commands::Cache(_)
+        | Commands::Batch(_)
+        | Commands::EngineHost
+        | Commands::EngineAsk(_) => return None,
     })
 }
 
@@ -2641,6 +2676,326 @@ fn plan_analyze(a: AnalyzeCli, in_batch: bool) -> Planned {
             )
         },
     )
+}
+
+// ── the engine child and its stage-2 front end (context-server stage 2) ─────
+
+/// `alsem engine-host` (the child) and `alsem engine-ask` (a front end of
+/// one ask). The child answers each `session/ask` through the one-shot job
+/// path of a standalone run, in the design's order (r5 §4.3): **decode** the
+/// argv (clap), **validate** it through the CLI's own planning
+/// (`Planned::Failed | Ready`, with no workspace read bound: a planning
+/// failure answers its CLI text and exit and reads nothing), then **acquire**
+/// the workspace read (each package once, `M_before` and `M_after` around the
+/// run) and run the job off it. A semantic build failure is the job's own
+/// CLI answer (`view_failed`); infrastructure failures are `kind: "failed"`.
+mod engine {
+    use super::*;
+    use al_sem::app_image::{InputsUnstable, PackageManifest, check_consistent};
+    use al_sem::engine::batch::plan_cx::ProcessFs;
+    use al_sem::engine::host::child::{Engine, protocol_stdout, serve};
+    use al_sem::engine::host::front::{EngineFront, FrontConfig};
+    use al_sem::engine::host::{AskParams, ChildStatus, Decisions, OpenParams};
+    use al_sem::program::inputs::WorkspaceInputs;
+    use al_sem::wire::{
+        FailedOutcome, Outcome, Spill, SpillKind, Stderr, Stdout, WireError, clamp_inline,
+        cli_outcome, stderr_bytes,
+    };
+    use std::collections::BTreeMap;
+    use std::io::Write as _;
+
+    /// How many times an ask whose packages moved during the run is retried
+    /// before it answers `inputsUnstable` (r4 §5.2).
+    const ACQUIRE_ATTEMPTS: usize = 3;
+
+    /// `alsem engine-host`: serve the engine protocol on stdin/stdout until
+    /// the front end shuts the session down or closes stdin.
+    pub(super) fn run_engine_host() -> ExitCode {
+        let out = match protocol_stdout() {
+            Ok(out) => out,
+            Err(e) => {
+                let _ = writeln!(std::io::stderr(), "al-sem: engine-host: {e}");
+                return ExitCode::from(1);
+            }
+        };
+        let mut engine = HostEngine::default();
+        let stdin = std::io::BufReader::new(std::io::stdin().lock());
+        match serve(&mut engine, stdin, std::io::BufWriter::new(out)) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                let _ = writeln!(std::io::stderr(), "al-sem: engine-host: {e}");
+                ExitCode::from(1)
+            }
+        }
+    }
+
+    /// The child's session: the workspace it serves and its counters.
+    #[derive(Default)]
+    struct HostEngine {
+        workspace: Option<PathBuf>,
+        asks: u64,
+        reads: u64,
+    }
+
+    impl Engine for HostEngine {
+        fn open(&mut self, params: &OpenParams) -> Result<(), String> {
+            if params.workspace.as_os_str().is_empty() {
+                return Err("session/open names no workspace".into());
+            }
+            self.workspace = Some(params.workspace.clone());
+            Ok(())
+        }
+
+        fn ask(&mut self, params: AskParams, spill: &Spill<'_>) -> Outcome {
+            self.asks += 1;
+            let workspace = self.workspace.clone().unwrap_or_default();
+            answer(&params, &workspace, &mut self.reads, spill)
+        }
+
+        fn status(&self) -> ChildStatus {
+            ChildStatus {
+                pid: std::process::id(),
+                workspace: self.workspace.clone(),
+                asks: self.asks,
+                workspace_reads: self.reads,
+            }
+        }
+    }
+
+    /// The argv decoded as the CLI decodes it, or the CLI's own answer to a
+    /// line it does not run: clap's error (or help) text and exit, or a
+    /// command the engine does not serve (exit 3, as a batch refuses it).
+    fn decode(argv: &[String]) -> Result<Commands, JobOutput> {
+        let cli =
+            Cli::try_parse_from(std::iter::once("alsem").chain(argv.iter().map(String::as_str)))
+                .map_err(|e| {
+                    let text = e.to_string().into_bytes();
+                    let exit = u8::try_from(e.exit_code()).unwrap_or(2);
+                    let action = if e.use_stderr() {
+                        WriteAction::Stderr(text)
+                    } else {
+                        WriteAction::Stdout(text)
+                    };
+                    JobOutput {
+                        actions: vec![action],
+                        exit,
+                    }
+                })?;
+        match refused(&cli.command) {
+            Some(name) => Err(JobOutput::lines(
+                &[format!("al-sem: '{name}' cannot run in the engine")],
+                exit::CONFIG_ERROR,
+            )),
+            None => Ok(cli.command),
+        }
+    }
+
+    /// One ask's outcome (see the module doc for the order).
+    fn answer(ask: &AskParams, session: &Path, reads: &mut u64, spill: &Spill<'_>) -> Outcome {
+        let inline = clamp_inline(ask.max_inline_bytes);
+        let cli = |out: &JobOutput| match cli_outcome(out, inline, |b| spill(SpillKind::Stdout, b))
+        {
+            Ok(o) => o,
+            Err(WireError::FileWrite(p)) => Outcome::failed(
+                FailedOutcome::RefusedPath,
+                format!("the engine does not write files yet (--out {p})"),
+            ),
+            Err(e) => Outcome::failed(FailedOutcome::Protocol, e.to_string()),
+        };
+        let mut unstable: Option<InputsUnstable> = None;
+        for _ in 0..ACQUIRE_ATTEMPTS {
+            // Decode and validate: planning reads only the request's own
+            // inputs (its diff text, the files its flags name), no workspace.
+            let command = match decode(&ask.argv) {
+                Ok(c) => c,
+                Err(out) => return cli(&out),
+            };
+            let plan_reads = PlanReads::request(ask.diff_text.clone(), Box::new(ProcessFs));
+            let shipped = ask.decisions.clone().map(
+                |Decisions {
+                     changed_is_file,
+                     diff_root,
+                 }| (changed_is_file, diff_root),
+            );
+            let (command, cx) = decide(command, PlanCx::new(&plan_reads), shipped);
+            let planned = plan(command, true, &cx);
+            let wanted = match &planned {
+                Planned::Failed(f) => return cli(&f.output),
+                Planned::Ready { reads, .. } => reads.clone(),
+            };
+            // One read per workspace, with the union of what the job needs of it.
+            let mut by_path: BTreeMap<PathBuf, (PathBuf, WorkspaceNeeds)> = BTreeMap::new();
+            for (path, needs) in &wanted {
+                let key = std::path::absolute(path).unwrap_or_else(|_| path.clone());
+                by_path
+                    .entry(key)
+                    .and_modify(|(_, n)| *n = n.union(*needs))
+                    .or_insert((path.clone(), *needs));
+            }
+            let session_abs =
+                std::path::absolute(session).unwrap_or_else(|_| session.to_path_buf());
+            if let Some((other, _)) = by_path.iter().find(|(abs, _)| **abs != session_abs) {
+                return Outcome::failed(
+                    FailedOutcome::NotThisWorkspace,
+                    format!(
+                        "workspace '{}' is not this session's ('{}')",
+                        other.display(),
+                        session.display()
+                    ),
+                );
+            }
+            // Acquire: M_before, the read (each package once), M_consumed.
+            let packages: Vec<PathBuf> = by_path
+                .values()
+                .flat_map(|(p, _)| al_sem::dependencies::discover_app_files(p).0)
+                .map(|f| f.path)
+                .collect();
+            let before = PackageManifest::observe(&packages);
+            let given: Vec<Arc<WorkspaceInputs>> = by_path
+                .values()
+                .map(|(p, needs)| WorkspaceInputs::read(p, needs))
+                .collect();
+            *reads += given.len() as u64;
+            let consumed =
+                PackageManifest(given.iter().flat_map(|g| g.closure.consumed().0).collect());
+            let reader = WorkspaceReader::new(wanted);
+            for g in given {
+                reader.give(g);
+            }
+            let slots = [Slot::new()];
+            let jobs = make_jobs(vec![planned], &reader, &slots);
+            let out = al_sem::engine::batch::standalone_output(&*jobs[0]);
+            drop(jobs);
+            let after = PackageManifest::observe(&packages);
+            match check_consistent(&before, &consumed, &after) {
+                Ok(()) => return cli(&out),
+                Err(e) => unstable = Some(e),
+            }
+        }
+        Outcome::failed(
+            FailedOutcome::InputsUnstable,
+            format!(
+                "{} (after {ACQUIRE_ATTEMPTS} attempts)",
+                unstable.map_or_else(String::new, |e| e.to_string())
+            ),
+        )
+    }
+
+    /// Whether the command reads its diff from stdin (`--diff -`).
+    fn reads_stdin(command: &Commands) -> bool {
+        match command {
+            Commands::Digest(d) => d.diff.as_deref() == Some("-"),
+            Commands::Explain(e) => e.diff.as_deref() == Some("-"),
+            _ => false,
+        }
+    }
+
+    /// `alsem engine-ask -- <command line>`: decode the command line, decide
+    /// its file-system questions here (the front end's job, r3 §4.3), read
+    /// its stdin if it asks for it, ask an engine child, and deliver the
+    /// answer: its exact stdout and stderr and its exit code. A `kind:
+    /// "failed"` answer prints its outcome and message, exit 1.
+    pub(super) fn run_engine_ask(a: EngineAskCli) -> ExitCode {
+        let parsed =
+            Cli::try_parse_from(std::iter::once("alsem").chain(a.argv.iter().map(String::as_str)));
+        let command = match parsed {
+            Ok(cli) => cli.command,
+            Err(e) => e.exit(),
+        };
+        let streams = JobStreams {
+            stdout: PathBuf::new(),
+            stderr: PathBuf::new(),
+        };
+        let Some(workspace) = job_paths(&command, &streams).workspaces.into_iter().next() else {
+            return usage("al-sem: engine-ask: the command names no workspace".into());
+        };
+        let plan_reads = PlanReads::process();
+        let (command, cx) = decide(command, PlanCx::new(&plan_reads), None);
+        let decisions = Decisions {
+            changed_is_file: changed_is_file(&command),
+            diff_root: cx.diff_root_decided.clone(),
+        };
+        let diff_text = reads_stdin(&command)
+            .then(|| cx.stdin_text().map(str::to_string))
+            .flatten();
+        let program = match std::env::current_exe() {
+            Ok(p) => p,
+            Err(e) => return usage(format!("al-sem: engine-ask: {e}")),
+        };
+        let mut front = match EngineFront::new(FrontConfig::new(program, workspace)) {
+            Ok(f) => f,
+            Err(e) => return usage(format!("al-sem: engine-ask: {e}")),
+        };
+        let answer = front.ask(AskParams {
+            argv: a.argv,
+            diff_text,
+            decisions: Some(decisions),
+            max_inline_bytes: a.max_inline,
+        });
+        let code = deliver(answer.outcome);
+        front.shutdown();
+        code
+    }
+
+    /// Bytes a spill file holds, checked against its length and hash.
+    fn spilled(f: &al_sem::wire::SpillFile) -> Result<Vec<u8>, String> {
+        let bytes = std::fs::read(&f.path).map_err(|e| format!("{}: {e}", f.path))?;
+        if bytes.len() as u64 != f.bytes
+            || al_sem::engine::ids::sha256_bytes_hex(&bytes) != f.sha256
+        {
+            return Err(format!(
+                "{}: length or hash differs from the answer",
+                f.path
+            ));
+        }
+        let _ = std::fs::remove_file(&f.path);
+        Ok(bytes)
+    }
+
+    /// Write an answer's streams and return its exit.
+    fn deliver(outcome: Outcome) -> ExitCode {
+        let failed = |line: String| ExitCode::from(replay(&JobOutput::lines(&[line], 1), 1));
+        match outcome {
+            Outcome::Cli {
+                exit_code,
+                stdout,
+                stderr,
+                ..
+            } => {
+                let stdout = match stdout {
+                    Stdout::Text(t) => t.into_bytes(),
+                    Stdout::File(f) => match spilled(&f) {
+                        Ok(b) => b,
+                        Err(e) => return failed(format!("al-sem: engine-ask: {e}")),
+                    },
+                };
+                let stderr = match stderr {
+                    Stderr::Lines(l) => stderr_bytes(&l),
+                    Stderr::File(f) => match spilled(&f) {
+                        Ok(b) => b,
+                        Err(e) => return failed(format!("al-sem: engine-ask: {e}")),
+                    },
+                };
+                let out = JobOutput {
+                    actions: vec![WriteAction::Stderr(stderr), WriteAction::Stdout(stdout)],
+                    exit: exit_code,
+                };
+                ExitCode::from(replay(&out, 1))
+            }
+            Outcome::Failed {
+                outcome,
+                message,
+                diagnostic_file,
+            } => {
+                let more = diagnostic_file
+                    .map_or_else(String::new, |f| format!(" (full text: {})", f.path));
+                failed(format!(
+                    "al-sem: engine: {}: {message}{more}",
+                    outcome.as_str()
+                ))
+            }
+        }
+    }
 }
 
 #[cfg(test)]

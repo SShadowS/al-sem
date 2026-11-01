@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (the wire answer: outcome taxonomy and frame bounding)
+
+- **`wire::Answer` is the closed schema of context-server design r5 §8.3.**
+  `kind: "cli"` is a CLI outcome (the command ran, failed its planning, or its
+  model did not build: a semantic build failure is the job's own text and
+  exit); `kind: "failed"` is an infrastructure outcome with a
+  `FailedOutcome` (`cancelled`, `deadline`, `budget`, `busy`, `engineError`,
+  `refusedPath`, `notThisWorkspace`, `inputsUnstable`, `protocol`), a
+  `message` of at most 4 KiB inline and the whole text in `diagnosticFile`
+  (review r4 #11). A CLI answer's stderr is `stderr` lines xor `stderrFile`;
+  `changedPaths`/`changedPathsTruncated` are in the schema (empty until
+  freshness exists). `StdoutFile` is now `SpillFile` (alias kept).
+- **`wire::bound_frame`** makes every answer fit one frame (r5 §3): over the
+  limit it spills, in order, stdout to `stdoutFile`, stderr to `stderrFile`
+  (exact bytes), cuts `changedPaths` to 256, and ends in a minimal terminal
+  frame (`failed`, `protocol`, "answer exceeded the frame limit", the whole
+  encoded answer in `diagnosticFile`); a failed spill ends in that frame with
+  the write error. `wire::skip_line` discards the rest of a line
+  `read_frame` refused, without holding it.
+
+### Added (the engine child process: context-server stage 2 plumbing)
+
+- **`alsem engine-host`** (hidden): the engine child a front end owns, speaking
+  line-framed JSON-RPC 2.0 over stdin/stdout (`engine::host`): `engine/hello`
+  first (protocol version, engine instance id, version, grammar sha, pid),
+  then `session/open`, `session/ask`, `session/status`, `session/shutdown`.
+  Each ask runs the one-shot job path a standalone `alsem <command>` runs and
+  answers its exact bytes (`stdoutText`, or `stdoutFile` over the request's
+  inline cap); no resident revision yet (`revision: null`). Order per r5 §4.3:
+  decode (clap) → validate through the CLI's own `Planned::Failed | Ready`
+  split with no workspace read bound (a planning failure answers its CLI text
+  and exit and reads nothing) → acquire the workspace read (each package once,
+  `M_before == M_consumed == M_after`, three attempts, then `inputsUnstable`)
+  → run. A request for another workspace is `notThisWorkspace`; `--out` is
+  `refusedPath` (the output sink is a later step). The child bounds its own
+  response frame, refuses an id over 1 KiB, answers an oversized request line
+  with a parse error after skipping it unheld, and moves fd 1 to its protocol
+  stream with fd 1 pointed at stderr, so a stray print cannot break framing.
+- **`engine::host::front::EngineFront`**: the front end's supervision. Hello
+  within 10 s with a supported protocol, else kill; a child frame over 16 MiB
+  is refused after reading the limit plus one byte, and a frame that does not
+  parse kills the child (`protocol`); stderr drained continuously, the newest
+  64 KiB kept; end of output or a failed write fails the ask with the exit
+  status and stderr tail (`engineError`); restart on the next ask after a
+  backoff of 1 s doubling to 30 s that resets only after a completed ask or
+  60 s stable (never on a hello); three deaths in 60 s fail every ask for five
+  minutes or until `reset`; `shutdown` waits 10 s, then kills; dropping it
+  kills and reaps the child and removes its spill folder.
+- **`alsem engine-ask -- <command line>`** (hidden): a front end of one ask as
+  a process. It decodes the line, decides the diff root and `--changed` itself
+  (the child probes nothing for them), reads a `--diff -` from its own stdin,
+  and prints the answer's exact stdout and stderr with its exit code.
+- **Test hooks** (`ALSEM_ENGINE_TEST_HOOK`: `no-hello`, `protocol:<n>`,
+  `abort-on-ask`, `abort-on-ask-once:<marker>`, `oversized-frame-on-ask`,
+  `garbage-frame-on-ask`), compiled into debug builds and, through the new
+  `engine-test-hooks` feature, into an abort-on-panic build; never in a
+  shipped one.
+- Tests (`tests/cli/engine_host.rs`, `engine::host::child::tests`,
+  `wire::tests`): explain/prove/digest/query through the child byte-identical
+  to the CLI, inline and as `stdoutFile`; `engine-ask` equal to the CLI for a
+  `--diff -` request and a clap error; planning failures keep their CLI
+  outcomes with zero workspace reads; a broken workspace answers the job's own
+  failure text; oversized and malformed child frames, a missing hello, an
+  unknown protocol, a crash mid-request with respawn, repeated deaths with
+  doubling backoff and the failed state; the child's own frame rules.
+  Discrimination: reading the workspace before planning, trimming the inline
+  stdout, an unbounded frame read, a backoff reset on hello, an ignored hello
+  deadline and a child that does not skip an oversized line each fail their
+  test.
+- Measured on CDO (release-fast, `/usr/bin/time -v`, the peak includes the
+  child): one `digest --routine IssueReminder --routine DocHandle --routine
+  VendorLedgerSendToQueue --include-reads --deterministic` (22.7 MB of JSON,
+  delivered as `stdoutFile`) through `engine-ask` → `engine-host`: 29.27 /
+  29.44 s, 3.44 / 3.46 GB, against the CLI's 30.15 / 29.83 s, 3.43 / 3.43 GB
+  in interleaved runs; `prove IssueReminder may-commit` 28.77 s against
+  28.48 s. The process boundary, framing and spill are inside run-to-run noise;
+  outputs are byte-identical to the CLI's.
+
 ### Changed (dependency packages are read once, into owned images)
 
 - **Every product of a dependency `.app` is now built from one owned copy of

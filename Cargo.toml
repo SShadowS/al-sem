@@ -147,6 +147,11 @@ lru = { version = "0.18", optional = true }
 reqwest = { version = "0.13", features = ["blocking", "rustls-no-provider"], default-features = false, optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"], optional = true }
 
+# The engine child moves fd 1 to its protocol stream and points fd 1 at stderr
+# (`engine::host::child::protocol_stdout`). Already in the tree (transitive).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 default = ["telemetry"]
 telemetry = [
@@ -165,6 +170,11 @@ telemetry = [
 # assert on `record_*` calls without spinning up the real exporter. Implies
 # `telemetry`.
 test-runtime = ["telemetry"]
+# The engine child's fault hooks (`engine::host::test_hooks`, read from
+# `ALSEM_ENGINE_TEST_HOOK`): compiled into debug builds always, and into an
+# optimized build only with this feature, so the crash/frame/hello tests can
+# run against an abort-on-panic (`release-ship`) binary. Never in a shipped one.
+engine-test-hooks = []
 
 [dev-dependencies]
 # No `criterion` here: the benches are their own package (`benches/Cargo.toml`).
