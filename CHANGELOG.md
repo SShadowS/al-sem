@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (context-server stage 4: the change-type classifier)
+
+- **`program::session::classify`**: the declaration projection of one
+  workspace file (context-server design §6.1) — blake3 over every
+  `ObjectNode`, `RoutineNode` and `RoutineMeta` the build's own extraction
+  (`summarize_file`) yields, in document order with multiplicity, every field
+  of every nested type, except the positional origins and
+  `RoutineNode.source_unit` (`EXCLUDED`). The encoding is the `Classify`
+  trait, implemented by exhaustive destructuring with no `..`, so a new field
+  does not compile until it is hashed or excluded (`DECL_PROJECTION_VERSION`).
+  `classify_files` gives B (every projection equal on the same paths) or S
+  (a projection changed, or a file was added, removed or renamed). Tests
+  (T-class, T-proj-guard): body edit and inserted newlines keep the
+  projection; a reorder, a parameter/return/`var`/name change, a duplicate,
+  `[MethodId]`, `[TryFunction]`, enum extensibility and implementation map,
+  a subscriber's target and the path each change it; origins and the
+  source-unit stamp do not reach the hash, every other field does.
+
 ### Changed (context-server stage 4: the `complete(p)` index)
 
 - **`prove_event_param_temps` scans each publisher's own object only.** Rule 2
