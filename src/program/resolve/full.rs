@@ -40,7 +40,7 @@ use rayon::prelude::*;
 use crate::engine::perf_trace as pt;
 use crate::program::build::{DepInput, DepLayer, assemble_program_graph, build_dep_layer_cached};
 use crate::program::dep_cache::{DepCache, DepKey};
-use crate::program::dep_summary::parse_for_build;
+use crate::program::dep_summary::parse_for_build_reusing;
 use crate::program::graph::ProgramGraph;
 use crate::program::inputs::WorkspaceInputs;
 use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
@@ -96,6 +96,7 @@ pub enum ObligationId {
 }
 
 /// A classified edge annotated with the obligation it was resolved from.
+#[derive(Clone, Debug)]
 pub struct ClassifiedEdge {
     pub obligation_id: ObligationId,
     pub edge: Edge,
@@ -112,6 +113,11 @@ pub struct ClassifiedEdge {
 /// [`resolve_full_program_from_parts`] aggregates every file's triple and
 /// sorts the combined `flagged`/`indeterminate` populations once, after all
 /// files have been processed.
+///
+/// A workspace session retains one per file, BEFORE the whole-program
+/// refinement (`close_holder_sites`) rewrites its edges, and clones it into
+/// each revision that reuses it (context-server design §6.6).
+#[derive(Clone)]
 pub(crate) struct FileResolution {
     pub edges: Vec<ClassifiedEdge>,
     pub flagged: Vec<FlaggedBuiltinDispatchSite>,
@@ -1384,6 +1390,7 @@ pub fn app_object_map(graph: &ProgramGraph, app: AppRef) -> HashMap<ObjectNodeId
 ///
 /// `surface` is built by the caller (normally [`ProgramContext::decl_surface`]):
 /// workspace decls over the dependency tier's frozen `dep_meta`.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn resolve_full_program_from_parts(
     graph: &ProgramGraph,
     parsed: &[ParsedUnit],
@@ -1391,12 +1398,15 @@ fn resolve_full_program_from_parts(
     primary_app_ref: AppRef,
     ws_file_set: &HashSet<String>,
     files: &crate::program::site_key::FileTable,
+    reuse: Option<&HashMap<String, Arc<FileResolution>>>,
+    keep: bool,
 ) -> (
     Vec<ClassifiedEdge>,
     Coverage,
     BuiltinDispatchAudit,
     HashMap<ObligationId, SiteFacts>,
     ParenlessCalls,
+    Option<KeptResolutions>,
 ) {
     let mut site_facts: HashMap<ObligationId, SiteFacts> = HashMap::new();
     // Quick ObjectNodeId → &ObjectNode lookup.
@@ -1440,27 +1450,65 @@ fn resolve_full_program_from_parts(
         })
         .collect();
 
-    let file_results: Vec<(String, FileResolution)> =
+    //
+    // A workspace session (context-server design §6.6) hands back, in
+    // `reuse`, the retained pre-refinement resolution of every file whose
+    // parse it kept under a body-only revision: that file is not resolved
+    // again; its clone is taken, its cross-file source witnesses
+    // re-materialized against the current `surface` (§6.5). With `keep`, every
+    // file's pre-refinement resolution is returned for the next revision.
+    let file_results: Vec<(String, FileResolution, Option<Arc<FileResolution>>, bool)> =
         crate::big_stack::big_stack_pool().install(|| {
             files_to_resolve
                 .par_iter()
                 .map(|pf| {
-                    let r = resolve_file_obligations(
-                        pf,
-                        primary_app_ref,
-                        graph,
-                        &index,
-                        surface,
-                        &obj_node_map,
-                        files.get(primary_app_ref, &pf.virtual_path),
-                    );
-                    (pf.virtual_path.clone(), r)
+                    let fresh = || {
+                        resolve_file_obligations(
+                            pf,
+                            primary_app_ref,
+                            graph,
+                            &index,
+                            surface,
+                            &obj_node_map,
+                            files.get(primary_app_ref, &pf.virtual_path),
+                        )
+                    };
+                    let path = pf.virtual_path.clone();
+                    if let Some(old) = reuse.and_then(|m| m.get(&pf.virtual_path)) {
+                        let mut r = (**old).clone();
+                        if rematerialize_witnesses(&mut r.edges, surface) {
+                            return (path, r, keep.then(|| Arc::clone(old)), false);
+                        }
+                        // §6.5: a reused cross-file reference with no current
+                        // declaration is an invariant failure. Debug panics;
+                        // release resolves the file again against the current
+                        // semantics (what a cold build yields).
+                        debug_assert!(
+                            false,
+                            "a reused witness in {} has no current declaration",
+                            pf.virtual_path
+                        );
+                        let r = fresh();
+                        let k = keep.then(|| Arc::new(r.clone()));
+                        return (path, r, k, true);
+                    }
+                    let r = fresh();
+                    let k = keep.then(|| Arc::new(r.clone()));
+                    (path, r, k, false)
                 })
                 .collect()
         });
 
+    let mut kept = keep.then(|| KeptResolutions {
+        files: Vec::with_capacity(file_results.len()),
+        rematerialize_failures: 0,
+    });
     let mut parenless_calls = ParenlessCalls::new();
-    for (path, file_res) in file_results {
+    for (path, file_res, retained, failed) in file_results {
+        if let (Some(k), Some(r)) = (kept.as_mut(), retained) {
+            k.files.push((path.clone(), r));
+            k.rematerialize_failures += usize::from(failed);
+        }
         if !file_res.parenless.is_empty() {
             parenless_calls.insert(
                 (primary_app_ref, path),
@@ -1554,7 +1602,52 @@ fn resolve_full_program_from_parts(
         builtin_dispatch_audit,
         site_facts,
         parenless_calls,
+        kept,
     )
+}
+
+/// What a resolve kept for a workspace session (context-server design §6.6).
+pub(crate) struct KeptResolutions {
+    /// Every workspace file's pre-refinement resolution, by virtual path, in
+    /// resolution order. A reused file's entry is the retained `Arc` itself.
+    pub(crate) files: Vec<(String, Arc<FileResolution>)>,
+    /// Reused files whose witnesses could not be re-materialized, so they were
+    /// resolved again (release only; debug panics).
+    pub(crate) rematerialize_failures: usize,
+}
+
+/// Re-materialize every cross-file source witness of `edges` through the
+/// current declaration surface (context-server design §6.5): a route whose
+/// target is a routine and whose witness is `SourceSpan` (the one form
+/// `resolver::make_routine_route` gives a callee found in the surface) gets
+/// that routine's current path and span, exactly as a cold resolve computes
+/// them. Every other witness is left as it is: a symbol-only callee's
+/// `AbiSymbol`, a source-tier miss's `None`, a catalog entry. Caller-local
+/// positions (the obligation's and the site's span) are the owning file's and
+/// are not touched.
+///
+/// Returns `false` when such a route's routine has no current declaration
+/// (an invariant failure: a body-only revision keeps every declaration); the
+/// edges are then partly rewritten and must be resolved again. No zero-span
+/// or other invented witness is ever written.
+pub(crate) fn rematerialize_witnesses(edges: &mut [ClassifiedEdge], surface: &DeclSurface) -> bool {
+    for ce in edges {
+        for route in &mut ce.edge.routes {
+            let (RouteTarget::Routine(rid), Witness::SourceSpan { file, span }) =
+                (&route.target, &mut route.witness)
+            else {
+                continue;
+            };
+            let Some((meta, path)) = surface.get_with_path(rid) else {
+                return false;
+            };
+            if file.as_str() != path {
+                *file = path.to_string();
+            }
+            *span = (meta.origin.byte.start as u32, meta.origin.byte.end as u32);
+        }
+    }
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -1593,6 +1686,20 @@ pub fn resolve_full_program(workspace_root: &Path) -> Option<ProgramReport> {
 /// `build_context`'s cost on every resolve.
 #[must_use]
 pub fn resolve_full_program_with(ctx: &ProgramContext) -> ProgramReport {
+    resolve_full_program_reusing(ctx, None, false).0
+}
+
+/// [`resolve_full_program_with`] for a workspace session (context-server
+/// design §6.6): the files in `reuse` take their retained pre-refinement
+/// resolution instead of being resolved again, and with `keep` every file's
+/// pre-refinement resolution comes back for the next revision. Everything
+/// whole-program (`close_holder_sites`, the event-flow edges, the coverage,
+/// the histograms) is computed exactly as a cold resolve computes it.
+pub(crate) fn resolve_full_program_reusing(
+    ctx: &ProgramContext,
+    reuse: Option<&HashMap<String, Arc<FileResolution>>>,
+    keep: bool,
+) -> (ProgramReport, Option<KeptResolutions>) {
     // ── Steps 1–4: shared setup (snapshot → graph → parse → primary app) ──────
     let ProgramContext {
         snap,
@@ -1605,7 +1712,7 @@ pub fn resolve_full_program_with(ctx: &ProgramContext) -> ProgramReport {
     let primary_app_ref = *primary_app_ref;
 
     // ── Step 5: Resolve all obligations ──────────────────────────────────────
-    let (edges, coverage, builtin_dispatch_audit, site_facts, parenless_calls) =
+    let (edges, coverage, builtin_dispatch_audit, site_facts, parenless_calls, kept) =
         resolve_full_program_from_parts(
             graph,
             parsed,
@@ -1613,6 +1720,8 @@ pub fn resolve_full_program_with(ctx: &ProgramContext) -> ProgramReport {
             primary_app_ref,
             ws_file_set,
             &ctx.files,
+            reuse,
+            keep,
         );
 
     // ── Step 6: Histograms ────────────────────────────────────────────────────
@@ -1651,19 +1760,22 @@ pub fn resolve_full_program_with(ctx: &ProgramContext) -> ProgramReport {
     // diagnostic — surfaced, never gating (see `recovered_files`'s doc).
     let recovered_files = ctx.recovered_files();
 
-    ProgramReport {
-        edges,
-        coverage,
-        histogram,
-        primary_histogram,
-        abi_integrity,
-        primary_app_ref,
-        event_flow_dual_publisher_alias_skips,
-        recovered_files,
-        builtin_dispatch_audit,
-        site_facts,
-        parenless_calls,
-    }
+    (
+        ProgramReport {
+            edges,
+            coverage,
+            histogram,
+            primary_histogram,
+            abi_integrity,
+            primary_app_ref,
+            event_flow_dual_publisher_alias_skips,
+            recovered_files,
+            builtin_dispatch_audit,
+            site_facts,
+            parenless_calls,
+        },
+        kept,
+    )
 }
 
 /// Export-oriented entry: assemble the whole-program graph + classified edges +
@@ -1678,7 +1790,7 @@ pub fn resolve_full_program_for_export(
     workspace_root: &Path,
 ) -> Option<(ProgramGraph, Vec<ClassifiedEdge>, AppRef)> {
     let ctx = build_context(workspace_root)?;
-    let (edges, _coverage, _builtin_dispatch_audit, _site_facts, _parenless) =
+    let (edges, _coverage, _builtin_dispatch_audit, _site_facts, _parenless, _kept) =
         resolve_full_program_from_parts(
             &ctx.graph,
             &ctx.parsed,
@@ -1686,6 +1798,8 @@ pub fn resolve_full_program_for_export(
             ctx.primary_app_ref,
             &ctx.ws_file_set,
             &ctx.files,
+            None,
+            false,
         );
     Some((ctx.graph, edges, ctx.primary_app_ref))
 }
@@ -1911,7 +2025,7 @@ impl ProgramContext {
 }
 
 /// What [`ProgramContext::resolve_dependency_bodies`] returns.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DependencyBodyResolution {
     /// One edge per dependency call site; `edge.from.object.app` is the owning app.
     pub edges: Vec<ClassifiedEdge>,
@@ -2011,6 +2125,19 @@ pub fn build_context_from_snapshot_cached(
     profile: BuildProfile,
     dep_cache: &DepCache,
 ) -> Result<ProgramContext, String> {
+    build_context_from_snapshot_reusing(snap, profile, dep_cache, None)
+}
+
+/// [`build_context_from_snapshot_cached`], taking each workspace file's tree
+/// from `reuse` when it has one (a workspace session's retained parse,
+/// context-server design §6.3). Everything else is built as the cold build
+/// builds it.
+pub fn build_context_from_snapshot_reusing(
+    snap: AppSetSnapshot,
+    profile: BuildProfile,
+    dep_cache: &DepCache,
+    reuse: Option<&crate::snapshot::parse::ParseReuse<'_>>,
+) -> Result<ProgramContext, String> {
     // ws_file_set: the true workspace source virtual paths (first AppUnit).
     // Excludes embedded dep apps whose AppId matches the workspace AppId.
     let ws_file_set: HashSet<String> = snap
@@ -2045,7 +2172,7 @@ pub fn build_context_from_snapshot_cached(
     let shared_tier = dep_cache.get(&DepKey::of(&snap, profile));
     let mut parse = {
         let _s = pt::span("preflight", "preflight.parse_snapshot");
-        parse_for_build(&snap, profile, shared_tier.is_some())
+        parse_for_build_reusing(&snap, profile, shared_tier.is_some(), reuse)
     };
     let parsed: Vec<ParsedUnit> = parse.workspace.take().into_iter().collect();
     crate::census_hook::mark("2.parse");
@@ -4393,14 +4520,17 @@ mod tests {
             let t5 = std::time::Instant::now();
             // The surface is built inside the timed window, so the total
             // still includes the DeclSurface build, as the label says.
-            let (edges, coverage, _audit, _ifaces, _parenless) = resolve_full_program_from_parts(
-                &graph,
-                &parsed,
-                &DeclSurface::build(&graph, &parsed),
-                primary_app_ref,
-                &ws_file_set,
-                &crate::program::site_key::FileTable::build(&graph, &parsed, &[]),
-            );
+            let (edges, coverage, _audit, _ifaces, _parenless, _kept) =
+                resolve_full_program_from_parts(
+                    &graph,
+                    &parsed,
+                    &DeclSurface::build(&graph, &parsed),
+                    primary_app_ref,
+                    &ws_file_set,
+                    &crate::program::site_key::FileTable::build(&graph, &parsed, &[]),
+                    None,
+                    false,
+                );
             resolve_from_parts_total_times.push(t5.elapsed());
 
             assert!(
@@ -4518,14 +4648,17 @@ mod tests {
         let primary_app_ref = *primary_app_ref;
 
         // The full-run baseline (production entry point).
-        let (full_edges, coverage, _audit, _ifaces, _parenless) = resolve_full_program_from_parts(
-            graph,
-            parsed,
-            &ctx.decl_surface(),
-            primary_app_ref,
-            ws_file_set,
-            &ctx.files,
-        );
+        let (full_edges, coverage, _audit, _ifaces, _parenless, _kept) =
+            resolve_full_program_from_parts(
+                graph,
+                parsed,
+                &ctx.decl_surface(),
+                primary_app_ref,
+                ws_file_set,
+                &ctx.files,
+                None,
+                false,
+            );
         assert!(coverage_holds(&coverage), "fixture coverage must hold");
 
         // Phase-1 (call-site) edges only, in the full run's own order —

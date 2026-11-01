@@ -234,23 +234,44 @@ impl ResolvedProgram {
     ) -> Result<ResolvedProgram, String> {
         use crate::engine::perf_trace as pt;
         let cross_app = scope == ProgramScope::CrossApp;
-        let (ctx, mut report, coverage) = {
+        let (ctx, report, coverage) = {
             let _s = cross_app.then(|| pt::span("crossapp", "crossapp.program_build_full"));
             crate::program::resolve::full::build_program_with_coverage_profiled(
                 inputs,
                 scope.profile(),
             )?
         };
-        let dependency_body_edges = if cross_app {
-            let dependency = {
-                let _s = pt::span("crossapp", "crossapp.resolve_dependency_bodies");
-                ctx.resolve_dependency_bodies()
-            };
-            report.site_facts.extend(dependency.site_facts);
-            report.parenless_calls.extend(dependency.parenless_calls);
-            dependency.edges
-        } else {
-            Vec::new()
+        let dependency = cross_app.then(|| {
+            let _s = pt::span("crossapp", "crossapp.resolve_dependency_bodies");
+            ctx.resolve_dependency_bodies()
+        });
+        Ok(ResolvedProgram::from_parts(
+            inputs, scope, ctx, report, coverage, dependency,
+        ))
+    }
+
+    /// One program from its parts: the context, the resolver's report, the
+    /// reduced coverage and, under [`ProgramScope::CrossApp`], the dependency
+    /// bodies' resolution (its edges kept apart, its site facts and parens-less
+    /// calls merged). [`Self::build`] and a workspace session
+    /// (`program::session::workspace`) both assemble through it, so the two
+    /// cannot drift.
+    pub(crate) fn from_parts(
+        inputs: &Arc<WorkspaceInputs>,
+        scope: ProgramScope,
+        ctx: ProgramContext,
+        mut report: ProgramReport,
+        coverage: FreshCoverage,
+        dependency: Option<crate::program::resolve::full::DependencyBodyResolution>,
+    ) -> ResolvedProgram {
+        debug_assert_eq!(dependency.is_some(), scope == ProgramScope::CrossApp);
+        let dependency_body_edges = match dependency {
+            Some(dependency) => {
+                report.site_facts.extend(dependency.site_facts);
+                report.parenless_calls.extend(dependency.parenless_calls);
+                dependency.edges
+            }
+            None => Vec::new(),
         };
         // What `ProgramBody::dependency_body_edges` promises its readers (the
         // graph's `dependencyBodies` histogram reads the slice as is).
@@ -273,7 +294,7 @@ impl ResolvedProgram {
             site_facts,
             parenless_calls,
         } = report;
-        Ok(ResolvedProgram {
+        ResolvedProgram {
             meta: ProgramMeta {
                 inputs: Arc::clone(inputs),
                 scope,
@@ -290,7 +311,7 @@ impl ResolvedProgram {
                 site_facts,
                 parenless_calls,
             },
-        })
+        }
     }
 
     /// What the build read and resolved, besides the body.

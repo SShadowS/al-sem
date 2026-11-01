@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (context-server stage 4: the workspace session, retained parse and resolutions)
+
+- **`program::session::WorkspaceSession`**: the incremental cross-app model
+  (context-server design §6, a stage-4 prefix). `refresh(inputs, …)` turns
+  the state retained from the previous revision plus the next revision's
+  inputs into the next `CrossAppProgram`, under a `revision.refresh` span and
+  a `model.copied_bytes` counter; `refresh_program` stops at the program.
+  Retained: the dependency tier (held strongly, so the session's `DepCache`
+  keeps hitting it), each workspace file's parse (reused for byte-equal
+  text), its declaration projection and its pre-refinement `FileResolution`,
+  and the dependency bodies' resolution. Classes: **P** (first refresh,
+  `DepKey` changed, any root `app.json` byte changed, or a source
+  dependency's content hash changed) rebuilds; **S** (a projection changed,
+  or a file added, removed or renamed) re-resolves every workspace file and
+  every dependency body; **B** re-resolves only the changed files and reuses
+  the rest, re-materializing each reused route's `SourceSpan` witness through
+  the current declaration surface (`rematerialize_witnesses`: only a routine
+  route's `SourceSpan`; `AbiSymbol`, `None` and catalog witnesses untouched; a
+  routine the surface lacks is an invariant failure — debug panics, release
+  resolves the file again — never a zero-span witness). Every whole-program
+  step reruns whole, as the cold build runs it: graph assembly,
+  `close_holder_sites`, the event-flow edges, the demand, the model assembly,
+  the adapter, the event graph and the three final passes
+  (`cross_app_program_from`, unchanged).
+- Plumbing, behaviour-preserving for every cold caller:
+  `snapshot::parse::parse_unit_reusing` / `ParseReuse`,
+  `dep_summary::parse_for_build_reusing`,
+  `full::build_context_from_snapshot_reusing`,
+  `full::resolve_full_program_reusing` (with `KeptResolutions`),
+  `ResolvedProgram::from_parts` (now also what `ResolvedProgram::build`
+  assembles through). `ClassifiedEdge` derives `Clone, Debug`;
+  `FileResolution` and `DependencyBodyResolution` derive `Clone`.
+- Tests (`program::session::workspace::tests`, 16): after every edit the
+  session's program (every edge with its witnesses, site facts, parens-less
+  calls, meta) and model (rows, calls, bindings, events, diagnostics) equal a
+  cold build's, as text — body edits (callee and caller), newlines before a
+  callee (a workspace caller's and a DEPENDENCY caller's witness move),
+  declaration reorder, signature, return type and arity changes, file add /
+  rename / remove and a second implementer of a dependency interface, demand
+  W → D1 → D2 and contraction, a dependency raiser and subscriber edits,
+  duplicate ids across `#if` arms, the setter-argument holder refinement
+  X → Y → unprovable → back with the holder's file unchanged, a temp-proof
+  revocation and restoration in an unchanged subscriber, `[MethodId]` /
+  `[TryFunction]` through a `__alsem_mid_<n>` dispatch, enum extensibility
+  and implementation map, a package change (P), a `roots.config.json`-only
+  change (B, nothing re-resolved), `app.json` changes (P), including an
+  `internalsVisibleTo` friend that reopens an unchanged caller's G28 dispatch,
+  and the re-materialization guard itself. Discrimination (each break seen
+  failing, then reverted): skip workspace re-materialization (3 fail); skip
+  dependency re-materialization (the T-loc test fails); a zero-span fallback
+  on a miss, and a target-keyed rewrite of `AbiSymbol`/`None` (the guard test
+  fails); skip `close_holder_sites` when anything is reused (T-refine fails);
+  drop `method_id`/`try_function` from the projection (T-methodid fails);
+  reuse dependency resolutions across S (2 fail, one through the file-table
+  shift a file add causes); ignore the `app.json` identity (both `app.json`
+  tests fail, the G28 one on equality); reuse a parse by path alone (10 fail).
+
 ### Added (context-server stage 4: the change-type classifier)
 
 - **`program::session::classify`**: the declaration projection of one
