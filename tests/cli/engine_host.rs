@@ -119,6 +119,51 @@ fn answers_are_byte_identical_to_the_cli() {
     assert!(report.status.is_some_and(|s| s.success()), "{report:?}");
 }
 
+/// `alsem <argv>` as a process fed `stdin`: (stdout, stderr, exit).
+///
+/// A process may exit without reading its stdin (a clap error exits before
+/// any command runs). Writing to it then fails with a broken pipe, at a
+/// moment that depends on the scheduler: that is the process's outcome, not
+/// a failure of this helper, so a broken pipe ends the write and the exit
+/// and streams are compared as usual. Any other write error fails.
+fn run_with_stdin(argv: &[&str], stdin: &[u8]) -> (Vec<u8>, Vec<u8>, Option<i32>) {
+    use std::io::Write;
+    let mut child = Command::new(ALSEM)
+        .args(argv)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Dropped at the end of the statement: the child sees its input end.
+    match child.stdin.take().unwrap().write_all(stdin) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+        Err(e) => panic!("write stdin: {e}"),
+    }
+    let out = child.wait_with_output().unwrap();
+    (out.stdout, out.stderr, out.status.code())
+}
+
+/// The `--no-such-flag` case of the test below, made deterministic: a stdin
+/// far over any pipe buffer cannot be written before the process exits, so
+/// the write always meets a closed pipe (it used to do so only when the
+/// process won the race, failing the test). Both `alsem <argv>` and `alsem
+/// engine-ask -- <argv>` exit on the clap error without reading stdin; the
+/// write's broken pipe is their outcome and the two still agree.
+#[test]
+fn a_process_that_exits_before_reading_its_stdin_is_compared() {
+    let ws = ws_explain();
+    let w = ws.to_str().unwrap();
+    let stdin = vec![b'x'; 4 << 20];
+    let argv = ["explain", w, "--routine", "Archive", "--no-such-flag"];
+    let direct = run_with_stdin(&argv, &stdin);
+    assert_eq!(direct.2, Some(2), "a clap error: {direct:?}");
+    let mut via = vec!["engine-ask", "--"];
+    via.extend(argv);
+    assert_eq!(run_with_stdin(&via, &stdin), direct);
+}
+
 /// `alsem engine-ask -- <argv>` (the front end as a process: it decodes,
 /// decides the diff root and reads the diff from its own stdin) prints what
 /// `alsem <argv>` prints, for a `--diff -` request and a clap error.
@@ -127,24 +172,7 @@ fn engine_ask_prints_what_the_cli_prints() {
     let ws = ws_explain();
     let w = ws.to_str().unwrap();
     let diff = "--- a/src/post.al\n+++ b/src/post.al\n@@ -14,5 +14,5 @@\n         if IsHandled then\n             exit;\n-        Order.Posted := false;\n+        Order.Posted := true;\n         Order.Validate(Status, Order.Status::Posted);\n         Order.Modify(true);\n";
-    let run = |argv: &[&str], stdin: &str| {
-        use std::io::Write;
-        let mut child = Command::new(ALSEM)
-            .args(argv)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(stdin.as_bytes())
-            .unwrap();
-        let out = child.wait_with_output().unwrap();
-        (out.stdout, out.stderr, out.status.code())
-    };
+    let run = |argv: &[&str], stdin: &str| run_with_stdin(argv, stdin.as_bytes());
     for argv in [
         vec!["explain", w, "--diff", "-", "--format", "json"],
         vec!["explain", w, "--routine", "Archive", "--no-such-flag"],
@@ -468,6 +496,29 @@ mod faults {
             Duration::from_millis(200),
             "a completed ask resets the backoff"
         );
+    }
+
+    /// A child that exits before reading the request: the front end's write
+    /// of the request fails with a broken pipe, deterministically (a request
+    /// far over any pipe buffer cannot be written to a reader that is gone),
+    /// and that failure is an answer, `engineError` naming the failed write,
+    /// with the death recorded, never a crash of the front end.
+    #[test]
+    fn a_child_gone_before_the_request_write_fails_the_ask() {
+        let mut front = hooked("exit-after-open");
+        let answer = front.ask(AskParams {
+            diff_text: Some("x".repeat(4 << 20)),
+            ..explain()
+        });
+        let (outcome, message) = failure(&answer.outcome);
+        assert_eq!(outcome, FailedOutcome::EngineError, "{message}");
+        assert!(
+            message.contains("writing to the engine failed"),
+            "{message}"
+        );
+        let stats = front.stats();
+        assert_eq!((stats.spawns, stats.deaths, stats.completed), (1, 1, 0));
+        assert_eq!(front.child_exited(), None, "no child running");
     }
 
     /// A child that dies on every ask: each restart waits longer (the

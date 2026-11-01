@@ -113,6 +113,14 @@ pub fn serve(
                             flood(&mut output, *kind, *count)?;
                             continue;
                         }
+                        #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
+                        if let Some(super::test_hooks::Hook::ExitAfterOpen) = &hook {
+                            send(
+                                &mut output,
+                                &Message::response(id, serde_json::json!({"ok": true})),
+                            )?;
+                            std::process::exit(0);
+                        }
                         Message::response(id, serde_json::json!({"ok": true}))
                     }
                     Err(why) => Message::error(id, codes::OPEN_FAILED, why),

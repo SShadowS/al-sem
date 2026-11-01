@@ -300,6 +300,9 @@ pub mod test_hooks {
         /// After answering `session/open`, write `count` small frames of
         /// `kind` unasked (while the front end reads nothing), then serve on.
         FloodAfterOpen(Flood, usize),
+        /// After answering `session/open`, exit without reading another
+        /// byte: the front end's next request write meets a closed pipe.
+        ExitAfterOpen,
     }
 
     /// What a flood writes.
@@ -327,6 +330,7 @@ pub mod test_hooks {
             "abort-on-ask-once" => Hook::AbortOnAskOnce(arg.into()),
             "oversized-frame-on-ask" => Hook::OversizedFrameOnAsk,
             "garbage-frame-on-ask" => Hook::GarbageFrameOnAsk,
+            "exit-after-open" => Hook::ExitAfterOpen,
             "flood-after-open" => {
                 let (kind, count) = arg.split_once(':')?;
                 let kind = match kind {
