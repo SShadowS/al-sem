@@ -1587,7 +1587,7 @@ struct Converter<'a> {
     /// receiver object ours?".
     primary_objects: std::collections::HashSet<(al_syntax::ir::ObjectKind, String)>,
     /// `ProgramReport::site_facts`: interfaces (S3.2) and receivers (S6.0).
-    site_facts: &'a HashMap<ObligationId, crate::program::resolve::full::SiteFacts>,
+    site_facts: crate::program::resolved::SiteFactsRef<'a>,
     /// The dependency target registry (S3.3): body state per dependency routine.
     registry: crate::program::registry::DependencyRegistry<'a>,
     /// The dependency targets reached so far, in edge order (S3.3). Pushed only
