@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (flaky `engine_ask_prints_what_the_cli_prints`: a broken pipe in the test)
+
+- **The test, not the product, raced.** For its `--no-such-flag` case both
+  `alsem` and `alsem engine-ask` exit on the clap error without reading stdin
+  (`engine-ask` exits before it starts an engine child). The test wrote its
+  diff to their stdin with `.unwrap()`; when the process had already exited,
+  the write failed with a broken pipe (EPIPE) and the test panicked. It failed
+  only when the process won the race. The test helper (`run_with_stdin` in
+  `tests/cli/engine_host.rs`) now treats a broken pipe as the process's
+  outcome and compares exit and streams as usual; any other write error still
+  fails, as in `cli_batch_*`.
+- **The race is now pinned deterministically.**
+  `a_process_that_exits_before_reading_its_stdin_is_compared` writes 4 MiB,
+  far over any pipe buffer, so the write always meets the closed pipe. With
+  the broken-pipe arm removed it failed 3/3 (`write stdin: Broken pipe (os
+  error 32)`); restored, it passes.
+- **The product side was already correct, and is now pinned.** The front
+  end's failed request write (`EngineFront::call`) becomes an `engineError`
+  answer with the death recorded. No test reached that path. A new child test
+  hook, `exit-after-open` (`ALSEM_ENGINE_TEST_HOOK`), exits right after
+  answering `session/open`; `a_child_gone_before_the_request_write_fails_the_ask`
+  sends a 4 MiB ask to it and asserts the answer names the failed write. With
+  that path changed to a panic the test failed and every other `engine_host`
+  test still passed; restored, it passes.
+
 ### Changed (the producer solve's arena is canonical: context-server stage 1b)
 
 - **`pd_solve::solve` returns its arena in rank order** (design r6 §6.10), so
