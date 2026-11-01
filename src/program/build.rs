@@ -164,6 +164,9 @@ fn build_dep_nodes(
     // ── Step 2: the NON-primary per-file summaries ───────────────────────────
     let (summaries, bodies) = match input {
         DepInput::Parsed(parsed) => {
+            // Extraction off trees parsed already: a wall-clock span here (the
+            // build-time parse counts it as `deps.extract_cpu_ns`).
+            let _s = crate::engine::perf_trace::span("deps", "deps.extract");
             let summaries = parsed
                 .iter()
                 // primary — extracted fresh per call by `assemble_program_graph`.
@@ -259,6 +262,9 @@ fn build_dep_nodes(
     // across all apps (one app read twice is two units), because the step 4
     // dedup unions event facts per source file only.
     let mut source_unit = 1u32..;
+    // The summaries' consumption into the layer (context-server design r4
+    // §6.7: the work a declaration pack would remove, with `deps.extract`).
+    let consume_span = crate::engine::perf_trace::span("deps", "deps.layer_consume");
     for unit in summaries {
         let method_ids = symbol_method_ids(snap, &unit.app, apps, abi_cache);
         for mut file in unit.files {
@@ -286,6 +292,7 @@ fn build_dep_nodes(
             }
         }
     }
+    drop(consume_span);
     recovered.sort();
 
     // ── Step 2b: ingest SymbolOnly dep ABI nodes ─────────────────────────────

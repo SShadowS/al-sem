@@ -79,6 +79,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cross-app model now has one prefix per app instead of one shared prefix. CDO
   provenance stamps are untouched.
 
+### Changed (context-server stage 1: phase split)
+
+- **`View::prepare` is a sequence of phase functions.** `relation_of`,
+  `compose_cone` (the one composition), `emit_raw` (a raw-only scoped
+  composition for subjects a retained composition did not emit), `tree_apps`,
+  `tree_groups`, `read_tree` and `run_once` (`engine::session`) are called by the
+  one-shot view with its drain-and-release discipline unchanged, and by a
+  borrowed path that keeps what it fills (context-server design r3 §4.2; the
+  resident revision is stage 2). The det harvest is split out of
+  `build_detector_artifacts`: `harvest_detector_artifacts` takes
+  `CapsInput::Owned | Borrowed` (owned moves each routine's direct facts and
+  coverage, borrowed clones them) and `L4Input::None | Solve | Solved` (the
+  one-shot solve still runs inside the harvest, after the payloads moved and
+  the pd arena dropped, so its peak never holds them; `Solved` lends a retained
+  solve with `CoreInput::Owned | Borrowed`). `ConeDerivedStore`
+  (`CapabilityAnalysis::derived`, `DetectorArtifacts::cone_derived`), the
+  cross-app base's `dependency_calls`, the view's `l4` and `det` cells and the
+  incremental host's `CoreSummaries` are behind `Arc`. No CLI output moves.
+- **Cost of the one-shot path, measured.** A digest `prepare` on ws-d37
+  allocates exactly three blocks more than before (the det, l4 and derived
+  `Arc`s: 5,984 → 5,987 allocations, +2,128 bytes = the three `ArcInner` sizes)
+  and copies no payload. CDO cross-app (`DO-cdo-baseline/Cloud`, release-fast,
+  `/usr/bin/time -v`, a shared machine): analyze, explain `--routine
+  IssueReminder`, prove `IssueReminder may-commit` and digest `--routine
+  IssueReminder` print byte-identical stdout before and after; peak RSS is
+  unchanged within noise (3.41–3.49 GB both); wall times overlap once the
+  machine's load is low (explain 34.1/34.6 s base, 34.1/41.0 s after).
+- **New measurement spans** (design r4 §12 stage 1, r3 §14):
+  `attach.settle_dead_marks`, `attach.settle_rules`, `attach.event_param_temps`,
+  `l3.finish_resolved`, `pd.solve`, `resolve.close_holder_sites`,
+  `deps.layer_consume`, `deps.extract` (on the parsed-tree path) and the counter
+  `deps.extract_cpu_ns` (inside the build-time parallel parse, where no
+  wall-clock span can hold the extraction alone). On CDO (cross-app explain,
+  load ≈ 20): `pd.solve` 3.7–4.2 s of a 6.3–9.0 s composition,
+  `attach.event_param_temps` 1.2–1.4 s, `l3.finish_resolved` 0.30–0.40 s,
+  `deps.layer_consume` 0.21–0.42 s, `attach.settle_dead_marks` 0.013 s,
+  `attach.settle_rules` 0.010 s (0 without rules), `resolve.close_holder_sites`
+  under 1 ms, extraction 0.36–0.43 s CPU.
+- **Tests** (`engine::session::phase_tests`): mixed-order sequences over one
+  prepared state (query→digest, digest→query, explain→prove, prove→explain;
+  ws-d37 single-app, rule B cross-app) answer byte-equal to cold standalone
+  runs, composing and solving once; the det cell is evicted and refilled twice
+  from the retained `CoreSummaries`; a seeded L4 solve after a digest seeds
+  every SCC from the retained core and equals a cold solve; a dependency root
+  borrows a scoped emission; the owned harvest arm copies no payload (a
+  thread-gated counting allocator for the lib tests, `src/test_alloc.rs`: the
+  lent harvest allocates at least the measured payload clone more, in bytes and
+  count, and the derived `Arc` is moved, not re-wrapped). Discrimination
+  proofs, each run and seen to fail, then reverted: the lent arm handing an
+  empty derived store → digest on `DepWriteThenCommit` differs; the served
+  trees lent an empty pd arena → digest differs; draining the retained core
+  into the harvest → the refill's parameter roles vanish and the seeded solve
+  panics ("no baseline core summary"); no scoped emission for the dependency
+  root → its effects differ; cloning `direct_full` in the owned arm → owned
+  bytes 35,773 → 48,498, below the payload margin.
+
 ### Changed (context-server stage 0: request-scoped planning)
 
 - **Planning reads no process state.** The `alsem` binary's three planning

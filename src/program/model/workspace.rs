@@ -2528,6 +2528,10 @@ fn finish_resolved(
     skip_roots_config: bool,
     row_nodes: RowNodes,
 ) -> Option<ModelRows> {
+    // Measured as a whole (context-server design r4 §12 stage 1): the record
+    // and field resolution (`l3.resolve`), the root classification and the
+    // primary app.
+    let _s = pt::span("l3", "l3.finish_resolved");
     let resolved = {
         resolve(&mut ws);
         // R4-F: classify AST roots, then overlay `<workspace>/roots.config.json`,

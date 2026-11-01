@@ -1868,7 +1868,7 @@ mod tests {
         let tree = crate::engine::l5::snapshot::compose_tree(
             model,
             b.rel().cone(),
-            b.dependency_calls.as_deref().unwrap_or(&[]),
+            b.dependency_calls_or_empty(),
             &caps,
             crate::engine::l5::snapshot::TreeRaw::Drain(raw),
             pd,
@@ -2009,7 +2009,7 @@ mod tests {
         let tree = crate::engine::l5::snapshot::compose_tree(
             model,
             b.rel().cone(),
-            b.dependency_calls.as_deref().unwrap_or(&[]),
+            b.dependency_calls_or_empty(),
             &caps,
             crate::engine::l5::snapshot::TreeRaw::Drain(raw),
             pd,

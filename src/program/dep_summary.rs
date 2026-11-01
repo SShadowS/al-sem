@@ -61,7 +61,14 @@ pub(crate) fn parse_for_build_observed(
     let mut apps = AppRegistry::default();
     let refs: Vec<AppRef> = snap.apps.iter().map(|u| apps.intern(&u.id)).collect();
 
-    crate::big_stack::big_stack_pool().install(|| {
+    // `deps.extract` (context-server design r4 §6.7): the extraction runs
+    // inside each file's parallel parse, which it must not outlive (a file's
+    // tree is dropped right after it), so no wall-clock span can hold it
+    // alone. Its summed CPU time is a counter instead, read only when
+    // tracing is on.
+    let timed = crate::engine::perf_trace::enabled(crate::engine::perf_trace::Detail::Stages);
+    let extract_ns = std::sync::atomic::AtomicU64::new(0);
+    let parsed = crate::big_stack::big_stack_pool().install(|| {
         let mut workspace = None;
         let mut dep_summaries = Vec::new();
         let mut dep_bodies = keep.then(Vec::new);
@@ -98,8 +105,12 @@ pub(crate) fn parse_for_build_observed(
                         let now = o.live.fetch_add(1, SeqCst) + 1;
                         o.peak.fetch_max(now, SeqCst);
                     }
+                    let t = timed.then(std::time::Instant::now);
                     let summary =
                         summarize_file(app_ref, pf.provenance.tier, &pf.virtual_path, &pf.file);
+                    if let Some(t) = t {
+                        extract_ns.fetch_add(t.elapsed().as_nanos() as u64, SeqCst);
+                    }
                     let kept = if keep {
                         Some(pf)
                     } else {
@@ -129,7 +140,11 @@ pub(crate) fn parse_for_build_observed(
             dep_summaries,
             dep_bodies,
         }
-    })
+    });
+    if timed {
+        crate::engine::perf_trace::counter_delta("deps.extract_cpu_ns", extract_ns.into_inner());
+    }
+    parsed
 }
 
 /// Summarize one parsed dependency file. Uses the SAME extraction

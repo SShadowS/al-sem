@@ -463,7 +463,7 @@ pub fn empty_artifacts(
         uncertainties: Default::default(),
         // ⟨C1⟩ Fold BEFORE the move so the derived substrate always mirrors this
         // context's own summaries.
-        cone_derived: cone_store_of(&summaries),
+        cone_derived: std::sync::Arc::new(cone_store_of(&summaries)),
         summaries,
         event_flow_indexes: crate::engine::l5::event_flow::EventFlowIndexes::default(),
         parameter_roles_by_routine: HashMap::new(),

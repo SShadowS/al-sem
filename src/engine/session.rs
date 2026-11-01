@@ -53,8 +53,11 @@ pub struct View {
     /// Each fingerprint tree job's owned read (#160 step 9 D5; #277 D5.4),
     /// read off its tree inside `prepare`; taken by [`View::take_tree_read`].
     tree_reads: BTreeMap<JobId, TreeReadOut>,
-    l4: Option<L4Analysis>,
-    det: Option<DetectorArtifacts>,
+    /// `l4` and `det` behind an `Arc` (context-server design r3 §4.1): a
+    /// view served off retained cells holds the revision's handles; a
+    /// one-shot view's is the only one (one `Arc` allocation per cell).
+    l4: Option<Arc<L4Analysis>>,
+    det: Option<Arc<DetectorArtifacts>>,
     /// One bit per [`Cell`] released; a released cell is never refilled.
     released: u16,
     ordering: Option<OrderingFactsMap>,
@@ -720,14 +723,179 @@ fn note_release(released: &mut u16, cell: Cell) {
     *released |= cell.bit();
 }
 
-/// The `rel` cell's value. Single-app the view builds it (counted in
-/// `ExecRelation::new`, its `rel.*` census buckets printed by `single_app`);
-/// cross-app it is the base's, built, counted and census-printed with the base.
-fn relation_of(target: &AnalysisTarget) -> Arc<ExecRelation> {
+// ── Phase functions (context-server design r3 §4.2, stage 1) ───────────────
+//
+// `View::prepare` sequences these for a one-shot view: owned inputs, its
+// drain-and-release discipline, its asserts. The borrowed phase path (the
+// resident revision of stage 2; `Prepared` in the stage-1 tests) calls the
+// same functions with lent inputs and keeps what it fills. Each is a function
+// of its arguments: no cell, no release, no fill state.
+
+/// The relation phase: the `rel` cell's value. Single-app the view builds it
+/// (counted in `ExecRelation::new`, its `rel.*` census buckets printed by
+/// `single_app`); cross-app it is the base's, built, counted and
+/// census-printed with the base.
+pub(crate) fn relation_of(target: &AnalysisTarget) -> Arc<ExecRelation> {
     match target {
         AnalysisTarget::CrossApp(b) => Arc::clone(b.rel()),
         AnalysisTarget::SingleApp(_) => Arc::new(ExecRelation::single_app(target.resolved())),
     }
+}
+
+/// The composition phase (`compose_cone`): ONE composition over `rel.cone()`
+/// with `scope`: every routine's direct facts and coverage, the derived rows
+/// when `scope.derived`, the pd arena, and the raw facts of the members
+/// `scope.raw` names (emitted during the fold, while the successor cones are
+/// alive; the fold frees each cone after its last reader, so a one-shot
+/// composition never retains them).
+pub(crate) fn compose_cone(
+    model: &Model,
+    rel: &ExecRelation,
+    scope: ConeScope,
+) -> (CapabilityAnalysis, InheritedFacts) {
+    let _s = pt::span("context", "context.capability_cones");
+    dc::compose_capabilities(model, rel.cone(), dc::det_cone_inputs(model, rel), scope)
+}
+
+/// The raw-emission phase (`emit_raw`): the raw facts of `subjects` alone,
+/// for a reader whose subjects a retained composition did not emit (a
+/// dependency root over a primary-scoped composition). Today it is a raw-only
+/// composition (no derived rows), r3 §12's "scoped second composition"; the
+/// retained-cone emission is stage 5's cone store. Its entries equal the ones
+/// a composition over any scope containing them emits
+/// (`prove_scoped_equals_unscoped`).
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn emit_raw(
+    model: &Model,
+    rel: &ExecRelation,
+    subjects: &WitnessRequest,
+) -> InheritedFacts {
+    let _s = pt::span("context", "context.emit_raw");
+    let scope = ConeScope {
+        derived: false,
+        raw: subjects.scope(model),
+    };
+    dc::compose_capabilities(model, rel.cone(), dc::det_cone_inputs(model, rel), scope).1
+}
+
+/// Rule B's app names and D9's source-less apps (#160 step 9) a tree reads;
+/// none single-app.
+pub(crate) fn tree_apps(
+    cross_base: Option<&crate::engine::l4::capability_cone::R3a5CrossAppBase>,
+) -> crate::engine::l5::snapshot::TreeApps {
+    use crate::engine::l5::snapshot::TreeApps;
+    cross_base.map_or_else(TreeApps::default, |b| TreeApps {
+        names: b.loaded_app_names(),
+        source_less: crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
+    })
+}
+
+/// The tree demands that share ONE tree (G16): consecutive `Effects` readers
+/// with the same flags, over the union of their subjects. A reader's entries
+/// and cones off it equal those off a tree over its own roots
+/// (`prove_scoped_equals_unscoped`). Each tree is a whole-program snapshot,
+/// so one per job cost a derive and its tables per job: 408 `prove` jobs over
+/// a program with Base Application's source grew past 40 GB before the first
+/// output. `--tests` (digest's, and every explain's) is a read parameter
+/// (context-server design r3 §6.12): the coverage graph reads only the tree's
+/// whole-program sections, so the group builds it once and shares it.
+pub(crate) fn tree_groups(trees: &[(JobId, TreeDemand)]) -> Vec<Vec<usize>> {
+    let shares = |a: &TreeDemand, b: &TreeDemand| {
+        matches!((&a.read, &b.read), (TreeRead::Effects, TreeRead::Effects))
+            && a.tests == b.tests
+            && a.gaps_in_cone == b.gaps_in_cone
+            && a.include_reads == b.include_reads
+    };
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for (i, (_, d)) in trees.iter().enumerate() {
+        match groups.last_mut() {
+            Some(g) if shares(&trees[g[0]].1, d) => g.push(i),
+            _ => groups.push(vec![i]),
+        }
+    }
+    groups
+}
+
+/// The tree-read phase: `group`'s reads off `tree`, filed per job into
+/// `effects` or `tree_reads`. The inventory read consumes the tree (its key
+/// classes filter it); the others leave it in place.
+pub(crate) fn read_tree(
+    tree: &mut Option<CapabilitySnapshot>,
+    trees: &[(JobId, TreeDemand)],
+    group: &[usize],
+    target: &AnalysisTarget,
+    effects: &mut BTreeMap<JobId, DigestEffects>,
+    tree_reads: &mut BTreeMap<JobId, TreeReadOut>,
+) {
+    let model = target.resolved();
+    // No tree read asks `primary`: digest, prove and the query ask their
+    // roots, inventory nothing (#277 D5.1's table).
+    for &m in group {
+        assert!(!trees[m].1.subjects.primary, "no tree read asks primary");
+    }
+    let (job, demand) = &trees[group[0]];
+    let roots = &demand.subjects.ids;
+    match &demand.read {
+        TreeRead::Effects => {
+            let t = tree.as_ref().expect("tree filled above");
+            let roots: Vec<Vec<String>> = group
+                .iter()
+                .map(|&m| trees[m].1.subjects.ids.iter().cloned().collect())
+                .collect();
+            let readers: Vec<&[String]> = roots.iter().map(Vec::as_slice).collect();
+            let outs = crate::engine::l5::digest_cli::digest_effects_each(
+                t,
+                model,
+                &readers,
+                demand.tests,
+                demand.gaps_in_cone,
+                demand.include_reads,
+                crate::engine::l5::digest_cli::BoundaryMode::On,
+            );
+            for (&m, out) in group.iter().zip(outs) {
+                effects.insert(trees[m].0, out);
+            }
+        }
+        TreeRead::FingerprintQuery(read) => {
+            let t = tree.as_ref().expect("tree filled above");
+            let out = read_fingerprint_query(t, read, roots, model);
+            tree_reads.insert(*job, TreeReadOut::FingerprintQuery(out));
+        }
+        TreeRead::Inventory(read) => {
+            let t = tree.take().expect("tree filled above");
+            let out = read_inventory(t, read, target);
+            tree_reads.insert(*job, TreeReadOut::Inventory(out));
+        }
+    }
+}
+
+/// The run phase: one detector run over `det` (one context per run; its
+/// borrowed maps print per construction). Rule 3: a run's summarize
+/// diagnostics come from ITS mask, off `l4`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_once(
+    model: &Model,
+    det: &DetectorArtifacts,
+    ordering: Option<&OrderingFactsMap>,
+    rules: Option<&RulesIndex>,
+    l4: Option<&L4Analysis>,
+    (run, scope_primary): &(Vec<Detector>, bool),
+    key: &RunKey,
+    cross_base: Option<&crate::engine::l4::capability_cone::R3a5CrossAppBase>,
+) -> RunOutput {
+    let ctx: DetectorContext<'_> = dc::detector_context(model, det, ordering, rules);
+    let summarize: &[SummarizeDiagnostic] = if key.demanded & substrate::CORE_SUMMARIES != 0 {
+        &l4.expect("l4 filled with CORE_SUMMARIES")
+            .summarize_diagnostics
+    } else {
+        &[]
+    };
+    // One run per distinct key, whatever the number of jobs (#277 D5.5).
+    pt::instant_lazy("view", "view.run", || {
+        serde_json::json!({ "detectors": key.detectors, "demanded": key.demanded,
+                            "scopePrimary": key.scope_primary })
+    });
+    registry::finish_run(model, &ctx, run, cross_base, *scope_primary, summarize)
 }
 
 impl View {
@@ -916,9 +1084,7 @@ impl View {
                     WitnessScope::None
                 },
             };
-            let _s = pt::span("context", "context.capability_cones");
-            let (c, w) =
-                dc::compose_capabilities(model, r.cone(), dc::det_cone_inputs(model, r), scope);
+            let (c, w) = compose_cone(model, r, scope);
             *caps = Some(c);
             if need_raw {
                 *raw = Some(w);
@@ -932,43 +1098,14 @@ impl View {
         // is lent to every tree but the last; the dependency calls die after
         // the last.
         if !plan.trees.is_empty() {
-            use crate::engine::l5::snapshot::{SubjectRaw, TreeApps, TreeRaw, compose_tree};
+            use crate::engine::l5::snapshot::{SubjectRaw, TreeRaw, compose_tree};
             use std::borrow::Cow;
             let mut dependency_calls = dependency_calls;
             let r = rel.as_ref().expect("rel filled above");
-            // Rule B's app names and D9's source-less apps (#160 step 9); none
-            // single-app.
-            let apps = cross_base.map_or_else(TreeApps::default, |b| TreeApps {
-                names: b.loaded_app_names(),
-                source_less: crate::engine::l5::snapshot::source_less_apps(&b.dependency_apps),
-            });
+            let apps = tree_apps(cross_base);
             let mut map = raw.take().expect("raw filled above");
-            // G16: consecutive `Effects` readers with the same flags share ONE
-            // tree over the union of their subjects. A reader's entries and
-            // cones off it equal those off a tree over its own roots
-            // (`prove_scoped_equals_unscoped`). Each tree is a whole-program
-            // snapshot, so one per job cost a derive and its tables per job:
-            // 408 `prove` jobs over a program with Base Application's source
-            // grew past 40 GB before the first output. `--tests` (digest's,
-            // and every explain's) is a read parameter (context-server design
-            // r3 §6.12): the coverage graph reads only the tree's whole-program
-            // sections, so the group builds it once and shares it.
-            let groups: Vec<Vec<usize>> = {
-                let shares = |a: &TreeDemand, b: &TreeDemand| {
-                    matches!((&a.read, &b.read), (TreeRead::Effects, TreeRead::Effects))
-                        && a.tests == b.tests
-                        && a.gaps_in_cone == b.gaps_in_cone
-                        && a.include_reads == b.include_reads
-                };
-                let mut groups: Vec<Vec<usize>> = Vec::new();
-                for (i, (_, d)) in plan.trees.iter().enumerate() {
-                    match groups.last_mut() {
-                        Some(g) if shares(&plan.trees[g[0]].1, d) => g.push(i),
-                        _ => groups.push(vec![i]),
-                    }
-                }
-                groups
-            };
+            // G16: groups of readers share one tree ([`tree_groups`]).
+            let groups: Vec<Vec<usize>> = tree_groups(&plan.trees);
             let scopes: Vec<BTreeSet<String>> = groups
                 .iter()
                 .map(|g| {
@@ -1041,49 +1178,7 @@ impl View {
                     }
                     dependency_calls = None;
                 }
-                // No tree read asks `primary`: digest, prove and the query ask
-                // their roots, inventory nothing (#277 D5.1's table).
-                for &m in group {
-                    assert!(
-                        !plan.trees[m].1.subjects.primary,
-                        "no tree read asks primary"
-                    );
-                }
-                let (job, demand) = &plan.trees[group[0]];
-                let roots = &demand.subjects.ids;
-                match &demand.read {
-                    TreeRead::Effects => {
-                        let t = tree.as_ref().expect("tree filled above");
-                        let roots: Vec<Vec<String>> = group
-                            .iter()
-                            .map(|&m| plan.trees[m].1.subjects.ids.iter().cloned().collect())
-                            .collect();
-                        let readers: Vec<&[String]> = roots.iter().map(Vec::as_slice).collect();
-                        let outs = crate::engine::l5::digest_cli::digest_effects_each(
-                            t,
-                            model,
-                            &readers,
-                            demand.tests,
-                            demand.gaps_in_cone,
-                            demand.include_reads,
-                            crate::engine::l5::digest_cli::BoundaryMode::On,
-                        );
-                        for (&m, out) in group.iter().zip(outs) {
-                            effects.insert(plan.trees[m].0, out);
-                        }
-                    }
-                    TreeRead::FingerprintQuery(read) => {
-                        let t = tree.as_ref().expect("tree filled above");
-                        let out = read_fingerprint_query(t, read, roots, model);
-                        tree_reads.insert(*job, TreeReadOut::FingerprintQuery(out));
-                    }
-                    TreeRead::Inventory(read) => {
-                        // The assembly consumes the tree (its key classes filter it).
-                        let t = tree.take().expect("tree filled above");
-                        let out = read_inventory(t, read, target);
-                        tree_reads.insert(*job, TreeReadOut::Inventory(out));
-                    }
-                }
+                read_tree(tree, &plan.trees, group, target, effects, tree_reads);
                 *tree = None;
                 note_release(released, Cell::Tree);
             }
@@ -1096,21 +1191,27 @@ impl View {
                 !need_l4 || l4.is_none(),
                 "L4 already filled; a det fill that needs l4 builds it in the same call"
             );
-            let req = need_l4.then(|| L4Request {
-                extra_diagnostics: std::mem::take(&mut extra_diagnostics),
-                control: None,
-            });
-            let (art, solved) = dc::build_detector_artifacts(
+            // The owned arms (r3 §4.2): the harvest moves the composition's
+            // payloads and drains the core summaries of its own solve.
+            let l4_input = if need_l4 {
+                dc::L4Input::Solve(L4Request {
+                    extra_diagnostics: std::mem::take(&mut extra_diagnostics),
+                    control: None,
+                })
+            } else {
+                dc::L4Input::None
+            };
+            let (art, solved) = dc::harvest_detector_artifacts(
                 model,
                 union,
                 r,
-                req,
+                caps.take().map(dc::CapsInput::Owned),
+                l4_input,
                 target.cross_app_inputs(),
-                caps.take(),
             );
-            *det = Some(art);
+            *det = Some(Arc::new(art));
             if need_l4 {
-                *l4 = solved;
+                *l4 = solved.map(Arc::new);
             }
         }
         // D7 (6): nothing reads the composition past the det fill.
@@ -1128,7 +1229,7 @@ impl View {
             };
             // The `CoreSummaries` die here: nothing harvests them.
             let (solved, _core) = build_l4(model, r, req, target.cross_app_inputs().as_ref());
-            *l4 = Some(solved);
+            *l4 = Some(Arc::new(solved));
         }
         if !need_det {
             return;
@@ -1159,29 +1260,21 @@ impl View {
             }
             pt::instant_lazy("view", "view.live", || serde_json::json!({ "cells": live }));
         }
-        for entry @ (run, scope_primary) in &plan.runs {
+        for entry in &plan.runs {
             let key = key(entry);
             if runs.contains_key(&key) {
                 continue;
             }
-            // One context per run (its borrowed maps print per construction).
-            let ctx: DetectorContext<'_> =
-                dc::detector_context(model, art, ordering.as_ref(), rules.as_ref());
-            // Rule 3: a run's summarize diagnostics come from ITS mask.
-            let summarize: &[SummarizeDiagnostic] = if key.demanded & substrate::CORE_SUMMARIES != 0
-            {
-                &l4.as_ref()
-                    .expect("l4 filled with CORE_SUMMARIES")
-                    .summarize_diagnostics
-            } else {
-                &[]
-            };
-            // One run per distinct key, whatever the number of jobs (#277 D5.5).
-            pt::instant_lazy("view", "view.run", || {
-                serde_json::json!({ "detectors": key.detectors, "demanded": key.demanded,
-                                    "scopePrimary": key.scope_primary })
-            });
-            let out = registry::finish_run(model, &ctx, run, cross_base, *scope_primary, summarize);
+            let out = run_once(
+                model,
+                art,
+                ordering.as_ref(),
+                rules.as_ref(),
+                l4.as_deref(),
+                entry,
+                &key,
+                cross_base,
+            );
             runs.insert(key, Arc::new(out));
         }
     }
@@ -1286,11 +1379,11 @@ impl View {
     }
 
     pub fn l4(&self) -> &L4Analysis {
-        self.l4.as_ref().expect("l4 cell not filled")
+        self.l4.as_deref().expect("l4 cell not filled")
     }
 
     pub fn det(&self) -> &DetectorArtifacts {
-        self.det.as_ref().expect("det cell not filled")
+        self.det.as_deref().expect("det cell not filled")
     }
 
     /// The witness subjects' raw inherited facts (#160 step 6 D2).
@@ -1384,7 +1477,7 @@ impl View {
         let cross = target.cross_app_inputs();
         let (solved, core, outcome) =
             build_l4_controlled(target.resolved(), &rel, req, cross.as_ref())?;
-        self.l4 = Some(solved);
+        self.l4 = Some(Arc::new(solved));
         Ok((
             core,
             outcome.expect("a controlled solve reports its outcome"),
@@ -1396,9 +1489,49 @@ impl View {
     pub fn take_l4(&mut self) -> L4Analysis {
         let l4 = self.l4.take().expect("l4 cell not filled");
         note_release(&mut self.released, Cell::L4);
-        l4
+        Arc::try_unwrap(l4)
+            .unwrap_or_else(|_| panic!("take_l4 on a view whose l4 another holder shares"))
+    }
+
+    /// A view over cells another holder filled (the borrowed phase path of
+    /// the stage-1 tests; stage 2's revision facade): `prepare` never runs on
+    /// it, and every cell it holds is a shared handle or the request's own
+    /// read. The target goes back with [`View::into_target`].
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn served(
+        target: AnalysisTarget,
+        rel: Arc<ExecRelation>,
+        l4: Option<Arc<L4Analysis>>,
+        det: Option<Arc<DetectorArtifacts>>,
+        effects: BTreeMap<JobId, DigestEffects>,
+        tree_reads: BTreeMap<JobId, TreeReadOut>,
+        runs: BTreeMap<RunKey, Arc<RunOutput>>,
+    ) -> View {
+        View {
+            rel: Some(rel),
+            l4,
+            det,
+            effects,
+            tree_reads,
+            runs,
+            // A served view composes nothing.
+            released: Cell::Caps.bit() | Cell::Raw.bit() | Cell::Tree.bit(),
+            ..View::new(target)
+        }
+    }
+
+    /// The target back from a [`View::served`] view.
+    #[cfg(test)]
+    pub(crate) fn into_target(self) -> AnalysisTarget {
+        self.target
     }
 }
+
+// Context-server design r3 §4.2 (stage 1): the borrowed phase path.
+#[cfg(test)]
+#[path = "session_phase_tests.rs"]
+mod phase_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2300,7 +2433,7 @@ mod tests {
         let inputs = crate::program::inputs::WorkspaceInputs::read(tmp.path(), &Default::default());
         let mut v = View::new(AnalysisTarget::build(&inputs, false, "l4-host").expect("cross-app"));
         let calls = |v: &View| match v.target() {
-            AnalysisTarget::CrossApp(b) => b.dependency_calls.as_ref().map(Vec::len),
+            AnalysisTarget::CrossApp(b) => b.dependency_calls.as_ref().map(|c| c.len()),
             AnalysisTarget::SingleApp(_) => panic!("precondition: cross-app"),
         };
         assert!(
