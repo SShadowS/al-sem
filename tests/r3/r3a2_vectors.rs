@@ -22,8 +22,6 @@ use al_sem::engine::l4::summary::project_r3a2;
 use al_sem::program::model::program_calls::assemble_and_resolve_inline_program as assemble_and_resolve;
 use serde_json::Value;
 
-const MODEL_INSTANCE_ID: &str = "r0";
-
 // ---------------------------------------------------------------------------
 // Vector document shape.
 // ---------------------------------------------------------------------------
@@ -173,7 +171,7 @@ fn all_r3a2_pipeline_vectors_match() {
 
     for vec in &doc.pipeline_vectors {
         let files = files_of(&vec.files);
-        let resolved = assemble_and_resolve(&files, &doc.app_guid, MODEL_INSTANCE_ID);
+        let resolved = assemble_and_resolve(&files, &doc.app_guid);
         let projection = project_r3a2(&resolved);
 
         let actual_summaries = serde_json::to_value(&projection.summaries).unwrap();

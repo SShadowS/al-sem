@@ -678,7 +678,6 @@ pub fn assemble_and_resolve_workspace_with_program_calls(
 ) -> Option<crate::program::model::workspace::Model> {
     assemble_and_resolve_workspace_program(
         &crate::program::inputs::WorkspaceInputs::read(workspace, &Default::default()),
-        crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
         AssemblyNeeds::BASE,
     )
@@ -693,14 +692,12 @@ pub fn assemble_and_resolve_workspace_with_program_calls(
 #[must_use]
 pub fn assemble_and_resolve_workspace_program(
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
-    model_instance_id: &str,
     skip_roots_config: bool,
     needs: AssemblyNeeds,
 ) -> Option<crate::program::model::workspace::Model> {
     let program = ResolvedProgram::build(inputs, ProgramScope::Workspace).ok()?;
     let rows = crate::program::model::workspace::assemble_and_resolve_workspace_from_program(
         inputs,
-        model_instance_id,
         skip_roots_config,
         &program.body().ctx,
         &program.body().parenless_calls,
@@ -723,15 +720,9 @@ pub fn assemble_and_resolve_workspace_program(
 pub fn assemble_and_resolve_inline_program(
     files: &[(String, String)],
     app_guid: &str,
-    model_instance_id: &str,
 ) -> crate::program::model::workspace::Model {
     // What a default `analyze` builds: no rules.
-    assemble_and_resolve_inline_program_with(
-        files,
-        app_guid,
-        model_instance_id,
-        AssemblyNeeds::BASE,
-    )
+    assemble_and_resolve_inline_program_with(files, app_guid, AssemblyNeeds::BASE)
 }
 
 /// [`assemble_and_resolve_inline_program`] with stated `needs` (a test that
@@ -743,13 +734,11 @@ pub fn assemble_and_resolve_inline_program(
 pub fn assemble_and_resolve_inline_program_with(
     files: &[(String, String)],
     app_guid: &str,
-    model_instance_id: &str,
     needs: AssemblyNeeds,
 ) -> crate::program::model::workspace::Model {
     let dir = write_inline_workspace(files, app_guid);
     assemble_and_resolve_workspace_program(
         &crate::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default()),
-        model_instance_id,
         true,
         needs,
     )
@@ -774,8 +763,7 @@ pub fn assemble_and_resolve_inline_program_reversed_groups(
     let rows =
         crate::program::model::workspace::assemble_and_resolve_workspace_from_program_reversed_groups(
             &inputs,
-            crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
-            true,
+                true,
             &program.body().ctx,
             &program.body().parenless_calls,
             AssemblyNeeds::BASE,
@@ -822,11 +810,7 @@ pub fn assemble_and_resolve_inline_program_default(
     files: &[(String, String)],
     app_guid: &str,
 ) -> crate::program::model::workspace::Model {
-    assemble_and_resolve_inline_program(
-        files,
-        app_guid,
-        crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
-    )
+    assemble_and_resolve_inline_program(files, app_guid)
 }
 
 /// The CROSS-APP detector model and what the cross-app base reads besides it.
@@ -875,14 +859,12 @@ pub enum CrossAppFailure {
 /// states what the assembly builds beyond the base rows.
 pub fn assemble_and_resolve_cross_app_program(
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
-    model_instance_id: &str,
     skip_roots_config: bool,
     needs: AssemblyNeeds,
 ) -> Result<CrossAppProgram, CrossAppFailure> {
     cross_app_program_from(
         ResolvedProgram::build(inputs, ProgramScope::CrossApp),
         inputs,
-        model_instance_id,
         skip_roots_config,
         needs,
     )
@@ -894,12 +876,10 @@ pub fn assemble_and_resolve_cross_app_program(
 pub(crate) fn cross_app_program_from(
     program: Result<ResolvedProgram, String>,
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
-    model_instance_id: &str,
     skip_roots_config: bool,
     needs: AssemblyNeeds,
 ) -> Result<CrossAppProgram, CrossAppFailure> {
-    cross_app_program_census(program, inputs, model_instance_id, skip_roots_config, needs)
-        .map(|(p, _)| p)
+    cross_app_program_census(program, inputs, skip_roots_config, needs).map(|(p, _)| p)
 }
 
 /// The cross-app build up to the attach: the program, the demand the model was
@@ -918,13 +898,11 @@ pub(crate) struct CrossAppAssembled {
 /// needs.
 pub(crate) fn cross_app_assemble(
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
-    model_instance_id: &str,
     skip_roots_config: bool,
 ) -> Result<CrossAppAssembled, CrossAppFailure> {
     cross_app_assemble_from(
         ResolvedProgram::build(inputs, ProgramScope::CrossApp),
         inputs,
-        model_instance_id,
         skip_roots_config,
         AssemblyNeeds::BASE,
     )
@@ -934,7 +912,6 @@ pub(crate) fn cross_app_assemble(
 fn cross_app_assemble_from(
     program: Result<ResolvedProgram, String>,
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
-    model_instance_id: &str,
     skip_roots_config: bool,
     needs: AssemblyNeeds,
 ) -> Result<CrossAppAssembled, CrossAppFailure> {
@@ -956,7 +933,6 @@ fn cross_app_assemble_from(
         let _s = pt::span("crossapp", "crossapp.model_assembly");
         crate::program::model::workspace::assemble_and_resolve_cross_app_from_program(
             inputs,
-            model_instance_id,
             skip_roots_config,
             ctx,
             Some(&demand),
@@ -985,11 +961,8 @@ fn cross_app_assemble_from(
 #[must_use]
 pub fn cross_app_rows_before_attach(
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
-    model_instance_id: &str,
 ) -> Option<crate::program::model::workspace::ModelRows> {
-    cross_app_assemble(inputs, model_instance_id, true)
-        .ok()
-        .map(|a| a.rows)
+    cross_app_assemble(inputs, true).ok().map(|a| a.rows)
 }
 
 /// #160 step 11b (spec §5.5, A8's second case, R1-18): the cross-app event
@@ -1000,10 +973,9 @@ pub fn cross_app_rows_before_attach(
 #[must_use]
 pub fn cross_app_event_graph_after(
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
-    model_instance_id: &str,
     edit: impl FnOnce(&mut crate::program::model::workspace::ModelRows),
 ) -> Option<crate::program::model::events::EventGraph> {
-    let mut a = cross_app_assemble(inputs, model_instance_id, true).ok()?;
+    let mut a = cross_app_assemble(inputs, true).ok()?;
     edit(&mut a.rows);
     let body = a.program.body();
     Some(
@@ -1021,7 +993,6 @@ pub fn cross_app_event_graph_after(
 fn cross_app_program_census(
     program: Result<ResolvedProgram, String>,
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
-    model_instance_id: &str,
     skip_roots_config: bool,
     needs: AssemblyNeeds,
 ) -> Result<(CrossAppProgram, SiteCensus), CrossAppFailure> {
@@ -1031,7 +1002,7 @@ fn cross_app_program_census(
         demand,
         rows,
         abi_rows,
-    } = cross_app_assemble_from(program, inputs, model_instance_id, skip_roots_config, needs)?;
+    } = cross_app_assemble_from(program, inputs, skip_roots_config, needs)?;
     let body = program.body();
     let ctx = &body.ctx;
     let mut friends: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
@@ -1113,7 +1084,6 @@ pub fn adapter_census_for_workspace_cross_app(
     cross_app_program_census(
         ResolvedProgram::build(&inputs, ProgramScope::CrossApp),
         &inputs,
-        crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
         AssemblyNeeds::BASE,
     )
@@ -2486,7 +2456,6 @@ pub(crate) fn build_models_with(
     // the same program parse and resolution.
     let l3 = crate::program::model::workspace::assemble_and_resolve_workspace_from_program(
         inputs,
-        crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
         &ctx,
         &report.parenless_calls,
@@ -2653,10 +2622,9 @@ mod tests {
                 || manifest.get("application").is_some();
             let must_warn = declares && !ws.join(".alpackages").exists();
             let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
-            let disk =
-                assemble_and_resolve_workspace_program(&inputs, "r0", true, AssemblyNeeds::BASE)
-                    .expect("disk");
-            let inline = assemble_and_resolve_inline_program(&files, guid, "r0");
+            let disk = assemble_and_resolve_workspace_program(&inputs, true, AssemblyNeeds::BASE)
+                .expect("disk");
+            let inline = assemble_and_resolve_inline_program(&files, guid);
             let mut disk_text = model_text(&disk);
             let inline_text = model_text(&inline);
             // The inline builder writes an app.json with no dependencies, so it
@@ -3402,7 +3370,6 @@ mod tests {
             .join("tests/r0-corpus/ws-cross-object-chain");
         let a = cross_app_assemble(
             &crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default()),
-            crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
             false,
         )
         .expect("cross-app build");

@@ -21,7 +21,7 @@
           "description": "Move the HTTP call outside the loop or batch requests to avoid N external calls per iteration.",
           "safety": "medium"
         },
-        "id": "d48/0b1ef04c0e266459/f873cf14844a1f76705035492ed87950710976b98936aa66391b519d9b334e3f/0b1ef04c0e266459/0111c3fe83ddeeebad9d2c78e9c8ed9e21034f7922c67bd2eb59f8a2cd305dda/0b1ef04c0e266459/0111c3fe83ddeeebad9d2c78e9c8ed9e21034f7922c67bd2eb59f8a2cd305dda/cs0",
+        "id": "d48/afc8e541f7a82fb4/f873cf14844a1f76705035492ed87950710976b98936aa66391b519d9b334e3f/afc8e541f7a82fb4/0111c3fe83ddeeebad9d2c78e9c8ed9e21034f7922c67bd2eb59f8a2cd305dda/afc8e541f7a82fb4/0111c3fe83ddeeebad9d2c78e9c8ed9e21034f7922c67bd2eb59f8a2cd305dda/cs0",
         "looseFingerprint": "2339d7a99897c4a6",
         "pathCount": 1,
         "primaryLocation": {
@@ -30,7 +30,7 @@
           "line": 15,
           "objectId": "11111111-0000-0000-0000-00000000d480/Codeunit/50000",
           "objectName": "D48 Sender",
-          "routineId": "0b1ef04c0e266459/0111c3fe83ddeeebad9d2c78e9c8ed9e21034f7922c67bd2eb59f8a2cd305dda",
+          "routineId": "afc8e541f7a82fb4/0111c3fe83ddeeebad9d2c78e9c8ed9e21034f7922c67bd2eb59f8a2cd305dda",
           "routineName": "SendOne"
         },
         "rootCause": "A repeat loop in ProcessAll reaches HTTP Send in SendOne on every iteration.",
@@ -51,7 +51,7 @@
           "description": "Move the FILE call outside the loop or batch requests to avoid N external calls.",
           "safety": "medium"
         },
-        "id": "d48/0b1ef04c0e266459/99ac6d3c1e759fff528a2eb5db53868fb9f2629fc45087d1089771aa2874c4ad/0b1ef04c0e266459/99ac6d3c1e759fff528a2eb5db53868fb9f2629fc45087d1089771aa2874c4ad/cs0",
+        "id": "d48/afc8e541f7a82fb4/99ac6d3c1e759fff528a2eb5db53868fb9f2629fc45087d1089771aa2874c4ad/afc8e541f7a82fb4/99ac6d3c1e759fff528a2eb5db53868fb9f2629fc45087d1089771aa2874c4ad/cs0",
         "looseFingerprint": "f5e7d33d670aab74",
         "pathCount": 1,
         "primaryLocation": {
@@ -60,7 +60,7 @@
           "line": 73,
           "objectId": "11111111-0000-0000-0000-00000000d480/Codeunit/50003",
           "objectName": "D48 File Loop",
-          "routineId": "0b1ef04c0e266459/99ac6d3c1e759fff528a2eb5db53868fb9f2629fc45087d1089771aa2874c4ad",
+          "routineId": "afc8e541f7a82fb4/99ac6d3c1e759fff528a2eb5db53868fb9f2629fc45087d1089771aa2874c4ad",
           "routineName": "ExportAll"
         },
         "rootCause": "A repeat loop in ExportAll directly calls FILE IO on every iteration.",

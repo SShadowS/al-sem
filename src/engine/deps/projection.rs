@@ -48,7 +48,8 @@ pub struct ProjectedParameter {
 /// A projected dependency routine — the R2.5a comparison surface for routines.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectedRoutine {
-    /// Internal RoutineId: `${modelInstanceId}/${canonicalRoutineKeyHash}`.
+    /// Internal RoutineId: `{appScope}/{canonicalRoutineKeyHash}`, the dependency's
+    /// own app scope (`ids::encode_routine_id`).
     pub id: String,
     /// `StableRoutineId`: `${stableObjectId}#${normalizedSignatureHash}`. A dep ABI
     /// has no member triggers, so the enclosing-member fold (task 4) never applies
@@ -202,7 +203,6 @@ fn abi_routine_to_routine(
     app_guid: &str,
     object_type: &str,
     object_key: &str,
-    model_instance_id: &str,
 ) -> ProjectedRoutine {
     let normalized_hash = abi_signature_hash(r);
     let canonical = CanonicalRoutineKey {
@@ -241,7 +241,7 @@ fn abi_routine_to_routine(
         ids::to_stable_routine_id_from_parts(&stable_object_id, &normalized_hash, None);
 
     ProjectedRoutine {
-        id: ids::encode_routine_id(&canonical, model_instance_id),
+        id: ids::encode_routine_id(&canonical),
         stable_routine_id,
         stable_object_id,
         signature_fingerprint: normalized_hash,
@@ -274,11 +274,7 @@ fn abi_routine_to_routine(
 /// the dependency app identity — for parity with the TS pipeline it comes from the
 /// MANIFEST `<App>` element (`ref.appGuid`), NOT `SymbolReference.json`'s `AppId`
 /// (R2.5a Rev 2 #2). Mirrors `projectAbiToIndex`.
-pub fn project_abi_to_index(
-    abi: &SymbolReferenceAbi,
-    app_guid: &str,
-    model_instance_id: &str,
-) -> ProjectedAbi {
+pub fn project_abi_to_index(abi: &SymbolReferenceAbi, app_guid: &str) -> ProjectedAbi {
     let source_unit_id = format!("dep:{app_guid}:__symbols__");
     let mut objects: Vec<ProjectedObject> = Vec::new();
     let mut routines: Vec<ProjectedRoutine> = Vec::new();
@@ -387,7 +383,6 @@ pub fn project_abi_to_index(
                 app_guid,
                 &o.object_type,
                 &object_key,
-                model_instance_id,
             ));
         }
     }
@@ -457,13 +452,13 @@ mod tests {
             }],
             ..Default::default()
         };
-        let a = project_abi_to_index(&abi, "11111111-2222-3333-4444-555555555555", "instance-A");
-        let b = project_abi_to_index(&abi, "11111111-2222-3333-4444-555555555555", "instance-B");
-        assert_eq!(
-            a.routines[0].stable_routine_id,
-            b.routines[0].stable_routine_id
-        );
+        let guid = "11111111-2222-3333-4444-555555555555";
+        let a = project_abi_to_index(&abi, guid);
         assert_eq!(a.routines[0].signature_fingerprint, h1);
-        assert_ne!(a.routines[0].id, b.routines[0].id); // internal id differs
+        // The internal id is scoped by the dependency's own app, not by the
+        // consuming model: `{routine_app_scope(guid)}/{64 hex}`.
+        let (scope, hex) = a.routines[0].id.split_once('/').expect("two-part id");
+        assert_eq!(scope, ids::routine_app_scope(guid));
+        assert_eq!(hex.len(), 64);
     }
 }

@@ -31,7 +31,7 @@
           "description": "Remove the Commit, or restructure so the surrounding transaction completes (returns control to its caller) before this code runs.",
           "safety": "low"
         },
-        "id": "d8/323c302a83ac644b/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574/op2",
+        "id": "d8/469fd5cc0952e4c7/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574/op2",
         "looseFingerprint": "904b37f00430162c",
         "pathCount": 1,
         "primaryLocation": {
@@ -40,7 +40,7 @@
           "line": 11,
           "objectId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50109",
           "objectName": "D8BadSubscriber",
-          "routineId": "323c302a83ac644b/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574",
+          "routineId": "469fd5cc0952e4c7/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574",
           "routineName": "HandlePosted"
         },
         "rootCause": "HandlePosted calls Commit while reachable from PostSalesDoc, which writes 2 tables before it. A mid-transaction Commit breaks rollback semantics — if the surrounding operation later fails, the data is left half-written.",
@@ -65,7 +65,7 @@
           "description": "If the span includes operations that are logically independent, split them into separate transactions with their own Commit boundaries.",
           "safety": "low"
         },
-        "id": "d9/323c302a83ac644b/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574/op2",
+        "id": "d9/469fd5cc0952e4c7/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574/op2",
         "looseFingerprint": "19cd310b4d6e8a9c",
         "pathCount": 1,
         "primaryLocation": {
@@ -74,7 +74,7 @@
           "line": 4,
           "objectId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50109",
           "objectName": "D8BadSubscriber",
-          "routineId": "323c302a83ac644b/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574",
+          "routineId": "469fd5cc0952e4c7/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574",
           "routineName": "HandlePosted"
         },
         "rootCause": "Transaction ending at HandlePosted's Commit spans 3 routines, writes 3 known table(s) before it, publishes 1 event(s) before it. Consider whether all of this needs to be atomic.",
@@ -95,7 +95,7 @@
           "description": "Remove the Commit from the subscriber path. If durable side effects are required, schedule them outside the publisher's transaction (e.g. a job-queue entry written without Commit, processed later).",
           "safety": "medium"
         },
-        "id": "d35/323c302a83ac644b/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574/323c302a83ac644b/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574/op2",
+        "id": "d35/469fd5cc0952e4c7/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574/469fd5cc0952e4c7/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574/op2",
         "looseFingerprint": "e48e52f11d776f68",
         "pathCount": 1,
         "primaryLocation": {
@@ -104,7 +104,7 @@
           "line": 11,
           "objectId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50109",
           "objectName": "D8BadSubscriber",
-          "routineId": "323c302a83ac644b/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574",
+          "routineId": "469fd5cc0952e4c7/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574",
           "routineName": "HandlePosted"
         },
         "rootCause": "HandlePosted is an event subscriber that calls Commit directly — the publisher cannot roll back the committed state if its work later fails.",
@@ -125,7 +125,7 @@
           "description": "Treat 11111111-0000-0000-0000-00000000d80a/table/50100 as part of this event's effect surface for permission/transaction reasoning.",
           "safety": "high"
         },
-        "id": "d45/323c302a83ac644b/cef6be65ffad540c497f12505e92be6971f278eddb0f9cf1180f61e12fe6ef20|11111111-0000-0000-0000-00000000d80a/table/50100",
+        "id": "d45/469fd5cc0952e4c7/cef6be65ffad540c497f12505e92be6971f278eddb0f9cf1180f61e12fe6ef20|11111111-0000-0000-0000-00000000d80a/table/50100",
         "looseFingerprint": "7a82b719b4f5a7f5",
         "pathCount": 1,
         "primaryLocation": {
@@ -134,10 +134,10 @@
           "line": 19,
           "objectId": "11111111-0000-0000-0000-00000000d80a/Codeunit/50108",
           "objectName": "D8PostingChain",
-          "routineId": "323c302a83ac644b/cef6be65ffad540c497f12505e92be6971f278eddb0f9cf1180f61e12fe6ef20",
+          "routineId": "469fd5cc0952e4c7/cef6be65ffad540c497f12505e92be6971f278eddb0f9cf1180f61e12fe6ef20",
           "routineName": "OnAfterPostSalesDoc"
         },
-        "rootCause": "Publisher 323c302a83ac644b/cef6be65ffad540c497f12505e92be6971f278eddb0f9cf1180f61e12fe6ef20 dispatches to 1 subscriber(s) that write table 11111111-0000-0000-0000-00000000d80a/table/50100; reach=direct; publisherAlsoWrites=yes; subscriberCoverage=complete",
+        "rootCause": "Publisher 469fd5cc0952e4c7/cef6be65ffad540c497f12505e92be6971f278eddb0f9cf1180f61e12fe6ef20 dispatches to 1 subscriber(s) that write table 11111111-0000-0000-0000-00000000d80a/table/50100; reach=direct; publisherAlsoWrites=yes; subscriberCoverage=complete",
         "severity": "info",
         "title": "Event subscribers expose table transitively from publisher"
       }

@@ -20,7 +20,7 @@
           "description": "Add a Commit() call before the window-opening UI call, or restructure the code so the UI interaction happens outside the write transaction. Alternatively, consider whether the write can be deferred until after the user interaction.",
           "safety": "medium"
         },
-        "id": "d49/11111111-0000-0000-0000-0000000d4901:Codeunit:50000#62ac09d40ac27912236d1c7a1170a332ba0d8e8605d00dda84e62c8f20a35dfe/WRITE_PENDING_AT_UI|e20ce22c0a0b3fe4|733eb2dfeeebba02|",
+        "id": "d49/11111111-0000-0000-0000-0000000d4901:Codeunit:50000#62ac09d40ac27912236d1c7a1170a332ba0d8e8605d00dda84e62c8f20a35dfe/WRITE_PENDING_AT_UI|fa4712cf8225549f|3ab3609b25266202|",
         "looseFingerprint": "9f07be8ee914676a",
         "pathCount": 1,
         "primaryLocation": {
@@ -29,7 +29,7 @@
           "line": 15,
           "objectId": "11111111-0000-0000-0000-0000000d4901/Codeunit/50000",
           "objectName": "D49 Sender",
-          "routineId": "79aace5e7d73056a/b701ace1eeb7abf23eebe53459cca92d7a5c682255d6ffb6f8a547a2321ab233",
+          "routineId": "6ffeb5c413f9f08b/b701ace1eeb7abf23eebe53459cca92d7a5c682255d6ffb6f8a547a2321ab233",
           "routineName": "ModifyThenMessage"
         },
         "rootCause": "ModifyThenMessage opens a window-opening UI (UI_MESSAGE) while a database write is still pending (uncommitted). BC's runtime throws \"you cannot open a window after modifying the database\" — the write transaction must be committed or rolled back before opening a window.",

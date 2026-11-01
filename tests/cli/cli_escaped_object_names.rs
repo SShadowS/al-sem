@@ -20,7 +20,6 @@
 use std::path::Path;
 use std::process::Command;
 
-use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
 use serde_json::Value;
 
 const GUID: &str = "24024024-0000-0000-0000-0000000002a0";
@@ -48,7 +47,6 @@ fn model(ws: &Path) -> al_sem::program::model::workspace::Model {
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
         &inputs,
-        MI,
         true,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
@@ -455,7 +453,6 @@ fn already_quoted_dependency_parameter_binds_its_logical_table() {
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     let cross = al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
         &inputs,
-        MI,
         true,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )

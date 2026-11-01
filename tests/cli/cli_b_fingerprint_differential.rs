@@ -33,7 +33,6 @@
 
 use std::path::PathBuf;
 
-use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use al_sem::engine::l5::fingerprint_cli::{
     FingerprintFormat, FingerprintOptions, FingerprintOutput, ShardMode, run_fingerprint_pipeline,
 };
@@ -139,12 +138,9 @@ fn compose_full_for(
         "fixture {fixture} not found at {}",
         ws.display()
     );
-    let model_id = compute_gate_model_instance_id(&ws)
-        .unwrap_or_else(|| panic!("{fixture}: could not compute modelInstanceId"));
     let inputs = read(&ws);
     let resolved = assemble_and_resolve_workspace_program(
         &inputs,
-        &model_id,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )

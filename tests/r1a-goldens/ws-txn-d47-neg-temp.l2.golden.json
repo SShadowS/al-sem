@@ -24,7 +24,7 @@
         "loops": [],
         "operationSites": [
           {
-            "id": "r0/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/op0",
+            "id": "98bb4b22361c033b/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/op0",
             "kind": "record-op",
             "loopStack": [],
             "sourceAnchor": {
@@ -44,7 +44,7 @@
             }
           },
           {
-            "id": "r0/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/op1",
+            "id": "98bb4b22361c033b/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/op1",
             "kind": "record-op",
             "loopStack": [],
             "sourceAnchor": {
@@ -66,10 +66,10 @@
         ],
         "recordOperations": [
           {
-            "id": "r0/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/op0",
+            "id": "98bb4b22361c033b/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/op0",
             "op": "Init",
             "recordVariableName": "TempRec",
-            "recordVariableId": "r0/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/rv/temprec",
+            "recordVariableId": "98bb4b22361c033b/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/rv/temprec",
             "tempState": {
               "kind": "known",
               "value": true
@@ -85,10 +85,10 @@
             }
           },
           {
-            "id": "r0/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/op1",
+            "id": "98bb4b22361c033b/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/op1",
             "op": "Insert",
             "recordVariableName": "TempRec",
-            "recordVariableId": "r0/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/rv/temprec",
+            "recordVariableId": "98bb4b22361c033b/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/rv/temprec",
             "tempState": {
               "kind": "known",
               "value": true
@@ -106,8 +106,8 @@
         ],
         "callSites": [
           {
-            "id": "r0/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/cs0",
-            "operationId": "r0/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/op2",
+            "id": "98bb4b22361c033b/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/cs0",
+            "operationId": "98bb4b22361c033b/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/op2",
             "calleeText": "Client.Get",
             "callee": {
               "kind": "member",
@@ -190,7 +190,7 @@
         ],
         "recordVariables": [
           {
-            "id": "r0/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/rv/temprec",
+            "id": "98bb4b22361c033b/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/rv/temprec",
             "name": "TempRec",
             "tableName": "D47 Rec",
             "tempState": {
@@ -272,18 +272,18 @@
           "children": [
             {
               "kind": "op",
-              "operationId": "r0/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/op0"
+              "operationId": "98bb4b22361c033b/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/op0"
             },
             {
               "kind": "other"
             },
             {
               "kind": "op",
-              "operationId": "r0/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/op1"
+              "operationId": "98bb4b22361c033b/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/op1"
             },
             {
               "kind": "call",
-              "callsiteId": "r0/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/cs0"
+              "callsiteId": "98bb4b22361c033b/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/cs0"
             }
           ]
         },
@@ -302,10 +302,10 @@
           "confidence": "unresolved",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/op1",
+          "witnessOperationId": "98bb4b22361c033b/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/op1",
           "extra": {
             "kind": "table",
-            "recordVariableId": "r0/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/rv/temprec",
+            "recordVariableId": "98bb4b22361c033b/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/rv/temprec",
             "tempState": {
               "kind": "known",
               "value": true
@@ -323,7 +323,7 @@
             "kind": "literal",
             "value": "https://example.test/ping"
           },
-          "witnessCallsiteId": "r0/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/cs0",
+          "witnessCallsiteId": "98bb4b22361c033b/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/cs0",
           "extra": {
             "kind": "http",
             "method": "Get",

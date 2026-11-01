@@ -20,7 +20,7 @@
           "description": "Commit (or complete) the write transaction before making the external call, or move the external IO out of the transactional path entirely. Holding a write transaction open across a network call risks deadlocks and orphaned side effects.",
           "safety": "medium"
         },
-        "id": "d47/11111111-0000-0000-0000-0000000d4702:Codeunit:50000#ac74742b81f7f1f1ddeda902e79e314c6d65bb8e97f49257b6268d29e0cabe95/WRITE_PENDING_AT_EXTERNAL_IO|681dfca33234eb32|64804a20aa38a3ec|",
+        "id": "d47/11111111-0000-0000-0000-0000000d4702:Codeunit:50000#ac74742b81f7f1f1ddeda902e79e314c6d65bb8e97f49257b6268d29e0cabe95/WRITE_PENDING_AT_EXTERNAL_IO|09dd270143c86078|6fecdfec851d5e96|",
         "looseFingerprint": "c50b39728ea17f8a",
         "pathCount": 1,
         "primaryLocation": {
@@ -29,7 +29,7 @@
           "line": 18,
           "objectId": "11111111-0000-0000-0000-0000000d4702/Codeunit/50000",
           "objectName": "D47 Sender",
-          "routineId": "bc9111dfe1c1b2f9/67546f13322e2ed52f1a7a3f33492abbe9ae04758f15f9b670ce97703dc761f1",
+          "routineId": "92c90242b23866d6/67546f13322e2ed52f1a7a3f33492abbe9ae04758f15f9b670ce97703dc761f1",
           "routineName": "SendThenCommit"
         },
         "rootCause": "SendThenCommit performs HTTP Get while a database write is still pending (uncommitted). The external call happens inside an open write transaction — if it blocks or fails the transaction is held open across the network round-trip, and BC's runtime forbids HTTP during a write transaction.",

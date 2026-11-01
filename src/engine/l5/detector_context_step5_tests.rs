@@ -274,7 +274,6 @@ fn step5_t3_context_coverage_equals_the_snapshot_on_r0() {
         let inputs = crate::program::inputs::WorkspaceInputs::read(dir, &Default::default());
         let Some(m) = assemble_and_resolve_workspace_program(
             &inputs,
-            crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
             false,
             crate::program::model::workspace::AssemblyNeeds::BASE,
         ) else {
@@ -331,7 +330,7 @@ fn step5_t3_context_coverage_equals_the_snapshot_on_r0() {
 
 fn cross_app_base(ws: &Path) -> R3a5CrossAppBase {
     let inputs = crate::program::inputs::WorkspaceInputs::read(ws, &Default::default());
-    build_cross_app_base(&inputs, "r0").expect("cross-app base")
+    build_cross_app_base(&inputs).expect("cross-app base")
 }
 
 /// T4/T5's preconditions on the base: the dependency half holds exactly one

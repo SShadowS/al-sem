@@ -11,7 +11,7 @@ HIGH (2):
     fix (medium): Remove the Commit from the subscriber path. If durable side effects are required, schedule them outside the publisher's transaction (e.g. a job-queue entry written without Commit, processed later).
 
 INFO (2):
-  [d45-event-transitive-table-exposure] Event subscribers expose table transitively from publisher — Publisher 323c302a83ac644b/cef6be65ffad540c497f12505e92be6971f278eddb0f9cf1180f61e12fe6ef20 dispatches to 1 subscriber(s) that write table 11111111-0000-0000-0000-00000000d80a/table/50100; reach=direct; publisherAlsoWrites=yes; subscriberCoverage=complete
+  [d45-event-transitive-table-exposure] Event subscribers expose table transitively from publisher — Publisher 469fd5cc0952e4c7/cef6be65ffad540c497f12505e92be6971f278eddb0f9cf1180f61e12fe6ef20 dispatches to 1 subscriber(s) that write table 11111111-0000-0000-0000-00000000d80a/table/50100; reach=direct; publisherAlsoWrites=yes; subscriberCoverage=complete
     ws:src/posting.al:19:5 in D8PostingChain :: OnAfterPostSalesDoc
     confidence: likely
     fix (high): Treat 11111111-0000-0000-0000-00000000d80a/table/50100 as part of this event's effect surface for permission/transaction reasoning.

@@ -186,5 +186,6 @@ mod d1_downgraded_to_info_oracle;
 mod gate_prsummary_differential;
 mod gate_sarif_differential;
 mod gate_suppress_baseline_differential;
+mod ids_file_list_independence;
 mod ids_parent_baseline;
 mod temp_storage_failure;

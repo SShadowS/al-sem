@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (routine ids no longer depend on the file list)
+
+- **Internal routine ids are scoped per app** (context-server design r3 §6.7).
+  An internal id is still `{prefix}/{64 lowercase hex}`, but the prefix is now
+  the routine's own app scope, `ids::routine_app_scope(app_guid)` = the first
+  16 lowercase hex of sha256 over the lowercase app guid, instead of the
+  workspace `modelInstanceId`, which hashes the sorted `.al` file list. Adding,
+  removing or renaming an `.al` file no longer changes every id of every app in
+  the model; the same routine has the same id in every model holding its app.
+  The 64-hex hash part is unchanged. Uniqueness across apps does not rest on the
+  prefix: the app guid is the first hashed key part, and the loader keys apps by
+  guid. The `model_instance_id` parameter is gone from `encode_routine_id`,
+  `compute_routine_id`, `project_abi_to_index`, the model assembly entries
+  (`assemble_and_resolve_*`, `build_cross_app_base*`, `project_r3a5_cross_app`,
+  `project_r4_findings_cross_app`) and the L2 single-routine analyzers;
+  `MODEL_INSTANCE_ID_DEFAULT` and `R3A4_MODEL_INSTANCE_ID` are removed.
+- **Consumer audit** (every reader of the id shape or of `modelInstanceId`):
+  - finding fingerprints (`l5::fingerprint`): swap every internal id for its
+    stable id before hashing, scanning `{prefix}/{64 hex}` for each distinct
+    prefix. A cross-app model now carries one prefix per app; all are 16 hex, so
+    at most one id matches at any position. Unchanged code; the scan oracle test
+    gained a two-scope map, and `fingerprint_index_substitutes_ids_of_two_app_scopes`
+    pins the production `build`. No fingerprint moved (below).
+  - `stable_sub_id` (`l4::summary`, `capability_cone`, `combined_graph`,
+    `r3a4_projection`, `program::model::coverage`): split at the second (or
+    last) `/`. Unchanged: the scope never holds a `/`.
+  - `modelInstanceId` itself stays a workspace input. It is still the commands'
+    presence check (no root `app.json` `id` → `NoModelInstanceId`, as before)
+    and part of the L4 host key (`engine::incremental`'s `host_global`), so a
+    file-list change still invalidates the retained L4 host: the one consumer
+    that relied on the id changing with the file list keeps its own key.
+  - outputs that print internal ids, or 16-hex ids hashed over them (snapshot
+    `edgeId`, digest `factId` and occurrence ids, the policy SARIF message text
+    `on routine <id>`): moved once, regenerated. These were already per-run
+    handles that changed with every file add.
+  - `--baseline` files, SARIF `fingerprints`, stable routine ids and stable
+    sub-ids: unchanged.
+  - caches: the snapshot source cache holds `.app` text only, the dependency
+    cache constants have no on-disk reader, the LSP reads no model ids. CDO
+    provenance stamps (git state, dependency closure) are inputs, untouched.
+- **Proof.** `tests/ids-parent-baseline/record.json` was minted from the parent
+  engine (004f0ee4) over 229 fixture apps: 472 SARIF fingerprints, 1531 stable
+  ids and stable sub-ids from analyze `--with-evidence` and digest output, and
+  148 `--update-baseline` files. After the change the fingerprints and stable
+  ids are equal and every parent-minted baseline still suppresses every finding
+  (`tests/cli/ids_parent_baseline.rs`; `REGEN_TEMP_GOLDENS` never rewrites the
+  record). `tests/cli/ids_file_list_independence.rs`: ids survive adding,
+  removing and renaming an unrelated file (while `modelInstanceId` moves each
+  time), and two apps declaring the same `codeunit 50100 Helper` with the same
+  `Run()` get distinct ids under their own scopes. Discrimination: a `/` in the
+  scope fails the parent-baseline test (124 fixtures' fingerprints moved and the
+  parent baselines stopped suppressing); a guid-blind scope fails both id tests;
+  the file-list hash mixed back into the id fails the stability test; collecting
+  one prefix only fails the two-scope fingerprint test and 3 fixtures of the
+  record. The 684 regenerated or re-minted goldens differ from the parent's only
+  in internal ids and in 16-hex ids hashed over them (a one-to-one remap per
+  file), or in key order (3 `r3a3` goldens); the 6 hand-edited vector files
+  (`r0`, `r1a`, `r1d`, `r2-5a` ×2, `r3a3`) swap the old prefix for the app scope
+  and drop the `modelInstanceId` inputs. No gate SARIF, `r0`, `r2c`, `r2d`, `r3a1`,
+  `r3a2`, `r3a4`, `l4-summary-baseline` or semantic-edges golden moved.
+
 ### Changed (context-server stage 0: request-scoped planning)
 
 - **Planning reads no process state.** The `alsem` binary's three planning

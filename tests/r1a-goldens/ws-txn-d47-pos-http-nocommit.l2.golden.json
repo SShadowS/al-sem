@@ -24,7 +24,7 @@
         "loops": [],
         "operationSites": [
           {
-            "id": "r0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op0",
+            "id": "bee864ab08e54eb0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op0",
             "kind": "record-op",
             "loopStack": [],
             "sourceAnchor": {
@@ -44,7 +44,7 @@
             }
           },
           {
-            "id": "r0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op1",
+            "id": "bee864ab08e54eb0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op1",
             "kind": "record-op",
             "loopStack": [],
             "sourceAnchor": {
@@ -66,10 +66,10 @@
         ],
         "recordOperations": [
           {
-            "id": "r0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op0",
+            "id": "bee864ab08e54eb0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op0",
             "op": "Get",
             "recordVariableName": "Rec",
-            "recordVariableId": "r0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/rv/rec",
+            "recordVariableId": "bee864ab08e54eb0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
@@ -95,10 +95,10 @@
             }
           },
           {
-            "id": "r0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op1",
+            "id": "bee864ab08e54eb0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op1",
             "op": "Modify",
             "recordVariableName": "Rec",
-            "recordVariableId": "r0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/rv/rec",
+            "recordVariableId": "bee864ab08e54eb0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
@@ -116,8 +116,8 @@
         ],
         "callSites": [
           {
-            "id": "r0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/cs0",
-            "operationId": "r0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op2",
+            "id": "bee864ab08e54eb0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/cs0",
+            "operationId": "bee864ab08e54eb0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op2",
             "calleeText": "Client.Get",
             "callee": {
               "kind": "member",
@@ -200,7 +200,7 @@
         ],
         "recordVariables": [
           {
-            "id": "r0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/rv/rec",
+            "id": "bee864ab08e54eb0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/rv/rec",
             "name": "Rec",
             "tableName": "D47 Rec",
             "tempState": {
@@ -282,18 +282,18 @@
           "children": [
             {
               "kind": "op",
-              "operationId": "r0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op0"
+              "operationId": "bee864ab08e54eb0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op0"
             },
             {
               "kind": "other"
             },
             {
               "kind": "op",
-              "operationId": "r0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op1"
+              "operationId": "bee864ab08e54eb0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op1"
             },
             {
               "kind": "call",
-              "callsiteId": "r0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/cs0"
+              "callsiteId": "bee864ab08e54eb0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/cs0"
             }
           ]
         },
@@ -312,10 +312,10 @@
           "confidence": "unresolved",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op0",
+          "witnessOperationId": "bee864ab08e54eb0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op0",
           "extra": {
             "kind": "table",
-            "recordVariableId": "r0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/rv/rec",
+            "recordVariableId": "bee864ab08e54eb0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
@@ -329,10 +329,10 @@
           "confidence": "unresolved",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op1",
+          "witnessOperationId": "bee864ab08e54eb0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op1",
           "extra": {
             "kind": "table",
-            "recordVariableId": "r0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/rv/rec",
+            "recordVariableId": "bee864ab08e54eb0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
@@ -350,7 +350,7 @@
             "kind": "literal",
             "value": "https://example.test/ping"
           },
-          "witnessCallsiteId": "r0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/cs0",
+          "witnessCallsiteId": "bee864ab08e54eb0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/cs0",
           "extra": {
             "kind": "http",
             "method": "Get",
@@ -369,7 +369,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op0"
+          "witnessOperationId": "bee864ab08e54eb0/9c0f92a9f093955ad5d6c71cf854f29a0b67e3de8319ed914a83fc04f1a59b26/op0"
         }
       ],
       "capabilityStatus": "complete",

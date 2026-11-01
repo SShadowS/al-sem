@@ -16,8 +16,9 @@
 //!
 //! ## Stable id form (THE Task-3 fix)
 //!
-//! A dep routine's INTERNAL id (`<modelInstanceId>/<keyHash>[/opN|/csN]`) is
-//! modelInstanceId/devFingerprint-keyed → NOT reproducible by another engine. al-sem
+//! A dep routine's INTERNAL id (`<appScope>/<keyHash>[/opN|/csN]`; its prefix was
+//! the consuming model's modelInstanceId until the routine-id migration) is an
+//! engine-internal encoding → NOT a cross-engine identity. al-sem
 //! and the Rust port both STABLE-PROJECT it to
 //! `<appGuid>:<Type>:<Key>#<64 lowercase hex>[/opN|/csN]`, which is
 //! appGuid/signature-derived → cache/modelInstanceId/devFingerprint-INDEPENDENT.
@@ -40,15 +41,11 @@ use crate::engine::deps::dep_artifact_l4::{
     collect_dep_order_index, inject_intra_app_call_edges, is_dep_order_index_stamp_fresh,
 };
 
-/// modelInstanceId for the R3a-4 dep producer (the emitted ids are stable-projected
-/// → modelInstanceId-INDEPENDENT; pinned to match the al-sem capture's `r0`).
-pub const R3A4_MODEL_INSTANCE_ID: &str = "r0";
-
 // ---------------------------------------------------------------------------
 // The DepIdStabilizer — internal dep id → stable, cache-INDEPENDENT id.
 // ---------------------------------------------------------------------------
 
-/// Maps INTERNAL dep ids (`<modelInstanceId>/<keyHash>[/opN|/csN]`) → STABLE,
+/// Maps INTERNAL dep ids (`<appScope>/<keyHash>[/opN|/csN]`) → STABLE,
 /// cache/devFingerprint-INDEPENDENT ids
 /// (`<appGuid>:<Type>:<Key>#<64 hex>[/opN|/csN]`). Port of al-sem's
 /// `DepIdStabilizer` (`scripts/r3a4-projection.ts`).
@@ -90,7 +87,7 @@ impl DepIdStabilizer {
 
     /// Stable-project an id that is either a routine-base id OR a routine-base id
     /// followed by a `/opN` / `/csN` suffix. The internal RoutineId is exactly two
-    /// `/`-parts (`<modelInstanceId>/<keyHash>`), so the suffix is everything after
+    /// `/`-parts (`<appScope>/<keyHash>`), so the suffix is everything after
     /// the LAST `/`; a bare routine id has no third part and maps directly.
     pub fn stable(&self, internal_id: &str) -> String {
         // Exact routine-base match first.
@@ -419,7 +416,6 @@ fn project_consumed_effect(model: &ConsumerModel, stab: &DepIdStabilizer) -> PCo
 pub fn project_r3a4_from_workspace(workspace: &Path, fixture_name: &str) -> R3a4Projection {
     let model = crate::program::model::program_calls::assemble_and_resolve_cross_app_program(
         &crate::program::inputs::WorkspaceInputs::read(workspace, &Default::default()),
-        R3A4_MODEL_INSTANCE_ID,
         false,
         crate::program::model::workspace::AssemblyNeeds::BASE,
     )

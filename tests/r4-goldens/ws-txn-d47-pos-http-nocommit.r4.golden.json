@@ -7,7 +7,7 @@
   "findings": [
     {
       "detector": "d47-io-unsafe-txn",
-      "id": "d47/11111111-0000-0000-0000-0000000d4701:Codeunit:50000#afbd4d21cd130a0310f3053cdb1624182dade39345a728046cb409622a883fcf/WRITE_PENDING_AT_EXTERNAL_IO|6409339ecce975a7|3976e68300bea13c|",
+      "id": "d47/11111111-0000-0000-0000-0000000d4701:Codeunit:50000#afbd4d21cd130a0310f3053cdb1624182dade39345a728046cb409622a883fcf/WRITE_PENDING_AT_EXTERNAL_IO|3928707d9f7906b7|fbe3089a337fb3e7|",
       "rootCauseKey": "d47/11111111-0000-0000-0000-0000000d4701:Codeunit:50000#afbd4d21cd130a0310f3053cdb1624182dade39345a728046cb409622a883fcf",
       "title": "External IO inside an open write transaction",
       "rootCause": "SendAfterModify performs HTTP Get while a database write is still pending (uncommitted). The external call happens inside an open write transaction — if it blocks or fails the transaction is held open across the network round-trip, and BC's runtime forbids HTTP during a write transaction.",

@@ -29,7 +29,7 @@
         "loops": [],
         "operationSites": [
           {
-            "id": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op0",
+            "id": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op0",
             "kind": "record-op",
             "loopStack": [],
             "sourceAnchor": {
@@ -49,7 +49,7 @@
             }
           },
           {
-            "id": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op1",
+            "id": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op1",
             "kind": "record-op",
             "loopStack": [],
             "sourceAnchor": {
@@ -69,7 +69,7 @@
             }
           },
           {
-            "id": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op2",
+            "id": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op2",
             "kind": "commit",
             "loopStack": [],
             "sourceAnchor": {
@@ -91,10 +91,10 @@
         ],
         "recordOperations": [
           {
-            "id": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op0",
+            "id": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op0",
             "op": "Get",
             "recordVariableName": "Rec",
-            "recordVariableId": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/rv/rec",
+            "recordVariableId": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
@@ -120,10 +120,10 @@
             }
           },
           {
-            "id": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op1",
+            "id": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op1",
             "op": "Modify",
             "recordVariableName": "Rec",
-            "recordVariableId": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/rv/rec",
+            "recordVariableId": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
@@ -141,8 +141,8 @@
         ],
         "callSites": [
           {
-            "id": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/cs0",
-            "operationId": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op3",
+            "id": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/cs0",
+            "operationId": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op3",
             "calleeText": "Worker.DoHttp",
             "callee": {
               "kind": "member",
@@ -186,7 +186,7 @@
         ],
         "recordVariables": [
           {
-            "id": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/rv/rec",
+            "id": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/rv/rec",
             "name": "Rec",
             "tableName": "D47 Rec",
             "tempState": {
@@ -253,22 +253,22 @@
           "children": [
             {
               "kind": "op",
-              "operationId": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op0"
+              "operationId": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op0"
             },
             {
               "kind": "other"
             },
             {
               "kind": "op",
-              "operationId": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op1"
+              "operationId": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op1"
             },
             {
               "kind": "call",
-              "callsiteId": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/cs0"
+              "callsiteId": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/cs0"
             },
             {
               "kind": "op",
-              "operationId": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op2"
+              "operationId": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op2"
             }
           ]
         },
@@ -287,10 +287,10 @@
           "confidence": "unresolved",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op0",
+          "witnessOperationId": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op0",
           "extra": {
             "kind": "table",
-            "recordVariableId": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/rv/rec",
+            "recordVariableId": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
@@ -304,10 +304,10 @@
           "confidence": "unresolved",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op1",
+          "witnessOperationId": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op1",
           "extra": {
             "kind": "table",
-            "recordVariableId": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/rv/rec",
+            "recordVariableId": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
@@ -321,7 +321,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op2"
+          "witnessOperationId": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op2"
         },
         {
           "op": "error-implicit",
@@ -329,7 +329,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op0"
+          "witnessOperationId": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -350,8 +350,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/0b637c19b140d4d4b3bdc6a8a454c7e68a83f732d24adbd3d5a9aa97e86bd9f5/cs0",
-            "operationId": "r0/0b637c19b140d4d4b3bdc6a8a454c7e68a83f732d24adbd3d5a9aa97e86bd9f5/op0",
+            "id": "37e6b06c9ac529a4/0b637c19b140d4d4b3bdc6a8a454c7e68a83f732d24adbd3d5a9aa97e86bd9f5/cs0",
+            "operationId": "37e6b06c9ac529a4/0b637c19b140d4d4b3bdc6a8a454c7e68a83f732d24adbd3d5a9aa97e86bd9f5/op0",
             "calleeText": "Client.Get",
             "callee": {
               "kind": "member",
@@ -464,7 +464,7 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/0b637c19b140d4d4b3bdc6a8a454c7e68a83f732d24adbd3d5a9aa97e86bd9f5/cs0"
+              "callsiteId": "37e6b06c9ac529a4/0b637c19b140d4d4b3bdc6a8a454c7e68a83f732d24adbd3d5a9aa97e86bd9f5/cs0"
             }
           ]
         },
@@ -487,7 +487,7 @@
             "kind": "literal",
             "value": "https://example.test/ping"
           },
-          "witnessCallsiteId": "r0/0b637c19b140d4d4b3bdc6a8a454c7e68a83f732d24adbd3d5a9aa97e86bd9f5/cs0",
+          "witnessCallsiteId": "37e6b06c9ac529a4/0b637c19b140d4d4b3bdc6a8a454c7e68a83f732d24adbd3d5a9aa97e86bd9f5/cs0",
           "extra": {
             "kind": "http",
             "method": "Get",

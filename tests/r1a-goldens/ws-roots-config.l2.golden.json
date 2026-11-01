@@ -73,8 +73,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/4859461f8b305244bda94cfa4e28a4e091a3bd6c0b734f9deb34e2a0bff163b4/cs0",
-            "operationId": "r0/4859461f8b305244bda94cfa4e28a4e091a3bd6c0b734f9deb34e2a0bff163b4/op0",
+            "id": "3fa71880d5614a24/4859461f8b305244bda94cfa4e28a4e091a3bd6c0b734f9deb34e2a0bff163b4/cs0",
+            "operationId": "3fa71880d5614a24/4859461f8b305244bda94cfa4e28a4e091a3bd6c0b734f9deb34e2a0bff163b4/op0",
             "calleeText": "DoInstallWork",
             "callee": {
               "kind": "bare",
@@ -115,7 +115,7 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/4859461f8b305244bda94cfa4e28a4e091a3bd6c0b734f9deb34e2a0bff163b4/cs0"
+              "callsiteId": "3fa71880d5614a24/4859461f8b305244bda94cfa4e28a4e091a3bd6c0b734f9deb34e2a0bff163b4/cs0"
             }
           ]
         },
@@ -187,7 +187,7 @@
         "fieldAccesses": [],
         "recordVariables": [
           {
-            "id": "r0/475011eb1cd68adcc4dbde61763074ff15bca29c5fcacc9d7e5e9e78e646109d/rv/rec",
+            "id": "3fa71880d5614a24/475011eb1cd68adcc4dbde61763074ff15bca29c5fcacc9d7e5e9e78e646109d/rv/rec",
             "name": "Rec",
             "tempState": {
               "kind": "known",

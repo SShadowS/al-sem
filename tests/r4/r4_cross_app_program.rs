@@ -272,14 +272,11 @@ fn cross_app_fixtures() -> Vec<std::path::PathBuf> {
 /// `[0, 0, 2, 2, 1]`); restored, it passes.
 #[test]
 fn the_cross_app_model_rows_are_workspace_then_abi_then_parsed_dependencies() {
-    use al_sem::program::model::workspace::{
-        MODEL_INSTANCE_ID_DEFAULT as MI, assemble_and_resolve_cross_app_from_program,
-    };
+    use al_sem::program::model::workspace::assemble_and_resolve_cross_app_from_program;
     for ws in cross_app_fixtures() {
         let ctx = build_context(&ws).expect("context");
         let (model, _) = assemble_and_resolve_cross_app_from_program(
             &al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default()),
-            MI,
             false,
             &ctx,
             None,
@@ -349,10 +346,9 @@ fn routine_label(m: &al_sem::program::model::workspace::Model, id: &str) -> Stri
 #[test]
 fn the_cross_app_model_resolves_dependency_bodies_and_events() {
     use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
-    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     shared_name_workspace(dir.path());
-    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false, BASE)
+    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), false, BASE)
         .expect("model")
         .resolved;
     let calls = m.calls.clone();
@@ -411,9 +407,8 @@ fn the_cross_app_model_resolves_dependency_bodies_and_events() {
 #[test]
 fn a_call_into_a_symbol_only_dependency_lands_on_its_model_row() {
     use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
-    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r3a5-fixtures/ws");
-    let m = assemble_and_resolve_cross_app_program(&read(&ws), MI, false, BASE)
+    let m = assemble_and_resolve_cross_app_program(&read(&ws), false, BASE)
         .expect("model")
         .resolved;
     let calls = m.calls.clone();
@@ -474,7 +469,7 @@ fn d13_count(dir: &Path) -> usize {
     use al_sem::engine::l5::detectors::registered_detectors;
     use al_sem::engine::l5::finding::project_r4_findings_cross_app;
     let names = vec!["d13-cross-app-internal-call".to_string()];
-    project_r4_findings_cross_app(dir, "r0", &registered_detectors(), "x", &names).finding_count
+    project_r4_findings_cross_app(dir, &registered_detectors(), "x", &names).finding_count
 }
 
 /// d13 and calls into a dependency's `internal` procedure, end to end through the
@@ -554,7 +549,7 @@ fn an_object_finding_in_a_dependency_is_out_of_scope() {
         "",
     );
     let names = vec!["d64-api-page-write-surface".to_string()];
-    let p = project_r4_findings_cross_app(ws, "r0", &registered_detectors(), "x", &names);
+    let p = project_r4_findings_cross_app(ws, &registered_detectors(), "x", &names);
     assert_eq!(p.finding_count, 1, "{:#?}", p.findings);
     assert!(
         p.findings[0]
@@ -610,7 +605,7 @@ fn d43_confidence(dir: &Path) -> Vec<String> {
     use al_sem::engine::l5::detectors::registered_detectors;
     use al_sem::engine::l5::finding::project_r4_findings_cross_app;
     let names = vec!["d43-event-ishandled-skip".to_string()];
-    project_r4_findings_cross_app(dir, "r0", &registered_detectors(), "x", &names)
+    project_r4_findings_cross_app(dir, &registered_detectors(), "x", &names)
         .findings
         .iter()
         .map(|f| f.confidence.level.clone())
@@ -679,7 +674,7 @@ fn d43_follows_a_codeunit_variable_call_to_a_dependency_publisher() {
     let dir = tempfile::tempdir().unwrap();
     ishandled_var_workspace(dir.path());
     let names = vec!["d43-event-ishandled-skip".to_string()];
-    let p = project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+    let p = project_r4_findings_cross_app(dir.path(), &registered_detectors(), "x", &names);
     let levels: Vec<&str> = p
         .findings
         .iter()
@@ -706,11 +701,9 @@ fn d43_follows_a_codeunit_variable_call_to_a_dependency_publisher() {
 #[test]
 fn an_app_that_depends_on_the_workspace_is_not_in_the_cross_app_model() {
     use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
-    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     friend_workspace(dir.path(), true);
-    let x =
-        assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false, BASE).expect("model");
+    let x = assemble_and_resolve_cross_app_program(&read(dir.path()), false, BASE).expect("model");
     let apps: std::collections::BTreeSet<&str> = x
         .resolved
         .workspace
@@ -783,7 +776,7 @@ fn d44_anchors_on_the_workspace_subscriber() {
     let dir = tempfile::tempdir().unwrap();
     shared_subscribers_workspace(dir.path());
     let names = vec!["d44-event-multi-subscriber-overlap".to_string()];
-    let p = project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+    let p = project_r4_findings_cross_app(dir.path(), &registered_detectors(), "x", &names);
     assert_eq!(p.finding_count, 1, "{:#?}", p.findings);
     assert_eq!(
         p.findings[0].primary_location.source_unit_id,
@@ -821,7 +814,6 @@ fn without_dependencies_cross_app_mode_reports_what_single_app_mode_does() {
         let Some(single) =
             al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
                 &al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default()),
-                al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
                 false,
                 al_sem::engine::l5::registry::assembly_needs(&detectors),
             )
@@ -832,9 +824,7 @@ fn without_dependencies_cross_app_mode_reports_what_single_app_mode_does() {
             p.findings.into_iter().map(|f| f.id).collect::<Vec<_>>()
         };
         let a = ids(project_r4_findings(&single, &detectors, "x", &names));
-        let b = ids(project_r4_findings_cross_app(
-            ws, "r0", &detectors, "x", &names,
-        ));
+        let b = ids(project_r4_findings_cross_app(ws, &detectors, "x", &names));
         compared += 1;
         if a != b {
             differ.push(ws.file_name().unwrap().to_string_lossy().to_string());
@@ -889,7 +879,7 @@ fn temp_blob_impl_is_not_file_io() {
         ],
         "",
     );
-    let p = project_r3a5_cross_app(ws, "r0", "x");
+    let p = project_r3a5_cross_app(ws, "x");
     let dep_file_facts: Vec<String> = p
         .summaries
         .iter()
@@ -931,7 +921,7 @@ fn d61_count(dir: &Path) -> usize {
     use al_sem::engine::l5::detectors::registered_detectors;
     use al_sem::engine::l5::finding::project_r4_findings_cross_app;
     let names = vec!["d61-ishandled-bypasses-critical-write".to_string()];
-    project_r4_findings_cross_app(dir, "r0", &registered_detectors(), "x", &names).finding_count
+    project_r4_findings_cross_app(dir, &registered_detectors(), "x", &names).finding_count
 }
 
 /// S7.6 triage fix: d61 flags a write the flag can SKIP, never one that runs
@@ -1004,11 +994,9 @@ fn demand_workspace(dir: &Path) {
 #[test]
 fn the_cross_app_model_holds_the_demanded_dependency_routines() {
     use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
-    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     demand_workspace(dir.path());
-    let x =
-        assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false, BASE).expect("model");
+    let x = assemble_and_resolve_cross_app_program(&read(dir.path()), false, BASE).expect("model");
     let ws = &x.resolved.workspace;
     let mut dep: Vec<&str> = ws
         .routines
@@ -1094,7 +1082,7 @@ fn a_dependency_internal_edge_reaches_the_cone() {
     let dir = tempfile::tempdir().unwrap();
     transitive_dep_write_workspace(dir.path());
     let names = vec!["d44-event-multi-subscriber-overlap".to_string()];
-    let p = project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+    let p = project_r4_findings_cross_app(dir.path(), &registered_detectors(), "x", &names);
     assert_eq!(p.finding_count, 1, "{:#?}", p.findings);
 }
 
@@ -1141,7 +1129,7 @@ fn d45_reports_a_dependency_publisher_the_workspace_subscribes_to() {
     let dir = tempfile::tempdir().unwrap();
     dep_publisher_workspace(dir.path());
     let names = vec!["d45-event-transitive-table-exposure".to_string()];
-    let p = project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+    let p = project_r4_findings_cross_app(dir.path(), &registered_detectors(), "x", &names);
     assert_eq!(p.finding_count, 1, "{:#?}", p.findings);
     assert_eq!(
         p.findings[0].primary_location.source_unit_id,
@@ -1245,7 +1233,7 @@ fn d3_count(dir: &Path) -> usize {
     use al_sem::engine::l5::detectors::registered_detectors;
     use al_sem::engine::l5::finding::project_r4_findings_cross_app;
     let names = vec!["d3-missing-setloadfields".to_string()];
-    project_r4_findings_cross_app(dir, "r0", &registered_detectors(), "x", &names).finding_count
+    project_r4_findings_cross_app(dir, &registered_detectors(), "x", &names).finding_count
 }
 
 /// S8.5 triage fixes to d3 (61.5% false positives on the cross-app sample). Each
@@ -1361,8 +1349,7 @@ fn a_dependency_write_to_a_temporary_argument_is_not_physical() {
     for (name, a, expected) in cases {
         let dir = tempfile::tempdir().unwrap();
         transitive_dep_write_workspace_with(dir.path(), &a, b);
-        let p =
-            project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+        let p = project_r4_findings_cross_app(dir.path(), &registered_detectors(), "x", &names);
         assert_eq!(p.finding_count, expected, "case {name}: {:#?}", p.findings);
     }
 }
@@ -1409,8 +1396,7 @@ fn a_dependency_write_behind_a_false_literal_is_not_reached() {
     for (name, call, expected) in cases {
         let dir = tempfile::tempdir().unwrap();
         transitive_dep_write_workspace_with(dir.path(), &run2(call), b);
-        let p =
-            project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+        let p = project_r4_findings_cross_app(dir.path(), &registered_detectors(), "x", &names);
         assert_eq!(p.finding_count, expected, "case {name}: {:#?}", p.findings);
     }
 }
@@ -1542,8 +1528,7 @@ fn d8_counts_only_the_writes_pending_at_the_commit() {
     for (name, caller, own, expected) in cases {
         let dir = tempfile::tempdir().unwrap();
         d8_workspace(dir.path(), caller, own);
-        let p =
-            project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names);
+        let p = project_r4_findings_cross_app(dir.path(), &registered_detectors(), "x", &names);
         if p.finding_count != expected {
             wrong.push(format!("{name}: {} (want {expected})", p.finding_count));
         }
@@ -1570,7 +1555,7 @@ fn the_cone_follows_every_dependency_call() {
     use al_sem::engine::l5::finding::project_r4_findings_cross_app;
     let names = vec!["d44-event-multi-subscriber-overlap".to_string()];
     let count = |dir: &Path| {
-        project_r4_findings_cross_app(dir, "r0", &registered_detectors(), "x", &names).finding_count
+        project_r4_findings_cross_app(dir, &registered_detectors(), "x", &names).finding_count
     };
 
     let dir = tempfile::tempdir().unwrap();
@@ -1726,9 +1711,8 @@ fn a_local_event_raised_with_temporary_records_has_temporary_subscribers() {
     for (name, buf, access, body, expected) in cases {
         let dir = tempfile::tempdir().unwrap();
         event_temp_workspace(dir.path(), buf, access, body);
-        let n =
-            project_r4_findings_cross_app(dir.path(), "r0", &registered_detectors(), "x", &names)
-                .finding_count;
+        let n = project_r4_findings_cross_app(dir.path(), &registered_detectors(), "x", &names)
+            .finding_count;
         if n != expected {
             wrong.push(format!("{name}: {n} (want {expected})"));
         }
@@ -1747,7 +1731,6 @@ fn a_local_event_raised_with_temporary_records_has_temporary_subscribers() {
 #[test]
 fn a_run_of_a_dependency_page_without_entry_trigger_names_the_page() {
     use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
-    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     write(
         &dir.path().join("app.json"),
@@ -1774,7 +1757,7 @@ fn a_run_of_a_dependency_page_without_entry_trigger_names_the_page() {
         )],
         "",
     );
-    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false, BASE)
+    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), false, BASE)
         .expect("model")
         .resolved;
     let calls = m.calls.clone();
@@ -1890,10 +1873,9 @@ fn a_dependencys_if_duplicated_subscriber_gets_each_edge_once() {
     use al_sem::program::model::program_calls::{
         assemble_and_resolve_cross_app_program, cross_app_rows_before_attach,
     };
-    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     if_dup_dependency_workspace(dir.path());
-    let rows = cross_app_rows_before_attach(&read(dir.path()), MI).expect("rows");
+    let rows = cross_app_rows_before_attach(&read(dir.path())).expect("rows");
     let h: Vec<usize> = rows
         .workspace
         .routines
@@ -1908,7 +1890,7 @@ fn a_dependencys_if_duplicated_subscriber_gets_each_edge_once() {
         node(h[0]).is_some() && node(h[0]) == node(h[1]),
         "precondition: both H rows map to one node"
     );
-    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false, BASE)
+    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), false, BASE)
         .expect("model")
         .resolved;
     let h_rows = m
@@ -1957,11 +1939,10 @@ fn a_dependencys_if_duplicated_subscriber_gets_each_edge_once() {
 #[test]
 fn a_dependencys_subscriber_with_an_unmapped_first_row_gets_each_edge_once() {
     use al_sem::program::model::program_calls::cross_app_event_graph_after;
-    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     if_dup_dependency_workspace(dir.path());
     let mut h_ids: Vec<String> = Vec::new();
-    let graph = cross_app_event_graph_after(&read(dir.path()), MI, |rows| {
+    let graph = cross_app_event_graph_after(&read(dir.path()), |rows| {
         let h: Vec<usize> = rows
             .workspace
             .routines
@@ -2109,10 +2090,9 @@ fn event_graph_reads_node_of() {
     use al_sem::program::model::program_calls::{
         assemble_and_resolve_cross_app_program, cross_app_rows_before_attach,
     };
-    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     j5_shapes_dependency_workspace(dir.path());
-    let rows = cross_app_rows_before_attach(&read(dir.path()), MI).expect("rows");
+    let rows = cross_app_rows_before_attach(&read(dir.path())).expect("rows");
     let named = |name: &str| -> Vec<usize> {
         rows.workspace
             .routines
@@ -2185,7 +2165,7 @@ fn event_graph_reads_node_of() {
         "precondition: Hb's two nodes subscribe to different events"
     );
 
-    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), MI, false, BASE)
+    let m = assemble_and_resolve_cross_app_program(&read(dir.path()), false, BASE)
         .expect("model")
         .resolved;
     let mut edges: Vec<(String, String, String)> = m
@@ -2238,7 +2218,6 @@ fn dep_order_index_pairs_frames_and_ops_of_one_row() {
         ConsumerModel, collect_dep_order_index, dep_artifacts_from_model,
     };
     use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
-    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     let dir = dir.path();
     write(
@@ -2293,7 +2272,7 @@ codeunit 50172 "Dep Ord"
         )],
         "",
     );
-    let x = assemble_and_resolve_cross_app_program(&read(dir), MI, false, BASE).expect("model");
+    let x = assemble_and_resolve_cross_app_program(&read(dir), false, BASE).expect("model");
     let rows: Vec<usize> = x
         .resolved
         .workspace
@@ -2372,11 +2351,10 @@ codeunit 50172 "Dep Ord"
 #[test]
 fn a_subscriber_id_over_two_nodes_emits_both_nodes_subscriptions() {
     use al_sem::program::model::program_calls::cross_app_event_graph_after;
-    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     j5_shapes_dependency_workspace(dir.path());
     let mut id = String::new();
-    let graph = cross_app_event_graph_after(&read(dir.path()), MI, |rows| {
+    let graph = cross_app_event_graph_after(&read(dir.path()), |rows| {
         let hb: Vec<usize> = rows
             .workspace
             .routines
@@ -2428,11 +2406,10 @@ fn a_subscriber_id_over_two_nodes_emits_both_nodes_subscriptions() {
 #[test]
 fn a_two_node_subscriber_ids_edges_do_not_depend_on_row_order() {
     use al_sem::program::model::program_calls::cross_app_event_graph_after;
-    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     j5_shapes_dependency_workspace(dir.path());
     let run = |swap: bool| {
-        let graph = cross_app_event_graph_after(&read(dir.path()), MI, |rows| {
+        let graph = cross_app_event_graph_after(&read(dir.path()), |rows| {
             let hb: Vec<usize> = rows
                 .workspace
                 .routines
@@ -2488,7 +2465,6 @@ fn dep_return_summary_is_the_last_rows() {
         dep_artifacts_from_model,
     };
     use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
-    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dir = tempfile::tempdir().unwrap();
     let dir = dir.path();
     write(
@@ -2541,7 +2517,7 @@ codeunit 50173 "Dep Ret"
         )],
         "",
     );
-    let x = assemble_and_resolve_cross_app_program(&read(dir), MI, false, BASE).expect("model");
+    let x = assemble_and_resolve_cross_app_program(&read(dir), false, BASE).expect("model");
     let rows: Vec<usize> = x
         .resolved
         .workspace

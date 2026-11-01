@@ -311,7 +311,8 @@ pub fn routine_signature_fingerprint(
 /// unambiguous rather than merely conventional.
 ///
 /// This changes the hash INPUT only. The id's SHAPE
-/// (`{modelInstanceId}/{64 lowercase hex}`) is load-bearing far downstream —
+/// (`{appScope}/{64 lowercase hex}`, see [`encode_routine_id`]) is load-bearing
+/// far downstream —
 /// `l5::fingerprint`'s `substitute_stable_ids` locates ids by scanning for
 /// exactly 64 lowercase-hex bytes and `l4::summary`'s `stable_sub_id` splits on
 /// exactly two `/`-parts — so a `#member` suffix or an extra `/`-segment would
@@ -337,9 +338,40 @@ pub fn encode_canonical_routine_key(key: &CanonicalRoutineKey) -> String {
     sha256_of_strings(&parts)
 }
 
-/// Full RoutineId: `"{modelInstanceId}/{canonicalRoutineKeyHash}"`.
-pub fn encode_routine_id(key: &CanonicalRoutineKey, model_instance_id: &str) -> String {
-    format!("{model_instance_id}/{}", encode_canonical_routine_key(key))
+/// The prefix of every internal routine id of one app: the first 16 lowercase
+/// hex of sha256 over the app guid, lowercased (a guid's case carries no
+/// identity; object ids keep it verbatim, the scope does not).
+///
+/// Sixteen hex digits, never a `/`: the id's two-part shape is what
+/// `l5::fingerprint`'s scanner and `l4::summary::stable_sub_id` read.
+pub fn routine_app_scope(app_guid: &str) -> String {
+    let mut scope = sha256_hex(&app_guid.to_lowercase());
+    scope.truncate(16);
+    scope
+}
+
+/// Full internal RoutineId: `"{appScope}/{canonicalRoutineKeyHash}"`, the app
+/// scope being [`routine_app_scope`] of `key.app_guid`.
+///
+/// **Per app, not per model** (context-server design r3 §6.7). The prefix used to
+/// be the workspace's `modelInstanceId`, a hash over the sorted `.al` file list,
+/// so adding, removing or renaming any file moved every id of every app in the
+/// model. Now the same routine has the same id in every model that holds its
+/// app. Uniqueness does not rest on the prefix: `app_guid` is the first part of
+/// the hashed key, and two apps with one guid cannot share a model (the loader
+/// keys apps by guid).
+///
+/// `modelInstanceId` itself stays a workspace input
+/// (`WorkspaceInputs::model_instance_id`): the presence check `analyze` and the
+/// single-model commands make, and part of the L4 host key
+/// (`engine::incremental`), which therefore still changes when the file list
+/// does.
+pub fn encode_routine_id(key: &CanonicalRoutineKey) -> String {
+    format!(
+        "{}/{}",
+        routine_app_scope(&key.app_guid),
+        encode_canonical_routine_key(key)
+    )
 }
 
 /// Stable routine id from its parts: `"{stableObjectId}#{64 lowercase hex}"`.
@@ -505,6 +537,49 @@ mod tests {
         assert_eq!(sha256_of_strings(&["😀".to_string()]), expected);
     }
 
+    /// The app scope, hand-derived: `printf '%s' <guid> | sha256sum | cut -c1-16`.
+    /// A guid's case is not identity, so an upper-case spelling gives the same
+    /// scope.
+    #[test]
+    fn routine_app_scope_is_16_hex_of_sha256_over_the_lowercase_guid() {
+        assert_eq!(
+            routine_app_scope("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+            "9af645a8fef33e6d"
+        );
+        assert_eq!(
+            routine_app_scope("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"),
+            "9af645a8fef33e6d"
+        );
+    }
+
+    /// Two apps declaring the same object and routine: distinct ids, each under
+    /// its own app's scope.
+    #[test]
+    fn same_routine_in_two_apps_gets_two_ids_under_two_scopes() {
+        let a = CanonicalRoutineKey {
+            app_guid: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string(),
+            ..member_key(None)
+        };
+        let b = CanonicalRoutineKey {
+            app_guid: "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee".to_string(),
+            ..member_key(None)
+        };
+        let (id_a, id_b) = (encode_routine_id(&a), encode_routine_id(&b));
+        assert_ne!(id_a, id_b);
+        assert_eq!(
+            id_a.split_once('/').unwrap().0,
+            routine_app_scope(&a.app_guid)
+        );
+        assert_eq!(
+            id_b.split_once('/').unwrap().0,
+            routine_app_scope(&b.app_guid)
+        );
+        assert_ne!(
+            routine_app_scope(&a.app_guid),
+            routine_app_scope(&b.app_guid)
+        );
+    }
+
     #[test]
     fn utf16_len_counts_code_units_not_scalars_or_bytes() {
         assert_eq!(utf16_len(""), 0);
@@ -541,14 +616,23 @@ mod tests {
     #[test]
     fn routine_id_shape_is_two_parts_with_64_hex_regardless_of_member() {
         for member in [None, Some(""), Some("No."), Some(r#"a"b"#), Some("😀")] {
-            let id = encode_routine_id(&member_key(member), "r0");
+            let key = member_key(member);
+            let id = encode_routine_id(&key);
             let parts: Vec<&str> = id.split('/').collect();
             assert_eq!(
                 parts.len(),
                 2,
                 "id must stay exactly two `/`-separated parts (member={member:?}): {id}"
             );
-            assert_eq!(parts[0], "r0", "first part is the modelInstanceId verbatim");
+            assert_eq!(
+                parts[0],
+                routine_app_scope(&key.app_guid),
+                "first part is the app scope"
+            );
+            assert!(
+                parts[0].len() == 16 && parts[0].bytes().all(is_lower_hex),
+                "the app scope is 16 lowercase hex: {id}"
+            );
             assert_eq!(
                 parts[1].len(),
                 64,

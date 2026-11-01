@@ -19,7 +19,7 @@
         "loops": [],
         "operationSites": [
           {
-            "id": "r0/28cb24539d114132924b7eb5f4a16e91e6648cc87b576a76fa3481592a498875/op0",
+            "id": "f5bfec236cb8893b/28cb24539d114132924b7eb5f4a16e91e6648cc87b576a76fa3481592a498875/op0",
             "kind": "commit",
             "loopStack": [],
             "sourceAnchor": {
@@ -42,8 +42,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/28cb24539d114132924b7eb5f4a16e91e6648cc87b576a76fa3481592a498875/cs0",
-            "operationId": "r0/28cb24539d114132924b7eb5f4a16e91e6648cc87b576a76fa3481592a498875/op1",
+            "id": "f5bfec236cb8893b/28cb24539d114132924b7eb5f4a16e91e6648cc87b576a76fa3481592a498875/cs0",
+            "operationId": "f5bfec236cb8893b/28cb24539d114132924b7eb5f4a16e91e6648cc87b576a76fa3481592a498875/op1",
             "calleeText": "Client.Get",
             "callee": {
               "kind": "member",
@@ -203,7 +203,7 @@
                   "children": [
                     {
                       "kind": "call",
-                      "callsiteId": "r0/28cb24539d114132924b7eb5f4a16e91e6648cc87b576a76fa3481592a498875/cs0"
+                      "callsiteId": "f5bfec236cb8893b/28cb24539d114132924b7eb5f4a16e91e6648cc87b576a76fa3481592a498875/cs0"
                     },
                     {
                       "kind": "exit"
@@ -214,7 +214,7 @@
             },
             {
               "kind": "op",
-              "operationId": "r0/28cb24539d114132924b7eb5f4a16e91e6648cc87b576a76fa3481592a498875/op0"
+              "operationId": "f5bfec236cb8893b/28cb24539d114132924b7eb5f4a16e91e6648cc87b576a76fa3481592a498875/op0"
             }
           ]
         },
@@ -241,7 +241,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/28cb24539d114132924b7eb5f4a16e91e6648cc87b576a76fa3481592a498875/op0"
+          "witnessOperationId": "f5bfec236cb8893b/28cb24539d114132924b7eb5f4a16e91e6648cc87b576a76fa3481592a498875/op0"
         },
         {
           "op": "send",
@@ -253,7 +253,7 @@
             "kind": "literal",
             "value": "https://example.com/notify"
           },
-          "witnessCallsiteId": "r0/28cb24539d114132924b7eb5f4a16e91e6648cc87b576a76fa3481592a498875/cs0",
+          "witnessCallsiteId": "f5bfec236cb8893b/28cb24539d114132924b7eb5f4a16e91e6648cc87b576a76fa3481592a498875/cs0",
           "extra": {
             "kind": "http",
             "method": "Get",

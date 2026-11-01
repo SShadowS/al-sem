@@ -6,7 +6,7 @@
       "routineId": "11111111-0000-0000-0000-0000000d4707:Codeunit:50000#302dc2332e7a9ae6fb0474a4d66e256730ee465bd1df06a0f8f46b10716cf434",
       "facts": [
         {
-          "key": "EXTERNAL_IO_BEFORE_COMMIT||7292b64cbb30ae96|6f6c6b53eb1954ea",
+          "key": "EXTERNAL_IO_BEFORE_COMMIT||744957f0c3629fbb|91e2dc41e84a6fbb",
           "ioType": "HTTP",
           "ioDetail": {
             "method": "Get"
@@ -14,8 +14,8 @@
           "guarantee": {
             "label": "EXTERNAL_IO_BEFORE_COMMIT",
             "scope": "root",
-            "commitOccurrenceId": "6f6c6b53eb1954ea",
-            "ioOccurrenceId": "7292b64cbb30ae96",
+            "commitOccurrenceId": "91e2dc41e84a6fbb",
+            "ioOccurrenceId": "744957f0c3629fbb",
             "supportingEdgeIds": [],
             "commitEffectiveness": "assumed_effective",
             "interveningBoundary": "none",

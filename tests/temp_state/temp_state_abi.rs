@@ -134,7 +134,6 @@ fn abi_param_reads_typedefinition_temporary() {
 /// The workspace calls every dependency procedure, so each is in the model.
 fn project_and_resolve() -> al_sem::program::model::workspace::ModelEntities {
     use al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program;
-    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
     let dep = "11111111-2222-3333-4444-555555555555";
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -159,7 +158,6 @@ fn project_and_resolve() -> al_sem::program::model::workspace::ModelEntities {
     );
     assemble_and_resolve_cross_app_program(
         &al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default()),
-        MI,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )

@@ -21,8 +21,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/027b190c8d7f64f9af48ef766492468522a030709daf161984d6d7a07dce2049/cs0",
-            "operationId": "r0/027b190c8d7f64f9af48ef766492468522a030709daf161984d6d7a07dce2049/op0",
+            "id": "9b6811a0827502f0/027b190c8d7f64f9af48ef766492468522a030709daf161984d6d7a07dce2049/cs0",
+            "operationId": "9b6811a0827502f0/027b190c8d7f64f9af48ef766492468522a030709daf161984d6d7a07dce2049/op0",
             "calleeText": "Client.Send",
             "callee": {
               "kind": "member",
@@ -166,7 +166,7 @@
             },
             {
               "kind": "call",
-              "callsiteId": "r0/027b190c8d7f64f9af48ef766492468522a030709daf161984d6d7a07dce2049/cs0"
+              "callsiteId": "9b6811a0827502f0/027b190c8d7f64f9af48ef766492468522a030709daf161984d6d7a07dce2049/cs0"
             }
           ]
         },
@@ -188,7 +188,7 @@
           "resourceArgSource": {
             "kind": "unknown"
           },
-          "witnessCallsiteId": "r0/027b190c8d7f64f9af48ef766492468522a030709daf161984d6d7a07dce2049/cs0",
+          "witnessCallsiteId": "9b6811a0827502f0/027b190c8d7f64f9af48ef766492468522a030709daf161984d6d7a07dce2049/cs0",
           "extra": {
             "kind": "http",
             "method": "Send",

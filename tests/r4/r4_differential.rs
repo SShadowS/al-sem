@@ -1392,7 +1392,6 @@ fn run_rust(golden_name: &str, source_dir: &str, detector_names: &[&str]) -> R4F
         .collect();
     let model = al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
         &al_sem::program::inputs::WorkspaceInputs::read(&fixture_dir, &Default::default()),
-        al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
         al_sem::engine::l5::registry::assembly_needs(&selected),
     );
@@ -1412,7 +1411,7 @@ fn run_rust(golden_name: &str, source_dir: &str, detector_names: &[&str]) -> R4F
 /// Run the Rust CROSS-APP L5 pass for one fixture: build the cross-app L4 base
 /// (reading the committed dep `.app`(s) from `<fixture>/.alpackages/`), run the
 /// registered detectors in cross-app mode, project the envelope filtered to the named
-/// detectors. Model-instance id `"r0"` matches the al-sem dump convention.
+/// detectors.
 fn run_rust_cross_app(
     golden_name: &str,
     source_dir: &str,
@@ -1426,7 +1425,7 @@ fn run_rust_cross_app(
     );
     let names: Vec<String> = detector_names.iter().map(|s| s.to_string()).collect();
     let detectors = registered_detectors();
-    project_r4_findings_cross_app(&fixture_dir, "r0", &detectors, golden_name, &names)
+    project_r4_findings_cross_app(&fixture_dir, &detectors, golden_name, &names)
 }
 
 /// Run a single CROSS-APP entry. All 4 cross-app fixtures (d13-internal-call,

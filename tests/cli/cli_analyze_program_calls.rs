@@ -19,7 +19,6 @@ use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::run_detectors;
 use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
-use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
 
 type Key = (String, String, u64, u64, String, String);
 
@@ -100,7 +99,6 @@ fn analyze_matches_the_detectors_over_the_program_model_on_r0_fixtures() {
         let inputs = al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let model = assemble_and_resolve_workspace_program(
             &inputs,
-            MODEL_INSTANCE_ID_DEFAULT,
             false,
             al_sem::engine::l5::registry::assembly_needs(&registered_detectors()),
         )

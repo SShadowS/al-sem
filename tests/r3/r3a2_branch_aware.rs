@@ -21,7 +21,6 @@ use al_sem::program::model::program_calls::assemble_and_resolve_inline_program;
 use serde_json::Value;
 
 const APP_GUID: &str = "dddddddd-dddd-dddd-dddd-dddddddddd01";
-const MODEL_INSTANCE_ID: &str = "r0";
 
 fn files(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
     pairs
@@ -91,7 +90,6 @@ fn conditional_insert_yields_unknown_dirty_at_exit() {
     let resolved = assemble_and_resolve_inline_program(
         &files(&[("Publisher.al", src_publisher), ("Table.al", src_table)]),
         APP_GUID,
-        MODEL_INSTANCE_ID,
     );
     let proj = project_r3a2(&resolved);
     let summaries = serde_json::to_value(&proj.summaries).unwrap();
@@ -166,7 +164,6 @@ fn repeat_multi_statement_body_sees_all_statements() {
     let resolved = assemble_and_resolve_inline_program(
         &files(&[("Codeunit.al", src), ("Table.al", WORKER_TABLE)]),
         APP_GUID,
-        MODEL_INSTANCE_ID,
     );
     let proj = project_r3a2(&resolved);
     let summaries = serde_json::to_value(&proj.summaries).unwrap();
@@ -217,7 +214,6 @@ fn while_conditional_break_contributes_dirty_state_to_loop_exit() {
     let resolved = assemble_and_resolve_inline_program(
         &files(&[("Codeunit.al", src), ("Table.al", WORKER_TABLE)]),
         APP_GUID,
-        MODEL_INSTANCE_ID,
     );
     let proj = project_r3a2(&resolved);
     let summaries = serde_json::to_value(&proj.summaries).unwrap();
@@ -267,7 +263,6 @@ fn repeat_with_conditional_break_is_sound() {
     let resolved = assemble_and_resolve_inline_program(
         &files(&[("Codeunit.al", src), ("Table.al", WORKER_TABLE)]),
         APP_GUID,
-        MODEL_INSTANCE_ID,
     );
     let proj = project_r3a2(&resolved);
     let summaries = serde_json::to_value(&proj.summaries).unwrap();
@@ -306,7 +301,6 @@ fn resolved_edge_to_bodyless_dep_callee_yields_opaque_uncertainty() {
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(&fixture, &Default::default());
     let cross = assemble_and_resolve_cross_app_program(
         &inputs,
-        "r2.5b",
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )

@@ -36,7 +36,6 @@ use serde_json::Value;
 
 const R3A5_TEST_NAME: &str = "differential_r3a5_cross_app_summary_match_goldens";
 const FIXTURE: &str = "cross-app-full-summary";
-const MODEL_INSTANCE_ID: &str = "r0";
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -134,7 +133,7 @@ fn compact(v: &Value) -> String {
 
 /// Build the Rust R3a-5 projection over the workspace fixture.
 fn rust_projection() -> R3a5FullSummaryProjection {
-    project_r3a5_cross_app(&ws_fixture_dir(), MODEL_INSTANCE_ID, FIXTURE)
+    project_r3a5_cross_app(&ws_fixture_dir(), FIXTURE)
 }
 
 #[test]

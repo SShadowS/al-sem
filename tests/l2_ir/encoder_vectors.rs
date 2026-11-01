@@ -79,10 +79,7 @@ fn encode(kind: &str, input: &Value) -> String {
             ids::sha256_of_strings(&parts)
         }
         "encodeCanonicalRoutineKey" => ids::encode_canonical_routine_key(&build_key(input)),
-        "encodeRoutineId" => ids::encode_routine_id(
-            &build_key(&input["key"]),
-            input["modelInstanceId"].as_str().unwrap(),
-        ),
+        "encodeRoutineId" => ids::encode_routine_id(&build_key(&input["key"])),
         "normalizedSignatureHash" => ids::normalized_signature_hash(
             input["name"].as_str().unwrap(),
             &parse_params(&input["parameters"]),

@@ -165,7 +165,7 @@ mod tests {
     use crate::program::model::program_calls::{
         assemble_and_resolve_cross_app_program, assemble_and_resolve_workspace_program,
     };
-    use crate::program::model::workspace::{MODEL_INSTANCE_ID_DEFAULT, Model};
+    use crate::program::model::workspace::Model;
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
@@ -331,7 +331,6 @@ mod tests {
     fn workspace_model(dir: &Path) -> Option<Model> {
         assemble_and_resolve_workspace_program(
             &crate::program::inputs::WorkspaceInputs::read(dir, &Default::default()),
-            MODEL_INSTANCE_ID_DEFAULT,
             false,
             crate::program::model::workspace::AssemblyNeeds::BASE,
         )
@@ -357,7 +356,6 @@ mod tests {
         let inputs = crate::program::inputs::WorkspaceInputs::read(dir, &Default::default());
         let Ok(x) = assemble_and_resolve_cross_app_program(
             &inputs,
-            MODEL_INSTANCE_ID_DEFAULT,
             false,
             crate::program::model::workspace::AssemblyNeeds::BASE,
         ) else {

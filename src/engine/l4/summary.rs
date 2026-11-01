@@ -471,14 +471,15 @@ pub(crate) fn stable_routine_id(
 }
 
 /// Rewrite `${routineId}/<suffix>` (callsiteId `/csN`, operationId `/opN`) into
-/// stable form. Internal RoutineId is `${modelInstanceId}/${hash}` (exactly two
-/// `/`-separated parts), so the suffix is everything after the SECOND `/`.
+/// stable form. Internal RoutineId is `{appScope}/{hash}` (exactly two
+/// `/`-separated parts; the 16-hex scope never holds a `/`), so the suffix is
+/// everything after the SECOND `/`.
 /// Mirrors `stableSubId` in r3a2-projection.ts.
 pub(crate) fn stable_sub_id(
     internal_sub_id: &str,
     map: &std::collections::HashMap<String, String>,
 ) -> String {
-    // The internal sub-id looks like `<modelInstanceId>/<hash>/<suffix>`.
+    // The internal sub-id looks like `<appScope>/<hash>/<suffix>`.
     // We need to split off the first two `/`-parts as the routineId.
     let first_slash = internal_sub_id.find('/');
     let second_slash =

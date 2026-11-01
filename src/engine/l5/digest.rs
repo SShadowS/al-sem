@@ -6619,7 +6619,6 @@ mod tests {
             if let Some(resolved) =
                 crate::program::model::program_calls::assemble_and_resolve_workspace_program(
                     &crate::program::inputs::WorkspaceInputs::read(dir, &Default::default()),
-                    crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
                     false,
                     crate::program::model::workspace::AssemblyNeeds::BASE,
                 )
@@ -8397,7 +8396,6 @@ codeunit 50410 DupProducer
             .filter_map(|dir| {
                 crate::program::model::program_calls::assemble_and_resolve_workspace_program(
                     &crate::program::inputs::WorkspaceInputs::read(dir, &Default::default()),
-                    crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
                     false,
                     crate::program::model::workspace::AssemblyNeeds::BASE,
                 )

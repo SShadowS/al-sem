@@ -16,13 +16,12 @@
 //! ## Routine-id stabilization (edit-stable fingerprint)
 //!
 //! The `rootCauseKey` embeds INTERNAL routine ids — directly, or as the PREFIX of
-//! operation/callsite/loop ids (`${routineId}/suffix`). For SOURCE routines that
-//! internal id is `${modelInstanceId}/${keyHash}`; for DEPENDENCY routines it is
-//! `dep:<artifactKey>/<keyHash>`. Either form is unstable across edits/cache bumps:
-//! `modelInstanceId` is content-derived (shifts when any workspace `.al` file is
-//! added/removed/renamed) in the content-MII gate path, and `<artifactKey>` is
-//! cache-derived (drifts on every cache bump). Hashing either verbatim makes the
-//! fingerprint unstable for an identical logical finding.
+//! operation/callsite/loop ids (`${routineId}/suffix`). That internal id is
+//! `{appScope}/{keyHash}` (`ids::encode_routine_id`; until the routine-id
+//! migration its prefix was the workspace `modelInstanceId`, which shifted when any
+//! `.al` file was added, removed or renamed). It is an engine-internal handle:
+//! hashing it verbatim would tie the fingerprint to the id encoding, so a change
+//! of encoding would move every fingerprint for an identical logical finding.
 //!
 //! To match al-sem's NEW stabilized fingerprint (`src/projection/finding-fingerprint.ts`),
 //! we build a map from EVERY routine's internal id → its `StableRoutineId`
@@ -32,7 +31,9 @@
 //! routines, SOURCE and DEPENDENCY alike — and substitute every internal routine-id
 //! occurrence in the `rootCauseKey` before hashing. Because operation/callsite/loop
 //! ids carry the routine id as a prefix, replacing the routine-id substring preserves
-//! the `/suffix`. The result is `modelInstanceId`- and cache-INDEPENDENT (edit-stable).
+//! the `/suffix`. The result is independent of the internal id's prefix
+//! (edit-stable); `tests/cli/ids_parent_baseline.rs` pins that across the
+//! migration.
 //!
 //! Routines whose `normalized_signature_hash` is empty are skipped (no stable form to
 //! swap to — `to_stable_routine_id_from_parts` would emit a degenerate trailing `#`).
@@ -44,10 +45,11 @@
 //! member into the stable id closes that (measured on DO: duplicate-fingerprint
 //! excess 7 → 3, the residual 3 being `d55`'s own callsite-blind `rootCauseKey`,
 //! not an id collision).
-//! For the r0-pinned (r4 differential) path the engine pins `modelInstanceId = "r0"`,
-//! so source ids are already reproducible; the substitution still applies and both
-//! paths stabilize to the SAME `StableRoutineId`. This unifies the prior dep-only
-//! special case into one all-routines map.
+//! Internal ids are `{appScope}/{64 hex}`, one scope per app
+//! (`ids::encode_routine_id`), so a cross-app model carries several prefixes;
+//! the substitution maps every app's routines to the SAME kind of
+//! `StableRoutineId`. This unifies the prior dep-only special case into one
+//! all-routines map.
 
 use crate::engine::ids::{is_lower_hex, sha256_hex};
 use crate::engine::l5::finding::Finding;
@@ -64,13 +66,13 @@ pub struct FingerprintIndex<'a> {
     /// hashing, making the fingerprint edit-/cache-independent. EMPTY only for an
     /// empty model → `fingerprint_of` is then a no-op. Borrows the model's strings.
     stable_by_id: HashMap<&'a str, &'a str>,
-    /// The distinct `"{modelInstanceId}/"` prefixes present in `stable_by_id`'s
-    /// keys (each key up to and including its first `/`), longest-first. Internal
-    /// RoutineIds have the fixed shape `"{modelInstanceId}/{64 lowercase hex}"`
-    /// (`engine/ids.rs:192`), so `substitute_stable_ids` finds candidate id
+    /// The distinct `"{appScope}/"` prefixes present in `stable_by_id`'s keys
+    /// (each key up to and including its first `/`), longest-first: one per app
+    /// in the model. Internal RoutineIds have the fixed shape
+    /// `"{appScope}/{64 lowercase hex}"` (`ids::encode_routine_id`), so `substitute_stable_ids` finds candidate id
     /// occurrences by scanning for these prefixes instead of trying every id at
     /// every byte — turning the per-finding O(F·(R log R + L·R)) scan into O(L).
-    model_instance_prefixes: Vec<String>,
+    routine_id_prefixes: Vec<String>,
 }
 
 impl FingerprintIndex<'_> {
@@ -80,8 +82,8 @@ impl FingerprintIndex<'_> {
         t.buf::<(&str, &ModelRoutine)>(self.routines_by_id.len())
             .buf::<(&str, &ModelObject)>(self.objects_by_id.len())
             .buf::<(&str, &str)>(self.stable_by_id.len())
-            .buf::<String>(self.model_instance_prefixes.len())
-            .strs(&self.model_instance_prefixes);
+            .buf::<String>(self.routine_id_prefixes.len())
+            .strs(&self.routine_id_prefixes);
         t
     }
 }
@@ -116,12 +118,12 @@ impl<'a> FingerprintIndex<'a> {
             .map(|r| (r.id.as_str(), r.stable_routine_id.as_str()))
             .collect();
 
-        // Distinct `"{modelInstanceId}/"` prefixes (key up to and including its
-        // first `/`). Deduplicated via BTreeSet, then sorted longest-first so a
-        // longer prefix shadows a shorter one that is its own prefix (mirrors the
-        // old scan's longest-key-first shadowing). In a real run every id shares
-        // one modelInstanceId so this is a single-element vec.
-        let model_instance_prefixes: Vec<String> = {
+        // Distinct `"{appScope}/"` prefixes (key up to and including its first
+        // `/`). Deduplicated via BTreeSet, then sorted longest-first so a longer
+        // prefix shadows a shorter one that is its own prefix (mirrors the old
+        // scan's longest-key-first shadowing). One per app in the model; every
+        // scope is 16 hex, so they never shadow each other.
+        let routine_id_prefixes: Vec<String> = {
             let mut v: Vec<String> = stable_by_id
                 .keys()
                 .filter_map(|k| k.find('/').map(|i| k[..=i].to_string()))
@@ -136,7 +138,7 @@ impl<'a> FingerprintIndex<'a> {
             routines_by_id,
             objects_by_id,
             stable_by_id,
-            model_instance_prefixes,
+            routine_id_prefixes,
         }
     }
 
@@ -244,7 +246,7 @@ impl<'a> FingerprintIndex<'a> {
         if self.stable_by_id.is_empty() {
             key.to_string()
         } else {
-            substitute_stable_ids(key, &self.stable_by_id, &self.model_instance_prefixes)
+            substitute_stable_ids(key, &self.stable_by_id, &self.routine_id_prefixes)
         }
     }
 }
@@ -311,16 +313,17 @@ fn site_segment_len(rest: &str) -> Option<usize> {
 
 /// Replace every stable_by_id KEY occurring in `key` with its value, scanning
 /// structurally instead of trying every id at every byte. Ids have the fixed
-/// shape "{modelInstanceId}/{64 lowercase hex}" (engine/ids.rs:192), so we find
+/// shape "{appScope}/{64 lowercase hex}" (`ids::encode_routine_id`), so we find
 /// candidate occurrences by scanning for each known "{mid}/" prefix and
 /// checking the following 64 bytes for lowercase-hex; the candidate substring
 /// is then a single HashMap probe. A candidate that misses the map is copied
 /// verbatim (identical to the old scan's behavior for empty-hash routines).
 ///
 /// This is byte-for-byte equivalent to the original try-every-id scan for every
-/// id the engine emits (all ids share one modelInstanceId, so all keys have the
-/// same length and at most one can match at any position) — pinned by the
-/// `structural_substitution_matches_scan_oracle` equivalence test.
+/// id the engine emits (every prefix is a 16-hex app scope, so all keys have the
+/// same length and at most one can match at any position, however many apps the
+/// model holds) — pinned by the `structural_substitution_matches_scan_oracle`
+/// equivalence test, whose second map carries two app scopes.
 fn substitute_stable_ids(
     key: &str,
     stable_by_id: &HashMap<&str, &str>,
@@ -762,6 +765,58 @@ mod tests {
                 "divergence (16-hex mid) on key: {k}"
             );
         }
+
+        // Third map: a cross-app model since the routine-id migration holds one
+        // 16-hex app scope PER APP, so one key can carry ids under two prefixes.
+        let (s1, s2) = ("9af645a8fef33e6d", "d6f39ce9665a51a0");
+        let id_x = format!("{s1}/{}", "1".repeat(64));
+        let id_y = format!("{s2}/{}", "2".repeat(64));
+        let id_y_absent = format!("{s2}/{}", "3".repeat(64));
+        let mut map2: HashMap<String, String> = HashMap::new();
+        map2.insert(id_x.clone(), "STABLE_X".to_string());
+        map2.insert(id_y.clone(), "STABLE_Y".to_string());
+        let prefixes2 = [format!("{s1}/"), format!("{s2}/")];
+        let keys2 = [
+            format!("d16/{id_x}/cs0|{id_y}/op2"), // one id per app, with suffixes
+            format!("{id_y}{id_x}"),              // adjacent, second app first
+            format!("{id_x}/{id_y_absent}"),      // the second is absent -> verbatim
+            format!("{s1}/{s2}/short"),           // two prefixes, no 64-hex
+        ];
+        let bmap2: HashMap<&str, &str> =
+            map2.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        for k in &keys2 {
+            assert_eq!(
+                substitute_stable_ids(k, &bmap2, &prefixes2),
+                oracle_substitute(k, &map2),
+                "divergence (two app scopes) on key: {k}"
+            );
+        }
+    }
+
+    /// `FingerprintIndex::build` collects one prefix per app scope and substitutes
+    /// the ids of both apps in one `rootCauseKey` (the production path, not the
+    /// scanner alone).
+    #[test]
+    fn fingerprint_index_substitutes_ids_of_two_app_scopes() {
+        let ws_id = format!("9af645a8fef33e6d/{}", "a1".repeat(32));
+        let dep_id = format!("d6f39ce9665a51a0/{}", "b2".repeat(32));
+        let mut r_ws = minimal_routine(&ws_id, "ws/Codeunit/1", "WsProc");
+        r_ws.stable_routine_id = "ws:Codeunit:1#WS".to_string();
+        let mut r_dep = minimal_routine(&dep_id, "dep/Codeunit/2", "DepProc");
+        r_dep.stable_routine_id = "dep:Codeunit:2#DEP".to_string();
+        let routines = vec![r_ws, r_dep];
+        let objects = vec![
+            minimal_object("ws/Codeunit/1", "Codeunit", 1),
+            minimal_object("dep/Codeunit/2", "Codeunit", 2),
+        ];
+        let idx = FingerprintIndex::build(&routines, &objects);
+        assert_eq!(idx.routine_id_prefixes.len(), 2, "one prefix per app scope");
+        let key = format!("d16/{ws_id}/cs0|{dep_id}");
+        let fp = idx.fingerprint_of(&dummy_finding("d16-x", &key, &ws_id));
+        let expected =
+            &sha256_hex("d16-x|Codeunit/1|WsProc||d16/ws:Codeunit:1#WS/cs0|dep:Codeunit:2#DEP")
+                [..16];
+        assert_eq!(fp, expected, "both apps' ids must be stabilized");
     }
 
     // -----------------------------------------------------------------------

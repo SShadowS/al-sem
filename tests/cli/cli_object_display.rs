@@ -19,7 +19,6 @@ use std::process::Command;
 
 use serde_json::Value;
 
-use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use al_sem::engine::l5::snapshot::compose_snapshot;
 use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
 
@@ -134,11 +133,9 @@ fn stable_id_of(ws: &Path, file: &str, display: &str) -> String {
 /// then matched none of the table's writes). Before G40 this asserted the
 /// overwrite, as the precondition for catching an identity-table owner.
 fn assert_identity_table_holds_table_name(ws: &Path) {
-    let model_id = compute_gate_model_instance_id(ws).unwrap();
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     let model = assemble_and_resolve_workspace_program(
         &inputs,
-        &model_id,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )

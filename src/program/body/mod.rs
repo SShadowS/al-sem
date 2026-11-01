@@ -24,17 +24,10 @@ pub fn features_for_named_routine(
     source: &str,
     routine_name: &str,
     app_guid: &str,
-    model_instance_id: &str,
     source_unit_id: &str,
 ) -> Option<features::PFeatures> {
-    l2_workspace::ir_features_for_named_routine(
-        source,
-        routine_name,
-        app_guid,
-        model_instance_id,
-        source_unit_id,
-    )
-    .map(|(f, _, _)| f)
+    l2_workspace::ir_features_for_named_routine(source, routine_name, app_guid, source_unit_id)
+        .map(|(f, _, _)| f)
 }
 
 /// True if loop `outer`'s source range strictly contains loop `inner`'s.

@@ -301,9 +301,10 @@ pub struct AnalysisModel {
 /// model exists). The program context and the model are resident together only
 /// while the adapter runs; the context is dropped before this returns.
 ///
-/// The model is assembled with the al-sem GATE modelInstanceId (content-derived,
-/// UNPINNED) so the internal RoutineIds embedded in each finding's rootCauseKey —
-/// and therefore the SARIF fingerprint hashed over them — byte-match the goldens.
+/// The internal RoutineIds embedded in each finding's rootCauseKey are scoped per
+/// app (`ids::encode_routine_id`); the SARIF fingerprint swaps each for its
+/// stable id before hashing (`l5::fingerprint`), so it depends on neither.
+/// A workspace without a model-instance id (no root `app.json` `id`) still fails.
 ///
 /// `single_app == false` (analyze's default since engine-switch S8.3) builds the
 /// cross-app base instead: one `FULL` program build, the workspace plus the
@@ -407,7 +408,10 @@ pub fn build_view_model(
     if !needs.model {
         return Ok(None);
     }
-    let Some(mi) = model_instance_id else {
+    // The id no longer enters the routine ids (they are scoped per app,
+    // `ids::encode_routine_id`); its absence (no root `app.json` with an `id`)
+    // still fails the model, as before.
+    if model_instance_id.is_none() {
         // Beside graph, analyze's warning reads the coverage of the program
         // graph read: one build per view (A12.6; #277 final r1 FR-6). It is
         // reduced before the dependency bodies resolve; its equality with the
@@ -420,12 +424,11 @@ pub fn build_view_model(
             }),
             ..no_id()
         });
-    };
+    }
     use crate::program::model::program_calls::CrossAppFailure;
     match crate::engine::l4::capability_cone::build_cross_app_base_from(
         program,
         inputs,
-        mi,
         key.no_roots_config,
         needs.assembly(),
     ) {
@@ -507,14 +510,13 @@ fn build_single_app(
         analyze: extras.then(|| Box::new((Ok(program.into_parts().0.coverage), model))),
         inputs: Arc::clone(inputs),
     };
-    let Some(model_instance_id) = id else {
+    if id.is_none() {
         return Err(failed(program, ModelFailure::NoModelInstanceId));
-    };
+    }
     let resolved = {
         let _s = pt::span("l3", "l3.assemble_resolve");
         assemble_and_resolve_workspace_from_program(
             inputs,
-            model_instance_id,
             skip_roots_config,
             &program.body().ctx,
             &program.body().parenless_calls,
@@ -698,10 +700,7 @@ impl Job for AnalyzeJob<'_> {
         Some("analyze.total")
     }
     fn demands(&self) -> Vec<ViewDemand> {
-        // Assembled with the al-sem GATE modelInstanceId (content-derived, UNPINNED)
-        // so the internal RoutineIds embedded in each finding's rootCauseKey — and
-        // therefore the SARIF fingerprint hashed over them — byte-match the al-sem
-        // `analyze` CLI goldens (`build_analysis_model`).
+        // The view `build_analysis_model` builds.
         // The rules only when a selected detector reads them (d65): a default
         // run builds none (intent-evidence §4.1b).
         ViewDemand::one(

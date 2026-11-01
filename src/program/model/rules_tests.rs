@@ -13,7 +13,7 @@ use crate::program::inputs::WorkspaceInputs;
 use crate::program::model::program_calls::{
     assemble_and_resolve_cross_app_program, assemble_and_resolve_workspace_program,
 };
-use crate::program::model::workspace::{AssemblyNeeds, MODEL_INSTANCE_ID_DEFAULT, Model};
+use crate::program::model::workspace::{AssemblyNeeds, Model};
 
 fn ws() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-rules")
@@ -24,8 +24,7 @@ fn inputs() -> Arc<WorkspaceInputs> {
 }
 
 fn model(needs: AssemblyNeeds) -> Model {
-    assemble_and_resolve_workspace_program(&inputs(), MODEL_INSTANCE_ID_DEFAULT, true, needs)
-        .expect("ws-rules model")
+    assemble_and_resolve_workspace_program(&inputs(), true, needs).expect("ws-rules model")
 }
 
 /// One rule, every field but the id, one line each.
@@ -252,13 +251,8 @@ fn ws_rules_single_app_rules_are_exact() {
 /// dependency, so the rules are the same).
 #[test]
 fn ws_rules_cross_app_rules_are_exact() {
-    let x = assemble_and_resolve_cross_app_program(
-        &inputs(),
-        MODEL_INSTANCE_ID_DEFAULT,
-        true,
-        AssemblyNeeds::RULES,
-    )
-    .expect("cross-app model");
+    let x = assemble_and_resolve_cross_app_program(&inputs(), true, AssemblyNeeds::RULES)
+        .expect("cross-app model");
     assert_text(&rules_text(&x.resolved), "cross-app");
 }
 
@@ -454,7 +448,6 @@ fn when_earlier_and_on_path_shapes() {
     let m = crate::program::model::program_calls::assemble_and_resolve_inline_program_with(
         &[("src/we.al".to_string(), src.to_string())],
         "99999999-0000-0000-0000-0000000ee652",
-        MODEL_INSTANCE_ID_DEFAULT,
         AssemblyNeeds::RULES,
     );
     let routine = |name: &str| {

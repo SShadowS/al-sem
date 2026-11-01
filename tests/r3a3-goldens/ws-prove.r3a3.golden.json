@@ -258,7 +258,7 @@
 					"extra": {
 						"kind": "table",
 						"opSubtype": "Insert",
-						"recordVariableId": "r0/859f2e3f9fffcc8857521a46e87b06f169bedc99ba3f090b8a61f90d3708a3ab/rv/entry",
+						"recordVariableId": "fc1bf13cf814d160/859f2e3f9fffcc8857521a46e87b06f169bedc99ba3f090b8a61f90d3708a3ab/rv/entry",
 						"tempState": {
 							"kind": "known",
 							"value": false
@@ -288,8 +288,8 @@
 					"resourceId": "44444444-4444-4444-4444-444444444444:Codeunit:50312::OnBeforeProvePost::f8a2fe8f30655a2917f1f136850d37bc48ef7f1f1834fe61b4c7b5f7f991197c",
 					"witnessCallsiteId": "44444444-4444-4444-4444-444444444444:Codeunit:50312#3e974e17d1d2e8263c9a3c18282a3e10d19111f1276ea2d068273da58e8982c6/cs0",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],
@@ -312,8 +312,8 @@
 					"via": "self",
 					"resourceId": "44444444-4444-4444-4444-444444444444:Codeunit:50312::OnBeforeProvePost::f8a2fe8f30655a2917f1f136850d37bc48ef7f1f1834fe61b4c7b5f7f991197c",
 					"extra": {
-						"kind": "event",
-						"eventClass": "Integration"
+						"eventClass": "Integration",
+						"kind": "event"
 					}
 				}
 			],

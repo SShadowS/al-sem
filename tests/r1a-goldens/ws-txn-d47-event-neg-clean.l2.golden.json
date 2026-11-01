@@ -84,8 +84,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/bc6ad6661c3e4e05b8186680cfabe44cadd23aafee9e62730869c94128d11f15/cs0",
-            "operationId": "r0/bc6ad6661c3e4e05b8186680cfabe44cadd23aafee9e62730869c94128d11f15/op0",
+            "id": "2e9eefd0a12ffe2a/bc6ad6661c3e4e05b8186680cfabe44cadd23aafee9e62730869c94128d11f15/cs0",
+            "operationId": "2e9eefd0a12ffe2a/bc6ad6661c3e4e05b8186680cfabe44cadd23aafee9e62730869c94128d11f15/op0",
             "calleeText": "OnAfterNotify",
             "callee": {
               "kind": "bare",
@@ -126,7 +126,7 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/bc6ad6661c3e4e05b8186680cfabe44cadd23aafee9e62730869c94128d11f15/cs0"
+              "callsiteId": "2e9eefd0a12ffe2a/bc6ad6661c3e4e05b8186680cfabe44cadd23aafee9e62730869c94128d11f15/cs0"
             }
           ]
         },
@@ -201,8 +201,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/265ca23555821b97527190ba492c390c0ec66dacf313994cfa821916ed4139fb/cs0",
-            "operationId": "r0/265ca23555821b97527190ba492c390c0ec66dacf313994cfa821916ed4139fb/op0",
+            "id": "2e9eefd0a12ffe2a/265ca23555821b97527190ba492c390c0ec66dacf313994cfa821916ed4139fb/cs0",
+            "operationId": "2e9eefd0a12ffe2a/265ca23555821b97527190ba492c390c0ec66dacf313994cfa821916ed4139fb/op0",
             "calleeText": "Client.Post",
             "callee": {
               "kind": "member",
@@ -348,7 +348,7 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/265ca23555821b97527190ba492c390c0ec66dacf313994cfa821916ed4139fb/cs0"
+              "callsiteId": "2e9eefd0a12ffe2a/265ca23555821b97527190ba492c390c0ec66dacf313994cfa821916ed4139fb/cs0"
             }
           ]
         },
@@ -371,7 +371,7 @@
             "kind": "literal",
             "value": "https://example.test/notify"
           },
-          "witnessCallsiteId": "r0/265ca23555821b97527190ba492c390c0ec66dacf313994cfa821916ed4139fb/cs0",
+          "witnessCallsiteId": "2e9eefd0a12ffe2a/265ca23555821b97527190ba492c390c0ec66dacf313994cfa821916ed4139fb/cs0",
           "extra": {
             "kind": "http",
             "method": "Post",

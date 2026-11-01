@@ -97,11 +97,11 @@
   ],
   "findings": [
     {
-      "id": "policy-no-http-from-table-triggers/ddf4fac72522b5d5/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2",
-      "rootCauseKey": "policy-no-http-from-table-triggers/ddf4fac72522b5d5/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2",
+      "id": "policy-no-http-from-table-triggers/3ccdb74497797a23/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2",
+      "rootCauseKey": "policy-no-http-from-table-triggers/3ccdb74497797a23/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2",
       "detector": "policy-no-http-from-table-triggers",
       "title": "Database triggers should not perform HTTP calls",
-      "rootCause": "Policy no-http-from-table-triggers matched 1 fact(s) on routine ddf4fac72522b5d5/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2.",
+      "rootCause": "Policy no-http-from-table-triggers matched 1 fact(s) on routine 3ccdb74497797a23/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2.",
       "severity": "medium",
       "confidence": {
         "level": "likely",
@@ -115,12 +115,12 @@
           "endLine": 11,
           "endColumn": 8
         },
-        "enclosingRoutineId": "ddf4fac72522b5d5/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2",
+        "enclosingRoutineId": "3ccdb74497797a23/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2",
         "syntaxKind": "trigger_declaration"
       },
       "evidencePath": [
         {
-          "routineId": "ddf4fac72522b5d5/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2",
+          "routineId": "3ccdb74497797a23/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2",
           "sourceAnchor": {
             "sourceUnitId": "ws:src/Table.al",
             "range": {
@@ -129,13 +129,13 @@
               "endLine": 11,
               "endColumn": 8
             },
-            "enclosingRoutineId": "ddf4fac72522b5d5/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2",
+            "enclosingRoutineId": "3ccdb74497797a23/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2",
             "syntaxKind": "trigger_declaration"
           },
           "note": "Database triggers should not perform HTTP calls"
         },
         {
-          "routineId": "ddf4fac72522b5d5/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2",
+          "routineId": "3ccdb74497797a23/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2",
           "sourceAnchor": {
             "sourceUnitId": "ws:src/Table.al",
             "range": {
@@ -144,11 +144,11 @@
               "endLine": 11,
               "endColumn": 8
             },
-            "enclosingRoutineId": "ddf4fac72522b5d5/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2",
+            "enclosingRoutineId": "3ccdb74497797a23/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2",
             "syntaxKind": "trigger_declaration"
           },
           "note": "matched on capability.op=send, resourceKind=http",
-          "callsiteId": "ddf4fac72522b5d5/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2/cs0"
+          "callsiteId": "3ccdb74497797a23/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2/cs0"
         }
       ],
       "affectedObjects": [

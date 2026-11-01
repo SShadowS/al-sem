@@ -186,10 +186,8 @@ fn diff_rename_variant_from_overlay_byte_match() {
 }
 
 fn compose_ws(dir: &std::path::Path) -> CborValue {
-    use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
     use al_sem::engine::l5::snapshot_full::{FullSnapshotOptions, compose_full_snapshot};
     use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
-    let model_id = compute_gate_model_instance_id(dir).expect("modelInstanceId");
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(
         dir,
         &al_sem::program::inputs::WorkspaceNeeds {
@@ -199,7 +197,6 @@ fn compose_ws(dir: &std::path::Path) -> CborValue {
     );
     let resolved = assemble_and_resolve_workspace_program(
         &inputs,
-        &model_id,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )

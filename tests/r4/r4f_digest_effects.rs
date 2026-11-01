@@ -138,7 +138,11 @@ fn anti_degenerate_multi_hop_via_path_exists() {
 #[test]
 fn anti_degenerate_event_pos_multi_hop_http_fact_id() {
     // event-pos ProcessAndNotify HTTP — 2-hop path (call + event-dispatch), factId
-    // 2d2c85f05c8bac52. Also asserts the event-dispatch hop kind is present.
+    // 3d0b06737b186060. Also asserts the event-dispatch hop kind is present.
+    // The factId is sha256(canonicalKey)[..16] and the key embeds internal
+    // callsite/operation ids, so it moved with the routine-id migration: it was
+    // 2d2c85f05c8bac52 under the `r0/` prefix; the same key with the app scope
+    // `2584d981b3f23bbc/` hashes to the value below.
     let proj = run_rust_value("ws-txn-d47-event-pos");
     let entries = proj.get("entries").and_then(|v| v.as_array()).unwrap();
 
@@ -146,7 +150,7 @@ fn anti_degenerate_event_pos_multi_hop_http_fact_id() {
     let mut found_event_dispatch_hop = false;
     for entry in entries {
         for eff in entry.get("effects").and_then(|v| v.as_array()).unwrap() {
-            if eff.get("factId").and_then(|v| v.as_str()) == Some("2d2c85f05c8bac52") {
+            if eff.get("factId").and_then(|v| v.as_str()) == Some("3d0b06737b186060") {
                 found_fact_id = true;
             }
             for path in eff.get("viaPaths").and_then(|v| v.as_array()).unwrap() {
@@ -160,7 +164,7 @@ fn anti_degenerate_event_pos_multi_hop_http_fact_id() {
     }
     assert!(
         found_fact_id,
-        "event-pos multi-hop HTTP factId 2d2c85f05c8bac52 must be present"
+        "event-pos multi-hop HTTP factId 3d0b06737b186060 must be present"
     );
     assert!(
         found_event_dispatch_hop,

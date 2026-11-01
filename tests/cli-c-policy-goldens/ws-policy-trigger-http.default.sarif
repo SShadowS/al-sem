@@ -47,7 +47,7 @@
         {
           "ruleId": "policy-no-http-from-table-triggers",
           "message": {
-            "text": "Policy no-http-from-table-triggers matched 1 fact(s) on routine ddf4fac72522b5d5/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2."
+            "text": "Policy no-http-from-table-triggers matched 1 fact(s) on routine 3ccdb74497797a23/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2."
           },
           "level": "warning",
           "locations": [

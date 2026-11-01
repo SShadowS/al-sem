@@ -504,14 +504,12 @@ fn model_event_edges(
     al_sem::program::model::events::EventCensus,
 ) {
     use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
-    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
     let dir = tempfile::tempdir().unwrap();
     workspace(dir.path(), al);
     let inputs =
         al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &crate::fingerprint_needs());
     let m = assemble_and_resolve_workspace_program(
         &inputs,
-        MODEL_INSTANCE_ID_DEFAULT,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
@@ -745,14 +743,12 @@ fn event_flow_routes(
 /// resolution)`, sorted. Unlike `model_event_edges` it keeps an element suffix.
 fn model_event_ids(al: &str) -> Vec<(String, String, String)> {
     use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
-    use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
     let dir = tempfile::tempdir().unwrap();
     workspace(dir.path(), al);
     let inputs =
         al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &crate::fingerprint_needs());
     let m = assemble_and_resolve_workspace_program(
         &inputs,
-        MODEL_INSTANCE_ID_DEFAULT,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )

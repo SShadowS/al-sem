@@ -990,7 +990,6 @@ pub fn dependency_half(ws: &std::path::Path) -> Vec<crate::program::model::calls
     let inputs = crate::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     let x = crate::program::model::program_calls::assemble_and_resolve_cross_app_program(
         &inputs,
-        "r0",
         false,
         crate::program::model::workspace::AssemblyNeeds::BASE,
     )

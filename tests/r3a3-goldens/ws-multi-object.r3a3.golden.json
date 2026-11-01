@@ -22,7 +22,7 @@
 					"extra": {
 						"kind": "table",
 						"opSubtype": "Get",
-						"recordVariableId": "r0/2bd8139ea3e68be14b6a2bac5f71688dfa94bd6e00ac4456a99ffcb7a7023280/rv/customer",
+						"recordVariableId": "e66a14abe8081a44/2bd8139ea3e68be14b6a2bac5f71688dfa94bd6e00ac4456a99ffcb7a7023280/rv/customer",
 						"tempState": {
 							"kind": "known",
 							"value": false

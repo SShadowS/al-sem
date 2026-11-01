@@ -33,7 +33,6 @@ use al_sem::engine::l5::registry::{Detector, assembly_needs, substrate};
 use al_sem::program::model::program_calls::{
     assemble_and_resolve_inline_program_with, assemble_and_resolve_workspace_program,
 };
-use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
 use std::path::PathBuf;
 
 /// An inline workspace built with what every registered detector reads (the
@@ -45,7 +44,6 @@ fn with_rules(
     assemble_and_resolve_inline_program_with(
         files,
         app_guid,
-        MODEL_INSTANCE_ID_DEFAULT,
         assembly_needs(&registered_detectors()),
     )
 }
@@ -162,7 +160,6 @@ fn every_detector_parity_between_full_and_minimal_ctx() {
         let dir = corpus_dir(fixture);
         let resolved = assemble_and_resolve_workspace_program(
             &al_sem::program::inputs::WorkspaceInputs::read(&dir, &Default::default()),
-            MODEL_INSTANCE_ID_DEFAULT,
             false,
             assembly_needs(&detectors),
         )

@@ -15,8 +15,6 @@ use al_sem::engine::l4::capability_cone::project_r3a3;
 use al_sem::program::model::program_calls::assemble_and_resolve_inline_program as assemble_and_resolve;
 use serde_json::Value;
 
-const MODEL_INSTANCE_ID: &str = "r0";
-
 #[derive(serde::Deserialize)]
 struct VectorsDoc {
     #[serde(rename = "appGuid")]
@@ -68,7 +66,7 @@ fn all_r3a3_pipeline_vectors_match() {
     for vec in &doc.pipeline_vectors {
         replayed += 1;
         let files = files_of(&vec.files);
-        let resolved = assemble_and_resolve(&files, &doc.app_guid, MODEL_INSTANCE_ID);
+        let resolved = assemble_and_resolve(&files, &doc.app_guid);
         let projection = project_r3a3(&resolved);
 
         let actual_summaries = serde_json::to_value(&projection.summaries).unwrap();
@@ -108,12 +106,12 @@ fn equal_distance_tie_is_deterministic() {
     let files = files_of(&vec.files);
 
     let first = {
-        let resolved = assemble_and_resolve(&files, &doc.app_guid, MODEL_INSTANCE_ID);
+        let resolved = assemble_and_resolve(&files, &doc.app_guid);
         serde_json::to_value(project_r3a3(&resolved).summaries).unwrap()
     };
     // 16 independent re-runs — any HashMap-iteration leak surfaces as a flake.
     for _ in 0..16 {
-        let resolved = assemble_and_resolve(&files, &doc.app_guid, MODEL_INSTANCE_ID);
+        let resolved = assemble_and_resolve(&files, &doc.app_guid);
         let again = serde_json::to_value(project_r3a3(&resolved).summaries).unwrap();
         assert_eq!(again, first, "equal-distance tie winner is not stable");
     }

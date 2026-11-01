@@ -812,11 +812,8 @@ fn read_inputs(ws: &Path) -> std::sync::Arc<al_sem::program::inputs::WorkspaceIn
 /// The single-app model (`alsem analyze --single-app`'s; with no dependency it
 /// equals the cross-app one).
 fn single_app_model(ws: &Path) -> Model {
-    let id = al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id(ws)
-        .expect("model id");
     al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
         &read_inputs(ws),
-        &id,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
@@ -825,11 +822,8 @@ fn single_app_model(ws: &Path) -> Model {
 
 /// The default (cross-app) model `alsem analyze` builds.
 fn cross_app_model(ws: &Path) -> Model {
-    let id = al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id(ws)
-        .expect("model id");
     al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
         &read_inputs(ws),
-        &id,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )

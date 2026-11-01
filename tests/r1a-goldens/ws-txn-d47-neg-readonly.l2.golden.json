@@ -21,8 +21,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/955d1bcf80f156a0a3ed637837414fab84be3371d2bff24be55a639f572c0f29/cs0",
-            "operationId": "r0/955d1bcf80f156a0a3ed637837414fab84be3371d2bff24be55a639f572c0f29/op0",
+            "id": "08866bf187e4567d/955d1bcf80f156a0a3ed637837414fab84be3371d2bff24be55a639f572c0f29/cs0",
+            "operationId": "08866bf187e4567d/955d1bcf80f156a0a3ed637837414fab84be3371d2bff24be55a639f572c0f29/op0",
             "calleeText": "Client.Get",
             "callee": {
               "kind": "member",
@@ -135,7 +135,7 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/955d1bcf80f156a0a3ed637837414fab84be3371d2bff24be55a639f572c0f29/cs0"
+              "callsiteId": "08866bf187e4567d/955d1bcf80f156a0a3ed637837414fab84be3371d2bff24be55a639f572c0f29/cs0"
             }
           ]
         },
@@ -158,7 +158,7 @@
             "kind": "literal",
             "value": "https://example.test/ping"
           },
-          "witnessCallsiteId": "r0/955d1bcf80f156a0a3ed637837414fab84be3371d2bff24be55a639f572c0f29/cs0",
+          "witnessCallsiteId": "08866bf187e4567d/955d1bcf80f156a0a3ed637837414fab84be3371d2bff24be55a639f572c0f29/cs0",
           "extra": {
             "kind": "http",
             "method": "Get",

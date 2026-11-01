@@ -241,7 +241,6 @@ fn report_dataitem_implicit_rec_and_name_vars_seeded() {
         trig_member.as_deref(),
         &no_params,
         None,
-        "a",
     );
     let feats = ir_walk::project_routine_features_ir(&f, oi, trig, &rid, src, "a", None);
     let rec = feats
@@ -279,7 +278,6 @@ fn report_dataitem_implicit_rec_and_name_vars_seeded() {
         ir_walk::ir_enclosing_member(helper).as_deref(),
         &no_params,
         None,
-        "a",
     );
     let feats2 = ir_walk::project_routine_features_ir(&f, oi, helper, &rid2, src, "a", None);
     assert!(

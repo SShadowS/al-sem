@@ -14,7 +14,7 @@
 					"extra": {
 						"kind": "table",
 						"opSubtype": "Insert",
-						"recordVariableId": "r0/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/rv/temprec",
+						"recordVariableId": "98bb4b22361c033b/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/rv/temprec",
 						"tempState": {
 							"kind": "known",
 							"value": true
@@ -33,15 +33,15 @@
 					},
 					"witnessCallsiteId": "11111111-0000-0000-0000-0000000d4705:Codeunit:50000#cc7e0d05e04c6c2a3061943bdc3dc62be0146ae5a91d97774026d7e5158f39ba/cs0",
 					"extra": {
-						"kind": "http",
-						"method": "Get",
 						"bodyArgSource": {
-							"kind": "constant-var",
-							"varName": "resp",
 							"initializer": {
 								"kind": "unknown"
-							}
-						}
+							},
+							"kind": "constant-var",
+							"varName": "resp"
+						},
+						"kind": "http",
+						"method": "Get"
 					}
 				}
 			],

@@ -47,7 +47,7 @@
         {
           "ruleId": "policy-exposed-root-no-isolated-storage-write",
           "message": {
-            "text": "Policy exposed-root-no-isolated-storage-write matched 1 fact(s) on routine da44ea3c69c984c1/156f9b05f0a159334d95a6b03ede875c7b0e28c0ef547c37b9c5d046105d48dd."
+            "text": "Policy exposed-root-no-isolated-storage-write matched 1 fact(s) on routine ab9fde18e9afaf6f/156f9b05f0a159334d95a6b03ede875c7b0e28c0ef547c37b9c5d046105d48dd."
           },
           "level": "error",
           "locations": [

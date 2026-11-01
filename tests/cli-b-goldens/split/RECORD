@@ -8,3 +8,8 @@ Re-mints:
 - 2026-10-28 (G20): full-snapshot.r5b.cross-app.{json,cbor}. The capability facts gained
   `error-implicit` facts (unguarded record lookups, TestField, FieldError). The json diff holds only
   those facts and the counts and hashes that follow from them.
+- 2026-11-01 (routine-id migration, context-server design r3 6.7): all six records. Internal
+  routine ids are now `{app scope}/{64 hex}` instead of `{modelInstanceId}/{64 hex}`. After
+  replacing every `<prefix>/<64 hex>` with its hash part, the json files are equal except for the
+  16-hex edge ids hashed over internal callsite/operation ids, which map one-to-one; the cbor files
+  decode to the same documents under the same normalization.

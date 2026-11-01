@@ -142,8 +142,8 @@ pub fn iterate_embedded_source(app_bytes: &[u8]) -> Vec<EmbeddedSourceFile> {
 // The dep-artifact payload types (the R3a-4 producer surface).
 // ===========================================================================
 
-/// A compact intra-app call edge — `from → to` routine-id pairs in the dep's own
-/// modelInstanceId space, + the representative callsite id. Mirrors al-sem
+/// A compact intra-app call edge — `from → to` internal routine-id pairs (the
+/// dep's own app scope), + the representative callsite id. Mirrors al-sem
 /// `DepCallEdge`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DepCallEdge {

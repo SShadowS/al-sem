@@ -33,7 +33,6 @@
 
 use std::path::{Path, PathBuf};
 
-use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use al_sem::engine::gate::run::compute_analyzer_diagnostics;
 use al_sem::engine::l5::snapshot_full::{
     EnvelopeDiagnostic, FullSnapshotOptions, compose_full_snapshot, serialize_cbor,
@@ -144,12 +143,6 @@ fn compose_for(fixture: &str) -> (al_sem::engine::gate::cbor::CborValue, Model, 
         "cli-b fixture {fixture} not found at {}",
         fixture_dir.display()
     );
-    // al-sem's `analyzeWorkspace` computes a content-derived `modelInstanceId`
-    // (NOT the `r0` default the R4-F differential used) — the internal callsite /
-    // routine ids (and the edgeIds hashed over them) embed it, so the snapshot
-    // must be assembled with the SAME id the gate path computes.
-    let model_instance_id = compute_gate_model_instance_id(&fixture_dir)
-        .unwrap_or_else(|| panic!("{fixture}: could not compute modelInstanceId"));
     // Engine-switch S6.4: the model `alsem diff`'s workspace mode builds.
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(
         &fixture_dir,
@@ -160,7 +153,6 @@ fn compose_for(fixture: &str) -> (al_sem::engine::gate::cbor::CborValue, Model, 
     );
     let resolved = assemble_and_resolve_workspace_program(
         &inputs,
-        &model_instance_id,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )

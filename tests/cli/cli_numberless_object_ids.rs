@@ -31,7 +31,6 @@ use std::path::Path;
 use al_sem::engine::deps::projection::project_abi_to_index;
 use al_sem::engine::deps::symbol_reference::parse_symbol_reference;
 use al_sem::program::model::model_object_id;
-use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT as MI;
 
 const GUID: &str = "83830000-0000-0000-0000-000000000083";
 const DEP_GUID: &str = "83830000-0000-0000-0000-0000000000de";
@@ -117,7 +116,6 @@ fn full_snapshot(ws: &Path) -> serde_json::Value {
     );
     let model = al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
         &inputs,
-        MI,
         true,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
@@ -268,7 +266,6 @@ fn source_interfaces_get_distinct_ids_from_every_producer() {
     let inputs = read(ws);
     let model = al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
         &inputs,
-        MI,
         true,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
@@ -381,7 +378,6 @@ fn codeunits_without_a_parsed_number_get_distinct_ids() {
 
     let model = al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
         &read(ws),
-        MI,
         true,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
@@ -475,7 +471,7 @@ fn dependency_interfaces_without_id_get_distinct_ids() {
         abi.objects.iter().all(|o| o.object_number == 0),
         "precondition: the symbols carry no Id"
     );
-    let p = project_abi_to_index(&abi, DEP_GUID, MI);
+    let p = project_abi_to_index(&abi, DEP_GUID);
     let ids = sorted(p.objects.iter().map(|o| o.id.clone()).collect());
     assert_eq!(
         ids,
@@ -526,7 +522,6 @@ fn dependency_interface_graph_id_equals_its_model_object_id() {
     let inputs = read(ws);
     let cross = al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
         &inputs,
-        MI,
         true,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
@@ -595,7 +590,6 @@ fn dependency_interface_with_escaped_quotes_graph_id_equals_its_model_object_id(
     let inputs = read(ws);
     let cross = al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
         &inputs,
-        MI,
         true,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )

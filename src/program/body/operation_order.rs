@@ -764,7 +764,6 @@ pub fn analyze_named_routine_order(
     source: &str,
     routine_name: &str,
     app_guid: &str,
-    model_instance_id: &str,
     source_unit_id: &str,
 ) -> Option<RoutineOperationOrder> {
     let (features, _parameters, attr_names_lc) =
@@ -772,7 +771,6 @@ pub fn analyze_named_routine_order(
             source,
             routine_name,
             app_guid,
-            model_instance_id,
             source_unit_id,
         )?;
 

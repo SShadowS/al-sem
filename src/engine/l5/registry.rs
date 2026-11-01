@@ -869,7 +869,7 @@ mod tests {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-d13-internal-call");
         let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
-        let base = crate::engine::l4::capability_cone::build_cross_app_base(&inputs, "r0")
+        let base = crate::engine::l4::capability_cone::build_cross_app_base(&inputs)
             .expect("cross-app base");
         let d13 = crate::engine::l5::detectors::registered_detectors()
             .into_iter()
@@ -917,7 +917,7 @@ mod tests {
         let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/r0-corpus/ws-d13-internal-call");
         let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
-        let base = crate::engine::l4::capability_cone::build_cross_app_base(&inputs, "r0")
+        let base = crate::engine::l4::capability_cone::build_cross_app_base(&inputs)
             .expect("cross-app base");
         let primary = base
             .resolved
@@ -1099,7 +1099,6 @@ mod tests {
         crate::program::model::program_calls::assemble_and_resolve_inline_program_with(
             &files,
             "99999999-0000-0000-0000-0000000ee651",
-            crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
             needs,
         )
     }

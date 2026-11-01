@@ -24,7 +24,7 @@
         "loops": [],
         "operationSites": [
           {
-            "id": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op0",
+            "id": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op0",
             "kind": "record-op",
             "loopStack": [],
             "sourceAnchor": {
@@ -44,7 +44,7 @@
             }
           },
           {
-            "id": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op1",
+            "id": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op1",
             "kind": "record-op",
             "loopStack": [],
             "sourceAnchor": {
@@ -64,7 +64,7 @@
             }
           },
           {
-            "id": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op2",
+            "id": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op2",
             "kind": "commit",
             "loopStack": [],
             "sourceAnchor": {
@@ -86,10 +86,10 @@
         ],
         "recordOperations": [
           {
-            "id": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op0",
+            "id": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op0",
             "op": "Get",
             "recordVariableName": "Rec",
-            "recordVariableId": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/rv/rec",
+            "recordVariableId": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
@@ -115,10 +115,10 @@
             }
           },
           {
-            "id": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op1",
+            "id": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op1",
             "op": "Modify",
             "recordVariableName": "Rec",
-            "recordVariableId": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/rv/rec",
+            "recordVariableId": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
@@ -136,8 +136,8 @@
         ],
         "callSites": [
           {
-            "id": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/cs0",
-            "operationId": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op3",
+            "id": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/cs0",
+            "operationId": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op3",
             "calleeText": "Client.Post",
             "callee": {
               "kind": "member",
@@ -238,7 +238,7 @@
         ],
         "recordVariables": [
           {
-            "id": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/rv/rec",
+            "id": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/rv/rec",
             "name": "Rec",
             "tableName": "D47 Rec",
             "tempState": {
@@ -335,22 +335,22 @@
           "children": [
             {
               "kind": "op",
-              "operationId": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op0"
+              "operationId": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op0"
             },
             {
               "kind": "other"
             },
             {
               "kind": "op",
-              "operationId": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op1"
+              "operationId": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op1"
             },
             {
               "kind": "call",
-              "callsiteId": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/cs0"
+              "callsiteId": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/cs0"
             },
             {
               "kind": "op",
-              "operationId": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op2"
+              "operationId": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op2"
             }
           ]
         },
@@ -369,10 +369,10 @@
           "confidence": "unresolved",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op0",
+          "witnessOperationId": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op0",
           "extra": {
             "kind": "table",
-            "recordVariableId": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/rv/rec",
+            "recordVariableId": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
@@ -386,10 +386,10 @@
           "confidence": "unresolved",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op1",
+          "witnessOperationId": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op1",
           "extra": {
             "kind": "table",
-            "recordVariableId": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/rv/rec",
+            "recordVariableId": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
@@ -403,7 +403,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op2"
+          "witnessOperationId": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op2"
         },
         {
           "op": "send",
@@ -415,7 +415,7 @@
             "kind": "literal",
             "value": "https://example.test/events"
           },
-          "witnessCallsiteId": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/cs0",
+          "witnessCallsiteId": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/cs0",
           "extra": {
             "kind": "http",
             "method": "Post",
@@ -434,7 +434,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op0"
+          "witnessOperationId": "0fd5919f44ccdebd/fce356a56bd713ec3f24756083c02df1bc3225bca206b09526c69f3b0e2da3fe/op0"
         }
       ],
       "capabilityStatus": "complete",

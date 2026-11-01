@@ -36,8 +36,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/6ed8dbf226a6ce93a7c18561deb437ee1e49107ac33a55c8df2fd9b3a7ce5857/cs0",
-            "operationId": "r0/6ed8dbf226a6ce93a7c18561deb437ee1e49107ac33a55c8df2fd9b3a7ce5857/op0",
+            "id": "1de0d88279f76ebc/6ed8dbf226a6ce93a7c18561deb437ee1e49107ac33a55c8df2fd9b3a7ce5857/cs0",
+            "operationId": "1de0d88279f76ebc/6ed8dbf226a6ce93a7c18561deb437ee1e49107ac33a55c8df2fd9b3a7ce5857/op0",
             "calleeText": "OnAfterAdjust",
             "callee": {
               "kind": "bare",
@@ -58,7 +58,7 @@
                 "parameterIndex": 0,
                 "sourceKind": "parameter",
                 "sourceVariableName": "inv",
-                "sourceRecordVariableId": "r0/6ed8dbf226a6ce93a7c18561deb437ee1e49107ac33a55c8df2fd9b3a7ce5857/rv/inv",
+                "sourceRecordVariableId": "1de0d88279f76ebc/6ed8dbf226a6ce93a7c18561deb437ee1e49107ac33a55c8df2fd9b3a7ce5857/rv/inv",
                 "sourceParameterIndex": 0,
                 "callerSourceParameterIsVar": true,
                 "sourceTempState": {
@@ -96,7 +96,7 @@
         "fieldAccesses": [],
         "recordVariables": [
           {
-            "id": "r0/6ed8dbf226a6ce93a7c18561deb437ee1e49107ac33a55c8df2fd9b3a7ce5857/rv/inv",
+            "id": "1de0d88279f76ebc/6ed8dbf226a6ce93a7c18561deb437ee1e49107ac33a55c8df2fd9b3a7ce5857/rv/inv",
             "name": "Inv",
             "tableName": "Inventory",
             "tempState": {
@@ -137,7 +137,7 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/6ed8dbf226a6ce93a7c18561deb437ee1e49107ac33a55c8df2fd9b3a7ce5857/cs0"
+              "callsiteId": "1de0d88279f76ebc/6ed8dbf226a6ce93a7c18561deb437ee1e49107ac33a55c8df2fd9b3a7ce5857/cs0"
             }
           ]
         },
@@ -189,7 +189,7 @@
         "fieldAccesses": [],
         "recordVariables": [
           {
-            "id": "r0/9e1e6b0771b4bdb5de60aef74eaa7546b18a69264eef32468b66904317e024f4/rv/inv",
+            "id": "1de0d88279f76ebc/9e1e6b0771b4bdb5de60aef74eaa7546b18a69264eef32468b66904317e024f4/rv/inv",
             "name": "Inv",
             "tableName": "Inventory",
             "tempState": {
@@ -296,7 +296,7 @@
         "loops": [],
         "operationSites": [
           {
-            "id": "r0/078ece006d8588c196a4f9751345a9250c4d74951d4d6b35f0c444444cdf1876/op0",
+            "id": "1de0d88279f76ebc/078ece006d8588c196a4f9751345a9250c4d74951d4d6b35f0c444444cdf1876/op0",
             "kind": "record-op",
             "loopStack": [],
             "sourceAnchor": {
@@ -318,10 +318,10 @@
         ],
         "recordOperations": [
           {
-            "id": "r0/078ece006d8588c196a4f9751345a9250c4d74951d4d6b35f0c444444cdf1876/op0",
+            "id": "1de0d88279f76ebc/078ece006d8588c196a4f9751345a9250c4d74951d4d6b35f0c444444cdf1876/op0",
             "op": "Modify",
             "recordVariableName": "Inv",
-            "recordVariableId": "r0/078ece006d8588c196a4f9751345a9250c4d74951d4d6b35f0c444444cdf1876/rv/inv",
+            "recordVariableId": "1de0d88279f76ebc/078ece006d8588c196a4f9751345a9250c4d74951d4d6b35f0c444444cdf1876/rv/inv",
             "tempState": {
               "kind": "parameter-dependent",
               "parameterIndex": 0
@@ -366,7 +366,7 @@
         ],
         "recordVariables": [
           {
-            "id": "r0/078ece006d8588c196a4f9751345a9250c4d74951d4d6b35f0c444444cdf1876/rv/inv",
+            "id": "1de0d88279f76ebc/078ece006d8588c196a4f9751345a9250c4d74951d4d6b35f0c444444cdf1876/rv/inv",
             "name": "Inv",
             "tableName": "Inventory",
             "tempState": {
@@ -422,7 +422,7 @@
             },
             {
               "kind": "op",
-              "operationId": "r0/078ece006d8588c196a4f9751345a9250c4d74951d4d6b35f0c444444cdf1876/op0"
+              "operationId": "1de0d88279f76ebc/078ece006d8588c196a4f9751345a9250c4d74951d4d6b35f0c444444cdf1876/op0"
             }
           ]
         },
@@ -441,10 +441,10 @@
           "confidence": "unresolved",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/078ece006d8588c196a4f9751345a9250c4d74951d4d6b35f0c444444cdf1876/op0",
+          "witnessOperationId": "1de0d88279f76ebc/078ece006d8588c196a4f9751345a9250c4d74951d4d6b35f0c444444cdf1876/op0",
           "extra": {
             "kind": "table",
-            "recordVariableId": "r0/078ece006d8588c196a4f9751345a9250c4d74951d4d6b35f0c444444cdf1876/rv/inv",
+            "recordVariableId": "1de0d88279f76ebc/078ece006d8588c196a4f9751345a9250c4d74951d4d6b35f0c444444cdf1876/rv/inv",
             "tempState": {
               "kind": "parameter-dependent",
               "parameterIndex": 0
@@ -524,7 +524,7 @@
         "loops": [],
         "operationSites": [
           {
-            "id": "r0/4de250486fbeac0a896b90086d605de1f30fd0c42b94fc4b448cf55ac02eb395/op0",
+            "id": "1de0d88279f76ebc/4de250486fbeac0a896b90086d605de1f30fd0c42b94fc4b448cf55ac02eb395/op0",
             "kind": "record-op",
             "loopStack": [],
             "sourceAnchor": {
@@ -546,10 +546,10 @@
         ],
         "recordOperations": [
           {
-            "id": "r0/4de250486fbeac0a896b90086d605de1f30fd0c42b94fc4b448cf55ac02eb395/op0",
+            "id": "1de0d88279f76ebc/4de250486fbeac0a896b90086d605de1f30fd0c42b94fc4b448cf55ac02eb395/op0",
             "op": "Get",
             "recordVariableName": "Other",
-            "recordVariableId": "r0/4de250486fbeac0a896b90086d605de1f30fd0c42b94fc4b448cf55ac02eb395/rv/other",
+            "recordVariableId": "1de0d88279f76ebc/4de250486fbeac0a896b90086d605de1f30fd0c42b94fc4b448cf55ac02eb395/rv/other",
             "tempState": {
               "kind": "known",
               "value": false
@@ -591,7 +591,7 @@
         ],
         "recordVariables": [
           {
-            "id": "r0/4de250486fbeac0a896b90086d605de1f30fd0c42b94fc4b448cf55ac02eb395/rv/inv",
+            "id": "1de0d88279f76ebc/4de250486fbeac0a896b90086d605de1f30fd0c42b94fc4b448cf55ac02eb395/rv/inv",
             "name": "Inv",
             "tableName": "Inventory",
             "tempState": {
@@ -602,7 +602,7 @@
             "parameterIndex": 0
           },
           {
-            "id": "r0/4de250486fbeac0a896b90086d605de1f30fd0c42b94fc4b448cf55ac02eb395/rv/other",
+            "id": "1de0d88279f76ebc/4de250486fbeac0a896b90086d605de1f30fd0c42b94fc4b448cf55ac02eb395/rv/other",
             "name": "Other",
             "tableName": "Inventory",
             "tempState": {
@@ -681,7 +681,7 @@
               "conditionLeaves": [
                 {
                   "kind": "op",
-                  "operationId": "r0/4de250486fbeac0a896b90086d605de1f30fd0c42b94fc4b448cf55ac02eb395/op0"
+                  "operationId": "1de0d88279f76ebc/4de250486fbeac0a896b90086d605de1f30fd0c42b94fc4b448cf55ac02eb395/op0"
                 }
               ],
               "children": [
@@ -715,10 +715,10 @@
           "confidence": "unresolved",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/4de250486fbeac0a896b90086d605de1f30fd0c42b94fc4b448cf55ac02eb395/op0",
+          "witnessOperationId": "1de0d88279f76ebc/4de250486fbeac0a896b90086d605de1f30fd0c42b94fc4b448cf55ac02eb395/op0",
           "extra": {
             "kind": "table",
-            "recordVariableId": "r0/4de250486fbeac0a896b90086d605de1f30fd0c42b94fc4b448cf55ac02eb395/rv/other",
+            "recordVariableId": "1de0d88279f76ebc/4de250486fbeac0a896b90086d605de1f30fd0c42b94fc4b448cf55ac02eb395/rv/other",
             "tempState": {
               "kind": "known",
               "value": false

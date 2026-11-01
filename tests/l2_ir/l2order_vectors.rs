@@ -13,12 +13,11 @@
 //! Reproduction context (mirrors gen-l2order-vectors / l2cc_vectors):
 //!   - app.json id    = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"  (appGuid)
 //!   - single file    = src/vec.al  →  sourceUnitId = "ws:src/vec.al"
-//!   - modelInstanceId = "r0"
+//!   - internal ids are scoped by the app guid (`ids::routine_app_scope`)
 
 use al_sem::program::body::operation_order::{OperationOrder, analyze_named_routine_order};
 
 const APP_GUID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-const MODEL_INSTANCE_ID: &str = "r0";
 const SOURCE_UNIT_ID: &str = "ws:src/vec.al";
 
 #[derive(serde::Deserialize)]
@@ -118,13 +117,8 @@ fn all_l2order_vector_families_match() {
     let mut failures: Vec<String> = Vec::new();
 
     for vec in &doc.vectors {
-        let analysis = analyze_named_routine_order(
-            &vec.source,
-            &vec.routine_name,
-            APP_GUID,
-            MODEL_INSTANCE_ID,
-            SOURCE_UNIT_ID,
-        );
+        let analysis =
+            analyze_named_routine_order(&vec.source, &vec.routine_name, APP_GUID, SOURCE_UNIT_ID);
         let Some(analysis) = analysis else {
             failures.push(format!(
                 "[{}] {}: routine `{}` not found by the Rust walker",
