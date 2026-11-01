@@ -21,9 +21,9 @@
 //!
 //! 1. `parent_baseline_fingerprints_and_stable_ids_are_unchanged`: per fixture
 //!    app, the sorted SARIF `ruleId|fingerprint` list (every registered detector,
-//!    `--scope all`) and every stable-id-bearing string in analyze
-//!    `--format json --with-evidence` and the all-files digest are equal to the
-//!    record.
+//!    `--scope all`) and every stable routine id and stable sub-id occurring in
+//!    analyze `--format json --with-evidence` and the all-files digest are equal
+//!    to the record.
 //! 2. `parent_minted_baselines_still_suppress_every_finding`: the `--baseline`
 //!    file the parent minted (`--update-baseline`) for each fixture with findings
 //!    still suppresses every finding today (zero SARIF results), and the
@@ -35,9 +35,9 @@
 //! re-minted only by hand, with `IDS_PARENT_BASELINE_MINT=<commit>`, and only at
 //! a commit whose fingerprints are known good.
 //!
-//! A recorded string never contains an internal id (the minter refuses one), so
-//! the record cannot move for the reason the migration legitimately moves other
-//! output.
+//! A recorded string is a stable id and nothing else (`stable_id_re`), so the
+//! record cannot move for the reason the migration legitimately moves other
+//! output: internal ids and the hashes derived from them.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -56,7 +56,7 @@ const MINT_ENV: &str = "IDS_PARENT_BASELINE_MINT";
 struct FixtureRecord {
     /// Sorted `ruleId|<fingerprints as key=value,…>` per SARIF result.
     findings: Vec<String>,
-    /// Sorted, deduplicated stable-id-bearing strings from analyze's
+    /// Sorted, deduplicated stable ids and stable sub-ids occurring in analyze's
     /// `--with-evidence` JSON and the all-files digest JSON.
     stable_ids: Vec<String>,
     /// The `--update-baseline` bytes the minting commit wrote, when the fixture
@@ -149,26 +149,29 @@ fn analyze(args: &AnalyzeArgs) -> al_sem::engine::gate::run::AnalyzeOutput {
         .unwrap_or_else(|e| panic!("{}: analyze failed: {e}", args.workspace))
 }
 
-/// An internal routine id anywhere in `s`: `{prefix}/{64 lowercase hex}` with a
-/// non-empty, `/`-free prefix of word characters. Shape-only on purpose, so it
-/// matches the old (`modelInstanceId`, `r0`) and the new (app scope) prefixes.
-fn internal_id_re() -> &'static regex::Regex {
-    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"[0-9A-Za-z_-]+/[0-9a-f]{64}").expect("regex"))
-}
-
-/// A stable routine id anywhere in `s`: `…#{64 lowercase hex}`.
+/// A stable routine id or stable sub-id: `{guid}:{Type}:{key}#{64 lowercase hex}`
+/// (`ids::to_stable_routine_id_from_parts`), optionally followed by the site
+/// suffixes `stable_sub_id` re-attaches (`/cs0`, `/op3`, `/loop2`, …). Only the
+/// id itself is recorded, never the text around it: a finding id such as
+/// `d47/{stable id}/WRITE_PENDING_AT_EXTERNAL_IO|{occurrence}|{occurrence}|` also
+/// carries digest occurrence ids, which are sha256 over a canonical key holding
+/// INTERNAL routine and operation ids (`l5::digest::occurrence_id_from_key`) —
+/// per-run handles that moved with every file add before the migration and move
+/// with it once.
 fn stable_id_re() -> &'static regex::Regex {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"#[0-9a-f]{64}").expect("regex"))
+    RE.get_or_init(|| {
+        regex::Regex::new(
+            r"[0-9A-Za-z]{8}-[0-9A-Za-z]{4}-[0-9A-Za-z]{4}-[0-9A-Za-z]{4}-[0-9A-Za-z]{12}:[^#|]*?#[0-9a-f]{64}(?:/[a-z]+[0-9]+)*",
+        )
+        .expect("regex")
+    })
 }
 
 fn collect_stable_strings(v: &serde_json::Value, out: &mut Vec<String>) {
     match v {
         serde_json::Value::String(s) => {
-            if stable_id_re().is_match(s) && !internal_id_re().is_match(s) {
-                out.push(s.clone());
-            }
+            out.extend(stable_id_re().find_iter(s).map(|m| m.as_str().to_string()));
         }
         serde_json::Value::Array(a) => a.iter().for_each(|x| collect_stable_strings(x, out)),
         serde_json::Value::Object(m) => m.values().for_each(|x| collect_stable_strings(x, out)),
