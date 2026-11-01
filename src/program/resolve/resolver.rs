@@ -2464,6 +2464,60 @@ pub(crate) fn object_receiver_target<'g>(
     }
 }
 
+/// Whether `target` declares a procedure named `method_lc` that hides the
+/// built-in entry-dispatch method of the same name (`Run`, `RunModal`,
+/// `Import`, `Export`) for a call WITH arguments. For a Page or Report, a
+/// procedure of a `PageExtension`/`ReportExtension` in `from_object`'s
+/// dependency closure counts too.
+///
+/// AL's rule, probed with alc 18.1.43.24897 (fix/transitive-dependency-demand):
+/// - A procedure with the built-in's own parameters (`procedure Run()`) is
+///   AL0440 ("already defines a method called 'Run' with the same parameter
+///   types"), so a call with no argument is always the built-in.
+/// - Once the object (or a visible extension) declares any `Run(…)`, every
+///   call with arguments binds among the declared procedures only: with
+///   `procedure Run(var R: Record "Integer")`, `Cu.Run(DateRec)` is AL0133
+///   (cannot convert), and with `procedure Run(A: Integer; C: Integer)`,
+///   `Cu.Run(IntRec)` is AL0135 (missing argument) — the built-in
+///   `Run(var Record)` is never a fallback.
+///
+/// Microsoft's System Application has such procedures
+/// (`"Azure AD User Mgmt. Impl.".Run(ForUserSecurityId: Guid)`,
+/// `"Guided Experience".Run(…)`).
+fn declares_entry_method_overload(
+    target: &ObjectNode,
+    method_lc: &str,
+    from_object: &ObjectNode,
+    graph: &ProgramGraph,
+    index: &ResolveIndex,
+) -> bool {
+    let declares = |oid: &ObjectNodeId| {
+        graph
+            .routines
+            .run_by(|r| {
+                r.id.object
+                    .cmp(oid)
+                    .then_with(|| r.id.name_lc.as_str().cmp(method_lc))
+            })
+            .any(|r| !r.is_trigger)
+    };
+    if declares(&target.id) {
+        return true;
+    }
+    let extensions: &[ObjectNodeId] = match target.id.kind {
+        ObjectKind::Page => index.page_extensions_of(&target.name.fold_identifier()),
+        ObjectKind::Report => index.report_extensions_of(&target.name.fold_identifier()),
+        _ => &[],
+    };
+    if extensions.is_empty() {
+        return false;
+    }
+    let closure = graph.topology.closure(from_object.id.app);
+    extensions
+        .iter()
+        .any(|ext| closure.contains(&ext.app) && declares(ext))
+}
+
 /// The Opaque boundary for a symbol-only object's entry trigger: the trigger
 /// may exist, and the ABI does not say.
 fn opaque_entry_route(target_id: &ObjectNodeId, trigger_name: &str) -> Route {
@@ -3123,7 +3177,15 @@ pub(crate) fn resolve_member_with_args(
                 ObjectKind::XmlPort => matches!(method_lc, "run" | "import" | "export"),
                 _ => false,
             };
-            if is_entry_trigger_dispatch && arity <= 1 {
+            // A call with arguments to an object that declares a procedure of
+            // that name binds to the procedure, never to the built-in run
+            // (`declares_entry_method_overload`); the general dispatch below
+            // resolves it.
+            if is_entry_trigger_dispatch
+                && arity <= 1
+                && !(arity == 1
+                    && declares_entry_method_overload(target, method_lc, from_object, graph, index))
+            {
                 // ponytail: completeness is re-derived from the shape by the
                 // caller (`full.rs`), so a closed empty codeunit/XmlPort run reads
                 // `Partial` there; both classify as honest-empty.

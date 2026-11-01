@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (`Cu.Run(x)` reaches a declared procedure `Run`)
+
+- **A typed-receiver `Run` call with an argument binds to the procedure the
+  object declares, not to the built-in run.** The resolver sent every
+  `Codeunit`/`Page`/`Report`/`XmlPort` variable call to `Run` (and `RunModal`,
+  `Import`, `Export`) with zero or one argument to the object's entry trigger.
+  When the object declares a procedure of that name, AL binds a call with
+  arguments to it (probed with alc 18.1.43.24897: `procedure Run()` with no
+  parameter is AL0440, so a call with no argument is always the built-in; once
+  any `Run(…)` is declared, `Cu.Run(DateRec)` against `Run(var R: Record
+  "Integer")` is AL0133 and `Cu.Run(IntRec)` against `Run(A; C: Integer)` is
+  AL0135 — the built-in is never a fallback; a `pageextension`'s `Run(G: Guid)`
+  counts for `PageVar.Run(G)`). For a codeunit with no `OnRun` the old route
+  was an empty run, classified `honestEmpty` ("provably no callee"), so
+  `alsem prove … may-commit` answered `no` for a routine whose callee commits;
+  with an `OnRun` the edge went to the wrong routine. Microsoft's System
+  Application declares such procedures (`"Azure AD User Mgmt.
+  Impl.".Run(ForUserSecurityId: Guid)`). `resolver::declares_entry_method_overload`
+  now sends such a call to the general dispatch.
+- This was first reported as a cross-app demand gap (workspace → dependency
+  `Start` → dependency `Helper.Run`, missing from the model). It is not: the
+  demand closure is transitive, and the same chain with the routine named
+  `DoWork` resolves and proves `yes`. The probe's `procedure Run()` had no
+  parameter, which alc rejects (AL0440); the engine's built-in reading of that
+  call was right. `tests/cli/cli_typed_run_declared_procedure.rs` pins the use
+  (prove and the dependency-body histogram, with the dependency as a source
+  folder and as a source `.app`, single-app, a page extension, and the
+  no-argument call staying on `OnRun`).
+- CDO (`DO-cdo-baseline/Cloud`, master `212e5f82` vs this fix): unchanged.
+  `--program-call-graph-stats` is byte-identical (wholeProgram 46328 edges:
+  resolvedSource 11639, resolvedCatalog 6151, conditionalResolved 266,
+  honestDynamic 16, honestEmpty 28256, unknown 0; primaryScoped 20916:
+  resolvedSource 9530, resolvedCatalog 6151, honestDynamic 16, honestEmpty
+  5219, unknown 0), `--dependency-bodies-stats` is byte-identical (431321
+  sites, honestEmpty 125067, unknown 0), and the `alsem graph` export of the
+  cross-app model is byte-identical (110202 lines), so no demanded dependency
+  routine changes. No CDO call site has the shape: the System Application
+  procedures above are not called with one argument in source the build reads.
+
 ### Changed (routine ids no longer depend on the file list)
 
 - **Internal routine ids are scoped per app** (context-server design r3 §6.7).
