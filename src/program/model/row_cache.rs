@@ -152,11 +152,46 @@ pub struct RowCacheStats {
 pub struct RowCache {
     pub(crate) workspace: HashMap<String, CachedFile>,
     pub(crate) dependency: HashMap<(AppRef, String), CachedFile>,
+    /// Each dependency file's routine ids per object (`dependency_routine_ids`,
+    /// a pure function of the app and the parse), with the parse they were
+    /// built from: the demanded slice and the rows' nodes are looked up.
+    pub(crate) dependency_ids: HashMap<(AppRef, String), DependencyIds>,
     pub(crate) abi: Option<CachedAbi>,
     pub(crate) last: RowCacheStats,
 }
 
+/// One dependency file's routine ids and the parse they belong to.
+pub(crate) struct DependencyIds {
+    tree: Arc<al_syntax::ir::AlFile>,
+    ids: Arc<Vec<Vec<RoutineNodeId>>>,
+}
+
 impl RowCache {
+    /// The routine ids of dependency file `pf` of `app`: the kept ones when
+    /// they were built from this very parse, else `compute()`'s, kept.
+    pub(crate) fn dependency_ids(
+        &mut self,
+        app: AppRef,
+        pf: &crate::snapshot::parse::ParsedFile,
+        compute: impl FnOnce() -> Vec<Vec<RoutineNodeId>>,
+    ) -> Arc<Vec<Vec<RoutineNodeId>>> {
+        let key = (app, pf.virtual_path.clone());
+        if let Some(d) = self.dependency_ids.get(&key)
+            && Arc::ptr_eq(&d.tree, &pf.file)
+        {
+            return Arc::clone(&d.ids);
+        }
+        let ids = Arc::new(compute());
+        self.dependency_ids.insert(
+            key,
+            DependencyIds {
+                tree: Arc::clone(&pf.file),
+                ids: Arc::clone(&ids),
+            },
+        );
+        ids
+    }
+
     /// What the last assembly through this cache reused.
     #[must_use]
     pub fn last_stats(&self) -> RowCacheStats {

@@ -2319,8 +2319,18 @@ fn append_dependency_rows(
         let mut files: Vec<&crate::snapshot::parse::ParsedFile> = parsed.files.iter().collect();
         files.sort_by(|a, b| a.virtual_path.cmp(&b.virtual_path));
         for pf in files {
-            let population = match (demand, app) {
-                (Some(d), Some(app)) => demanded_population(&pf.file, app, d),
+            // A session keeps each dependency file's routine ids (a pure
+            // function of the app and the parse), so the demanded slice and
+            // the rows' nodes are looked up, not hashed again.
+            let ids = match (cache.as_deref_mut(), app) {
+                (Some(c), Some(app)) => {
+                    Some(c.dependency_ids(app, pf, || dependency_routine_ids(&pf.file, app)))
+                }
+                _ => None,
+            };
+            let population = match (demand, app, &ids) {
+                (Some(d), Some(_), Some(ids)) => demanded_population_from_ids(ids, d),
+                (Some(d), Some(app), None) => demanded_population(&pf.file, app, d),
                 _ => whole_file_population(&pf.file),
             };
             let no_calls = std::collections::HashSet::new();
@@ -2399,19 +2409,21 @@ fn append_dependency_rows(
                     }
                 }
             };
-            node_of.extend(positions.into_iter().map(|(oi, ri)| {
-                app.map(|app| {
+            node_of.extend(positions.into_iter().map(|(oi, ri)| match &ids {
+                Some(ids) => Some(ids[oi][ri].clone()),
+                None => app.map(|app| {
                     let o = &pf.file.objects[oi];
                     crate::program::sig_fp::source_routine_node_id(
                         dep_object_node_id(app, o),
                         &o.routines[ri],
                     )
-                })
+                }),
             }));
         }
     }
     if let Some(c) = cache {
         c.dependency.retain(|k, _| seen.contains(k));
+        c.dependency_ids.retain(|k, _| seen.contains(k));
     }
     abi_ids
 }
@@ -2481,6 +2493,45 @@ fn append_abi_rows(
         }
     }
     ids.into_iter().filter_map(|(k, v)| Some((k, v?))).collect()
+}
+
+/// Each routine's program id in dependency file `ir_file` of `app`, per
+/// object, as [`demanded_population`] builds them.
+pub(crate) fn dependency_routine_ids(
+    ir_file: &al_syntax::ir::AlFile,
+    app: crate::program::node::AppRef,
+) -> Vec<Vec<crate::program::node::RoutineNodeId>> {
+    ir_file
+        .objects
+        .iter()
+        .map(|o| {
+            let object = dep_object_node_id(app, o);
+            o.routines
+                .iter()
+                .map(|r| crate::program::sig_fp::source_routine_node_id(object.clone(), r))
+                .collect()
+        })
+        .collect()
+}
+
+/// [`demanded_population`] from the file's routine ids
+/// ([`dependency_routine_ids`]).
+fn demanded_population_from_ids(
+    ids: &[Vec<crate::program::node::RoutineNodeId>],
+    demand: &std::collections::HashSet<crate::program::node::RoutineNodeId>,
+) -> FilePopulation {
+    ids.iter()
+        .enumerate()
+        .map(|(oi, routines)| {
+            let kept = routines
+                .iter()
+                .enumerate()
+                .filter(|(_, id)| demand.contains(*id))
+                .map(|(ri, _)| ri)
+                .collect();
+            (oi, kept)
+        })
+        .collect()
 }
 
 /// Every object of a dependency file, with only its demanded routines (S8.2). The

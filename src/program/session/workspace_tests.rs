@@ -404,6 +404,49 @@ fn dependency_raiser_and_subscriber_edits() {
     assert_eq!(r.class, ChangeClass::Declaration);
 }
 
+/// The event-flow edges are rerun whole every revision (§6.5). The
+/// counterexample to every finer rule keyed on the PUBLISHER's file or on the
+/// class: text inserted above the workspace subscriber (B, its projection
+/// kept) moves its declaration, and the edge of the DEPENDENCY publisher
+/// `OnDepEvent` (whose file, package and projection are unchanged) carries
+/// the subscriber's span as its route witness, so the edge changes. Reusing
+/// the previous revision's event-flow edges under B, or recomputing only the
+/// publishers in changed files, would keep the stale span.
+#[test]
+fn event_flow_edge_of_an_unchanged_publisher_moves_under_b() {
+    use crate::program::resolve::edge::EdgeKind;
+    let ws = base_ws();
+    let edge = |ws: &Ws| {
+        let p = ResolvedProgram::build(&ws.inputs(), ProgramScope::CrossApp).unwrap();
+        let e: Vec<String> = p
+            .body()
+            .all_edges()
+            .filter(|e| {
+                e.edge.kind == EdgeKind::EventFlow && e.edge.from.name_lc.as_str() == "ondepevent"
+            })
+            .map(|e| format!("{:?}", e.edge))
+            .collect();
+        assert_eq!(e.len(), 1, "precondition: one edge for the publisher");
+        e[0].clone()
+    };
+    let mut s = WorkspaceSession::new();
+    refresh_and_compare(&mut s, &ws, "cold");
+    let before = edge(&ws);
+    ws.edit(
+        "Sub.Codeunit.al",
+        "    [EventSubscriber",
+        "\n\n\n    [EventSubscriber",
+    );
+    assert_ne!(
+        edge(&ws),
+        before,
+        "precondition: the unchanged publisher's edge moves with its subscriber"
+    );
+    let r = refresh_and_compare(&mut s, &ws, "lines above the subscriber");
+    assert_eq!(r.class, ChangeClass::BodyOnly);
+    assert_eq!(r.changed, vec!["src/Sub.Codeunit.al".to_string()]);
+}
+
 /// Several routines per file and a duplicate id (`#if` arms declare one
 /// procedure twice): a body edit in one arm is B, the duplicate's rows stay
 /// as cold builds them.

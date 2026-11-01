@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (graph assembly: platform publisher injection; stage-4 follow-ups)
+
+- **`inject_platform_event_publishers` scanned every routine of the graph
+  once per platform-event subscriber** to decide whether the table already
+  has a real publisher of that name (0.31–0.33 s of the 0.33–0.35 s
+  `preflight.assemble_graph` on CDO, every build and every session
+  revision; `graph.platform_publishers`). It now reads the run of
+  `(table, event)` in the sorted routine list (`NodeSet::run_by`; the id's
+  order starts with the object and the name), the same set the scan
+  filtered. Behaviour-preserving: every golden unchanged. New test
+  `platform_publisher_is_not_injected_over_a_real_one` states the rule
+  literally (a real publisher suppresses the synthetic, a same-named
+  non-publisher does not, a publisher on another table does not); break:
+  key the run on the table alone → it fails ("not a publisher").
+  With this the graph reassembly the design's `DeclSemantics` /
+  `DeclLocations` split was to avoid costs ~20 ms per revision
+  (`graph.extract` 8–12 ms, `graph.layer_index` 3–5 ms), so the split is
+  not built: rebuilding is exact and cheaper than keeping the parts.
+- **The session keeps each dependency file's routine ids**
+  (`RowCache::dependency_ids`, a pure function of the app and the parse,
+  checked by parse identity): the demanded slice and the rows' nodes are
+  looked up instead of hashing every dependency routine's id again each
+  revision (10,881 files on CDO). The cold assembly is unchanged. Break:
+  the slice from the ids ignores the demand → 10 session tests fail on
+  model equality.
+- **The event-flow edges stay whole** (design §6.5), now that they cost
+  64–75 ms per revision on CDO (they were 0.73–0.94 s, see the subscriber
+  tier fix below). No finer rule: a body-only edit above a workspace
+  subscriber changes the edge of an unchanged DEPENDENCY publisher (its
+  route witness is the subscriber's span), so neither reusing the edges
+  under B nor recomputing only the publishers in changed files is correct.
+  Counterexample test `event_flow_edge_of_an_unchanged_publisher_moves_under_b`
+  (its precondition shows the cold edge moving; the session equals cold).
+
 ### Added (context-server stage 4: retained raw model rows)
 
 - **The workspace session keeps each file's raw model rows** (context-server
