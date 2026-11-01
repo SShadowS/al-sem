@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (engine protocol: three stage-2 review findings, review r6 NEW 3-5)
+
+- **A CLI answer's stderr is exact (NEW 3).** The wire used to turn stderr
+  into lines with `String::from_utf8_lossy` and rebuild "line + `\n`" from
+  them, and `bound_frame` spilled that rebuilt text: `b"warning"` arrived as
+  `b"warning\n"` and `[0xff, b'\n']` as a replacement character, even in
+  the "exact bytes" `stderrFile`. Now `Stderr::Lines` holds a
+  `wire::StderrLines`, which keeps the ORIGINAL bytes and exists only for
+  bytes the line form carries exactly (empty, or UTF-8 ending in `\n`);
+  lines are derived only to encode. Any other stderr goes to `stderrFile`
+  as its original bytes (`Stderr::exact`; design r7 §3, no `stderrBytes`
+  inline form), and a frame-limit spill writes the held bytes. The lossy
+  `wire::stderr_lines` and `wire::stderr_bytes` are gone; `cli_outcome`
+  takes the kind-aware `Spill`. Test
+  `wire::tests::stderr_is_exact_against_standalone_replay_inline_and_spilled`
+  compares with standalone `replay_on`, through `bound_frame` and the real
+  decoder, inline and spilled: no final newline, blank lines, non-UTF-8,
+  a UTF-8 character split across actions, several actions. Discrimination:
+  with the old lossy conversion restored it fails (`b"warning"` delivered
+  as `b"warning\n"`); restored, it passes.
+- **An oversized request ending exactly at the read bound no longer eats
+  the next request (NEW 4).** `read_frame` reads at most the limit plus one
+  byte; for a line of exactly that length INCLUDING its newline, the
+  newline was already consumed, and the child's unconditional `skip_line`
+  then discarded the following valid request. `read_frame` now returns
+  `ReadFrame::{Frame, Eof, Oversized}`, where `Oversized` records
+  `delimiter_consumed`, and recovery is only `Oversized::skip_rest` (which
+  skips nothing when the newline was read); `skip_line` is private. The
+  front end's reader stops at an oversized frame (it kills the child and
+  never recovers past it), so it had no such boundary. Tests
+  `engine::host::child::tests::serve_recovers_at_every_oversize_boundary`
+  (exact limit served; limit + 1 with newline, longer, and at EOF refused,
+  each followed by a request that is answered) and
+  `wire::tests::read_frame_reports_whether_the_refused_line_ended`.
+  Discrimination: with `skip_rest` skipping unconditionally both fail
+  (request 11 is swallowed); restored, both pass.
+- **The front end's queue of child output is bounded (NEW 5).** The stdout
+  reader pushed every frame into an unbounded channel and only `call`
+  decoded them, so a faulty child could exhaust the front end's memory.
+  The reader now checks each frame's shape (a JSON-RPC 2.0 response with
+  exactly one of result and error, or a notification) before queueing;
+  `engine/progress` notifications are coalesced per request; and past
+  `QUEUE_FRAMES` (1,024) frames or `QUEUE_BYTES` (64 MiB) the reader kills
+  the child at once, with no ask needed, and records why. The pending ask,
+  or the next ask or `status`, fails `protocol` with that reason
+  (`EngineFront::last_failure`, `queue_stats`, `ensure_started`,
+  `child_exited` expose it). New test hook
+  `ALSEM_ENGINE_TEST_HOOK=flood-after-open:<response|notify|progress|garbage>:<n>`.
+  Tests: `engine_host::faults::a_flooding_child_is_ended_with_no_ask_waiting`
+  (200,000 small frames while nothing reads: the queue peaks at exactly
+  1,024 frames, the child is ended, `status` fails with the reason),
+  `a_progress_flood_is_coalesced_and_the_child_lives`, and four unit tests
+  in `engine::host::front::tests`. Discrimination: with the bound check
+  disabled, the integration test times out with 200,000 frames (7.4 MB)
+  queued and the two bound unit tests fail; with coalescing disabled, the
+  progress tests fail (the child is killed at 1,025 frames); restored, all
+  pass.
+
 ### Changed (the wire answer: outcome taxonomy and frame bounding)
 
 - **`wire::Answer` is the closed schema of context-server design r5 §8.3.**
@@ -24,8 +82,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (exact bytes), cuts `changedPaths` to 256, and ends in a minimal terminal
   frame (`failed`, `protocol`, "answer exceeded the frame limit", the whole
   encoded answer in `diagnosticFile`); a failed spill ends in that frame with
-  the write error. `wire::skip_line` discards the rest of a line
-  `read_frame` refused, without holding it.
+  the write error. Recovery from a line `read_frame` refused discards its
+  rest without holding it (since the NEW 4 fix: `Oversized::skip_rest`).
 
 ### Added (the engine child process: context-server stage 2 plumbing)
 

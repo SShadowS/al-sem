@@ -16,8 +16,12 @@
 //! its length and SHA-256). Exactly one of the two (`kind: "cli"`). Embedding
 //! the CLI's pretty JSON as raw JSON (`RawValue`) was rejected: its literal
 //! newlines break the line framing, and re-serializing a parsed value does not
-//! keep its bytes. Its stderr travels as lines (`stderr`) or, when the frame
-//! would not fit, as `stderrFile` (the exact bytes).
+//! keep its bytes. Its stderr is exact too: inline as lines (`stderr`, each
+//! line without its newline) only when the bytes are UTF-8 and end in a
+//! newline (or are empty), so that "each line plus `\n`" rebuilds them byte
+//! for byte; any other stderr (no final newline, not UTF-8), and any that
+//! would not fit the frame, travels as `stderrFile`: the ORIGINAL bytes,
+//! never a text rebuilt from lossy lines (review r6 NEW 3).
 //!
 //! **Outcomes (r5 §8.3).** `kind: "cli"` is a CLI outcome: the command ran,
 //! or failed its planning (`Planned::Failed`), or its model did not build (a
@@ -152,12 +156,78 @@ pub enum Stdout {
     File(SpillFile),
 }
 
-/// A CLI answer's stderr: its lines (each without its newline), or the exact
-/// bytes in a file.
+/// A CLI answer's stderr: inline lines, or the exact bytes in a file (design
+/// r7 §3 "lossless stderr"; the explicitly lossless inline `stderrBytes`
+/// form is not used: what lines cannot carry goes to `stderrFile`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Stderr {
-    Lines(Vec<String>),
+    /// Bytes the wire's `stderr: [lines]` carries exactly.
+    Lines(StderrLines),
+    /// The exact bytes, in a file.
     File(SpillFile),
+}
+
+impl Stderr {
+    /// `bytes` inline when lines carry them exactly ([`StderrLines::exact`]),
+    /// else the original bytes written by `spill`.
+    pub fn exact(bytes: &[u8], spill: &Spill<'_>) -> std::io::Result<Stderr> {
+        match StderrLines::exact(bytes) {
+            Some(lines) => Ok(Stderr::Lines(lines)),
+            None => spill(SpillKind::Stderr, bytes).map(Stderr::File),
+        }
+    }
+}
+
+/// Stderr bytes that the wire's line form carries exactly: empty, or UTF-8
+/// whose every line ends in `\n` (blank lines, interior or final, are empty
+/// lines). It HOLDS the bytes, so a spill ([`bound_frame`]) writes the
+/// original bytes, never a text rebuilt from lines (review r6 NEW 3); the
+/// lines are derived only to encode. Bytes with a last line lacking its
+/// newline, or that are not UTF-8, have no `StderrLines`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StderrLines {
+    /// Invariant: empty, or valid UTF-8 ending in `\n`.
+    bytes: Vec<u8>,
+}
+
+impl StderrLines {
+    /// `bytes` when the line form carries them exactly; `None` otherwise.
+    #[must_use]
+    pub fn exact(bytes: &[u8]) -> Option<StderrLines> {
+        let carried =
+            bytes.is_empty() || (bytes.ends_with(b"\n") && std::str::from_utf8(bytes).is_ok());
+        carried.then(|| StderrLines {
+            bytes: bytes.to_vec(),
+        })
+    }
+
+    /// Lines received from the wire: the bytes are each line followed by
+    /// `\n` (what the sender's bytes were, by the form's definition).
+    #[must_use]
+    pub fn from_lines<S: AsRef<str>>(lines: &[S]) -> StderrLines {
+        let mut bytes = Vec::new();
+        for l in lines {
+            bytes.extend_from_slice(l.as_ref().as_bytes());
+            bytes.push(b'\n');
+        }
+        StderrLines { bytes }
+    }
+
+    /// The exact bytes.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// The bytes as lines, each without its newline.
+    #[must_use]
+    pub fn lines(&self) -> Vec<String> {
+        let text = std::str::from_utf8(&self.bytes).expect("StderrLines holds UTF-8");
+        match text.strip_suffix('\n') {
+            Some(body) => body.split('\n').map(str::to_string).collect(),
+            None => Vec::new(),
+        }
+    }
 }
 
 /// The revision that answered (r3 §4.7).
@@ -315,7 +385,7 @@ impl From<Answer> for RawAnswer {
                     Stdout::File(f) => raw.stdout_file = Some(f),
                 }
                 match stderr {
-                    Stderr::Lines(l) => raw.stderr = Some(l),
+                    Stderr::Lines(l) => raw.stderr = Some(l.lines()),
                     Stderr::File(f) => raw.stderr_file = Some(f),
                 }
                 raw.changed_paths = changed_paths;
@@ -348,7 +418,7 @@ impl TryFrom<RawAnswer> for Answer {
                     _ => return Err(WireError::StdoutNotExclusive),
                 };
                 let stderr = match (raw.stderr, raw.stderr_file) {
-                    (Some(l), None) => Stderr::Lines(l),
+                    (Some(l), None) => Stderr::Lines(StderrLines::from_lines(&l)),
                     (None, Some(f)) => Stderr::File(f),
                     _ => {
                         return Err(WireError::Json(
@@ -386,12 +456,13 @@ impl TryFrom<RawAnswer> for Answer {
 /// A job's held writes as a `kind: "cli"` outcome: its stdout inline when it
 /// is UTF-8, at most `inline_cap` bytes and small enough escaped for one
 /// frame; else written by `spill` (which returns where). Its stderr as lines
-/// (each without its newline). A job that wrote a file (`--out`) is refused:
-/// the server's output sink handles those.
+/// when they rebuild its bytes exactly, else its original bytes spilled
+/// ([`Stderr::exact`]). A job that wrote a file (`--out`) is refused: the
+/// server's output sink handles those.
 pub fn cli_outcome(
     out: &JobOutput,
     inline_cap: usize,
-    spill: impl FnOnce(&[u8]) -> std::io::Result<SpillFile>,
+    spill: &Spill<'_>,
 ) -> Result<Outcome, WireError> {
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     for a in &out.actions {
@@ -412,39 +483,18 @@ pub fn cli_outcome(
     };
     let stdout = match inline {
         Ok(s) => s,
-        Err(bytes) => Stdout::File(spill(&bytes).map_err(|e| WireError::Spill(e.to_string()))?),
+        Err(bytes) => Stdout::File(
+            spill(SpillKind::Stdout, &bytes).map_err(|e| WireError::Spill(e.to_string()))?,
+        ),
     };
+    let stderr = Stderr::exact(&stderr, spill).map_err(|e| WireError::Spill(e.to_string()))?;
     Ok(Outcome::Cli {
         exit_code: out.exit,
         stdout,
-        stderr: Stderr::Lines(stderr_lines(&stderr)),
+        stderr,
         changed_paths: Vec::new(),
         changed_paths_truncated: false,
     })
-}
-
-/// Stderr bytes as lines, each without its newline (lossy UTF-8).
-#[must_use]
-pub fn stderr_lines(stderr: &[u8]) -> Vec<String> {
-    let stderr = String::from_utf8_lossy(stderr);
-    stderr
-        .strip_suffix('\n')
-        .unwrap_or(&stderr)
-        .split('\n')
-        .filter(|_| !stderr.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
-/// The bytes the lines stand for: each line and its newline.
-#[must_use]
-pub fn stderr_bytes(lines: &[String]) -> Vec<u8> {
-    let mut out = Vec::new();
-    for l in lines {
-        out.extend_from_slice(l.as_bytes());
-        out.push(b'\n');
-    }
-    out
 }
 
 /// The bytes `text` takes as a JSON string, quotes included.
@@ -495,8 +545,7 @@ fn cut(text: &str, max: usize) -> &str {
 /// most `limit` bytes (r5 §3). A `kind: "failed"` message over
 /// [`MESSAGE_INLINE_BYTES`] is always cut, its whole text spilled. Then, while
 /// the frame is over the limit, in order: (1) `stdoutText` → `stdoutFile`;
-/// (2) `stderr` → `stderrFile` (the exact bytes, a line and its newline per
-/// entry); (3) `changedPaths` cut to [`CHANGED_PATHS_KEPT`] with
+/// (2) `stderr` → `stderrFile` (the original bytes [`StderrLines`] holds); (3) `changedPaths` cut to [`CHANGED_PATHS_KEPT`] with
 /// `changedPathsTruncated`; (4) the terminal fallback: `kind: "failed"`,
 /// outcome `protocol`, "answer exceeded the frame limit", with the whole
 /// encoded answer as its `diagnosticFile`. A spill that fails ends in the
@@ -574,7 +623,7 @@ pub fn bound_frame(
                 Stdout::File(_) => Ok(()),
             },
             1 => match stderr {
-                Stderr::Lines(l) => spill(SpillKind::Stderr, &stderr_bytes(l)).map(|f| {
+                Stderr::Lines(l) => spill(SpillKind::Stderr, l.bytes()).map(|f| {
                     *stderr = Stderr::File(f);
                 }),
                 Stderr::File(_) => Ok(()),
@@ -617,28 +666,76 @@ pub fn decode_frame<T: DeserializeOwned>(frame: &[u8]) -> Result<T, WireError> {
     serde_json::from_slice(body).map_err(|e| WireError::Json(e.to_string()))
 }
 
-/// The next frame of `reader`, its newline kept; `None` at end of input. A
-/// line longer than [`MAX_FRAME_BYTES`] is an error, read (and held) no
-/// further than the limit plus one byte: an oversized frame is refused
-/// before it is buffered whole. The rest of that line stays unread
-/// ([`skip_line`] discards it without holding it).
-pub fn read_frame(reader: &mut impl BufRead) -> Result<Option<Vec<u8>>, WireError> {
+/// What [`read_frame`] read.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReadFrame {
+    /// One frame, its newline kept (absent only on a last line at end of
+    /// input).
+    Frame(Vec<u8>),
+    /// End of input.
+    Eof,
+    /// A line over [`MAX_FRAME_BYTES`], refused after the limit plus one
+    /// byte. A reader that goes on recovers with [`Oversized::skip_rest`].
+    Oversized(Oversized),
+}
+
+/// A refused oversized line: how much was read, and whether its newline was
+/// among those bytes (review r6 NEW 4: a line of exactly the limit plus one
+/// byte, newline included, ends inside the first read, so skipping "the
+/// rest of the line" then would discard the NEXT frame).
+#[derive(Debug, PartialEq, Eq)]
+#[must_use = "a reader that goes on must skip the rest of the line"]
+pub struct Oversized {
+    /// The bytes read and dropped: the limit plus one.
+    pub read: usize,
+    /// The line's newline was among them: the next byte starts a new frame.
+    pub delimiter_consumed: bool,
+}
+
+impl Oversized {
+    /// Discard what is left of the refused line, holding none of it: nothing
+    /// when its newline was already read, else up to and including its
+    /// newline (or to end of input). Returns the bytes skipped. This is the
+    /// only recovery the codec offers, so no caller decides it alone.
+    pub fn skip_rest(&self, reader: &mut impl BufRead) -> std::io::Result<u64> {
+        if self.delimiter_consumed {
+            return Ok(0);
+        }
+        skip_line(reader)
+    }
+
+    /// The refusal as a codec error (its message names the bytes read).
+    #[must_use]
+    pub fn error(&self) -> WireError {
+        WireError::FrameTooLarge(self.read)
+    }
+}
+
+/// The next frame of `reader`. A line longer than [`MAX_FRAME_BYTES`] is
+/// refused, read (and held) no further than the limit plus one byte: an
+/// oversized frame is refused before it is buffered whole, and the refusal
+/// says whether its newline was read ([`Oversized`]).
+pub fn read_frame(reader: &mut impl BufRead) -> Result<ReadFrame, WireError> {
     let mut line = Vec::new();
     let read = std::io::Read::take(&mut *reader, MAX_FRAME_BYTES as u64 + 1)
         .read_until(b'\n', &mut line)
         .map_err(|e| WireError::Io(e.to_string()))?;
     if read == 0 {
-        return Ok(None);
+        return Ok(ReadFrame::Eof);
     }
     if line.len() > MAX_FRAME_BYTES {
-        return Err(WireError::FrameTooLarge(line.len()));
+        return Ok(ReadFrame::Oversized(Oversized {
+            read: line.len(),
+            delimiter_consumed: line.last() == Some(&b'\n'),
+        }));
     }
-    Ok(Some(line))
+    Ok(ReadFrame::Frame(line))
 }
 
-/// Discard the rest of the current line (after [`read_frame`] refused it),
-/// a buffer at a time, holding none of it. Returns the bytes skipped.
-pub fn skip_line(reader: &mut impl BufRead) -> std::io::Result<u64> {
+/// Discard the rest of the current line, a buffer at a time, holding none
+/// of it. Returns the bytes skipped. Private: recovery goes through
+/// [`Oversized::skip_rest`], which knows whether the line already ended.
+fn skip_line(reader: &mut impl BufRead) -> std::io::Result<u64> {
     let mut skipped = 0u64;
     loop {
         let (done, used) = {
@@ -679,7 +776,7 @@ mod tests {
         }
     }
 
-    fn no_spill(_: &[u8]) -> std::io::Result<SpillFile> {
+    fn no_spill(_: SpillKind, _: &[u8]) -> std::io::Result<SpillFile> {
         panic!("inline expected")
     }
 
@@ -688,7 +785,7 @@ mod tests {
     /// frame is ONE line.
     #[test]
     fn stdout_text_round_trips_exact_bytes_in_one_line() {
-        let outcome = cli_outcome(&cli(PRETTY), DEFAULT_INLINE_BYTES, no_spill).unwrap();
+        let outcome = cli_outcome(&cli(PRETTY), DEFAULT_INLINE_BYTES, &no_spill).unwrap();
         let answer = Answer {
             id: serde_json::json!(7),
             outcome,
@@ -712,7 +809,7 @@ mod tests {
         assert!(text.ends_with("}\n"), "the trailing newline is kept");
         assert_eq!(
             stderr,
-            Stderr::Lines(vec!["warn: one".into(), "warn: two".into()])
+            Stderr::Lines(StderrLines::from_lines(&["warn: one", "warn: two"]))
         );
         assert_eq!(exit_code, 0);
         // On the wire: a JSON string, never the document embedded raw.
@@ -730,7 +827,7 @@ mod tests {
         let answers: Vec<Answer> = (0..3)
             .map(|i| Answer {
                 id: serde_json::json!(format!("r{i}")),
-                outcome: cli_outcome(&cli(&PRETTY.repeat(i + 1)), MAX_INLINE_BYTES, no_spill)
+                outcome: cli_outcome(&cli(&PRETTY.repeat(i + 1)), MAX_INLINE_BYTES, &no_spill)
                     .unwrap(),
                 revision: Some(RevisionId {
                     engine_instance_id: "e".into(),
@@ -745,7 +842,7 @@ mod tests {
         }
         let mut reader = std::io::BufReader::new(&stream[..]);
         let mut got = Vec::new();
-        while let Some(frame) = read_frame(&mut reader).unwrap() {
+        while let ReadFrame::Frame(frame) = read_frame(&mut reader).unwrap() {
             got.push(decode_frame::<Answer>(&frame).unwrap());
         }
         assert_eq!(got, answers);
@@ -789,12 +886,14 @@ mod tests {
                 actions: vec![WriteAction::Stdout(stdout.clone())],
                 exit: 0,
             };
-            let mut seen = None;
-            let o = cli_outcome(&out, cap, |b| {
-                seen = Some(b.to_vec());
+            let seen = std::cell::RefCell::new(None);
+            let o = cli_outcome(&out, cap, &|kind, b| {
+                assert_eq!(kind, SpillKind::Stdout);
+                *seen.borrow_mut() = Some(b.to_vec());
                 Ok(SpillFile::of("f".into(), b))
             })
             .unwrap();
+            let seen = seen.into_inner();
             let Outcome::Cli {
                 stdout: Stdout::File(f),
                 ..
@@ -818,7 +917,7 @@ mod tests {
             exit: 0,
         };
         assert!(matches!(
-            cli_outcome(&plain, MAX_INLINE_BYTES, no_spill).unwrap(),
+            cli_outcome(&plain, MAX_INLINE_BYTES, &no_spill).unwrap(),
             Outcome::Cli {
                 stdout: Stdout::Text(_),
                 ..
@@ -840,13 +939,21 @@ mod tests {
         line.push(b'\n');
         line.extend_from_slice(b"{\"next\":1}\n");
         let mut reader = std::io::BufReader::new(&line[..]);
-        assert!(matches!(
-            read_frame(&mut reader),
-            Err(WireError::FrameTooLarge(n)) if n == MAX_FRAME_BYTES + 1
-        ));
-        assert_eq!(skip_line(&mut reader).unwrap(), 10);
-        let next = read_frame(&mut reader).unwrap().unwrap();
-        assert_eq!(next, b"{\"next\":1}\n");
+        let Ok(ReadFrame::Oversized(over)) = read_frame(&mut reader) else {
+            panic!("refused")
+        };
+        assert_eq!(
+            over,
+            Oversized {
+                read: MAX_FRAME_BYTES + 1,
+                delimiter_consumed: false
+            }
+        );
+        assert_eq!(over.skip_rest(&mut reader).unwrap(), 10);
+        assert_eq!(
+            read_frame(&mut reader).unwrap(),
+            ReadFrame::Frame(b"{\"next\":1}\n".to_vec())
+        );
         assert_eq!(
             decode_frame::<serde_json::Value>(b"{\"a\":\n1}\n"),
             Err(WireError::NotOneLine)
@@ -856,9 +963,55 @@ mod tests {
             exit: 0,
         };
         assert_eq!(
-            cli_outcome(&out, DEFAULT_INLINE_BYTES, no_spill),
+            cli_outcome(&out, DEFAULT_INLINE_BYTES, &no_spill),
             Err(WireError::FileWrite("o.json".into()))
         );
+    }
+
+    /// Review r6 NEW 4, at the reader: a line of exactly the limit (newline
+    /// included) is a frame; the limit plus one with its newline is refused
+    /// with the newline consumed, so recovery skips nothing and the next
+    /// frame reads; a longer line is refused with its rest unread; an
+    /// oversized last line at end of input recovers to end of input.
+    #[test]
+    fn read_frame_reports_whether_the_refused_line_ended() {
+        let next = b"{\"next\":1}\n";
+        let read_after = |mut stream: Vec<u8>, consumed: Option<bool>| {
+            stream.extend_from_slice(next);
+            let mut reader = std::io::BufReader::new(&stream[..]);
+            match (read_frame(&mut reader).unwrap(), consumed) {
+                (ReadFrame::Frame(f), None) => assert_eq!(f.len(), MAX_FRAME_BYTES),
+                (ReadFrame::Oversized(over), Some(c)) => {
+                    assert_eq!(over.read, MAX_FRAME_BYTES + 1);
+                    assert_eq!(over.delimiter_consumed, c);
+                    over.skip_rest(&mut reader).unwrap();
+                }
+                (other, _) => panic!("{other:?}"),
+            }
+            assert_eq!(
+                read_frame(&mut reader).unwrap(),
+                ReadFrame::Frame(next.to_vec())
+            );
+            assert_eq!(read_frame(&mut reader).unwrap(), ReadFrame::Eof);
+        };
+        let line = |n: usize| {
+            let mut l = vec![b'x'; n - 1];
+            l.push(b'\n');
+            l
+        };
+        read_after(line(MAX_FRAME_BYTES), None);
+        read_after(line(MAX_FRAME_BYTES + 1), Some(true));
+        read_after(line(MAX_FRAME_BYTES + 2), Some(false));
+        read_after(line(MAX_FRAME_BYTES + 4096), Some(false));
+        // At end of input, no newline: recovery stops at the end.
+        let tail = vec![b'x'; MAX_FRAME_BYTES + 3];
+        let mut reader = std::io::BufReader::new(&tail[..]);
+        let Ok(ReadFrame::Oversized(over)) = read_frame(&mut reader) else {
+            panic!("refused")
+        };
+        assert!(!over.delimiter_consumed);
+        assert_eq!(over.skip_rest(&mut reader).unwrap(), 2);
+        assert_eq!(read_frame(&mut reader).unwrap(), ReadFrame::Eof);
     }
 
     /// A spill sink that records what it was given, in memory.
@@ -888,7 +1041,7 @@ mod tests {
             outcome: Outcome::Cli {
                 exit_code: 0,
                 stdout: Stdout::Text(stdout.into()),
-                stderr: Stderr::Lines(stderr),
+                stderr: Stderr::Lines(StderrLines::from_lines(&stderr)),
                 changed_paths: (0..changed).map(|i| format!("src/f{i}.al")).collect(),
                 changed_paths_truncated: false,
             },
@@ -939,7 +1092,10 @@ mod tests {
         );
         assert!(f.len() <= limit);
         assert_eq!(sink.kinds(), [SpillKind::Stdout, SpillKind::Stderr]);
-        assert_eq!(sink.0.borrow()[1].1, stderr_bytes(&lines));
+        assert_eq!(
+            sink.0.borrow()[1].1,
+            StderrLines::from_lines(&lines).bytes()
+        );
         let Outcome::Cli { stderr, .. } = decoded(&f).outcome else {
             panic!("cli")
         };
@@ -986,6 +1142,157 @@ mod tests {
         assert_eq!(diagnostic_file.unwrap().bytes, whole.len() as u64);
         let back: Answer = serde_json::from_slice(&whole).unwrap();
         assert!(matches!(back.outcome, Outcome::Cli { .. }));
+    }
+
+    /// What a standalone run writes, captured: (stdout, stderr).
+    #[derive(Default)]
+    struct Capture(Vec<u8>, Vec<u8>);
+
+    impl crate::engine::batch::output::Sink for Capture {
+        fn stdout(&mut self, b: &[u8]) -> Result<(), crate::engine::batch::output::Failure> {
+            self.0.extend_from_slice(b);
+            Ok(())
+        }
+        fn stderr(&mut self, b: &[u8]) -> Result<(), crate::engine::batch::output::Failure> {
+            self.1.extend_from_slice(b);
+            Ok(())
+        }
+        fn file(
+            &mut self,
+            _: &std::path::Path,
+            _: &[u8],
+        ) -> Result<(), crate::engine::batch::output::Failure> {
+            unreachable!("no file writes here")
+        }
+        fn dir(
+            &mut self,
+            _: &std::path::Path,
+        ) -> Result<(), crate::engine::batch::output::Failure> {
+            unreachable!("no file writes here")
+        }
+        fn write_error(&mut self, _: &str, _: &std::io::Error) {}
+    }
+
+    /// The stderr bytes a decoded answer stands for: its lines rebuilt, or
+    /// its file's bytes from `sink` (checked against length and hash).
+    fn delivered_stderr(answer: &Answer, sink: &Sink) -> (Vec<u8>, bool) {
+        let Outcome::Cli { stderr, .. } = &answer.outcome else {
+            panic!("a cli answer: {:?}", answer.outcome)
+        };
+        match stderr {
+            Stderr::Lines(l) => (l.bytes().to_vec(), false),
+            Stderr::File(f) => {
+                let n: usize = f.path.trim_start_matches("spill").parse().unwrap();
+                let (kind, bytes) = sink.0.borrow()[n - 1].clone();
+                assert_eq!(kind, SpillKind::Stderr);
+                assert_eq!(f.bytes, bytes.len() as u64);
+                assert_eq!(f.sha256, crate::engine::ids::sha256_bytes_hex(&bytes));
+                (bytes, true)
+            }
+        }
+    }
+
+    /// Review r6 NEW 3: stderr reaches the client byte for byte what a
+    /// standalone run writes (`replay_on`), through the real encoder,
+    /// `bound_frame` and the real decoder, in both forms: a last line with no
+    /// newline, blank lines (interior, leading, only), bytes that are not
+    /// UTF-8, and several stderr actions around stdout. Stderr that lines
+    /// cannot rebuild goes to a file as its original bytes, whatever the
+    /// frame size; stderr they can rebuild is inline when the frame fits and
+    /// spilled (still exact) when it does not.
+    #[test]
+    fn stderr_is_exact_against_standalone_replay_inline_and_spilled() {
+        let cases: Vec<(&str, Vec<WriteAction>, bool)> = vec![
+            (
+                "no final newline",
+                vec![WriteAction::Stderr(b"warning".to_vec())],
+                false,
+            ),
+            (
+                "blank lines",
+                vec![WriteAction::Stderr(b"\na\n\n\nb\n\n".to_vec())],
+                true,
+            ),
+            (
+                "only a newline",
+                vec![WriteAction::Stderr(b"\n".to_vec())],
+                true,
+            ),
+            ("empty", vec![], true),
+            (
+                "not UTF-8",
+                vec![WriteAction::Stderr(vec![0xff, b'\n'])],
+                false,
+            ),
+            (
+                "UTF-8 cut inside a character across actions",
+                vec![
+                    WriteAction::Stderr("æ".as_bytes()[..1].to_vec()),
+                    WriteAction::Stdout(b"x\n".to_vec()),
+                    WriteAction::Stderr(b"\n".to_vec()),
+                ],
+                false,
+            ),
+            (
+                "several actions, the last unterminated",
+                vec![
+                    WriteAction::Stderr(b"one\n".to_vec()),
+                    WriteAction::Stdout(b"{}\n".to_vec()),
+                    WriteAction::Stderr(b"two".to_vec()),
+                    WriteAction::Stderr(b" halves\n\n".to_vec()),
+                    WriteAction::Stderr(b"three".to_vec()),
+                ],
+                false,
+            ),
+            (
+                "several actions, all terminated",
+                vec![
+                    WriteAction::Stderr(b"one\n".to_vec()),
+                    WriteAction::Stdout(b"{}\n".to_vec()),
+                    WriteAction::Stderr(b"two\n\n".to_vec()),
+                ],
+                true,
+            ),
+        ];
+        for (name, actions, lines_rebuild) in cases {
+            let out = JobOutput { actions, exit: 0 };
+            let mut standalone = Capture::default();
+            crate::engine::batch::output::replay_on(&out, 1, &mut standalone);
+            // The roomy frame: inline whenever lines rebuild the bytes.
+            let sink = Sink::new();
+            let outcome =
+                cli_outcome(&out, DEFAULT_INLINE_BYTES, &|k, b| sink.spill(k, b)).unwrap();
+            let answer = Answer {
+                id: serde_json::json!(1),
+                outcome,
+                revision: None,
+            };
+            let frame = bound_frame(answer.clone(), MAX_FRAME_BYTES, &rpc, &|k, b| {
+                sink.spill(k, b)
+            });
+            let (bytes, spilled) = delivered_stderr(&decoded(&frame), &sink);
+            assert_eq!(bytes, standalone.1, "{name}: inline frame");
+            assert_eq!(spilled, !lines_rebuild, "{name}: the form");
+            // A frame too small for the stderr: spilled, still exact. Lines
+            // that alone overflow 4 KiB go FIRST, so the case's own ending
+            // (and with it whether lines rebuild the bytes) is unchanged.
+            let pad: String = (0..600).map(|i| format!("pad {i}\n")).collect();
+            let mut big = out.clone();
+            big.actions.insert(0, WriteAction::Stderr(pad.into_bytes()));
+            let mut standalone = Capture::default();
+            crate::engine::batch::output::replay_on(&big, 1, &mut standalone);
+            let sink = Sink::new();
+            let answer = Answer {
+                id: serde_json::json!(1),
+                outcome: cli_outcome(&big, DEFAULT_INLINE_BYTES, &|k, b| sink.spill(k, b)).unwrap(),
+                revision: None,
+            };
+            let frame = bound_frame(answer, 4096, &rpc, &|k, b| sink.spill(k, b));
+            assert!(frame.len() <= 4096, "{name}");
+            let (bytes, spilled) = delivered_stderr(&decoded(&frame), &sink);
+            assert!(spilled, "{name}: spilled in the small frame");
+            assert_eq!(bytes, standalone.1, "{name}: spilled frame");
+        }
     }
 
     /// r5 §8.3: a failed answer's message is at most 4 KiB inline, the whole
