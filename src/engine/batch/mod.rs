@@ -137,7 +137,7 @@ pub fn run_batch(b: u32, jobs: &[(&dyn Job, JobStreams)]) -> Vec<JobLine> {
 /// Job `j`'s document as its writes, inside its job span: first the job
 /// lines its view build and computes printed (D7), as standalone prints them
 /// before any of its own writes.
-fn serialize(j: usize, job: &dyn Job, doc: Doc, lines: Vec<String>) -> JobOutput {
+pub(crate) fn serialize(j: usize, job: &dyn Job, doc: Doc, lines: Vec<String>) -> JobOutput {
     let _s = job_span(j, job, "serialize");
     let mut out = job.serialize(doc);
     out.actions

@@ -3925,8 +3925,11 @@ pub struct R3a5CrossAppBase {
     /// split's dependency half, read only by digest's tree (its call-site
     /// ledger, #160 step 6 D6). The view takes it in its first `prepare` and
     /// drops it there unless that prepare composes the tree (final panel
-    /// F1-C2), so no other command holds it past its first fill.
-    pub dependency_calls: Option<Vec<crate::program::model::calls::CallEdge>>,
+    /// F1-C2), so no other command holds it past its first fill. Behind an
+    /// `Arc` (context-server design r3 §4.1): a resident revision lends it to
+    /// every tree instead of giving it up; the one-shot view's taken handle
+    /// is the only one, so it still frees the calls after its last tree.
+    pub dependency_calls: Option<std::sync::Arc<Vec<crate::program::model::calls::CallEdge>>>,
     /// The solver field index: the leaf summaries' and every cross-app
     /// `build_l4` solve's (through [`Self::cross_app_inputs`]), built once.
     pub field_index: crate::engine::l4::summary_runner::FieldIndex,
@@ -3967,6 +3970,11 @@ impl R3a5CrossAppBase {
     pub fn rel(&self) -> &std::sync::Arc<crate::engine::l4::exec_relation::ExecRelation> {
         self.held_rel()
             .expect("the base's relation was released past its view's prepare")
+    }
+
+    /// The dependency calls while the base still holds them, else none.
+    pub fn dependency_calls_or_empty(&self) -> &[crate::program::model::calls::CallEdge] {
+        self.dependency_calls.as_deref().map_or(&[], Vec::as_slice)
     }
 
     /// The relation, `None` once released past the view's prepare (a census
@@ -4255,7 +4263,7 @@ pub(crate) fn build_cross_app_base_from(
         resolved,
         dep_routine_ids,
         rel: Some(std::sync::Arc::new(rel)),
-        dependency_calls: Some(dependency_calls),
+        dependency_calls: Some(std::sync::Arc::new(dependency_calls)),
         field_index,
         leaf_summaries,
         fixed_roles,
@@ -4306,7 +4314,7 @@ fn census_cross_app_base(b: &R3a5CrossAppBase) {
     emit(
         "base.dependency_calls",
         Tally::default().buf::<crate::program::model::calls::CallEdge>(
-            b.dependency_calls.as_ref().map_or(0, Vec::len),
+            b.dependency_calls.as_ref().map_or(0, |c| c.len()),
         ),
     );
     emit(
