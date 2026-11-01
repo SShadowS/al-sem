@@ -22,7 +22,6 @@ use std::path::PathBuf;
 use al_sem::engine::l5::detectors::registered_detectors;
 use al_sem::engine::l5::registry::{run_detectors, serialize_detector_stats};
 use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
-use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
 
 use crate::regen;
 
@@ -161,7 +160,6 @@ fn run_stats(fixture: &str, names: &[&str]) -> String {
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(&fixture_dir, &Default::default());
     match assemble_and_resolve_workspace_program(
         &inputs,
-        MODEL_INSTANCE_ID_DEFAULT,
         false,
         // What the selected detectors read (the `all` slot holds d65: rules).
         al_sem::engine::l5::registry::assembly_needs(&selected),

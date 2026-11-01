@@ -27,7 +27,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
-use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use al_sem::engine::l4::effect_query_cli::{QuerySubstrate, query_view, render_query_effects};
 use al_sem::engine::l5::digest::{
     CarrierCache, DagCache, HopCache, build_fingerprint_indexes_pub, reconstruct_witness_paths_pub,
@@ -472,11 +471,9 @@ fn snapshot_writes(snap: &CapabilitySnapshot) -> BTreeMap<String, Vec<(String, S
 fn a1c_cone_values_are_frame_correct() {
     let tmp = write_workspace();
     let ws = tmp.path();
-    let model_id = compute_gate_model_instance_id(ws).expect("model id");
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs());
     let model = assemble_and_resolve_workspace_program(
         &inputs,
-        &model_id,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
@@ -723,11 +720,9 @@ fn a2c_depth_two_proof_real_call_first() {
 fn a2h_fingerprint_witnesses_use_the_proofs() {
     let tmp = write_workspace();
     let ws = tmp.path();
-    let model_id = compute_gate_model_instance_id(ws).expect("model id");
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs());
     let model = assemble_and_resolve_workspace_program(
         &inputs,
-        &model_id,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
@@ -1062,11 +1057,9 @@ fn a2e_recursion_cycles_mixes_guards() {
 fn mixed_carrier_precondition() -> Vec<String> {
     let tmp = write_workspace();
     let ws = tmp.path();
-    let model_id = compute_gate_model_instance_id(ws).expect("model id");
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs());
     let model = assemble_and_resolve_workspace_program(
         &inputs,
-        &model_id,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )

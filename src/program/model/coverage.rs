@@ -121,7 +121,7 @@ fn is_unresolved_resolution(resolution: Resolution) -> bool {
 
 // ---------------------------------------------------------------------------
 // Stable-id projection for callsite / operation ids. The internal RoutineId is
-// `${modelInstanceId}/${hash}` (two `/`-parts) and the callsite / operation ids
+// `{appScope}/{hash}` (two `/`-parts) and the callsite / operation ids
 // embed it as a prefix; rewrite the prefix to the StableRoutineId.
 // ---------------------------------------------------------------------------
 

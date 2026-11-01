@@ -504,11 +504,8 @@ fn source_less_of(target: &AnalysisTarget) -> HashSet<String> {
 }
 
 fn cross_base(ws: &Path) -> crate::engine::l4::capability_cone::R3a5CrossAppBase {
-    crate::engine::l4::capability_cone::build_cross_app_base(
-        &inputs(ws),
-        crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
-    )
-    .unwrap_or_else(|_| panic!("cross-app base"))
+    crate::engine::l4::capability_cone::build_cross_app_base(&inputs(ws))
+        .unwrap_or_else(|_| panic!("cross-app base"))
 }
 
 /// T7 (a), D6: the ledger reads every caller. The dependency's `DepCaller`

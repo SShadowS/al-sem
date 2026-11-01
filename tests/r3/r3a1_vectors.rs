@@ -19,15 +19,13 @@
 //!
 //! Reproduction context (from the vector doc header):
 //!   - appGuid          = "3a100000-0000-0000-0000-00000000003a"
-//!   - modelInstanceId  = "r0"
+//!   - internal ids are scoped by the app guid (`ids::routine_app_scope`)
 //!   - files            = [[name, source], ...]  →  sourceUnitId = "ws:<name>.al"
 //!     (engine-switch S9.5c: the program-backed builder reads `.al` files only;
 //!     no expected value depends on the unit id)
 
 use al_sem::program::model::program_calls::assemble_and_resolve_inline_program as assemble_and_resolve;
 use serde_json::{Value, json};
-
-const MODEL_INSTANCE_ID: &str = "r0";
 
 #[derive(serde::Deserialize)]
 struct VectorsDoc {
@@ -92,7 +90,7 @@ fn all_r3a1_combined_graph_vectors_match() {
 
     for vec in &doc.vectors {
         let files = files_of(&vec.files);
-        let resolved = assemble_and_resolve(&files, &doc.app_guid, MODEL_INSTANCE_ID);
+        let resolved = assemble_and_resolve(&files, &doc.app_guid);
         let projection = resolved.project_r3a1_combined_graph();
 
         compare(
@@ -158,7 +156,7 @@ fn typed_edges_carry_no_anchors() {
     let _ = json!({}); // keep serde_json::json import meaningful if compare changes
     for vec in &doc.vectors {
         let files = files_of(&vec.files);
-        let resolved = assemble_and_resolve(&files, &doc.app_guid, MODEL_INSTANCE_ID);
+        let resolved = assemble_and_resolve(&files, &doc.app_guid);
         let projection = resolved.project_r3a1_combined_graph();
         let v = serde_json::to_value(&projection.typed_edges).unwrap();
         let s = serde_json::to_string(&v).unwrap();

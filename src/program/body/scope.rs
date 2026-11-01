@@ -144,7 +144,8 @@ pub(crate) fn scope_tier(
     }
 }
 
-/// Compute the internal RoutineId (`{modelInstanceId}/{canonicalKeyHash}`).
+/// Compute the internal RoutineId (`{appScope}/{canonicalKeyHash}`, see
+/// [`crate::engine::ids::encode_routine_id`]).
 ///
 /// `enclosing_member` is the member-trigger discriminator: the UNESCAPED logical
 /// name of the field / control / action / dataitem that encloses this routine,
@@ -166,7 +167,6 @@ pub fn compute_routine_id(
     enclosing_member: Option<&str>,
     parameters: &[ParameterSymbol],
     return_type_text: Option<&str>,
-    model_instance_id: &str,
 ) -> String {
     let param_specs: Vec<ParamSpec> = parameters
         .iter()
@@ -186,5 +186,5 @@ pub fn compute_routine_id(
         normalized_signature_hash,
         enclosing_member: enclosing_member.map(|m| m.to_string()),
     };
-    encode_routine_id(&key, model_instance_id)
+    encode_routine_id(&key)
 }

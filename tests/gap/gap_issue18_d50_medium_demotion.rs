@@ -71,7 +71,6 @@ use al_sem::engine::l5::finding::Finding;
 use al_sem::engine::l5::registry::{run_detectors, substrate};
 use al_sem::engine::l5::transaction_spans::{SeedKind, TransactionSpan};
 use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
-use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
 use al_sem::program::model::workspace::{Model, ModelRoutine};
 
 const FIXTURE: &str = "ws-d50-medium";
@@ -100,7 +99,6 @@ fn resolve_fixture() -> Model {
     );
     assemble_and_resolve_workspace_program(
         &al_sem::program::inputs::WorkspaceInputs::read(&dir, &Default::default()),
-        MODEL_INSTANCE_ID_DEFAULT,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )

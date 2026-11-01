@@ -12,8 +12,12 @@
 //! attribute-vector routines (OnBeforePost / OnAfterCalc / HandleEvent). We
 //! rebuild each routine's ABI shape from those two source vector files (the sig
 //! file gives param/return type text; the attr file gives the event attributes),
-//! project under both modelInstanceIds, and assert against the recorded
-//! independence values.
+//! project each, and assert against the recorded values.
+//!
+//! Since the routine-id migration (context-server design r3 §6.7) the projection
+//! takes no `modelInstanceId` at all: the internal id's prefix is the
+//! dependency's own app scope, so the two recorded internal ids are one id and
+//! the independence now holds for the internal id too.
 
 use al_sem::engine::deps::projection::{ProjectedRoutine, project_abi_to_index};
 use al_sem::engine::deps::symbol_reference::{
@@ -118,8 +122,8 @@ fn attr_routines(attr_doc: &Value) -> Vec<AbiRoutine> {
     abi.objects.into_iter().next().unwrap().routines
 }
 
-/// Project one routine under `model_instance_id`, returning its projected form.
-fn project_one(r: &AbiRoutine, app_guid: &str, model_instance_id: &str) -> ProjectedRoutine {
+/// Project one routine, returning its projected form.
+fn project_one(r: &AbiRoutine, app_guid: &str) -> ProjectedRoutine {
     let abi = SymbolReferenceAbi {
         objects: vec![AbiObject {
             object_type: OBJECT_TYPE.to_string(),
@@ -130,7 +134,7 @@ fn project_one(r: &AbiRoutine, app_guid: &str, model_instance_id: &str) -> Proje
         }],
         ..Default::default()
     };
-    project_abi_to_index(&abi, app_guid, model_instance_id)
+    project_abi_to_index(&abi, app_guid)
         .routines
         .into_iter()
         .next()
@@ -148,8 +152,6 @@ fn stable_id_independence_vectors_replay_byte_for_byte() {
     let attr_doc: Value = serde_json::from_str(attr_raw).expect("attr vectors must parse");
 
     let app_guid = stable_doc["appGuid"].as_str().unwrap();
-    let mid_a = stable_doc["modelInstanceIdA"].as_str().unwrap();
-    let mid_b = stable_doc["modelInstanceIdB"].as_str().unwrap();
     let rows = stable_doc["rows"].as_array().expect("rows array");
     let declared = stable_doc["count"].as_u64().expect("count") as usize;
     assert_eq!(declared, rows.len(), "declared count != actual rows");
@@ -175,8 +177,10 @@ fn stable_id_independence_vectors_replay_byte_for_byte() {
             }
         };
 
-        let pa = project_one(r, app_guid, mid_a);
-        let pb = project_one(r, app_guid, mid_b);
+        // Two projections of the same ABI (the recorded A and B runs): nothing
+        // a consuming model supplies enters any of the ids any more.
+        let pa = project_one(r, app_guid);
+        let pb = project_one(r, app_guid);
 
         let exp_stable = row["stableRoutineId"].as_str().unwrap();
         let exp_fp = row["signatureFingerprint"].as_str().unwrap();
@@ -219,9 +223,9 @@ fn stable_id_independence_vectors_replay_byte_for_byte() {
                 pb.id
             ));
         }
-        // The internal ids MUST differ (modelInstanceId is in the prefix).
-        if row["internalRoutineIdDiffers"].as_bool() == Some(true) && pa.id == pb.id {
-            row_errs.push("internal ids expected to differ but matched".to_string());
+        // The internal id is the same in both runs: its prefix is the app scope.
+        if row["internalRoutineIdDiffers"].as_bool() != Some(false) || exp_int_a != exp_int_b {
+            row_errs.push("the recorded internal ids must be one id".to_string());
         }
 
         if !row_errs.is_empty() {

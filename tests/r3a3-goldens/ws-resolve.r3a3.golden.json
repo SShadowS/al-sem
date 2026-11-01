@@ -25,7 +25,7 @@
 					"extra": {
 						"kind": "table",
 						"opSubtype": "Get",
-						"recordVariableId": "r0/206335bf973a5ec9cb2539e0d325824af59e5d11ef2b5a243abc60763b911370/rv/customer",
+						"recordVariableId": "eec458d3722f678a/206335bf973a5ec9cb2539e0d325824af59e5d11ef2b5a243abc60763b911370/rv/customer",
 						"tempState": {
 							"kind": "known",
 							"value": false
@@ -63,7 +63,7 @@
 					"extra": {
 						"kind": "table",
 						"opSubtype": "Get",
-						"recordVariableId": "r0/206335bf973a5ec9cb2539e0d325824af59e5d11ef2b5a243abc60763b911370/rv/customer",
+						"recordVariableId": "eec458d3722f678a/206335bf973a5ec9cb2539e0d325824af59e5d11ef2b5a243abc60763b911370/rv/customer",
 						"tempState": {
 							"kind": "known",
 							"value": false

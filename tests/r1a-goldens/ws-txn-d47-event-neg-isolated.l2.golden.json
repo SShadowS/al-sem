@@ -29,7 +29,7 @@
         "loops": [],
         "operationSites": [
           {
-            "id": "r0/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op0",
+            "id": "1fd3027229a273a8/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op0",
             "kind": "record-op",
             "loopStack": [],
             "sourceAnchor": {
@@ -49,7 +49,7 @@
             }
           },
           {
-            "id": "r0/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op1",
+            "id": "1fd3027229a273a8/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op1",
             "kind": "record-op",
             "loopStack": [],
             "sourceAnchor": {
@@ -71,10 +71,10 @@
         ],
         "recordOperations": [
           {
-            "id": "r0/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op0",
+            "id": "1fd3027229a273a8/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op0",
             "op": "Get",
             "recordVariableName": "Rec",
-            "recordVariableId": "r0/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/rv/rec",
+            "recordVariableId": "1fd3027229a273a8/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
@@ -100,10 +100,10 @@
             }
           },
           {
-            "id": "r0/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op1",
+            "id": "1fd3027229a273a8/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op1",
             "op": "Modify",
             "recordVariableName": "Rec",
-            "recordVariableId": "r0/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/rv/rec",
+            "recordVariableId": "1fd3027229a273a8/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
@@ -121,8 +121,8 @@
         ],
         "callSites": [
           {
-            "id": "r0/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/cs0",
-            "operationId": "r0/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op2",
+            "id": "1fd3027229a273a8/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/cs0",
+            "operationId": "1fd3027229a273a8/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op2",
             "calleeText": "OnAfterProcessIsolated",
             "callee": {
               "kind": "bare",
@@ -165,7 +165,7 @@
         ],
         "recordVariables": [
           {
-            "id": "r0/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/rv/rec",
+            "id": "1fd3027229a273a8/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/rv/rec",
             "name": "Rec",
             "tableName": "D47 Isolated Rec",
             "tempState": {
@@ -217,18 +217,18 @@
           "children": [
             {
               "kind": "op",
-              "operationId": "r0/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op0"
+              "operationId": "1fd3027229a273a8/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op0"
             },
             {
               "kind": "other"
             },
             {
               "kind": "op",
-              "operationId": "r0/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op1"
+              "operationId": "1fd3027229a273a8/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op1"
             },
             {
               "kind": "call",
-              "callsiteId": "r0/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/cs0"
+              "callsiteId": "1fd3027229a273a8/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/cs0"
             }
           ]
         },
@@ -247,10 +247,10 @@
           "confidence": "unresolved",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op0",
+          "witnessOperationId": "1fd3027229a273a8/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op0",
           "extra": {
             "kind": "table",
-            "recordVariableId": "r0/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/rv/rec",
+            "recordVariableId": "1fd3027229a273a8/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
@@ -264,10 +264,10 @@
           "confidence": "unresolved",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op1",
+          "witnessOperationId": "1fd3027229a273a8/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op1",
           "extra": {
             "kind": "table",
-            "recordVariableId": "r0/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/rv/rec",
+            "recordVariableId": "1fd3027229a273a8/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
@@ -281,7 +281,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op0"
+          "witnessOperationId": "1fd3027229a273a8/721dae296e4657b7beb7ba891cc487d985645881bf456d82d19d294694f307d3/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -409,8 +409,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/aecb8d1c4b22c3dd741b6aa7393109f1e9d0caea2effc9221c19b580fe096ebf/cs0",
-            "operationId": "r0/aecb8d1c4b22c3dd741b6aa7393109f1e9d0caea2effc9221c19b580fe096ebf/op0",
+            "id": "1fd3027229a273a8/aecb8d1c4b22c3dd741b6aa7393109f1e9d0caea2effc9221c19b580fe096ebf/cs0",
+            "operationId": "1fd3027229a273a8/aecb8d1c4b22c3dd741b6aa7393109f1e9d0caea2effc9221c19b580fe096ebf/op0",
             "calleeText": "Client.Post",
             "callee": {
               "kind": "member",
@@ -556,7 +556,7 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/aecb8d1c4b22c3dd741b6aa7393109f1e9d0caea2effc9221c19b580fe096ebf/cs0"
+              "callsiteId": "1fd3027229a273a8/aecb8d1c4b22c3dd741b6aa7393109f1e9d0caea2effc9221c19b580fe096ebf/cs0"
             }
           ]
         },
@@ -579,7 +579,7 @@
             "kind": "literal",
             "value": "https://example.test/notify"
           },
-          "witnessCallsiteId": "r0/aecb8d1c4b22c3dd741b6aa7393109f1e9d0caea2effc9221c19b580fe096ebf/cs0",
+          "witnessCallsiteId": "1fd3027229a273a8/aecb8d1c4b22c3dd741b6aa7393109f1e9d0caea2effc9221c19b580fe096ebf/cs0",
           "extra": {
             "kind": "http",
             "method": "Post",

@@ -24,7 +24,7 @@
         "loops": [],
         "operationSites": [
           {
-            "id": "r0/7c696f0a7779ec8ac48e2da4bfb2f4a81df306148913d663578924e6f338c872/op0",
+            "id": "a070cc6d1066ebd4/7c696f0a7779ec8ac48e2da4bfb2f4a81df306148913d663578924e6f338c872/op0",
             "kind": "error-call",
             "loopStack": [],
             "sourceAnchor": {
@@ -47,8 +47,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/7c696f0a7779ec8ac48e2da4bfb2f4a81df306148913d663578924e6f338c872/cs0",
-            "operationId": "r0/7c696f0a7779ec8ac48e2da4bfb2f4a81df306148913d663578924e6f338c872/op1",
+            "id": "a070cc6d1066ebd4/7c696f0a7779ec8ac48e2da4bfb2f4a81df306148913d663578924e6f338c872/cs0",
+            "operationId": "a070cc6d1066ebd4/7c696f0a7779ec8ac48e2da4bfb2f4a81df306148913d663578924e6f338c872/op1",
             "calleeText": "Error",
             "callee": {
               "kind": "bare",
@@ -110,7 +110,7 @@
           "children": [
             {
               "kind": "error",
-              "callsiteId": "r0/7c696f0a7779ec8ac48e2da4bfb2f4a81df306148913d663578924e6f338c872/cs0"
+              "callsiteId": "a070cc6d1066ebd4/7c696f0a7779ec8ac48e2da4bfb2f4a81df306148913d663578924e6f338c872/cs0"
             }
           ]
         },
@@ -129,7 +129,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessCallsiteId": "r0/7c696f0a7779ec8ac48e2da4bfb2f4a81df306148913d663578924e6f338c872/cs0"
+          "witnessCallsiteId": "a070cc6d1066ebd4/7c696f0a7779ec8ac48e2da4bfb2f4a81df306148913d663578924e6f338c872/cs0"
         },
         {
           "op": "error-throw",
@@ -137,7 +137,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/7c696f0a7779ec8ac48e2da4bfb2f4a81df306148913d663578924e6f338c872/op0"
+          "witnessOperationId": "a070cc6d1066ebd4/7c696f0a7779ec8ac48e2da4bfb2f4a81df306148913d663578924e6f338c872/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -156,7 +156,7 @@
         "loops": [],
         "operationSites": [
           {
-            "id": "r0/43dcc3b4c48a3294b49770065ff014e41afb8d1003acb7d38c6cee732122ec91/op0",
+            "id": "a070cc6d1066ebd4/43dcc3b4c48a3294b49770065ff014e41afb8d1003acb7d38c6cee732122ec91/op0",
             "kind": "commit",
             "loopStack": [],
             "sourceAnchor": {
@@ -179,8 +179,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/43dcc3b4c48a3294b49770065ff014e41afb8d1003acb7d38c6cee732122ec91/cs0",
-            "operationId": "r0/43dcc3b4c48a3294b49770065ff014e41afb8d1003acb7d38c6cee732122ec91/op1",
+            "id": "a070cc6d1066ebd4/43dcc3b4c48a3294b49770065ff014e41afb8d1003acb7d38c6cee732122ec91/cs0",
+            "operationId": "a070cc6d1066ebd4/43dcc3b4c48a3294b49770065ff014e41afb8d1003acb7d38c6cee732122ec91/op1",
             "calleeText": "Worker.P",
             "callee": {
               "kind": "member",
@@ -239,11 +239,11 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/43dcc3b4c48a3294b49770065ff014e41afb8d1003acb7d38c6cee732122ec91/cs0"
+              "callsiteId": "a070cc6d1066ebd4/43dcc3b4c48a3294b49770065ff014e41afb8d1003acb7d38c6cee732122ec91/cs0"
             },
             {
               "kind": "op",
-              "operationId": "r0/43dcc3b4c48a3294b49770065ff014e41afb8d1003acb7d38c6cee732122ec91/op0"
+              "operationId": "a070cc6d1066ebd4/43dcc3b4c48a3294b49770065ff014e41afb8d1003acb7d38c6cee732122ec91/op0"
             }
           ]
         },
@@ -262,7 +262,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/43dcc3b4c48a3294b49770065ff014e41afb8d1003acb7d38c6cee732122ec91/op0"
+          "witnessOperationId": "a070cc6d1066ebd4/43dcc3b4c48a3294b49770065ff014e41afb8d1003acb7d38c6cee732122ec91/op0"
         }
       ],
       "capabilityStatus": "complete",

@@ -101,8 +101,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/11015b06a94d4c9bb3b0f01eecaa7393a71476222aa4c7b8e6eac5780cc0bbf7/cs0",
-            "operationId": "r0/11015b06a94d4c9bb3b0f01eecaa7393a71476222aa4c7b8e6eac5780cc0bbf7/op0",
+            "id": "73e128cc0b77d52a/11015b06a94d4c9bb3b0f01eecaa7393a71476222aa4c7b8e6eac5780cc0bbf7/cs0",
+            "operationId": "73e128cc0b77d52a/11015b06a94d4c9bb3b0f01eecaa7393a71476222aa4c7b8e6eac5780cc0bbf7/op0",
             "calleeText": "First.DoThing",
             "callee": {
               "kind": "member",
@@ -130,8 +130,8 @@
             }
           },
           {
-            "id": "r0/11015b06a94d4c9bb3b0f01eecaa7393a71476222aa4c7b8e6eac5780cc0bbf7/cs1",
-            "operationId": "r0/11015b06a94d4c9bb3b0f01eecaa7393a71476222aa4c7b8e6eac5780cc0bbf7/op1",
+            "id": "73e128cc0b77d52a/11015b06a94d4c9bb3b0f01eecaa7393a71476222aa4c7b8e6eac5780cc0bbf7/cs1",
+            "operationId": "73e128cc0b77d52a/11015b06a94d4c9bb3b0f01eecaa7393a71476222aa4c7b8e6eac5780cc0bbf7/op1",
             "calleeText": "Second.DoOther",
             "callee": {
               "kind": "member",
@@ -205,11 +205,11 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/11015b06a94d4c9bb3b0f01eecaa7393a71476222aa4c7b8e6eac5780cc0bbf7/cs0"
+              "callsiteId": "73e128cc0b77d52a/11015b06a94d4c9bb3b0f01eecaa7393a71476222aa4c7b8e6eac5780cc0bbf7/cs0"
             },
             {
               "kind": "call",
-              "callsiteId": "r0/11015b06a94d4c9bb3b0f01eecaa7393a71476222aa4c7b8e6eac5780cc0bbf7/cs1"
+              "callsiteId": "73e128cc0b77d52a/11015b06a94d4c9bb3b0f01eecaa7393a71476222aa4c7b8e6eac5780cc0bbf7/cs1"
             }
           ]
         },
@@ -240,8 +240,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/053bfbdf4c9150da433ebbcb693a26db6a52fb979ba31353e32c827a16b36637/cs0",
-            "operationId": "r0/053bfbdf4c9150da433ebbcb693a26db6a52fb979ba31353e32c827a16b36637/op0",
+            "id": "73e128cc0b77d52a/053bfbdf4c9150da433ebbcb693a26db6a52fb979ba31353e32c827a16b36637/cs0",
+            "operationId": "73e128cc0b77d52a/053bfbdf4c9150da433ebbcb693a26db6a52fb979ba31353e32c827a16b36637/op0",
             "calleeText": "StepA",
             "callee": {
               "kind": "bare",
@@ -268,8 +268,8 @@
             }
           },
           {
-            "id": "r0/053bfbdf4c9150da433ebbcb693a26db6a52fb979ba31353e32c827a16b36637/cs1",
-            "operationId": "r0/053bfbdf4c9150da433ebbcb693a26db6a52fb979ba31353e32c827a16b36637/op1",
+            "id": "73e128cc0b77d52a/053bfbdf4c9150da433ebbcb693a26db6a52fb979ba31353e32c827a16b36637/cs1",
+            "operationId": "73e128cc0b77d52a/053bfbdf4c9150da433ebbcb693a26db6a52fb979ba31353e32c827a16b36637/op1",
             "calleeText": "StepB",
             "callee": {
               "kind": "bare",
@@ -310,11 +310,11 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/053bfbdf4c9150da433ebbcb693a26db6a52fb979ba31353e32c827a16b36637/cs0"
+              "callsiteId": "73e128cc0b77d52a/053bfbdf4c9150da433ebbcb693a26db6a52fb979ba31353e32c827a16b36637/cs0"
             },
             {
               "kind": "call",
-              "callsiteId": "r0/053bfbdf4c9150da433ebbcb693a26db6a52fb979ba31353e32c827a16b36637/cs1"
+              "callsiteId": "73e128cc0b77d52a/053bfbdf4c9150da433ebbcb693a26db6a52fb979ba31353e32c827a16b36637/cs1"
             }
           ]
         },

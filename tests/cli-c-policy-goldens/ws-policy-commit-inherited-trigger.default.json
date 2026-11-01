@@ -97,11 +97,11 @@
   ],
   "findings": [
     {
-      "id": "policy-no-commit-in-triggers/455d104c60665aaf/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d",
-      "rootCauseKey": "policy-no-commit-in-triggers/455d104c60665aaf/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d",
+      "id": "policy-no-commit-in-triggers/075fdfef3e40c9e2/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d",
+      "rootCauseKey": "policy-no-commit-in-triggers/075fdfef3e40c9e2/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d",
       "detector": "policy-no-commit-in-triggers",
       "title": "Database triggers must not perform Commit",
-      "rootCause": "Policy no-commit-in-triggers matched 1 fact(s) on routine 455d104c60665aaf/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d.",
+      "rootCause": "Policy no-commit-in-triggers matched 1 fact(s) on routine 075fdfef3e40c9e2/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d.",
       "severity": "high",
       "confidence": {
         "level": "likely",
@@ -115,12 +115,12 @@
           "endLine": 15,
           "endColumn": 8
         },
-        "enclosingRoutineId": "455d104c60665aaf/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d",
+        "enclosingRoutineId": "075fdfef3e40c9e2/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d",
         "syntaxKind": "trigger_declaration"
       },
       "evidencePath": [
         {
-          "routineId": "455d104c60665aaf/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d",
+          "routineId": "075fdfef3e40c9e2/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d",
           "sourceAnchor": {
             "sourceUnitId": "ws:src/Table.al",
             "range": {
@@ -129,13 +129,13 @@
               "endLine": 15,
               "endColumn": 8
             },
-            "enclosingRoutineId": "455d104c60665aaf/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d",
+            "enclosingRoutineId": "075fdfef3e40c9e2/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d",
             "syntaxKind": "trigger_declaration"
           },
           "note": "Database triggers must not perform Commit"
         },
         {
-          "routineId": "455d104c60665aaf/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d",
+          "routineId": "075fdfef3e40c9e2/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d",
           "sourceAnchor": {
             "sourceUnitId": "ws:src/Table.al",
             "range": {
@@ -144,12 +144,12 @@
               "endLine": 15,
               "endColumn": 8
             },
-            "enclosingRoutineId": "455d104c60665aaf/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d",
+            "enclosingRoutineId": "075fdfef3e40c9e2/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d",
             "syntaxKind": "trigger_declaration"
           },
           "note": "matched on capability.op=commit, resourceKind=transaction",
-          "operationId": "455d104c60665aaf/8d9ac3e97c57caa30c2a595caa97bca3ff7ea877fc3842891d8e1fc054d7defa/op0",
-          "callsiteId": "455d104c60665aaf/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d/cs0"
+          "operationId": "075fdfef3e40c9e2/8d9ac3e97c57caa30c2a595caa97bca3ff7ea877fc3842891d8e1fc054d7defa/op0",
+          "callsiteId": "075fdfef3e40c9e2/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d/cs0"
         }
       ],
       "affectedObjects": [

@@ -28,12 +28,10 @@ use al_sem::engine::snapshot::snapshot_workspace;
 use al_sem::program::body::l2_workspace::project_workspace;
 
 /// The model the detector-output modes (`--r3a1/2/3`, `--r4-findings`, `--r4f-*`)
-/// project (engine-switch S6.9): program-backed, as `alsem analyze` builds it,
-/// under the default model-instance id.
+/// project (engine-switch S6.9): program-backed, as `alsem analyze` builds it.
 fn program_model(workspace: &std::path::Path) -> Option<al_sem::program::model::workspace::Model> {
     al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
         &al_sem::program::inputs::WorkspaceInputs::read(workspace, &Default::default()),
-        al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
         // What a default `analyze` builds: none of these modes reads rules.
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
@@ -48,7 +46,6 @@ fn program_model_for(
 ) -> Option<al_sem::program::model::workspace::Model> {
     al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
         &al_sem::program::inputs::WorkspaceInputs::read(workspace, &Default::default()),
-        al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
         al_sem::engine::l5::registry::assembly_needs(detectors),
     )
@@ -346,7 +343,9 @@ fn snapshot_memory_cmd(args: &[String]) -> ExitCode {
     };
 
     let t = Instant::now();
-    let Some(id) = al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id(&ws)
+    // The presence check `analyze` makes (a root `app.json` with an `id`); the
+    // id itself no longer enters the routine ids.
+    let Some(_) = al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id(&ws)
     else {
         eprintln!(
             "aldump: error: {}: no app.json or unreadable workspace",
@@ -358,11 +357,11 @@ fn snapshot_memory_cmd(args: &[String]) -> ExitCode {
     let needs = al_sem::program::model::workspace::AssemblyNeeds::BASE;
     let model = if single_app {
         al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
-            &inputs, &id, false, needs,
+            &inputs, false, needs,
         )
     } else {
         al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
-            &inputs, &id, false, needs,
+            &inputs, false, needs,
         )
         .ok()
         .map(|p| p.resolved)
@@ -778,7 +777,6 @@ fn run_main() -> ExitCode {
         }
         let projection = al_sem::engine::l4::capability_cone::project_r3a5_cross_app(
             &workspace,
-            "r0",
             "cross-app-full-summary",
         );
         return match serde_json::to_string_pretty(&projection) {
@@ -1039,7 +1037,6 @@ fn run_main() -> ExitCode {
         let detector_names: Vec<String> = detectors.iter().map(|d| d.name.clone()).collect();
         let projection = al_sem::engine::l5::finding::project_r4_findings_cross_app(
             &workspace,
-            al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
             &detectors,
             &fixture_name,
             &detector_names,

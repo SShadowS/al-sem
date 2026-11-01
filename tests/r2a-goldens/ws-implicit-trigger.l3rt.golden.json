@@ -41,7 +41,7 @@
       ],
       "recordOperations": [
         {
-          "operationId": "r0/4fca6331353762e69186f75985c4f737f9fdcfac8f31f2eaaaa921dd166b0ab8/op0",
+          "operationId": "5b772d547a1e63e6/4fca6331353762e69186f75985c4f737f9fdcfac8f31f2eaaaa921dd166b0ab8/op0",
           "op": "Validate",
           "recordVariableName": "line",
           "tableId": "11111111-d1it-0000-0000-000000000001:Table:72100"
@@ -64,7 +64,7 @@
       ],
       "recordOperations": [
         {
-          "operationId": "r0/37d312feaf199444d642269a7d6210e4e8a4e73faa56de00d8212cb3993fad98/op0",
+          "operationId": "5b772d547a1e63e6/37d312feaf199444d642269a7d6210e4e8a4e73faa56de00d8212cb3993fad98/op0",
           "op": "FindSet",
           "recordVariableName": "anotherline",
           "tableId": "11111111-d1it-0000-0000-000000000001:Table:72100"

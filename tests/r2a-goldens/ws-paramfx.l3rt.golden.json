@@ -34,13 +34,13 @@
       ],
       "recordOperations": [
         {
-          "operationId": "r0/c82631f4c81532890fc07f0b9311a574d1529b43b69e872e20ecd189ad2c0ada/op0",
+          "operationId": "690e666d1a2ed6b6/c82631f4c81532890fc07f0b9311a574d1529b43b69e872e20ecd189ad2c0ada/op0",
           "op": "Validate",
           "recordVariableName": "salesline",
           "tableId": "aaaaaaaa-0000-0000-0000-0000000000b2:Table:60100"
         },
         {
-          "operationId": "r0/c82631f4c81532890fc07f0b9311a574d1529b43b69e872e20ecd189ad2c0ada/op1",
+          "operationId": "690e666d1a2ed6b6/c82631f4c81532890fc07f0b9311a574d1529b43b69e872e20ecd189ad2c0ada/op1",
           "op": "Reset",
           "recordVariableName": "salesline",
           "tableId": "aaaaaaaa-0000-0000-0000-0000000000b2:Table:60100"

@@ -1,14 +1,17 @@
 //! Compute the al-sem GATE `modelInstanceId` — the content-derived id
-//! `discoverSources` (al-sem `src/providers/discover.ts`) stamps onto every internal
-//! RoutineId when `analyzeWorkspace` is called WITHOUT a `modelInstanceIdOverride`.
+//! `discoverSources` (al-sem `src/providers/discover.ts`) computed for a workspace.
 //!
-//! WHY THE GATE NEEDS THIS (and the R4 dump does not): the al-sem R4 finding dump pins
-//! `modelInstanceId="r0"`, and the Rust engine's default assembly also uses `"r0"`. But
-//! the al-sem `analyze` CLI (which produced the gate-SARIF goldens via
-//! `dump-gate-sarif.ts`) uses the UNPINNED, content-derived id. A finding's
-//! `rootCauseKey` embeds `${modelInstanceId}/${hash}` internal RoutineIds, and the
-//! SARIF fingerprint is `sha256(... | rootCauseKey)`. So to byte-match the GATE
-//! fingerprints the Rust engine must assemble with the SAME content-derived id.
+//! **It is no longer part of any routine id.** It used to prefix every internal
+//! RoutineId (`{modelInstanceId}/{hash}`), and because it hashes the sorted `.al`
+//! file list, adding, removing or renaming any file moved every id. Since the
+//! routine-id migration (context-server design r3 §6.7) the prefix is the routine's
+//! own app scope (`ids::encode_routine_id`). What still reads this id:
+//! - the commands' presence check (`TargetFailure::NoModelInstanceId`: no root
+//!   `app.json` with a string `id` fails the model, as before);
+//! - the L4 host key (`engine::incremental`'s `host_global`), which is how a file
+//!   added or removed still invalidates the retained L4 host. That key changing
+//!   with the file list is deliberate and conservative; the context-server design
+//!   (§6.9) removes it from the host half in a later stage.
 //!
 //! Derivation (`discover.ts` + `providers/workspace.ts` + `hash.ts`):
 //!   appVersion        = app.json `version` ?? "0.0.0.0"

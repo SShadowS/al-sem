@@ -222,3 +222,12 @@ root-cause any movement before committing (the old solver is at the
   - The reverse index's oracle comparison passed in the re-freezing run (it runs before
     the digest). Per table, the ancestor lists only grew (33,640 -> 44,139 entries, 0
     removed, the same 66 tables), from the same new edges.
+- **2026-11-01, the routine-id migration** (context-server design r3 §6.7: internal
+  routine ids are `{app scope}/{64 hex}`, no longer `{modelInstanceId}/{64 hex}`).
+  Whole-program `e58ca2fb…` -> `68cb79be…`; reverse index `9addc20a…` -> `ebe586c3…`.
+  Exact single-variable attribution on the pinned `bc3ccb18` baseline: with
+  `ids::routine_app_scope` temporarily returning `"r0"` (the prefix this source-only path
+  used before) and nothing else changed, both tests reproduce the OLD digests byte for
+  byte; with the app scope they give the new ones. CDO is one app, so every id keeps one
+  common prefix and `canonical()`'s sort by `routine_id` is unchanged; only the id text
+  moved. The reverse index's oracle comparison passed in the re-freezing run.

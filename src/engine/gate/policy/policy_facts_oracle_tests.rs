@@ -19,6 +19,13 @@
 //! gained the `error-implicit` facts (unguarded record lookups, `TestField`,
 //! `FieldError`) of their routines, which policy sees as it sees `error-throw`.
 //! Re-record only for such an intended change, after reading the diff.
+//!
+//! Re-recorded (2026-11-01, routine-id migration) with
+//! `REMINT_POLICY_FACTS_ORACLE=1`: the rendering hashed here holds internal
+//! routine ids, whose prefix became the app scope. Checked before re-recording:
+//! on the parent (004f0ee4) and after the change, all 454 cases have equal
+//! counts and an equal sha256 once every `<prefix>/<64 hex>` is reduced to its
+//! hash part; 448 raw sha256 values moved, the other 6 hold no internal id.
 
 use super::*;
 use crate::engine::gate::policy::policy_loader::{LoadResult, load_policy_from_string};

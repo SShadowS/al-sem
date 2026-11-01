@@ -21,8 +21,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/3bdaa31601611f625a853c922742695eea009c6065204ae0aed98251348416ff/cs0",
-            "operationId": "r0/3bdaa31601611f625a853c922742695eea009c6065204ae0aed98251348416ff/op0",
+            "id": "30e2672b15a78aef/3bdaa31601611f625a853c922742695eea009c6065204ae0aed98251348416ff/cs0",
+            "operationId": "30e2672b15a78aef/3bdaa31601611f625a853c922742695eea009c6065204ae0aed98251348416ff/op0",
             "calleeText": "NotARealProc",
             "callee": {
               "kind": "bare",
@@ -63,7 +63,7 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/3bdaa31601611f625a853c922742695eea009c6065204ae0aed98251348416ff/cs0"
+              "callsiteId": "30e2672b15a78aef/3bdaa31601611f625a853c922742695eea009c6065204ae0aed98251348416ff/cs0"
             }
           ]
         },

@@ -21,8 +21,6 @@ use al_sem::engine::deps::dep_artifact_l4::{
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-const MODEL_INSTANCE_ID: &str = "r0";
-
 /// The chain dependency's artifact, built as the cross-app path builds it
 /// (engine-switch S7.5): from the cross-app model of the workspace that depends on
 /// it, `tests/r3a4-fixtures/ws`.
@@ -30,7 +28,6 @@ fn chain_dep_artifact() -> al_sem::engine::deps::dep_artifact_l4::DependencyArti
     let ws = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/r3a4-fixtures/ws");
     let x = al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
         &al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default()),
-        MODEL_INSTANCE_ID,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )

@@ -1492,7 +1492,6 @@ fn cross_app_census_has_no_losses_with_a_dependency_body() {
     );
     let a = cross_app_assemble(
         &crate::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default()),
-        crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
     )
     .expect("cross-app build");
@@ -1608,7 +1607,6 @@ fn two_apps_same_path_same_expr_pair_within_their_app() {
     }
     let a = cross_app_assemble(
         &crate::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default()),
-        crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
     )
     .expect("cross-app build");

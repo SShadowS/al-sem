@@ -21,8 +21,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/3c026965a6942f8251f5251194bd13554cb77123ae1d8c514fbc48d4abb7f7d9/cs0",
-            "operationId": "r0/3c026965a6942f8251f5251194bd13554cb77123ae1d8c514fbc48d4abb7f7d9/op0",
+            "id": "9551a52aded16587/3c026965a6942f8251f5251194bd13554cb77123ae1d8c514fbc48d4abb7f7d9/cs0",
+            "operationId": "9551a52aded16587/3c026965a6942f8251f5251194bd13554cb77123ae1d8c514fbc48d4abb7f7d9/op0",
             "calleeText": "Codeunit.Run",
             "callee": {
               "kind": "object-run",
@@ -93,7 +93,7 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/3c026965a6942f8251f5251194bd13554cb77123ae1d8c514fbc48d4abb7f7d9/cs0"
+              "callsiteId": "9551a52aded16587/3c026965a6942f8251f5251194bd13554cb77123ae1d8c514fbc48d4abb7f7d9/cs0"
             }
           ]
         },
@@ -117,7 +117,7 @@
             "enumName": "Codeunit",
             "member": "D13DepInternal"
           },
-          "witnessCallsiteId": "r0/3c026965a6942f8251f5251194bd13554cb77123ae1d8c514fbc48d4abb7f7d9/cs0",
+          "witnessCallsiteId": "9551a52aded16587/3c026965a6942f8251f5251194bd13554cb77123ae1d8c514fbc48d4abb7f7d9/cs0",
           "extra": {
             "kind": "dispatch",
             "objectType": "Codeunit"

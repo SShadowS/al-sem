@@ -21,7 +21,6 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::OnceLock;
 
-use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use al_sem::engine::l4::combined_graph::build_combined_graph;
 use al_sem::engine::l4::effect_query_cli::{QuerySubstrate, query_view, render_query_effects};
 use al_sem::engine::l5::detector_context::build_detector_context;
@@ -248,10 +247,8 @@ fn model() -> &'static Model {
     static MODEL: OnceLock<Model> = OnceLock::new();
     MODEL.get_or_init(|| {
         let tmp = write_workspace();
-        let id = compute_gate_model_instance_id(tmp.path()).expect("model id");
         assemble_and_resolve_workspace_program(
             &read(tmp.path()),
-            &id,
             false,
             al_sem::program::model::workspace::AssemblyNeeds::BASE,
         )

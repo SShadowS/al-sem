@@ -49,7 +49,7 @@
         "loops": [],
         "operationSites": [
           {
-            "id": "r0/3f3008e6bd5490f7364b24bf754b984153c6998e8e7d28b4ff567a2cdd881b25/op0",
+            "id": "05d17100b346c29d/3f3008e6bd5490f7364b24bf754b984153c6998e8e7d28b4ff567a2cdd881b25/op0",
             "kind": "commit",
             "loopStack": [],
             "sourceAnchor": {
@@ -85,7 +85,7 @@
           "children": [
             {
               "kind": "op",
-              "operationId": "r0/3f3008e6bd5490f7364b24bf754b984153c6998e8e7d28b4ff567a2cdd881b25/op0"
+              "operationId": "05d17100b346c29d/3f3008e6bd5490f7364b24bf754b984153c6998e8e7d28b4ff567a2cdd881b25/op0"
             }
           ]
         },
@@ -104,7 +104,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/3f3008e6bd5490f7364b24bf754b984153c6998e8e7d28b4ff567a2cdd881b25/op0"
+          "witnessOperationId": "05d17100b346c29d/3f3008e6bd5490f7364b24bf754b984153c6998e8e7d28b4ff567a2cdd881b25/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -164,8 +164,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/74206747c5de6013d351603b93b0b0f8f089403adb5492503aed55ddc4ce8d1e/cs0",
-            "operationId": "r0/74206747c5de6013d351603b93b0b0f8f089403adb5492503aed55ddc4ce8d1e/op0",
+            "id": "05d17100b346c29d/74206747c5de6013d351603b93b0b0f8f089403adb5492503aed55ddc4ce8d1e/cs0",
+            "operationId": "05d17100b346c29d/74206747c5de6013d351603b93b0b0f8f089403adb5492503aed55ddc4ce8d1e/op0",
             "calleeText": "Proc.Process",
             "callee": {
               "kind": "member",
@@ -224,7 +224,7 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/74206747c5de6013d351603b93b0b0f8f089403adb5492503aed55ddc4ce8d1e/cs0"
+              "callsiteId": "05d17100b346c29d/74206747c5de6013d351603b93b0b0f8f089403adb5492503aed55ddc4ce8d1e/cs0"
             }
           ]
         },
@@ -255,8 +255,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/bb748065892d8eede735a73b2bba26b8b7570ce67ab79a96f794925a8996f1b7/cs0",
-            "operationId": "r0/bb748065892d8eede735a73b2bba26b8b7570ce67ab79a96f794925a8996f1b7/op0",
+            "id": "05d17100b346c29d/bb748065892d8eede735a73b2bba26b8b7570ce67ab79a96f794925a8996f1b7/cs0",
+            "operationId": "05d17100b346c29d/bb748065892d8eede735a73b2bba26b8b7570ce67ab79a96f794925a8996f1b7/op0",
             "calleeText": "E.Nothing",
             "callee": {
               "kind": "member",
@@ -315,7 +315,7 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/bb748065892d8eede735a73b2bba26b8b7570ce67ab79a96f794925a8996f1b7/cs0"
+              "callsiteId": "05d17100b346c29d/bb748065892d8eede735a73b2bba26b8b7570ce67ab79a96f794925a8996f1b7/cs0"
             }
           ]
         },

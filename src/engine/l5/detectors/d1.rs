@@ -3417,7 +3417,6 @@ mod shadow_tests {
         let resolved =
             crate::program::model::program_calls::assemble_and_resolve_workspace_program(
                 &crate::program::inputs::WorkspaceInputs::read(&ws_path, &Default::default()),
-                crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
                 false,
                 crate::program::model::workspace::AssemblyNeeds::BASE,
             )

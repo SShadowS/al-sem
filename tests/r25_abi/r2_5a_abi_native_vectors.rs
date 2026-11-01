@@ -84,7 +84,6 @@ fn abi_native_sig_vectors_replay_byte_for_byte() {
     let app_guid = doc["appGuid"].as_str().unwrap();
     let object_type = doc["objectType"].as_str().unwrap();
     let object_number = doc["objectNumber"].as_i64().unwrap();
-    let model_instance_id = doc["modelInstanceId"].as_str().unwrap();
     let rows = doc["rows"].as_array().expect("rows array");
 
     let declared = doc["count"].as_u64().expect("count") as usize;
@@ -105,7 +104,7 @@ fn abi_native_sig_vectors_replay_byte_for_byte() {
             }],
             ..Default::default()
         };
-        let projected = project_abi_to_index(&abi, app_guid, model_instance_id);
+        let projected = project_abi_to_index(&abi, app_guid);
         assert_eq!(projected.routines.len(), 1, "one routine expected");
         let pr = &projected.routines[0];
 

@@ -19,7 +19,7 @@
         "loops": [],
         "operationSites": [
           {
-            "id": "r0/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/op0",
+            "id": "67f3b01c68b9d23c/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/op0",
             "kind": "error-call",
             "loopStack": [],
             "sourceAnchor": {
@@ -42,8 +42,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/cs0",
-            "operationId": "r0/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/op1",
+            "id": "67f3b01c68b9d23c/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/cs0",
+            "operationId": "67f3b01c68b9d23c/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/op1",
             "calleeText": "Client.Get",
             "callee": {
               "kind": "member",
@@ -110,8 +110,8 @@
             }
           },
           {
-            "id": "r0/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/cs1",
-            "operationId": "r0/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/op2",
+            "id": "67f3b01c68b9d23c/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/cs1",
+            "operationId": "67f3b01c68b9d23c/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/op2",
             "calleeText": "Error",
             "callee": {
               "kind": "bare",
@@ -205,11 +205,11 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/cs0"
+              "callsiteId": "67f3b01c68b9d23c/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/cs0"
             },
             {
               "kind": "error",
-              "callsiteId": "r0/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/cs1"
+              "callsiteId": "67f3b01c68b9d23c/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/cs1"
             }
           ]
         },
@@ -232,7 +232,7 @@
             "kind": "literal",
             "value": "https://api.example.test/orders"
           },
-          "witnessCallsiteId": "r0/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/cs0",
+          "witnessCallsiteId": "67f3b01c68b9d23c/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/cs0",
           "extra": {
             "kind": "http",
             "method": "Get",
@@ -251,7 +251,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessCallsiteId": "r0/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/cs1"
+          "witnessCallsiteId": "67f3b01c68b9d23c/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/cs1"
         },
         {
           "op": "error-throw",
@@ -259,7 +259,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/op0"
+          "witnessOperationId": "67f3b01c68b9d23c/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/op0"
         }
       ],
       "capabilityStatus": "complete",

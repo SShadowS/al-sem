@@ -1,129 +1,127 @@
 {
-  "description": "R2.5a StableRoutineId modelInstanceId-independence vector. The SAME ABI projected under two different modelInstanceIds yields byte-identical StableRoutineId + signatureFingerprint (only the internal RoutineId prefix changes). This is what lets the cross-app callGraph `to` key stay modelInstanceId-independent so the dep:<artifactKey> cache key can stay deferred.",
+  "description": "R2.5a StableRoutineId modelInstanceId-independence vector. Recorded when the internal RoutineId was prefixed by the consuming model's modelInstanceId: the SAME ABI projected under two different modelInstanceIds (A, B) yielded byte-identical StableRoutineId + signatureFingerprint and internal ids differing only in the prefix. Since the routine-id migration (context-server design r3 6.7) the prefix is the dependency's own app scope (first 16 hex of sha256 over the lowercase appGuid), so internalRoutineIdA and internalRoutineIdB are the same id and internalRoutineIdDiffers is false; the 64-hex hash parts are the ones originally recorded.",
   "appGuid": "11111111-2222-3333-4444-555555555555",
-  "modelInstanceIdA": "instance-AAAA",
-  "modelInstanceIdB": "instance-BBBB",
   "count": 15,
   "rows": [
     {
       "routineName": "RecordUnquoted",
       "stableRoutineId": "11111111-2222-3333-4444-555555555555:Codeunit:50100#c4f5965524e3ca635a9e2d145c98c6272d449fb938b625df36d4ce6c3b3a938a",
       "signatureFingerprint": "c4f5965524e3ca635a9e2d145c98c6272d449fb938b625df36d4ce6c3b3a938a",
-      "internalRoutineIdA": "instance-AAAA/15d4e3b91f6157f63ff1c7b95110c9ff5b2520ffa90bf5917cf64f4d5daaa2b6",
-      "internalRoutineIdB": "instance-BBBB/15d4e3b91f6157f63ff1c7b95110c9ff5b2520ffa90bf5917cf64f4d5daaa2b6",
-      "internalRoutineIdDiffers": true
+      "internalRoutineIdA": "666ff6ccaa5b3c07/15d4e3b91f6157f63ff1c7b95110c9ff5b2520ffa90bf5917cf64f4d5daaa2b6",
+      "internalRoutineIdB": "666ff6ccaa5b3c07/15d4e3b91f6157f63ff1c7b95110c9ff5b2520ffa90bf5917cf64f4d5daaa2b6",
+      "internalRoutineIdDiffers": false
     },
     {
       "routineName": "RecordQuoted",
       "stableRoutineId": "11111111-2222-3333-4444-555555555555:Codeunit:50100#d2afdd6e8696e55b26f21f77489d158517ce40606645bbd838504ec56156458d",
       "signatureFingerprint": "d2afdd6e8696e55b26f21f77489d158517ce40606645bbd838504ec56156458d",
-      "internalRoutineIdA": "instance-AAAA/42b5ea276f774bd49d0e909eadf69a1d90214fea89c037a3cac6cfa9c377cee9",
-      "internalRoutineIdB": "instance-BBBB/42b5ea276f774bd49d0e909eadf69a1d90214fea89c037a3cac6cfa9c377cee9",
-      "internalRoutineIdDiffers": true
+      "internalRoutineIdA": "666ff6ccaa5b3c07/42b5ea276f774bd49d0e909eadf69a1d90214fea89c037a3cac6cfa9c377cee9",
+      "internalRoutineIdB": "666ff6ccaa5b3c07/42b5ea276f774bd49d0e909eadf69a1d90214fea89c037a3cac6cfa9c377cee9",
+      "internalRoutineIdDiffers": false
     },
     {
       "routineName": "EnumParam",
       "stableRoutineId": "11111111-2222-3333-4444-555555555555:Codeunit:50100#3fadb2b0b5a51821e76306ff0ead5197aed0dbee7f0437077cf6fe3f1cda80af",
       "signatureFingerprint": "3fadb2b0b5a51821e76306ff0ead5197aed0dbee7f0437077cf6fe3f1cda80af",
-      "internalRoutineIdA": "instance-AAAA/ac7cb236d66a17e8fd2bc99972f14efe76768e723ad7ef5b525aa775a96b1425",
-      "internalRoutineIdB": "instance-BBBB/ac7cb236d66a17e8fd2bc99972f14efe76768e723ad7ef5b525aa775a96b1425",
-      "internalRoutineIdDiffers": true
+      "internalRoutineIdA": "666ff6ccaa5b3c07/ac7cb236d66a17e8fd2bc99972f14efe76768e723ad7ef5b525aa775a96b1425",
+      "internalRoutineIdB": "666ff6ccaa5b3c07/ac7cb236d66a17e8fd2bc99972f14efe76768e723ad7ef5b525aa775a96b1425",
+      "internalRoutineIdDiffers": false
     },
     {
       "routineName": "InterfaceParam",
       "stableRoutineId": "11111111-2222-3333-4444-555555555555:Codeunit:50100#60b21fbe16bfd54a676acb234987f9476857f3d49390c7c3d768073bba9ea117",
       "signatureFingerprint": "60b21fbe16bfd54a676acb234987f9476857f3d49390c7c3d768073bba9ea117",
-      "internalRoutineIdA": "instance-AAAA/d7b8304e8692c737cc480cb36b7a780691d98fb767610f05593d47814a0d126d",
-      "internalRoutineIdB": "instance-BBBB/d7b8304e8692c737cc480cb36b7a780691d98fb767610f05593d47814a0d126d",
-      "internalRoutineIdDiffers": true
+      "internalRoutineIdA": "666ff6ccaa5b3c07/d7b8304e8692c737cc480cb36b7a780691d98fb767610f05593d47814a0d126d",
+      "internalRoutineIdB": "666ff6ccaa5b3c07/d7b8304e8692c737cc480cb36b7a780691d98fb767610f05593d47814a0d126d",
+      "internalRoutineIdDiffers": false
     },
     {
       "routineName": "ArrayParam",
       "stableRoutineId": "11111111-2222-3333-4444-555555555555:Codeunit:50100#b9e424f4d13ae993f2c7a0dc4461227f699801d9d55340549eefd00e69bf03eb",
       "signatureFingerprint": "b9e424f4d13ae993f2c7a0dc4461227f699801d9d55340549eefd00e69bf03eb",
-      "internalRoutineIdA": "instance-AAAA/eb1fe6c0716b58d26f9b2253a227079772ecea3084d6d9b7d35cb166aa1f8ba9",
-      "internalRoutineIdB": "instance-BBBB/eb1fe6c0716b58d26f9b2253a227079772ecea3084d6d9b7d35cb166aa1f8ba9",
-      "internalRoutineIdDiffers": true
+      "internalRoutineIdA": "666ff6ccaa5b3c07/eb1fe6c0716b58d26f9b2253a227079772ecea3084d6d9b7d35cb166aa1f8ba9",
+      "internalRoutineIdB": "666ff6ccaa5b3c07/eb1fe6c0716b58d26f9b2253a227079772ecea3084d6d9b7d35cb166aa1f8ba9",
+      "internalRoutineIdDiffers": false
     },
     {
       "routineName": "LengthedPrimitives",
       "stableRoutineId": "11111111-2222-3333-4444-555555555555:Codeunit:50100#923baf0fb91d94b6b834b63e6b814ce01e2e81cd4a375e4e968d061862986b66",
       "signatureFingerprint": "923baf0fb91d94b6b834b63e6b814ce01e2e81cd4a375e4e968d061862986b66",
-      "internalRoutineIdA": "instance-AAAA/a3eb314963704a38f0a6c5ea8b26107dfae12feec77f09ccb0b67daa8ee3a6bb",
-      "internalRoutineIdB": "instance-BBBB/a3eb314963704a38f0a6c5ea8b26107dfae12feec77f09ccb0b67daa8ee3a6bb",
-      "internalRoutineIdDiffers": true
+      "internalRoutineIdA": "666ff6ccaa5b3c07/a3eb314963704a38f0a6c5ea8b26107dfae12feec77f09ccb0b67daa8ee3a6bb",
+      "internalRoutineIdB": "666ff6ccaa5b3c07/a3eb314963704a38f0a6c5ea8b26107dfae12feec77f09ccb0b67daa8ee3a6bb",
+      "internalRoutineIdDiffers": false
     },
     {
       "routineName": "DictParam",
       "stableRoutineId": "11111111-2222-3333-4444-555555555555:Codeunit:50100#5140b4b63851804d94375c9b01cc5d4c9fdf3805b1713bcb2c299b48062edaa5",
       "signatureFingerprint": "5140b4b63851804d94375c9b01cc5d4c9fdf3805b1713bcb2c299b48062edaa5",
-      "internalRoutineIdA": "instance-AAAA/2f0b0b597581155c4c740aec1bb3198b2783081673b00fff6a36a8279ca4d629",
-      "internalRoutineIdB": "instance-BBBB/2f0b0b597581155c4c740aec1bb3198b2783081673b00fff6a36a8279ca4d629",
-      "internalRoutineIdDiffers": true
+      "internalRoutineIdA": "666ff6ccaa5b3c07/2f0b0b597581155c4c740aec1bb3198b2783081673b00fff6a36a8279ca4d629",
+      "internalRoutineIdB": "666ff6ccaa5b3c07/2f0b0b597581155c4c740aec1bb3198b2783081673b00fff6a36a8279ca4d629",
+      "internalRoutineIdDiffers": false
     },
     {
       "routineName": "ListParam",
       "stableRoutineId": "11111111-2222-3333-4444-555555555555:Codeunit:50100#fae7df7081ce381a8e7dc484e35022f8ef65d6217aae61dfb5b36780cf62093d",
       "signatureFingerprint": "fae7df7081ce381a8e7dc484e35022f8ef65d6217aae61dfb5b36780cf62093d",
-      "internalRoutineIdA": "instance-AAAA/b911b4d195a8bb5c5271228f67579c9440ca5fba805d442ab1ee3bcd93b04e88",
-      "internalRoutineIdB": "instance-BBBB/b911b4d195a8bb5c5271228f67579c9440ca5fba805d442ab1ee3bcd93b04e88",
-      "internalRoutineIdDiffers": true
+      "internalRoutineIdA": "666ff6ccaa5b3c07/b911b4d195a8bb5c5271228f67579c9440ca5fba805d442ab1ee3bcd93b04e88",
+      "internalRoutineIdB": "666ff6ccaa5b3c07/b911b4d195a8bb5c5271228f67579c9440ca5fba805d442ab1ee3bcd93b04e88",
+      "internalRoutineIdDiffers": false
     },
     {
       "routineName": "VarPrimitive",
       "stableRoutineId": "11111111-2222-3333-4444-555555555555:Codeunit:50100#a282a878cc36905122dd7c85a3a32b47be161d09d29c32fa525e7a2382ef0d51",
       "signatureFingerprint": "a282a878cc36905122dd7c85a3a32b47be161d09d29c32fa525e7a2382ef0d51",
-      "internalRoutineIdA": "instance-AAAA/e56d839ac2052d4f61e2965200f16e1bce8978e10ee4f50abe4e934b69caae4f",
-      "internalRoutineIdB": "instance-BBBB/e56d839ac2052d4f61e2965200f16e1bce8978e10ee4f50abe4e934b69caae4f",
-      "internalRoutineIdDiffers": true
+      "internalRoutineIdA": "666ff6ccaa5b3c07/e56d839ac2052d4f61e2965200f16e1bce8978e10ee4f50abe4e934b69caae4f",
+      "internalRoutineIdB": "666ff6ccaa5b3c07/e56d839ac2052d4f61e2965200f16e1bce8978e10ee4f50abe4e934b69caae4f",
+      "internalRoutineIdDiffers": false
     },
     {
       "routineName": "ReturnOnly",
       "stableRoutineId": "11111111-2222-3333-4444-555555555555:Codeunit:50100#5d2441b0d50f06867ce5acb75ee2655030284d8fbc856291aab7daf949c218cb",
       "signatureFingerprint": "5d2441b0d50f06867ce5acb75ee2655030284d8fbc856291aab7daf949c218cb",
-      "internalRoutineIdA": "instance-AAAA/dd12df30eb781db3b87e84fa1c4b1efb846ddda2123de3bf86d5923efef53849",
-      "internalRoutineIdB": "instance-BBBB/dd12df30eb781db3b87e84fa1c4b1efb846ddda2123de3bf86d5923efef53849",
-      "internalRoutineIdDiffers": true
+      "internalRoutineIdA": "666ff6ccaa5b3c07/dd12df30eb781db3b87e84fa1c4b1efb846ddda2123de3bf86d5923efef53849",
+      "internalRoutineIdB": "666ff6ccaa5b3c07/dd12df30eb781db3b87e84fa1c4b1efb846ddda2123de3bf86d5923efef53849",
+      "internalRoutineIdDiffers": false
     },
     {
       "routineName": "NoParamsNoReturn",
       "stableRoutineId": "11111111-2222-3333-4444-555555555555:Codeunit:50100#44308c447f2a54d3c3661de1bcba7a7bec91e7b297ff162e57365c0dc9c83840",
       "signatureFingerprint": "44308c447f2a54d3c3661de1bcba7a7bec91e7b297ff162e57365c0dc9c83840",
-      "internalRoutineIdA": "instance-AAAA/87a016e46c0aa9c5046b99422eb47704c66a4ac442761df870cb241b990f2191",
-      "internalRoutineIdB": "instance-BBBB/87a016e46c0aa9c5046b99422eb47704c66a4ac442761df870cb241b990f2191",
-      "internalRoutineIdDiffers": true
+      "internalRoutineIdA": "666ff6ccaa5b3c07/87a016e46c0aa9c5046b99422eb47704c66a4ac442761df870cb241b990f2191",
+      "internalRoutineIdB": "666ff6ccaa5b3c07/87a016e46c0aa9c5046b99422eb47704c66a4ac442761df870cb241b990f2191",
+      "internalRoutineIdDiffers": false
     },
     {
       "routineName": "Overload",
       "stableRoutineId": "11111111-2222-3333-4444-555555555555:Codeunit:50100#e031014204da46b8754a9f2b27f5c615985bbaa22663defec70b48abc0a1291b",
       "signatureFingerprint": "e031014204da46b8754a9f2b27f5c615985bbaa22663defec70b48abc0a1291b",
-      "internalRoutineIdA": "instance-AAAA/1ef18daefe6e616c80d739472c9598372cb0a5a051ceb0ced80cdbf2b6cf4acc",
-      "internalRoutineIdB": "instance-BBBB/1ef18daefe6e616c80d739472c9598372cb0a5a051ceb0ced80cdbf2b6cf4acc",
-      "internalRoutineIdDiffers": true
+      "internalRoutineIdA": "666ff6ccaa5b3c07/1ef18daefe6e616c80d739472c9598372cb0a5a051ceb0ced80cdbf2b6cf4acc",
+      "internalRoutineIdB": "666ff6ccaa5b3c07/1ef18daefe6e616c80d739472c9598372cb0a5a051ceb0ced80cdbf2b6cf4acc",
+      "internalRoutineIdDiffers": false
     },
     {
       "routineName": "OnBeforePost",
       "stableRoutineId": "11111111-2222-3333-4444-555555555555:Codeunit:50100#b8f56ae8b03a6740b13ff473bde8ee85186ee672014f118fb86a5a14fe5fdaf6",
       "signatureFingerprint": "b8f56ae8b03a6740b13ff473bde8ee85186ee672014f118fb86a5a14fe5fdaf6",
-      "internalRoutineIdA": "instance-AAAA/5669499ac8f897ab3a8fda1252b15725b1e8a96793692da80181a0aa3a0d2557",
-      "internalRoutineIdB": "instance-BBBB/5669499ac8f897ab3a8fda1252b15725b1e8a96793692da80181a0aa3a0d2557",
-      "internalRoutineIdDiffers": true
+      "internalRoutineIdA": "666ff6ccaa5b3c07/5669499ac8f897ab3a8fda1252b15725b1e8a96793692da80181a0aa3a0d2557",
+      "internalRoutineIdB": "666ff6ccaa5b3c07/5669499ac8f897ab3a8fda1252b15725b1e8a96793692da80181a0aa3a0d2557",
+      "internalRoutineIdDiffers": false
     },
     {
       "routineName": "OnAfterCalc",
       "stableRoutineId": "11111111-2222-3333-4444-555555555555:Codeunit:50100#20490a131768b13857b354dbfeb839a6b0e77c88c49b1501b14025fca1c7d592",
       "signatureFingerprint": "20490a131768b13857b354dbfeb839a6b0e77c88c49b1501b14025fca1c7d592",
-      "internalRoutineIdA": "instance-AAAA/463d0dbc3ee29bf950b7af21b1f886d5aab5ea79783d93ae6091b248fba20966",
-      "internalRoutineIdB": "instance-BBBB/463d0dbc3ee29bf950b7af21b1f886d5aab5ea79783d93ae6091b248fba20966",
-      "internalRoutineIdDiffers": true
+      "internalRoutineIdA": "666ff6ccaa5b3c07/463d0dbc3ee29bf950b7af21b1f886d5aab5ea79783d93ae6091b248fba20966",
+      "internalRoutineIdB": "666ff6ccaa5b3c07/463d0dbc3ee29bf950b7af21b1f886d5aab5ea79783d93ae6091b248fba20966",
+      "internalRoutineIdDiffers": false
     },
     {
       "routineName": "HandleEvent",
       "stableRoutineId": "11111111-2222-3333-4444-555555555555:Codeunit:50100#e7dcab6bf11e66911db86de47ca9f95ba764b4bca66a975d31a70b65e9d88f74",
       "signatureFingerprint": "e7dcab6bf11e66911db86de47ca9f95ba764b4bca66a975d31a70b65e9d88f74",
-      "internalRoutineIdA": "instance-AAAA/cfd59ecec97708d9283ca69c2aed939d1f74c6eee9f067dea47b53a13fe47101",
-      "internalRoutineIdB": "instance-BBBB/cfd59ecec97708d9283ca69c2aed939d1f74c6eee9f067dea47b53a13fe47101",
-      "internalRoutineIdDiffers": true
+      "internalRoutineIdA": "666ff6ccaa5b3c07/cfd59ecec97708d9283ca69c2aed939d1f74c6eee9f067dea47b53a13fe47101",
+      "internalRoutineIdB": "666ff6ccaa5b3c07/cfd59ecec97708d9283ca69c2aed939d1f74c6eee9f067dea47b53a13fe47101",
+      "internalRoutineIdDiffers": false
     }
   ]
 }

@@ -47,8 +47,8 @@ fn three(ws: &Path, no_roots_config: bool) -> [Option<Vec<String>>; 3] {
     } else {
         Arc::clone(&full)
     };
-    let program = full.model_instance_id.as_deref().and_then(|id| {
-        assemble_and_resolve_workspace_program(&full, id, no_roots_config, AssemblyNeeds::BASE)
+    let program = full.model_instance_id.as_deref().and_then(|_| {
+        assemble_and_resolve_workspace_program(&full, no_roots_config, AssemblyNeeds::BASE)
             .map(|m| rows(&m))
     });
     let target = AnalysisTarget::build(&other, true, "t16")

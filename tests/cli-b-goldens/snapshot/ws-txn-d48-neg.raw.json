@@ -14,7 +14,7 @@
   "callsiteIndex": [
     {
       "calleeDisplay": "Client.Send",
-      "callsiteId": "4359c17162d3bf58/027b190c8d7f64f9af48ef766492468522a030709daf161984d6d7a07dce2049/cs0",
+      "callsiteId": "9b6811a0827502f0/027b190c8d7f64f9af48ef766492468522a030709daf161984d6d7a07dce2049/cs0",
       "controlContext": "top-level",
       "endColumn": 30,
       "endLine": 12,
@@ -33,7 +33,7 @@
   "callsiteResolutions": [
     {
       "calleeDisplay": "Client.Send",
-      "callsiteId": "4359c17162d3bf58/027b190c8d7f64f9af48ef766492468522a030709daf161984d6d7a07dce2049/cs0",
+      "callsiteId": "9b6811a0827502f0/027b190c8d7f64f9af48ef766492468522a030709daf161984d6d7a07dce2049/cs0",
       "dispatchKind": "unresolved",
       "from": "11111111-0000-0000-0000-00000000d481:Codeunit:50000#87be6e12ef6d9ff4dbfc63ca7c99925ef35263973d450e98dcb316037967511b",
       "resolvedEdges": [],
@@ -62,7 +62,7 @@
       "resourceKind": "http",
       "subject": "11111111-0000-0000-0000-00000000d481:Codeunit:50000#87be6e12ef6d9ff4dbfc63ca7c99925ef35263973d450e98dcb316037967511b",
       "via": "self",
-      "witnessCallsiteId": "4359c17162d3bf58/027b190c8d7f64f9af48ef766492468522a030709daf161984d6d7a07dce2049/cs0"
+      "witnessCallsiteId": "9b6811a0827502f0/027b190c8d7f64f9af48ef766492468522a030709daf161984d6d7a07dce2049/cs0"
     }
   ],
   "contractFacts": [
@@ -122,7 +122,7 @@
       "routineId": "11111111-0000-0000-0000-00000000d481:Codeunit:50000#87be6e12ef6d9ff4dbfc63ca7c99925ef35263973d450e98dcb316037967511b",
       "source": "ast",
       "sourceAnchor": {
-        "enclosingRoutineId": "4359c17162d3bf58/027b190c8d7f64f9af48ef766492468522a030709daf161984d6d7a07dce2049",
+        "enclosingRoutineId": "9b6811a0827502f0/027b190c8d7f64f9af48ef766492468522a030709daf161984d6d7a07dce2049",
         "range": {
           "endColumn": 8,
           "endLine": 13,

@@ -36,7 +36,6 @@ use al_sem::engine::l4::capability_cone::{
 };
 
 const FIXTURE: &str = "cross-app-full-summary";
-const MODEL_INSTANCE_ID: &str = "r0";
 
 // Stable ids (from the committed fixture — appGuid:Type:Num#sigHash).
 const PRIMARY_USECHAIN: &str = "33333333-0005-0000-0000-000000000003:Codeunit:71000#cd29682292055c2a9dfd1a910cc9281bbc9e7bb136e230bd4ee9577061070f74";
@@ -53,7 +52,7 @@ fn ws_fixture_dir() -> PathBuf {
 }
 
 fn projection() -> R3a5FullSummaryProjection {
-    project_r3a5_cross_app(&ws_fixture_dir(), MODEL_INSTANCE_ID, FIXTURE)
+    project_r3a5_cross_app(&ws_fixture_dir(), FIXTURE)
 }
 
 fn by_id<'a>(p: &'a R3a5FullSummaryProjection, id: &str) -> &'a PRoutineFullSummary {

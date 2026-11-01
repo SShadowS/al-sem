@@ -59,7 +59,7 @@
 					"extra": {
 						"kind": "table",
 						"opSubtype": "Insert",
-						"recordVariableId": "r0/7e83507dadcabe52223d97c9fe6496b1f70904d6914c8f5ee9d350d784993e73/rv/rec",
+						"recordVariableId": "9af645a8fef33e6d/7e83507dadcabe52223d97c9fe6496b1f70904d6914c8f5ee9d350d784993e73/rv/rec",
 						"tempState": {
 							"kind": "known",
 							"value": false
@@ -97,7 +97,7 @@
 					"extra": {
 						"kind": "table",
 						"opSubtype": "Insert",
-						"recordVariableId": "r0/7e83507dadcabe52223d97c9fe6496b1f70904d6914c8f5ee9d350d784993e73/rv/rec",
+						"recordVariableId": "9af645a8fef33e6d/7e83507dadcabe52223d97c9fe6496b1f70904d6914c8f5ee9d350d784993e73/rv/rec",
 						"tempState": {
 							"kind": "known",
 							"value": false

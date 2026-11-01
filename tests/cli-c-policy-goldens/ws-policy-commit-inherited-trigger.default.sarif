@@ -47,7 +47,7 @@
         {
           "ruleId": "policy-no-commit-in-triggers",
           "message": {
-            "text": "Policy no-commit-in-triggers matched 1 fact(s) on routine 455d104c60665aaf/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d."
+            "text": "Policy no-commit-in-triggers matched 1 fact(s) on routine 075fdfef3e40c9e2/e9b0510c5a1ac5ebb731d010aa8e51523736171e5ce890c67eac45e201d6db8d."
           },
           "level": "error",
           "locations": [

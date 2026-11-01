@@ -22,8 +22,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/77fe9cbfa9855a8cfbb36af19400bb7bdbbd5cfa2ecec8f8b3388d12cc266e7f/cs0",
-            "operationId": "r0/77fe9cbfa9855a8cfbb36af19400bb7bdbbd5cfa2ecec8f8b3388d12cc266e7f/op0",
+            "id": "9ac37a595de21e37/77fe9cbfa9855a8cfbb36af19400bb7bdbbd5cfa2ecec8f8b3388d12cc266e7f/cs0",
+            "operationId": "9ac37a595de21e37/77fe9cbfa9855a8cfbb36af19400bb7bdbbd5cfa2ecec8f8b3388d12cc266e7f/op0",
             "calleeText": "DoUpgradeWork",
             "callee": {
               "kind": "bare",
@@ -64,7 +64,7 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/77fe9cbfa9855a8cfbb36af19400bb7bdbbd5cfa2ecec8f8b3388d12cc266e7f/cs0"
+              "callsiteId": "9ac37a595de21e37/77fe9cbfa9855a8cfbb36af19400bb7bdbbd5cfa2ecec8f8b3388d12cc266e7f/cs0"
             }
           ]
         },

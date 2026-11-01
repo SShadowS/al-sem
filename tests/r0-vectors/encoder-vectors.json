@@ -462,9 +462,8 @@
     },
     {
       "kind": "encodeRoutineId",
-      "note": "pinned modelInstanceId r0",
+      "note": "prefix = first 16 hex of sha256(lowercase appGuid); hash part unchanged",
       "input": {
-        "modelInstanceId": "r0",
         "key": {
           "appGuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
           "objectType": "Codeunit",
@@ -474,15 +473,14 @@
           "normalizedSignatureHash": "563cd989dee79c749fbb7c98b0724eec3c61305a116dbb35ab6a690917f8f240"
         }
       },
-      "expected": "r0/72173233bd7f52e0cfdfe505111d3cdc5925ebe682588f09d1cab60c2fff785a"
+      "expected": "9af645a8fef33e6d/72173233bd7f52e0cfdfe505111d3cdc5925ebe682588f09d1cab60c2fff785a"
     },
     {
       "kind": "encodeRoutineId",
-      "note": "different modelInstanceId → different RoutineId prefix",
+      "note": "same object and routine in another app → another prefix and another hash",
       "input": {
-        "modelInstanceId": "deadbeefcafef00d",
         "key": {
-          "appGuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "appGuid": "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee",
           "objectType": "Codeunit",
           "objectNumber": 50100,
           "routineKind": "procedure",
@@ -490,7 +488,7 @@
           "normalizedSignatureHash": "563cd989dee79c749fbb7c98b0724eec3c61305a116dbb35ab6a690917f8f240"
         }
       },
-      "expected": "deadbeefcafef00d/72173233bd7f52e0cfdfe505111d3cdc5925ebe682588f09d1cab60c2fff785a"
+      "expected": "d6f39ce9665a51a0/ad4f087ca95c3d7f1ca0845df0faa33748b03027057c63f87de9287d8ba06b2b"
     },
     {
       "kind": "normalizedSignatureHash",

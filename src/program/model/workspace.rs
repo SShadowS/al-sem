@@ -1150,8 +1150,6 @@ fn anchor_from_origin(
 // Per-file assembly.
 // ---------------------------------------------------------------------------
 
-pub const MODEL_INSTANCE_ID_DEFAULT: &str = "r0";
-
 /// What the model assembly builds beyond the rows every model has: the facts
 /// that need a routine's full IR, which only exists at assembly (the
 /// `declared-needs` skill, level 1). A view sets it from the union of its
@@ -1257,7 +1255,6 @@ fn project_ir(
     population: &FilePopulation,
     source: &str,
     app_guid: &str,
-    model_instance_id: &str,
     source_unit_id: &str,
     cols: &Utf16Cols,
     parenless_calls: &std::collections::HashSet<al_syntax::ir::ExprId>,
@@ -1550,7 +1547,6 @@ fn project_ir(
                     enclosing_member.as_deref(),
                     &params_for_id,
                     ir_routine.return_type.as_deref(),
-                    model_instance_id,
                 );
                 let (feats, site_exprs) =
                     crate::program::body::ir_walk::project_routine_features_ir_with(
@@ -2098,14 +2094,12 @@ fn card_action(
 /// `needs` states what the assembly builds beyond the base rows.
 pub fn assemble_and_resolve_workspace_from_program(
     inputs: &crate::program::inputs::WorkspaceInputs,
-    model_instance_id: &str,
     skip_roots_config: bool,
     ctx: &crate::program::resolve::full::ProgramContext,
     parenless: &crate::program::resolve::full::ParenlessCalls,
     needs: AssemblyNeeds,
 ) -> Option<ModelRows> {
-    let (ws, node_of) =
-        assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless, needs)?;
+    let (ws, node_of) = assemble_l3_workspace_from_program(inputs, ctx, parenless, needs)?;
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
     finish_resolved(ws, inputs, skip_roots_config, row_nodes)
 }
@@ -2118,14 +2112,12 @@ pub fn assemble_and_resolve_workspace_from_program(
 #[doc(hidden)]
 pub fn assemble_and_resolve_workspace_from_program_reversed_groups(
     inputs: &crate::program::inputs::WorkspaceInputs,
-    model_instance_id: &str,
     skip_roots_config: bool,
     ctx: &crate::program::resolve::full::ProgramContext,
     parenless: &crate::program::resolve::full::ParenlessCalls,
     needs: AssemblyNeeds,
 ) -> Option<ModelRows> {
-    let (mut ws, mut node_of) =
-        assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless, needs)?;
+    let (mut ws, mut node_of) = assemble_l3_workspace_from_program(inputs, ctx, parenless, needs)?;
     let mut by_id: HashMap<String, Vec<usize>> = HashMap::new();
     for (ri, r) in ws.routines.iter().enumerate() {
         by_id.entry(r.id.clone()).or_default().push(ri);
@@ -2160,24 +2152,14 @@ pub fn assemble_and_resolve_workspace_from_program_reversed_groups(
 /// source-bearing dependency file keeps every object but only the routines in it.
 pub fn assemble_and_resolve_cross_app_from_program(
     inputs: &crate::program::inputs::WorkspaceInputs,
-    model_instance_id: &str,
     skip_roots_config: bool,
     ctx: &crate::program::resolve::full::ProgramContext,
     demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
     parenless: &crate::program::resolve::full::ParenlessCalls,
     needs: AssemblyNeeds,
 ) -> Option<(ModelRows, AbiRowIds)> {
-    let (mut ws, mut node_of) =
-        assemble_l3_workspace_from_program(inputs, model_instance_id, ctx, parenless, needs)?;
-    let abi_rows = append_dependency_rows(
-        &mut ws,
-        &mut node_of,
-        model_instance_id,
-        ctx,
-        demand,
-        parenless,
-        needs,
-    );
+    let (mut ws, mut node_of) = assemble_l3_workspace_from_program(inputs, ctx, parenless, needs)?;
+    let abi_rows = append_dependency_rows(&mut ws, &mut node_of, ctx, demand, parenless, needs);
     let row_nodes = RowNodes::build(ctx, &ws, node_of);
     Some((
         finish_resolved(ws, inputs, skip_roots_config, row_nodes)?,
@@ -2219,7 +2201,6 @@ pub type AbiRowIds = HashMap<crate::program::node::RoutineNodeId, String>;
 fn append_dependency_rows(
     ws: &mut ModelEntities,
     node_of: &mut Vec<Option<crate::program::node::RoutineNodeId>>,
-    model_instance_id: &str,
     ctx: &crate::program::resolve::full::ProgramContext,
     demand: Option<&std::collections::HashSet<crate::program::node::RoutineNodeId>>,
     parenless: &crate::program::resolve::full::ParenlessCalls,
@@ -2245,11 +2226,7 @@ fn append_dependency_rows(
             continue;
         };
         if let Some(abi) = crate::program::abi_ingest::load_symbol_reference(unit) {
-            let p = crate::engine::deps::projection::project_abi_to_index(
-                &abi,
-                &unit.id.guid,
-                model_instance_id,
-            );
+            let p = crate::engine::deps::projection::project_abi_to_index(&abi, &unit.id.guid);
             // `project_abi_to_index` projects one routine per ABI routine, objects
             // and routines in order.
             let node_ids = abi.objects.iter().flat_map(|o| {
@@ -2318,7 +2295,6 @@ fn append_dependency_rows(
                 &population,
                 &pf.text,
                 guid,
-                model_instance_id,
                 &format!("dep:{guid}:{}", pf.virtual_path),
                 &cols,
                 calls,
@@ -2431,7 +2407,6 @@ pub fn select_program_files<'c>(
 
 fn assemble_l3_workspace_from_program(
     inputs: &crate::program::inputs::WorkspaceInputs,
-    model_instance_id: &str,
     ctx: &crate::program::resolve::full::ProgramContext,
     parenless: &crate::program::resolve::full::ParenlessCalls,
     needs: AssemblyNeeds,
@@ -2508,7 +2483,6 @@ fn assemble_l3_workspace_from_program(
                     pop,
                     &pf.text,
                     &app_guid,
-                    model_instance_id,
                     &source_unit_id,
                     &cols,
                     calls,
@@ -3817,7 +3791,6 @@ page 50814 "CP4 Wizard"
             Some(r#"Be""ta"#),
             &params,
             None,
-            MODEL_INSTANCE_ID_DEFAULT,
         );
         assert_ne!(
             raw_escaped_id, l3_routine.id,
@@ -3844,7 +3817,6 @@ mod population_tests {
             crate::program::resolve::full::build_program_with_coverage(&inputs).unwrap();
         let full = assemble_and_resolve_workspace_from_program(
             &inputs,
-            "r0",
             true,
             &ctx,
             &Default::default(),
@@ -3863,7 +3835,6 @@ mod population_tests {
         let dropped = ctx.graph.workspace_rows.routines.remove(k);
         let fewer = assemble_and_resolve_workspace_from_program(
             &inputs,
-            "r0",
             true,
             &ctx,
             &Default::default(),
@@ -3918,7 +3889,6 @@ mod population_tests {
         let full = decls(
             &assemble_and_resolve_workspace_from_program(
                 &inputs,
-                "r0",
                 true,
                 &ctx,
                 &Default::default(),
@@ -3939,7 +3909,6 @@ mod population_tests {
         let fewer = decls(
             &assemble_and_resolve_workspace_from_program(
                 &inputs,
-                "r0",
                 true,
                 &ctx,
                 &Default::default(),

@@ -309,7 +309,6 @@ fn pins_round_trip_flags_what_d65_flags() {
         .collect();
     let model = al_sem::program::model::program_calls::assemble_and_resolve_workspace_program(
         &WorkspaceInputs::read(&ws_d65(), &Default::default()),
-        al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
         false,
         al_sem::engine::l5::registry::assembly_needs(&d65),
     )

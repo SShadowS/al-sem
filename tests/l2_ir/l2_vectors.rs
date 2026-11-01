@@ -19,13 +19,12 @@
 //! Reproduction context (from `scripts/gen-l2-vectors.ts`):
 //!   - app.json id  = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"  (appGuid)
 //!   - single file  = src/vec.al  →  sourceUnitId = "ws:src/vec.al"
-//!   - modelInstanceId = "r0"
+//!   - internal ids are scoped by the app guid (`ids::routine_app_scope`)
 
 use al_sem::program::body::features::PFeatures;
 use al_sem::program::body::features_for_named_routine;
 
 const APP_GUID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-const MODEL_INSTANCE_ID: &str = "r0";
 const SOURCE_UNIT_ID: &str = "ws:src/vec.al";
 
 #[derive(serde::Deserialize)]
@@ -65,13 +64,8 @@ fn all_l2_vector_families_match() {
     let mut failures: Vec<String> = Vec::new();
 
     for vec in &doc.vectors {
-        let actual = features_for_named_routine(
-            &vec.source,
-            &vec.routine_name,
-            APP_GUID,
-            MODEL_INSTANCE_ID,
-            SOURCE_UNIT_ID,
-        );
+        let actual =
+            features_for_named_routine(&vec.source, &vec.routine_name, APP_GUID, SOURCE_UNIT_ID);
         let Some(actual) = actual else {
             failures.push(format!(
                 "[{}] {}: routine `{}` not found by the Rust walker",

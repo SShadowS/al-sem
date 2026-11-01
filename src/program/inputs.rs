@@ -70,7 +70,9 @@ pub struct WorkspaceInputs {
     /// `driver_version()` read once.
     pub driver_version: String,
     /// `compute_gate_model_instance_id`'s value, from the fields above with the
-    /// same algorithm; `None` = fail-closed.
+    /// same algorithm; `None` = fail-closed. Not part of any routine id (they are
+    /// scoped per app, `ids::encode_routine_id`); read as the commands' presence
+    /// check and as part of the L4 host key (`engine::incremental`).
     pub model_instance_id: Option<String>,
     /// `WorkspaceNeeds::build_only` as asked.
     pub build_only: bool,

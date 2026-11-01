@@ -19,7 +19,7 @@
         "loops": [],
         "operationSites": [
           {
-            "id": "r0/4005ee153548b4399d80861e591984e106f532b25f07851afb88152e5e731419/op0",
+            "id": "d73faf4ac85093cc/4005ee153548b4399d80861e591984e106f532b25f07851afb88152e5e731419/op0",
             "kind": "commit",
             "loopStack": [],
             "sourceAnchor": {
@@ -42,8 +42,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/4005ee153548b4399d80861e591984e106f532b25f07851afb88152e5e731419/cs0",
-            "operationId": "r0/4005ee153548b4399d80861e591984e106f532b25f07851afb88152e5e731419/op1",
+            "id": "d73faf4ac85093cc/4005ee153548b4399d80861e591984e106f532b25f07851afb88152e5e731419/cs0",
+            "operationId": "d73faf4ac85093cc/4005ee153548b4399d80861e591984e106f532b25f07851afb88152e5e731419/op1",
             "calleeText": "Client.Post",
             "callee": {
               "kind": "member",
@@ -189,11 +189,11 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/4005ee153548b4399d80861e591984e106f532b25f07851afb88152e5e731419/cs0"
+              "callsiteId": "d73faf4ac85093cc/4005ee153548b4399d80861e591984e106f532b25f07851afb88152e5e731419/cs0"
             },
             {
               "kind": "op",
-              "operationId": "r0/4005ee153548b4399d80861e591984e106f532b25f07851afb88152e5e731419/op0"
+              "operationId": "d73faf4ac85093cc/4005ee153548b4399d80861e591984e106f532b25f07851afb88152e5e731419/op0"
             }
           ]
         },
@@ -212,7 +212,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/4005ee153548b4399d80861e591984e106f532b25f07851afb88152e5e731419/op0"
+          "witnessOperationId": "d73faf4ac85093cc/4005ee153548b4399d80861e591984e106f532b25f07851afb88152e5e731419/op0"
         },
         {
           "op": "send",
@@ -224,7 +224,7 @@
             "kind": "literal",
             "value": "https://example.test/events"
           },
-          "witnessCallsiteId": "r0/4005ee153548b4399d80861e591984e106f532b25f07851afb88152e5e731419/cs0",
+          "witnessCallsiteId": "d73faf4ac85093cc/4005ee153548b4399d80861e591984e106f532b25f07851afb88152e5e731419/cs0",
           "extra": {
             "kind": "http",
             "method": "Post",

@@ -23,7 +23,7 @@
       "features": {
         "loops": [
           {
-            "id": "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/loop0",
+            "id": "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/loop0",
             "type": "repeat",
             "sourceAnchor": {
               "sourceUnitId": "ws:src/LoopThenCommit.Codeunit.al",
@@ -37,10 +37,10 @@
         ],
         "operationSites": [
           {
-            "id": "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op0",
+            "id": "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op0",
             "kind": "record-op",
             "loopStack": [
-              "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/loop0"
+              "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/loop0"
             ],
             "sourceAnchor": {
               "sourceUnitId": "ws:src/LoopThenCommit.Codeunit.al",
@@ -59,10 +59,10 @@
             }
           },
           {
-            "id": "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op1",
+            "id": "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op1",
             "kind": "record-op",
             "loopStack": [
-              "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/loop0"
+              "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/loop0"
             ],
             "sourceAnchor": {
               "sourceUnitId": "ws:src/LoopThenCommit.Codeunit.al",
@@ -81,7 +81,7 @@
             }
           },
           {
-            "id": "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op2",
+            "id": "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op2",
             "kind": "commit",
             "loopStack": [],
             "sourceAnchor": {
@@ -103,16 +103,16 @@
         ],
         "recordOperations": [
           {
-            "id": "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op0",
+            "id": "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op0",
             "op": "Init",
             "recordVariableName": "Rec",
-            "recordVariableId": "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/rv/rec",
+            "recordVariableId": "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
             },
             "loopStack": [
-              "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/loop0"
+              "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/loop0"
             ],
             "sourceAnchor": {
               "sourceUnitId": "ws:src/LoopThenCommit.Codeunit.al",
@@ -124,16 +124,16 @@
             }
           },
           {
-            "id": "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op1",
+            "id": "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op1",
             "op": "Insert",
             "recordVariableName": "Rec",
-            "recordVariableId": "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/rv/rec",
+            "recordVariableId": "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
             },
             "loopStack": [
-              "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/loop0"
+              "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/loop0"
             ],
             "sourceAnchor": {
               "sourceUnitId": "ws:src/LoopThenCommit.Codeunit.al",
@@ -149,7 +149,7 @@
         "fieldAccesses": [],
         "recordVariables": [
           {
-            "id": "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/rv/rec",
+            "id": "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/rv/rec",
             "name": "Rec",
             "tableName": "LO Rec",
             "tempState": {
@@ -247,17 +247,17 @@
               "children": [
                 {
                   "kind": "op",
-                  "operationId": "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op0"
+                  "operationId": "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op0"
                 },
                 {
                   "kind": "op",
-                  "operationId": "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op1"
+                  "operationId": "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op1"
                 }
               ]
             },
             {
               "kind": "op",
-              "operationId": "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op2"
+              "operationId": "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op2"
             }
           ]
         },
@@ -281,10 +281,10 @@
           "confidence": "unresolved",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op1",
+          "witnessOperationId": "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op1",
           "extra": {
             "kind": "table",
-            "recordVariableId": "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/rv/rec",
+            "recordVariableId": "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/rv/rec",
             "tempState": {
               "kind": "known",
               "value": false
@@ -298,7 +298,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op2"
+          "witnessOperationId": "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/op2"
         }
       ],
       "capabilityStatus": "complete",

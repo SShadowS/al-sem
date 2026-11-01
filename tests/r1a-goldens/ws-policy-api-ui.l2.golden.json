@@ -28,8 +28,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a/cs0",
-            "operationId": "r0/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a/op0",
+            "id": "791901cf085682e2/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a/cs0",
+            "operationId": "791901cf085682e2/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a/op0",
             "calleeText": "Confirm",
             "callee": {
               "kind": "bare",
@@ -80,7 +80,7 @@
         "fieldAccesses": [],
         "recordVariables": [
           {
-            "id": "r0/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a/rv/rec",
+            "id": "791901cf085682e2/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a/rv/rec",
             "name": "Rec",
             "tempState": {
               "kind": "known",
@@ -125,7 +125,7 @@
               "conditionLeaves": [
                 {
                   "kind": "call",
-                  "callsiteId": "r0/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a/cs0"
+                  "callsiteId": "791901cf085682e2/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a/cs0"
                 }
               ],
               "children": [
@@ -159,7 +159,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessCallsiteId": "r0/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a/cs0"
+          "witnessCallsiteId": "791901cf085682e2/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a/cs0"
         }
       ],
       "capabilityStatus": "complete",

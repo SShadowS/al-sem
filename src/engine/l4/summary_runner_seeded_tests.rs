@@ -8,7 +8,7 @@ use crate::engine::l4::exec_relation::ExecRelation;
 use crate::program::model::program_calls::{
     assemble_and_resolve_inline_program_default, assemble_and_resolve_workspace_program,
 };
-use crate::program::model::workspace::{MODEL_INSTANCE_ID_DEFAULT, Model};
+use crate::program::model::workspace::Model;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -429,7 +429,6 @@ fn all_cases() -> Vec<Case> {
         let inputs = crate::program::inputs::WorkspaceInputs::read(dir, &Default::default());
         let model = assemble_and_resolve_workspace_program(
             &inputs,
-            MODEL_INSTANCE_ID_DEFAULT,
             false,
             crate::program::model::workspace::AssemblyNeeds::BASE,
         )

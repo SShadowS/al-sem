@@ -3190,7 +3190,7 @@ codeunit 50001 T
     #[test]
     fn statement_position_set_only_for_bare_call_statements() {
         let (features, _, _) =
-            ir_features_for_named_routine(SRC, "Caller", "g", "m", "u").expect("routine");
+            ir_features_for_named_routine(SRC, "Caller", "g", "u").expect("routine");
         let sites: Vec<(&str, bool)> = features
             .call_sites
             .iter()
@@ -3233,7 +3233,7 @@ codeunit 50003 F
 }
 "#;
         let (features, _, _) =
-            ir_features_for_named_routine(SRC, "Caller", "g", "m", "u").expect("routine");
+            ir_features_for_named_routine(SRC, "Caller", "g", "u").expect("routine");
         let got: Vec<(&str, _)> = features
             .field_accesses
             .iter()
@@ -3279,7 +3279,7 @@ codeunit 50002 C
 }
 "#;
         let (features, _, _) =
-            ir_features_for_named_routine(SRC, "Caller", "g", "m", "u").expect("routine");
+            ir_features_for_named_routine(SRC, "Caller", "g", "u").expect("routine");
         let got: Vec<(&str, &str)> = features
             .condition_references
             .iter()
@@ -3307,7 +3307,7 @@ codeunit 50004 I
 }
 "#;
         let (features, _, _) =
-            ir_features_for_named_routine(SRC, "Caller", "g", "m", "u").expect("routine");
+            ir_features_for_named_routine(SRC, "Caller", "g", "u").expect("routine");
         let got: Vec<(&str, Option<bool>)> = features
             .record_operations
             .iter()

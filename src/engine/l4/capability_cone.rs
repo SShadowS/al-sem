@@ -4081,9 +4081,8 @@ impl R3a5CrossAppBase {
 ///   +1 s and no memory on CDO/DO.
 pub(crate) fn build_cross_app_base(
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
-    model_instance_id: &str,
 ) -> Result<R3a5CrossAppBase, crate::program::model::program_calls::CrossAppFailure> {
-    build_cross_app_base_with(inputs, model_instance_id, false)
+    build_cross_app_base_with(inputs, false)
 }
 
 /// [`build_cross_app_base`] with `--no-roots-config` (#160 step 9 D1): the
@@ -4093,7 +4092,6 @@ pub(crate) fn build_cross_app_base(
 /// [`build_cross_app_base_from`] with its own needs.
 pub(crate) fn build_cross_app_base_with(
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
-    model_instance_id: &str,
     no_roots_config: bool,
 ) -> Result<R3a5CrossAppBase, crate::program::model::program_calls::CrossAppFailure> {
     build_cross_app_base_from(
@@ -4102,7 +4100,6 @@ pub(crate) fn build_cross_app_base_with(
             crate::program::resolved::ProgramScope::CrossApp,
         ),
         inputs,
-        model_instance_id,
         no_roots_config,
         crate::program::model::workspace::AssemblyNeeds::BASE,
     )
@@ -4113,7 +4110,6 @@ pub(crate) fn build_cross_app_base_with(
 pub(crate) fn build_cross_app_base_from(
     program: Result<crate::program::resolved::ResolvedProgram, String>,
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
-    model_instance_id: &str,
     no_roots_config: bool,
     needs: crate::program::model::workspace::AssemblyNeeds,
 ) -> Result<R3a5CrossAppBase, crate::program::model::program_calls::CrossAppFailure> {
@@ -4121,7 +4117,6 @@ pub(crate) fn build_cross_app_base_from(
     let mut x = crate::program::model::program_calls::cross_app_program_from(
         program,
         inputs,
-        model_instance_id,
         no_roots_config,
         needs,
     )?;
@@ -4403,7 +4398,6 @@ fn census_cross_app_base(b: &R3a5CrossAppBase) {
 /// workspace yields an empty projection.
 pub fn project_r3a5_cross_app(
     workspace: &std::path::Path,
-    model_instance_id: &str,
     fixture_name: &str,
 ) -> R3a5FullSummaryProjection {
     use crate::engine::l4::summary_runner::compute_summaries_v2_with_leaves_core;
@@ -4418,7 +4412,7 @@ pub fn project_r3a5_cross_app(
     };
 
     let inputs = crate::program::inputs::WorkspaceInputs::read(workspace, &Default::default());
-    let Some(base) = build_cross_app_base(&inputs, model_instance_id).ok() else {
+    let Some(base) = build_cross_app_base(&inputs).ok() else {
         return empty;
     };
     let ws_routines = base.ws_routines();
@@ -5574,7 +5568,7 @@ codeunit 13 "Dep Rec Sub"
         let ws = dir.path().join("ws");
         write_fixture(&ws);
         let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
-        let base = build_cross_app_base(&inputs, "r0").expect("cross-app base");
+        let base = build_cross_app_base(&inputs).expect("cross-app base");
         let publisher = routine_id(&base, "OnDepRec");
         let fwd = routine_id(&base, "Fwd");
         assert!(
@@ -5642,7 +5636,7 @@ codeunit 13 "Dep Rec Sub"
         }
 
         // (iii) project_r3a5_cross_app.
-        let proj = project_r3a5_cross_app(&ws, "r0", "issue70");
+        let proj = project_r3a5_cross_app(&ws, "issue70");
         let u = "unknown".to_string();
         for (name, want) in [
             (
@@ -5741,7 +5735,7 @@ codeunit 13 "Dep Rec Sub"
         let ws = dir.path().join("ws");
         write_fixture(&ws);
         let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
-        let base = build_cross_app_base(&inputs, "r0").expect("cross-app base");
+        let base = build_cross_app_base(&inputs).expect("cross-app base");
         let owned = crate::engine::l5::detector_context::build_detector_context_with(
             &base.resolved,
             crate::engine::l5::registry::substrate::CORE_SUMMARIES,
@@ -5770,7 +5764,7 @@ codeunit 13 "Dep Rec Sub"
         let ws = dir.path().join("ws");
         write_fixture(&ws);
         let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
-        let base = build_cross_app_base(&inputs, "r0").expect("cross-app base");
+        let base = build_cross_app_base(&inputs).expect("cross-app base");
         let publisher = routine_id(&base, "OnDepRec");
         let probe = Detector {
             name: "probe".to_string(),
@@ -5960,7 +5954,7 @@ codeunit 13 "Dep Rec Sub"
             Some(base),
         );
         let ctx = owned.ctx();
-        let proj = project_r3a5_cross_app(ws, "r0", "issue107");
+        let proj = project_r3a5_cross_app(ws, "issue107");
         let mut out = Vec::new();
         for name in names {
             let id = routine_id(base, name);
@@ -6031,7 +6025,7 @@ codeunit 13 "Dep Rec Sub"
         let ws = dir.path().join("ws");
         write_fixture_107(&ws, true);
         let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
-        let base = build_cross_app_base(&inputs, "r0").expect("cross-app base");
+        let base = build_cross_app_base(&inputs).expect("cross-app base");
         for p in ["OnDepRec", "OnDepRec2"] {
             assert!(
                 base.dep_routine_ids.contains(&routine_id(&base, p)),
@@ -6092,7 +6086,7 @@ codeunit 13 "Dep Rec Sub"
         let ws = dir.path().join("ws");
         write_fixture_107(&ws, false);
         let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
-        let base = build_cross_app_base(&inputs, "r0").expect("cross-app base");
+        let base = build_cross_app_base(&inputs).expect("cross-app base");
         let keys = [
             "persistsCurrentRecord",
             "validatesParam",
@@ -6154,7 +6148,7 @@ mod step4_tests {
 
     fn base_of(ws: &Path) -> R3a5CrossAppBase {
         let inputs = crate::program::inputs::WorkspaceInputs::read(ws, &Default::default());
-        build_cross_app_base(&inputs, "r0").expect("cross-app base")
+        build_cross_app_base(&inputs).expect("cross-app base")
     }
 
     /// Spec §5.2: the Primary payload takes WORKSPACE callers only. A
@@ -6498,7 +6492,6 @@ mod step4_tests {
         let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         let single = crate::program::model::program_calls::assemble_and_resolve_workspace_program(
             &inputs,
-            "r0",
             false,
             crate::program::model::workspace::AssemblyNeeds::BASE,
         )
@@ -6575,7 +6568,6 @@ pub(crate) mod callsite_local_scan_tests {
     pub(super) fn workspace_model(dir: &Path) -> Option<Model> {
         assemble_and_resolve_workspace_program(
             &crate::program::inputs::WorkspaceInputs::read(dir, &Default::default()),
-            crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
             false,
             crate::program::model::workspace::AssemblyNeeds::BASE,
         )
@@ -7485,10 +7477,7 @@ codeunit 50100 C
         failures: &mut Vec<String>,
     ) -> Option<ComposeStats> {
         let inputs = crate::program::inputs::WorkspaceInputs::read(dir, &Default::default());
-        match build_cross_app_base(
-            &inputs,
-            crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
-        ) {
+        match build_cross_app_base(&inputs) {
             Ok(base) => Some(check_model(
                 &base.resolved,
                 base.rel(),

@@ -7,7 +7,7 @@
   "findings": [
     {
       "detector": "d47-io-unsafe-txn",
-      "id": "d47/11111111-0000-0000-0000-0000000d4720:Codeunit:50000#1b14d37dcf2ab2bfe14c21ea39032c69934029e553023cd2e8ef7fc364eeaf5f/EXTERNAL_IO_IN_EVENT_SUBSCRIBER_TXN|8632ad53f9592356|2d2c85f05c8bac52|",
+      "id": "d47/11111111-0000-0000-0000-0000000d4720:Codeunit:50000#1b14d37dcf2ab2bfe14c21ea39032c69934029e553023cd2e8ef7fc364eeaf5f/EXTERNAL_IO_IN_EVENT_SUBSCRIBER_TXN|c4cedd57d3fb1c4a|3d0b06737b186060|",
       "rootCauseKey": "d47/11111111-0000-0000-0000-0000000d4720:Codeunit:50000#1b14d37dcf2ab2bfe14c21ea39032c69934029e553023cd2e8ef7fc364eeaf5f",
       "title": "External IO in event subscriber inside publisher's write transaction (advisory)",
       "rootCause": "ProcessAndNotify dirties the database transaction (DB write) then raises integration event. A synchronous event subscriber (one or more subscribers) may run inside the publisher's uncommitted transaction and issue an external request (HTTP Post). If the subscriber is bound and the event is non-isolated, the external call executes before the publisher's transaction commits or rolls back. Subscriber binding and execution order are NOT proven — review manually.",

@@ -921,7 +921,7 @@ fn p4_cross_app_base_drops_a_trusted_dead_dependency_gap() {
     let ws = dir.path().join("ws");
     write_fixture_dep_ambiguous_after(&ws, "exit;");
     let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
-    let base = build_cross_app_base(&inputs, "r0").expect("cross-app base");
+    let base = build_cross_app_base(&inputs).expect("cross-app base");
     let inner: Vec<&ModelRoutine> = base
         .ws_routines()
         .iter()

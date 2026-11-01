@@ -19,7 +19,7 @@
         "loops": [],
         "operationSites": [
           {
-            "id": "r0/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/op0",
+            "id": "de0fb01749aa7e54/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/op0",
             "kind": "error-call",
             "loopStack": [],
             "sourceAnchor": {
@@ -42,8 +42,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs0",
-            "operationId": "r0/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/op1",
+            "id": "de0fb01749aa7e54/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs0",
+            "operationId": "de0fb01749aa7e54/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/op1",
             "calleeText": "CopyStr",
             "callee": {
               "kind": "bare",
@@ -126,8 +126,8 @@
             }
           },
           {
-            "id": "r0/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs1",
-            "operationId": "r0/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/op2",
+            "id": "de0fb01749aa7e54/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs1",
+            "operationId": "de0fb01749aa7e54/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/op2",
             "calleeText": "MaxStrLen",
             "callee": {
               "kind": "bare",
@@ -175,8 +175,8 @@
             }
           },
           {
-            "id": "r0/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs2",
-            "operationId": "r0/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/op3",
+            "id": "de0fb01749aa7e54/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs2",
+            "operationId": "de0fb01749aa7e54/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/op3",
             "calleeText": "StrLen",
             "callee": {
               "kind": "bare",
@@ -224,8 +224,8 @@
             }
           },
           {
-            "id": "r0/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs3",
-            "operationId": "r0/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/op4",
+            "id": "de0fb01749aa7e54/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs3",
+            "operationId": "de0fb01749aa7e54/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/op4",
             "calleeText": "Error",
             "callee": {
               "kind": "bare",
@@ -273,8 +273,8 @@
             }
           },
           {
-            "id": "r0/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs4",
-            "operationId": "r0/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/op5",
+            "id": "de0fb01749aa7e54/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs4",
+            "operationId": "de0fb01749aa7e54/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/op5",
             "calleeText": "L.Add",
             "callee": {
               "kind": "member",
@@ -438,11 +438,11 @@
               "conditionLeaves": [
                 {
                   "kind": "call",
-                  "callsiteId": "r0/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs0",
+                  "callsiteId": "de0fb01749aa7e54/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs0",
                   "conditionLeaves": [
                     {
                       "kind": "call",
-                      "callsiteId": "r0/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs1"
+                      "callsiteId": "de0fb01749aa7e54/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs1"
                     }
                   ]
                 }
@@ -453,7 +453,7 @@
               "conditionLeaves": [
                 {
                   "kind": "call",
-                  "callsiteId": "r0/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs2"
+                  "callsiteId": "de0fb01749aa7e54/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs2"
                 }
               ]
             },
@@ -465,7 +465,7 @@
                   "children": [
                     {
                       "kind": "error",
-                      "callsiteId": "r0/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs3"
+                      "callsiteId": "de0fb01749aa7e54/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs3"
                     }
                   ]
                 }
@@ -473,7 +473,7 @@
             },
             {
               "kind": "call",
-              "callsiteId": "r0/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs4"
+              "callsiteId": "de0fb01749aa7e54/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs4"
             }
           ]
         },
@@ -500,7 +500,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessCallsiteId": "r0/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs3"
+          "witnessCallsiteId": "de0fb01749aa7e54/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/cs3"
         },
         {
           "op": "error-throw",
@@ -508,7 +508,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/op0"
+          "witnessOperationId": "de0fb01749aa7e54/6d0783737c80157c48e96a0710b6848de201c43a278ee52f198305f2af3ce6a1/op0"
         }
       ],
       "capabilityStatus": "complete",

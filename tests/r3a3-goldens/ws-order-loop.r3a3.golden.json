@@ -22,7 +22,7 @@
 					"extra": {
 						"kind": "table",
 						"opSubtype": "Insert",
-						"recordVariableId": "r0/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/rv/rec",
+						"recordVariableId": "afa5fecec3dcc585/5bd097eb67c6e5c40557f3c18269897548c44c8b0c8fe78b4af648567cca5a47/rv/rec",
 						"tempState": {
 							"kind": "known",
 							"value": false

@@ -24,7 +24,6 @@
 
 use al_sem::engine::l4::summary::{PDbEffect, PDbEffectTempState, R3a2Projection, project_r3a2};
 use al_sem::program::model::program_calls::assemble_and_resolve_workspace_program;
-use al_sem::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT;
 use tempfile::TempDir;
 
 const APP_JSON: &str = r#"{
@@ -43,7 +42,6 @@ fn project(al_src: &str) -> R3a2Projection {
     std::fs::write(dir.path().join("src").join("main.al"), al_src).expect("write al");
     let resolved = assemble_and_resolve_workspace_program(
         &al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &Default::default()),
-        MODEL_INSTANCE_ID_DEFAULT,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )

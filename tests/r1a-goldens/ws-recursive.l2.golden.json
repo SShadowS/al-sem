@@ -24,7 +24,7 @@
         "loops": [],
         "operationSites": [
           {
-            "id": "r0/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/op0",
+            "id": "97953c0f029cd637/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/op0",
             "kind": "record-op",
             "loopStack": [],
             "sourceAnchor": {
@@ -46,10 +46,10 @@
         ],
         "recordOperations": [
           {
-            "id": "r0/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/op0",
+            "id": "97953c0f029cd637/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/op0",
             "op": "FindSet",
             "recordVariableName": "Customer",
-            "recordVariableId": "r0/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/rv/customer",
+            "recordVariableId": "97953c0f029cd637/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/rv/customer",
             "tempState": {
               "kind": "known",
               "value": false
@@ -69,8 +69,8 @@
         ],
         "callSites": [
           {
-            "id": "r0/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/cs0",
-            "operationId": "r0/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/op1",
+            "id": "97953c0f029cd637/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/cs0",
+            "operationId": "97953c0f029cd637/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/op1",
             "calleeText": "Pong",
             "callee": {
               "kind": "bare",
@@ -100,7 +100,7 @@
         "fieldAccesses": [],
         "recordVariables": [
           {
-            "id": "r0/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/rv/customer",
+            "id": "97953c0f029cd637/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/rv/customer",
             "name": "Customer",
             "tableName": "Customer",
             "tempState": {
@@ -139,11 +139,11 @@
           "children": [
             {
               "kind": "op",
-              "operationId": "r0/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/op0"
+              "operationId": "97953c0f029cd637/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/op0"
             },
             {
               "kind": "call",
-              "callsiteId": "r0/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/cs0"
+              "callsiteId": "97953c0f029cd637/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/cs0"
             }
           ]
         },
@@ -162,10 +162,10 @@
           "confidence": "unresolved",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/op0",
+          "witnessOperationId": "97953c0f029cd637/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/op0",
           "extra": {
             "kind": "table",
-            "recordVariableId": "r0/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/rv/customer",
+            "recordVariableId": "97953c0f029cd637/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/rv/customer",
             "tempState": {
               "kind": "known",
               "value": false
@@ -179,7 +179,7 @@
           "confidence": "static",
           "provenance": "direct",
           "via": "self",
-          "witnessOperationId": "r0/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/op0"
+          "witnessOperationId": "97953c0f029cd637/a5b1cf7aae0cd7b05efa40d416af1446f56b5821d71e324843902260a6c10985/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -200,8 +200,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/5f0b591fa8aa0dfe868a068b0f9c51a6f6835ddb7204f8e0ae072a37f8739205/cs0",
-            "operationId": "r0/5f0b591fa8aa0dfe868a068b0f9c51a6f6835ddb7204f8e0ae072a37f8739205/op0",
+            "id": "97953c0f029cd637/5f0b591fa8aa0dfe868a068b0f9c51a6f6835ddb7204f8e0ae072a37f8739205/cs0",
+            "operationId": "97953c0f029cd637/5f0b591fa8aa0dfe868a068b0f9c51a6f6835ddb7204f8e0ae072a37f8739205/op0",
             "calleeText": "Ping",
             "callee": {
               "kind": "bare",
@@ -242,7 +242,7 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/5f0b591fa8aa0dfe868a068b0f9c51a6f6835ddb7204f8e0ae072a37f8739205/cs0"
+              "callsiteId": "97953c0f029cd637/5f0b591fa8aa0dfe868a068b0f9c51a6f6835ddb7204f8e0ae072a37f8739205/cs0"
             }
           ]
         },

@@ -21,8 +21,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2/cs0",
-            "operationId": "r0/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2/op0",
+            "id": "3ccdb74497797a23/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2/cs0",
+            "operationId": "3ccdb74497797a23/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2/op0",
             "calleeText": "Client.Get",
             "callee": {
               "kind": "member",
@@ -92,7 +92,7 @@
         "fieldAccesses": [],
         "recordVariables": [
           {
-            "id": "r0/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2/rv/rec",
+            "id": "3ccdb74497797a23/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2/rv/rec",
             "name": "Rec",
             "tempState": {
               "kind": "parameter-dependent",
@@ -145,7 +145,7 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2/cs0"
+              "callsiteId": "3ccdb74497797a23/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2/cs0"
             }
           ]
         },
@@ -168,7 +168,7 @@
             "kind": "literal",
             "value": "https://example.com/notify"
           },
-          "witnessCallsiteId": "r0/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2/cs0",
+          "witnessCallsiteId": "3ccdb74497797a23/e2d6d5fb812251f4909bf17a00c13d25fe326ee75fb753f61e15fcf391bedde2/cs0",
           "extra": {
             "kind": "http",
             "method": "Get",

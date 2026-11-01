@@ -44,10 +44,6 @@ use crate::engine::ids::{
 use crate::program::body::scope;
 use std::path::Path;
 
-/// The intentional stable corpus/model-instance label (matches the golden's id
-/// prefixes `r0/…`). It does not enter the R1a stable comparison subset.
-const MODEL_INSTANCE_ID: &str = "r0";
-
 /// A discovered workspace `.al` file (the shared walk's type).
 pub(crate) use crate::source_text::AlFile;
 use crate::source_text::NestedApps;
@@ -154,7 +150,6 @@ fn build_proutine(
         enclosing_member.as_deref(),
         &parameters,
         return_type_text.as_deref(),
-        MODEL_INSTANCE_ID,
     );
     let mut features: PFeatures = ir_walk::project_routine_features_ir(
         ir_file,
@@ -219,7 +214,6 @@ pub fn ir_features_for_named_routine(
     source: &str,
     routine_name: &str,
     app_guid: &str,
-    model_instance_id: &str,
     source_unit_id: &str,
 ) -> Option<(PFeatures, Vec<scope::ParameterSymbol>, Vec<String>)> {
     use crate::program::body::ir_walk;
@@ -247,7 +241,6 @@ pub fn ir_features_for_named_routine(
                 enclosing_member.as_deref(),
                 &parameters,
                 r.return_type.as_deref(),
-                model_instance_id,
             );
             let features = ir_walk::project_routine_features_ir(
                 &ir_file,

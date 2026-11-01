@@ -95,7 +95,7 @@ fn canonical_kinds(set: &BTreeSet<String>) -> Vec<String> {
 /// omits it, and no Rust consumer (d50/d51 lookup by routine id) needs it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RootClassification {
-    /// Internal RoutineId (`${modelInstanceId}/${hash}`).
+    /// Internal RoutineId (`{appScope}/{hash}`, `ids::encode_routine_id`).
     pub routine_id: String,
     pub kinds: Vec<String>,
     pub externally_reachable: bool,

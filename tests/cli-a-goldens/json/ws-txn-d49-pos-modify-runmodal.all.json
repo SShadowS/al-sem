@@ -20,7 +20,7 @@
           "description": "Add a Commit() call before the window-opening UI call, or restructure the code so the UI interaction happens outside the write transaction. Alternatively, consider whether the write can be deferred until after the user interaction.",
           "safety": "medium"
         },
-        "id": "d49/11111111-0000-0000-0000-0000000d4902:Codeunit:50000#5098a6b4ccf565e1ea2c49aaa4c34564280e943633b182038eb006d80f813721/WRITE_PENDING_AT_UI|f9b5f9631b801526|c71ab11b9bf8d38c|",
+        "id": "d49/11111111-0000-0000-0000-0000000d4902:Codeunit:50000#5098a6b4ccf565e1ea2c49aaa4c34564280e943633b182038eb006d80f813721/WRITE_PENDING_AT_UI|00cda7804c9127d8|40c1ea6e11ec8aee|",
         "looseFingerprint": "9f07be8ee914676a",
         "pathCount": 1,
         "primaryLocation": {
@@ -29,7 +29,7 @@
           "line": 15,
           "objectId": "11111111-0000-0000-0000-0000000d4902/Codeunit/50000",
           "objectName": "D49 Sender",
-          "routineId": "f0deb5e0a238c365/e2d0ecb6bef7ddcc73934b486afe9c4529d5b67cce7d8ae8979ec62bd77cddda",
+          "routineId": "52424ddea2af29e4/e2d0ecb6bef7ddcc73934b486afe9c4529d5b67cce7d8ae8979ec62bd77cddda",
           "routineName": "ModifyThenRunModal"
         },
         "rootCause": "ModifyThenRunModal opens a window-opening UI (UI_WINDOW_OPEN) while a database write is still pending (uncommitted). BC's runtime throws \"you cannot open a window after modifying the database\" — the write transaction must be committed or rolled back before opening a window.",

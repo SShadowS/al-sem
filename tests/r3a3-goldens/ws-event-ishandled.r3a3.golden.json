@@ -14,7 +14,7 @@
 					"extra": {
 						"kind": "table",
 						"opSubtype": "Insert",
-						"recordVariableId": "r0/45eef88fbf582ffb380033c475fa373779a746726e9053f935d9c0ba357c15e7/rv/rec",
+						"recordVariableId": "bafde89c041e1756/45eef88fbf582ffb380033c475fa373779a746726e9053f935d9c0ba357c15e7/rv/rec",
 						"tempState": {
 							"kind": "parameter-dependent",
 							"parameterIndex": 0

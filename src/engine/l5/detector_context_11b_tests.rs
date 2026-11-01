@@ -2069,8 +2069,8 @@ codeunit 50172 "Dep Ord"
     out.write_all(bytes.get_ref()).unwrap();
 
     let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
-    let base = crate::engine::l4::capability_cone::build_cross_app_base(&inputs, "r0")
-        .expect("cross-app base");
+    let base =
+        crate::engine::l4::capability_cone::build_cross_app_base(&inputs).expect("cross-app base");
     let rows: Vec<&ModelRoutine> = base
         .resolved
         .workspace

@@ -14,7 +14,7 @@
   "callsiteIndex": [
     {
       "calleeDisplay": "LiveHelper",
-      "callsiteId": "99b2347c6aebdaf0/609585be4ad09835acbf3a4740dfde1506aa78a340562bbaf7c8be6f043fd0c2/cs0",
+      "callsiteId": "a3c882280b009076/609585be4ad09835acbf3a4740dfde1506aa78a340562bbaf7c8be6f043fd0c2/cs0",
       "controlContext": "top-level",
       "endColumn": 14,
       "endLine": 4,
@@ -33,11 +33,11 @@
   "callsiteResolutions": [
     {
       "calleeDisplay": "LiveHelper",
-      "callsiteId": "99b2347c6aebdaf0/609585be4ad09835acbf3a4740dfde1506aa78a340562bbaf7c8be6f043fd0c2/cs0",
+      "callsiteId": "a3c882280b009076/609585be4ad09835acbf3a4740dfde1506aa78a340562bbaf7c8be6f043fd0c2/cs0",
       "dispatchKind": "direct",
       "from": "11111111-0000-0000-0000-00000000d14a:Codeunit:50114#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc",
       "resolvedEdges": [
-        "e0ff9b5b77482a90"
+        "de2f0e1887f4060c"
       ],
       "status": "resolved"
     }
@@ -134,7 +134,7 @@
       "routineId": "11111111-0000-0000-0000-00000000d14a:Codeunit:50114#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc",
       "source": "ast",
       "sourceAnchor": {
-        "enclosingRoutineId": "99b2347c6aebdaf0/609585be4ad09835acbf3a4740dfde1506aa78a340562bbaf7c8be6f043fd0c2",
+        "enclosingRoutineId": "a3c882280b009076/609585be4ad09835acbf3a4740dfde1506aa78a340562bbaf7c8be6f043fd0c2",
         "range": {
           "endColumn": 5,
           "endLine": 5,
@@ -173,12 +173,12 @@
   "schemaVersion": 4,
   "typedEdges": [
     {
-      "callsiteId": "99b2347c6aebdaf0/609585be4ad09835acbf3a4740dfde1506aa78a340562bbaf7c8be6f043fd0c2/cs0",
-      "edgeId": "e0ff9b5b77482a90",
+      "callsiteId": "a3c882280b009076/609585be4ad09835acbf3a4740dfde1506aa78a340562bbaf7c8be6f043fd0c2/cs0",
+      "edgeId": "de2f0e1887f4060c",
       "from": "11111111-0000-0000-0000-00000000d14a:Codeunit:50114#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc",
       "kind": "direct-call",
       "sourceAnchor": {
-        "enclosingRoutineId": "99b2347c6aebdaf0/609585be4ad09835acbf3a4740dfde1506aa78a340562bbaf7c8be6f043fd0c2",
+        "enclosingRoutineId": "a3c882280b009076/609585be4ad09835acbf3a4740dfde1506aa78a340562bbaf7c8be6f043fd0c2",
         "range": {
           "endColumn": 14,
           "endLine": 4,

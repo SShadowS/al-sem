@@ -62,7 +62,6 @@ use al_sem::program::body::features::PFeatures;
 use al_sem::program::body::features_for_named_routine;
 
 const APP_GUID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-const MODEL_INSTANCE_ID: &str = "r0";
 const SOURCE_UNIT_ID: &str = "ws:src/vec.al";
 
 /// The canonical probe table reused across fixtures (mirrors `PROBE_TABLE`).
@@ -72,7 +71,7 @@ const PROBE_TABLE: &str = r#"table 50100 "Probe Rec" { fields { field(1; "No."; 
 /// projected features for `routine` (panics if the routine isn't found — a
 /// missing routine is itself an oracle failure).
 fn features(source: &str, routine: &str) -> PFeatures {
-    features_for_named_routine(source, routine, APP_GUID, MODEL_INSTANCE_ID, SOURCE_UNIT_ID)
+    features_for_named_routine(source, routine, APP_GUID, SOURCE_UNIT_ID)
         .unwrap_or_else(|| panic!("routine `{routine}` not found by the Rust L2 walker"))
 }
 

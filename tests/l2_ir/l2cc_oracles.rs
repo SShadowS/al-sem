@@ -65,14 +65,13 @@ use al_sem::program::body::control_context::{
 use al_sem::program::body::features::PCallee;
 
 const APP_GUID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
-const MODEL_INSTANCE_ID: &str = "r0";
 const SOURCE_UNIT_ID: &str = "ws:src/vec.al";
 
 /// Run the full Rust L2 control-context analysis over an inline single-file
 /// workspace and return the result for `routine` (panics if the routine isn't
 /// found — a missing routine is itself an oracle failure).
 fn analyze(source: &str, routine: &str) -> RoutineControlContexts {
-    analyze_named_routine(source, routine, APP_GUID, MODEL_INSTANCE_ID, SOURCE_UNIT_ID)
+    analyze_named_routine(source, routine, APP_GUID, SOURCE_UNIT_ID)
         .unwrap_or_else(|| panic!("routine `{routine}` not found by the Rust L2 walker"))
 }
 

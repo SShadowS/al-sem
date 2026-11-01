@@ -1047,7 +1047,6 @@ fn select_named(detectors: &[Detector], names: &[String]) -> Vec<Detector> {
 /// → None) yields an empty projection.
 pub fn project_r4_findings_cross_app(
     workspace: &std::path::Path,
-    model_instance_id: &str,
     detectors: &[Detector],
     fixture_name: &str,
     detector_names: &[String],
@@ -1065,7 +1064,6 @@ pub fn project_r4_findings_cross_app(
                 crate::program::resolved::ProgramScope::CrossApp,
             ),
             &inputs,
-            model_instance_id,
             false,
             crate::engine::l5::registry::assembly_needs(&selected),
         )

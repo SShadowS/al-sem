@@ -3926,7 +3926,6 @@ mod step6_tree_tests {
             let Some(m) =
                 crate::program::model::program_calls::assemble_and_resolve_workspace_program(
                     &inputs,
-                    crate::program::model::workspace::MODEL_INSTANCE_ID_DEFAULT,
                     false,
                     crate::program::model::workspace::AssemblyNeeds::BASE,
                 )
@@ -3984,7 +3983,7 @@ mod step6_tree_tests {
         use crate::program::model::program_calls::{
             assemble_and_resolve_cross_app_program, assemble_and_resolve_workspace_program,
         };
-        use crate::program::model::workspace::{AssemblyNeeds, MODEL_INSTANCE_ID_DEFAULT};
+        use crate::program::model::workspace::AssemblyNeeds;
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
         // `tests/fixtures` too: `test-selection-graph` is the one with an
         // interface closed over a non-extensible enum.
@@ -4000,20 +3999,11 @@ mod step6_tree_tests {
         for dir in &dirs {
             let where_ = dir.strip_prefix(&root).unwrap_or(dir).display().to_string();
             let inputs = crate::program::inputs::WorkspaceInputs::read(dir, &Default::default());
-            let single = assemble_and_resolve_workspace_program(
-                &inputs,
-                MODEL_INSTANCE_ID_DEFAULT,
-                false,
-                AssemblyNeeds::BASE,
-            );
-            let cross = assemble_and_resolve_cross_app_program(
-                &inputs,
-                MODEL_INSTANCE_ID_DEFAULT,
-                false,
-                AssemblyNeeds::BASE,
-            )
-            .ok()
-            .map(|r| r.resolved);
+            let single =
+                assemble_and_resolve_workspace_program(&inputs, false, AssemblyNeeds::BASE);
+            let cross = assemble_and_resolve_cross_app_program(&inputs, false, AssemblyNeeds::BASE)
+                .ok()
+                .map(|r| r.resolved);
             for (mode, m) in [("single-app", single), ("cross-app", cross)] {
                 let Some(m) = m else { continue };
                 models += 1;
@@ -4683,7 +4673,7 @@ mod step0_sort_tests {
         use crate::program::model::program_calls::{
             assemble_and_resolve_cross_app_program, assemble_and_resolve_workspace_program,
         };
-        use crate::program::model::workspace::{AssemblyNeeds, MODEL_INSTANCE_ID_DEFAULT};
+        use crate::program::model::workspace::AssemblyNeeds;
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
         let mut dirs: Vec<std::path::PathBuf> = ["r0-corpus", "fixtures"]
             .iter()
@@ -4698,20 +4688,11 @@ mod step0_sort_tests {
         for dir in &dirs {
             let where_ = dir.strip_prefix(&root).unwrap_or(dir).display().to_string();
             let inputs = crate::program::inputs::WorkspaceInputs::read(dir, &Default::default());
-            let single = assemble_and_resolve_workspace_program(
-                &inputs,
-                MODEL_INSTANCE_ID_DEFAULT,
-                false,
-                AssemblyNeeds::BASE,
-            );
-            let cross = assemble_and_resolve_cross_app_program(
-                &inputs,
-                MODEL_INSTANCE_ID_DEFAULT,
-                false,
-                AssemblyNeeds::BASE,
-            )
-            .ok()
-            .map(|r| r.resolved);
+            let single =
+                assemble_and_resolve_workspace_program(&inputs, false, AssemblyNeeds::BASE);
+            let cross = assemble_and_resolve_cross_app_program(&inputs, false, AssemblyNeeds::BASE)
+                .ok()
+                .map(|r| r.resolved);
             for (mode, m) in [("single-app", single), ("cross-app", cross)] {
                 let Some(m) = m else { continue };
                 models += 1;

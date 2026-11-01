@@ -47,7 +47,7 @@
         {
           "ruleId": "policy-exposed-root-no-direct-ledger-write",
           "message": {
-            "text": "Policy exposed-root-no-direct-ledger-write matched 1 fact(s) on routine 808c74269078d99a/6e5901bedc0eda408891306a136b2f7868b850728bb2cb9d3cdeea2462d23093."
+            "text": "Policy exposed-root-no-direct-ledger-write matched 1 fact(s) on routine ff286a0829013fc7/6e5901bedc0eda408891306a136b2f7868b850728bb2cb9d3cdeea2462d23093."
           },
           "level": "error",
           "locations": [

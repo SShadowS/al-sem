@@ -21,8 +21,8 @@
         "recordOperations": [],
         "callSites": [
           {
-            "id": "r0/c7b082683466046cabf0520456584207c38e714a18b5ebc04a81ad65d3fe74d7/cs0",
-            "operationId": "r0/c7b082683466046cabf0520456584207c38e714a18b5ebc04a81ad65d3fe74d7/op0",
+            "id": "5ef320a5b5bb8baf/c7b082683466046cabf0520456584207c38e714a18b5ebc04a81ad65d3fe74d7/cs0",
+            "operationId": "5ef320a5b5bb8baf/c7b082683466046cabf0520456584207c38e714a18b5ebc04a81ad65d3fe74d7/op0",
             "calleeText": "Dep.InternalMethod",
             "callee": {
               "kind": "member",
@@ -50,8 +50,8 @@
             }
           },
           {
-            "id": "r0/c7b082683466046cabf0520456584207c38e714a18b5ebc04a81ad65d3fe74d7/cs1",
-            "operationId": "r0/c7b082683466046cabf0520456584207c38e714a18b5ebc04a81ad65d3fe74d7/op1",
+            "id": "5ef320a5b5bb8baf/c7b082683466046cabf0520456584207c38e714a18b5ebc04a81ad65d3fe74d7/cs1",
+            "operationId": "5ef320a5b5bb8baf/c7b082683466046cabf0520456584207c38e714a18b5ebc04a81ad65d3fe74d7/op1",
             "calleeText": "Dep.PublicMethod",
             "callee": {
               "kind": "member",
@@ -110,11 +110,11 @@
           "children": [
             {
               "kind": "call",
-              "callsiteId": "r0/c7b082683466046cabf0520456584207c38e714a18b5ebc04a81ad65d3fe74d7/cs0"
+              "callsiteId": "5ef320a5b5bb8baf/c7b082683466046cabf0520456584207c38e714a18b5ebc04a81ad65d3fe74d7/cs0"
             },
             {
               "kind": "call",
-              "callsiteId": "r0/c7b082683466046cabf0520456584207c38e714a18b5ebc04a81ad65d3fe74d7/cs1"
+              "callsiteId": "5ef320a5b5bb8baf/c7b082683466046cabf0520456584207c38e714a18b5ebc04a81ad65d3fe74d7/cs1"
             }
           ]
         },

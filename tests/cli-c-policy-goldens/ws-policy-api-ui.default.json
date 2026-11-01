@@ -97,11 +97,11 @@
   ],
   "findings": [
     {
-      "id": "policy-api-no-interactive-ui/6cad5cc3f372ef45/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a",
-      "rootCauseKey": "policy-api-no-interactive-ui/6cad5cc3f372ef45/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a",
+      "id": "policy-api-no-interactive-ui/791901cf085682e2/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a",
+      "rootCauseKey": "policy-api-no-interactive-ui/791901cf085682e2/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a",
       "detector": "policy-api-no-interactive-ui",
       "title": "API/web-service roots must not use interactive UI",
-      "rootCause": "Policy api-no-interactive-ui matched 1 fact(s) on routine 6cad5cc3f372ef45/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a.",
+      "rootCause": "Policy api-no-interactive-ui matched 1 fact(s) on routine 791901cf085682e2/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a.",
       "severity": "high",
       "confidence": {
         "level": "likely",
@@ -115,12 +115,12 @@
           "endLine": 32,
           "endColumn": 20
         },
-        "enclosingRoutineId": "6cad5cc3f372ef45/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a",
+        "enclosingRoutineId": "791901cf085682e2/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a",
         "syntaxKind": "trigger_declaration"
       },
       "evidencePath": [
         {
-          "routineId": "6cad5cc3f372ef45/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a",
+          "routineId": "791901cf085682e2/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a",
           "sourceAnchor": {
             "sourceUnitId": "ws:src/Page.al",
             "range": {
@@ -129,13 +129,13 @@
               "endLine": 32,
               "endColumn": 20
             },
-            "enclosingRoutineId": "6cad5cc3f372ef45/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a",
+            "enclosingRoutineId": "791901cf085682e2/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a",
             "syntaxKind": "trigger_declaration"
           },
           "note": "API/web-service roots must not use interactive UI"
         },
         {
-          "routineId": "6cad5cc3f372ef45/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a",
+          "routineId": "791901cf085682e2/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a",
           "sourceAnchor": {
             "sourceUnitId": "ws:src/Page.al",
             "range": {
@@ -144,11 +144,11 @@
               "endLine": 32,
               "endColumn": 20
             },
-            "enclosingRoutineId": "6cad5cc3f372ef45/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a",
+            "enclosingRoutineId": "791901cf085682e2/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a",
             "syntaxKind": "trigger_declaration"
           },
           "note": "matched on capability.op=ui-confirm, resourceKind=ui",
-          "callsiteId": "6cad5cc3f372ef45/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a/cs0"
+          "callsiteId": "791901cf085682e2/63e9bdd4d363ea0590b948e4f20bd770cb78d0211919176f397725369792005a/cs0"
         }
       ],
       "affectedObjects": [

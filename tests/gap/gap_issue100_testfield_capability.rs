@@ -19,7 +19,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use al_sem::engine::gate::policy::pipeline::{
     PolicyCheckOptions, policy_request, run_policy_check,
 };
@@ -73,10 +72,8 @@ fn read_inputs(dir: &Path) -> std::sync::Arc<WorkspaceInputs> {
 }
 
 fn resolve(dir: &Path) -> Model {
-    let model_id = compute_gate_model_instance_id(dir).expect("modelInstanceId");
     assemble_and_resolve_workspace_program(
         &read_inputs(dir),
-        &model_id,
         true,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )

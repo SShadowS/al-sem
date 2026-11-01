@@ -16,7 +16,6 @@ use std::process::Command;
 
 use serde_json::Value;
 
-use al_sem::engine::gate::model_instance_id::compute_gate_model_instance_id;
 use al_sem::engine::ids::{
     normalized_signature_hash, object_key, to_stable_object_id, to_stable_routine_id_from_parts,
 };
@@ -207,12 +206,10 @@ fn hunk_on_assignment_line_is_a_changed_root() {
     );
     d8_workspace(dir.path(), &posting);
 
-    let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
     let inputs =
         al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &crate::fingerprint_needs());
     let model = assemble_and_resolve_workspace_program(
         &inputs,
-        &model_id,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
@@ -1691,12 +1688,10 @@ fn file_with_only_opless_routines_is_matched() {
     let pure = "codeunit 50300 PureCu\n{\n    procedure Add(A: Integer; B: Integer): Integer\n    begin\n        exit(A + B);\n    end;\n}\n";
     write(&dir.path().join("src/Pure.al"), pure);
 
-    let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
     let inputs =
         al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &crate::fingerprint_needs());
     let model = assemble_and_resolve_workspace_program(
         &inputs,
-        &model_id,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
@@ -2179,12 +2174,10 @@ fn duplicate_id_anchor_follows_the_changed_arm() {
 fn model_routine_declaration_start_includes_attributes() {
     let dir = tempfile::tempdir().unwrap();
     d8_workspace(dir.path(), &d8_posting());
-    let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
     let inputs =
         al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &crate::fingerprint_needs());
     let model = assemble_and_resolve_workspace_program(
         &inputs,
-        &model_id,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
@@ -2222,12 +2215,10 @@ fn declaration_start_line_claims_separated_and_multi_line_attributes() {
         &dir.path().join("src/Attrs.Codeunit.al"),
         "codeunit 50120 AttrsCu\n{\n    [IntegrationEvent(false, false)]\n    // note\n    procedure Commented()\n    begin\n    end;\n\n    [EventSubscriber(ObjectType::Codeunit, Codeunit::AttrsCu,\n        'Commented', '', false, false)]\n    local procedure MultiLine()\n    begin\n    end;\n}\n",
     );
-    let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
     let inputs =
         al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &crate::fingerprint_needs());
     let model = assemble_and_resolve_workspace_program(
         &inputs,
-        &model_id,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
@@ -2305,12 +2296,10 @@ fn quoted_interface_name_is_unescaped_in_the_id() {
         &dir.path().join("src/IQuoted.Interface.al"),
         "interface \"I\"\"Foo\"\n{\n    procedure Bar();\n}\n",
     );
-    let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
     let inputs =
         al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &crate::fingerprint_needs());
     let model = assemble_and_resolve_workspace_program(
         &inputs,
-        &model_id,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
@@ -2338,12 +2327,10 @@ fn quoted_interface_name_is_unescaped_in_the_id() {
 fn interface_object_rows_carry_declaration_only_routines() {
     let dir = tempfile::tempdir().unwrap();
     decl_only_workspace(dir.path());
-    let model_id = compute_gate_model_instance_id(dir.path()).unwrap();
     let inputs =
         al_sem::program::inputs::WorkspaceInputs::read(dir.path(), &crate::fingerprint_needs());
     let model = assemble_and_resolve_workspace_program(
         &inputs,
-        &model_id,
         false,
         al_sem::program::model::workspace::AssemblyNeeds::BASE,
     )
