@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (the producer solve's arena is canonical: context-server stage 1b)
+
+- **`pd_solve::solve` returns its arena in rank order** (design r6 §6.10), so
+  its order no longer follows the order of its inputs. A finalization pass
+  (`pd_solve::finalize`) ranks producers by `(owner internal id, operation
+  id)`, edges by the whole `TypedOutEdge` identity in internal ids (`from`
+  and `sort_key` first, so a state's links stay in `sort_key` order), states
+  by `(producer rank, dist, routine internal id, t, reqs)` and links by
+  `(edge rank, callee state rank)`; it remaps every index (`ConeState.producer`,
+  `ConeLink.callee_state`, `ConeLink.edge`, link ranges), rebuilds
+  `by_routine` and the resolved entries, and merges two graph edges with one
+  identity. Ranks use internal ids, never stable ids: two routines with one
+  stable id stay two states. Operation ids rank by their ordinal (`op8` before
+  `op10`), the solve's old input order.
+- **One witness selection moves on CDO, none on the fixtures.** Of a
+  routine's own entries that tie for one fact (one key, `dist` and first hop),
+  the cone keeps the first; it is now the most precise `t` rather than the
+  first discovered. On CDO (`bc3ccb18`) 12 of 581,584 tie groups now keep
+  `Known(false)` instead of `Unknown` of the same producer (the
+  `capabilityFacts` section moves; 224 more groups change to a state with the
+  same rep, which moves nothing). Ranking that last tie by discovery instead
+  reproduces every snapshot section byte for byte, so the rest of the change
+  is a pure reordering: on every `r0-corpus` fixture and on CDO the arena's
+  logical lines are the same multiset (402 fixture arenas byte-identical, 20
+  reordered), and no golden moved (`check-goldens --regen` writes nothing).
+- **`aldump --snapshot-memory --pd-dump <file>`** writes the cone arena as
+  `ConeArena::logical_lines` (every index replaced by its identity), the
+  before/after evidence for an order change.
+- Tests: `solve_is_independent_of_input_order` and
+  `corpus_arena_and_witnesses_are_independent_of_producer_order` (24 and 6
+  permutations; arena bytes and rendered digests identical),
+  `solve_keeps_two_routines_that_share_a_stable_id`, `op_id_cmp_orders_by_ordinal_and_stays_total`.
+
 ### Fixed (CI: the parent-baseline tests overflowed their stack)
 
 - **CI has been red since the routine-id merge (`212e5f82`): both
