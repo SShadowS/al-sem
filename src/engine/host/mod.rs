@@ -25,7 +25,10 @@
 //! | front → child | `session/shutdown` | → `{ok: true}`, then the child exits |
 //!
 //! A protocol version the front end does not support, a missing hello, a
-//! frame over the limit or one that does not parse kills the child. A request
+//! frame over the limit or one that does not parse kills the child, and so
+//! does output the front end has not read piling up past [`QUEUE_FRAMES`]
+//! frames or [`QUEUE_BYTES`] bytes ([`PROGRESS_METHOD`] notifications are
+//! coalesced per request first). A request
 //! id over [`MAX_ID_BYTES`] is refused at decode. Errors use the JSON-RPC
 //! codes in [`codes`].
 
@@ -73,6 +76,18 @@ pub const DEATH_WINDOW: Duration = Duration::from_secs(60);
 
 /// See [`DEATH_LIMIT`].
 pub const FAILED_COOLDOWN: Duration = Duration::from_secs(300);
+
+/// The most bytes of the child's output a front end holds queued, unread
+/// (design r7 §3, review r6 NEW 5); past it the child is killed (`protocol`).
+pub const QUEUE_BYTES: usize = 64 * 1024 * 1024;
+
+/// The most frames of the child's output a front end holds queued, unread;
+/// past it the child is killed (`protocol`).
+pub const QUEUE_FRAMES: usize = 1024;
+
+/// The progress notification: `params.id` names the request it reports on.
+/// A front end keeps only the newest one per request queued.
+pub const PROGRESS_METHOD: &str = "engine/progress";
 
 /// The largest request id, as JSON, a child accepts (r5 §3).
 pub const MAX_ID_BYTES: usize = 1024;
@@ -282,6 +297,22 @@ pub mod test_hooks {
         OversizedFrameOnAsk,
         /// Answer an ask with a line that is not JSON.
         GarbageFrameOnAsk,
+        /// After answering `session/open`, write `count` small frames of
+        /// `kind` unasked (while the front end reads nothing), then serve on.
+        FloodAfterOpen(Flood, usize),
+    }
+
+    /// What a flood writes.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Flood {
+        /// Valid responses (`{"id":0,"result":{}}`).
+        Response,
+        /// Valid notifications, each of a different method.
+        Notify,
+        /// Progress notifications for one request (coalesced by the front).
+        Progress,
+        /// Short lines that are not JSON.
+        Garbage,
     }
 
     /// The hook the environment names, if any.
@@ -296,6 +327,17 @@ pub mod test_hooks {
             "abort-on-ask-once" => Hook::AbortOnAskOnce(arg.into()),
             "oversized-frame-on-ask" => Hook::OversizedFrameOnAsk,
             "garbage-frame-on-ask" => Hook::GarbageFrameOnAsk,
+            "flood-after-open" => {
+                let (kind, count) = arg.split_once(':')?;
+                let kind = match kind {
+                    "response" => Flood::Response,
+                    "notify" => Flood::Notify,
+                    "progress" => Flood::Progress,
+                    "garbage" => Flood::Garbage,
+                    _ => return None,
+                };
+                Hook::FloodAfterOpen(kind, count.parse().ok()?)
+            }
             _ => return None,
         })
     }

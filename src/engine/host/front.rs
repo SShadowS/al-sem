@@ -8,8 +8,17 @@
 //!   `session/open`. A missing or wrong hello kills the child.
 //! - **Frames.** A reader thread reads the child's stdout one frame at a time
 //!   ([`crate::wire::read_frame`]: at most the limit plus one byte of any
-//!   line is held). A frame over the limit, or one that does not parse as a
-//!   protocol message, kills the child (`protocol`).
+//!   line is held) and checks each frame's shape (a JSON-RPC response or a
+//!   notification) BEFORE queueing it. A frame over the limit, or one of the
+//!   wrong shape, kills the child (`protocol`); the reader stops at it and
+//!   never recovers past it, so it has no delimiter boundary to get wrong.
+//! - **The queue** of frames read but not yet taken is bounded (design r7
+//!   §3, review r6 NEW 5): [`PROGRESS_METHOD`] notifications are coalesced
+//!   per request (the newest replaces the queued one), and past
+//!   `queue_frames` frames or `queue_bytes` bytes the READER kills the child
+//!   at once, whether or not an ask is waiting, and records why: the pending
+//!   ask (or the next one, or [`EngineFront::status`]) fails `protocol` with
+//!   that reason, and [`EngineFront::queue_stats`] shows it before then.
 //! - **stderr** is drained continuously by its own thread; the newest
 //!   [`STDERR_RETAIN`] bytes are kept, never forwarded to stdout.
 //! - **Death.** End of the child's stdout, or a write to it failing, fails the
@@ -26,19 +35,18 @@
 
 use std::collections::VecDeque;
 use std::ffi::OsString;
-use std::io::{BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use super::{
     AskParams, BACKOFF_INITIAL, BACKOFF_MAX, ChildStatus, DEATH_LIMIT, DEATH_WINDOW,
-    FAILED_COOLDOWN, HELLO_DEADLINE, Hello, Message, OpenParams, SHUTDOWN_DEADLINE, STABLE_AFTER,
-    STDERR_RETAIN, SUPPORTED_PROTOCOLS,
+    FAILED_COOLDOWN, HELLO_DEADLINE, Hello, Message, OpenParams, PROGRESS_METHOD, QUEUE_BYTES,
+    QUEUE_FRAMES, SHUTDOWN_DEADLINE, STABLE_AFTER, STDERR_RETAIN, SUPPORTED_PROTOCOLS,
 };
-use crate::wire::{Answer, FailedOutcome, MESSAGE_INLINE_BYTES, Outcome, decode_frame};
+use crate::wire::{Answer, FailedOutcome, MESSAGE_INLINE_BYTES, Outcome, ReadFrame, decode_frame};
 
 /// How a front end starts and supervises its child. [`FrontConfig::new`]
 /// gives the design's values; tests shorten the clocks.
@@ -60,6 +68,10 @@ pub struct FrontConfig {
     pub death_limit: usize,
     pub death_window: Duration,
     pub failed_cooldown: Duration,
+    /// The bound on queued, unread child frames ([`QUEUE_FRAMES`]).
+    pub queue_frames: usize,
+    /// The bound on queued, unread child bytes ([`QUEUE_BYTES`]).
+    pub queue_bytes: usize,
 }
 
 impl FrontConfig {
@@ -79,16 +91,226 @@ impl FrontConfig {
             death_limit: DEATH_LIMIT,
             death_window: DEATH_WINDOW,
             failed_cooldown: FAILED_COOLDOWN,
+            queue_frames: QUEUE_FRAMES,
+            queue_bytes: QUEUE_BYTES,
         }
     }
 }
 
-/// What the reader thread saw on the child's stdout.
+/// What the consumer takes from the child's output queue.
+#[derive(Debug)]
 enum Event {
-    Frame(Vec<u8>),
-    /// A frame over the limit or a read error: reading stopped.
+    /// A protocol message, its shape checked.
+    Frame(Message),
+    /// Reading stopped on a protocol failure (an oversized or malformed
+    /// frame, the queue bound, a read error); the reader killed the child.
     Bad(String),
     Eof,
+}
+
+/// Why `recv` returned no event.
+#[derive(Debug, PartialEq, Eq)]
+enum RecvError {
+    Timeout,
+}
+
+/// One queued frame.
+#[derive(Debug)]
+struct Queued {
+    msg: Message,
+    bytes: usize,
+    /// The request a progress notification reports on (coalescing key).
+    progress_of: Option<serde_json::Value>,
+}
+
+/// The queue's state under its lock.
+#[derive(Debug, Default)]
+struct QueueState {
+    items: VecDeque<Queued>,
+    bytes: usize,
+    peak_frames: usize,
+    peak_bytes: usize,
+    /// Set once, when the reader stops: `Some(Bad)` wins over queued frames
+    /// (the child is dead and the queue discarded), `Some(Eof)` is taken
+    /// after them.
+    end: Option<End>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum End {
+    Eof,
+    Bad(String),
+}
+
+/// The child's output between the reader thread and the consumer: bounded
+/// by frames and bytes (design r7 §3).
+#[derive(Debug, Default)]
+struct Queue {
+    state: Mutex<QueueState>,
+    ready: Condvar,
+}
+
+/// The queue's counters (for tests and status).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct QueueStats {
+    pub frames: usize,
+    pub bytes: usize,
+    pub peak_frames: usize,
+    pub peak_bytes: usize,
+    /// Why the reader stopped on a protocol failure (and killed the child).
+    pub failure: Option<String>,
+}
+
+impl Queue {
+    fn lock(&self) -> MutexGuard<'_, QueueState> {
+        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// The next event, waiting up to `timeout` (forever when `None`).
+    fn recv(&self, timeout: Option<Duration>) -> Result<Event, RecvError> {
+        let deadline = timeout.map(|t| Instant::now() + t);
+        let mut s = self.lock();
+        loop {
+            if let Some(End::Bad(why)) = &s.end {
+                return Ok(Event::Bad(why.clone()));
+            }
+            if let Some(q) = s.items.pop_front() {
+                s.bytes -= q.bytes;
+                return Ok(Event::Frame(q.msg));
+            }
+            if s.end == Some(End::Eof) {
+                return Ok(Event::Eof);
+            }
+            s = match deadline {
+                None => self.ready.wait(s).unwrap_or_else(|p| p.into_inner()),
+                Some(d) => {
+                    let left = d.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        return Err(RecvError::Timeout);
+                    }
+                    self.ready
+                        .wait_timeout(s, left)
+                        .unwrap_or_else(|p| p.into_inner())
+                        .0
+                }
+            };
+        }
+    }
+
+    /// Stop with `end`. A protocol failure discards what is queued.
+    fn finish(&self, end: End) {
+        let mut s = self.lock();
+        if s.end.is_none() {
+            if matches!(end, End::Bad(_)) {
+                s.items.clear();
+                s.bytes = 0;
+            }
+            s.end = Some(end);
+        }
+        drop(s);
+        self.ready.notify_all();
+    }
+
+    fn stats(&self) -> QueueStats {
+        let s = self.lock();
+        QueueStats {
+            frames: s.items.len(),
+            bytes: s.bytes,
+            peak_frames: s.peak_frames,
+            peak_bytes: s.peak_bytes,
+            failure: match &s.end {
+                Some(End::Bad(why)) => Some(why.clone()),
+                _ => None,
+            },
+        }
+    }
+
+    /// Queue one checked frame: a progress notification replaces the queued
+    /// one for its request; anything past the bounds is refused (the
+    /// caller then kills the child).
+    fn push(&self, q: Queued, max_frames: usize, max_bytes: usize) -> Result<(), String> {
+        let mut s = self.lock();
+        let same = q.progress_of.as_ref().and_then(|r| {
+            s.items
+                .iter()
+                .position(|i| i.progress_of.as_ref() == Some(r))
+        });
+        let (frames, bytes) = match same {
+            Some(i) => (s.items.len(), s.bytes - s.items[i].bytes + q.bytes),
+            None => (s.items.len() + 1, s.bytes + q.bytes),
+        };
+        if frames > max_frames || bytes > max_bytes {
+            return Err(format!(
+                "engine protocol error: the engine's unread output exceeds the front end's \
+                 queue bound ({max_frames} frames, {max_bytes} bytes): {frames} frames, \
+                 {bytes} bytes"
+            ));
+        }
+        match same {
+            Some(i) => s.items[i] = q,
+            None => s.items.push_back(q),
+        }
+        s.bytes = bytes;
+        s.peak_frames = s.peak_frames.max(frames);
+        s.peak_bytes = s.peak_bytes.max(bytes);
+        drop(s);
+        self.ready.notify_all();
+        Ok(())
+    }
+}
+
+/// `frame` as a protocol message of a shape the front end takes: a response
+/// (an id and exactly one of result and error, no method) or a notification
+/// (a method, no id, no result or error).
+fn checked(frame: &[u8]) -> Result<Queued, String> {
+    let msg: Message = decode_frame(frame).map_err(|e| format!("engine protocol error: {e}"))?;
+    let response = msg.method.is_none() && (msg.result.is_some() != msg.error.is_some());
+    let notification =
+        msg.method.is_some() && msg.id.is_none() && msg.result.is_none() && msg.error.is_none();
+    if msg.jsonrpc != "2.0" || !(response || notification) {
+        return Err(
+            "engine protocol error: a frame that is no JSON-RPC response or notification"
+                .to_string(),
+        );
+    }
+    let progress_of = (msg.method.as_deref() == Some(PROGRESS_METHOD))
+        .then(|| msg.params.as_ref().and_then(|p| p.get("id")).cloned())
+        .flatten();
+    Ok(Queued {
+        bytes: frame.len(),
+        msg,
+        progress_of,
+    })
+}
+
+/// The reader: frames from `reader` into `queue`, each checked before it is
+/// queued, until end of input or a protocol failure. Returns the failure
+/// (the queue already records it; the caller kills the child).
+fn pump(
+    mut reader: impl BufRead,
+    queue: &Queue,
+    max_frames: usize,
+    max_bytes: usize,
+) -> Option<String> {
+    loop {
+        let step = match crate::wire::read_frame(&mut reader) {
+            Ok(ReadFrame::Frame(f)) => {
+                checked(&f).and_then(|q| queue.push(q, max_frames, max_bytes))
+            }
+            Ok(ReadFrame::Eof) => {
+                queue.finish(End::Eof);
+                return None;
+            }
+            Ok(ReadFrame::Oversized(over)) => {
+                Err(format!("engine protocol error: {}", over.error()))
+            }
+            Err(e) => Err(format!("engine protocol error: {e}")),
+        };
+        if let Err(why) = step {
+            queue.finish(End::Bad(why.clone()));
+            return Some(why);
+        }
+    }
 }
 
 /// The newest bytes of the child's stderr.
@@ -100,12 +322,27 @@ struct StderrTail {
 
 /// A started child.
 struct Running {
-    child: Child,
+    /// Shared with the reader thread, which kills the child on a protocol
+    /// failure (`Child::kill` on a reaped child signals nothing).
+    child: Arc<Mutex<Child>>,
     stdin: ChildStdin,
-    frames: Receiver<Event>,
+    frames: Arc<Queue>,
     stderr: Arc<Mutex<StderrTail>>,
     hello: Hello,
     since: Instant,
+}
+
+impl Running {
+    fn child(&self) -> MutexGuard<'_, Child> {
+        self.child.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Kill and reap.
+    fn kill_and_reap(&self) -> Option<ExitStatus> {
+        let mut c = self.child();
+        let _ = c.kill();
+        c.wait().ok()
+    }
 }
 
 /// The front end's counters.
@@ -135,6 +372,7 @@ pub struct EngineFront {
     deaths: VecDeque<Instant>,
     failed_until: Option<Instant>,
     last_stderr: String,
+    last_failure: Option<(FailedOutcome, String)>,
     stats: FrontStats,
 }
 
@@ -156,6 +394,7 @@ impl EngineFront {
             deaths: VecDeque::new(),
             failed_until: None,
             last_stderr: String::new(),
+            last_failure: None,
             stats: FrontStats::default(),
         })
     }
@@ -280,17 +519,18 @@ impl EngineFront {
         let mut answered = false;
         while asked && !answered {
             let left = deadline.saturating_duration_since(Instant::now());
-            match run.frames.recv_timeout(left) {
-                Ok(Event::Frame(f)) => {
-                    answered = decode_frame::<Message>(&f)
-                        .is_ok_and(|m| m.id.as_ref() == Some(&id) && m.result.is_some());
+            match run.frames.recv(Some(left)) {
+                Ok(Event::Frame(m)) => {
+                    answered = m.id.as_ref() == Some(&id) && m.result.is_some();
                 }
                 _ => break,
             }
         }
-        drop(run.stdin);
+        let Running { child, stdin, .. } = run;
+        drop(stdin);
+        let mut child = child.lock().unwrap_or_else(|p| p.into_inner());
         loop {
-            match run.child.try_wait() {
+            match child.try_wait() {
                 Ok(Some(status)) => {
                     return ShutdownReport {
                         graceful: answered,
@@ -303,11 +543,38 @@ impl EngineFront {
                 _ => break,
             }
         }
-        let _ = run.child.kill();
+        let _ = child.kill();
         ShutdownReport {
             graceful: false,
-            status: run.child.wait().ok(),
+            status: child.wait().ok(),
         }
+    }
+
+    /// Start the child if none is running (as the first ask would), without
+    /// asking it anything.
+    pub fn ensure_started(&mut self) -> Result<(), String> {
+        self.ensure_running().map_err(|(_, m)| m)
+    }
+
+    /// The running child's output-queue counters, and the protocol failure
+    /// its reader stopped on (recorded even when no ask is waiting).
+    #[must_use]
+    pub fn queue_stats(&self) -> Option<QueueStats> {
+        self.running.as_ref().map(|r| r.frames.stats())
+    }
+
+    /// Whether the running child has exited (reaping it if so; its status
+    /// is kept for the front end's own reap).
+    pub fn child_exited(&self) -> Option<bool> {
+        self.running
+            .as_ref()
+            .map(|r| r.child().try_wait().is_ok_and(|s| s.is_some()))
+    }
+
+    /// The last failure that ended a child (its outcome and message).
+    #[must_use]
+    pub fn last_failure(&self) -> Option<(FailedOutcome, String)> {
+        self.last_failure.clone()
     }
 
     fn take_id(&mut self) -> serde_json::Value {
@@ -338,6 +605,13 @@ impl EngineFront {
                 ));
             }
             self.reset();
+        }
+        // A child whose reader stopped on a protocol failure while nothing
+        // was asked (the queue bound, a malformed frame) was killed by the
+        // reader: this request fails with that reason and the death counts.
+        let background = self.running.as_ref().and_then(|r| r.frames.stats().failure);
+        if let Some(why) = background {
+            return Err(self.kill(FailedOutcome::Protocol, why));
         }
         if let Some(run) = &self.running {
             if run.since.elapsed() >= self.cfg.stable_after {
@@ -373,21 +647,20 @@ impl EngineFront {
         let stderr = Arc::new(Mutex::new(StderrTail::default()));
         let tail = Arc::clone(&stderr);
         std::thread::spawn(move || drain(stderr_pipe, &tail));
-        let (tx, frames) = channel();
-        std::thread::spawn(move || {
-            let mut reader = BufReader::with_capacity(1 << 16, stdout);
-            loop {
-                let event = match crate::wire::read_frame(&mut reader) {
-                    Ok(Some(f)) => Event::Frame(f),
-                    Ok(None) => Event::Eof,
-                    Err(e) => Event::Bad(e.to_string()),
-                };
-                let last = !matches!(event, Event::Frame(_));
-                if tx.send(event).is_err() || last {
-                    return;
+        let child = Arc::new(Mutex::new(child));
+        let frames = Arc::new(Queue::default());
+        {
+            let (queue, child) = (Arc::clone(&frames), Arc::clone(&child));
+            let (max_frames, max_bytes) = (self.cfg.queue_frames, self.cfg.queue_bytes);
+            std::thread::spawn(move || {
+                let reader = BufReader::with_capacity(1 << 16, stdout);
+                if pump(reader, &queue, max_frames, max_bytes).is_some() {
+                    // A protocol failure: end the child now, with no ask
+                    // needed to notice (its output pipe closes with us).
+                    let _ = child.lock().unwrap_or_else(|p| p.into_inner()).kill();
                 }
-            }
-        });
+            });
+        }
         let since = Instant::now();
         let mut run = Running {
             child,
@@ -403,24 +676,20 @@ impl EngineFront {
             },
             since,
         };
-        let hello = match run.frames.recv_timeout(self.cfg.hello_deadline) {
-            Ok(Event::Frame(f)) => decode_frame::<Message>(&f)
-                .ok()
+        let hello = match run.frames.recv(Some(self.cfg.hello_deadline)) {
+            Ok(Event::Frame(m)) => Some(m)
                 .filter(|m| m.method.as_deref() == Some("engine/hello"))
                 .and_then(|m| serde_json::from_value::<Hello>(m.params?).ok())
                 .ok_or((
                     FailedOutcome::Protocol,
                     "engine protocol error: the first frame is not engine/hello".to_string(),
                 )),
-            Ok(Event::Bad(e)) => Err((
-                FailedOutcome::Protocol,
-                format!("engine protocol error: {e}"),
-            )),
-            Ok(Event::Eof) | Err(RecvTimeoutError::Disconnected) => Err((
+            Ok(Event::Bad(e)) => Err((FailedOutcome::Protocol, e)),
+            Ok(Event::Eof) => Err((
                 FailedOutcome::EngineError,
                 "engine exited before its hello".to_string(),
             )),
-            Err(RecvTimeoutError::Timeout) => Err((
+            Err(RecvError::Timeout) => Err((
                 FailedOutcome::EngineError,
                 format!(
                     "engine start timeout: no hello within {} ms",
@@ -487,54 +756,39 @@ impl EngineFront {
         let deadline = timeout.map(|t| Instant::now() + t);
         loop {
             let run = self.running.as_mut().expect("a running child");
-            let event = match deadline {
-                Some(d) => run
-                    .frames
-                    .recv_timeout(d.saturating_duration_since(Instant::now())),
-                None => run
-                    .frames
-                    .recv()
-                    .map_err(|_| RecvTimeoutError::Disconnected),
-            };
+            let event = run
+                .frames
+                .recv(deadline.map(|d| d.saturating_duration_since(Instant::now())));
             match event {
-                Ok(Event::Frame(f)) => match decode_frame::<Message>(&f) {
-                    Ok(m) if m.id.is_none() && m.method.is_some() => {}
-                    Ok(m) if m.id.as_ref() == Some(&id) => {
-                        if let Some(err) = m.error {
-                            return Err((FailedOutcome::EngineError, err.message));
-                        }
-                        return m.result.ok_or_else(|| {
-                            self.kill(
-                                FailedOutcome::Protocol,
-                                "engine protocol error: a response with no result".into(),
-                            )
-                        });
+                // Shapes were checked by the reader: a notification, or a
+                // response with exactly one of result and error.
+                Ok(Event::Frame(m)) if m.method.is_some() => {}
+                Ok(Event::Frame(m)) if m.id.as_ref() == Some(&id) => {
+                    if let Some(err) = m.error {
+                        return Err((FailedOutcome::EngineError, err.message));
                     }
-                    Ok(m) => {
-                        let why = format!(
-                            "engine protocol error: unexpected message for {id}: {}",
-                            m.error
-                                .map_or_else(|| format!("id {:?}", m.id), |e| e.message)
-                        );
-                        return Err(self.kill(FailedOutcome::Protocol, why));
-                    }
-                    Err(e) => {
-                        return Err(self.kill(
+                    return m.result.ok_or_else(|| {
+                        self.kill(
                             FailedOutcome::Protocol,
-                            format!("engine protocol error: {e}"),
-                        ));
-                    }
-                },
-                Ok(Event::Bad(e)) => {
-                    return Err(self.kill(
-                        FailedOutcome::Protocol,
-                        format!("engine protocol error: {e}"),
-                    ));
+                            "engine protocol error: a response with no result".into(),
+                        )
+                    });
                 }
-                Ok(Event::Eof) | Err(RecvTimeoutError::Disconnected) => {
+                Ok(Event::Frame(m)) => {
+                    let why = format!(
+                        "engine protocol error: unexpected message for {id}: {}",
+                        m.error
+                            .map_or_else(|| format!("id {:?}", m.id), |e| e.message)
+                    );
+                    return Err(self.kill(FailedOutcome::Protocol, why));
+                }
+                Ok(Event::Bad(why)) => {
+                    return Err(self.kill(FailedOutcome::Protocol, why));
+                }
+                Ok(Event::Eof) => {
                     return Err(self.died("the engine closed its output".into()));
                 }
-                Err(RecvTimeoutError::Timeout) => {
+                Err(RecvError::Timeout) => {
                     return Err(self.kill(
                         FailedOutcome::EngineError,
                         format!("the engine did not answer {method} in time"),
@@ -547,21 +801,19 @@ impl EngineFront {
     /// The child is gone (end of its output, a failed write): reap it and
     /// record the death.
     fn died(&mut self, why: String) -> Failure {
-        let Some(mut run) = self.running.take() else {
-            return (FailedOutcome::EngineError, why);
+        let Some(run) = self.running.take() else {
+            return self.failure(FailedOutcome::EngineError, why);
         };
         // It closed its output; give it a moment to exit before killing it.
         let deadline = Instant::now() + Duration::from_millis(500);
         let status = loop {
-            match run.child.try_wait() {
+            let polled = run.child().try_wait();
+            match polled {
                 Ok(Some(s)) => break Some(s),
                 Ok(None) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                _ => {
-                    let _ = run.child.kill();
-                    break run.child.wait().ok();
-                }
+                _ => break run.kill_and_reap(),
             }
         };
         let message = format!(
@@ -570,20 +822,25 @@ impl EngineFront {
             settle_tail(&run.stderr)
         );
         self.record_death(&run);
-        (FailedOutcome::EngineError, message)
+        self.failure(FailedOutcome::EngineError, message)
     }
 
     /// Kill the child for `why` and record the death.
     fn kill(&mut self, outcome: FailedOutcome, why: String) -> Failure {
-        if let Some(mut run) = self.running.take() {
-            let _ = run.child.kill();
-            let _ = run.child.wait();
+        if let Some(run) = self.running.take() {
+            run.kill_and_reap();
             let tail = settle_tail(&run.stderr);
             self.record_death(&run);
             if !tail.is_empty() {
-                return (outcome, format!("{why}; stderr: {tail}"));
+                return self.failure(outcome, format!("{why}; stderr: {tail}"));
             }
         }
+        self.failure(outcome, why)
+    }
+
+    /// `(outcome, why)`, recorded as the last failure.
+    fn failure(&mut self, outcome: FailedOutcome, why: String) -> Failure {
+        self.last_failure = Some((outcome, why.clone()));
         (outcome, why)
     }
 
@@ -611,9 +868,8 @@ impl EngineFront {
 
 impl Drop for EngineFront {
     fn drop(&mut self) {
-        if let Some(mut run) = self.running.take() {
-            let _ = run.child.kill();
-            let _ = run.child.wait();
+        if let Some(run) = self.running.take() {
+            run.kill_and_reap();
         }
     }
 }
@@ -684,4 +940,129 @@ fn describe(status: ExitStatus) -> String {
     status
         .code()
         .map_or_else(|| "no exit code".into(), |c| format!("exit code {c}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(msg: &Message) -> Vec<u8> {
+        crate::wire::encode_frame(msg).unwrap()
+    }
+
+    fn response(id: u64) -> Vec<u8> {
+        frame(&Message::response(
+            serde_json::json!(id),
+            serde_json::json!({}),
+        ))
+    }
+
+    fn progress(request: u64, done: u64) -> Vec<u8> {
+        frame(&Message::notification(
+            PROGRESS_METHOD,
+            serde_json::json!({"id": request, "done": done}),
+        ))
+    }
+
+    /// `stream` pumped into a fresh queue with these bounds, nobody taking.
+    fn pumped(stream: &[u8], frames: usize, bytes: usize) -> (Queue, Option<String>) {
+        let queue = Queue::default();
+        let failure = pump(stream, &queue, frames, bytes);
+        (queue, failure)
+    }
+
+    /// Review r6 NEW 5: with nobody taking, a flood of valid small frames
+    /// fills the queue only to its frame bound; the next frame is a protocol
+    /// failure the queue records (and `recv` reports at once, the queued
+    /// frames discarded) and the reader stops there.
+    #[test]
+    fn the_frame_bound_stops_a_flood_and_records_why() {
+        let stream: Vec<u8> = (0..10_000).flat_map(response).collect();
+        let (queue, failure) = pumped(&stream, 4, QUEUE_BYTES);
+        let why = failure.expect("the flood is a protocol failure");
+        assert!(why.contains("queue bound"), "{why}");
+        let stats = queue.stats();
+        assert_eq!(stats.peak_frames, 4);
+        assert_eq!(stats.failure.as_deref(), Some(why.as_str()));
+        assert!(matches!(queue.recv(None), Ok(Event::Bad(w)) if w == why));
+        assert_eq!(queue.stats().frames, 0, "discarded");
+    }
+
+    /// The byte bound holds the same way, below the frame bound.
+    #[test]
+    fn the_byte_bound_stops_a_flood() {
+        let one = response(1).len();
+        let stream: Vec<u8> = (0..10_000).flat_map(|_| response(1)).collect();
+        let (queue, failure) = pumped(&stream, QUEUE_FRAMES, 10 * one);
+        assert!(failure.is_some_and(|w| w.contains("queue bound")));
+        let stats = queue.stats();
+        assert_eq!((stats.peak_frames, stats.peak_bytes), (10, 10 * one));
+    }
+
+    /// Progress notifications are coalesced per request: thousands of them
+    /// for two requests hold two frames, the newest of each, and are no
+    /// failure; frames queued before the end of input are still taken
+    /// before it.
+    #[test]
+    fn progress_is_coalesced_per_request() {
+        let mut stream: Vec<u8> = (0..5_000)
+            .flat_map(|i| [progress(7, i), progress(8, i)].concat())
+            .collect();
+        stream.extend(response(3));
+        let (queue, failure) = pumped(&stream, 4, QUEUE_BYTES);
+        assert_eq!(failure, None);
+        assert_eq!(queue.stats().peak_frames, 3);
+        let mut taken = Vec::new();
+        loop {
+            match queue.recv(Some(Duration::from_secs(1))).unwrap() {
+                Event::Frame(m) => taken.push(m),
+                Event::Eof => break,
+                Event::Bad(w) => panic!("{w}"),
+            }
+        }
+        let done: Vec<_> = taken
+            .iter()
+            .map(|m| {
+                m.params
+                    .as_ref()
+                    .map(|p| (p["id"].clone(), p["done"].clone()))
+            })
+            .collect();
+        assert_eq!(
+            done,
+            [
+                Some((serde_json::json!(7), serde_json::json!(4999))),
+                Some((serde_json::json!(8), serde_json::json!(4999))),
+                None
+            ]
+        );
+    }
+
+    /// Shape is checked before a frame is queued: a line that is not JSON,
+    /// a request (method and id), a response with both result and error, a
+    /// wrong `jsonrpc` each stop the reader with nothing of theirs queued.
+    #[test]
+    fn a_frame_of_the_wrong_shape_is_refused_before_queueing() {
+        let request = frame(&Message::request(
+            serde_json::json!(1),
+            "session/ask",
+            serde_json::Value::Null,
+        ));
+        let mut both = Message::response(serde_json::json!(1), serde_json::json!({}));
+        both.error = Some(super::super::RpcError {
+            code: 1,
+            message: "x".into(),
+        });
+        let mut v1 = Message::response(serde_json::json!(1), serde_json::json!({}));
+        v1.jsonrpc = "1.0".into();
+        for bad in [b"x\n".to_vec(), request, frame(&both), frame(&v1)] {
+            let (queue, failure) = pumped(&bad, QUEUE_FRAMES, QUEUE_BYTES);
+            assert!(
+                failure.is_some_and(|w| w.starts_with("engine protocol error")),
+                "{}",
+                String::from_utf8_lossy(&bad)
+            );
+            assert_eq!(queue.stats().peak_frames, 0);
+        }
+    }
 }
