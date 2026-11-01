@@ -184,6 +184,7 @@ mod cli_workspace_fingerprint_closure;
 mod cli_workspace_source;
 mod cli_write_failure;
 mod d1_downgraded_to_info_oracle;
+mod engine_host;
 mod gate_prsummary_differential;
 mod gate_sarif_differential;
 mod gate_suppress_baseline_differential;

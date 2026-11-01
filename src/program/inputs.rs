@@ -7,10 +7,14 @@
 //! itself gives (one `Arc` per path, which several jobs can share), and
 //! [`RequestInputs`], the files one command's flags name (policy, baseline).
 //!
-//! One exception, by design (spec §4.2.2): the dependency `.app` files. The set
-//! holds the closure's LIST (and, with `fingerprint_rows`, one hash per file),
-//! but the loader still opens each `.app` itself. A `.app` replaced between the
-//! two reads gives hash rows of the old bytes and a model of the new ones.
+//! The dependency `.app` files are read here too, each once into an owned
+//! image (context-server design r5 §5.2, [`ClosureEntries::acquire`]): the
+//! hash rows and every product the build makes of a package come from that
+//! one image, so a `.app` rewritten during the run can no longer give hash
+//! rows of the old bytes and a model of the new ones. The set keeps each
+//! image only until the build that consumes it takes it
+//! ([`ClosureEntries::image`]); it keeps the identities for good
+//! ([`ClosureEntries::consumed`]).
 //!
 //! `read` never fails: every read error is stored in its slot (the `.al` walk's
 //! in `al_walk`), and each reader decides what a missing or unreadable input
@@ -22,6 +26,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::app_image::{AppImage, PackageManifest, PackageState};
 use crate::dependencies::DiscoveredAppFile;
 use crate::engine::l5::snapshot_full::SnapshotInput;
 use crate::engine::perf_trace as pt;
@@ -125,10 +130,102 @@ pub struct PolicyInput {
 }
 
 /// `discover_app_files`'s two lists: the `.app` files, and the `.alpackages`
-/// folders whose listing failed.
+/// folders whose listing failed; and each `.app` read once into an owned
+/// image ([`crate::app_image`]), from which the build makes every product of
+/// the package.
 pub struct ClosureEntries {
     pub files: Vec<DiscoveredAppFile>,
     pub unreadable: Vec<(PathBuf, std::io::Error)>,
+    /// One per `files` entry, in order.
+    acquired: Vec<AcquiredPackage>,
+}
+
+/// One package as the read acquired it: its image until a build takes it,
+/// and its identity (the `M_consumed` entry), kept for good.
+struct AcquiredPackage {
+    held: std::sync::Mutex<Option<Arc<AppImage>>>,
+    /// The acquisition's failure, as `(kind, message)`: answered again, never
+    /// retried, so every build of one read sees one outcome.
+    failed: Option<(std::io::ErrorKind, String)>,
+    state: PackageState,
+    /// SHA-256 of the image (a `dep-package` fingerprint row), when asked.
+    sha256: Option<String>,
+}
+
+impl ClosureEntries {
+    /// `files` acquired, each read once into an image; `sha256` also hashes
+    /// each image for the fingerprint rows.
+    pub fn acquire(
+        files: Vec<DiscoveredAppFile>,
+        unreadable: Vec<(PathBuf, std::io::Error)>,
+        sha256: bool,
+    ) -> ClosureEntries {
+        let _s = pt::span("inputs", "inputs.acquire_packages");
+        let acquired = files
+            .iter()
+            .map(|f| match AppImage::acquire(&f.path) {
+                Ok(image) => AcquiredPackage {
+                    state: PackageState::Present {
+                        len: image.len(),
+                        blake3: image.content_hash().to_string(),
+                    },
+                    sha256: sha256.then(|| image.sha256().to_string()),
+                    held: std::sync::Mutex::new(Some(image)),
+                    failed: None,
+                },
+                Err(e) => AcquiredPackage {
+                    state: PackageState::Unreadable(e.kind().to_string()),
+                    failed: Some((e.kind(), e.to_string())),
+                    sha256: None,
+                    held: std::sync::Mutex::new(None),
+                },
+            })
+            .collect();
+        ClosureEntries {
+            files,
+            unreadable,
+            acquired,
+        }
+    }
+
+    /// The image of `files[i]`, handed to the build that consumes it: the
+    /// read's own image the first time (the read keeps only its identity, so
+    /// the bytes live as long as the build's products need them, not as long
+    /// as the read); a later build of the same read re-reads the file and
+    /// gets it only if its bytes are the ones the read acquired. A failed
+    /// acquisition answers its failure again.
+    pub fn image(&self, i: usize) -> std::io::Result<Arc<AppImage>> {
+        let entry = &self.acquired[i];
+        if let Some((kind, message)) = &entry.failed {
+            return Err(std::io::Error::new(*kind, message.clone()));
+        }
+        if let Some(image) = entry.held.lock().expect("held image").take() {
+            return Ok(image);
+        }
+        let image = AppImage::acquire(&self.files[i].path)?;
+        match &entry.state {
+            PackageState::Present { blake3, .. } if blake3 == image.content_hash() => Ok(image),
+            _ => Err(std::io::Error::other(
+                "the package changed after the workspace read",
+            )),
+        }
+    }
+
+    /// What the read acquired, by path, in closure order (`M_consumed`).
+    pub fn consumed(&self) -> PackageManifest {
+        PackageManifest(
+            self.files
+                .iter()
+                .zip(&self.acquired)
+                .map(|(f, a)| (f.path.clone(), a.state.clone()))
+                .collect(),
+        )
+    }
+
+    /// The `.app` paths, in closure order.
+    pub fn paths(&self) -> Vec<PathBuf> {
+        self.files.iter().map(|f| f.path.clone()).collect()
+    }
 }
 
 /// One workspace `.al` file.
@@ -352,7 +449,8 @@ impl WorkspaceInputs {
         };
 
         let (files, unreadable) = crate::dependencies::discover_app_files(workspace);
-        let closure = ClosureEntries { files, unreadable };
+        let closure =
+            ClosureEntries::acquire(files, unreadable, !build_only && needs.fingerprint_rows);
         let source_dependencies = crate::program::source_deps::read(workspace);
 
         let mut set = WorkspaceInputs {
@@ -466,6 +564,26 @@ impl WorkspaceInputs {
             path(&mut t, &f.folder);
             path(&mut t, &f.path);
         }
+        // The package images a build has not taken yet, and each identity.
+        t.buf::<AcquiredPackage>(self.closure.acquired.len());
+        for a in &self.closure.acquired {
+            if let Some(image) = a.held.lock().expect("held image").as_ref() {
+                t.arc::<AppImage>();
+                t.buf::<u8>(image.head().len());
+                // A sealed private copy holds its bytes off the heap.
+                if !image.is_private() {
+                    t.buf::<u8>(usize::try_from(image.len()).unwrap_or(usize::MAX));
+                }
+                path(&mut t, image.path());
+                t.strs([image.content_hash()]);
+            }
+            if let PackageState::Present { blake3, .. } = &a.state {
+                t.strs([blake3]);
+            }
+            if let Some(s) = &a.sha256 {
+                t.strs([s]);
+            }
+        }
         t.buf::<(PathBuf, std::io::Error)>(self.closure.unreadable.len());
         self.closure
             .unreadable
@@ -554,11 +672,24 @@ impl WorkspaceInputs {
     }
 
     fn compute_snapshot_inputs(&self) -> Vec<SnapshotInput> {
+        // From the acquired images: no package is opened again.
+        let acquired = &self.closure.acquired;
         let closure = crate::program::resolve::semantic_golden::dependency_closure_entries_from(
             &self.workspace,
             &self.closure.files,
             &self.closure.unreadable,
+            &|i| match &acquired[i].failed {
+                Some((_, message)) => Err(message.clone()),
+                None => Ok(()),
+            },
         );
+        let sha256: HashMap<&Path, &str> = self
+            .closure
+            .files
+            .iter()
+            .zip(acquired)
+            .filter_map(|(f, a)| Some((f.path.as_path(), a.sha256.as_deref()?)))
+            .collect();
         let roots = match &self.roots_config {
             Some(Ok(b)) if self.roots_config_loaded() => Some(b.as_slice()),
             _ => None,
@@ -567,6 +698,7 @@ impl WorkspaceInputs {
             &self.workspace,
             self.app_json.bytes.as_deref().ok(),
             closure,
+            &|p| sha256.get(p).map(|s| (*s).to_string()),
             roots,
             self.coverage_yaml.as_deref(),
             &self.source_dependencies,

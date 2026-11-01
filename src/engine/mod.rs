@@ -10,6 +10,8 @@ pub mod batch;
 pub mod census;
 pub mod deps;
 pub mod gate;
+/// The engine child process and its protocol (context-server stage 2).
+pub mod host;
 pub mod ids;
 /// #222: the incremental L4 host (`IncrementalHost`).
 pub mod incremental;

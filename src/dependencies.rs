@@ -38,29 +38,25 @@ pub struct ResolvedDependency {
     pub dependency: AppDependency,
     pub app_path: PathBuf,
     pub package: std::sync::Arc<ParsedAppPackage>,
-    /// `app_path`'s stamp, taken BEFORE any of its bytes were read.
+    /// The package image `package` was parsed from; its source and ABI are
+    /// built from the same image (`crate::app_image`).
+    pub image: std::sync::Arc<crate::app_image::AppImage>,
+    /// `image`'s stamp.
     pub stamp: Option<AppFileStamp>,
 }
 
-/// An `.app` file's size and modification time, taken BEFORE its bytes are
-/// read. Keys the shared dependency tier (`program::dep_cache::DepKey`): a
-/// file replaced after the stamp but before the read is cached under the OLD
-/// stamp, so the next rebuild (which stamps the new file) misses and rebuilds.
+/// An `.app` image's identity: its size and modification time (from the
+/// handle it was read through, before the read) and the blake3 of the bytes
+/// read (`crate::app_image::AppImage::stamp`). Keys the shared dependency
+/// tier (`program::dep_cache::DepKey`) and the package and source caches, so
+/// an entry is a hit only for the same bytes: a file rewritten in place with
+/// its size and time kept still misses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct AppFileStamp {
     pub len: u64,
     pub modified: Option<std::time::SystemTime>,
-}
-
-impl AppFileStamp {
-    /// `None` when the file cannot be stat'ed.
-    pub fn of(path: &Path) -> Option<AppFileStamp> {
-        let meta = std::fs::metadata(path).ok()?;
-        Some(AppFileStamp {
-            len: meta.len(),
-            modified: meta.modified().ok(),
-        })
-    }
+    /// blake3 of the image's bytes.
+    pub content: [u8; 32],
 }
 
 /// One `.app` file dropped during GUID-level dependency dedup (Tier-1
@@ -114,8 +110,9 @@ pub struct DependencyLoadReport {
 struct DiscoveredApp {
     app_path: PathBuf,
     meta: crate::app_package::AppMetadata,
-    /// Taken before the manifest read — see [`AppFileStamp`].
-    stamp: Option<AppFileStamp>,
+    /// The image the manifest was read from: the symbols, source and ABI
+    /// are read from it too, never from `app_path` again.
+    image: std::sync::Arc<crate::app_image::AppImage>,
 }
 
 /// Collapse `deps` down to one entry per non-empty GUID, keeping the
@@ -633,14 +630,16 @@ pub fn load_all_apps_with(
     let (files, unreadable) = discover_app_files(project_root);
     load_all_apps_from(
         project_root,
-        &crate::program::inputs::ClosureEntries { files, unreadable },
+        &crate::program::inputs::ClosureEntries::acquire(files, unreadable, false),
         cache,
     )
 }
 
-/// [`load_all_apps_with`] over a closure already discovered
-/// ([`discover_app_files`]'s two lists, read once into the command's
-/// `WorkspaceInputs`, #160 step 1): the `.app` files themselves are still opened here.
+/// [`load_all_apps_with`] over a closure already discovered and acquired
+/// ([`discover_app_files`]'s two lists and each `.app` read once into an
+/// image, in the command's `WorkspaceInputs`, #160 step 1): every product of
+/// a package (manifest, symbols, and later its source and ABI) is built from
+/// its image, never by opening the path again.
 pub fn load_all_apps_from(
     project_root: &Path,
     closure: &crate::program::inputs::ClosureEntries,
@@ -665,16 +664,24 @@ pub fn load_all_apps_from(
     let mut discovered: Vec<DiscoveredApp> = Vec::new();
     let mut unreadable_apps: Vec<UnreadableDependency> = Vec::new();
 
-    for DiscoveredAppFile {
-        folder: alpackages,
-        path,
-    } in files.iter().cloned()
+    for (
+        i,
+        DiscoveredAppFile {
+            folder: alpackages,
+            path,
+        },
+    ) in files.iter().cloned().enumerate()
     {
-        // Stamp BEFORE the first read of this file's bytes (see `AppFileStamp`).
-        let stamp = AppFileStamp::of(&path);
         // Phase 1: manifest-only discovery — never touches SymbolReference.json.
-        match crate::app_package::extract_app_metadata(&path) {
-            Ok(meta) => {
+        // The acquisition's failure reads as opening the file did.
+        let read = closure
+            .image(i)
+            .with_context(|| format!("open .app: {}", path.display()))
+            .and_then(|image| {
+                crate::app_package::extract_app_metadata(&image).map(|meta| (image, meta))
+            });
+        match read {
+            Ok((image, meta)) => {
                 debug!(
                     "load_all_apps: discovered {} v{} from {}",
                     meta.name,
@@ -684,7 +691,7 @@ pub fn load_all_apps_from(
                 discovered.push(DiscoveredApp {
                     app_path: path,
                     meta,
-                    stamp,
+                    image,
                 });
             }
             Err(e) => {
@@ -727,8 +734,9 @@ pub fn load_all_apps_from(
         let mut winner_idx: Option<usize> = None;
         let mut first_error: Option<String> = None;
         for (i, candidate) in group.iter().enumerate() {
-            let loaded = cache.package(&candidate.app_path, candidate.stamp, || {
-                crate::app_package::extract_app_symbols(&candidate.app_path).map(|objects| {
+            let stamp = Some(candidate.image.stamp());
+            let loaded = cache.package(&candidate.app_path, stamp, || {
+                crate::app_package::extract_app_symbols(&candidate.image).map(|objects| {
                     ParsedAppPackage {
                         metadata: candidate.meta.clone(),
                         objects,
@@ -752,7 +760,8 @@ pub fn load_all_apps_from(
                         },
                         app_path: candidate.app_path.clone(),
                         package,
-                        stamp: candidate.stamp,
+                        image: std::sync::Arc::clone(&candidate.image),
+                        stamp,
                     });
                     winner_idx = Some(i);
                     break;
@@ -894,9 +903,11 @@ pub fn resolve_all(project_root: &Path) -> Result<Vec<ResolvedDependency>> {
                     app_path.display()
                 );
 
-                let stamp = AppFileStamp::of(&app_path);
-                match extract_app_package(&app_path) {
-                    Ok(package) => {
+                let read = crate::app_image::AppImage::acquire(&app_path)
+                    .with_context(|| format!("open .app: {}", app_path.display()))
+                    .and_then(|image| extract_app_package(&image).map(|p| (image, p)));
+                match read {
+                    Ok((image, package)) => {
                         info!(
                             "Loaded {} v{} ({} objects)",
                             package.metadata.name,
@@ -907,7 +918,8 @@ pub fn resolve_all(project_root: &Path) -> Result<Vec<ResolvedDependency>> {
                             dependency: dep,
                             app_path,
                             package: std::sync::Arc::new(package),
-                            stamp,
+                            stamp: Some(image.stamp()),
+                            image,
                         });
                     }
                     Err(e) => {
@@ -994,7 +1006,8 @@ mod tests {
         let path = dir.path().join("Microsoft_Base Application_28.4.app");
         std::fs::write(&path, package).unwrap();
 
-        let err = crate::app_package::extract_app_metadata(&path).unwrap_err();
+        let image = crate::app_image::AppImage::acquire(&path).unwrap();
+        let err = crate::app_package::extract_app_metadata(&image).unwrap_err();
         let line = manifest_read_warning(&path, &err);
         assert!(line.contains("Ready-to-Run package"), "{line}");
         assert!(line.contains("missing.app"), "{line}");
@@ -1155,7 +1168,7 @@ mod tests {
 
     fn discovered(guid: &str, name: &str, version: &str, path: &str) -> DiscoveredApp {
         DiscoveredApp {
-            stamp: None,
+            image: crate::app_image::AppImage::from_bytes(path, Vec::new()),
             app_path: PathBuf::from(path),
             meta: crate::app_package::AppMetadata {
                 app_id: guid.to_string(),

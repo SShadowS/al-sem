@@ -334,7 +334,14 @@ pub fn build_raw_abi_index_from_snapshot(
         };
         // Fresh re-parse — does NOT touch graph.routines / graph.objects.
         // Skip unreadable .app files (same behaviour as ingest_abi).
-        if let Ok(mut abi) = crate::program::abi_ingest::read_symbol_reference_from_app(path) {
+        // From the unit's own package image (a path-only unit is acquired once).
+        let image = match &unit.app_image {
+            Some(image) => Ok(std::sync::Arc::clone(image)),
+            None => crate::app_image::AppImage::acquire(path).map_err(anyhow::Error::new),
+        };
+        if let Ok(mut abi) =
+            image.and_then(|i| crate::program::abi_ingest::read_symbol_reference_from_app(&i))
+        {
             if unit.source.is_some() {
                 abi.objects.retain(|o| {
                     object_kind_from_abi_type(&o.object_type)

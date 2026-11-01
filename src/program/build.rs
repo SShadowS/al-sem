@@ -1252,6 +1252,7 @@ mod tests {
             abi: None,
             app_path: None,
             app_stamp: None,
+            app_image: None,
         }
     }
 
@@ -2372,6 +2373,7 @@ codeunit 50301 "Preproc Dup Sig"
             abi: None,
             app_path: app_path.map(std::path::PathBuf::from),
             app_stamp: None,
+            app_image: None,
         }
     }
 

@@ -1,6 +1,6 @@
 //! Source providers: acquire per-app source by the best available means.
 
-use crate::dependencies::AppFileStamp;
+use crate::app_image::AppImage;
 use crate::program::dep_cache::DepCache;
 use crate::program::inputs::WorkspaceInputs;
 use crate::snapshot::cache::cached_source;
@@ -109,9 +109,9 @@ impl SourceProvider for WorkspaceProvider {
 
 /// Embedded ShowMyCode source inside a dependency `.app`.
 pub struct EmbeddedAppProvider<'a> {
-    pub app_path: PathBuf,
-    /// The stamp taken BEFORE the `.app` was read (never a fresh stat).
-    pub stamp: Option<AppFileStamp>,
+    /// The package image the loader read the manifest and symbols from: the
+    /// source is extracted from the same bytes.
+    pub image: Arc<AppImage>,
     /// Shares the extracted texts with every other root loading this `.app`.
     pub cache: &'a DepCache,
     /// Answer a known source without its text (see [`DepCache::source`]).
@@ -120,11 +120,12 @@ pub struct EmbeddedAppProvider<'a> {
 
 impl SourceProvider for EmbeddedAppProvider<'_> {
     fn try_provide(&self, _app: &AppId) -> Result<Option<SourceRoot>> {
+        let path = self.image.path();
         self.cache
-            .source(&self.app_path, self.stamp, self.defer_text, || {
+            .source(path, Some(self.image.stamp()), self.defer_text, || {
                 #[cfg(test)]
-                extract_log::record(&self.app_path);
-                let (files, content_hash) = cached_source(&self.app_path)?;
+                extract_log::record(path);
+                let (files, content_hash) = cached_source(&self.image)?;
                 if files.is_empty() {
                     return Ok(None); // symbol-only app
                 }
@@ -238,8 +239,7 @@ mod tests {
             return;
         };
         let p = EmbeddedAppProvider {
-            app_path,
-            stamp: None,
+            image: AppImage::acquire(&app_path).unwrap(),
             cache: &DepCache::default(),
             defer_text: false,
         };

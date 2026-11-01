@@ -5,14 +5,16 @@
 //! - SymbolReference.json: All symbol definitions (codeunits, tables, etc.)
 //!
 //! A Ready-to-Run package nests the real app one level down; opening goes
-//! through [`open_app_file`], which unwraps it.
+//! through [`open_app_image`], which unwraps it. Every reader takes the
+//! package's image ([`crate::app_image`]), never its path.
 
-use crate::engine::deps::app_package_zip::{AppReader, open_app_file};
+use crate::app_image::AppImage;
+use crate::engine::deps::app_package_zip::{AppReader, open_app_image};
 use crate::types::ObjectType;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::io::{Read, Seek};
-use std::path::Path;
+use std::sync::Arc;
 
 /// App metadata from NavxManifest.xml
 #[derive(Debug, Clone)]
@@ -284,17 +286,21 @@ struct SymbolMethodProperty {
     value: Option<serde_json::Value>,
 }
 
-/// Open a `.app` file's zip, unwrapping a Ready-to-Run package (see
-/// [`crate::engine::deps::app_package_zip::open_app_file`]). A file with no
+/// Open a `.app` image's zip, unwrapping a Ready-to-Run package (see
+/// [`crate::engine::deps::app_package_zip::open_app_image`]). A file with no
 /// zip at all is an error here: every caller needs the manifest or symbols.
-pub(crate) fn open_app_zip(path: &Path) -> Result<zip::ZipArchive<AppReader>> {
-    open_app_file(path)?
-        .with_context(|| format!("Failed to open .app as ZIP archive: {}", path.display()))
+pub(crate) fn open_app_zip(image: &Arc<AppImage>) -> Result<zip::ZipArchive<AppReader>> {
+    open_app_image(image)?.with_context(|| {
+        format!(
+            "Failed to open .app as ZIP archive: {}",
+            image.path().display()
+        )
+    })
 }
 
-/// Extract and parse a .app package file
-pub fn extract_app_package(path: &Path) -> Result<ParsedAppPackage> {
-    let mut archive = open_app_zip(path)?;
+/// Extract and parse a .app package image
+pub fn extract_app_package(image: &Arc<AppImage>) -> Result<ParsedAppPackage> {
+    let mut archive = open_app_zip(image)?;
 
     // Parse NavxManifest.xml
     let metadata = parse_manifest(&mut archive)?;
@@ -309,15 +315,16 @@ pub fn extract_app_package(path: &Path) -> Result<ParsedAppPackage> {
 /// (KB-sized) WITHOUT touching SymbolReference.json (MB-sized) — the cheap
 /// identity probe `load_all_apps` dedups on before paying for full symbol
 /// extraction.
-pub fn extract_app_metadata(path: &Path) -> Result<AppMetadata> {
-    let mut archive = open_app_zip(path)?;
+pub fn extract_app_metadata(image: &Arc<AppImage>) -> Result<AppMetadata> {
+    let mut archive = open_app_zip(image)?;
     parse_manifest(&mut archive)
 }
 
 /// Symbols-only read: the expensive half of [`extract_app_package`], for a
-/// caller that already holds the manifest via [`extract_app_metadata`].
-pub fn extract_app_symbols(path: &Path) -> Result<Vec<ExternalObject>> {
-    let mut archive = open_app_zip(path)?;
+/// caller that already holds the manifest via [`extract_app_metadata`] —
+/// from the same image.
+pub fn extract_app_symbols(image: &Arc<AppImage>) -> Result<Vec<ExternalObject>> {
+    let mut archive = open_app_zip(image)?;
     parse_symbols(&mut archive)
 }
 
@@ -636,6 +643,12 @@ fn format_type(td: Option<&SymbolTypeDefinition>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    /// The package at `path`, acquired once and parsed from its image.
+    fn extract_app_package_at(path: &Path) -> Result<ParsedAppPackage> {
+        extract_app_package(&AppImage::acquire(path)?)
+    }
 
     // -----------------------------------------------------------------------
     // Task 1.5: `<InternalsVisibleTo>` friend-app parsing (`parse_manifest_xml`)
@@ -741,7 +754,7 @@ mod tests {
             return;
         }
 
-        let result = extract_app_package(test_path);
+        let result = extract_app_package_at(test_path);
         assert!(result.is_ok(), "Failed to parse app: {:?}", result.err());
 
         let package = result.unwrap();
@@ -776,7 +789,7 @@ mod tests {
             return;
         }
 
-        let pkg = extract_app_package(test_path).expect("parse Base Application");
+        let pkg = extract_app_package_at(test_path).expect("parse Base Application");
         let approvals = pkg
             .objects
             .iter()
@@ -886,7 +899,7 @@ mod tests {
         let path = dir.path().join("bomb.app");
         std::fs::write(&path, &bytes).expect("write crafted .app");
 
-        let result = extract_app_package(&path);
+        let result = extract_app_package_at(&path);
         assert!(
             result.is_err(),
             "an oversized SymbolReference.json must be rejected, not silently truncated"
@@ -923,7 +936,7 @@ mod tests {
         let path = dir.path().join("bomb-manifest.app");
         std::fs::write(&path, &bytes).expect("write crafted .app");
 
-        let result = extract_app_package(&path);
+        let result = extract_app_package_at(&path);
         assert!(
             result.is_err(),
             "an oversized NavxManifest.xml must be rejected, not silently truncated"
@@ -944,7 +957,7 @@ mod tests {
         let path = dir.path().join("normal.app");
         std::fs::write(&path, &bytes).expect("write crafted .app");
 
-        let pkg = extract_app_package(&path).expect("normal-sized app must parse");
+        let pkg = extract_app_package_at(&path).expect("normal-sized app must parse");
         assert_eq!(pkg.metadata.name, "BombApp");
     }
 
