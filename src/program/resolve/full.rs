@@ -1486,11 +1486,16 @@ fn resolve_full_program_from_parts(
 
     // ── Phase 1b (G30): interface sites on an object global its own codeunit
     // writes, closed once every call of the writing routines is known ────────
-    crate::program::resolve::interface_holder::close_holder_sites(
-        graph,
-        &mut classified_edges,
-        &mut site_facts,
-    );
+    // A span: the whole-program refinement every revision reruns
+    // (context-server design r3 §6.6, §14).
+    {
+        let _s = pt::span("resolve", "resolve.close_holder_sites");
+        crate::program::resolve::interface_holder::close_holder_sites(
+            graph,
+            &mut classified_edges,
+            &mut site_facts,
+        );
+    }
 
     // ── Phase 2: publisher event flow obligations (all apps) ──────────────────
     // emit_event_flow_edges processes ALL graph.routines (no app filter).

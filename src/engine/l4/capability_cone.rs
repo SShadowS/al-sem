@@ -2748,7 +2748,11 @@ fn compose_inherited_cones(
         })
         .collect();
     let _t_pd = crate::engine::l5::detector_context::cones_census::start();
+    // A span beside the census timer (context-server design r3 §6.10: the
+    // whole re-solve's cost decides whether the per-producer rule ships).
+    let pd_span = crate::engine::perf_trace::span("cone", "pd.solve");
     let (arena, resolved) = super::pd_solve::solve(producers, g, routines_by_id, frames);
+    drop(pd_span);
     crate::engine::l5::detector_context::cones_census::add_since(
         &crate::engine::l5::detector_context::cones_census::PD_SOLVE_NANOS,
         _t_pd,

@@ -581,15 +581,26 @@ fn attach_program_calls_with(
         calls: std::sync::Arc::new(calls),
         events: std::sync::Arc::new(events),
     };
+    // The three whole-model final passes, each its own span (context-server
+    // design r4 §12 stage 1: they gate stage 4's per-revision cost).
     // #288: a row's dead marks stay trusted only if its `Error` calls bind to the
     // builtin.
-    crate::program::model::workspace::settle_dead_mark_trust(&mut resolved);
+    {
+        let _s = pt::span("attach", "attach.settle_dead_marks");
+        crate::program::model::workspace::settle_dead_mark_trust(&mut resolved);
+    }
     // Intent evidence §4.2: rules built at assembly settle their `stops` here,
     // by the same per-site test.
-    crate::program::model::workspace::settle_rules(&mut resolved);
+    {
+        let _s = pt::span("attach", "attach.settle_rules");
+        crate::program::model::workspace::settle_rules(&mut resolved);
+    }
     // A `local` event raised only with temporary records makes its subscribers'
     // same-named `var` parameters temporary (engine-switch S8).
-    crate::program::model::event_param_temp::prove_event_param_temps(&mut resolved);
+    {
+        let _s = pt::span("attach", "attach.event_param_temps");
+        crate::program::model::event_param_temp::prove_event_param_temps(&mut resolved);
+    }
     if crate::engine::census::enabled() {
         crate::census_hook::mark("census.model");
         census_model(&resolved);
