@@ -461,6 +461,7 @@ impl LastReads {
         LaterReads {
             last: Some(self),
             pos,
+            everything: false,
         }
     }
 }
@@ -470,21 +471,40 @@ impl LastReads {
 pub(crate) struct LaterReads<'a> {
     last: Option<&'a LastReads>,
     pos: usize,
+    /// Every cell and run is read later: a view served off retained cells
+    /// (context-server design r3 §4.3 step 8), whose releases drop nothing.
+    everything: bool,
 }
 
 impl LaterReads<'_> {
     /// No later demand: a test's one-demand run (`run_on_target`).
     #[cfg(test)]
-    pub(crate) const NONE: LaterReads<'static> = LaterReads { last: None, pos: 0 };
+    pub(crate) const NONE: LaterReads<'static> = LaterReads {
+        last: None,
+        pos: 0,
+        everything: false,
+    };
+
+    /// Everything is read later (the borrowed phase path's served views).
+    #[cfg(test)]
+    pub(crate) const EVERYTHING: LaterReads<'static> = LaterReads {
+        last: None,
+        pos: 0,
+        everything: true,
+    };
 
     fn reads_cell(&self, cell: Cell) -> bool {
-        self.last
-            .is_some_and(|l| l.cells.get(&cell).is_some_and(|&last| last > self.pos))
+        self.everything
+            || self
+                .last
+                .is_some_and(|l| l.cells.get(&cell).is_some_and(|&last| last > self.pos))
     }
 
     fn reads_run(&self, key: &RunKey) -> bool {
-        self.last
-            .is_some_and(|l| l.runs.get(key).is_some_and(|&last| last > self.pos))
+        self.everything
+            || self
+                .last
+                .is_some_and(|l| l.runs.get(key).is_some_and(|&last| last > self.pos))
     }
 
     fn cells(&self) -> impl Iterator<Item = Cell> + '_ {
@@ -585,6 +605,9 @@ impl ViewCx<'_> {
 
     /// [`View::release_all_but`], keeping what a later demand reads too.
     pub fn release_all_but(&mut self, keep: &[Cell]) {
+        if self.later.everything {
+            return;
+        }
         let keep: Vec<Cell> = keep.iter().copied().chain(self.later.cells()).collect();
         self.view.release_all_but(&keep);
     }

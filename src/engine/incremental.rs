@@ -44,7 +44,11 @@ struct Baseline {
     host_global: [u8; 32],
     solve: SolveBaseline,
     l4: L4Analysis,
-    core: CoreSummaries,
+    /// Immutable for the revision and never consumed (context-server design
+    /// r3 §4.1): the next seeded solve borrows it (`L4Reuse::core`), and a
+    /// det harvest over the same revision reads it through
+    /// `CoreInput::Borrowed`.
+    core: std::sync::Arc<CoreSummaries>,
 }
 
 /// Why a refresh stopped. The committed baseline is untouched in both.
@@ -212,7 +216,7 @@ impl Refresher for IncrementalHost {
             host_global,
             solve: outcome.baseline,
             l4,
-            core,
+            core: std::sync::Arc::new(core),
         });
         Ok(RefreshReport {
             kind,

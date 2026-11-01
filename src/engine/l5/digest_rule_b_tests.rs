@@ -137,7 +137,7 @@ fn a_tree_read_is_a_pure_read() {
     let AnalysisTarget::CrossApp(b) = &target else {
         panic!("cross-app")
     };
-    let calls = b.dependency_calls.as_deref().unwrap_or(&[]);
+    let calls = b.dependency_calls_or_empty();
     let roots: Vec<String> = stable_roots(model, &["CallWrite"]).into_iter().collect();
     let subjects: BTreeSet<String> = model
         .workspace
@@ -352,7 +352,7 @@ fn an_event_boundary_group_is_in_the_may_relations() {
     let mut tree = tree_of(
         model,
         base.rel(),
-        base.dependency_calls.as_deref().unwrap_or(&[]),
+        base.dependency_calls_or_empty(),
         &source_less_apps(&base.dependency_apps),
         ConeScope {
             derived: false,
@@ -433,7 +433,7 @@ fn the_dependency_calls_leave_the_base_in_the_first_prepare() {
     let tmp = tempfile::tempdir().unwrap();
     crate::engine::l5::test_support::write_fixture_dep_ledger(tmp.path());
     let calls_of = |v: &View| match v.target() {
-        AnalysisTarget::CrossApp(b) => b.dependency_calls.as_ref().map(Vec::len),
+        AnalysisTarget::CrossApp(b) => b.dependency_calls.as_ref().map(|c| c.len()),
         AnalysisTarget::SingleApp(_) => panic!("precondition: cross-app"),
     };
     let target =
@@ -533,7 +533,7 @@ fn t7a_a_dependency_callers_rows_are_the_ledgers() {
     let tree = tree_of(
         model,
         base.rel(),
-        base.dependency_calls.as_deref().unwrap_or(&[]),
+        base.dependency_calls_or_empty(),
         &source_less_apps(&base.dependency_apps),
         ConeScope {
             derived: true,
@@ -600,7 +600,7 @@ fn t7b_a_call_into_a_body_less_dependency_row_is_unfetched() {
     let tree = tree_of(
         model,
         base.rel(),
-        base.dependency_calls.as_deref().unwrap_or(&[]),
+        base.dependency_calls_or_empty(),
         &source_less_apps(&base.dependency_apps),
         ConeScope {
             derived: true,
@@ -771,10 +771,7 @@ fn t3_digest_scoped_equals_unscoped() {
         let sl = source_less_of(&target);
         let (rel, calls) = match &target {
             AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
-            AnalysisTarget::CrossApp(b) => (
-                Arc::clone(b.rel()),
-                b.dependency_calls.as_deref().unwrap_or(&[]),
-            ),
+            AnalysisTarget::CrossApp(b) => (Arc::clone(b.rel()), b.dependency_calls_or_empty()),
         };
         let roots = crate::engine::l5::digest::reportable_roots(model);
         let all = tree_of(
@@ -890,7 +887,7 @@ fn fingerprint_witness_boundary_trigger_and_event() {
         let mut tree = tree_of(
             model,
             base.rel(),
-            base.dependency_calls.as_deref().unwrap_or(&[]),
+            base.dependency_calls_or_empty(),
             &source_less_apps(&base.dependency_apps),
             ConeScope {
                 derived: false,
@@ -1065,10 +1062,7 @@ fn prove_scoped_equals_unscoped() {
             let sl = source_less_of(&target);
             let (rel, calls) = match &target {
                 AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
-                AnalysisTarget::CrossApp(b) => (
-                    Arc::clone(b.rel()),
-                    b.dependency_calls.as_deref().unwrap_or(&[]),
-                ),
+                AnalysisTarget::CrossApp(b) => (Arc::clone(b.rel()), b.dependency_calls_or_empty()),
             };
             let roots = crate::engine::l5::digest::reportable_roots(model);
             let all = tree_of(
@@ -1185,10 +1179,7 @@ fn fingerprint_query_scoped_equals_unscoped() {
             let sl = source_less_of(&target);
             let (rel, calls) = match &target {
                 AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
-                AnalysisTarget::CrossApp(b) => (
-                    Arc::clone(b.rel()),
-                    b.dependency_calls.as_deref().unwrap_or(&[]),
-                ),
+                AnalysisTarget::CrossApp(b) => (Arc::clone(b.rel()), b.dependency_calls_or_empty()),
             };
             let owners = crate::engine::l4::effect_query_cli::OwnerIndex::build(model);
             let primary = primary_stable_ids(model);
@@ -1339,7 +1330,7 @@ fn inventory_reads_a_tree_with_no_raw_facts() {
     let tree = tree_of(
         model,
         b.rel(),
-        b.dependency_calls.as_deref().unwrap_or(&[]),
+        b.dependency_calls_or_empty(),
         &source_less_apps(&b.dependency_apps),
         ConeScope {
             derived: false,

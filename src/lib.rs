@@ -58,6 +58,12 @@ pub mod snapshot;
 pub mod source_text;
 /// Per-user state locations, and the read-fallback that carries pre-rename installs.
 pub mod state_paths;
+/// The lib test binary's thread-gated counting allocator (T-phase-alloc).
+#[cfg(test)]
+pub(crate) mod test_alloc;
+#[cfg(test)]
+#[global_allocator]
+static TEST_ALLOC: test_alloc::Counting = test_alloc::Counting;
 pub mod telemetry;
 /// `--analyze`'s per-`[Test]` assert counts (#253).
 pub mod test_quality;

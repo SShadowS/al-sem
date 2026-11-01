@@ -1040,7 +1040,7 @@ mod tests {
             summary(routine_id, facts, vec![], None),
         );
         let mut owned = minimal_ctx(routines, vec![], &[]);
-        owned.art_mut().cone_derived = cone_store_of(&summaries);
+        owned.art_mut().cone_derived = std::sync::Arc::new(cone_store_of(&summaries));
         owned.art_mut().summaries = summaries;
         owned
     }

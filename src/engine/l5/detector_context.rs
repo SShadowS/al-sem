@@ -910,7 +910,9 @@ pub struct DetectorArtifacts {
     /// off it, so this row REPLACES that Vec outright: since C1 Task 3 no
     /// summary carries a raw Vec (see `FullRoutineSummary`). Parked here because the rows are `Range<u32>` windows into pools this store owns; a row alone
     /// is meaningless. EMPTY when the `SUMMARIES` substrate was not demanded.
-    pub cone_derived: ConeDerivedStore,
+    /// The composition's own `Arc` ([`CapabilityAnalysis::derived`]), moved or
+    /// shared, never copied.
+    pub cone_derived: Arc<ConeDerivedStore>,
     /// The shared event-flow indexes (publisher/subscriber lookup tables) the
     /// d43/d44/d45 event-flow detectors consume. al-sem builds this LAZILY
     /// (`ctx.getEventFlowIndexes()`, memoized); the Rust port builds it EAGERLY
@@ -1392,7 +1394,11 @@ pub(crate) fn det_cone_inputs_over<'e>(
 pub(crate) struct CapabilityAnalysis {
     pub direct_full: HashMap<String, Vec<CapabilityFact>>,
     pub coverage: HashMap<String, crate::engine::l4::capability_cone::CoverageRecord>,
-    pub derived: ConeDerivedStore,
+    /// Behind an `Arc` (context-server design r3 §4.2): the det harvest moves
+    /// it into [`DetectorArtifacts::cone_derived`] when it owns the analysis
+    /// and shares it when it borrows one, so a refill never copies the store.
+    /// The one-shot path pays one `Arc` allocation per composition.
+    pub derived: Arc<ConeDerivedStore>,
     pub pd: Option<crate::engine::l4::pd_solve::ConeArena>,
 }
 
@@ -1468,7 +1474,7 @@ pub(crate) fn compose_capabilities(
         CapabilityAnalysis {
             direct_full,
             coverage: outcome.coverage,
-            derived: outcome.derived,
+            derived: Arc::new(outcome.derived),
             pd: Some(outcome.pd_solution),
         },
         outcome.raw,
@@ -1506,7 +1512,8 @@ pub(crate) fn compose_detector_artifacts(
 /// (when `l4` is `Some`) ONE [`build_l4`] solve over `rel`, then the harvest
 /// of its core summaries. It composes nothing and never sees raw facts.
 /// Returns the solve's [`L4Analysis`] beside the artifacts. `l4: None` = no
-/// solve.
+/// solve. The one-shot form of [`harvest_detector_artifacts`]: it owns the
+/// composition and solves inside the harvest.
 pub(crate) fn build_detector_artifacts(
     resolved: &Model,
     demanded: u32,
@@ -1515,12 +1522,79 @@ pub(crate) fn build_detector_artifacts(
     cross: Option<CrossAppInputs<'_>>,
     caps: Option<CapabilityAnalysis>,
 ) -> (DetectorArtifacts, Option<L4Analysis>) {
+    let l4 = match l4 {
+        Some(req) => L4Input::Solve(req),
+        None => L4Input::None,
+    };
+    harvest_detector_artifacts(
+        resolved,
+        demanded,
+        rel,
+        caps.map(CapsInput::Owned),
+        l4,
+        cross,
+    )
+}
+
+/// The composition a det harvest reads (context-server design r3 §4.2). The
+/// one-shot view hands its own and the harvest MOVES each routine's direct
+/// facts and coverage into its summary (its peak is today's); a resident
+/// revision lends its retained one and the harvest CLONES per routine what it
+/// keeps, so the composition outlives any number of det fills. Not boxed:
+/// a box is one more allocation on the one-shot path, whose count T-phase-
+/// alloc pins; the enum lives on the stack for one call.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum CapsInput<'a> {
+    Owned(CapabilityAnalysis),
+    /// Built by the borrowed phase path only (the stage-1 tests; the resident
+    /// revision of stage 2).
+    #[cfg_attr(not(test), allow(dead_code))]
+    Borrowed(&'a CapabilityAnalysis),
+}
+
+/// The solver's core summaries as the harvest reads them (r3 §4.2): `Owned`
+/// is drained (each routine's uncertainties and parameter roles moved out),
+/// `Borrowed` is read and cloned per routine, so a retained
+/// `Arc<CoreSummaries>` survives the harvest for a det refill and for the
+/// next seeded solve (`L4Reuse::core`).
+pub(crate) enum CoreInput<'a> {
+    Owned(CoreSummaries),
+    #[cfg_attr(not(test), allow(dead_code))]
+    Borrowed(&'a CoreSummaries),
+}
+
+/// Where the harvest's solve comes from.
+pub(crate) enum L4Input<'a> {
+    /// No solve (the mask has no `CORE_SUMMARIES` and the plan no `l4`).
+    None,
+    /// Solve inside the harvest, at the point the one-shot det fill always
+    /// solved: after the summaries took the composition's payloads and its
+    /// pd arena was dropped, so the solve's peak never holds them. The solve
+    /// is returned beside the artifacts.
+    Solve(L4Request<'a>),
+    /// A retained solve and its core summaries (the borrowed phase path).
+    #[cfg_attr(not(test), allow(dead_code))]
+    Solved(&'a L4Analysis, CoreInput<'a>),
+}
+
+/// The owned detector substrates over `rel` at mask `demanded`, harvested
+/// from `caps` (owned or lent, [`CapsInput`]) and from `l4` (solved here,
+/// lent, or none, [`L4Input`]). Returns the solve's [`L4Analysis`] only when
+/// it ran here ([`L4Input::Solve`]).
+pub(crate) fn harvest_detector_artifacts(
+    resolved: &Model,
+    demanded: u32,
+    rel: &ExecRelation,
+    caps: Option<CapsInput<'_>>,
+    l4: L4Input<'_>,
+    cross: Option<CrossAppInputs<'_>>,
+) -> (DetectorArtifacts, Option<L4Analysis>) {
     // The Primary payload; `DetectorArtifacts.graph` shares it by pointer.
     let graph: Arc<PrimaryGraph> = Arc::clone(rel.primary());
     let cone = Arc::clone(rel.cone_shared());
     use crate::engine::l5::registry::substrate;
     assert!(
-        demanded & substrate::CORE_SUMMARIES == 0 || l4.is_some(),
+        demanded & substrate::CORE_SUMMARIES == 0 || !matches!(l4, L4Input::None),
         "CORE_SUMMARIES demanded without an l4 request: the uncertainty/roles harvest would be silently empty"
     );
     pt::counter_delta("build.detector_context", 1);
@@ -1547,49 +1621,76 @@ pub(crate) fn build_detector_artifacts(
     let _cones_span = pt::span("context", "context.summaries_assemble");
     // ⟨C1⟩ Assigned inside the block below (kept a separate binding so the whole
     // cone-assembly block stays at its original indentation).
-    let mut cone_derived = ConeDerivedStore::default();
+    let cone_derived: Arc<ConeDerivedStore>;
     let summaries: HashMap<String, FullRoutineSummary> = if need_summaries {
-        let CapabilityAnalysis {
-            mut direct_full,
-            coverage: mut cone_coverage,
-            derived,
-            pd,
-        } = caps.expect(
+        let caps = caps.expect(
             "SUMMARIES/TRANSACTION_SPANS demanded without a composition: the caller composes \
              once and passes it (#160 step 6 D2)",
         );
-        cone_derived = derived;
-        // #69 D1.4: the detectors read the solve only through the cone; its
-        // arena (a snapshot input) is dead here.
-        drop(pd);
-
-        // `cone_coverage` and `direct_full` are owned and dead after this
-        // loop, so move their payloads into the summaries instead of cloning
-        // them out.
         let mut summaries: HashMap<String, FullRoutineSummary> = HashMap::new();
         let _t_assemble = cones_census::start();
-        for r in &ws.routines {
-            let coverage = cone_coverage.remove(&r.id);
-            let direct = direct_full.remove(&r.id);
-            // One summary per id (#160 step 11b §4.6): `direct_full` is already
-            // the projection's per-id input (a collided id's full-value union),
-            // and the cone is per id, so a collided id's first row files it and
-            // every later row of the id finds the drain empty and is skipped.
-            // (A coverage of `None` is the fail-soft for an id the cone did not
-            // walk.)
-            let Some(direct) = direct else {
-                continue;
-            };
-            // ⟨C1 Task 3⟩ No inherited half (R6): raw facts live in the view's
-            // witness pass, never on a summary.
-            summaries.insert(
-                r.id.clone(),
-                FullRoutineSummary::new(r.id.clone(), direct, coverage),
-            );
+        match caps {
+            CapsInput::Owned(CapabilityAnalysis {
+                mut direct_full,
+                coverage: mut cone_coverage,
+                derived,
+                pd,
+            }) => {
+                cone_derived = derived;
+                // #69 D1.4: the detectors read the solve only through the cone;
+                // its arena (a snapshot input) is dead here.
+                drop(pd);
+                // `cone_coverage` and `direct_full` are owned and dead after
+                // this loop, so move their payloads into the summaries instead
+                // of cloning them out.
+                for r in &ws.routines {
+                    let coverage = cone_coverage.remove(&r.id);
+                    let direct = direct_full.remove(&r.id);
+                    // One summary per id (#160 step 11b §4.6): `direct_full` is
+                    // already the projection's per-id input (a collided id's
+                    // full-value union), and the cone is per id, so a collided
+                    // id's first row files it and every later row of the id
+                    // finds the drain empty and is skipped. (A coverage of
+                    // `None` is the fail-soft for an id the cone did not walk.)
+                    let Some(direct) = direct else {
+                        continue;
+                    };
+                    // ⟨C1 Task 3⟩ No inherited half (R6): raw facts live in the
+                    // view's witness pass, never on a summary.
+                    summaries.insert(
+                        r.id.clone(),
+                        FullRoutineSummary::new(r.id.clone(), direct, coverage),
+                    );
+                }
+            }
+            CapsInput::Borrowed(c) => {
+                // The lent composition stays whole: its derived store is
+                // shared, and each routine's payloads are cloned. The first
+                // row of an id files it, as the owned drain does.
+                cone_derived = Arc::clone(&c.derived);
+                let mut filed: HashSet<&str> = HashSet::new();
+                for r in &ws.routines {
+                    if !filed.insert(r.id.as_str()) {
+                        continue;
+                    }
+                    let Some(direct) = c.direct_full.get(&r.id) else {
+                        continue;
+                    };
+                    summaries.insert(
+                        r.id.clone(),
+                        FullRoutineSummary::new(
+                            r.id.clone(),
+                            direct.clone(),
+                            c.coverage.get(&r.id).cloned(),
+                        ),
+                    );
+                }
+            }
         }
         cones_census::add_since(&cones_census::ASSEMBLE_NANOS, _t_assemble);
         summaries
     } else {
+        cone_derived = Arc::new(ConeDerivedStore::default());
         HashMap::new()
     };
     drop(_cones_span);
@@ -1706,11 +1807,20 @@ pub(crate) fn build_detector_artifacts(
     // Skipped ⇒ `uncertainties_by_node` / `parameter_roles_by_routine` /
     // `summarize_diagnostics` are all empty, which by decision (a) means a
     // substrate-skipping run emits no summarize cap-hit diagnostics.
-    let (l4, core_summaries) = match l4.map(|req| build_l4(resolved, rel, req, cross.as_ref())) {
-        Some((l4, core)) => (Some(l4), Some(core)),
-        None => (None, None),
+    let mut lent_l4: Option<&L4Analysis> = None;
+    let (l4, core_summaries) = match l4 {
+        L4Input::None => (None, None),
+        L4Input::Solve(req) => {
+            let (l4, core) = build_l4(resolved, rel, req, cross.as_ref());
+            (Some(l4), Some(CoreInput::Owned(core)))
+        }
+        L4Input::Solved(l4, core) => {
+            lent_l4 = Some(l4);
+            (None, Some(core))
+        }
     };
-    let summarize_diagnostics = match &l4 {
+    let l4_read = l4.as_ref().or(lent_l4);
+    let summarize_diagnostics = match l4_read {
         Some(l4) if demanded & substrate::CORE_SUMMARIES != 0 => l4.summarize_diagnostics.clone(),
         _ => Vec::new(),
     };
@@ -1718,7 +1828,7 @@ pub(crate) fn build_detector_artifacts(
         HashMap<String, UncertaintySetId>,
         UncertaintyIndex,
         HashMap<String, Vec<RecordRoleSummary>>,
-    ) = if let Some(CoreSummaries(mut core_summaries)) =
+    ) = if let Some(mut core_summaries) =
         core_summaries.filter(|_| demanded & substrate::CORE_SUMMARIES != 0)
     {
         // uncertaintiesAt(node) per routine: [...fromSummary, ...fromEdges], deduped.
@@ -1760,11 +1870,17 @@ pub(crate) fn build_detector_artifacts(
             }
             // Harvest the CORE parameter_roles per routine from the SAME recomputed
             // core summaries (d37/d39 read these as `routine.summary.parameterRoles`),
-            // moved out with the uncertainties in this one `remove`.
-            let (from_summary, roles) = match core_summaries.remove(&r.id) {
-                Some(s) => (s.uncertainties, s.parameter_roles),
-                None => (Vec::new(), Vec::new()),
-            };
+            // moved out with the uncertainties in this one `remove` (or, from a
+            // lent `CoreSummaries`, cloned: r3 §4.2's "take or clone").
+            let (from_summary, roles) = match &mut core_summaries {
+                CoreInput::Owned(CoreSummaries(m)) => m
+                    .remove(&r.id)
+                    .map(|s| (s.uncertainties, s.parameter_roles)),
+                CoreInput::Borrowed(CoreSummaries(m)) => m
+                    .get(&r.id)
+                    .map(|s| (s.uncertainties.clone(), s.parameter_roles.clone())),
+            }
+            .unwrap_or_default();
             if !roles.is_empty() {
                 parameter_roles_by_routine.insert(r.id.clone(), roles);
             }
@@ -1785,10 +1901,22 @@ pub(crate) fn build_detector_artifacts(
         // `core_summaries`, not `ws.routines` — so anything the loop above did not
         // reach still belongs in it. Empty in practice (the solver is driven by
         // `ws.routines`), but membership is preserved by construction rather than by
-        // an assumption about the solver's key set.
-        for (rid, s) in core_summaries {
-            if !s.parameter_roles.is_empty() {
-                parameter_roles_by_routine.insert(rid, s.parameter_roles);
+        // an assumption about the solver's key set. Drained, what is left is
+        // exactly the unprocessed ids; lent, they are filtered.
+        match core_summaries {
+            CoreInput::Owned(CoreSummaries(m)) => {
+                for (rid, s) in m {
+                    if !s.parameter_roles.is_empty() {
+                        parameter_roles_by_routine.insert(rid, s.parameter_roles);
+                    }
+                }
+            }
+            CoreInput::Borrowed(CoreSummaries(m)) => {
+                for (rid, s) in m {
+                    if !processed.contains(rid.as_str()) && !s.parameter_roles.is_empty() {
+                        parameter_roles_by_routine.insert(rid.clone(), s.parameter_roles.clone());
+                    }
+                }
             }
         }
         (
@@ -1810,7 +1938,7 @@ pub(crate) fn build_detector_artifacts(
     // trace beside every other substrate rather than being guessed at.
     let reverse_effect_index = if demanded & substrate::DB_EFFECT_REVERSE_INDEX != 0 {
         let _s = pt::span("context", "context.reverse_effect_index");
-        l4.as_ref().map(|l4| ReverseEffectIndex::build(&l4.bundle))
+        l4_read.map(|l4| ReverseEffectIndex::build(&l4.bundle))
     } else {
         None
     };
