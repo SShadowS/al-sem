@@ -63,9 +63,227 @@ fn usage() -> ExitCode {
          \x20      aldump --switch-dump <workspace> <out-dir>\n\
          \x20      aldump --dump-dependency-source <workspace> <out-dir>\n\
          \x20      aldump --switch-compare <dump-dir-A> <dump-dir-B> [--sample N] [--width N]\n\
-         \x20      aldump --snapshot-memory <workspace> [--single-app] [--hash]"
+         \x20      aldump --snapshot-memory <workspace> [--single-app] [--hash]\n\
+         \x20      aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--verify]"
     );
     ExitCode::FAILURE
+}
+
+/// `aldump --session-refresh <workspace-copy> [--file <rel>] [--verify]`:
+/// measure the stage-4 workspace session (context-server design §6,
+/// `program::session::WorkspaceSession`) per change type. It EDITS the
+/// workspace it is given, so it refuses a workspace inside a git checkout
+/// (the pinned CDO baseline is one): run it on a copy.
+///
+/// Steps, each one refresh, printed as one JSON line: `cold` (P, the first
+/// build), `noop`, `body` (a comment line inside the first procedure body of
+/// the chosen file, B) and its restore, `newline` (two lines prepended to the
+/// file, B) and its restore, `decl` (a procedure added to the file, S) and its
+/// restore, `add` (a new file, F) and its removal, `appjson` (a trailing
+/// newline on `app.json`, P) and its restore. Each line has the class, the
+/// files parsed and resolved, whether the dependency bodies were resolved
+/// again, `model.copied_bytes`, the program and whole-refresh wall times, and
+/// the resident set. With `--verify`, each step also builds the model cold
+/// and compares the two models' text fingerprints (`write_model`).
+///
+/// The chosen file (`--file`, else the median-sized codeunit file with a
+/// procedure body) is restored after each pair, and the session's model
+/// needs are `AssemblyNeeds::BASE` (what a default command builds).
+fn session_refresh_cmd(args: &[String]) -> ExitCode {
+    use al_sem::program::inputs::WorkspaceInputs;
+    use al_sem::program::model::workspace::AssemblyNeeds;
+    use al_sem::program::session::WorkspaceSession;
+    use serde_json::json;
+    use std::path::{Path, PathBuf};
+
+    const USAGE: &str =
+        "usage: aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--verify]";
+    let (mut ws, mut file, mut verify) = (None::<PathBuf>, None::<String>, false);
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--verify" => verify = true,
+            "--file" => file = it.next().cloned(),
+            _ if ws.is_none() && !a.starts_with("--") => ws = Some(PathBuf::from(a)),
+            _ => {
+                eprintln!("{USAGE}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let Some(ws) = ws else {
+        eprintln!("{USAGE}");
+        return ExitCode::FAILURE;
+    };
+    let Ok(ws) = ws.canonicalize() else {
+        eprintln!("aldump --session-refresh: no workspace at {}", ws.display());
+        return ExitCode::FAILURE;
+    };
+    if ws.ancestors().any(|d| d.join(".git").exists()) {
+        eprintln!(
+            "aldump --session-refresh: {} is inside a git checkout; it edits the workspace, run it on a copy",
+            ws.display()
+        );
+        return ExitCode::FAILURE;
+    }
+    fn status_kib(key: &str) -> Option<u64> {
+        let s = std::fs::read_to_string("/proc/self/status").ok()?;
+        let line = s.lines().find(|l| l.starts_with(key))?;
+        line.split_whitespace().nth(1)?.parse().ok()
+    }
+    fn al_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if !p
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+                {
+                    al_files(&p, out);
+                }
+            } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("al")) {
+                out.push(p);
+            }
+        }
+    }
+    let target: PathBuf = match file {
+        Some(f) => ws.join(f),
+        None => {
+            let mut all = Vec::new();
+            al_files(&ws, &mut all);
+            let mut cands: Vec<(u64, PathBuf)> = all
+                .into_iter()
+                .filter_map(|p| {
+                    let t = std::fs::read_to_string(&p).ok()?;
+                    (t.contains("\n    begin\n")
+                        && t.trim_start().to_lowercase().starts_with("codeunit"))
+                    .then_some((t.len() as u64, p))
+                })
+                .collect();
+            cands.sort();
+            match cands.get(cands.len() / 2) {
+                Some((_, p)) => p.clone(),
+                None => {
+                    eprintln!("aldump --session-refresh: no codeunit file with a procedure body");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+    };
+    let Ok(original) = std::fs::read_to_string(&target) else {
+        eprintln!("aldump --session-refresh: cannot read {}", target.display());
+        return ExitCode::FAILURE;
+    };
+    let app_json = ws.join("app.json");
+    let Ok(app_original) = std::fs::read(&app_json) else {
+        eprintln!(
+            "aldump --session-refresh: cannot read {}",
+            app_json.display()
+        );
+        return ExitCode::FAILURE;
+    };
+    let probe = target
+        .parent()
+        .unwrap_or(&ws)
+        .join("SessionProbe.Codeunit.al");
+    eprintln!("aldump --session-refresh: editing {}", target.display());
+
+    let mut session = WorkspaceSession::new();
+    let mut failed = false;
+    let mut step = |name: &str, session: &mut WorkspaceSession| {
+        let inputs = WorkspaceInputs::read(&ws, &Default::default());
+        let out = session.refresh(&inputs, false, AssemblyNeeds::BASE);
+        let r = session.last_report().cloned();
+        let mut row = json!({
+            "step": name,
+            "rssKiB": status_kib("VmRSS:"),
+            "peakRssKiB": status_kib("VmHWM:"),
+        });
+        if let Some(r) = &r {
+            row["class"] = json!(format!("{:?}", r.class));
+            row["changed"] = json!(r.changed.len());
+            row["parsed"] = json!(r.parsed);
+            row["resolved"] = json!(r.resolved);
+            row["dependencyBodiesResolved"] = json!(r.dependency_bodies_resolved);
+            row["copiedBytes"] = json!(r.copied_bytes);
+            row["programMs"] = json!(r.program_ms);
+            row["refreshMs"] = json!(r.wall_ms);
+        }
+        match out {
+            Ok(model) => {
+                if verify {
+                    let session_fp = al_sem::program::session::workspace::model_fingerprint(&model);
+                    drop(model);
+                    let t = std::time::Instant::now();
+                    let cold = al_sem::program::model::program_calls::assemble_and_resolve_cross_app_program(
+                        &inputs,
+                        false,
+                        AssemblyNeeds::BASE,
+                    );
+                    row["coldMs"] = json!(t.elapsed().as_millis());
+                    let equal = cold.as_ref().is_ok_and(|c| {
+                        al_sem::program::session::workspace::model_fingerprint(c) == session_fp
+                    });
+                    row["equalToCold"] = json!(equal);
+                    failed |= !equal;
+                }
+            }
+            Err(e) => {
+                row["error"] = json!(format!("{e:?}"));
+                failed = true;
+            }
+        }
+        println!("{row}");
+    };
+    let write = |p: &Path, t: &str| std::fs::write(p, t).expect("write the workspace copy");
+    step("cold", &mut session);
+    step("noop", &mut session);
+    let body = original.replacen(
+        "\n    begin\n",
+        "\n    begin\n        // session probe\n",
+        1,
+    );
+    write(&target, &body);
+    step("body", &mut session);
+    write(&target, &original);
+    step("body-restore", &mut session);
+    write(&target, &format!("\n\n{original}"));
+    step("newline", &mut session);
+    write(&target, &original);
+    step("newline-restore", &mut session);
+    let decl = match original.rfind('}') {
+        Some(i) => format!(
+            "{}\n    procedure SessionProbeAdded()\n    begin\n    end;\n{}",
+            &original[..i],
+            &original[i..]
+        ),
+        None => original.clone(),
+    };
+    write(&target, &decl);
+    step("decl", &mut session);
+    write(&target, &original);
+    step("decl-restore", &mut session);
+    write(
+        &probe,
+        "codeunit 99977 \"Session Probe\"\n{\n    procedure Run()\n    begin\n    end;\n}\n",
+    );
+    step("add", &mut session);
+    std::fs::remove_file(&probe).expect("remove the probe file");
+    step("add-restore", &mut session);
+    let mut app = app_original.clone();
+    app.push(b'\n');
+    std::fs::write(&app_json, &app).expect("write app.json");
+    step("appjson", &mut session);
+    std::fs::write(&app_json, &app_original).expect("restore app.json");
+    step("appjson-restore", &mut session);
+    if failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 /// `--dump-dependency-source <workspace> <out-dir>`: write the AL source the
@@ -553,6 +771,7 @@ fn run_main() -> ExitCode {
         Some("--switch-compare") => return switch_compare_cmd(&raw[1..]),
         Some("--compiler-oracle") => return compiler_oracle_cmd(&raw[1..]),
         Some("--snapshot-memory") => return snapshot_memory_cmd(&raw[1..]),
+        Some("--session-refresh") => return session_refresh_cmd(&raw[1..]),
         _ => {}
     }
     let mut l2 = false;
@@ -912,7 +1131,7 @@ fn run_main() -> ExitCode {
             String,
             Vec<al_sem::program::resolve::edge::Edge>,
         > = std::collections::BTreeMap::new();
-        for ce in &res.edges {
+        for ce in res.edges.iter() {
             per_app
                 .entry(graph.apps.resolve(ce.edge.from.object.app).name.clone())
                 .or_default()
@@ -958,7 +1177,7 @@ fn run_main() -> ExitCode {
             use al_sem::program::resolve::edge::{ObligationOutcome, RouteTarget};
             let mut rows = Vec::new();
             let mut ambiguous = Vec::new();
-            for ce in &res.edges {
+            for ce in res.edges.iter() {
                 let app = graph.apps.resolve(ce.edge.from.object.app);
                 let span = &ce.edge.site.span;
                 let line_text = || {

@@ -1412,7 +1412,11 @@ fn resolve_full_program_from_parts(
     // Quick ObjectNodeId → &ObjectNode lookup.
     let obj_node_map = app_object_map(graph, primary_app_ref);
 
-    let index = ResolveIndex::build(graph);
+    let index = {
+        let _s = pt::span("resolve", "resolve.index");
+        ResolveIndex::build(graph)
+    };
+    let files_span = pt::span("resolve", "resolve.files");
 
     let mut obligation_id_set: HashSet<ObligationId> = HashSet::new();
     let mut classified_edges: Vec<ClassifiedEdge> = Vec::new();
@@ -1531,6 +1535,7 @@ fn resolve_full_program_from_parts(
         indeterminate.extend(file_res.indeterminate);
         site_facts.extend(file_res.site_facts);
     }
+    drop(files_span);
 
     // ── Phase 1b (G30): interface sites on an object global its own codeunit
     // writes, closed once every call of the writing routines is known ────────
@@ -1548,7 +1553,10 @@ fn resolve_full_program_from_parts(
     // ── Phase 2: publisher event flow obligations (all apps) ──────────────────
     // emit_event_flow_edges processes ALL graph.routines (no app filter).
     // We must track obligation ids in the same pass so coverage holds.
-    let event_edges = emit_event_flow_edges(graph, surface);
+    let event_edges = {
+        let _s = pt::span("resolve", "resolve.event_flow");
+        emit_event_flow_edges(graph, surface)
+    };
     for edge in event_edges {
         // Each publisher routine emits exactly one EventFlow edge.
         let obl_id = ObligationId::Publisher(edge.from.clone());
@@ -1630,6 +1638,27 @@ pub(crate) struct KeptResolutions {
 /// (an invariant failure: a body-only revision keeps every declaration); the
 /// edges are then partly rewritten and must be resolved again. No zero-span
 /// or other invented witness is ever written.
+/// Whether every cross-file source witness of `edges` already names its
+/// routine's current path and span ([`rematerialize_witnesses`] would change
+/// nothing): `Some(true)` / `Some(false)`, or `None` when one names a routine
+/// the surface lacks. Lets a shared resolution be reused without a copy.
+pub(crate) fn witnesses_current(edges: &[ClassifiedEdge], surface: &DeclSurface) -> Option<bool> {
+    let mut current = true;
+    for ce in edges {
+        for route in &ce.edge.routes {
+            let (RouteTarget::Routine(rid), Witness::SourceSpan { file, span }) =
+                (&route.target, &route.witness)
+            else {
+                continue;
+            };
+            let (meta, path) = surface.get_with_path(rid)?;
+            current &= file.as_str() == path
+                && *span == (meta.origin.byte.start as u32, meta.origin.byte.end as u32);
+        }
+    }
+    Some(current)
+}
+
 pub(crate) fn rematerialize_witnesses(edges: &mut [ClassifiedEdge], surface: &DeclSurface) -> bool {
     for ce in edges {
         for route in &mut ce.edge.routes {
@@ -1712,11 +1741,15 @@ pub(crate) fn resolve_full_program_reusing(
     let primary_app_ref = *primary_app_ref;
 
     // ── Step 5: Resolve all obligations ──────────────────────────────────────
+    let surface = {
+        let _s = pt::span("resolve", "resolve.decl_surface");
+        ctx.decl_surface()
+    };
     let (edges, coverage, builtin_dispatch_audit, site_facts, parenless_calls, kept) =
         resolve_full_program_from_parts(
             graph,
             parsed,
-            &ctx.decl_surface(),
+            &surface,
             primary_app_ref,
             ws_file_set,
             &ctx.files,
@@ -1748,10 +1781,24 @@ pub(crate) fn resolve_full_program_reusing(
 
     // ── Step 7: ABI integrity ─────────────────────────────────────────────────
     // Build a raw ABI index from dep .app files (independent of graph nodes).
-    let raw_abi_index = build_raw_abi_index_from_snapshot(snap, &graph.apps);
-    // Collect all underlying edges for the ABI check.
-    let plain_edges: Vec<Edge> = edges.iter().map(|ce| ce.edge.clone()).collect();
-    let abi_integrity = abi_ingestion_integrity(&plain_edges, &raw_abi_index);
+    // A workspace session (`keep`) hands the report to
+    // `ResolvedProgram::from_parts`, which drops the ABI integrity, as the cold
+    // `ResolvedProgram::build` does: the session does not compute it (0.8-1.0 s
+    // on CDO). Every other caller gets it as before.
+    let abi_integrity = if keep {
+        AbiIntegrityReport {
+            abi_routes_total: 0,
+            abi_mapped: 0,
+            abi_unmapped: 0,
+            abi_unmapped_sites: Vec::new(),
+        }
+    } else {
+        let _s = pt::span("resolve", "resolve.abi_integrity");
+        let raw_abi_index = build_raw_abi_index_from_snapshot(snap, &graph.apps);
+        // Collect all underlying edges for the ABI check.
+        let plain_edges: Vec<Edge> = edges.iter().map(|ce| ce.edge.clone()).collect();
+        abi_ingestion_integrity(&plain_edges, &raw_abi_index)
+    };
 
     let event_flow_dual_publisher_alias_skips =
         crate::program::resolve::resolver::dual_publisher_alias_skip_count(&graph.routines);
@@ -2009,18 +2056,23 @@ impl ProgramContext {
                 })
                 .collect()
         });
-        let mut out = DependencyBodyResolution::default();
+        let (mut edges, mut site_facts) = (Vec::new(), HashMap::new());
+        let mut parenless_calls = ParenlessCalls::new();
         for ((app, pf), r) in files.iter().zip(results) {
-            out.edges.extend(r.edges);
-            out.site_facts.extend(r.site_facts);
+            edges.extend(r.edges);
+            site_facts.extend(r.site_facts);
             if !r.parenless.is_empty() {
-                out.parenless_calls.insert(
+                parenless_calls.insert(
                     (*app, pf.virtual_path.clone()),
                     r.parenless.into_iter().collect(),
                 );
             }
         }
-        out
+        DependencyBodyResolution {
+            edges: Arc::new(edges),
+            site_facts: Arc::new(site_facts),
+            parenless_calls,
+        }
     }
 }
 
@@ -2028,9 +2080,10 @@ impl ProgramContext {
 #[derive(Default, Clone)]
 pub struct DependencyBodyResolution {
     /// One edge per dependency call site; `edge.from.object.app` is the owning app.
-    pub edges: Vec<ClassifiedEdge>,
-    /// The receiver/interface facts of those sites (see [`SiteFacts`]).
-    pub site_facts: HashMap<ObligationId, SiteFacts>,
+    /// Shared (a workspace session hands one resolution to many revisions).
+    pub edges: Arc<Vec<ClassifiedEdge>>,
+    /// The receiver/interface facts of those sites (see [`SiteFacts`]). Shared.
+    pub site_facts: Arc<HashMap<ObligationId, SiteFacts>>,
     /// See [`ParenlessCalls`]: the dependency files' parens-less calls.
     pub parenless_calls: ParenlessCalls,
 }

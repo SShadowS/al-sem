@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (context-server stage 4: `aldump --session-refresh`)
+
+- **`aldump --session-refresh <workspace-copy> [--file <rel>] [--verify]`**
+  measures the workspace session per change type on a real workspace: cold,
+  no-op, body edit, prepended newlines, an added procedure, an added file and
+  an `app.json` byte, each followed by its restore, one JSON line per refresh
+  (class, files parsed/resolved, dependency bodies resolved again,
+  `copiedBytes`, `programMs`, `refreshMs`, resident set). `--verify` builds
+  each step's model cold and compares the two `write_model` fingerprints. It
+  edits the workspace, so it refuses one inside a git checkout (the pinned
+  CDO baseline is). `session::workspace::{write_program, write_model,
+  model_fingerprint}` are the equality projections the tests and the driver
+  share; `RefreshReport` gains `program_ms`.
+- **The dependency resolution is shared, not copied, across B.**
+  `DependencyBodyResolution.edges` and `.site_facts` are `Arc`s;
+  `ProgramBody` holds the dependency edges by `Arc` and its site facts as a
+  two-layer `SiteFactsMap` (workspace facts over the shared dependency facts;
+  reads answer what the merged map answered, the dependency entry winning a
+  common key) read through the `Copy` view `SiteFactsRef`, which `EdgeView`
+  and the adapter now carry. A session copies the reused dependency edges
+  only when a witness into a moved workspace declaration must change
+  (`full::witnesses_current`, then `Arc::make_mut` + re-materialization);
+  `RefreshReport.dependency_edges_copied` says which. On CDO
+  `model.copied_bytes` per B revision drops from 310 MB to 15.5 MB.
+- The session skips the ABI-integrity check, whose one consumer on its path
+  (`ResolvedProgram::from_parts`) drops it, as the cold `ResolvedProgram::build`
+  does (0.8–1.0 s on CDO); every other caller computes it as before.
+- New spans inside the resolve: `resolve.decl_surface`, `resolve.index`,
+  `resolve.files`, `resolve.event_flow`, `resolve.abi_integrity`.
+- **Measured on a temp copy of the CDO baseline** (release-fast,
+  `aldump --session-refresh --verify`, shared machine): every one of the 12
+  steps' models equals the cold build's (`equalToCold: true`). `revision.refresh`
+  per class: P (first build) 14.0 s, P (`app.json`) 12.5–12.7 s against a cold
+  model build of 13.3–15.8 s; S/F 9.5–10.8 s (dependency re-resolution
+  4.1–4.6 s of it); B 5.1–5.9 s (program 1.6–1.8 s; model assembly 2.4–2.9 s,
+  attach 0.9–1.0 s, demand 0.15–0.2 s; one noisy 9.1 s no-op). Per-file
+  resolution under B is 20–40 ms; `resolve.event_flow` is 0.73–0.94 s every
+  revision (the design assumed milliseconds). `model.copied_bytes`: 15.5 MB
+  per B, 0 for S/P. Peak RSS of the whole driver run (session plus the
+  verifying cold builds) 5.55 GB.
+
 ### Added (context-server stage 4: the workspace session, retained parse and resolutions)
 
 - **`program::session::WorkspaceSession`**: the incremental cross-app model

@@ -73,10 +73,17 @@ pub struct RefreshReport {
     pub resolved: usize,
     /// Whether the dependency bodies were resolved again.
     pub dependency_bodies_resolved: bool,
+    /// Under B: whether the reused dependency edges had to be copied (a
+    /// witness into a moved workspace declaration changed); otherwise they
+    /// are shared with the previous revision.
+    pub dependency_edges_copied: bool,
     /// Bytes copied out of the retained state into this revision (the
     /// `model.copied_bytes` counter): the reused resolutions' buffers.
     pub copied_bytes: u64,
-    /// The whole refresh, inputs given (the `revision.refresh` span).
+    /// The program part ([`WorkspaceSession::refresh_program`]).
+    pub program_ms: u128,
+    /// The whole refresh, inputs given (the `revision.refresh` span); equal to
+    /// `program_ms` after a `refresh_program` alone.
     pub wall_ms: u128,
 }
 
@@ -255,12 +262,26 @@ impl WorkspaceSession {
 
         // The dependency bodies: reused across B, resolved whole otherwise.
         let reuse_dependency = class == ChangeClass::BodyOnly;
+        let mut dependency_edges_copied = false;
         let (dependency, dependency_arc, dependency_resolved) = match (reuse_dependency, retained) {
             (true, Some(r)) => {
+                // The edges and site facts are shared by `Arc`; only the
+                // parens-less calls are copied, and the edges only when a
+                // witness into a moved workspace declaration must change.
                 let mut d = (*r.dependency).clone();
-                tally_dependency(&mut copied, &d);
-                if f::rematerialize_witnesses(&mut d.edges, &ctx.decl_surface()) {
-                    (d, Arc::clone(&r.dependency), false)
+                tally_parenless(&mut copied, &d);
+                let surface = ctx.decl_surface();
+                let current = f::witnesses_current(&d.edges, &surface);
+                if current == Some(false) {
+                    dependency_edges_copied = true;
+                    let edges = Arc::make_mut(&mut d.edges);
+                    tally_edges(&mut copied, edges);
+                    let ok = f::rematerialize_witnesses(edges, &surface);
+                    debug_assert!(ok, "checked by witnesses_current");
+                }
+                if current.is_some() {
+                    let arc = Arc::new(d.clone());
+                    (d, arc, false)
                 } else {
                     // §6.5: a cross-file reference with no current
                     // declaration is an invariant failure; release redoes
@@ -327,11 +348,101 @@ impl WorkspaceSession {
             parsed,
             resolved: resolved_now,
             dependency_bodies_resolved: dependency_resolved,
+            dependency_edges_copied,
             copied_bytes: copied.bytes as u64,
+            program_ms: start.elapsed().as_millis(),
             wall_ms: start.elapsed().as_millis(),
         });
         Ok(program)
     }
+}
+
+/// The program as text, for the cold-oracle comparison (stage 4's equality
+/// contract): both edge sets in order with their witnesses, the site facts
+/// and parens-less calls sorted, the meta. Two builds of one revision write
+/// the same text exactly when a consumer of the program can tell no
+/// difference.
+#[doc(hidden)]
+pub fn write_program(p: &ResolvedProgram, w: &mut dyn std::fmt::Write) -> std::fmt::Result {
+    let b = p.body();
+    for e in b.all_edges() {
+        writeln!(w, "{e:?}")?;
+    }
+    writeln!(w, "-- dependency edges {}", b.dependency_body_edges().len())?;
+    let mut facts: Vec<_> = b.site_facts.iter().collect();
+    facts.sort_by(|a, b| a.0.cmp(b.0));
+    for f in facts {
+        writeln!(w, "{f:?}")?;
+    }
+    let mut parenless: Vec<_> = b
+        .parenless_calls
+        .iter()
+        .map(|(k, v)| {
+            let mut ids: Vec<usize> = v.iter().map(|e| e.index()).collect();
+            ids.sort_unstable();
+            (k.clone(), ids)
+        })
+        .collect();
+    parenless.sort();
+    writeln!(w, "{parenless:?}")?;
+    let m = p.meta();
+    writeln!(
+        w,
+        "{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
+        m.recovered_files, m.coverage, m.histogram, m.primary_histogram, m.coverage_contract
+    )
+}
+
+/// The cross-app model as text: every field a consumer reads (rows, calls,
+/// bindings sorted by call site, diagnostics, external targets, the event
+/// graph, the declared and loaded dependencies, the coverage, the friends).
+#[doc(hidden)]
+pub fn write_model(x: &CrossAppProgram, w: &mut dyn std::fmt::Write) -> std::fmt::Result {
+    let m = &x.resolved;
+    let mut bindings: Vec<_> = m.calls.upgraded_bindings.iter().collect();
+    bindings.sort_by(|a, b| a.0.cmp(b.0));
+    let mut friends: Vec<_> = x.friends.iter().collect();
+    friends.sort();
+    writeln!(w, "{:#?}", m.workspace)?;
+    writeln!(w, "{:#?}", m.root_classifications)?;
+    writeln!(
+        w,
+        "{:?}\n{:?}\n{:?}\n{:?}",
+        m.primary_app, m.infra_diagnostics, m.workspace_diagnostics, m.dependency_diagnostics
+    )?;
+    writeln!(w, "{:#?}", m.calls.edges)?;
+    writeln!(w, "{bindings:#?}")?;
+    writeln!(
+        w,
+        "{:?}\n{:?}",
+        m.calls.diagnostics, m.calls.external_targets
+    )?;
+    writeln!(w, "{:#?}", m.events)?;
+    writeln!(
+        w,
+        "{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
+        x.declared_dependencies, x.dependency_apps, x.coverage, friends, x.loaded_apps
+    )
+}
+
+/// A `fmt::Write` that hashes instead of storing (a CDO model's text runs to
+/// gigabytes).
+struct HashSink(blake3::Hasher);
+
+impl std::fmt::Write for HashSink {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.0.update(s.as_bytes());
+        Ok(())
+    }
+}
+
+/// blake3 of [`write_model`]'s text.
+#[doc(hidden)]
+#[must_use]
+pub fn model_fingerprint(x: &CrossAppProgram) -> String {
+    let mut h = HashSink(blake3::Hasher::new());
+    write_model(x, &mut h).expect("hashing cannot fail");
+    h.0.finalize().to_hex().to_string()
 }
 
 /// The P inputs (§6.1): the root `app.json` bytes and every dependency's
@@ -372,15 +483,22 @@ fn tally_resolution(t: &mut crate::engine::census::Tally, r: &FileResolution) {
     }
 }
 
-/// As [`tally_resolution`], for the dependency bodies' resolution.
-fn tally_dependency(t: &mut crate::engine::census::Tally, d: &DependencyBodyResolution) {
+/// The buffers a copy of the dependency bodies' edges copies.
+fn tally_edges(
+    t: &mut crate::engine::census::Tally,
+    edges: &[crate::program::resolve::full::ClassifiedEdge],
+) {
     use crate::program::resolve::edge::Route;
-    use crate::program::resolve::full::{ClassifiedEdge, ObligationId, SiteFacts};
-    t.buf::<ClassifiedEdge>(d.edges.len())
-        .buf::<(ObligationId, SiteFacts)>(d.site_facts.len());
-    for e in &d.edges {
+    use crate::program::resolve::full::ClassifiedEdge;
+    t.buf::<ClassifiedEdge>(edges.len());
+    for e in edges {
         t.buf::<Route>(e.edge.routes.len());
     }
+}
+
+/// The buffers a clone of the dependency bodies' parens-less calls copies
+/// (the edges and site facts are shared by `Arc`).
+fn tally_parenless(t: &mut crate::engine::census::Tally, d: &DependencyBodyResolution) {
     for ids in d.parenless_calls.values() {
         t.buf::<al_syntax::ir::ExprId>(ids.len());
     }

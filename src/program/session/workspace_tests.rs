@@ -112,68 +112,16 @@ impl Ws {
     }
 }
 
-/// The program as text: both edge sets in order (witnesses included), the site
-/// facts and parens-less calls sorted, the meta.
 fn program_text(p: &ResolvedProgram) -> String {
-    use std::fmt::Write as _;
     let mut s = String::new();
-    let b = p.body();
-    for e in b.all_edges() {
-        writeln!(s, "{e:?}").unwrap();
-    }
-    writeln!(s, "-- dependency edges {}", b.dependency_body_edges().len()).unwrap();
-    let mut facts: Vec<_> = b.site_facts.iter().collect();
-    facts.sort_by(|a, b| a.0.cmp(b.0));
-    for f in facts {
-        writeln!(s, "{f:?}").unwrap();
-    }
-    let mut parenless: Vec<_> = b
-        .parenless_calls
-        .iter()
-        .map(|(k, v)| {
-            let mut ids: Vec<usize> = v.iter().map(|e| e.index()).collect();
-            ids.sort_unstable();
-            (k.clone(), ids)
-        })
-        .collect();
-    parenless.sort();
-    writeln!(s, "{parenless:?}").unwrap();
-    let m = p.meta();
-    writeln!(
-        s,
-        "{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
-        m.recovered_files, m.coverage, m.histogram, m.primary_histogram, m.coverage_contract
-    )
-    .unwrap();
+    write_program(p, &mut s).unwrap();
     s
 }
 
-/// The cross-app model as text: every field a consumer reads.
 fn model_text(x: &CrossAppProgram) -> String {
-    let m = &x.resolved;
-    let mut bindings: Vec<_> = m.calls.upgraded_bindings.iter().collect();
-    bindings.sort_by(|a, b| a.0.cmp(b.0));
-    let mut friends: Vec<_> = x.friends.iter().collect();
-    friends.sort();
-    format!(
-        "{:#?}\n{:#?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:#?}\n{:#?}\n{:?}\n{:?}\n{:#?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
-        m.workspace,
-        m.root_classifications,
-        m.primary_app,
-        m.infra_diagnostics,
-        m.workspace_diagnostics,
-        m.dependency_diagnostics,
-        m.calls.edges,
-        bindings,
-        m.calls.diagnostics,
-        m.calls.external_targets,
-        m.events,
-        x.declared_dependencies,
-        x.dependency_apps,
-        x.coverage,
-        friends,
-        x.loaded_apps,
-    )
+    let mut s = String::new();
+    write_model(x, &mut s).unwrap();
+    s
 }
 
 /// The first line where two texts differ, with context, for a readable failure.
@@ -278,6 +226,10 @@ fn body_edit_reuses_every_other_resolution() {
     assert_eq!(r.changed, vec!["src/Callee.Codeunit.al".to_string()]);
     assert_eq!((r.parsed, r.resolved), (1, 1));
     assert!(!r.dependency_bodies_resolved);
+    assert!(
+        !r.dependency_edges_copied,
+        "no dependency witness moved: the dependency edges are shared, not copied"
+    );
     assert!(r.copied_bytes > 0, "the reused resolutions were copied");
     // A second body edit in the caller's own file.
     ws.edit(
@@ -311,6 +263,10 @@ fn newline_before_a_callee_moves_every_witness() {
     let r = refresh_and_compare(&mut s, &ws, "newlines");
     assert_eq!(r.class, ChangeClass::BodyOnly);
     assert!(!r.dependency_bodies_resolved);
+    assert!(
+        r.dependency_edges_copied,
+        "the dependency caller's witness to the moved implementer changed"
+    );
     assert_eq!(r.resolved, 2);
 }
 
