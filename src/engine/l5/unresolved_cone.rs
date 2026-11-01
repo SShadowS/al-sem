@@ -324,14 +324,15 @@ mod tests {
             identities: SnapshotIdentityTable {
                 stable_ids: Vec::new(),
                 display_names: Vec::new(),
-            },
+            }
+            .into(),
             capability_facts: Vec::new(),
             typed_edges: Vec::new(),
             operation_index: Vec::new(),
             callsite_index: Vec::new(),
             callsite_resolutions: Vec::new(),
             analysis_gaps: Vec::new(),
-            coverage: Vec::new(),
+            coverage: Vec::new().into(),
             event_declarations: Vec::new(),
             root_classifications: Vec::new(),
             routine_order_frames: None,
@@ -386,12 +387,9 @@ mod tests {
         // cone even though "polymorphic" is a distinct (non-resolved) status, and it
         // carries candidates[] + openWorld:true. 0 corpus coverage.
         let mut snap = empty_snap();
-        snap.identities
-            .stable_ids
-            .push("app:Codeunit:1#root".into());
-        snap.identities
-            .display_names
-            .push("Codeunit X::Root".into());
+        let ids = std::sync::Arc::make_mut(&mut snap.identities);
+        ids.stable_ids.push("app:Codeunit:1#root".into());
+        ids.display_names.push("Codeunit X::Root".into());
         snap.callsite_index
             .push(cs_ev("cs1", "app:Codeunit:1#root", "ws:src/X.al", 12));
         snap.callsite_resolutions.push(resolution(
@@ -487,8 +485,9 @@ mod tests {
     #[test]
     fn resolved_and_builtin_rows_excluded() {
         let mut snap = empty_snap();
-        snap.identities.stable_ids.push("r#1".into());
-        snap.identities.display_names.push("R::One".into());
+        let ids = std::sync::Arc::make_mut(&mut snap.identities);
+        ids.stable_ids.push("r#1".into());
+        ids.display_names.push("R::One".into());
         snap.callsite_resolutions
             .push(resolution("csA", "r#1", "A", "resolved", None, None));
         snap.callsite_resolutions
@@ -507,8 +506,9 @@ mod tests {
         let n = (DEFAULT_MAX_DEPTH as usize) + 5;
         for i in 0..=n {
             let id = format!("r#{i}");
-            snap.identities.stable_ids.push(id.clone());
-            snap.identities.display_names.push(format!("R::{i}"));
+            let ids = std::sync::Arc::make_mut(&mut snap.identities);
+            ids.stable_ids.push(id.clone());
+            ids.display_names.push(format!("R::{i}"));
         }
         for i in 0..n {
             let cs = format!("cs{i}");
@@ -544,8 +544,9 @@ mod tests {
         // A short chain entirely within maxDepth → not truncated.
         let mut snap = empty_snap();
         for i in 0..=2 {
-            snap.identities.stable_ids.push(format!("r#{i}"));
-            snap.identities.display_names.push(format!("R::{i}"));
+            let ids = std::sync::Arc::make_mut(&mut snap.identities);
+            ids.stable_ids.push(format!("r#{i}"));
+            ids.display_names.push(format!("R::{i}"));
         }
         for i in 0..2 {
             snap.typed_edges.push(SnapshotGraphEdge::DirectCall {

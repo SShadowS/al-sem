@@ -1251,7 +1251,7 @@ mod tests {
         let ping = row(&mut m, "Ping").stable_routine_id.clone();
         let export = make_dependency(&mut m, "ExportLine");
         let before = snap.coverage.len();
-        snap.coverage
+        std::sync::Arc::make_mut(&mut snap.coverage)
             .retain(|c| c.subject != ping && c.subject != export);
         assert_eq!(
             snap.coverage.len(),

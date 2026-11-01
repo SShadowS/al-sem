@@ -1724,14 +1724,15 @@ mod tests {
             identities: SnapshotIdentityTable {
                 stable_ids: vec![],
                 display_names: vec![],
-            },
+            }
+            .into(),
             capability_facts: vec![],
             typed_edges: vec![],
             operation_index: vec![],
             callsite_index: vec![],
             callsite_resolutions: vec![],
             analysis_gaps: vec![],
-            coverage: vec![],
+            coverage: vec![].into(),
             event_declarations: vec![],
             root_classifications: vec![],
             routine_order_frames: None,

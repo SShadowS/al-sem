@@ -729,6 +729,139 @@ fn explain_usage_errors() {
     }
 }
 
+// ── repeatable `--routine` (context-server design r3 §6.12, T-multi) ──
+
+/// `explain ws-explain <args> --format <format>`: (stdout, stderr, exit).
+fn explain_ws(args: &[&str], format: &str) -> (String, String, i32) {
+    let ws = fixtures_dir().join("ws-explain");
+    let ws = ws.to_string_lossy();
+    let mut argv = vec!["explain", &ws];
+    argv.extend(args.iter().copied());
+    argv.extend(["--format", format]);
+    run_alsem(&argv)
+}
+
+fn json(text: &str) -> serde_json::Value {
+    serde_json::from_str(text).expect("JSON document")
+}
+
+/// Two selectors: one card per routine, each the card its single run writes,
+/// in the cards' anchor order; `"selectors"` in input order in place of
+/// `"selector"`, the rest of the document as `--diff` writes it (no
+/// diagnostics here); exit 0.
+#[test]
+fn multi_routine_cards_are_the_single_runs_cards() {
+    let (out, err, code) = explain_ws(&["--routine", "Archive", "--routine", "PostOrder"], "json");
+    assert_eq!(code, 0, "{err}");
+    let doc = json(&out);
+    assert_eq!(
+        doc["selectors"],
+        serde_json::json!(["Archive", "PostOrder"])
+    );
+    assert!(doc.get("selector").is_none(), "no single selector field");
+    assert_eq!(doc["mode"], "routine");
+    assert_eq!(doc["diagnostics"], serde_json::json!([]));
+    let keys: Vec<&String> = doc.as_object().unwrap().keys().collect();
+    assert_eq!(
+        keys,
+        ["cards", "diagnostics", "mode", "schema", "selectors"]
+    );
+    let single = |r: &str| json(&explain_ws(&["--routine", r], "json").0)["cards"][0].clone();
+    // PostOrder (line 5) is above Archive (line 23): anchor order, not input.
+    assert_eq!(
+        doc["cards"],
+        serde_json::json!([single("PostOrder"), single("Archive")])
+    );
+    // Human: the two single runs' cards, in the same order.
+    let (human, _, code) = explain_ws(&["--routine", "Archive", "--routine", "PostOrder"], "human");
+    assert_eq!(code, 0);
+    let one = |r: &str| explain_ws(&["--routine", r], "human").0;
+    assert_eq!(human, format!("{}{}", one("PostOrder"), one("Archive")));
+}
+
+/// Duplicates collapse: a selector given twice writes the single run's bytes
+/// (both formats, exit included); two selectors naming one routine (a name
+/// and its stable id) give one card.
+#[test]
+fn multi_routine_duplicates_collapse() {
+    for format in ["json", "human"] {
+        assert_eq!(
+            explain_ws(
+                &["--routine", "PostOrder", "--routine", "PostOrder"],
+                format
+            ),
+            explain_ws(&["--routine", "PostOrder"], format),
+            "{format}: a repeated selector is the single document"
+        );
+    }
+    let single = json(&explain_ws(&["--routine", "PostOrder"], "json").0);
+    let id = single["cards"][0]["routine"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (out, _, code) = explain_ws(&["--routine", "PostOrder", "--routine", &id], "json");
+    assert_eq!(code, 0);
+    let doc = json(&out);
+    assert_eq!(doc["selectors"], serde_json::json!(["PostOrder", id]));
+    assert_eq!(doc["cards"], single["cards"], "one routine, one card");
+}
+
+/// Mixed: a found routine, an unknown name and an ambiguous one → exit 0 with
+/// the one card and both diagnostics in input order (prove's wording); none
+/// found → exit 2, no card, every selector's diagnostic.
+#[test]
+fn multi_routine_unmatched_selectors_are_diagnostics() {
+    let args = [
+        "--routine",
+        "NoSuchRoutine",
+        "--routine",
+        "PostOrder",
+        "--routine",
+        "CheckAmount",
+    ];
+    let (out, err, code) = explain_ws(&args, "json");
+    assert_eq!(code, 0, "{err}");
+    let doc = json(&out);
+    let names: Vec<&str> = doc["cards"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["routine"]["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["PostOrder"]);
+    let kinds: Vec<(&str, &str)> = doc["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| (d["kind"].as_str().unwrap(), d["selector"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("routine-not-found", "NoSuchRoutine"),
+            ("routine-ambiguous", "CheckAmount")
+        ]
+    );
+    let (human, _, code) = explain_ws(&args, "human");
+    assert_eq!(code, 0);
+    let not_found = explain_ws(&["--routine", "NoSuchRoutine"], "human").0;
+    let ambiguous = explain_ws(&["--routine", "CheckAmount"], "human").0;
+    let card = explain_ws(&["--routine", "PostOrder"], "human").0;
+    assert_eq!(
+        human,
+        format!("{card}{not_found}{ambiguous}"),
+        "the cards, then a diagnostics block"
+    );
+    let (out, _, code) = explain_ws(
+        &["--routine", "NoSuchRoutine", "--routine", "CheckAmount"],
+        "json",
+    );
+    assert_eq!(code, 2, "no card: the family's no-root exit");
+    let doc = json(&out);
+    assert_eq!(doc["cards"], serde_json::json!([]));
+    assert_eq!(doc["diagnostics"].as_array().unwrap().len(), 2);
+}
+
 /// `explain` runs as a batch job: next to a digest on the same workspace
 /// (one view, whose union of needs builds the rules for both), each job's
 /// output equals its standalone run.

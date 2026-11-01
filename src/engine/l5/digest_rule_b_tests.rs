@@ -123,6 +123,76 @@ fn b4_rule_b_is_off_on_the_cut() {
     assert!(effects.iter().all(|e| !e.boundary_group));
 }
 
+/// Context-server design r3 §13 item 3: a read of a tree never changes it.
+/// Two reads of ONE tree answer the same, each sharing the tree's coverage
+/// and identity table (`Arc` clones, never taken) and, with `tests`, one
+/// coverage graph; rule B is a parameter of the read (`BoundaryMode::Off`
+/// reads per-resource effects, as the cut does) and the tree keeps its rule.
+#[test]
+fn a_tree_read_is_a_pure_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_fixture_rule_b(tmp.path());
+    let target = AnalysisTarget::build(&inputs(tmp.path()), false, "digest").expect("cross-app");
+    let model = target.resolved();
+    let AnalysisTarget::CrossApp(b) = &target else {
+        panic!("cross-app")
+    };
+    let calls = b.dependency_calls.as_deref().unwrap_or(&[]);
+    let roots: Vec<String> = stable_roots(model, &["CallWrite"]).into_iter().collect();
+    let subjects: BTreeSet<String> = model
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| roots.contains(&r.stable_routine_id))
+        .map(|r| r.id.clone())
+        .collect();
+    let tree = tree_of(
+        model,
+        b.rel(),
+        calls,
+        &source_less_of(&target),
+        ConeScope {
+            derived: false,
+            raw: WitnessScope::Subjects(subjects),
+        },
+    );
+    assert!(
+        tree.boundary.is_some(),
+        "precondition: digest's tree has rule B"
+    );
+    assert!(!tree.coverage.is_empty() && !tree.identities.stable_ids.is_empty());
+    let read = |mode| digest_effects_each(&tree, model, &[&roots], true, false, false, mode);
+    let (first, second) = (read(BoundaryMode::On), read(BoundaryMode::On));
+    for e in [&first[0], &second[0]] {
+        assert!(
+            Arc::ptr_eq(&e.coverage, &tree.coverage),
+            "the tree's coverage, shared"
+        );
+        assert!(Arc::ptr_eq(&e.identities, &tree.identities));
+        assert!(e.coverage_graph.is_some(), "tests: the coverage graph");
+    }
+    assert_eq!(
+        shape(&first[0].entries[0].effects),
+        shape(&second[0].entries[0].effects),
+        "a second read of one tree answers the same"
+    );
+    let grouped = shape(&first[0].entries[0].effects);
+    assert!(
+        first[0].entries[0].effects.iter().any(|e| e.boundary_group),
+        "rule B groups: {grouped:?}"
+    );
+    let off = read(BoundaryMode::Off);
+    let effects = &off[0].entries[0].effects;
+    assert_eq!(shape(effects), vec!["DB_MODIFY - Customer"], "rule B off");
+    assert!(effects.iter().all(|e| !e.boundary_group));
+    assert!(tree.boundary.is_some(), "the tree keeps its rule");
+    assert_eq!(
+        shape(&read(BoundaryMode::On)[0].entries[0].effects),
+        grouped,
+        "an Off read changes no later On read"
+    );
+}
+
 /// B6: a primary carrier behind dependency code. `CallRaise` calls the
 /// dependency's `Raise`, which raises `OnRaised`; the workspace's
 /// `OnRaisedWs` handles it with an insert into `Ws Log`. The cut wins over
@@ -707,7 +777,7 @@ fn t3_digest_scoped_equals_unscoped() {
             ),
         };
         let roots = crate::engine::l5::digest::reportable_roots(model);
-        let mut all = tree_of(
+        let all = tree_of(
             model,
             &rel,
             calls,
@@ -717,7 +787,7 @@ fn t3_digest_scoped_equals_unscoped() {
                 raw: WitnessScope::All,
             },
         );
-        let unscoped = digest_effects(&mut all, model, &roots, false, false, false);
+        let unscoped = digest_effects(&all, model, &roots, false, false, false);
         for root in &roots {
             let subjects: BTreeSet<String> = model
                 .workspace
@@ -726,7 +796,7 @@ fn t3_digest_scoped_equals_unscoped() {
                 .filter(|r| &r.stable_routine_id == root)
                 .map(|r| r.id.clone())
                 .collect();
-            let mut scoped_tree = tree_of(
+            let scoped_tree = tree_of(
                 model,
                 &rel,
                 calls,
@@ -737,7 +807,7 @@ fn t3_digest_scoped_equals_unscoped() {
                 },
             );
             let scoped = digest_effects(
-                &mut scoped_tree,
+                &scoped_tree,
                 model,
                 std::slice::from_ref(root),
                 false,
@@ -1001,7 +1071,7 @@ fn prove_scoped_equals_unscoped() {
                 ),
             };
             let roots = crate::engine::l5::digest::reportable_roots(model);
-            let mut all = tree_of(
+            let all = tree_of(
                 model,
                 &rel,
                 calls,
@@ -1011,9 +1081,9 @@ fn prove_scoped_equals_unscoped() {
                     raw: WitnessRequest::primary().scope(model),
                 },
             );
-            let unscoped = digest_effects(&mut all, model, &roots, false, true, false);
+            let unscoped = digest_effects(&all, model, &roots, false, true, false);
             for root in &roots {
-                let mut scoped_tree = tree_of(
+                let scoped_tree = tree_of(
                     model,
                     &rel,
                     calls,
@@ -1024,7 +1094,7 @@ fn prove_scoped_equals_unscoped() {
                     },
                 );
                 let scoped = digest_effects(
-                    &mut scoped_tree,
+                    &scoped_tree,
                     model,
                     std::slice::from_ref(root),
                     false,

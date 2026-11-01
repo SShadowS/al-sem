@@ -7,6 +7,151 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (context-server stage 0: request-scoped planning)
+
+- **Planning reads no process state.** The `alsem` binary's three planning
+  globals (the `STDIN` `OnceLock`, `PLAN_FILES`, `PLAN_TOUCHED`) are gone. A
+  request's planning context `engine::batch::plan_cx::PlanCx` holds its
+  touched paths, its diff-root decision (`diff_root_decided`) and, when the
+  caller has one, the workspace read its job uses (`inputs`); `PlanReads` holds
+  what the requests of one run share (the one stdin read, each file read once).
+  Every file-system question goes through a `PlanFs` (`ProcessFs` for the CLI).
+  The order is the one of context-server design r3 §4.3: decode the argv (clap),
+  decide the request's file-system questions in the caller (`decide`: the diff
+  root via `decide_diff_root`, `digest --changed`), build the `PlanCx`, then plan
+  (`plan`, the design's `make_job`), which probes nothing. The `#[arg(skip)]`
+  `diff_root_decided` fields left `DigestCli`/`ExplainCli`; a batch worker's
+  shipped decisions go through the same `decide`. A request given a workspace
+  read (`PlanCx::inputs`, served by `WorkspaceReader::give`) reads no workspace
+  itself; an argv naming another workspace, or needing more than the read holds
+  (`WorkspaceInputs::holds`), is refused with exit 3. New
+  `engine::batch::standalone_output` returns a job's writes without replaying
+  them. No CLI output moves. Tests (bin `alsem`): two sequential `--diff -`
+  requests answer their own bytes, each equal to the same diff read from a file;
+  a request with no diff text fails `--diff -` with exit 3 and never reads the
+  process's stdin (`PROCESS_STDIN_READS`); two threads planning requests of one
+  run keep their own touched paths; the diff-root probes are asked of the
+  request's file system; planning over a file system that panics on every
+  question succeeds; a given workspace read answers after the disk changed, and
+  another workspace or a larger need is refused. Discrimination proofs, each
+  run and seen to fail, then reverted: a process-global `OnceLock` in
+  `stdin_text` → "two diffs, two answers" fails; `PlanReads::request(None)`
+  leaving stdin unset → exit 0 instead of 3; one shared touched list → the
+  concurrent test fails 3 of 3 runs; `std::fs::canonicalize` back in
+  `decide_diff_root` → `Workspace` instead of `GitTop("apps/ws")`;
+  `plan_explain` deciding its own diff root → "planning canonicalized" panic;
+  `reader_for` ignoring `inputs` → exit 2 instead of 0.
+
+### Added (context-server stage 0: `explain --routine` repeatable; spans)
+
+- **`alsem explain --routine` may be given more than once** (context-server
+  design r3 §6.12; review r1 #16). Each selector resolves alone as one
+  `--routine` always did (prove's code and `routine-not-found` /
+  `routine-ambiguous` wording); one tree serves every routine; the cards are
+  the union, sorted by anchor, each routine once (a selector given twice is one
+  selector; a name and its stable id give one card); the diagnostics are per
+  selector in input order; exit 0 when any card, 2 when none (mixed → 0 with
+  the diagnostics). One distinct selector writes the single-routine document
+  byte for byte as before (`"selector"`; every existing golden unchanged); two
+  or more write `"selectors": [..]` in its place, the rest of the document as
+  `--diff` writes it. Human mode: the cards, then the diagnostics. `--help`
+  states it. Tests (`cli_explain_differential`): two selectors give the single
+  runs' cards in anchor order, JSON and human; a repeated selector writes the
+  single run's bytes in both formats, a name plus its stable id one card; mixed
+  found/unknown/ambiguous → exit 0, one card, both diagnostics in order; none
+  found → exit 2. Discrimination proofs, run and seen to fail, then reverted:
+  rendering without collapsing repeated selectors → "a repeated selector is the
+  single document" fails; exit 2 whenever any selector is unmatched → the mixed
+  case's exit 0 fails.
+- **Spans** for prove's post-root work (r3 §13 item 6): `prove.literal_reach`,
+  `prove.group_paths`, `prove.reach_effects`, and `digest.unresolved_cones`,
+  `digest.coverage_graph`; for explain's render: `explain.indexes` (the
+  `Indexes` and `CrossRules` builds), `explain.reaching_tests`, `explain.cards`.
+- **Measured on CDO** (`DO-cdo-baseline/Cloud` `bc3ccb18`, cross-app,
+  release-fast, `/usr/bin/time -v`, shared 22-core machine), ten routines
+  (`IssueReminder`, `DocHandle`, `VendorLedgerSendToQueue`,
+  `BackgroundPdfWithFP`, `PurchaseHeaderGetLogInfo`, `ComputeAffectedCount`,
+  `GetPayload`, `SetInfo`, `SendToQueue`, `FindFirstViableOutputProfileCode`):
+  ten separate runs of the parent binary 243.3 s in total (22.7–28.1 s each,
+  peak 3.43–3.48 GB); ONE multi-root call 27.06 s, peak 3.47 GB; a batch of the
+  ten single-routine jobs 60.70 s before (ten `snapshot.derive`, 19.2 s) and
+  34.74 s after (one derive, 2.5 s; one coverage graph), peak 3.47 → 3.44 GB.
+  The multi-root call's per-request work past the composition: derive 2.55 s
+  + roots 3.26 s + unresolved cones 0.35 s + coverage graph 0.10 s + render
+  0.78 s ≈ 7.0 s, inside the design's 7–8 s hypothesis (one tree ~2.1 s +
+  slowest root ≤ 4.2 s); the composition (5.5 s) and model (≈14 s) are per
+  view. Equality: the multi-root document's ten cards equal the ten separate
+  runs' cards, and every job's stdout of both batches equals its separate run
+  byte for byte. In the new batch each job still pays its own
+  `explain.indexes` (10 × 0.8 s).
+- **Card render is not parallelized** (a deviation from r3 §6.12's "renders in
+  parallel", measured): on CDO cross-app, 9 cards cost `explain.cards` 28.6 ms
+  in total, while the per-job `explain.indexes` (one `Indexes::new` plus one
+  `CrossRules::new`) cost 792 ms. The "≈0.85 s per card" the design read from
+  the spec's traces is that per-job build, paid once per explain job, not per
+  card; a multi-root explain pays it once. `CrossRules` also carries a run-wide
+  expansion budget and memo shared by the cards, so a parallel render would
+  need per-card walk state for no measurable gain.
+
+### Changed (context-server stage 0: one tree for grouped explain; pure tree reads)
+
+- **Consecutive `explain` jobs on one view share ONE tree and ONE test-coverage
+  graph** (context-server design r3 §6.12). G16's grouping in `View::prepare`
+  excluded every reader with `tests` (every explain, and `digest --tests`);
+  `tests` is now a read parameter: readers group when their flags are equal,
+  and `digest_effects_each` builds the `CoverageGraph` once per tree and hands
+  every reader an `Arc` (`DigestEffects::coverage_graph:
+  Option<Arc<CoverageGraph>>`). The graph reads only the tree's whole-program
+  sections, so it is the same over any subject set; every job's bytes equal its
+  standalone run. New trace counter `build.coverage_graph`.
+- **A tree read never mutates the tree** (r3 §13 item 3). `digest_effects_each`
+  takes `&CapabilitySnapshot` and a `BoundaryMode` (`On`: the tree's rule B,
+  a dependency root still read with it off as G31 says; `Off`: none), threaded
+  as a parameter to the fingerprint indexes (`compute_digest_effects_cli_in`)
+  instead of taking and restoring `tree.boundary`. `CapabilitySnapshot::coverage`
+  and `::identities` are `Arc` fields handed out as `Arc` clones instead of
+  `std::mem::take` (the inventory read, which owns its tree, edits them through
+  `Arc::make_mut` on a unique `Arc`: no copy). No CLI output moves.
+- Tests: `cli_batch_plan::batch_explain_jobs_share_one_tree` (five explain jobs:
+  two routines, one named by two jobs, a test routine, a `--diff`, both formats
+  → `build.snapshot` 1 and `build.coverage_graph` 1, each job equal to its
+  standalone run); `tests_rule_b::a_tree_read_is_a_pure_read` (two reads of one
+  tree answer the same and share its coverage and identities by pointer; an
+  `Off` read gives the cut's per-resource effect and leaves the tree's rule).
+  Discrimination proofs, run and seen to fail, then reverted: the old predicate
+  (`!a.tests && !b.tests`) → counters (5, 5); `BoundaryMode::Off` answering the
+  tree's rule → the grouped effect instead of `DB_MODIFY - Customer`; copying
+  the coverage instead of an `Arc` clone → the pointer check fails.
+
+### Added (context-server stage 0: the wire codec and the output sink)
+
+- **`al_sem::wire`, the exact-output codec** (context-server design r3 §3.2,
+  §4.3, §13 item 2; a library, no process yet). NDJSON frames (compact JSON,
+  one line, at most 16 MiB: `encode_frame`, `decode_frame`, `read_frame`). An
+  answer (`Answer`) is `kind: "cli"` (exit code, stdout, stderr lines) or
+  `kind: "failed"`, with `revision` always present and `null` allowed. A CLI's
+  stdout travels as `stdoutText` — a JSON string whose value is the stdout byte
+  for byte, embedded and trailing newlines included — **xor** `stdoutFile`
+  (path, length, SHA-256) when it is not UTF-8, over the request's inline cap
+  (`clamp_inline`: default 64 KiB, at most 4 MiB), or too large once escaped
+  for one frame; a frame with both or neither is refused on decode. Tests: the
+  exact bytes of a pretty document round-trip and the frame is one line;
+  three frames read back by real line framing; the xor rule; over-cap,
+  non-UTF-8 and escape-heavy (control characters) stdout go to a file with
+  their exact bytes and hash; frame limits on both sides. Discrimination
+  proofs, run and seen to fail, then reverted: trimming the stdout's trailing
+  newline → "exact bytes" fails; dropping the escaped-length check → the
+  control-character stdout is inlined and the file test fails; pretty-printed
+  frames → both framing tests fail (the encoder's own one-newline assertion).
+- **`output::Sink`**: `replay_on` writes through a sink (r3 §10, §13 item 4),
+  and the first failed write's `al-sem: write error:` line goes through the sink
+  too. `Streams` is the CLI's and a batch job's (real streams or the job's two
+  files, the file system, the error line on the process's stderr, as before);
+  `Captured` keeps everything in memory, the error line in its stderr. Test:
+  a failed file write's line is captured and the later writes are not made.
+  Discrimination proof: calling `write_error` directly instead of the sink →
+  the captured stderr lacks the line, the test fails; reverted.
+
 ### Added (`aldump --snapshot-memory`)
 
 - **`aldump --snapshot-memory <workspace> [--single-app] [--hash]` re-measures

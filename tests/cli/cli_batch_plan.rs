@@ -307,6 +307,49 @@ fn batch_prove_jobs_share_one_tree() {
     );
 }
 
+/// T-group (context-server design r3 §6.12): consecutive `explain` jobs on one
+/// view share ONE tree (snap 1) and ONE test-coverage graph, where each used
+/// to keep its own (`--tests` was excluded from G16's grouping), and every job
+/// still equals its standalone run. The jobs mix one routine, another, a
+/// routine named twice by two jobs, a test routine (its card's `tests` reads
+/// the coverage graph), a `--diff` and both formats.
+#[test]
+fn batch_explain_jobs_share_one_tree() {
+    let ws = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/r0-corpus/ws-explain")
+        .to_string_lossy()
+        .into_owned();
+    let diff = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/cli-explain-goldens/ws-explain.changed.diff")
+        .to_string_lossy()
+        .into_owned();
+    let jobs: Vec<Vec<String>> = [
+        vec!["--routine", "PostOrder", "--format", "json"],
+        vec!["--routine", "Archive"],
+        vec!["--routine", "PostOrder"],
+        vec!["--routine", "PostUnreleasedFails", "--format", "json"],
+        vec!["--diff", &diff, "--format", "json"],
+    ]
+    .iter()
+    .map(|a| {
+        let mut v = vec!["explain", ws.as_str()];
+        v.extend(a.iter().copied());
+        argv(&v)
+    })
+    .collect();
+    let run = batch(&jobs);
+    assert_each_standalone(&run, &jobs, None);
+    assert_eq!(
+        (
+            count(&run.counters, "build.snapshot"),
+            count(&run.counters, "build.coverage_graph")
+        ),
+        (1, 1),
+        "five explain jobs, one tree, one coverage graph: {:?}",
+        run.counters
+    );
+}
+
 /// T3, two views of one workspace: analyze cross-app and `--single-app` build
 /// twice (program 2, ctx 2) off ONE read (inputs 1).
 #[test]

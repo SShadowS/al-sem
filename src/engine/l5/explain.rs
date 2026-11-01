@@ -10,7 +10,13 @@
 //! - `--routine <selector>`: the one routine `prove` would resolve, by the same
 //!   selector code (`digest_cli::resolve_changed_roots` with one routine
 //!   selector): no match and an ambiguous match both exit 2, the family's
-//!   no-root code, with a diagnostic that says which.
+//!   no-root code, with a diagnostic that says which. Repeatable
+//!   (context-server design r3 §6.12): each selector resolves alone, the cards
+//!   are the union (sorted, each routine once; a selector given twice is one),
+//!   the diagnostics are per selector in input order, exit 0 when any card
+//!   and 2 when none. One distinct selector writes the single-routine document
+//!   (`"selector"`) byte for byte as before; two or more write `"selectors"`
+//!   in its place, the rest of the document as `--diff` writes it.
 //! - `--diff <patch>`: every routine `digest --diff` resolves from the same
 //!   diff, by the same call with the same diff root, so the two commands see
 //!   the same changed set. A diff that resolves no routine exits 2.
@@ -78,8 +84,9 @@ pub const SCHEMA: &str = "al-sem.explain/1";
 /// How the command names its routines.
 #[derive(Debug, Clone)]
 pub enum ExplainMode {
-    /// `--routine <selector>`.
-    Routine(String),
+    /// `--routine <selector>`, given once or more (context-server design r3
+    /// §6.12): never empty.
+    Routines(Vec<String>),
     /// `--diff <patch>`: the diff's text and what its paths are relative to.
     Diff { text: String, root: DiffRoot },
     /// `--table <T> --field <F>`.
@@ -162,28 +169,39 @@ impl Job for ExplainJob<'_> {
     fn resolve(&self, _: SideIx, cx: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
         let model = cx.model();
         let resolved = match &self.req.mode {
-            ExplainMode::Routine(selector) => {
-                let changed = resolve_changed_roots(
-                    cx.ids(),
-                    model,
-                    &ChangedInput {
-                        files: None,
-                        routines: Some(vec![selector.clone()]),
-                        diff_text: None,
-                        diff_root: DiffRoot::default(),
-                        workspace_files: &[],
-                    },
-                    primary_guid_of(model),
-                    &OwnerIndex::build(model),
-                );
-                let diagnostics = changed
-                    .diagnostics
-                    .iter()
-                    .map(|d| selector_diagnostic(selector, d))
-                    .collect();
+            ExplainMode::Routines(selectors) => {
+                // Each selector resolves alone, as one `--routine` always did
+                // (prove's code and wording, G42); the cards are the union,
+                // sorted and distinct, the diagnostics per selector in input
+                // order. A selector given twice is one selector.
+                let owners = OwnerIndex::build(model);
+                let mut roots: BTreeSet<String> = BTreeSet::new();
+                let mut diagnostics = Vec::new();
+                for selector in distinct(selectors) {
+                    let changed = resolve_changed_roots(
+                        cx.ids(),
+                        model,
+                        &ChangedInput {
+                            files: None,
+                            routines: Some(vec![selector.clone()]),
+                            diff_text: None,
+                            diff_root: DiffRoot::default(),
+                            workspace_files: &[],
+                        },
+                        primary_guid_of(model),
+                        &owners,
+                    );
+                    diagnostics.extend(
+                        changed
+                            .diagnostics
+                            .iter()
+                            .map(|d| selector_diagnostic(selector, d)),
+                    );
+                    roots.extend(changed.roots);
+                }
                 Resolved {
-                    unresolved: changed.roots.is_empty(),
-                    roots: changed.roots,
+                    unresolved: roots.is_empty(),
+                    roots: roots.into_iter().collect(),
                     diagnostics,
                     field: None,
                 }
@@ -264,6 +282,12 @@ impl Job for ExplainJob<'_> {
             ),
         }
     }
+}
+
+/// `selectors` in input order, each once.
+fn distinct(selectors: &[String]) -> Vec<&String> {
+    let mut seen = HashSet::new();
+    selectors.iter().filter(|s| seen.insert(*s)).collect()
 }
 
 /// `--routine`'s diagnostic for one changed-roots diagnostic: prove's
@@ -677,14 +701,19 @@ fn render(
     resolved: &Resolved,
     effects: &DigestEffects,
 ) -> ExplainRunResult {
-    let ix = Indexes::new(model);
-    let cross = CrossRules::new(model);
+    use crate::engine::perf_trace::span;
+    let (ix, cross) = {
+        let _s = span("explain", "explain.indexes");
+        (Indexes::new(model), CrossRules::new(model))
+    };
     let tests_reaching = effects.coverage_graph.as_ref().map(|g| {
+        let _s = span("explain", "explain.reaching_tests");
         crate::engine::l5::test_coverage::reaching_tests(
             g,
             &resolved.roots.iter().cloned().collect(),
         )
     });
+    let cards_span = span("explain", "explain.cards");
     // (anchor sort key, routine id, JSON, human text) per card.
     type Rendered = (Option<(String, u32, u32)>, String, Value, String);
     let mut cards: Vec<Rendered> = resolved
@@ -700,11 +729,12 @@ fn render(
             )
         })
         .collect();
+    drop(cards_span);
     // Sorted by anchor (a card with no anchor last), then id.
     cards.sort_by(|a, b| (a.0.is_none(), &a.0, &a.1).cmp(&(b.0.is_none(), &b.0, &b.1)));
 
     let mode_name = match mode {
-        ExplainMode::Routine(_) => "routine",
+        ExplainMode::Routines(_) => "routine",
         ExplainMode::Diff { .. } => "diff",
         ExplainMode::Field { .. } => "field",
     };
@@ -712,9 +742,19 @@ fn render(
     doc.insert("schema".into(), SCHEMA.into());
     doc.insert("mode".into(), mode_name.into());
     match mode {
-        ExplainMode::Routine(s) => {
-            doc.insert("selector".into(), s.clone().into());
-        }
+        // One selector: the single-routine document, unchanged. Two or more:
+        // the list of distinct selectors, in input order, in its place.
+        ExplainMode::Routines(selectors) => match &distinct(selectors)[..] {
+            [one] => {
+                doc.insert("selector".into(), (*one).clone().into());
+            }
+            many => {
+                doc.insert(
+                    "selectors".into(),
+                    Value::Array(many.iter().map(|s| (*s).clone().into()).collect()),
+                );
+            }
+        },
         ExplainMode::Diff { .. } => {}
         ExplainMode::Field { table, field } => {
             doc.insert("selector".into(), json!({ "table": table, "field": field }));

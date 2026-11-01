@@ -2622,14 +2622,15 @@ page 50818 "T5 I-3 Wizard Alpha"
             identities: SnapshotIdentityTable {
                 stable_ids: identities.to_vec(),
                 display_names: identities.iter().map(|_| "x".to_string()).collect(),
-            },
+            }
+            .into(),
             capability_facts: Vec::new(),
             typed_edges: Vec::new(),
             operation_index: Vec::new(),
             callsite_index: Vec::new(),
             callsite_resolutions: Vec::new(),
             analysis_gaps: Vec::new(),
-            coverage: Vec::new(),
+            coverage: Vec::new().into(),
             event_declarations: Vec::new(),
             root_classifications: Vec::new(),
             routine_order_frames: None,

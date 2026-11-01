@@ -782,7 +782,10 @@ pub(crate) fn filter_by_class(
         match (class, *key) {
             (KeyClass::Header | KeyClass::Input | KeyClass::Gap | KeyClass::Evidence, _) => {}
             (_, "capabilityFacts") => core.capability_facts.retain(|f| is_primary(f.subject())),
-            (_, "coverage") => core.coverage.retain(|c| is_primary(&c.subject)),
+            // The inventory owns its tree: the `Arc` is unique, never copied.
+            (_, "coverage") => {
+                std::sync::Arc::make_mut(&mut core.coverage).retain(|c| is_primary(&c.subject))
+            }
             (_, "callsiteResolutions") => core.callsite_resolutions.retain(|r| is_primary(&r.from)),
             (_, "typedEdges") => core.typed_edges.retain(|e| is_primary(e.edge_from())),
             (_, "rootClassifications") => core
@@ -848,7 +851,7 @@ pub(crate) fn filter_by_class(
     }
 
     // (5) identities: every primary id plus every referenced one.
-    let ids = &mut core.identities;
+    let ids = std::sync::Arc::make_mut(&mut core.identities);
     let keep: Vec<bool> = ids
         .stable_ids
         .iter()

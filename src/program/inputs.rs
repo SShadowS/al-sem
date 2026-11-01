@@ -379,6 +379,14 @@ impl WorkspaceInputs {
         Arc::new(set)
     }
 
+    /// Whether this read answers every question `needs` asks: a read handed to
+    /// a job by its caller (a resident revision's, context-server design r3
+    /// §4.3) must hold what the job would have read itself.
+    pub fn holds(&self, needs: WorkspaceNeeds) -> bool {
+        (needs.build_only || !self.build_only)
+            && (!needs.fingerprint_rows || self.snapshot_inputs.is_some())
+    }
+
     /// The `.al` file at `rel_posix`, if the walk listed it.
     pub fn file(&self, rel_posix: &str) -> Option<&WsFile> {
         self.index.get(rel_posix).map(|&i| &self.al_files[i])

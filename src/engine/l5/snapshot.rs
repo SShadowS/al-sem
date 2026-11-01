@@ -1174,14 +1174,17 @@ pub struct SnapshotRootClassificationSlot {
 /// eventDeclarations, rootClassifications, [routineOrderFrames].
 #[derive(Debug, Clone)]
 pub struct CapabilitySnapshot {
-    pub identities: SnapshotIdentityTable,
+    /// Whole-program and shared: a tree's readers take `Arc` clones, never
+    /// the table itself (context-server design r3 §13 item 3).
+    pub identities: std::sync::Arc<SnapshotIdentityTable>,
     pub capability_facts: Vec<SnapshotCapabilityFact>,
     pub typed_edges: Vec<SnapshotGraphEdge>,
     pub operation_index: Vec<SnapshotOperationEvidence>,
     pub callsite_index: Vec<SnapshotCallsiteEvidence>,
     pub callsite_resolutions: Vec<SnapshotCallsiteResolution>,
     pub analysis_gaps: Vec<SnapshotAnalysisGap>,
-    pub coverage: Vec<SnapshotCoverageRecord>,
+    /// Whole-program and shared, as `identities`.
+    pub coverage: std::sync::Arc<Vec<SnapshotCoverageRecord>>,
     pub event_declarations: Vec<SnapshotEventDeclaration>,
     pub root_classifications: Vec<SnapshotRootClassificationSlot>,
     /// Absent when no routine has scope frames (symbol-only). A sorted-key map
@@ -1649,14 +1652,14 @@ pub fn compose_snapshot_from_base(
     );
 
     finish_snapshot(CapabilitySnapshot {
-        identities,
+        identities: identities.into(),
         capability_facts,
         typed_edges,
         operation_index,
         callsite_index,
         callsite_resolutions,
         analysis_gaps,
-        coverage,
+        coverage: coverage.into(),
         event_declarations,
         root_classifications,
         routine_order_frames,
@@ -1883,14 +1886,14 @@ pub(crate) fn compose_tree(
     drop(cone_pd);
 
     finish_snapshot(CapabilitySnapshot {
-        identities,
+        identities: identities.into(),
         capability_facts,
         typed_edges,
         operation_index,
         callsite_index,
         callsite_resolutions,
         analysis_gaps,
-        coverage,
+        coverage: coverage.into(),
         event_declarations,
         root_classifications,
         routine_order_frames,

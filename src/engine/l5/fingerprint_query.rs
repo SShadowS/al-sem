@@ -2028,14 +2028,14 @@ mod tests {
             ids.display_names.push((*display).into());
         }
         CapabilitySnapshot {
-            identities: ids,
+            identities: ids.into(),
             capability_facts: Vec::new(),
             typed_edges: Vec::new(),
             operation_index: Vec::new(),
             callsite_index: Vec::new(),
             callsite_resolutions: Vec::new(),
             analysis_gaps: Vec::new(),
-            coverage: Vec::new(),
+            coverage: Vec::new().into(),
             event_declarations: Vec::new(),
             root_classifications: Vec::new(),
             routine_order_frames: None,
