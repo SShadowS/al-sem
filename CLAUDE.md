@@ -39,6 +39,8 @@ cargo build --profile release-fast  # Thin LTO — USE THIS for measurement/tria
                                     # full --release only for the SHA-pinned north-star measure, perf_bounds, benches
                                     # `aldump --snapshot-memory <ws> [--single-app] [--hash]` under /usr/bin/time -v
                                     # re-measures cone memory; reference values: cone-memory spec §13
+                                    # `aldump --session-refresh <ws-COPY> --verify` measures the
+                                    # context server's incremental refresh per change type
 cargo build --profile cdo --bin aldump  # No LTO, incremental — for CORRECTNESS loops only (the CDO
                                     # unknown count, scripts/cdo-gate). ~1 min rebuild after an edit vs
                                     # ~2 min for release-fast. Never quote timings or memory from it.
@@ -80,7 +82,9 @@ Every test still runs before a merge; the tiers decide HOW OFTEN each one runs.
   `target/cdo/aldump.exe --program-call-graph-stats` / `--dependency-bodies-stats`
   (~1 min build + seconds to run); `cdo-gate` is the branch gate. **Do not set `CDO_WS` globally** — it was
   set as a user environment variable until 2026-10-04 and made every `cargo test` a
-  CDO run. The pinned path is `U:/Git/DO-cdo-baseline/Cloud`; pass it to `cdo-gate`.
+  CDO run. The pinned path is `U:/Git/DO-cdo-baseline/Cloud` on the Windows machine and
+  `/home/sshadows/Projects/DO-cdo-baseline/Cloud` on the Linux machine (the same `bc3ccb18`
+  worktree, transferred with matching hashes); pass it to `cdo-gate`.
 - **The pre-commit hook trusts a green task gate.** A green `ci-steps test` writes a
   stamp of the tested tree (`scripts/tree-stamp`, stored at
   `git rev-parse --git-path gate-stamp`). The hook skips its golden run only when the
@@ -232,6 +236,28 @@ removed every test, golden and `aldump` mode that measured L3 itself (`--l3-*`,
 `--b3`, `--r2-5a-merged-index`, the `tests/l3` suite), then the engine. Spec:
 `docs/superpowers/specs/2026-10-06-engine-switch-design.md`; plan:
 `docs/superpowers/plans/2026-10-07-engine-switch-s9.md`.
+
+**Consumer 3 — the context server** (`alsem mcp`, for AI agents). A resident engine that
+answers `explain` / `prove` / `digest` / `query` from a kept model instead of rebuilding
+per call. Design, review history and as-built notes:
+`docs/superpowers/specs/2026-11-01-context-server-design.md` (read it before changing any
+part). The pieces:
+- `src/mcp/`: the MCP front end (stdio JSON-RPC, tools `alsem_*`). Each call is turned into
+  the CLI's own argv and parsed by the CLI's clap inside the engine child — never a second
+  implementation of a command. Answers equal the CLI's stdout byte for byte (contract tests).
+- `src/engine/host/` + `src/wire/`: the engine child (`alsem engine-host`, hidden) and its
+  front end (`EngineFront`). The engine runs in a child process because `release-ship` is
+  `panic = "abort"`; the protocol, frame limits, backoff and the private output folder live
+  here. `alsem engine-ask -- <argv>` is a one-shot front end for tests and probes.
+- `src/engine/resident/`: the kept revision, `ensure_prepared` (artifacts filled in
+  dependency order, per-key generations), the input manifest and freshness check.
+- `src/program/session/`: incremental model refresh per change type (B body / S declaration
+  / F file / P package), with retained per-file parses, resolutions and raw rows; every
+  change type must give the same model as a cold build (the session tests compare).
+  Measure it with `aldump --session-refresh <workspace-copy> --verify` (it EDITS the
+  workspace, so only on a copy).
+The installed copy used by Claude Code is `~/.al-sem/bin/alsem` (registered as the `alsem`
+MCP server); it does not update itself — rebuild and copy it after the server changes.
 
 **Rules that live in modules** (find the files by name; the code is the tour):
 - `src/state_paths.rs` is the one place that knows both the current and pre-rename
@@ -530,7 +556,8 @@ metric-definition change is never stat-juked.
   time, and zero tests point at it any more. Every differential/golden is
   Rust-owned and regenerable via `REGEN_TEMP_GOLDENS=1 cargo test` (see above).
 - **The CDO baseline is a PINNED, reproducible workspace — keep it that way.**
-  `CDO_WS` must point at `U:/Git/DO-cdo-baseline/Cloud`: a git worktree of the DO
+  `CDO_WS` must point at `U:/Git/DO-cdo-baseline/Cloud` (Windows) or
+  `/home/sshadows/Projects/DO-cdo-baseline/Cloud` (Linux): a git worktree of the DO
   repo parked DETACHED at `bc3ccb18`, with a clean tree and its own copy of
   `.alpackages`. It is deliberately separate from the day-to-day `U:/Git/DO/Cloud`
   checkout, which moves as work happens.
