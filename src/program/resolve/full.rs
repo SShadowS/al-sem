@@ -2074,10 +2074,17 @@ impl ProgramContext {
                 })
                 .collect()
         });
-        let (mut edges, mut site_facts) = (Vec::new(), HashMap::new());
+        // Exactly sized: a workspace session keeps these for its whole life
+        // (context-server stage 3), and the per-file route vectors are
+        // push-built with as much spare capacity again as they hold.
+        let total: usize = results.iter().map(|r| r.edges.len()).sum();
+        let (mut edges, mut site_facts) = (Vec::with_capacity(total), HashMap::new());
         let mut parenless_calls = ParenlessCalls::new();
         for ((app, pf), r) in files.iter().zip(results) {
-            edges.extend(r.edges);
+            edges.extend(r.edges.into_iter().map(|mut e| {
+                al_syntax::ir::exact_size(&mut e.edge.routes);
+                e
+            }));
             site_facts.extend(r.site_facts);
             if !r.parenless.is_empty() {
                 parenless_calls.insert(

@@ -741,7 +741,7 @@ pub(crate) fn receiver_reset_after(
 ) -> bool {
     load_point_after(
         points,
-        routine.statement_tree.as_ref(),
+        routine.statement_tree.as_deref(),
         "rec",
         None,
         anchor,

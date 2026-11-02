@@ -500,7 +500,7 @@ fn apply_dep_operation_order(r: &mut ModelRoutine) -> Vec<DepScopeFrame> {
         variables: Vec::new(),
         var_assignments: Vec::new(),
         condition_references: Vec::new(),
-        statement_tree: r.statement_tree.clone(),
+        statement_tree: r.statement_tree.as_deref().cloned(),
         scope_frames: Vec::new(),
     };
 

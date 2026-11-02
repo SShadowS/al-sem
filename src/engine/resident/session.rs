@@ -434,8 +434,10 @@ impl ResidentSession {
 /// The target of a revision over `inputs` (the view builder's rules for a
 /// model view with [`REVISION_NEEDS`]): cross-app through the workspace
 /// session; single-app, or a workspace with no model-instance id (whose
-/// failure the cold builder words), through the cold builder.
-fn build_target(
+/// failure the cold builder words), through the cold builder. Public for the
+/// byte census (`tools/census-probe resident`).
+#[doc(hidden)]
+pub fn build_target(
     session: &mut WorkspaceSession,
     inputs: &Arc<WorkspaceInputs>,
     single_app: bool,

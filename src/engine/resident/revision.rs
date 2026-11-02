@@ -197,6 +197,21 @@ impl Revision {
         &self.target
     }
 
+    /// The revision's parts in the order a byte census drops them
+    /// (`tools/census-probe resident`): the artifact store, the relation,
+    /// the dependency calls, the read, then the target (last, so the
+    /// relation's and the calls' drop deltas are what only they held).
+    #[doc(hidden)]
+    pub fn into_census_parts(self) -> Vec<(&'static str, Box<dyn std::any::Any>)> {
+        vec![
+            ("revision.store", Box::new(self.store)),
+            ("revision.rel", Box::new(self.rel)),
+            ("revision.dependency_calls", Box::new(self.dependency_calls)),
+            ("revision.inputs", Box::new(self.inputs)),
+            ("revision.target", Box::new(self.target)),
+        ]
+    }
+
     /// The artifact store's counters.
     #[must_use]
     pub fn stats(&self) -> StoreStats {

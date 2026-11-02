@@ -81,6 +81,18 @@ pub fn preproc_contradicts(a: &[(String, bool)], b: &[(String, bool)]) -> bool {
         .any(|(s, v)| b.iter().any(|(t, w)| s == t && v != w))
 }
 
+/// Move `v` into a new allocation of exactly its length, freeing the old one.
+/// Not `Vec::shrink_to_fit`: an allocator may shrink in place and keep the
+/// whole block (mimalloc, the `alsem` binary's, keeps any block the new size
+/// fills at least half of — always the case after doubling growth).
+pub fn exact_size<T>(v: &mut Vec<T>) {
+    if v.capacity() > v.len() {
+        let mut exact = Vec::with_capacity(v.len());
+        exact.append(v);
+        *v = exact;
+    }
+}
+
 /// Push-only arena holding the `Expr`/`Stmt`/`Block` pools an `AlFile` references.
 #[derive(Default)]
 pub struct Ir {
@@ -96,6 +108,14 @@ pub struct Ir {
 impl Ir {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Drop the arenas' spare capacity (a finished lowering adds nothing).
+    pub fn shrink_to_fit(&mut self) {
+        exact_size(&mut self.exprs);
+        exact_size(&mut self.stmts);
+        exact_size(&mut self.blocks);
+        exact_size(&mut self.preproc_ranges);
     }
 
     pub fn add_expr(&mut self, e: Expr) -> ExprId {

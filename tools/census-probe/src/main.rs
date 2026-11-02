@@ -357,6 +357,7 @@ fn drop_root_by_field(r: Root) {
                 friends,
                 abi_ingest_errors,
                 workspace_rows,
+                ..
             } = g;
             step("graph.objects (own part + own_pos)", objects);
             step("graph.workspace_rows", workspace_rows);
@@ -1076,7 +1077,7 @@ fn q6_retained_census(ws: &std::path::Path) {
     );
     MARKS.lock().unwrap().clear();
     let (b0, a0) = live();
-    let inputs = al_sem::program::inputs::InputSet::read(ws, &Default::default());
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     let target = AnalysisTarget::build(&inputs, false, "census-probe").expect("cross-app base");
     on_mark("probe.base_returned");
     if let AnalysisTarget::CrossApp(base) = &target {
@@ -1116,7 +1117,7 @@ fn q6(ws: PathBuf) {
     use al_sem::program::model::workspace::{Model, ModelEntities, ModelRoutine};
     println!("==== Q6: alsem analyze pipeline on {} ====", ws.display());
     let fresh = phase("fresh_coverage", || {
-        let inputs = al_sem::program::inputs::InputSet::read(&ws, &Default::default());
+        let inputs = al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
         al_sem::program::resolve::full::build_program_with_coverage(&inputs).map(|(_, _, fc)| fc)
     });
     println!("    fresh_coverage ok: {}", fresh.is_ok());
@@ -1129,9 +1130,9 @@ fn q6(ws: PathBuf) {
     // projected from its parse, the program engine's calls and events attached.
     let resolved = phase("assemble_and_resolve_workspace_program", || {
         assemble_and_resolve_workspace_program(
-            &al_sem::program::inputs::InputSet::read(&ws, &Default::default()),
-            &id,
+            &al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default()),
             false,
+            al_sem::program::model::workspace::AssemblyNeeds::BASE,
         )
     })
     .expect("assemble");
@@ -1493,9 +1494,336 @@ fn index_split_mode(built: Vec<Root>) {
     );
 }
 
+/// `routines` dropped field by field, the deltas summed per field.
+fn routine_fields(routines: Vec<al_sem::program::model::workspace::ModelRoutine>) {
+    use al_sem::program::model::workspace::ModelRoutine;
+    let (t0, _) = live();
+    let n = routines.len();
+    let mut rf = Acc::default();
+    for r in routines {
+        let ModelRoutine {
+            id,
+            stable_routine_id,
+            object_id,
+            object_type,
+            name,
+            kind,
+            attributes_parsed,
+            app_guid,
+            normalized_signature_hash,
+            record_variables,
+            record_operations,
+            field_accesses,
+            variables,
+            parameters,
+            call_sites,
+            operation_sites,
+            statement_tree,
+            loops,
+            site_exprs,
+            source_anchor,
+            identifier_references,
+            unreachable_statements,
+            var_assignments,
+            condition_references,
+            rules,
+            rule_drafts,
+            card_text,
+            ..
+        } = r;
+        rf.drop_as(
+            "ids/names/strings",
+            (
+                id,
+                stable_routine_id,
+                object_id,
+                object_type,
+                name,
+                kind,
+                app_guid,
+                normalized_signature_hash,
+                source_anchor,
+            ),
+        );
+        rf.drop_as("attributes_parsed", attributes_parsed);
+        rf.drop_as("parameters", parameters);
+        rf.drop_as("variables", variables);
+        rf.drop_as("record_variables", record_variables);
+        rf.drop_as("record_operations", record_operations);
+        rf.drop_as("field_accesses", field_accesses);
+        rf.drop_as("call_sites", call_sites);
+        rf.drop_as("operation_sites", operation_sites);
+        rf.drop_as("statement_tree", statement_tree);
+        rf.drop_as("loops", loops);
+        rf.drop_as("site_exprs", site_exprs);
+        rf.drop_as("identifier_references", identifier_references);
+        rf.drop_as("unreachable_statements", unreachable_statements);
+        rf.drop_as("var_assignments", var_assignments);
+        rf.drop_as("condition_references", condition_references);
+        rf.drop_as("rules+drafts", (rules, rule_drafts));
+        rf.drop_as("card_text", card_text);
+        rf.drop_as("rest of the row", ());
+    }
+    let total = t0 - live().0;
+    println!(
+        "    {n} routines, {:.1} MiB (size_of ModelRoutine {} B)",
+        mib(total),
+        size_of::<ModelRoutine>()
+    );
+    rf.print(total);
+}
+
+/// The resident engine's live heap (context-server stage 3, T-mem): a
+/// workspace session and one revision built as `alsem engine-host` builds
+/// them, then one ask of each served kind (twice), then every retained part
+/// dropped in order, each drop delta printed. Live heap only: what the
+/// allocator keeps beyond it is the child's RSS minus these numbers.
+fn resident_mode(ws: PathBuf, routine: String) {
+    use al_sem::engine::batch::job::Job;
+    use al_sem::engine::resident::revision::Revision;
+    use al_sem::engine::resident::session::{REVISION_READ, build_target};
+    use al_sem::engine::resident::store::Control;
+    use al_sem::program::inputs::WorkspaceInputs;
+    use al_sem::program::session::WorkspaceSession;
+
+    let line = |label: &str, b0: isize, t: std::time::Instant| {
+        let (b, a) = live();
+        println!(
+            "  {label:<40} live {:>9.1} MiB  (+{:>8.1})  peak {:>9.1} MiB  allocs {:>10}  {:.1}s",
+            mib(b),
+            mib(b - b0),
+            mib(PEAK.load(Relaxed)),
+            a,
+            t.elapsed().as_secs_f64()
+        );
+        reset_peak();
+    };
+    let base = live().0;
+    PEAK.store(base, Relaxed);
+    println!("######## resident {} routine {routine}", ws.display());
+    let t = std::time::Instant::now();
+    let inputs = WorkspaceInputs::read(&ws, &REVISION_READ);
+    line("read", base, t);
+    let mut session = WorkspaceSession::new();
+    let t = std::time::Instant::now();
+    let b0 = live().0;
+    let target = build_target(&mut session, &inputs, false)
+        .unwrap_or_else(|_| panic!("the model did not build"));
+    line("build (session + target)", b0, t);
+    let id = al_sem::wire::RevisionId {
+        engine_instance_id: "probe".into(),
+        generation: 1,
+        inputs_stamp: "probe".into(),
+    };
+    let rev = Revision::new(id, Arc::clone(&inputs), target);
+    let ver = "probe";
+    let ask = |name: &str| -> Box<dyn Job + '_> {
+        use al_sem::engine::l5::digest_cli::{DiffRoot, DigestJob, DigestRequest};
+        use al_sem::engine::l5::explain::{ExplainJob, ExplainMode, ExplainRequest};
+        match name {
+            "query" => Box::new(al_sem::engine::l4::effect_query_cli::QueryJob::effects(
+                &inputs, &routine, ver, true, false,
+            )),
+            "explain" => Box::new(ExplainJob::new(
+                ExplainRequest {
+                    inputs: &inputs,
+                    mode: ExplainMode::Routines(vec![routine.clone()]),
+                    single_app: false,
+                },
+                true,
+                None,
+            )),
+            "prove" => Box::new(al_sem::engine::l5::prove::ProveJob {
+                detectors: al_sem::engine::l5::detectors::default_detectors(),
+                inputs: &inputs,
+                routine_selector: &routine,
+                question_text: "may-commit",
+                alsem_ver: ver,
+                deterministic: true,
+                single_app: false,
+                closed_world: false,
+                human: false,
+                out: None,
+            }),
+            _ => Box::new(DigestJob::new(
+                DigestRequest {
+                    inputs: &inputs,
+                    changed_files: None,
+                    changed_routines: Some(vec![routine.clone()]),
+                    diff_text: None,
+                    alsem_ver: ver,
+                    deterministic: true,
+                    single_app: false,
+                    tests: false,
+                    include_reads: false,
+                    diff_root: DiffRoot::Workspace,
+                },
+                false,
+                None,
+            )),
+        }
+    };
+    for round in 0..2 {
+        for name in ["query", "explain", "prove", "digest"] {
+            let t = std::time::Instant::now();
+            let b0 = live().0;
+            let job = ask(name);
+            let out = rev.answer(&*job, &Control::unreserved());
+            drop(job);
+            let ok = out
+                .as_ref()
+                .map_or_else(|e| format!("{e:?}"), |o| format!("exit {}", o.exit));
+            drop(out);
+            line(&format!("ask {name} (round {round}) {ok}"), b0, t);
+        }
+    }
+    println!("  fills: {:?}", rev.fill_counts());
+    println!("-- drop deltas (MiB, allocs):");
+    for kind in ["run", "det", "raw", "fold", "l4", "rules", "ordering"] {
+        let keys = rev.keys_where(|k| k.kind() == kind);
+        let (b0, a0) = live();
+        rev.evict(&keys);
+        let (b1, a1) = live();
+        println!(
+            "  {:<58} {:>9.2} MiB {:>10} allocs",
+            format!("artifact.{kind} ({} keys)", keys.len()),
+            mib(b0 - b1),
+            a0 - a1
+        );
+    }
+    step("probe's inputs handle", inputs);
+    for (name, part) in rev.into_census_parts() {
+        if name != "revision.target" {
+            step(name, part);
+            continue;
+        }
+        let target = part
+            .downcast::<Arc<al_sem::engine::gate::run::AnalysisTarget>>()
+            .expect("the target part");
+        let Ok(target) = Arc::try_unwrap(*target) else {
+            panic!("the target is shared")
+        };
+        match target {
+            al_sem::engine::gate::run::AnalysisTarget::CrossApp(b) => {
+                let mut b = *b;
+                step("base.leaf_summaries", std::mem::take(&mut b.leaf_summaries));
+                step("base.direct_full", std::mem::take(&mut b.direct_full));
+                step(
+                    "base.direct_coverage",
+                    std::mem::take(&mut b.direct_coverage),
+                );
+                step(
+                    "base.dep_routine_ids",
+                    std::mem::take(&mut b.dep_routine_ids),
+                );
+                step("base.fixed_roles", std::mem::take(&mut b.fixed_roles));
+                step("base.dependency_calls", b.dependency_calls.take());
+                let m = &mut b.resolved;
+                step(
+                    "model.calls",
+                    std::mem::replace(&mut m.calls, Default::default()),
+                );
+                step(
+                    "model.events",
+                    std::mem::replace(&mut m.events, Default::default()),
+                );
+                println!("  model.routines by field:");
+                routine_fields(std::mem::take(&mut m.workspace.routines));
+                step("model.tables", std::mem::take(&mut m.workspace.tables));
+                step("model.objects", std::mem::take(&mut m.workspace.objects));
+                step("base rest (rel, field index, coverage, …)", b);
+            }
+            other => {
+                step("target (single-app model)", other);
+            }
+        }
+    }
+    for (name, part) in session.take_census_parts() {
+        if name == "retained.tier" {
+            let tier = part.downcast::<Arc<DepNodes>>().expect("the tier part");
+            match Arc::try_unwrap(*tier) {
+                Ok(t) => {
+                    let DepNodes {
+                        objects,
+                        routines,
+                        dep_meta,
+                        bodies,
+                        lsp,
+                        lsp_events,
+                        ..
+                    } = t;
+                    if let Some(b) = &bodies {
+                        let (files, text): (usize, usize) = b
+                            .iter()
+                            .flat_map(|u| u.files.iter())
+                            .fold((0, 0), |(n, t), f| (n + 1, t + f.text.len()));
+                        println!(
+                            "  tier.bodies: {} units, {files} files, text {:.1} MiB",
+                            b.len(),
+                            mib(text as isize)
+                        );
+                    }
+                    step("session.tier.bodies", bodies);
+                    step("session.tier.routines", routines);
+                    step("session.tier.objects", objects);
+                    step("session.tier.dep_meta", dep_meta);
+                    step("session.tier.lsp", (lsp, lsp_events));
+                }
+                Err(t) => {
+                    step("session.retained.tier (shared)", t);
+                }
+            };
+            continue;
+        }
+        if name == "rows.dependency.routines" {
+            let rows = part
+                .downcast::<Vec<Vec<al_sem::program::model::workspace::ModelRoutine>>>()
+                .expect("the rows part");
+            println!("  session.rows.dependency.routines by field:");
+            routine_fields(rows.into_iter().flatten().collect());
+            continue;
+        }
+        if name == "retained.dependency_resolution" {
+            use al_sem::program::resolve::full::DependencyBodyResolution;
+            let d = part
+                .downcast::<Arc<DependencyBodyResolution>>()
+                .expect("the dependency part");
+            match Arc::try_unwrap(*d) {
+                Ok(d) => {
+                    let routes: usize = d.edges.iter().map(|e| e.edge.routes.len()).sum();
+                    let route_cap: usize = d.edges.iter().map(|e| e.edge.routes.capacity()).sum();
+                    println!(
+                        "  dep edges: len {} cap {} size_of {}; routes len {routes} cap {route_cap} size_of {}",
+                        d.edges.len(),
+                        d.edges.capacity(),
+                        size_of::<ClassifiedEdge>(),
+                        size_of::<Route>()
+                    );
+                    step("session.dep_resolution.edges", d.edges);
+                    step("session.dep_resolution.site_facts", d.site_facts);
+                    step("session.dep_resolution.parenless", d.parenless_calls);
+                }
+                Err(d) => {
+                    step("session.dep_resolution (shared)", d);
+                }
+            }
+            continue;
+        }
+        step(&format!("session.{name}"), part);
+    }
+    step("session", session);
+    println!("  remaining live {:>9.1} MiB", mib(live().0 - base));
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let source = match args.next().as_deref() {
+        Some("resident") => {
+            let ws = PathBuf::from(args.next().expect("workspace"));
+            let routine = args.next().unwrap_or_else(|| "IssueReminder".into());
+            resident_mode(ws, routine);
+            return;
+        }
         Some("embedded") => DependencySource::Embedded,
         Some("symbols") => DependencySource::Symbols,
         // Q6, the analyze model's cost (was `l3` before engine-switch S9).
@@ -1553,7 +1881,7 @@ fn main() {
         reset_peak();
         let t = std::time::Instant::now();
         let (snap, ws) = LspSnapshot::build_full_with_parsed_with_cache(root, source, &cache)
-            .unwrap_or_else(|| panic!("build failed: {}", root.display()));
+            .unwrap_or_else(|_| panic!("build failed: {}", root.display()));
         on_mark("10.returned");
         let secs = t.elapsed().as_secs_f64();
         println!(

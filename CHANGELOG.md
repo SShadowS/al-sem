@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (context-server stage 3: the resident engine keeps less)
+
+- **Where the resident child's memory goes, measured.** A new `census-probe
+  resident <ws> [routine]` mode (counting allocator, drop deltas) builds a
+  workspace session and a revision as `alsem engine-host` does, asks query,
+  explain, prove and digest twice, then drops every retained part in order.
+  On CDO (master `e5b515be`), live heap after the build 3,522 MiB and after
+  the four asks 4,441 MiB: the workspace session 2,635 MiB (dependency body
+  parses 1,121, dependency rows 691, dependency resolution 595, workspace rows
+  70, the rest 158), the model and cross-app base 888 MiB (routine rows 576),
+  the artifacts 918 MiB (fold 602, det 191, l4 79, run 46). The child's RSS is
+  about 0.7 GB above its live heap (28 M live allocations); `mi_collect`
+  after each ask frees none of it.
+- **Spare capacity is no longer retained.** Each parse's arenas
+  (`al_syntax::ir::exact_size`, a move into an exact allocation: mimalloc
+  keeps a block a `shrink_to_fit` still fills by half), the dependency edges
+  and their route vectors, and the session's kept dependency rows (a clone
+  is kept, not the push-built original) are exactly sized; a routine's
+  `statement_tree` is behind an `Arc`, one exact copy shared by the kept rows
+  and every revision's model. CDO live heap after the build 2,792 MiB (was
+  3,522), after the four asks 3,711 MiB (was 4,441); child RSS after the
+  build 3.69 GB (was 4.26), after the four asks 4.55 GB (was 5.14), peak
+  5.37 GB (was 5.98). Answers unchanged (every golden and T-order test).
+
 ### Fixed (`alsem mcp` help and README described the engine as not yet resident)
 
 - **`alsem mcp --help` and the README said each call builds the model afresh and that
