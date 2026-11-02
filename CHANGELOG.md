@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (context server: the resident refresh)
+
+- **The default mode no longer extracts the dependency source text again on
+  every refresh.** The workspace session now keeps each source-bearing
+  dependency's extracted file list in both memory modes (before, only
+  `--low-mem` did), so the next snapshot shares that text through the
+  session's `DepCache` at the same `.app` stamp (size, time and the image's
+  blake3) instead of extracting it again; a changed package is a new stamp
+  and a P refresh, which extracts the new text. The tier's trees hold the same
+  `Arc<str>` texts, so only the lists are extra. Measured on CDO
+  (release-fast, `IssueReminder`, one `alsem engine-host` child through
+  `census-probe front-seq`, six B refreshes per run, two runs interleaved with
+  the old binary): B refresh median **2.76 s -> 2.61 s** (2.67-2.81 s before,
+  2.50-2.70 s after); S unchanged within noise (6.9-7.5 s). Test
+  `dependency_text_is_extracted_once_per_package` (both modes, every step
+  cold-equal): one extraction for the cold refresh, none for a B or an S,
+  one for a changed package, none for the B after it. Discrimination:
+  keeping the list only under `--low-mem` again fails the default-mode test
+  at the first B (1 extraction, expected 0); reverted, green.
+
 ### Added (context server: `--low-mem`, no dependency syntax trees kept between revisions)
 
 - **Owner decision (2026-11-02):** the default keeps everything (fastest); about
