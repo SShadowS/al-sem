@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Measured (context-server stage 2: sequential warm asks through the resident child)
+
+- CDO baseline, release-fast, one `alsem engine-host` driven over the
+  protocol, cross-app, `IssueReminder`; every stdout byte-equal to the CLI's
+  (sha256 compared). Wall per ask, child RSS after it, against a cold CLI run:
+  first ask `query effects` **16.2 s** (build 13.6 s + solve 2.5 s; RSS
+  4.28 GB) vs CLI 12.0 s; warm `query effects` **0.04 s**; `explain
+  --routine --format json` **21.8 s** (the first composition with every
+  primary routine's raw facts 14.9 s, then the tree and card 6.9 s; RSS
+  4.95 GB) vs 25.9 s; `prove may-commit` **7.4 s** (det 0.8 s, tree + prove
+  6.6 s) vs 27.2 s; `digest --routine` **5.9 s** vs 26.8 s. Resident RSS
+  after all five **5.16 GB**, peak 5.98 GB (CLI peaks 3.35–3.40 GB): above
+  the design's 3 GB resident target, which stage 3's T-mem owns. The
+  per-ask freshness check took 1.4 ms.
+- One body edit on a temp copy (a statement added to `IssueReminder`): the
+  next ask refreshed the revision (class B, 3.0 s, 1 file parsed and
+  resolved, dependency bodies reused) and answered `query` in **5.5 s** in all
+  (the L4 solve is not seeded yet: 2.2 s); the following `digest` took
+  21.5 s (the composition is refolded whole until stage 5's cone store:
+  15.4 s) vs CLI 26.6 s. Both byte-equal to the CLI on the edited copy.
+
 ### Added (context-server stage 2: the resident engine child and the completed protocol)
 
 - **`alsem engine-host` is resident**: the first ask builds a revision of the
