@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (context-server stage 2: the resident session core)
+
+- **`engine::resident`** (design §4-§5): the session core a resident engine
+  child answers from. `store`: artifact snapshots and `ensure_prepared`
+  (§4.2) — dependency-aware phases, a fill registry with per-key monotonic
+  generations, one publication transaction per phase that merges into the
+  current snapshot and discards a value whose key was tombstoned since its
+  claim (refilled, at most 3 times, then "artifact churn"), keys pinned for
+  assembly that eviction skips, and claims released and waiters woken on
+  every failure path (cancel, deadline, failed reservation, failed or
+  panicking fill); a request gets a ready snapshot or an error, never a
+  partial one. `revision`: one built target over one acquired read, its
+  artifacts (`Ordering`, `Rules`, `Fold` = the one composition with the
+  primary raw facts and pd arena, `L4` with its never-drained core
+  summaries, `Raw(subjects)` for dependency roots, `Det` at a mask, `Run`),
+  and `answer(job)`: resolve, `ensure_prepared`, the request's trees off the
+  ready snapshot, the job's compute over a served `View` — the CLI's exact
+  output. `manifest`: every input a build reads (each `.al` text, the walk,
+  `app.json`, `roots.config.json`, the coverage yaml, the nested `app.json`
+  list, the source-dependency config, package discovery and each `.app`,
+  universe, engine, grammar), `M_consumed` from the acquired read, stat-cached
+  or fully hashed observations, the `al-sem-manifest-v1:` stamp, and the
+  three-way check over every entry. `session`: the published revision (or
+  failed build), the per-request pin by freshness mode (`fresh`, `verify`,
+  `latest-built` with `stale`, changed paths and a background refresh),
+  change notifications, and the build (cross-app through the stage-4
+  `WorkspaceSession`) discarded and retried when its three observations
+  disagree (3 attempts, then `inputsUnstable`).
+- `View` holds its target owned or shared (`View::served` is no longer
+  test-only); `capability_cone::cross_app_base_of` builds the base over a
+  cross-app model built already (the session's).
+- Tests (each with a recorded discrimination proof): T-prepared on the store
+  (empty snapshot, eviction, disjoint concurrent publication, tombstoned
+  publication refilled, joined prerequisite before dependent, failed
+  reservation wakes its waiter, cancelled waiter, failed fill, churn, pinned
+  keys); T-order on real artifacts (mixed orders single-app and cross-app,
+  dependency root, det evict and refill, seeded L4 over the retained core,
+  T-pin, cancel between phases); T-manifest; T-fresh, latest-built, verify
+  and notify, T-acquire-during, T-acquire-after, unstable inputs,
+  T-failed-build. The stage-1 test-only `Prepared` driver is gone (its tests
+  moved to the revision).
+
 ### Measured (context-server stage 4: refresh per change type)
 
 - On a temp copy of the CDO baseline (release-fast, `aldump --session-refresh

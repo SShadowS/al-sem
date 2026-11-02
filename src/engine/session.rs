@@ -31,8 +31,10 @@ use crate::program::model::workspace::Model;
 /// One command's model and the cells built over it (spec §4.4.3).
 pub struct View {
     /// Private: the cells describe this target, so it never changes after
-    /// `new` (read it through [`View::target`]).
-    target: AnalysisTarget,
+    /// `new` (read it through [`View::target`]). A served view (a resident
+    /// revision's, [`View::served`]) shares the revision's target and never
+    /// prepares.
+    target: HeldTarget,
     /// One execution relation per view (#160 step 4): single-app built by
     /// `prepare`, cross-app `Arc::clone(&base.rel)`. It holds the SCC too, so
     /// single-app the SCC lives from the relation's build, before the det
@@ -65,6 +67,33 @@ pub struct View {
     /// `ordering`: once, before the runs.
     rules: Option<RulesIndex>,
     runs: BTreeMap<RunKey, Arc<RunOutput>>,
+}
+
+/// A view's target: its own (a one-shot view, which `prepare` may take parts
+/// of), or a resident revision's, shared and never modified (context-server
+/// design §4.3: "a `View` facade holding `Arc` clones of the revision's
+/// cells").
+enum HeldTarget {
+    Owned(AnalysisTarget),
+    Shared(Arc<AnalysisTarget>),
+}
+
+impl HeldTarget {
+    fn get(&self) -> &AnalysisTarget {
+        match self {
+            HeldTarget::Owned(t) => t,
+            HeldTarget::Shared(t) => t,
+        }
+    }
+
+    /// The owned target, for `prepare`'s takes. A served view never
+    /// prepares: its cells are the revision's.
+    fn owned(&mut self) -> &mut AnalysisTarget {
+        match self {
+            HeldTarget::Owned(t) => t,
+            HeldTarget::Shared(_) => panic!("a served view never prepares"),
+        }
+    }
 }
 
 /// A run's identity: its detectors, their mask and its scope.
@@ -202,7 +231,7 @@ impl WitnessRequest {
     }
 
     /// The internal ids of every row this request names in `model`.
-    fn subjects(&self, model: &Model) -> BTreeSet<String> {
+    pub(crate) fn subjects(&self, model: &Model) -> BTreeSet<String> {
         model
             .workspace
             .routines
@@ -625,7 +654,7 @@ impl Plan {
 
     /// Whether the view's composition keeps raw facts: a request or a tree
     /// demand (a tree takes `raw`, empty under an empty request).
-    fn keeps_raw(&self) -> bool {
+    pub(crate) fn keeps_raw(&self) -> bool {
         !self.witness.is_empty() || !self.trees.is_empty()
     }
 
@@ -638,7 +667,7 @@ impl Plan {
 
     /// The derived rows are the det fill's (TRANSACTION_SPANS folds over the
     /// summaries); the raw half is the witness request's.
-    fn needs_derived(&self) -> bool {
+    pub(crate) fn needs_derived(&self) -> bool {
         self.union() & (substrate::SUMMARIES | substrate::TRANSACTION_SPANS) != 0
     }
 
@@ -647,8 +676,24 @@ impl Plan {
         self.runs.iter().map(key).collect()
     }
 
-    fn union(&self) -> u32 {
+    pub(crate) fn union(&self) -> u32 {
         self.runs.iter().map(|(r, _)| mask(r)).fold(0, |a, m| a | m)
+    }
+
+    /// The substrate bits the command reads off the view itself
+    /// ([`Plan::own`]).
+    pub(crate) fn own_bits(&self) -> u32 {
+        self.own
+    }
+
+    /// Each run's detectors and scope, in plan order.
+    pub(crate) fn run_entries(&self) -> &[(Vec<Detector>, bool)] {
+        &self.runs
+    }
+
+    /// The tree demands, each under its job.
+    pub(crate) fn tree_demands(&self) -> &[(JobId, TreeDemand)] {
+        &self.trees
     }
 
     /// Whether `prepare` solves `l4` for this plan (`prepare_inner`'s
@@ -676,7 +721,7 @@ impl Plan {
 }
 
 /// A run's key, its scope its own (#277 D5.5).
-fn key((run, scope_primary): &(Vec<Detector>, bool)) -> RunKey {
+pub(crate) fn key((run, scope_primary): &(Vec<Detector>, bool)) -> RunKey {
     RunKey {
         detectors: run.iter().map(|d| d.name.clone()).collect(),
         demanded: mask(run),
@@ -757,23 +802,22 @@ pub(crate) fn compose_cone(
     dc::compose_capabilities(model, rel.cone(), dc::det_cone_inputs(model, rel), scope)
 }
 
-/// The raw-emission phase (`emit_raw`): the raw facts of `subjects` alone,
+/// The raw-emission phase: the raw facts of `subjects` (internal ids) alone,
 /// for a reader whose subjects a retained composition did not emit (a
-/// dependency root over a primary-scoped composition). Today it is a raw-only
-/// composition (no derived rows), r3 §12's "scoped second composition"; the
-/// retained-cone emission is stage 5's cone store. Its entries equal the ones
-/// a composition over any scope containing them emits
-/// (`prove_scoped_equals_unscoped`).
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn emit_raw(
+/// dependency root over a primary-scoped composition; a resident revision's
+/// `Raw` artifact). Today it is a raw-only composition (no derived rows), r3
+/// §12's "scoped second composition"; the retained-cone emission is stage
+/// 5's cone store. Its entries equal the ones a composition over any scope
+/// containing them emits (`prove_scoped_equals_unscoped`).
+pub(crate) fn emit_raw_ids(
     model: &Model,
     rel: &ExecRelation,
-    subjects: &WitnessRequest,
+    subjects: BTreeSet<String>,
 ) -> InheritedFacts {
     let _s = pt::span("context", "context.emit_raw");
     let scope = ConeScope {
         derived: false,
-        raw: subjects.scope(model),
+        raw: WitnessScope::Subjects(subjects),
     };
     dc::compose_capabilities(model, rel.cone(), dc::det_cone_inputs(model, rel), scope).1
 }
@@ -900,6 +944,10 @@ pub(crate) fn run_once(
 
 impl View {
     pub fn new(target: AnalysisTarget) -> View {
+        View::with_target(HeldTarget::Owned(target))
+    }
+
+    fn with_target(target: HeldTarget) -> View {
         View {
             target,
             rel: None,
@@ -1043,12 +1091,12 @@ impl View {
         // Final panel F1-C2: the dependency calls (cross-app) are read only by
         // a tree; they leave the base in the first prepare and die at the
         // tree's composition below; a plan with no tree drops them here.
-        let dependency_calls = match &mut *target {
+        let dependency_calls = match target.owned() {
             AnalysisTarget::CrossApp(b) => b.dependency_calls.take(),
             AnalysisTarget::SingleApp(_) => None,
         }
         .filter(|_| !plan.trees.is_empty());
-        let target = &*target;
+        let target = target.get();
         let model = target.resolved();
         let cross_base = match target {
             AnalysisTarget::SingleApp(_) => None,
@@ -1295,8 +1343,10 @@ impl View {
             Cell::Tree => self.tree = None,
             Cell::Effects => self.effects.clear(),
             Cell::TreeRead => self.tree_reads.clear(),
+            // A served view's base is the revision's: its release drops
+            // nothing of it.
             Cell::Base => {
-                if let AnalysisTarget::CrossApp(b) = &mut self.target {
+                if let HeldTarget::Owned(AnalysisTarget::CrossApp(b)) = &mut self.target {
                     b.release_past_prepare();
                 }
             }
@@ -1354,7 +1404,7 @@ impl View {
         .into_iter()
         .filter_map(|(name, filled)| filled.then_some(name))
         .collect();
-        let rel = match &self.target {
+        let rel = match self.target.get() {
             AnalysisTarget::CrossApp(b) => b.held_rel().or(self.rel.as_ref()),
             AnalysisTarget::SingleApp(_) => self.rel.as_ref(),
         };
@@ -1367,11 +1417,11 @@ impl View {
     }
 
     pub fn target(&self) -> &AnalysisTarget {
-        &self.target
+        self.target.get()
     }
 
     pub fn model(&self) -> &Model {
-        self.target.resolved()
+        self.target.get().resolved()
     }
 
     pub fn rel(&self) -> &Arc<ExecRelation> {
@@ -1461,10 +1511,10 @@ impl View {
         }
         // #160 F1-C2, as `prepare` does for a plan with no tree: only a tree
         // reads the dependency calls (final r1 FX-10).
-        if let AnalysisTarget::CrossApp(b) = &mut self.target {
+        if let AnalysisTarget::CrossApp(b) = self.target.owned() {
             b.dependency_calls = None;
         }
-        let target = &self.target;
+        let target = self.target.get();
         let rel = Arc::clone(self.rel.get_or_insert_with(|| relation_of(target)));
         // §4.2: the host's third phase check, after the relation.
         if (control.cancel)() {
@@ -1493,14 +1543,14 @@ impl View {
             .unwrap_or_else(|_| panic!("take_l4 on a view whose l4 another holder shares"))
     }
 
-    /// A view over cells another holder filled (the borrowed phase path of
-    /// the stage-1 tests; stage 2's revision facade): `prepare` never runs on
-    /// it, and every cell it holds is a shared handle or the request's own
-    /// read. The target goes back with [`View::into_target`].
-    #[cfg(test)]
+    /// A view over cells another holder filled (the resident revision's
+    /// facade, context-server design §4.3; the stage-1 tests' borrowed phase
+    /// path): `prepare` never runs on it, and every cell it holds is a shared
+    /// handle or the request's own read. Its releases drop only the view's
+    /// own handles.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn served(
-        target: AnalysisTarget,
+        target: Arc<AnalysisTarget>,
         rel: Arc<ExecRelation>,
         l4: Option<Arc<L4Analysis>>,
         det: Option<Arc<DetectorArtifacts>>,
@@ -1517,14 +1567,8 @@ impl View {
             runs,
             // A served view composes nothing.
             released: Cell::Caps.bit() | Cell::Raw.bit() | Cell::Tree.bit(),
-            ..View::new(target)
+            ..View::with_target(HeldTarget::Shared(target))
         }
-    }
-
-    /// The target back from a [`View::served`] view.
-    #[cfg(test)]
-    pub(crate) fn into_target(self) -> AnalysisTarget {
-        self.target
     }
 }
 

@@ -22,6 +22,9 @@ pub mod l5;
 /// `ALSEM_TRACE` is unset; emits a Chrome-Trace side file otherwise. See the
 /// module doc for the disabled-path / crash-safety / threading contracts.
 pub mod perf_trace;
+/// The resident session of the context server (design §4-§5, stage 2): a
+/// revision kept between requests, its artifact store, the manifest.
+pub mod resident;
 pub mod return_summary;
 pub mod root_classification;
 /// #160 step 2: `View`, `Plan`, `RunKey` (spec §4.4.3).

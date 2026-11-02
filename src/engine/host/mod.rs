@@ -137,6 +137,12 @@ impl Hello {
 const GRAMMAR_SHA: &str =
     include_str!("../../../crates/al-syntax/src/raw/generated/node-types.sha256");
 
+/// The committed `node-types.sha256` of the grammar this build links.
+#[must_use]
+pub fn grammar_sha() -> &'static str {
+    GRAMMAR_SHA.trim()
+}
+
 /// A fresh id for this engine process: its pid and start time, hashed.
 fn engine_instance_id() -> String {
     let now = std::time::SystemTime::now()
