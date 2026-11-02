@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (context server: the LSP front end)
+
+- **The editor's LSP server answers explain / prove / digest / query
+  through the resident engine** (context-server design §9, the last stage-3
+  item). New custom requests under the frozen `al-call-hierarchy/` prefix:
+  `explain`, `prove`, `digest`, `queryEffects`, `queryTouches`,
+  `engineStatus`, `engineRefresh`. Params are the arguments of the matching
+  MCP tools (`alsem_explain`, ...; validated by the same code, so flags and
+  defaults are the CLI's), plus an optional `uri` (its workspace root
+  answers; default the first root) and `workDoneToken` (`$/progress`). The
+  result is the MCP envelope (`kind`, `revision`, `exitCode`, `stdoutText` /
+  `stdoutFile`, ...): the stdout is the CLI's byte for byte. The server is a
+  CLIENT of an `alsem engine-host` child, never a second in-process engine:
+  requests run on the engine pool's worker threads, so call hierarchy is
+  answered while one runs; the child starts on the first engine request
+  (never at server start), ends on its idle timeout and with the server.
+  `$/cancelRequest` sends the running request `session/cancel` (answered
+  `RequestCancelled`, the engine's `cancelled` answer as `data`); `didSave`
+  and the root's file watcher send `session/notifyChanged`, so an edit that
+  keeps a file's size and time is still seen.
+- **The engine executable** is the `alsem` binary next to `al-call-hierarchy`
+  (the packages ship both), or `engine.executable`. The server binary cannot
+  host the engine itself: the engine decodes each command line with the
+  `alsem` CLI's clap and planning, which live in that binary. A command that
+  reads paths (`--diff`, `--file`) has its file-system decisions made on the
+  server's side by the same binary (`alsem engine-ask --params`).
+- **Config**: an `engine` section in `~/.al-sem/config.json` and the
+  workspace's `.al-sem.json` (pre-rename spellings read too): `enabled`
+  (default true), `executable`, `memoryBudget`, `lowMem`, `idleTimeoutSecs`,
+  `maxChildren`; read at the first engine request. Output files go to
+  `~/.al-sem/lsp-out/<instance>/`.
+
+### Changed (context server)
+
+- **`alsem mcp`'s engine workers moved to `src/mcp/pool.rs`**, shared by the
+  MCP and LSP front ends behind a small `Transport` trait (how a response is
+  wrapped, how a cancelled request ends, how progress is sent). MCP behaviour
+  and bytes unchanged (`tests/cli/mcp_server.rs` green). `EngineFront` gains
+  `notify_changed_if_running`, which never starts a child.
+
 ### Fixed (context server: the resident refresh)
 
 - **The default mode no longer extracts the dependency source text again on

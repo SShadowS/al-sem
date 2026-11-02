@@ -12,6 +12,7 @@ mod dep_dispatch_fixture;
 
 mod l4_host_binary;
 mod l4_host_oracle;
+mod lsp_engine;
 mod lsp_incremental_parity;
 mod perf_support_smoke;
 mod program_graph;

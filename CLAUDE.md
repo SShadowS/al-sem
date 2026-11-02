@@ -193,6 +193,10 @@ Every module above lives in `src/lsp/` (a library module) so
 benches/tests can build a snapshot and query it in-process; `main.rs` re-exports `lsp`
 (alongside `config`/`telemetry`/`analysis`) so the binary-only modules (`server.rs`,
 `watcher.rs`) keep using it unchanged.
+The server also answers `al-call-hierarchy/{explain,prove,digest,queryEffects,queryTouches,
+engineStatus,engineRefresh}` as a CLIENT of the context server's engine child (Consumer 3,
+`src/lsp/engine.rs`), never with an in-process model: off the main loop, the child started
+on the first such request.
 
 **Consumer 2 — the CLI / `aldump`** (whole-program call-graph resolution, the moat):
 ```
@@ -245,6 +249,9 @@ part). The pieces:
 - `src/mcp/`: the MCP front end (stdio JSON-RPC, tools `alsem_*`). Each call is turned into
   the CLI's own argv and parsed by the CLI's clap inside the engine child — never a second
   implementation of a command. Answers equal the CLI's stdout byte for byte (contract tests).
+  `src/mcp/pool.rs` (workers, children bound, cancel, output folder) is shared with the LSP
+  front end (`src/lsp/engine.rs`, design §9), which spawns the `alsem` binary next to
+  `al-call-hierarchy` (or `engine.executable` in `.al-sem.json` / `~/.al-sem/config.json`).
 - `src/engine/host/` + `src/wire/`: the engine child (`alsem engine-host`, hidden) and its
   front end (`EngineFront`). The engine runs in a child process because `release-ship` is
   `panic = "abort"`; the protocol, frame limits, backoff and the private output folder live

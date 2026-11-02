@@ -499,6 +499,25 @@ impl EngineFront {
             .map_err(|(_, m)| m)
     }
 
+    /// [`EngineFront::notify_changed`] to a running child only: `Ok(false)`,
+    /// and nothing sent, when no child runs, or the running one announced
+    /// its idle exit or was stopped by its reader (the next ask starts a
+    /// new child, which checks the disk anyway). Never starts a child.
+    pub fn notify_changed_if_running(&mut self, paths: Vec<PathBuf>) -> Result<bool, String> {
+        let live = self
+            .running
+            .as_ref()
+            .is_some_and(|r| !r.idle_notice && r.frames.stats().failure.is_none());
+        if !live {
+            return Ok(false);
+        }
+        let params = serde_json::to_value(super::NotifyChangedParams { paths })
+            .map_err(|e| e.to_string())?;
+        self.notify("session/notifyChanged", params)
+            .map(|()| true)
+            .map_err(|(_, m)| m)
+    }
+
     /// `session/refresh {wait}`: with `wait`, the published revision after a
     /// fresh check (and any rebuild); without, `{started: true}` at once.
     pub fn refresh(&mut self, wait: bool) -> Result<serde_json::Value, String> {

@@ -53,6 +53,7 @@
 //! watches no files; the default `fresh` check per call sees every edit.
 
 pub mod output;
+pub mod pool;
 mod server;
 pub mod tools;
 
