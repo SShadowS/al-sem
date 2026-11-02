@@ -28,8 +28,9 @@
 //! under the budget.
 //!
 //! The RSS and peak come from a [`Meter`]: the process's own (`/proc` on
-//! Linux; elsewhere none, and admission then reads the estimates alone) or a
-//! test's.
+//! Linux; the working set on Windows, whose peak window is known only when
+//! the lifetime peak rose in it, [`window_peak`]; elsewhere none, and
+//! admission then reads the estimates alone) or a test's.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -227,11 +228,49 @@ pub trait Meter: Send + Sync {
 }
 
 /// This process's memory: `/proc/self/status` (`VmRSS`, `VmHWM`), the peak
-/// window reset through `/proc/self/clear_refs` (Linux ≥ 4.0). Elsewhere
-/// every reading is 0 and admission reads the estimates alone.
+/// window reset through `/proc/self/clear_refs` (Linux ≥ 4.0). On Windows
+/// the working set (`K32GetProcessMemoryInfo`), with the peak window
+/// [`window_peak`] derives from the process's lifetime peak. Elsewhere every
+/// reading is 0 and admission reads the estimates alone.
 #[derive(Debug, Default)]
 pub struct ProcMeter;
 
+/// A peak window's top on a platform that keeps only the process's lifetime
+/// peak and cannot reset it (Windows' `PeakWorkingSetSize`): `lifetime` when
+/// it rose above `at_reset` (the lifetime peak when the window opened), which
+/// is then exactly the window's top; else 0, unknown (the window's top lies
+/// somewhere at or below the old peak), which records no observation, so the
+/// case keeps its table or earlier estimate.
+#[must_use]
+pub fn window_peak(lifetime: u64, at_reset: u64) -> u64 {
+    if lifetime > at_reset { lifetime } else { 0 }
+}
+
+/// The process's (working set, lifetime peak working set) in bytes; 0s when
+/// the call fails.
+#[cfg(windows)]
+fn working_set() -> (u64, u64) {
+    crate::engine::perf_trace::working_set().unwrap_or((0, 0))
+}
+
+/// The lifetime peak when the current peak window opened (Windows).
+#[cfg(windows)]
+static PEAK_AT_RESET: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(windows)]
+impl Meter for ProcMeter {
+    fn rss(&self) -> u64 {
+        working_set().0
+    }
+    fn peak(&self) -> u64 {
+        window_peak(working_set().1, PEAK_AT_RESET.load(Ordering::SeqCst))
+    }
+    fn reset_peak(&self) {
+        PEAK_AT_RESET.store(working_set().1, Ordering::SeqCst);
+    }
+}
+
+#[cfg(not(windows))]
 impl ProcMeter {
     fn status_kib(key: &str) -> u64 {
         std::fs::read_to_string("/proc/self/status")
@@ -246,6 +285,7 @@ impl ProcMeter {
     }
 }
 
+#[cfg(not(windows))]
 impl Meter for ProcMeter {
     fn rss(&self) -> u64 {
         Self::status_kib("VmRSS:") * 1024

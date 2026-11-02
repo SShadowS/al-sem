@@ -1021,6 +1021,20 @@ Windows measurements (manifest check, directory walk, handle-relative creation, 
 copy share mode) before stage-2 exit numbers are quoted there; a shared server over a
 local socket for several agents on one workspace (the child protocol is socket-ready).
 
+Windows, checked on Linux (2026-11-02, branch `ctxsrv/windows`): the lib, both binaries
+and every test target cross-check clean for `x86_64-pc-windows-gnu`; fixed: the
+protocol stream (`SetStdHandle`, as `dup2` on Unix), inline-only answers (the cap rises
+to 4 MiB, larger is `refusedPath`, §10; before, any stdout over 64 KiB was a `protocol`
+failure), the budget meter (working set; a peak window is known only when the lifetime
+peak rose), `CREATE_NO_WINDOW`; the sealed copy's share mode is `tempfile`'s (0, delete
+on close), so §5.2 holds. Remaining for a real Windows run, scripted in
+`scripts/windows-ctxsrv-check.ps1`: the test subsets, the CDO transcript (wall times,
+the child's working set, the large digest's delivery), the manifest check against its
+10 ms target. Still open by design: handle-relative creation (`NtCreateFile` relative
+to a parent handle) so Windows gets file outputs; no interior release of freed blocks
+off Linux (the refresh RSS creep is unmeasured there); workspace keys are spelled
+paths, so `U:\x` and `u:/x` would start two children.
+
 ## 14. Re-measuring
 
 Cold per command: `/usr/bin/time -v alsem <cmd> …` with `ALSEM_TRACE=1`. Composition

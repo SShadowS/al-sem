@@ -57,6 +57,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and bytes unchanged (`tests/cli/mcp_server.rs` green). `EngineFront` gains
   `notify_changed_if_running`, which never starts a child.
 
+### Fixed (context server: Windows)
+
+Everything in the context server was built and measured on Linux. Checked here:
+`cargo check` (dev and release) and `cargo clippy -- -D warnings` for
+`x86_64-pc-windows-gnu` of the lib, both binaries and every test target
+(cross-compiled with clang and the mingw-w64 headers; one Windows-only
+`clippy::result_large_err` allowed on `app_image::check_consistent`, whose
+error is a word larger there); the
+fixes below; the rest needs a real Windows run, scripted in
+`scripts/windows-ctxsrv-check.ps1`. Linux behaviour is unchanged.
+
+- **The Windows build had four warnings; now it has none**: dead helpers of the
+  child's output namespace (`leaf`, `refused`, `quota`) are Unix-only, and
+  `release_alloc::set_resident`'s `thp_off` is read off Linux too.
+  `child_tests`'s two instance-directory tests are Unix-only (they used
+  `std::os::unix` and expect a directory Windows never makes).
+- **A stray print could corrupt the protocol stream on Windows.** The child's
+  and `alsem mcp`'s protocol stream was plain stdout off Unix. It is now a
+  duplicate of the standard output handle, and the process's standard output
+  is pointed at its stderr (`SetStdHandle`), as `dup2` does on Unix. New hook
+  `stray-stdout-on-ask` and test `a_stray_print_never_reaches_the_protocol_stream`
+  (Linux: dropping the `dup2` fails it with a `protocol` answer).
+- **Windows answers over 64 KiB failed.** With no output directory (Windows
+  fails closed, design §10), a stdout over the ask's inline cap was a
+  `protocol` failure, so a CDO digest larger than 64 KiB could not be
+  delivered at all. The child now answers inline-only: the cap rises to
+  4 MiB, and a larger stdout is answered `refusedPath` as §10 states. New
+  hook `no-output-dir` takes this path on any platform, in the child and in
+  `alsem mcp`'s output folder. Tests `without_an_output_directory_answers_stay_inline`
+  and `the_inline_only_path_delivers_inline` (digest inline with its summary,
+  an over-cap stdout inline, `out` refused, nothing written) and
+  `inline_only_refuses_an_undeliverable_answer`, each with a recorded break.
+- **The memory budget read 0 on Windows**, so admission ignored the real RSS.
+  The child's meter now reads the working set (`K32GetProcessMemoryInfo`).
+  Windows cannot reset the peak, so a peak window reports the lifetime peak
+  only when it rose in that window, and otherwise records no observation
+  (`window_peak`, test `an_unknown_window_peak_records_no_observation`).
+- The engine child is started with `CREATE_NO_WINDOW` on Windows (a front end
+  with no console would otherwise give it a console window), and a Windows
+  NTSTATUS exit (a `release-ship` panic is 0xC0000409) is described in hex.
+- The interior release of freed blocks is now disabled outside Linux (it
+  was a no-op there, but still sent `realloc` down the copy path).
+- `app_image`'s sealed copy on Windows: `tempfile` opens it with share mode
+  0 and delete-on-close, which §5.2 requires; documented, with a
+  Windows-only test.
+
 ### Fixed (context server: the resident refresh)
 
 - **The default mode no longer extracts the dependency source text again on
