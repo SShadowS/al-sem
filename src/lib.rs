@@ -58,6 +58,9 @@ pub mod program;
 pub mod protocol;
 /// The AL record-operation table both engines read.
 pub mod record_ops;
+/// The `alsem` binary's global allocator (mimalloc; the engine child releases
+/// freed large blocks to the OS) — see the module doc.
+pub mod release_alloc;
 pub mod snapshot;
 /// The shared `.al` source decoder (lossy UTF-8, BOM dropped) — see the module doc.
 pub mod source_text;

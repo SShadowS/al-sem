@@ -399,6 +399,63 @@ fn an_edit_between_asks_is_answered_from_a_refreshed_revision() {
     );
 }
 
+/// The child's allocator hands freed large blocks back to the OS
+/// (`al_sem::release_alloc`, design §7's per-refresh RSS creep): `alsem
+/// engine-host` turns the release on at `RELEASE_MIN` and its status says
+/// so; after a refresh (the previous revision freed) blocks were released
+/// (Linux, the one platform that releases), transparent huge pages are off
+/// in a `--low-mem` child only, and the answers stay the CLI's bytes.
+/// `ALSEM_RELEASE_MIN=0` turns both off: nothing is released.
+#[test]
+fn the_child_releases_freed_large_blocks() {
+    let dir = copy_ws("ws-explain");
+    let w = dir.path().to_str().unwrap().to_string();
+    let argv = ["prove", &w, "Archive", "may-commit", "--deterministic"];
+    let post = dir.path().join("src/post.al");
+    let text = std::fs::read_to_string(&post).unwrap();
+    let edited = text.replace(
+        "        Order.Modify();\n        Commit();",
+        "        Order.Modify(true);\n        Commit();",
+    );
+    assert_ne!(edited, text, "precondition: the edit applies");
+    for (off, low_mem) in [(false, false), (false, true), (true, true)] {
+        std::fs::write(&post, &text).unwrap();
+        let mut cfg = FrontConfig::new(ALSEM, dir.path());
+        if off {
+            cfg.env.push(("ALSEM_RELEASE_MIN".into(), "0".into()));
+        }
+        if low_mem {
+            cfg.args.push("--low-mem".into());
+        }
+        let mut front = EngineFront::new(cfg).expect("front end");
+        assert_eq!(cli_answer(front.ask(ask(&argv)).outcome), cli(&argv));
+        std::fs::write(&post, &edited).unwrap();
+        let fresh = front.ask(ask(&argv));
+        assert_eq!(fresh.revision.as_ref().map(|r| r.generation), Some(2));
+        assert_eq!(
+            cli_answer(fresh.outcome),
+            cli(&argv),
+            "refreshed equals cold"
+        );
+        let memory = front.status().unwrap().memory.expect("memory status");
+        let want = if off {
+            0
+        } else {
+            al_sem::release_alloc::RELEASE_MIN as u64
+        };
+        assert_eq!(memory["releaseFromBytes"], want, "{memory}");
+        let released = memory["releasedBlocks"].as_u64().expect("releasedBlocks");
+        let on_linux = !off && cfg!(target_os = "linux");
+        if on_linux {
+            assert!(released > 0, "the refresh released freed blocks: {memory}");
+        } else {
+            assert_eq!(released, 0, "{memory}");
+        }
+        assert_eq!(memory["thpDisabled"], on_linux && low_mem, "{memory}");
+        front.shutdown();
+    }
+}
+
 /// T-exit3 / T-plan: a planning failure with exit 3 (`digest --order`, a
 /// refused flag) is the CLI's own `kind: "cli"` answer, exit 3, with
 /// `revision: null` and no workspace read; so is an engine-only refusal

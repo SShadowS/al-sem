@@ -799,7 +799,40 @@ parses every dependency file, its observed peak becomes its estimate, and the fl
 creeps 0.2–0.3 GB per refresh in both modes, allocator retention); at 6 GiB nothing was
 refused or evicted. The saving is headroom, not a smaller default. Two findings left for
 later: the default mode extracts the dependency text again on every B (about 0.3 s that
-`--low-mem` does not pay), and the per-refresh RSS creep.
+`--low-mem` does not pay), and the per-refresh RSS creep. (Both fixed, next note.)
+
+**As built (the refresh creep and the dependency text, 2026-11-02).** *The dependency
+text:* the workspace session keeps each source-bearing dependency's extracted file list
+in both modes, so the default mode's B and S refreshes share the text through the
+session's `DepCache` at the same `.app` stamp (size, time, image blake3) instead of
+extracting it again; a changed package is P. B refresh median 2.76 s -> 2.61 s on CDO.
+*The creep* was measured before it was fixed (`census-probe refresh-seq` in process with a
+counting allocator over mimalloc, and `front-seq` against a real child; each refresh
+followed by the four asks). It is **not a retention**: the live heap stays within 2 MiB
+over 30 refreshes in both modes. It is **mimalloc page fragmentation**: every refresh
+builds the next revision beside the published one and then frees the old one, and a freed
+block stays resident in any page a live block still holds; transparent huge pages make it
+worse (`khugepaged` fills released ranges back in). It converges rather than grows without
+end: over 40 B then 20 S refreshes the child went 4.81 GB cold, 5.06 GB after the first
+refresh, and flattened at 5.44-5.46 GB. The fix is in the allocator, not the engine
+(`al_sem::release_alloc`): `alsem engine-host` discards the interior of every freed block
+of 16-512 KiB (`madvise(MADV_DONTNEED)`, Linux), and a `--low-mem` child also turns
+transparent huge pages off for itself; every other command keeps plain mimalloc. After,
+same refreshes (RSS cold / after the first refresh / at most):
+
+| Mode | Before | After | Band over the first refresh |
+|---|---|---|---:|
+| default (40 B, 20 S) | 4.81 / 5.06 / 5.46 GB | 4.58 / 4.78 / 5.07 GB | 0.40 -> **0.29 GB** |
+| default, huge pages off as well | | 4.24 / 4.44 / 4.66 GB | **0.22 GB** |
+| `--low-mem` (20 B, 10 S; huge pages off) | 3.81 / 4.03 / 4.37 GB | 3.50 / 3.73 / 3.95 GB | 0.34 -> **0.22 GB** |
+
+Every series is flat after about ten refreshes of each kind. Huge pages off cost about
+4 % on the asks (the four asks 36.0 s before, 36.6 s with the release, 38.2 s with huge
+pages off as well), so the default mode — kept the fastest by the owner's decision —
+releases with huge pages on, and `--low-mem` turns them off. The retained floor follows
+the RSS, so the budget's estimates see it. Pinned by `tests/resident_memory_bound.rs` (no
+per-refresh retention, both modes) and the child's `status.memory.releasedBlocks` /
+`thpDisabled` (e2e).
 
 ## 8. The MCP front end (`alsem mcp`)
 
