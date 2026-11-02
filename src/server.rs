@@ -103,6 +103,7 @@ use crate::lsp::custom::{
 };
 use crate::lsp::diagnostics::{DiagnosticsState, compute_all, compute_for_files, rung1_cover};
 use crate::lsp::encoding::{PositionEncoding, negotiate};
+use crate::lsp::engine::LspEngines;
 use crate::lsp::handlers::{ItemData, incoming, outgoing, prepare};
 use crate::lsp::l4_host::{HostHandle, spawn_l4_host};
 use crate::lsp::lens::code_lenses;
@@ -178,6 +179,10 @@ struct RootBuild {
     watch_backend: crate::watcher::BackendFactory,
     /// `--l4-host`: run the incremental L4 host for this root once it builds.
     l4_host: bool,
+    /// The server's engine requests (context-server §9): when set, this
+    /// root's watcher events are also sent to its running engine children
+    /// as `session/notifyChanged`. `None` in tests that build no engine.
+    engines: Option<Arc<LspEngines>>,
     /// Test seam: runs at the start of this root's build.
     #[cfg(test)]
     build_hook: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -238,11 +243,15 @@ impl RootState {
                 // Every watch exists before the build reads (S7): a change
                 // after registration is evented, one before it is in the read.
                 if self.build.start_watcher {
+                    let watch_tx = match &self.build.engines {
+                        Some(engines) => tee_to_engines(tx.clone(), Arc::clone(engines)),
+                        None => tx.clone(),
+                    };
                     crate::watcher::start_watching(
                         &self.root,
                         &self.build.watch_backend,
                         Arc::clone(&config),
-                        tx.clone(),
+                        watch_tx,
                     );
                 }
                 #[cfg(test)]
@@ -283,6 +292,33 @@ impl RootState {
     fn into_built(self) -> Option<ServerState> {
         self.state.into_inner().flatten()
     }
+}
+
+/// A sender for a root's file watcher that forwards every event to the
+/// root's updater (`updater_tx`) unchanged and in order, and also hands each
+/// changed path to the engine children (`session/notifyChanged`,
+/// context-server §9). The forwarding thread ends when the watcher drops its
+/// sender or the updater's channel closes; the watcher then finds its own
+/// channel closed on its next send and stops, as it did on the updater's.
+fn tee_to_engines(
+    updater_tx: mpsc::Sender<ChangeEvent>,
+    engines: Arc<LspEngines>,
+) -> mpsc::Sender<ChangeEvent> {
+    let (tx, rx) = mpsc::channel::<ChangeEvent>();
+    thread::spawn(move || {
+        for ev in rx {
+            if let ChangeEvent::PathChanged(p)
+            | ChangeEvent::FileSaved(p)
+            | ChangeEvent::FileRemoved(p) = &ev
+            {
+                engines.notify_changed(std::slice::from_ref(p));
+            }
+            if updater_tx.send(ev).is_err() {
+                return;
+            }
+        }
+    });
+    tx
 }
 
 /// The whole multi-root session: one [`RootState`] per root
@@ -402,9 +438,17 @@ pub fn run_server(
         dependency_source,
         Arc::new(DepCache::default()),
     );
+    // The context-server requests (`al-call-hierarchy/explain`, ...): nothing
+    // is read or started until the first one; the config comes from the
+    // global file and the first root's `.al-sem.json`.
+    let engines = Arc::new(LspEngines::new(
+        message_sink(&connection),
+        workspace.roots.first().map(|r| r.root.clone()),
+    ));
     // `--l4-host` (#222, hidden): each root runs the host once it builds.
     for root in &mut workspace.roots {
         root.build.l4_host = l4_host;
+        root.build.engines = Some(Arc::clone(&engines));
     }
     if dependency_source == DependencySource::Symbols {
         info!("Dependencies indexed from symbols only (--dependency-source symbols)");
@@ -433,7 +477,10 @@ pub fn run_server(
     // passed by value). This bug predates this cutover (the legacy
     // `main_loop(connection: &Connection, ...)` had the identical shape) but
     // was never exercised end to end until this task's own verification.
-    main_loop(connection, &workspace)?;
+    main_loop(connection, &workspace, &engines)?;
+    // Every engine child ends with the server (a running request is
+    // cancelled first).
+    engines.shutdown();
 
     // Dropping each root's `tx` is a best-effort shutdown signal to ITS
     // updater thread — but we deliberately do NOT `st.updater_handle.join()`
@@ -461,6 +508,9 @@ pub fn run_server(
             drop(st.l4_host);
         }
     }
+    // The engine requests' message sender (its pool already shut down); a
+    // running watcher's forwarding thread may still hold a clone.
+    drop(engines);
 
     // `io_threads.join()` blocks on `lsp_server`'s writer thread, which
     // itself blocks until EVERY `Sender<Message>` clone is dropped —
@@ -745,6 +795,7 @@ fn build_workspace(
                 dep_cache: Arc::clone(&dep_cache),
                 watch_backend: crate::watcher::recommended_backend(),
                 l4_host: false,
+                engines: None,
                 #[cfg(test)]
                 build_hook: None,
             },
@@ -854,12 +905,23 @@ fn publish_changed(send: impl Fn(Message), changed: Vec<(String, Vec<Diagnostic>
 /// Main message processing loop. Takes `connection` BY VALUE — see
 /// `run_server`'s call site for why that (not `&Connection`) is required for
 /// a clean process exit.
-fn main_loop(connection: Connection, workspace: &Workspace) -> Result<()> {
+///
+/// The context-server requests (`al-call-hierarchy/explain`, ...) are handed
+/// to `engines` and answered from its worker threads, never here: the loop
+/// goes on to the next message at once.
+fn main_loop(connection: Connection, workspace: &Workspace, engines: &LspEngines) -> Result<()> {
     for msg in &connection.receiver {
         match msg {
             Message::Request(req) => {
                 if connection.handle_shutdown(&req)? {
                     break;
+                }
+
+                if crate::lsp::engine::is_engine_method(&req.method) {
+                    let route = |uri: &str| route_uri(workspace, uri).map(|r| r.root.clone());
+                    let default_root = workspace.roots.first().map(|r| r.root.as_path());
+                    engines.handle(&req.id, &req.method, req.params, &route, default_root);
+                    continue;
                 }
 
                 let result = dispatch_request(&req, workspace);
@@ -879,12 +941,40 @@ fn main_loop(connection: Connection, workspace: &Workspace) -> Result<()> {
             }
             Message::Response(_) => {}
             Message::Notification(notif) => {
+                forward_to_engines(engines, &notif);
                 handle_notification(workspace, &notif);
             }
         }
     }
 
     Ok(())
+}
+
+/// The engine side of a notification (context-server §9): `$/cancelRequest`
+/// of an engine request cancels it (a queued one is dropped, a running one
+/// is sent `session/cancel`; it is answered `RequestCancelled`), and a
+/// `didSave` names the saved file to the running engine children
+/// (`session/notifyChanged`). Neither starts anything.
+fn forward_to_engines(engines: &LspEngines, notif: &Notification) {
+    match notif.method.as_str() {
+        "$/cancelRequest" => {
+            if let Ok(p) = serde_json::from_value::<lsp_types::CancelParams>(notif.params.clone()) {
+                let id = match p.id {
+                    lsp_types::NumberOrString::Number(n) => lsp_server::RequestId::from(n),
+                    lsp_types::NumberOrString::String(s) => lsp_server::RequestId::from(s),
+                };
+                engines.cancel(&id);
+            }
+        }
+        "textDocument/didSave" => {
+            if let Ok(p) = serde_json::from_value::<DidSaveTextDocumentParams>(notif.params.clone())
+                && let Some(path) = uri_to_path(&p.text_document.uri)
+            {
+                engines.notify_changed(&[path]);
+            }
+        }
+        _ => {}
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1308,6 +1398,7 @@ mod tests {
             dep_cache: Arc::default(),
             watch_backend: crate::watcher::recommended_backend(),
             l4_host,
+            engines: None,
             build_hook: None,
         }
     }
@@ -2279,6 +2370,7 @@ mod tests {
                 dep_cache: Arc::default(),
                 watch_backend: factory,
                 l4_host: false,
+                engines: None,
                 build_hook,
             },
         };
