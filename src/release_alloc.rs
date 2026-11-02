@@ -103,6 +103,9 @@ pub fn set_resident(min: usize, thp_off: bool) -> bool {
         let r = unsafe { libc::prctl(libc::PR_SET_THP_DISABLE, 1, 0, 0, 0) };
         THP_DISABLED.store(r == 0, Relaxed);
     }
+    // Off Linux there are no transparent huge pages to turn off.
+    #[cfg(not(target_os = "linux"))]
+    let _ = thp_off;
     thp_disabled()
 }
 
@@ -118,11 +121,12 @@ pub fn thp_disabled() -> bool {
 /// freed (purge delay 0).
 pub const RELEASE_MAX: usize = 512 * 1024;
 
-/// Whether a freed block of `size` bytes is released.
+/// Whether a freed block of `size` bytes is released. Never off Linux: there
+/// the release is a no-op, so `realloc` keeps mimalloc's own path too.
 #[inline]
 fn releases(size: usize) -> bool {
     let from = RELEASE_FROM.load(Relaxed);
-    from != 0 && size >= from && size <= RELEASE_MAX
+    cfg!(target_os = "linux") && from != 0 && size >= from && size <= RELEASE_MAX
 }
 
 /// mimalloc, releasing the interior of freed large blocks when asked.

@@ -20,8 +20,8 @@ use super::{
 };
 use crate::engine::resident::store::Stop;
 use crate::wire::{
-    Answer, FailedOutcome, MAX_FRAME_BYTES, Outcome, ReadFrame, Spill, WorkDone, bound_frame,
-    decode_frame, encode_frame, read_frame,
+    Answer, FailedOutcome, MAX_FRAME_BYTES, MAX_INLINE_BYTES, Outcome, ReadFrame, Spill, WireError,
+    WorkDone, bound_frame, decode_frame, encode_frame, read_frame,
 };
 
 /// What one ask may read of its request's state while it runs.
@@ -490,8 +490,18 @@ fn open_session<W: Write + Send>(
     p: &OpenParams,
     shared: &Shared<'_, W>,
 ) -> Result<Option<PathBuf>, String> {
-    // Windows fails closed: no directory, inline-only answers (§10).
-    let dir = match OutputDir::create(&p.output_root, &shared.instance) {
+    // Windows fails closed: no directory, inline-only answers (§10). The
+    // `no-output-dir` test hook takes the same path on any platform.
+    #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
+    let forced = matches!(shared.hook, Some(super::test_hooks::Hook::NoOutputDir));
+    #[cfg(not(any(feature = "engine-test-hooks", debug_assertions)))]
+    let forced = false;
+    let created = if forced {
+        Err(std::io::ErrorKind::Unsupported.into())
+    } else {
+        OutputDir::create(&p.output_root, &shared.instance)
+    };
+    let dir = match created {
         Ok(d) => Some(Arc::new(d)),
         Err(e) if e.kind() == std::io::ErrorKind::Unsupported => None,
         Err(e) => return Err(format!("output directory: {e}")),
@@ -722,6 +732,9 @@ fn run<W: Write + Send>(
                 progress: &progress,
                 queued_ms,
             };
+            if dir.is_none() {
+                return shared.answer(ask_inline_only(engine, &id, *params, &cx));
+            }
             let answer = engine.ask(&id, *params, &cx);
             shared.answer(answer)
         }
@@ -743,6 +756,42 @@ fn run<W: Write + Send>(
     }
 }
 
+/// One ask answered with no output directory (Windows, design §10: fail
+/// closed, inline-only). A stdout too large for the ask's inline cap cannot
+/// go to a file, so the cap is raised to [`MAX_INLINE_BYTES`] (an answer
+/// inline beats none); a stdout larger still cannot be delivered at all and
+/// is answered `refusedPath`, as §10 states, instead of the `protocol`
+/// failure a failed spill gives where a directory exists.
+fn ask_inline_only(
+    engine: &dyn Engine,
+    id: &serde_json::Value,
+    mut params: AskParams,
+    cx: &AskCx<'_>,
+) -> Answer {
+    params.max_inline_bytes = Some(MAX_INLINE_BYTES as u64);
+    refuse_undeliverable(engine.ask(id, params, cx))
+}
+
+/// [`ask_inline_only`]'s mapping: a `protocol` failure from a failed spill
+/// (the engine's `cli_outcome` reports it as [`WireError::Spill`]) becomes
+/// `refusedPath`, its message kept; every other answer is unchanged.
+fn refuse_undeliverable(mut answer: Answer) -> Answer {
+    let spill_failed = WireError::Spill(String::new()).to_string();
+    if let Outcome::Failed {
+        outcome, message, ..
+    } = &mut answer.outcome
+        && *outcome == FailedOutcome::Protocol
+        && message.starts_with(&spill_failed)
+    {
+        *outcome = FailedOutcome::RefusedPath;
+        *message = format!(
+            "the answer is larger than the {MAX_INLINE_BYTES}-byte inline limit and this \
+             platform has no private output directory (outputs are inline-only): {message}"
+        );
+    }
+    answer
+}
+
 /// The ask faults of the test hooks; `true` when the ask was answered (with
 /// a broken frame) and the worker goes on.
 #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
@@ -752,6 +801,13 @@ fn inject_ask_fault<W: Write + Send>(shared: &Shared<'_, W>) -> std::io::Result<
         Some(Hook::AbortOnAsk) => std::process::abort(),
         Some(Hook::SleepOnAsk(ms)) => {
             std::thread::sleep(std::time::Duration::from_millis(*ms));
+            Ok(false)
+        }
+        Some(Hook::StrayStdoutOnAsk) => {
+            // What a stray print anywhere in the engine does: it must land
+            // in the drained stderr, never in the protocol stream.
+            println!("engine test hook: a stray print to stdout");
+            let _ = std::io::stdout().flush();
             Ok(false)
         }
         Some(Hook::PanicOnAskOnce(marker)) => {
@@ -848,8 +904,33 @@ pub fn protocol_stdout() -> std::io::Result<std::fs::File> {
     }
 }
 
+/// The Windows version of the same: a duplicate of the standard output
+/// handle becomes the protocol stream, then the process's standard output
+/// handle is pointed at its standard error (`SetStdHandle`). Rust's
+/// `stdout()` looks the handle up on every write, so a stray `print!` lands
+/// in the drained stderr. (The C runtime's own descriptor 1 is not moved; no
+/// C code the engine links prints.)
+#[cfg(windows)]
+pub fn protocol_stdout() -> std::io::Result<std::fs::File> {
+    use std::os::windows::io::{AsHandle, AsRawHandle, RawHandle};
+    /// `STD_OUTPUT_HANDLE`, `(DWORD)-11`.
+    const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
+    unsafe extern "system" {
+        fn SetStdHandle(std_handle: u32, handle: RawHandle) -> i32;
+    }
+    let proto = std::io::stdout().as_handle().try_clone_to_owned()?;
+    let err = std::io::stderr().as_raw_handle();
+    // SAFETY: a plain call on this process's standard handle table, before
+    // any thread writes to stdout; `err` is the process's own stderr handle,
+    // which stays open for the process's life.
+    if unsafe { SetStdHandle(STD_OUTPUT_HANDLE, err) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(std::fs::File::from(proto))
+}
+
 /// See the Unix version.
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub fn protocol_stdout() -> std::io::Result<std::io::Stdout> {
     Ok(std::io::stdout())
 }

@@ -135,6 +135,34 @@ pub struct OutputSink {
     root: PathBuf,
     instance: PathBuf,
     inner: Mutex<imp::Inner>,
+    /// Write nothing, as off Unix: the child's `no-output-dir` test hook
+    /// (`ALSEM_ENGINE_TEST_HOOK`, debug and `engine-test-hooks` builds),
+    /// which lets the Windows path run on any platform. Always false in a
+    /// shipped build.
+    inline_only: bool,
+}
+
+/// Why nothing is written off Unix (design r7 §10, Windows fail-closed).
+fn inline_only_refusal(parts: &[String]) -> SinkError {
+    SinkError::Refused(format!(
+        "out '{}': this platform has no handle-relative file creation; outputs are inline only",
+        parts.join("/")
+    ))
+}
+
+/// Whether the `no-output-dir` test hook is set.
+fn forced_inline_only() -> bool {
+    #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
+    {
+        matches!(
+            crate::engine::host::test_hooks::from_env(),
+            Some(crate::engine::host::test_hooks::Hook::NoOutputDir)
+        )
+    }
+    #[cfg(not(any(feature = "engine-test-hooks", debug_assertions)))]
+    {
+        false
+    }
 }
 
 impl OutputSink {
@@ -153,6 +181,7 @@ impl OutputSink {
             root,
             instance,
             inner: Mutex::new(inner),
+            inline_only: forced_inline_only(),
         })
     }
 
@@ -171,7 +200,7 @@ impl OutputSink {
     /// Whether the sink can write at all (Unix).
     #[must_use]
     pub fn writable(&self) -> bool {
-        imp::WRITABLE
+        imp::WRITABLE && !self.inline_only
     }
 
     /// Bytes written so far.
@@ -184,6 +213,9 @@ impl OutputSink {
     /// folder, or absolute inside it). Returns the absolute path.
     pub fn write_out(&self, out: &str, bytes: &[u8]) -> Result<PathBuf, SinkError> {
         let parts = relative_components(&self.instance, out)?;
+        if self.inline_only {
+            return Err(inline_only_refusal(&parts));
+        }
         self.inner
             .lock()
             .expect("sink")
@@ -197,6 +229,9 @@ impl OutputSink {
         let mut inner = self.inner.lock().expect("sink");
         inner.serial += 1;
         let name = format!("{:04}-{stem}.{ext}", inner.serial);
+        if self.inline_only {
+            return Err(inline_only_refusal(std::slice::from_ref(&name)));
+        }
         inner.write(std::slice::from_ref(&name), bytes, false)?;
         Ok(self.instance.join(name))
     }
@@ -410,10 +445,7 @@ mod imp {
         }
 
         pub fn write(&mut self, parts: &[String], _: &[u8], _: bool) -> Result<(), SinkError> {
-            Err(SinkError::Refused(format!(
-                "out '{}': this platform has no handle-relative file creation; outputs are inline only",
-                parts.join("/")
-            )))
+            Err(super::inline_only_refusal(parts))
         }
     }
 }

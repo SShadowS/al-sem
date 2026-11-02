@@ -767,19 +767,28 @@ impl EngineFront {
 
     /// Spawn, take the hello, open the session.
     fn start(&mut self) -> Result<(), Failure> {
-        let mut child = Command::new(&self.cfg.program)
+        let mut command = Command::new(&self.cfg.program);
+        command
             .args(&self.cfg.args)
             .envs(self.cfg.env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                (
-                    FailedOutcome::EngineError,
-                    format!("engine start failed: {}: {e}", self.cfg.program.display()),
-                )
-            })?;
+            .stderr(Stdio::piped());
+        // A console program started by a front end that has no console (an
+        // editor or agent host launched it detached) would get a console
+        // window of its own; every stream is piped, so it needs none.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = command.spawn().map_err(|e| {
+            (
+                FailedOutcome::EngineError,
+                format!("engine start failed: {}: {e}", self.cfg.program.display()),
+            )
+        })?;
         self.stats.spawns += 1;
         let stdin = child.stdin.take().expect("piped stdin");
         let stdout = child.stdout.take().expect("piped stdout");
@@ -1096,6 +1105,13 @@ fn describe(status: ExitStatus) -> String {
         if let Some(sig) = status.signal() {
             return format!("killed by signal {sig}");
         }
+    }
+    // A Windows process ended by an exception or a fail-fast abort (a panic
+    // under `release-ship`: 0xC0000409) exits with an NTSTATUS, which reads
+    // only in hexadecimal.
+    #[cfg(windows)]
+    if let Some(c) = status.code().filter(|c| *c < 0) {
+        return format!("exit code {c} (0x{:08X})", c as u32);
     }
     status
         .code()

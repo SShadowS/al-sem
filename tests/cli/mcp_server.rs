@@ -406,61 +406,65 @@ fn a_transcript_answers_what_the_cli_answers() {
         "{env}"
     );
 
-    // Digest: always a file in the output folder, with a summary.
-    let argv = ["digest", w, "--routine", "PostOrder", "--deterministic"];
-    let expected = cli(&argv);
-    let env = envelope(&s.call(
-        130,
-        "alsem_digest",
-        json!({"routines": ["PostOrder"], "deterministic": true}),
-    ));
-    let file = &env["stdoutFile"];
-    assert!(env.get("stdoutText").is_none(), "{env}");
-    assert!(
-        Path::new(file["path"].as_str().unwrap()).starts_with(&s.root),
-        "{env}"
-    );
-    assert_eq!(cli_bytes(&env), expected);
-    assert_eq!(env["summary"]["summary"]["rootsResolved"], 1, "{env}");
-    assert_eq!(env["summary"]["entriesTotal"], 1, "{env}");
-    assert_eq!(
-        env["summary"]["entries"][0]["routine"],
-        "Codeunit Explain Post::PostOrder"
-    );
+    // The output folder (Unix; off Unix it writes nothing and these answers
+    // stay inline or are refused: `the_inline_only_path_delivers_inline`).
+    if cfg!(unix) {
+        // Digest: always a file in the output folder, with a summary.
+        let argv = ["digest", w, "--routine", "PostOrder", "--deterministic"];
+        let expected = cli(&argv);
+        let env = envelope(&s.call(
+            130,
+            "alsem_digest",
+            json!({"routines": ["PostOrder"], "deterministic": true}),
+        ));
+        let file = &env["stdoutFile"];
+        assert!(env.get("stdoutText").is_none(), "{env}");
+        assert!(
+            Path::new(file["path"].as_str().unwrap()).starts_with(&s.root),
+            "{env}"
+        );
+        assert_eq!(cli_bytes(&env), expected);
+        assert_eq!(env["summary"]["summary"]["rootsResolved"], 1, "{env}");
+        assert_eq!(env["summary"]["entriesTotal"], 1, "{env}");
+        assert_eq!(
+            env["summary"]["entries"][0]["routine"],
+            "Codeunit Explain Post::PostOrder"
+        );
 
-    // A stdout over the inline cap: the same bytes, as a file.
-    let argv = ["query", "touches", w, "--table", "50400", "--deterministic"];
-    let expected = cli(&argv);
-    let env = envelope(&s.call(
-        131,
-        "alsem_query_touches",
-        json!({"table": "50400", "deterministic": true, "maxInlineBytes": 16}),
-    ));
-    assert!(env["stdoutFile"].is_object(), "{env}");
-    assert!(Path::new(env["stdoutFile"]["path"].as_str().unwrap()).starts_with(&s.root));
-    assert_eq!(cli_bytes(&env), expected);
+        // A stdout over the inline cap: the same bytes, as a file.
+        let argv = ["query", "touches", w, "--table", "50400", "--deterministic"];
+        let expected = cli(&argv);
+        let env = envelope(&s.call(
+            131,
+            "alsem_query_touches",
+            json!({"table": "50400", "deterministic": true, "maxInlineBytes": 16}),
+        ));
+        assert!(env["stdoutFile"].is_object(), "{env}");
+        assert!(Path::new(env["stdoutFile"]["path"].as_str().unwrap()).starts_with(&s.root));
+        assert_eq!(cli_bytes(&env), expected);
 
-    // `out`: written inside the output folder, the same bytes.
-    let argv = ["prove", w, "PostOrder", "may-commit", "--deterministic"];
-    let expected = cli(&argv);
-    let env = envelope(&s.call(
+        // `out`: written inside the output folder, the same bytes.
+        let argv = ["prove", w, "PostOrder", "may-commit", "--deterministic"];
+        let expected = cli(&argv);
+        let env = envelope(&s.call(
         132,
         "alsem_prove",
         json!({"routine": "PostOrder", "question": "may-commit", "deterministic": true, "out": "answers/prove.json"}),
     ));
-    let path = PathBuf::from(env["stdoutFile"]["path"].as_str().unwrap());
-    assert!(
-        path.starts_with(&s.root) && path.ends_with("answers/prove.json"),
-        "{env}"
-    );
-    assert_eq!(cli_bytes(&env), expected);
-    // ... and again: the server's own file may be overwritten.
-    let env = envelope(&s.call(
+        let path = PathBuf::from(env["stdoutFile"]["path"].as_str().unwrap());
+        assert!(
+            path.starts_with(&s.root) && path.ends_with("answers/prove.json"),
+            "{env}"
+        );
+        assert_eq!(cli_bytes(&env), expected);
+        // ... and again: the server's own file may be overwritten.
+        let env = envelope(&s.call(
         133,
         "alsem_prove",
         json!({"routine": "PostOrder", "question": "may-commit", "deterministic": true, "out": path.to_str().unwrap()}),
     ));
-    assert_eq!(cli_bytes(&env), expected);
+        assert_eq!(cli_bytes(&env), expected);
+    }
 
     // Status shows the engine, and starts nothing new.
     let status = s.call(140, "alsem_status", json!({}));
@@ -613,6 +617,78 @@ fn output_paths_outside_the_folder_are_refused() {
     // `..` from the instance folder would be the output root itself.
     assert!(!s.root.join("escape.json").exists());
     assert!(s.finish().success());
+}
+
+/// What a Windows client gets (design §10, fail-closed: no handle-relative
+/// creation, so neither the server's output folder nor the child's spill
+/// directory writes anything; the `no-output-dir` hook takes that path on
+/// any platform): a digest comes back inline (`stdoutText`) with its
+/// summary, a stdout over the request's inline cap comes back inline, every
+/// answer is the CLI's bytes, an `out` is refused (`refusedPath`), and the
+/// output folder stays empty.
+///
+/// DISCRIMINATION (2026-11-02): making `OutputSink::writable` ignore the
+/// hook (`imp::WRITABLE` alone) sends the digest to the sink, which refuses
+/// it (`refusedPath` "out '0001-digest.json': ... inline only"): the
+/// `stdoutText` assertion fails. Not raising the child's inline cap
+/// (`ask_inline_only`) fails it too, `refusedPath` from the child.
+#[cfg(any(feature = "engine-test-hooks", debug_assertions))]
+#[test]
+fn the_inline_only_path_delivers_inline() {
+    let ws = ws_explain();
+    let w = ws.to_str().unwrap();
+    let mut s = Server::ready(&ws, Some("no-output-dir"));
+    let argv = ["digest", w, "--routine", "PostOrder", "--deterministic"];
+    let expected = cli(&argv);
+    let env = envelope(&s.call(
+        1,
+        "alsem_digest",
+        json!({"routines": ["PostOrder"], "deterministic": true}),
+    ));
+    assert!(env["stdoutText"].is_string(), "{env}");
+    assert!(env.get("stdoutFile").is_none(), "{env}");
+    assert_eq!(cli_bytes(&env), expected);
+    assert_eq!(env["summary"]["summary"]["rootsResolved"], 1, "{env}");
+    let argv = ["query", "touches", w, "--table", "50400", "--deterministic"];
+    let expected = cli(&argv);
+    let env = envelope(&s.call(
+        2,
+        "alsem_query_touches",
+        json!({"table": "50400", "deterministic": true, "maxInlineBytes": 16}),
+    ));
+    assert!(env["stdoutText"].is_string(), "{env}");
+    assert_eq!(cli_bytes(&env), expected);
+    let r = s.call(
+        3,
+        "alsem_prove",
+        json!({"routine": "PostOrder", "question": "may-commit", "out": "answers/prove.json"}),
+    );
+    let env = envelope(&r);
+    assert_eq!(env["outcome"], "refusedPath", "{r}");
+    assert!(
+        env["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("inline only")),
+        "{r}"
+    );
+    let written: Vec<_> = walk_files(&s.root);
+    assert!(written.is_empty(), "nothing written: {written:?}");
+    assert!(s.finish().success());
+}
+
+/// Every file under `dir`, recursively.
+#[cfg(any(feature = "engine-test-hooks", debug_assertions))]
+fn walk_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.extend(walk_files(&p));
+        } else {
+            out.push(p);
+        }
+    }
+    out
 }
 
 /// Progress notifications only with a progressToken, each carrying it.
