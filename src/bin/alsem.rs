@@ -157,6 +157,51 @@ enum Commands {
     /// exact stdout and stderr and exits with its exit code.
     #[command(hide = true, name = "engine-ask")]
     EngineAsk(EngineAskCli),
+    /// Serve the Model Context Protocol on stdin/stdout, for AI agents
+    /// (Claude Code and others): explain, prove, digest and query as tools.
+    ///
+    /// The server speaks JSON-RPC 2.0, one JSON object per line; its logs go
+    /// to stderr. Each tool call is run as the CLI command it names, by an
+    /// engine child process (one per workspace and universe), and answers
+    /// the CLI's exact output with its exit code: inline up to
+    /// `maxInlineBytes` (default 64 KiB), else as a file. Tools:
+    /// `alsem_explain` (default format human), `alsem_prove`, `alsem_digest`
+    /// (always a file, with a summary), `alsem_query_effects`,
+    /// `alsem_query_touches`, `alsem_status`, `alsem_refresh`.
+    ///
+    /// Files go only into a private folder the server creates under
+    /// `--output-root`; a tool's `out` must be inside it. Today each call
+    /// builds the model afresh (a cold run); a resident engine will answer
+    /// later calls from a kept model with no change to this interface.
+    ///
+    /// Register it with Claude Code:
+    /// `claude mcp add alsem -- alsem mcp --workspace <ws>`.
+    Mcp(McpCli),
+}
+
+/// `McpCli` — arguments for `alsem mcp`.
+#[derive(Parser)]
+struct McpCli {
+    /// The workspace of a tool call that names none (a call's `workspace`
+    /// input overrides it).
+    #[arg(long = "workspace")]
+    workspace: Option<String>,
+
+    /// Analyse workspaces alone by default (a call's `singleApp` overrides
+    /// it). The default loads the dependencies each workspace requires.
+    #[arg(long = "single-app", default_value_t = false)]
+    single_app: bool,
+
+    /// The default freshness of a call: fresh | latest-built | verify. Until
+    /// the engine keeps a model, every answer is fresh whatever is asked.
+    #[arg(long = "freshness", default_value = "fresh")]
+    freshness: String,
+
+    /// The folder the server's output folder is created in (default
+    /// `~/.al-sem/mcp-out`). Each server run makes its own private folder
+    /// there; folders older than 24 hours are removed at start.
+    #[arg(long = "output-root")]
+    output_root: Option<String>,
 }
 
 /// `EngineAskCli` — arguments for `alsem engine-ask`.
@@ -875,6 +920,7 @@ fn main() -> ExitCode {
         Commands::Batch(b) => run_batch_cmd(b),
         Commands::EngineHost => engine::run_engine_host(),
         Commands::EngineAsk(a) => engine::run_engine_ask(a),
+        Commands::Mcp(m) => engine::run_mcp(m),
         Commands::Policy(PolicyCli {
             command: PolicyCommands::Explain(e),
         }) => run_policy_explain_cmd(e),
@@ -1086,7 +1132,11 @@ fn plan_command(command: Commands, in_batch: bool, cx: &PlanCx) -> Planned {
             QueryCommands::Effects(e) => plan_query_effects(e),
         },
         Commands::Graph(g) => plan_graph(g),
-        Commands::Cache(_) | Commands::Batch(_) | Commands::EngineHost | Commands::EngineAsk(_) => {
+        Commands::Cache(_)
+        | Commands::Batch(_)
+        | Commands::EngineHost
+        | Commands::EngineAsk(_)
+        | Commands::Mcp(_) => {
             unreachable!("no job")
         }
     }
@@ -1100,6 +1150,7 @@ fn refused(command: &Commands) -> Option<&'static str> {
         Commands::Batch(_) => Some("batch"),
         Commands::EngineHost => Some("engine-host"),
         Commands::EngineAsk(_) => Some("engine-ask"),
+        Commands::Mcp(_) => Some("mcp"),
         Commands::Cache(_) => Some("cache prune"),
         Commands::Policy(PolicyCli {
             command: PolicyCommands::Explain(_),
@@ -1209,7 +1260,8 @@ fn job_paths(command: &Commands, streams: &JobStreams) -> JobPaths {
         | Commands::Cache(_)
         | Commands::Batch(_)
         | Commands::EngineHost
-        | Commands::EngineAsk(_) => (None, None),
+        | Commands::EngineAsk(_)
+        | Commands::Mcp(_) => (None, None),
     };
     p.workspaces.extend(workspace.map(PathBuf::from));
     p.writes.extend(out.map(file));
@@ -1440,7 +1492,8 @@ fn job_kind(command: &Commands) -> Option<JobKind> {
         | Commands::Cache(_)
         | Commands::Batch(_)
         | Commands::EngineHost
-        | Commands::EngineAsk(_) => return None,
+        | Commands::EngineAsk(_)
+        | Commands::Mcp(_) => return None,
     })
 }
 
@@ -2933,6 +2986,72 @@ mod engine {
         let code = deliver(answer.outcome);
         front.shutdown();
         code
+    }
+
+    /// The MCP front end's decisions (context-server design r3 §4.3): the
+    /// argv decoded with this binary's clap and decided by the CLI's own
+    /// [`decide`], through the file system now and the call's diff text, as
+    /// `engine-ask` decides. A command line that does not decode has none
+    /// (the child answers clap's error).
+    struct CliDecide;
+
+    impl al_sem::mcp::Decide for CliDecide {
+        fn decide(&self, argv: &[String], diff_text: Option<&str>) -> Option<Decisions> {
+            let cli = Cli::try_parse_from(
+                std::iter::once("alsem").chain(argv.iter().map(String::as_str)),
+            )
+            .ok()?;
+            let reads = PlanReads::request(diff_text.map(str::to_string), Box::new(ProcessFs));
+            let (command, cx) = decide(cli.command, PlanCx::new(&reads), None);
+            Some(Decisions {
+                changed_is_file: changed_is_file(&command),
+                diff_root: cx.diff_root_decided.clone(),
+            })
+        }
+    }
+
+    /// `alsem mcp`: serve MCP on stdin/stdout (`al_sem::mcp`). stdout
+    /// carries only protocol: fd 1 is moved to the protocol stream and
+    /// pointed at stderr, as the engine child does.
+    pub(super) fn run_mcp(m: McpCli) -> ExitCode {
+        let Some(freshness) = al_sem::mcp::tools::Freshness::parse(&m.freshness) else {
+            return usage(format!(
+                "al-sem: mcp: --freshness must be fresh, latest-built or verify, not '{}'",
+                m.freshness
+            ));
+        };
+        let program = match std::env::current_exe() {
+            Ok(p) => p,
+            Err(e) => return usage(format!("al-sem: mcp: {e}")),
+        };
+        let out = match protocol_stdout() {
+            Ok(out) => out,
+            Err(e) => return usage(format!("al-sem: mcp: {e}")),
+        };
+        let cfg = al_sem::mcp::McpConfig {
+            program,
+            child_env: Vec::new(),
+            defaults: al_sem::mcp::tools::Defaults {
+                workspace: m.workspace,
+                universe: if m.single_app {
+                    al_sem::mcp::tools::Universe::SingleApp
+                } else {
+                    al_sem::mcp::tools::Universe::CrossApp
+                },
+                freshness,
+            },
+            output_root: m
+                .output_root
+                .map_or_else(al_sem::mcp::default_output_root, PathBuf::from),
+        };
+        let stdin = std::io::BufReader::new(std::io::stdin().lock());
+        match al_sem::mcp::serve(cfg, Arc::new(CliDecide), stdin, Box::new(out)) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                let _ = writeln!(std::io::stderr(), "al-sem: mcp: {e}");
+                ExitCode::from(1)
+            }
+        }
     }
 
     /// Bytes a spill file holds, checked against its length and hash.

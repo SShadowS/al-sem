@@ -49,6 +49,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   T-failed-build. The stage-1 test-only `Prepared` driver is gone (its tests
   moved to the revision).
 
+### Added (context server: `alsem mcp`, the MCP front end)
+
+- **`alsem mcp`** serves the Model Context Protocol on stdin/stdout for AI
+  agents (design `docs/superpowers/specs/2026-11-01-context-server-design.md`
+  §8, §10). A small hand-written JSON-RPC 2.0 layer (`src/mcp/`; no new
+  dependency): NDJSON lines, logs on stderr only (fd 1 is moved to the
+  protocol stream), protocol versions 2025-06-18 / 2025-03-26 / 2024-11-05
+  (the client's echoed when supported, else 2025-06-18), `server/discover`
+  answered `-32601` in every state, `-32002` before `initialize`, `-32600`
+  for a second `initialize`, a `null` or non-scalar id, or an id still in
+  flight; progress notifications only for a call with `_meta.progressToken`.
+- Tools `alsem_explain` (`routines` | `diff` text with `diffRoot` |
+  `table` + `field`; default format human), `alsem_prove`, `alsem_digest`
+  (always a file plus a summary: roots requested and resolved, effect
+  counts, per-root coverage), `alsem_query_effects`, `alsem_query_touches`,
+  `alsem_status` (per-engine counters, starts nothing) and `alsem_refresh`.
+  Common inputs `workspace`, `freshness`, `singleApp`, `out`,
+  `maxInlineBytes`. Each call becomes the CLI's argv (`--flag=value`, then
+  `--` and the positionals), parsed by the engine child with the binary's
+  own clap; the front end decides the diff root and `digest --changed`
+  with the CLI's own `decide` and sends a diff's text in the protocol.
+  Exclusive modes and non-empty selector arrays are enforced as `-32602`
+  (the schemas carry no top-level `oneOf`, which the Anthropic tool API
+  refuses).
+- Results are the r7 §8.3 envelope: `kind: "cli"` (a semantic build failure
+  included, `isError: false`) with `exitCode`, `stdoutText` XOR
+  `stdoutFile`, lossless stderr, `stale`, `changedPaths`, `universe`,
+  `freshness`, `timing`, `revision` (always present); `kind: "failed"`
+  (`isError: true`) for infrastructure outcomes (`engineError`,
+  `refusedPath`, `busy`, ...). The envelope is the first text block, the
+  inline stdout the second (exactly), and with 2025-06-18 also
+  `structuredContent` (plus `output`, the CLI's JSON parsed). Answers are
+  bounded to one 16 MiB line with the wire codec's `bound_frame`.
+- One engine child per (workspace, universe), each on its own worker thread
+  with a queue of 16 (`busy` beyond), so a long build never blocks `ping`
+  or another workspace. A child killed mid-call is reported and the next
+  call respawns it (the existing `EngineFront` backoff).
+- Output policy (§10): every file goes into a private instance folder
+  `<output root>/<id>/` (mode 0700, refused if it exists), reached by
+  handle-relative `openat`/`mkdirat`/`renameat` with `O_NOFOLLOW`; a
+  tool's `out` must be inside it (`..`, other absolute paths and planted
+  symlinks are `refusedPath`); only files the server wrote, identity
+  unchanged, are overwritten; 1 GB quota; folders older than 24 h removed
+  at start. Off Unix the sink fails closed (answers stay inline).
+- Tests: `tests/cli/mcp_server.rs` (a full transcript, each answer equal to
+  the CLI's stdout byte for byte, version negotiation, invalid and
+  duplicate ids, a semantic build failure, refused paths, progress, a
+  killed engine respawned) and unit tests in `src/mcp/`; each with a
+  recorded discrimination proof.
+- Measured on the CDO baseline (release-fast, cross-app, one `tools/call`
+  per tool through one `alsem mcp` vs the CLI run right after it; one
+  shared machine): every stdout, stderr and exit equal. Wall, MCP / CLI:
+  explain 27.7 / 28.0 s (81 KB human card, to a file over 64 KiB), prove
+  26.2 / 27.8 s, digest 26.5 / 22.7 s (35 KB, file), query effects
+  13.2 / 13.6 s, query touches 13.5 / 13.8 s. One engine child served all
+  five (5 asks, 5 workspace reads): the child is still one-shot, so every
+  call is a cold build and the front end adds no measurable cost; a
+  resident child will make the later calls warm with no front-end change.
+
 ### Measured (context-server stage 4: refresh per change type)
 
 - On a temp copy of the CDO baseline (release-fast, `aldump --session-refresh
