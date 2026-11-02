@@ -8,7 +8,10 @@
 //! - [`session`]: the session that keeps the published revision, checks
 //!   freshness per request and refreshes through the stage-4
 //!   `WorkspaceSession` (§5.1, §6).
+//! - [`budget`]: admission, reservation and the retained floor (§4.5, §7;
+//!   stage 3).
 
+pub mod budget;
 pub mod manifest;
 pub mod revision;
 pub mod session;

@@ -124,6 +124,13 @@ impl WorkspaceSession {
         self.last.as_ref()
     }
 
+    /// Drop the dependency files' kept rows (context-server design §7, the
+    /// first eviction): the next refresh projects them again, so it is slower
+    /// and its answer is the same. Returns how many files' rows were dropped.
+    pub fn evict_dependency_rows(&mut self) -> usize {
+        self.rows.evict_dependency()
+    }
+
     /// The retained parts moved out one at a time, in the order a byte census
     /// drops them (`tools/census-probe resident`): each part's drop delta is
     /// the bytes no earlier-dropped part shared with it. Leaves the session

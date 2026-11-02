@@ -41,11 +41,16 @@
 //! to a file. Every file goes into the server's private output folder
 //! ([`output`]).
 //!
-//! **What the child does not do yet** (stage-2 completion, built in
-//! parallel): keep a revision between asks (every answer is a cold build,
-//! `revision: null`), freshness modes (`latest-built` and `verify` are
-//! served fresh, and the envelope says so), cancellation, deadlines.
-//! The front end needs no change when the child becomes resident.
+//! **Engine children (stage 3).** Each child keeps its revision between
+//! calls under a memory budget (`--memory-budget`, its share of
+//! `--total-budget`) and ends after `--idle-timeout` with nothing to do; at
+//! most `--max-children` run at once (a call for another workspace or
+//! universe ends the least recently used idle child). A client's
+//! `notifications/cancelled` drops a queued call or sends the running one
+//! `session/cancel`, and the call is not answered (MCP). `alsem_refresh` is
+//! `session/refresh {wait}`. The tools take no deadline (the design's §8.2
+//! defines none), and the server sends no `session/notifyChanged`: it
+//! watches no files; the default `fresh` check per call sees every edit.
 
 pub mod output;
 mod server;
@@ -66,6 +71,9 @@ pub const DEFAULT_PROTOCOL: &str = "2025-06-18";
 /// The most calls queued for one engine; past it a call is `busy`
 /// (design r7 §3, heavy depth).
 pub const WORKER_QUEUE_DEPTH: usize = 16;
+
+/// The default `--max-children` (design §7): engine children alive at once.
+pub const DEFAULT_MAX_CHILDREN: usize = 2;
 
 /// The server's `instructions` in its `initialize` result.
 pub const INSTRUCTIONS: &str = "al-sem answers questions about Microsoft Dynamics 365 Business Central AL code by whole-program analysis. Use alsem_explain before editing a routine (its rules, writes, callers, tests), alsem_prove for yes/no safety questions, alsem_digest for the effects of a change, alsem_query_* for table effects. Answers are the exact output of the alsem CLI.";
@@ -100,6 +108,49 @@ pub struct McpConfig {
     pub defaults: tools::Defaults,
     /// The output root; the server's instance folder is created below it.
     pub output_root: PathBuf,
+    /// Each child's `--memory-budget` (`None`: its universe's default),
+    /// capped at `total_budget / max_children`.
+    pub memory_budget: Option<u64>,
+    /// Each child's `--idle-timeout` in seconds (0: never).
+    pub idle_timeout_secs: u64,
+    /// The most children alive at once; a call for another workspace or
+    /// universe ends the least recently used idle child first.
+    pub max_children: usize,
+    /// The budget all children share (`None`: `max_children` times the
+    /// per-child budget).
+    pub total_budget: Option<u64>,
+}
+
+impl McpConfig {
+    /// A configuration with the design's defaults (§7) for the engine
+    /// children.
+    #[must_use]
+    pub fn new(program: PathBuf, defaults: tools::Defaults, output_root: PathBuf) -> McpConfig {
+        McpConfig {
+            program,
+            child_env: Vec::new(),
+            defaults,
+            output_root,
+            memory_budget: None,
+            idle_timeout_secs: crate::engine::resident::budget::DEFAULT_IDLE_TIMEOUT_SECS,
+            max_children: DEFAULT_MAX_CHILDREN,
+            total_budget: None,
+        }
+    }
+
+    /// The `--memory-budget` an engine child of `universe` is started with.
+    #[must_use]
+    pub fn child_budget(&self, universe: tools::Universe) -> u64 {
+        use crate::engine::resident::budget as b;
+        let own = self.memory_budget.unwrap_or(match universe {
+            tools::Universe::CrossApp => b::DEFAULT_BUDGET_CROSS_APP,
+            tools::Universe::SingleApp => b::DEFAULT_BUDGET_SINGLE_APP,
+        });
+        match self.total_budget {
+            Some(total) => own.min(total / self.max_children.max(1) as u64),
+            None => own,
+        }
+    }
 }
 
 /// The default output root: `~/.al-sem/mcp-out` (a temp folder when the home

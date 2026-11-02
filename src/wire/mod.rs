@@ -335,6 +335,17 @@ pub struct AnswerMeta {
     pub timing: Option<Timing>,
     /// A cancelled or expired request: what it did before it stopped.
     pub work: Option<WorkDone>,
+    /// A `budget` outcome's figures (§8.3: `estimateKiB`, `budgetKiB`,
+    /// `retainedFloorKiB`).
+    pub budget: Option<BudgetFigures>,
+}
+
+/// What a refused reservation needed, against what there was (KiB).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BudgetFigures {
+    pub estimate_kib: u64,
+    pub budget_kib: u64,
+    pub retained_floor_kib: u64,
 }
 
 /// Where an answer's time went, in milliseconds (§8.3).
@@ -436,6 +447,20 @@ struct RawAnswer {
     work_done_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     skipped_phases: Option<Vec<String>>,
+    #[serde(
+        rename = "estimateKiB",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    estimate_kib: Option<u64>,
+    #[serde(rename = "budgetKiB", default, skip_serializing_if = "Option::is_none")]
+    budget_kib: Option<u64>,
+    #[serde(
+        rename = "retainedFloorKiB",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    retained_floor_kib: Option<u64>,
 }
 
 impl From<Answer> for RawAnswer {
@@ -459,6 +484,9 @@ impl From<Answer> for RawAnswer {
             timing: a.meta.timing,
             work_done_ms: a.meta.work.as_ref().map(|w| w.work_done_ms),
             skipped_phases: a.meta.work.map(|w| w.skipped_phases),
+            estimate_kib: a.meta.budget.map(|b| b.estimate_kib),
+            budget_kib: a.meta.budget.map(|b| b.budget_kib),
+            retained_floor_kib: a.meta.budget.map(|b| b.retained_floor_kib),
         };
         match a.outcome {
             Outcome::Cli {
@@ -548,6 +576,16 @@ impl TryFrom<RawAnswer> for Answer {
                 universe: raw.universe,
                 timing: raw.timing,
                 work,
+                budget: match (raw.estimate_kib, raw.budget_kib, raw.retained_floor_kib) {
+                    (Some(estimate_kib), Some(budget_kib), Some(retained_floor_kib)) => {
+                        Some(BudgetFigures {
+                            estimate_kib,
+                            budget_kib,
+                            retained_floor_kib,
+                        })
+                    }
+                    _ => None,
+                },
             },
         })
     }
@@ -941,6 +979,11 @@ mod tests {
                         compute_ms: i as u64,
                     }),
                     work: None,
+                    budget: (i == 2).then_some(BudgetFigures {
+                        estimate_kib: 4,
+                        budget_kib: 5,
+                        retained_floor_kib: 6,
+                    }),
                 },
             })
             .collect();

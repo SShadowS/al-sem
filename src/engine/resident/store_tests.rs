@@ -305,7 +305,7 @@ fn a_failed_reservation_wakes_its_waiter_which_fills_the_key() {
     let store: Store<K, V> = Store::new();
     let n = AtomicUsize::new(0);
     let first = AtomicUsize::new(0);
-    let reserve = |_: usize| {
+    let reserve = |_: &'static str, _: usize| -> Result<Guard<'_>, String> {
         if first.fetch_add(1, Ordering::SeqCst) == 0 {
             // Fail only once request 2 is waiting on this claim.
             while store.stats().joins == 0 {
@@ -313,7 +313,7 @@ fn a_failed_reservation_wakes_its_waiter_which_fills_the_key() {
             }
             return Err("no room".to_string());
         }
-        Ok(())
+        Ok(Box::new(()))
     };
     let ctl = Control {
         stop: &|| None,
@@ -367,7 +367,7 @@ fn a_cancelled_waiter_leaves_and_the_fill_still_publishes() {
     let stop = || cancelled.load(Ordering::SeqCst).then_some(Stop::Cancelled);
     let waiter = Control {
         stop: &stop,
-        reserve: &|_| Ok(()),
+        reserve: &unreserved_guard,
     };
     std::thread::scope(|sc| {
         let open = gate.opener();
@@ -481,4 +481,52 @@ fn eviction_skips_keys_pinned_for_assembly() {
         .unwrap();
     assert_eq!(evicted.load(Ordering::SeqCst), 0, "A was pinned");
     assert!(s.get(&K::A).is_some());
+}
+
+/// A reclaim evicts only what no request holds: a value in a ready
+/// snapshot a request still computes over stays (evicting it would free
+/// nothing until the request ends); once released it goes. Found on CDO:
+/// a request's own fold was evicted by its trees' reservation, which then
+/// read the floor as the whole RSS and refused as impossible.
+///
+/// DISCRIMINATION (2026-11-02): `evict_unheld` filtering on `>= 1` instead
+/// of `== 1` fails "an older snapshot holds X"; `hold` adding no pin fails
+/// "a held value stays".
+#[test]
+fn a_reclaim_skips_values_a_ready_snapshot_holds() {
+    let store: Store<K, V> = Store::new();
+    let n = AtomicUsize::new(0);
+    store
+        .ensure_prepared(
+            &needs(&[K::A]),
+            &no_estimate,
+            &numbered(&n),
+            &Control::unreserved(),
+        )
+        .unwrap();
+    // A request computing over A holds it; an older snapshot keeps X's.
+    let held = store.hold(&[K::A]);
+    assert_eq!(store.evict_unheld(&[K::A]), 0, "a held value stays");
+    assert!(store.load().get(&K::A).is_some());
+    store
+        .ensure_prepared(
+            &needs(&[K::X]),
+            &no_estimate,
+            &numbered(&n),
+            &Control::unreserved(),
+        )
+        .unwrap();
+    let older = store.load();
+    store
+        .ensure_prepared(
+            &needs(&[K::Y]),
+            &no_estimate,
+            &numbered(&n),
+            &Control::unreserved(),
+        )
+        .unwrap();
+    assert_eq!(store.evict_unheld(&[K::X]), 0, "an older snapshot holds X");
+    drop((held, older));
+    assert_eq!(store.evict_unheld(&[K::A]), 1, "released, it goes");
+    assert!(store.load().get(&K::A).is_none());
 }

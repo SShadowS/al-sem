@@ -789,4 +789,110 @@ mod faults {
         let _ = front.ask(explain());
         assert_eq!(front.stats().spawns, 4, "a reset restarts");
     }
+
+    /// T-panic (design §11, every profile): a real Rust panic while an ask
+    /// is answered ends the child (under the abort profile the panic
+    /// aborts; under an unwinding one the worker's guard aborts), the ask
+    /// fails `engineError` naming the abort, and the next ask is answered
+    /// by a new child with the CLI's bytes.
+    ///
+    /// DISCRIMINATION (2026-11-02): removing the worker's `catch_unwind`
+    /// guard in `child::work` (an unwinding debug build) fails it: the
+    /// panicking worker thread dies, the reader keeps the child alive, and
+    /// the ask is never answered (the test's front end then waits forever;
+    /// it was stopped by `timeout` after 120 s).
+    #[test]
+    fn a_panic_mid_request_kills_the_child_and_the_next_ask_respawns() {
+        let marker = tempfile::tempdir().unwrap();
+        let hook = format!(
+            "panic-on-ask-once:{}",
+            marker.path().join("panicked").display()
+        );
+        let mut front = hooked(&hook);
+        let answer = front.ask(explain());
+        let (outcome, message) = failure(&answer.outcome);
+        assert_eq!(outcome, FailedOutcome::EngineError, "{message}");
+        assert!(message.contains("engine died"), "{message}");
+        #[cfg(unix)]
+        assert!(message.contains("signal 6"), "an abort: {message}");
+        let argv = explain_argv();
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        assert_eq!(cli_answer(front.ask(explain()).outcome), cli(&argv));
+        let stats = front.stats();
+        assert_eq!((stats.spawns, stats.deaths, stats.completed), (2, 1, 1));
+    }
+
+    /// `--idle-timeout` (design §7): a child with nothing to do announces
+    /// its idle exit and ends after the grace; the front end's next ask
+    /// starts a new child without counting a death or waiting a backoff,
+    /// and is answered with the CLI's bytes.
+    ///
+    /// DISCRIMINATION (2026-11-02): ignoring the notice in
+    /// `EngineFront::ensure_running` (`let idle = false && …`) fails it: the
+    /// next ask meets the closed pipe and fails `engineError` ("engine died
+    /// (writing to the engine failed: Broken pipe …; exit code 0)").
+    #[test]
+    fn an_idle_child_ends_and_the_next_ask_starts_a_new_one() {
+        let mut cfg = FrontConfig::new(ALSEM, ws_explain());
+        cfg.args.extend(
+            ["--idle-timeout", "1", "--idle-grace-ms", "200"]
+                .iter()
+                .map(Into::into),
+        );
+        let mut front = EngineFront::new(cfg).expect("front end");
+        let argv = explain_argv();
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let expected = cli(&argv);
+        assert_eq!(cli_answer(front.ask(explain()).outcome), expected);
+        let started = Instant::now();
+        while front.child_exited() != Some(true) {
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "the idle child never ended"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(cli_answer(front.ask(explain()).outcome), expected);
+        let stats = front.stats();
+        assert_eq!(
+            (stats.spawns, stats.deaths, stats.retired),
+            (2, 0, 1),
+            "no death: {stats:?}"
+        );
+    }
+
+    /// T-budget through the child: a workspace whose pre-model estimate
+    /// exceeds `--memory-budget` is refused `budget` before it is read,
+    /// with the estimate, budget and floor; `status` reports the budget.
+    ///
+    /// DISCRIMINATION (2026-11-02): opening the session without its budget
+    /// (`ResidentSession::new(..)` with no `.with_budget`) fails "cold build":
+    /// the model is built and read, and only the first fill is refused.
+    #[test]
+    fn a_workload_over_the_child_budget_is_refused_with_its_figures() {
+        let mut cfg = FrontConfig::new(ALSEM, ws_explain());
+        cfg.args.extend(
+            [
+                "--memory-budget",
+                "64M",
+                "--estimate-per-al-byte",
+                "1000000",
+            ]
+            .iter()
+            .map(Into::into),
+        );
+        let mut front = EngineFront::new(cfg).expect("front end");
+        let answer = front.ask(explain());
+        let (outcome, message) = failure(&answer.outcome);
+        assert_eq!(outcome, FailedOutcome::Budget, "{message}");
+        assert!(message.contains("cold build"), "{message}");
+        let figures = answer.meta.budget.expect("the budget figures");
+        assert_eq!(figures.budget_kib, 64 * 1024);
+        assert!(figures.estimate_kib > figures.budget_kib);
+        let status = front.status().expect("status");
+        assert_eq!(status.workspace_reads, 0, "refused before the read");
+        let memory = status.memory.expect("memory status");
+        assert_eq!(memory["budgetBytes"], 64 * 1024 * 1024);
+        assert_eq!(memory["impossible"], 1);
+    }
 }

@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (context-server stage 3: admission, eviction, idle children, MCP wiring)
+
+- **Reservation before work** (`engine::resident::budget`): every build, fill and
+  request's trees reserve their estimated peak; `rss + reserved + estimate <= budget`
+  or the child reclaims (admission closed, in-flight releasers waited for, unheld
+  artifacts evicted in the design's order: dependency raw, the session's dependency
+  rows, runs, det, fold, ordering, rules; never the model, relation, tier or L4 seed)
+  and tries once more, else answers `budget` with `estimateKiB`, `budgetKiB`,
+  `retainedFloorKiB`. An estimate that cannot fit above the retained floor
+  (`status.memory.retainedBytes`: RSS less the measured bytes of every evictable
+  artifact) fails at once. A first build is estimated from the manifest's `.al` and
+  package bytes (floor 1.5 GiB cross-app, 0.5 GiB single-app) and refused before
+  anything is read; observed peaks (`/proc` peak windows) replace the table.
+  A request's artifacts stay pinned through its compute, so a reclaim never evicts
+  what a request reads (found on CDO: a request's own fold was evicted by its trees'
+  reservation).
+- `alsem engine-host --memory-budget` (default **6 GiB** cross-app, 2 GiB
+  single-app: the design's 4 GiB is below what CDO retains after one build) and
+  `--idle-timeout` (600 s: the child announces `engine/idleExit` and ends after a
+  grace; the front end starts a new child on its next call, no death counted).
+  `status.memory` reports the budget's counters.
+- Lanes: one heavy worker and four light workers (queries) in the child; a panic in
+  a request ends the child in every profile (the front end restarts it).
+- `alsem mcp`: `notifications/cancelled` drops a queued call or sends the running one
+  `session/cancel`, and the call is not answered; `alsem_refresh` is `session/refresh
+  {wait}`; `--memory-budget`, `--idle-timeout`, `--max-children` (default 2: a call
+  for another workspace ends the least recently used idle child) and
+  `--total-budget`. `alsem_status` shows each child's memory, idle timeout and
+  retirements.
+- Measured on CDO (release-fast, cross-app, `IssueReminder`): with the default
+  budget no refusal, RSS after query+explain+prove+digest 4.59 GB, retained floor
+  3.90 GB; with `--memory-budget 5G` the explain's trees reclaimed the dependency
+  rows (10,881 files) and every answer was given, RSS 4.34 GB, peak 5.10 GB; with
+  4.5G explain is refused `budget` (the floor 3.75 GB plus the trees' 0.9 GB).
+
 ### Changed (context-server stage 3: the resident engine keeps less)
 
 - **Where the resident child's memory goes, measured.** A new `census-probe

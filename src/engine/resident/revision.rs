@@ -75,6 +75,9 @@ pub enum ArtifactKey {
 }
 
 impl StoreKey for ArtifactKey {
+    fn kind(&self) -> &'static str {
+        ArtifactKey::kind(self)
+    }
     fn phase(&self) -> usize {
         match self {
             ArtifactKey::Ordering | ArtifactKey::Rules | ArtifactKey::Fold | ArtifactKey::L4 => 0,
@@ -89,6 +92,26 @@ pub struct Fold {
     pub(crate) caps: CapabilityAnalysis,
     /// The primary routines' raw facts.
     pub(crate) raw: InheritedFacts,
+}
+
+impl Fold {
+    /// The fold's parts, for a byte census (`tools/census-probe resident`).
+    #[doc(hidden)]
+    pub fn into_census_parts(self) -> Vec<(&'static str, Box<dyn std::any::Any>)> {
+        let CapabilityAnalysis {
+            direct_full,
+            coverage,
+            derived,
+            pd,
+        } = self.caps;
+        vec![
+            ("fold.raw", Box::new(self.raw)),
+            ("fold.direct_full", Box::new(direct_full)),
+            ("fold.coverage", Box::new(coverage)),
+            ("fold.derived", Box::new(derived)),
+            ("fold.pd", Box::new(pd)),
+        ]
+    }
 }
 
 /// The retained solve: never drained, so a det refill and the next seeded
@@ -228,6 +251,50 @@ impl Revision {
     /// flight stay. Returns how many were evicted.
     pub fn evict(&self, keys: &[ArtifactKey]) -> usize {
         self.store.evict(keys)
+    }
+
+    /// The artifact kinds eviction may drop, in the design's order (§7):
+    /// dependency subjects' raw facts, then runs and the det, then the fold
+    /// (the cones), then ordering and rules. Never the model, the relation
+    /// or the L4 seed.
+    pub const EVICTION_ORDER: &'static [&'static str] =
+        &["raw", "run", "det", "fold", "ordering", "rules"];
+
+    /// The measured bytes of every evictable artifact the current snapshot
+    /// holds (what their fills left resident).
+    #[must_use]
+    pub fn evictable_bytes(&self) -> u64 {
+        let s = self.store.load();
+        s.keys()
+            .filter(|k| Self::EVICTION_ORDER.contains(&k.kind()))
+            .map(|k| s.bytes(k))
+            .sum()
+    }
+
+    /// Evict every unpinned artifact of `kind`; returns how many.
+    pub fn evict_kind(&self, kind: &str) -> usize {
+        let keys = self.keys_where(|k| k.kind() == kind);
+        if keys.is_empty() {
+            return 0;
+        }
+        self.store.evict(&keys)
+    }
+
+    /// Evict, for memory, every artifact of `kind` no request holds
+    /// ([`Store::evict_unheld`]); returns how many.
+    pub fn reclaim_kind(&self, kind: &str) -> usize {
+        let keys = self.keys_where(|k| k.kind() == kind);
+        if keys.is_empty() {
+            return 0;
+        }
+        self.store.evict_unheld(&keys)
+    }
+
+    /// How many routine rows the revision's model holds (the estimate
+    /// table's scale).
+    #[must_use]
+    pub fn routine_count(&self) -> u64 {
+        self.target.resolved().workspace.routines.len() as u64
     }
 
     /// Every key the current snapshot holds of `pred`'s kind.
@@ -575,7 +642,17 @@ impl Revision {
         if let Some(stop) = (ctl.stop)() {
             return Err(stop.into());
         }
+        // The trees' working memory is reserved like a fill's (§4.5 "heavy
+        // request"), and released once they are read.
+        let guard = if plan.tree_demands().is_empty() {
+            None
+        } else {
+            Some((ctl.reserve)("trees", 0).map_err(PrepareError::Budget)?)
+        };
         let (trees, tree_lines) = capture(|| self.trees(plan, &snap, ctl));
+        if let Some(g) = guard {
+            g.finish();
+        }
         let (effects, tree_reads) = trees?;
         let runs: BTreeMap<RunKey, Arc<RunOutput>> = needs
             .iter()
@@ -672,6 +749,11 @@ impl Revision {
             Err(f) => return Ok(serialize_failure(job, f)),
         };
         let plan = Plan::merge([(JobId(0), part.plan)]);
+        // The request's artifacts stay pinned through its trees and compute
+        // (§4.2 step 4): a reclaim for its own trees, or another request's,
+        // never evicts what it reads.
+        let needed: Vec<ArtifactKey> = self.needs_of(&plan).into_iter().map(|(k, _)| k).collect();
+        let _hold = self.store.hold(&needed);
         let (keys, has_tree) = (plan.keys(), plan.has_tree(JobId(0)));
         let (mut view, mut lines) = self.serve_plan(&plan, ctl, prepare_ms)?;
         if let Some(stop) = (ctl.stop)() {

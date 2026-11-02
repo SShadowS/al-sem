@@ -1679,6 +1679,52 @@ fn resident_mode(ws: PathBuf, routine: String) {
     }
     println!("  fills: {:?}", rev.fill_counts());
     println!("-- drop deltas (MiB, allocs):");
+    {
+        use al_sem::engine::resident::revision::{ArtifactKey, ArtifactValue};
+        let fold = rev.snapshot().get(&ArtifactKey::Fold).cloned();
+        if let Some(fold) = fold {
+            rev.evict(&[ArtifactKey::Fold]);
+            if let Ok(a) = Arc::try_unwrap(fold)
+                && let ArtifactValue::Fold(f) = a.value
+            {
+                for (name, part) in f.into_census_parts() {
+                    if name == "fold.pd" {
+                        let pd = part
+                            .downcast::<Option<al_sem::engine::l4::pd_solve::ConeArena>>()
+                            .expect("the pd part");
+                        if let Some(pd) = *pd {
+                            println!(
+                                "  pd: producers {} states {} (cap {}, {} B) links {} (cap {}, {} B) edges {} by_routine {}",
+                                pd.producers.len(),
+                                pd.states.len(),
+                                pd.states.capacity(),
+                                size_of::<al_sem::engine::l4::pd_solve::ConeState>(),
+                                pd.links.len(),
+                                pd.links.capacity(),
+                                size_of::<al_sem::engine::l4::pd_solve::ConeLink>(),
+                                pd.edges.len(),
+                                pd.by_routine.len()
+                            );
+                            let al_sem::engine::l4::pd_solve::ConeArena {
+                                producers,
+                                states,
+                                links,
+                                edges,
+                                by_routine,
+                            } = pd;
+                            step("fold.pd.by_routine", by_routine);
+                            step("fold.pd.links", links);
+                            step("fold.pd.states", states);
+                            step("fold.pd.edges", edges);
+                            step("fold.pd.producers", producers);
+                        }
+                        continue;
+                    }
+                    step(name, part);
+                }
+            }
+        }
+    }
     for kind in ["run", "det", "raw", "fold", "l4", "rules", "ordering"] {
         let keys = rev.keys_where(|k| k.kind() == kind);
         let (b0, a0) = live();

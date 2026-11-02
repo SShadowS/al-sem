@@ -43,7 +43,9 @@
 //! file-or-list are the front end's [`Decisions`] (mandatory when the
 //! command reads paths), request files travel as bytes (`requestFiles`).
 //!
-//! **Queue.** One worker answers asks in arrival order; at most
+//! **Queue.** One heavy worker answers every ask but query (and refreshes)
+//! in arrival order, and [`LIGHT_WORKERS`] light workers answer queries
+//! beside it (stage 3: a light ask never waits behind a heavy one); at most
 //! [`QUEUE_HEAVY`] heavy and [`QUEUE_LIGHT`] light asks (query) wait, holding
 //! at most [`QUEUED_BYTES`] of parameters; beyond, `busy` at once. A
 //! cancelled queued ask is answered `cancelled` at once with no work; an ask
@@ -128,6 +130,21 @@ pub const QUEUE_LIGHT: usize = 64;
 
 /// The most bytes of ask parameters a child holds waiting.
 pub const QUEUED_BYTES: usize = 16 * 1024 * 1024;
+
+/// The workers that answer light asks (query) beside the one heavy worker
+/// (design §4.5 "Lanes: one heavy, four light"), so a light ask never waits
+/// behind a heavy one.
+pub const LIGHT_WORKERS: usize = 4;
+
+/// The notification a child sends when its idle timeout passed (design §7
+/// `--idle-timeout`): it ends after [`IDLE_GRACE`] unless a request arrives
+/// first (which it then serves, staying up). A front end that sees it, or
+/// sees the child's output end after it, starts a new child for its next
+/// request without counting a death.
+pub const IDLE_EXIT_METHOD: &str = "engine/idleExit";
+
+/// How long an idle child waits after [`IDLE_EXIT_METHOD`] before it ends.
+pub const IDLE_GRACE: Duration = Duration::from_secs(10);
 
 /// The JSON-RPC 2.0 error codes the protocol uses.
 pub mod codes {
@@ -337,6 +354,16 @@ pub struct ChildStatus {
     pub queued: u64,
     #[serde(default)]
     pub in_flight: Option<serde_json::Value>,
+    /// Every ask in flight (the heavy worker's and the light workers').
+    #[serde(default)]
+    pub in_flight_all: Vec<serde_json::Value>,
+    /// The memory budget's counters (stage 3: `retainedBytes`, `reservedBytes`,
+    /// `fillWorkers`, `overruns`, ...).
+    #[serde(default)]
+    pub memory: Option<serde_json::Value>,
+    /// The idle timeout in seconds (`None`: never).
+    #[serde(default)]
+    pub idle_timeout_secs: Option<u64>,
     /// The private output directory.
     #[serde(default)]
     pub output_dir: Option<PathBuf>,
@@ -436,6 +463,14 @@ pub mod test_hooks {
         /// Abort on an ask only if `marker` does not exist yet, creating it:
         /// the first child dies, its replacement answers.
         AbortOnAskOnce(std::path::PathBuf),
+        /// Panic (a real Rust panic, not an abort) on an ask only if `marker`
+        /// does not exist yet, creating it: under the abort profile the panic
+        /// aborts; under an unwinding one the worker's guard ends the
+        /// process. Either way the child dies and its replacement answers.
+        PanicOnAskOnce(std::path::PathBuf),
+        /// Sleep this many milliseconds before answering an ask (then
+        /// answer it normally, its cancel flag read at its first phase).
+        SleepOnAsk(u64),
         /// Answer an ask with a line over the frame limit.
         OversizedFrameOnAsk,
         /// Answer an ask with a line that is not JSON.
@@ -471,6 +506,8 @@ pub mod test_hooks {
             "protocol" => Hook::Protocol(arg.parse().ok()?),
             "abort-on-ask" => Hook::AbortOnAsk,
             "abort-on-ask-once" => Hook::AbortOnAskOnce(arg.into()),
+            "panic-on-ask-once" => Hook::PanicOnAskOnce(arg.into()),
+            "sleep-on-ask" => Hook::SleepOnAsk(arg.parse().ok()?),
             "oversized-frame-on-ask" => Hook::OversizedFrameOnAsk,
             "garbage-frame-on-ask" => Hook::GarbageFrameOnAsk,
             "exit-after-open" => Hook::ExitAfterOpen,

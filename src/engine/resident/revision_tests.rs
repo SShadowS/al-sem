@@ -437,7 +437,7 @@ fn a_cancelled_request_stops_between_phases() {
     let stop = || Some(crate::engine::resident::store::Stop::Cancelled);
     let ctl = Control {
         stop: &stop,
-        reserve: &|_| Ok(()),
+        reserve: &crate::engine::resident::store::unreserved_guard,
     };
     let err = rev.answer(&*job(Cmd::Prove, &f), &ctl).unwrap_err();
     assert_eq!(err, PrepareError::Cancelled);
@@ -446,4 +446,90 @@ fn a_cancelled_request_stops_between_phases() {
         "nothing filled for a cancelled request"
     );
     assert_eq!(answer(&rev, Cmd::Prove, &f), cold(Cmd::Prove, &f));
+}
+
+/// T-race (design §4.5, §11): a heavy and a light request answered
+/// concurrently off ONE revision (as the child's heavy and light workers
+/// do) while a third thread evicts every evictable kind and the L4 seed,
+/// the three released together at a barrier each round: every answer is
+/// its cold run's bytes, no request sees a partial snapshot, and the
+/// artifacts are filled again after each eviction.
+///
+/// DISCRIMINATION (2026-11-02): dropping the assembly pins in
+/// `ensure_prepared` (no `pins += 1`) fails it: an eviction lands between a
+/// request's phases, and the request ends "missing from the ready snapshot"
+/// (or a run without its det) instead of answering: 5 of 5 runs failed
+/// (6 rounds failed 1 run in 3, hence 40).
+#[test]
+fn concurrent_requests_and_evictions_answer_the_cold_bytes() {
+    const ROUNDS: usize = 40;
+    let f = r0("ws-d37", "ForwardedAfterValidate");
+    let rev = revision(&f);
+    let (cold_prove, cold_query) = (cold(Cmd::Prove, &f), cold(Cmd::Query, &f));
+    let cold_explain = cold(Cmd::Explain, &f);
+    // Each round releases the three threads together: a rendezvous send per
+    // thread (a thread that panicked has dropped its receiver, so the send
+    // fails at once and nothing waits on it forever).
+    let (go_heavy, heavy_rx) = std::sync::mpsc::sync_channel::<()>(0);
+    let (go_light, light_rx) = std::sync::mpsc::sync_channel::<()>(0);
+    let (go_evict, evict_rx) = std::sync::mpsc::sync_channel::<()>(0);
+    let (rev, f) = (&rev, &f);
+    std::thread::scope(|s| {
+        let heavy = s.spawn(move || {
+            let mut outs = Vec::new();
+            for i in 0.. {
+                if heavy_rx.recv().is_err() {
+                    break;
+                }
+                let cmd = if i % 2 == 0 { Cmd::Prove } else { Cmd::Explain };
+                outs.push((cmd, answer(rev, cmd, f)));
+            }
+            outs
+        });
+        let light = s.spawn(move || {
+            let mut outs = Vec::new();
+            while light_rx.recv().is_ok() {
+                outs.push(answer(rev, Cmd::Query, f));
+            }
+            outs
+        });
+        let evictor = s.spawn(move || {
+            let mut evicted = 0;
+            while evict_rx.recv().is_ok() {
+                for _ in 0..50 {
+                    for k in ["run", "det", "fold", "l4", "rules", "ordering"] {
+                        evicted += rev.evict_kind(k);
+                    }
+                    std::thread::yield_now();
+                }
+            }
+            evicted
+        });
+        for _ in 0..ROUNDS {
+            let _ = go_evict.send(());
+            let _ = go_heavy.send(());
+            let _ = go_light.send(());
+        }
+        drop((go_heavy, go_light, go_evict));
+        for (cmd, out) in heavy.join().unwrap() {
+            let cold = if matches!(cmd, Cmd::Prove) {
+                &cold_prove
+            } else {
+                &cold_explain
+            };
+            assert_eq!(&out, cold, "{cmd:?}");
+        }
+        for out in light.join().unwrap() {
+            assert_eq!(out, cold_query);
+        }
+        assert!(
+            evictor.join().unwrap() > 0,
+            "precondition: evictions happened"
+        );
+    });
+    assert!(
+        rev.fill_counts().get("l4").copied().unwrap_or(0) > 1,
+        "refilled after eviction: {:?}",
+        rev.fill_counts()
+    );
 }

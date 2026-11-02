@@ -22,6 +22,12 @@
 //! keys never lose each other's entries. Only after the swap are the keys
 //! marked `Published` and the waiters woken.
 //!
+//! **Reservation** (§4.5, stage 3): each claimed key's fill reserves through
+//! [`Control::reserve`] just before it computes and holds the guard until
+//! its value is in hand; the guard's `finish` gives the bytes the fill left
+//! resident, kept with the published entry ([`Snapshot::bytes`]) as the
+//! eviction's sizes. A refused reservation releases the claims (below).
+//!
 //! **Every failure path releases the claims and wakes the waiters**: a
 //! cancelled or expired request, a failed reservation, a fill that failed or
 //! panicked, artifact churn. A waiter that is woken by a released claim
@@ -52,7 +58,25 @@ const WAIT_SLICE: Duration = Duration::from_millis(20);
 pub trait StoreKey: Clone + Ord + Hash + Debug + Send + Sync {
     /// 0-based; every prerequisite of a key is in a lower phase.
     fn phase(&self) -> usize;
+    /// The key's kind, as a reservation names its case (`budget::Case`).
+    fn kind(&self) -> &'static str {
+        "artifact"
+    }
 }
+
+/// A held reservation (§4.5): released when dropped. `finish` is called
+/// once the fill it covers has its value, and returns the bytes the fill
+/// left resident (recorded with the published entry, the eviction sizes).
+pub trait Held: Send {
+    fn finish(self: Box<Self>) -> u64 {
+        0
+    }
+}
+
+impl Held for () {}
+
+/// A reservation's guard.
+pub type Guard<'a> = Box<dyn Held + 'a>;
 
 /// A value of the store, and what a request requires of it (a det of a
 /// wide enough mask, for example).
@@ -67,10 +91,12 @@ pub struct Snapshot<K, V> {
     entries: BTreeMap<K, Published<V>>,
 }
 
-/// A published value and the generation it was filled at.
+/// A published value, the generation it was filled at, and the bytes its
+/// fill left resident (0 when unmeasured).
 pub struct Published<V> {
     pub value: Arc<V>,
     pub generation: u64,
+    pub bytes: u64,
 }
 
 impl<V> Clone for Published<V> {
@@ -78,6 +104,7 @@ impl<V> Clone for Published<V> {
         Published {
             value: Arc::clone(&self.value),
             generation: self.generation,
+            bytes: self.bytes,
         }
     }
 }
@@ -106,6 +133,12 @@ impl<K: StoreKey, V: StoreValue> Snapshot<K, V> {
     /// The keys present.
     pub fn keys(&self) -> impl Iterator<Item = &K> {
         self.entries.keys()
+    }
+
+    /// The bytes `key`'s fill left resident (0 when absent or unmeasured).
+    #[must_use]
+    pub fn bytes(&self, key: &K) -> u64 {
+        self.entries.get(key).map_or(0, |p| p.bytes)
     }
 
     /// The number of entries.
@@ -181,10 +214,15 @@ impl From<Stop> for PrepareError {
 pub struct Control<'a> {
     /// `Some` once the request must stop.
     pub stop: &'a (dyn Fn() -> Option<Stop> + Sync),
-    /// The reservation before a fill (§4.5): `Err(why)` refuses it. Stage 2
-    /// has no budget (stage 3's admission), so the child passes
-    /// [`Control::unreserved`]'s.
-    pub reserve: &'a (dyn Fn(usize) -> Result<(), String> + Sync),
+    /// The reservation before a fill, or before a request's trees (§4.5):
+    /// the key's kind (`"trees"` for trees) and the store's estimate (0 when
+    /// the reserver estimates itself); `Err(why)` refuses it.
+    pub reserve: &'a (dyn Fn(&'static str, usize) -> Result<Guard<'a>, String> + Sync),
+}
+
+/// A reservation that always succeeds and holds nothing.
+pub fn unreserved_guard<'a>(_: &'static str, _: usize) -> Result<Guard<'a>, String> {
+    Ok(Box::new(()))
 }
 
 impl Control<'static> {
@@ -193,7 +231,7 @@ impl Control<'static> {
     pub fn unreserved() -> Control<'static> {
         Control {
             stop: &|| None,
-            reserve: &|_| Ok(()),
+            reserve: &unreserved_guard,
         }
     }
 }
@@ -357,6 +395,43 @@ impl<K: StoreKey, V: StoreValue> Store<K, V> {
         gone.len()
     }
 
+    /// Pin `keys` for as long as the returned guard lives: a request holds
+    /// its needs through its compute (§4.2 step 4, "keep it pinned for the
+    /// compute"), so a reclaim never evicts what it reads.
+    pub fn hold(&self, keys: &[K]) -> impl Drop + '_ {
+        let mut reg = self.registry();
+        for k in keys {
+            reg.entry(k.clone()).or_default().pins += 1;
+        }
+        Pins {
+            store: self,
+            keys: keys.to_vec(),
+        }
+    }
+
+    /// Evict for memory (§4.5 reclaim): [`Store::evict`] of the keys whose
+    /// value no request holds — not pinned (for assembly or a compute,
+    /// [`Store::hold`]), and held by no older snapshot. Evicting a value a
+    /// request still reads frees nothing until that request ends, and would
+    /// only cost the next request its refill. Returns how many.
+    pub fn evict_unheld(&self, keys: &[K]) -> usize {
+        let free: Vec<K> = {
+            let cell = self.cell();
+            keys.iter()
+                .filter(|k| {
+                    cell.entries
+                        .get(*k)
+                        .is_some_and(|p| Arc::strong_count(&p.value) == 1)
+                })
+                .cloned()
+                .collect()
+        };
+        if free.is_empty() {
+            return 0;
+        }
+        self.evict(&free)
+    }
+
     /// Invalidate `keys` whatever their pins (a tombstone): each generation
     /// is incremented, so a fill in flight is discarded at publication and
     /// refilled, and the entries leave the current snapshot. A snapshot a
@@ -460,16 +535,17 @@ impl<K: StoreKey, V: StoreValue> Store<K, V> {
                 if claims.keys.is_empty() {
                     continue;
                 }
-                for (k, _) in &claims.keys {
-                    if let Err(why) = (ctl.reserve)(estimate(k)) {
-                        // `claims` drops: released, waiters woken.
-                        return Err(PrepareError::Budget(why));
-                    }
-                }
                 let s = self.load();
-                let mut values: Vec<(K, u64, V)> = Vec::new();
+                let mut values: Vec<(K, u64, V, u64)> = Vec::new();
                 for (k, generation) in claims.keys.clone() {
                     let (k, generation) = (&k, &generation);
+                    // Each fill holds its reservation while it computes (a
+                    // fill worker), released once its value is in hand.
+                    let guard = match (ctl.reserve)(k.kind(), estimate(k)) {
+                        Ok(g) => g,
+                        // `claims` drops: released, waiters woken.
+                        Err(why) => return Err(PrepareError::Budget(why)),
+                    };
                     let req = &missing
                         .iter()
                         .find(|(m, _)| m == k)
@@ -485,7 +561,7 @@ impl<K: StoreKey, V: StoreValue> Store<K, V> {
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fill(cx)))
                             .unwrap_or_else(|p| Err(panic_text(&p)));
                     match filled {
-                        Ok(v) => values.push((k.clone(), *generation, v)),
+                        Ok(v) => values.push((k.clone(), *generation, v, guard.finish())),
                         Err(why) => {
                             self.fail(k, worker, &why);
                             claims.keys.retain(|(c, _)| c != k);
@@ -569,14 +645,14 @@ impl<K: StoreKey, V: StoreValue> Store<K, V> {
     /// key released. Returns a key that churned past [`MAX_DISCARDS`].
     fn publish(
         &self,
-        values: Vec<(K, u64, V)>,
+        values: Vec<(K, u64, V, u64)>,
         worker: u64,
         discards: &mut HashMap<K, usize>,
     ) -> Option<K> {
         let mut reg = self.registry();
         let mut kept: Vec<(K, Published<V>)> = Vec::new();
         let mut churned = None;
-        for (k, generation, v) in values {
+        for (k, generation, v, bytes) in values {
             let e = reg.entry(k.clone()).or_default();
             if e.generation == generation {
                 kept.push((
@@ -584,6 +660,7 @@ impl<K: StoreKey, V: StoreValue> Store<K, V> {
                     Published {
                         value: Arc::new(v),
                         generation,
+                        bytes,
                     },
                 ));
                 continue;

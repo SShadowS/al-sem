@@ -113,6 +113,29 @@ enum Event {
     Eof,
 }
 
+impl Queue {
+    /// Between requests (nothing asked is outstanding): drop the queued
+    /// unsolicited notifications and say whether one was the child's
+    /// [`super::IDLE_EXIT_METHOD`] (it is going away on its own).
+    fn take_idle_notice(&self) -> bool {
+        let mut s = self.lock();
+        let mut idle = false;
+        let mut kept = VecDeque::new();
+        let mut bytes = 0;
+        for q in s.items.drain(..) {
+            if q.msg.method.as_deref() == Some(super::IDLE_EXIT_METHOD) {
+                idle = true;
+            } else if q.msg.method.is_none() {
+                bytes += q.bytes;
+                kept.push_back(q);
+            }
+        }
+        s.items = kept;
+        s.bytes = bytes;
+        idle
+    }
+}
+
 /// Why `recv` returned no event.
 #[derive(Debug, PartialEq, Eq)]
 enum RecvError {
@@ -335,6 +358,8 @@ struct Running {
     stderr: Arc<Mutex<StderrTail>>,
     hello: Hello,
     since: Instant,
+    /// The child announced its idle exit ([`super::IDLE_EXIT_METHOD`]).
+    idle_notice: bool,
 }
 
 impl Running {
@@ -356,6 +381,8 @@ pub struct FrontStats {
     pub spawns: u64,
     pub deaths: u64,
     pub completed: u64,
+    /// Children that ended on their idle timeout (never counted as deaths).
+    pub retired: u64,
 }
 
 /// How a shutdown ended.
@@ -379,6 +406,9 @@ pub struct EngineFront {
     last_stderr: String,
     last_failure: Option<(FailedOutcome, String)>,
     stats: FrontStats,
+    /// The last call met the child's idle exit (its request was lost with
+    /// it): the ask is sent once more to a new child.
+    retired_mid_call: bool,
 }
 
 /// A failure before an answer: its outcome and message.
@@ -410,7 +440,35 @@ impl EngineFront {
             last_stderr: String::new(),
             last_failure: None,
             stats: FrontStats::default(),
+            retired_mid_call: false,
         })
+    }
+
+    /// Let the running child go without counting a death: close its input
+    /// (an idle child ends on end of input), wait for it briefly, then kill
+    /// and reap it.
+    fn retire(&mut self) {
+        let Some(run) = self.running.take() else {
+            return;
+        };
+        let Running { child, stdin, .. } = run;
+        drop(stdin);
+        let mut child = child.lock().unwrap_or_else(|p| p.into_inner());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break;
+                }
+            }
+        }
+        self.stats.retired += 1;
     }
 
     /// Ask the engine one command. Every failure is an answer: a dead,
@@ -472,7 +530,15 @@ impl EngineFront {
         self.ensure_running()?;
         let params = serde_json::to_value(params)
             .map_err(|e| (FailedOutcome::Protocol, format!("encoding the ask: {e}")))?;
-        let result = self.call(id.clone(), "session/ask", params, None, watch)?;
+        self.retired_mid_call = false;
+        let result = match self.call(id.clone(), "session/ask", params.clone(), None, watch) {
+            // The ask crossed the child's idle exit: once more, to a new one.
+            Err(_) if std::mem::take(&mut self.retired_mid_call) => {
+                self.ensure_running()?;
+                self.call(id.clone(), "session/ask", params, None, watch)?
+            }
+            r => r?,
+        };
         match serde_json::from_value::<Answer>(result) {
             Ok(answer) if answer.id == *id => {
                 // A completed ask: the child is doing useful work.
@@ -678,6 +744,15 @@ impl EngineFront {
         if let Some(why) = background {
             return Err(self.kill(FailedOutcome::Protocol, why));
         }
+        // A child that announced its idle exit is let go (no death, no
+        // backoff) and a new one started for this request.
+        let idle = self
+            .running
+            .as_ref()
+            .is_some_and(|r| r.idle_notice || r.frames.take_idle_notice());
+        if idle {
+            self.retire();
+        }
         if let Some(run) = &self.running {
             if run.since.elapsed() >= self.cfg.stable_after {
                 self.reset_backoff();
@@ -740,6 +815,7 @@ impl EngineFront {
                 pid: 0,
             },
             since,
+            idle_notice: false,
         };
         let hello = match run.frames.recv(Some(self.cfg.hello_deadline)) {
             Ok(Event::Frame(m)) => Some(m)
@@ -844,6 +920,11 @@ impl EngineFront {
                 }
                 // Shapes were checked by the reader: a notification, or a
                 // response with exactly one of result and error.
+                Ok(Event::Frame(m)) if m.method.as_deref() == Some(super::IDLE_EXIT_METHOD) => {
+                    // The child serves a request that reaches it after its
+                    // notice; one that crosses its exit is retried once.
+                    run.idle_notice = true;
+                }
                 Ok(Event::Frame(m)) if m.method.is_some() => {
                     let ours = m.method.as_deref() == Some(PROGRESS_METHOD)
                         && m.params.as_ref().and_then(|p| p.get("id")) == Some(&id);
@@ -872,6 +953,14 @@ impl EngineFront {
                 }
                 Ok(Event::Bad(why)) => {
                     return Err(self.kill(FailedOutcome::Protocol, why));
+                }
+                Ok(Event::Eof) if run.idle_notice => {
+                    self.retire();
+                    self.retired_mid_call = true;
+                    return Err((
+                        FailedOutcome::EngineError,
+                        "the engine ended on its idle timeout".into(),
+                    ));
                 }
                 Ok(Event::Eof) => {
                     return Err(self.died("the engine closed its output".into()));

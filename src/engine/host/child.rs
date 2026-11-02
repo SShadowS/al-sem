@@ -84,13 +84,43 @@ enum Work {
 
 #[derive(Default)]
 struct QueueState {
-    items: VecDeque<Work>,
+    /// The heavy lane: every ask but query, and refreshes, in arrival order.
+    heavy_items: VecDeque<Work>,
+    /// The light lane: queries, in arrival order.
+    light_items: VecDeque<Work>,
     heavy: usize,
     light: usize,
     bytes: usize,
     closing: bool,
-    /// The ask in flight: its id and cancel flag.
-    in_flight: Option<(serde_json::Value, Arc<AtomicBool>)>,
+    /// The asks in flight: each id and cancel flag.
+    in_flight: Vec<(serde_json::Value, Arc<AtomicBool>)>,
+    /// When the last unit of work finished (the idle clock).
+    last_done: Option<Instant>,
+}
+
+impl QueueState {
+    fn idle(&self) -> bool {
+        self.heavy_items.is_empty() && self.light_items.is_empty() && self.in_flight.is_empty()
+    }
+}
+
+/// How a child serves (design §7): its idle timeout (`None`: never) and how
+/// many light workers answer queries beside the heavy worker.
+#[derive(Clone, Copy, Debug)]
+pub struct ServeConfig {
+    pub idle_timeout: Option<std::time::Duration>,
+    pub idle_grace: std::time::Duration,
+    pub light_workers: usize,
+}
+
+impl Default for ServeConfig {
+    fn default() -> Self {
+        ServeConfig {
+            idle_timeout: None,
+            idle_grace: super::IDLE_GRACE,
+            light_workers: super::LIGHT_WORKERS,
+        }
+    }
 }
 
 struct Shared<'o, W: Write> {
@@ -158,8 +188,22 @@ fn is_light(argv: &[String]) -> bool {
 /// queued ask is answered first; the shutdown is answered last.
 pub fn serve(
     engine: &dyn Engine,
+    input: impl BufRead + Send + 'static,
+    output: impl Write + Send,
+) -> std::io::Result<()> {
+    serve_with(engine, input, output, ServeConfig::default())
+}
+
+/// [`serve`] with an idle timeout and a light-worker count (design §4.5,
+/// §7): a light ask (query) is answered by one of `light_workers` workers
+/// beside the heavy one; once no request has arrived and no work has run
+/// for the idle timeout, the child sends [`super::IDLE_EXIT_METHOD`] and
+/// ends after the grace period unless a request arrives first.
+pub fn serve_with(
+    engine: &dyn Engine,
     mut input: impl BufRead + Send + 'static,
     mut output: impl Write + Send,
+    config: ServeConfig,
 ) -> std::io::Result<()> {
     #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
     let hook = super::test_hooks::from_env();
@@ -216,13 +260,22 @@ pub fn serve(
         hook,
     };
     std::thread::scope(|s| {
-        let worker = s.spawn(|| work(engine, &shared));
-        let ended = dispatch(engine, &rx, &shared);
+        let mut workers = vec![s.spawn(|| work(engine, &shared, false))];
+        for _ in 0..config.light_workers {
+            workers.push(s.spawn(|| work(engine, &shared, true)));
+        }
+        let ended = dispatch(engine, &rx, &shared, &config);
         shared.lock().closing = true;
         shared.ready.notify_all();
-        let worked = worker
-            .join()
-            .unwrap_or_else(|_| Err(std::io::Error::other("worker panicked")));
+        let mut worked = Ok(());
+        for w in workers {
+            let r = w
+                .join()
+                .unwrap_or_else(|_| Err(std::io::Error::other("worker panicked")));
+            if worked.is_ok() {
+                worked = r;
+            }
+        }
         let ended = ended?;
         worked?;
         if let Some(id) = ended {
@@ -238,10 +291,49 @@ fn dispatch<W: Write + Send>(
     engine: &dyn Engine,
     rx: &mpsc::Receiver<Incoming>,
     shared: &Shared<'_, W>,
+    config: &ServeConfig,
 ) -> std::io::Result<Option<serde_json::Value>> {
     let mut open = false;
+    let mut last_frame = Instant::now();
+    // Set once the idle notice went out: the grace period runs from it.
+    let mut exiting: Option<Instant> = None;
     loop {
-        let frame = match rx.recv() {
+        let next = match config.idle_timeout {
+            None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+            Some(idle) => {
+                let slice = exiting.map_or(idle, |_| config.idle_grace);
+                rx.recv_timeout(slice.min(std::time::Duration::from_millis(250)))
+            }
+        };
+        let next = match next {
+            Ok(i) => {
+                last_frame = Instant::now();
+                exiting = None;
+                Ok(i)
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let idle = config.idle_timeout.expect("only an idle clock times out");
+                let (quiet, since) = {
+                    let q = shared.lock();
+                    let since = q.last_done.map_or(last_frame, |d| d.max(last_frame));
+                    (q.idle(), since)
+                };
+                match exiting {
+                    Some(at) if quiet && at.elapsed() >= config.idle_grace => return Ok(None),
+                    None if quiet && since.elapsed() >= idle => {
+                        shared.send(&Message::notification(
+                            super::IDLE_EXIT_METHOD,
+                            serde_json::json!({"idleSecs": since.elapsed().as_secs()}),
+                        ))?;
+                        exiting = Some(Instant::now());
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(()),
+        };
+        let frame = match next {
             Ok(Incoming::Frame(f)) => f,
             Ok(Incoming::Oversized) => {
                 shared.send(&Message::error(
@@ -323,7 +415,7 @@ fn dispatch<W: Write + Send>(
                 Ok(p) => {
                     {
                         let mut q = shared.lock();
-                        q.items.push_back(Work::Refresh {
+                        q.heavy_items.push_back(Work::Refresh {
                             id: id.clone(),
                             wait: p.wait,
                             received: Instant::now(),
@@ -368,8 +460,9 @@ fn dispatch<W: Write + Send>(
                 let mut status = engine.status();
                 {
                     let q = shared.lock();
-                    status.queued = q.items.len() as u64;
-                    status.in_flight = q.in_flight.as_ref().map(|(id, _)| id.clone());
+                    status.queued = (q.heavy_items.len() + q.light_items.len()) as u64;
+                    status.in_flight = q.in_flight.first().map(|(id, _)| id.clone());
+                    status.in_flight_all = q.in_flight.iter().map(|(id, _)| id.clone()).collect();
                 }
                 status.output_dir = shared
                     .dir
@@ -442,7 +535,7 @@ fn enqueue_ask<W: Write + Send>(
             q.heavy += 1;
         }
         q.bytes += bytes;
-        q.items.push_back(Work::Ask {
+        let ask = Work::Ask {
             id,
             params: Box::new(params),
             received,
@@ -450,7 +543,12 @@ fn enqueue_ask<W: Write + Send>(
             cancel: Arc::new(AtomicBool::new(false)),
             light,
             bytes,
-        });
+        };
+        if light {
+            q.light_items.push_back(ask);
+        } else {
+            q.heavy_items.push_back(ask);
+        }
     }
     shared.ready.notify_all();
     None
@@ -473,17 +571,19 @@ fn cancel<W: Write + Send>(
 ) -> std::io::Result<bool> {
     let removed = {
         let mut q = shared.lock();
-        if let Some((current, flag)) = &q.in_flight
-            && current == id
-        {
+        if let Some((_, flag)) = q.in_flight.iter().find(|(current, _)| current == id) {
             flag.store(true, Ordering::SeqCst);
             return Ok(true);
         }
-        let at = q
-            .items
-            .iter()
-            .position(|w| matches!(w, Work::Ask { id: i, .. } if i == id));
-        match at.and_then(|i| q.items.remove(i)) {
+        let is = |w: &Work| matches!(w, Work::Ask { id: i, .. } if i == id);
+        let removed = match q.heavy_items.iter().position(is) {
+            Some(i) => q.heavy_items.remove(i),
+            None => match q.light_items.iter().position(is) {
+                Some(i) => q.light_items.remove(i),
+                None => None,
+            },
+        };
+        match removed {
             Some(Work::Ask { light, bytes, .. }) => {
                 dequeued(&mut q, light, bytes);
                 true
@@ -501,13 +601,27 @@ fn cancel<W: Write + Send>(
     Ok(removed)
 }
 
-/// The worker: one unit at a time, until closing with nothing queued.
-fn work<W: Write + Send>(engine: &dyn Engine, shared: &Shared<'_, W>) -> std::io::Result<()> {
+/// A worker of one lane (`light`: the queries; else every other ask and the
+/// refreshes): one unit at a time, until closing with nothing queued in its
+/// lane. A panic in a unit ends the process (as it does under the shipped
+/// abort profile), so a front end sees the child die and restarts it, never
+/// a child whose worker is gone while its reader still takes requests.
+fn work<W: Write + Send>(
+    engine: &dyn Engine,
+    shared: &Shared<'_, W>,
+    light: bool,
+) -> std::io::Result<()> {
     loop {
-        let next = {
+        let (next, id) = {
             let mut q = shared.lock();
             loop {
-                if let Some(w) = q.items.pop_front() {
+                let popped = if light {
+                    q.light_items.pop_front()
+                } else {
+                    q.heavy_items.pop_front()
+                };
+                if let Some(w) = popped {
+                    let mut flight = None;
                     if let Work::Ask {
                         id,
                         cancel,
@@ -517,9 +631,10 @@ fn work<W: Write + Send>(engine: &dyn Engine, shared: &Shared<'_, W>) -> std::io
                     } = &w
                     {
                         dequeued(&mut q, *light, *bytes);
-                        q.in_flight = Some((id.clone(), Arc::clone(cancel)));
+                        q.in_flight.push((id.clone(), Arc::clone(cancel)));
+                        flight = Some(id.clone());
                     }
-                    break w;
+                    break (w, flight);
                 }
                 if q.closing {
                     return Ok(());
@@ -527,8 +642,24 @@ fn work<W: Write + Send>(engine: &dyn Engine, shared: &Shared<'_, W>) -> std::io
                 q = shared.ready.wait(q).unwrap_or_else(|p| p.into_inner());
             }
         };
-        let result = run(engine, shared, next);
-        shared.lock().in_flight = None;
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(engine, shared, next)))
+                .unwrap_or_else(|_| {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "al-sem: engine-host: a request panicked; the engine ends"
+                    );
+                    std::process::abort()
+                });
+        {
+            let mut q = shared.lock();
+            if let Some(id) = &id
+                && let Some(i) = q.in_flight.iter().position(|(f, _)| f == id)
+            {
+                q.in_flight.remove(i);
+            }
+            q.last_done = Some(Instant::now());
+        }
         result?;
     }
 }
@@ -619,6 +750,21 @@ fn inject_ask_fault<W: Write + Send>(shared: &Shared<'_, W>) -> std::io::Result<
     use super::test_hooks::Hook;
     match &shared.hook {
         Some(Hook::AbortOnAsk) => std::process::abort(),
+        Some(Hook::SleepOnAsk(ms)) => {
+            std::thread::sleep(std::time::Duration::from_millis(*ms));
+            Ok(false)
+        }
+        Some(Hook::PanicOnAskOnce(marker)) => {
+            if std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(marker)
+                .is_ok()
+            {
+                panic!("engine test hook: a panic while answering an ask");
+            }
+            Ok(false)
+        }
         Some(Hook::AbortOnAskOnce(marker)) => {
             if std::fs::OpenOptions::new()
                 .write(true)

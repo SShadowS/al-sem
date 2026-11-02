@@ -62,12 +62,17 @@ struct Server {
 
 impl Server {
     fn start(workspace: &Path, hook: Option<&str>) -> Server {
+        Server::start_args(workspace, hook, &[])
+    }
+
+    fn start_args(workspace: &Path, hook: Option<&str>, extra: &[&str]) -> Server {
         let root = tempfile::tempdir().unwrap();
         let mut cmd = Command::new(ALSEM);
         cmd.args(["mcp", "--workspace"])
             .arg(workspace)
             .arg("--output-root")
             .arg(root.path())
+            .args(extra)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -90,7 +95,11 @@ impl Server {
 
     /// A server initialized at `2025-06-18` and ready.
     fn ready(workspace: &Path, hook: Option<&str>) -> Server {
-        let mut s = Server::start(workspace, hook);
+        Server::ready_args(workspace, hook, &[])
+    }
+
+    fn ready_args(workspace: &Path, hook: Option<&str>, extra: &[&str]) -> Server {
+        let mut s = Server::start_args(workspace, hook, extra);
         let r = s.request(json!(0), "initialize", json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}));
         assert_eq!(r["result"]["protocolVersion"], "2025-06-18", "{r}");
         s.notify("notifications/initialized", json!({}));
@@ -468,6 +477,20 @@ fn a_transcript_answers_what_the_cli_answers() {
     let refresh = s.call(141, "alsem_refresh", json!({}));
     assert_eq!(refresh["structuredContent"]["kind"], "refresh", "{refresh}");
     assert_eq!(refresh["isError"], false);
+    // `alsem_refresh` is `session/refresh`: with `wait`, the child's
+    // revision after its freshness check (nothing changed: generation 1);
+    // without, `{started: true}` at once. DISCRIMINATION (2026-11-02): not
+    // calling `front.refresh` (the stage-2 reset-only refresh) fails the
+    // generation assertion (`engine: {}`).
+    let waited = s.call(142, "alsem_refresh", json!({"wait": true}));
+    let engine = &waited["structuredContent"]["engine"];
+    assert_eq!(engine["revision"]["generation"], 1, "{waited}");
+    assert!(engine["wallMs"].is_number(), "{waited}");
+    let started = s.call(143, "alsem_refresh", json!({"wait": false}));
+    assert_eq!(
+        started["structuredContent"]["engine"]["started"], true,
+        "{started}"
+    );
 
     assert!(s.notifications.is_empty(), "no progress without a token");
     assert!(s.finish().success());
@@ -612,9 +635,123 @@ fn progress_only_with_a_token() {
     assert!(s.finish().success());
 }
 
+/// `--max-children` and `--total-budget` (design §7): with one child
+/// allowed, a call on a second workspace ends the first workspace's idle
+/// child before starting its own; a call back on the first starts a new
+/// one. Each child is started with its share of the total budget.
+///
+/// DISCRIMINATION (2026-11-02): skipping the bound in `dispatch` (`if
+/// live.len() >= usize::MAX`) fails "the first child was ended" (two
+/// children run at once).
+#[test]
+fn the_children_bound_ends_the_least_recently_used_idle_child() {
+    let ws = ws_explain();
+    let other = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-d37");
+    let mut s = Server::ready_args(&ws, None, &["--max-children", "1", "--total-budget", "3G"]);
+    let q = json!({"routine": "Archive"});
+    assert_eq!(
+        envelope(&s.call(1, "alsem_query_effects", q.clone()))["kind"],
+        "cli"
+    );
+    let first_pid = |st: &Value| -> Option<i64> {
+        st["engines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["workspace"].as_str() == ws.to_str())
+            .and_then(|e| e["engine"]["pid"].as_i64())
+    };
+    let st = s.call(2, "alsem_status", json!({}))["structuredContent"].clone();
+    let pid = first_pid(&st).expect("the first child runs");
+    assert_eq!(st["server"]["maxChildren"], 1, "{st}");
+    assert_eq!(
+        st["server"]["childBudgetBytes"]["crossApp"],
+        3u64 << 30,
+        "its share of --total-budget: {st}"
+    );
+    let r = s.call(
+        3,
+        "alsem_query_effects",
+        json!({"routine": "ForwardedAfterValidate", "workspace": other.to_str().unwrap()}),
+    );
+    let _ = envelope(&r);
+    // The first child was ended (graceful shutdown, not a death).
+    let started = std::time::Instant::now();
+    loop {
+        let alive = std::path::Path::new(&format!("/proc/{pid}")).exists()
+            && !std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .unwrap_or_default()
+                .contains(") Z ");
+        if !alive {
+            break;
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "the first child was ended"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // Back on the first workspace: a new child answers.
+    assert_eq!(
+        envelope(&s.call(4, "alsem_query_effects", q))["kind"],
+        "cli"
+    );
+    let st = s.call(5, "alsem_status", json!({}))["structuredContent"].clone();
+    assert_ne!(first_pid(&st), Some(pid), "{st}");
+    assert!(s.finish().success());
+}
+
 #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
 mod faults {
     use super::*;
+
+    /// MCP cancellation (design §8, `notifications/cancelled`): a running
+    /// call is sent `session/cancel` (the child stops it at its next phase)
+    /// and is never answered, as MCP asks; its id is free again at once
+    /// after, and the next call is answered normally. The child sleeps 1.5 s
+    /// on each ask, so the cancel lands while the call runs.
+    ///
+    /// DISCRIMINATION (2026-11-02): ignoring the notification
+    /// (`flag.store(false, ..)` in `serve`) fails it: the cancelled call is
+    /// answered (its human text, `kind: "cli"`) where the next call's JSON
+    /// was expected.
+    #[test]
+    fn a_cancelled_call_is_stopped_and_not_answered() {
+        let ws = ws_explain();
+        let mut s = Server::ready(&ws, Some("sleep-on-ask:1500"));
+        s.send(
+            json!(7),
+            "tools/call",
+            json!({"name": "alsem_query_effects", "arguments": {"routine": "Archive"}}),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        s.notify(
+            "notifications/cancelled",
+            json!({"requestId": 7, "reason": "test"}),
+        );
+        // The next response is the ping's, not the cancelled call's.
+        let r = s.request(json!(8), "ping", json!({}));
+        assert_eq!(r["result"], json!({}), "{r}");
+        let st = s.call(9, "alsem_status", json!({}));
+        assert!(st["structuredContent"]["engines"].is_array(), "{st}");
+        // Wait for the child to answer the cancelled ask (and the server
+        // to drop it), then reuse its id: a normal answer, the first
+        // response with id 7.
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        let env = envelope(&s.call(
+            7,
+            "alsem_query_effects",
+            json!({"routine": "Archive", "format": "json"}),
+        ));
+        assert_eq!(env["kind"], "cli", "{env}");
+        assert!(
+            env["stdoutText"]
+                .as_str()
+                .is_some_and(|t| t.starts_with('{')),
+            "the second call's JSON, not the first call's human text: {env}"
+        );
+        assert!(s.finish().success());
+    }
 
     /// An engine child killed mid-call (it aborts on the ask, as a panic
     /// does under `release-ship`) is reported as `kind: "failed"`,

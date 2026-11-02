@@ -28,6 +28,7 @@ use std::time::Instant;
 
 use crate::engine::batch::job::{ViewFailure, ViewKey, ViewNeeds};
 use crate::engine::gate::run::{AnalysisTarget, TargetFailure, build_view_model};
+use crate::engine::resident::budget::{Budget, BudgetStatus, Case, Refusal, Reservation};
 use crate::engine::resident::manifest::{Hashing, Manifest, check_consistent};
 use crate::engine::resident::revision::Revision;
 use crate::engine::resident::store::Stop;
@@ -121,6 +122,8 @@ pub enum PinError {
     Stopped(Stop),
     /// Every attempt's three observations disagreed.
     Unstable(String),
+    /// The build's reservation was refused (§4.5): nothing was read.
+    Budget(Refusal),
 }
 
 /// What the session did so far (`session/status`).
@@ -171,6 +174,8 @@ pub struct ResidentSession {
     generation: AtomicU64,
     stats: Mutex<SessionStats>,
     hook: Option<BuildHook>,
+    /// The child's memory budget (stage 3); `None` admits everything.
+    budget: Option<Arc<Budget>>,
 }
 
 impl ResidentSession {
@@ -190,6 +195,7 @@ impl ResidentSession {
             generation: AtomicU64::new(0),
             stats: Mutex::new(SessionStats::default()),
             hook: None,
+            budget: None,
         }
     }
 
@@ -198,6 +204,98 @@ impl ResidentSession {
     pub fn with_hook(mut self, hook: BuildHook) -> ResidentSession {
         self.hook = Some(hook);
         self
+    }
+
+    /// The session under a memory budget (§4.5): every build reserves first.
+    #[must_use]
+    pub fn with_budget(mut self, budget: Arc<Budget>) -> ResidentSession {
+        self.budget = Some(budget);
+        self
+    }
+
+    /// The memory budget, if any.
+    #[must_use]
+    pub fn budget(&self) -> Option<&Arc<Budget>> {
+        self.budget.as_ref()
+    }
+
+    /// The budget's counters, with the retained floor brought up to date.
+    #[must_use]
+    pub fn memory_status(&self) -> Option<BudgetStatus> {
+        self.update_floor();
+        self.budget.as_ref().map(|b| b.status())
+    }
+
+    /// Set the retained floor (`status.retainedBytes`): the RSS less the
+    /// measured bytes of every evictable artifact the published revision
+    /// holds.
+    pub fn update_floor(&self) {
+        let Some(b) = &self.budget else { return };
+        let evictable = match self.published() {
+            Some(Built::Revision(r)) => r.evictable_bytes(),
+            _ => 0,
+        };
+        b.set_retained_floor(b.meter().rss().saturating_sub(evictable));
+    }
+
+    /// Reserve `estimate` for `case` (§4.5): at once when it fits; refused
+    /// at once when it cannot fit even above the retained floor; else
+    /// admission is closed, the in-flight releasers (holders beyond `mine`,
+    /// fill workers) are waited for, unpinned artifacts are evicted in the
+    /// design's order until it fits, and the reservation is tried once more.
+    pub fn reserve_or_reclaim<'b>(
+        &self,
+        budget: &'b Budget,
+        case: Case,
+        estimate: u64,
+        mine: u64,
+        stop: &dyn Fn() -> bool,
+    ) -> Result<Reservation<'b>, Refusal> {
+        self.update_floor();
+        match budget.reserve(case, estimate) {
+            Ok(r) => return Ok(r),
+            Err(f) if f.impossible => return Err(f),
+            Err(_) => {}
+        }
+        let closed = budget.close();
+        budget.wait_for_releasers(mine, stop);
+        self.reclaim(budget, estimate);
+        self.update_floor();
+        let r = budget.reserve(case, estimate);
+        drop(closed);
+        r
+    }
+
+    /// Evict until `estimate` fits (§7's order): dependency subjects' raw
+    /// facts, the dependency rows the workspace session keeps (when no build
+    /// holds it), runs, the det, the fold, ordering and rules; never the
+    /// model, relation, tier or L4 seed. Returns how many entries went.
+    pub fn reclaim(&self, budget: &Budget, estimate: u64) -> u64 {
+        let rev = match self.published() {
+            Some(Built::Revision(r)) => Some(r),
+            _ => None,
+        };
+        let mut evicted = 0u64;
+        for kind in std::iter::once("raw").chain(std::iter::once("rows")).chain(
+            Revision::EVICTION_ORDER
+                .iter()
+                .copied()
+                .filter(|k| *k != "raw"),
+        ) {
+            if budget.fits(estimate) {
+                break;
+            }
+            evicted += match (kind, &rev) {
+                ("rows", _) => match self.builder.try_lock() {
+                    Ok(mut b) => b.workspace.evict_dependency_rows() as u64,
+                    Err(_) => 0,
+                },
+                (k, Some(r)) => r.reclaim_kind(k) as u64,
+                (_, None) => 0,
+            };
+        }
+        budget.count_evicted(evicted);
+        evicted
     }
 
     /// The workspace, as `session/open` named it.
@@ -278,7 +376,9 @@ impl ResidentSession {
                 std::thread::spawn(move || {
                     // A build already running will publish; never queue a second.
                     if let Ok(mut b) = me.builder.try_lock() {
-                        let _ = me.build_locked(&mut b, None);
+                        // No request holds this build: every holder is a
+                        // releaser it may wait for.
+                        let _ = me.build_locked(&mut b, None, 0);
                     }
                 });
                 return Ok(Pinned {
@@ -325,7 +425,8 @@ impl ResidentSession {
             }
             _ => before,
         };
-        let built = self.build_locked(&mut b, before)?;
+        // The request waiting for this build is one admitted holder.
+        let built = self.build_locked(&mut b, before, 1)?;
         Ok(Pinned {
             built,
             stale: false,
@@ -339,6 +440,7 @@ impl ResidentSession {
         &self,
         b: &mut Builder,
         mut before: Option<Manifest>,
+        mine: u64,
     ) -> Result<Built, PinError> {
         let start = Instant::now();
         let mut unstable = String::new();
@@ -358,6 +460,23 @@ impl ResidentSession {
                     ),
                     None => Manifest::observe(&self.workspace, self.single_app, Hashing::All),
                 },
+            };
+            // Reserve before anything is read (§4.5): the pre-model estimate
+            // from the observed input sizes for a first build, the table's
+            // scaled estimate beside a published revision.
+            let reservation = match &self.budget {
+                Some(budget) => {
+                    let case = match prev.as_ref().map(|p| &p.built) {
+                        Some(Built::Revision(_)) => Case::Incremental,
+                        _ => Case::Cold,
+                    };
+                    let estimate = budget.estimate(case, m_before.input_sizes());
+                    Some(
+                        self.reserve_or_reclaim(budget, case, estimate, mine, &|| false)
+                            .map_err(PinError::Budget)?,
+                    )
+                }
+                None => None,
             };
             self.hook(BuildPoint::BeforeRead, attempt);
             let inputs = WorkspaceInputs::read(&self.workspace, &REVISION_READ);
@@ -417,6 +536,16 @@ impl ResidentSession {
                 manifest: m_after,
             }));
             self.clear_dirty(&dirty);
+            if let Some(r) = reservation {
+                r.finish();
+            }
+            if let (Some(budget), Built::Revision(rev)) = (&self.budget, &built) {
+                budget.estimates().routines = Some(rev.routine_count());
+            }
+            // The previous revision is released here (unless a request still
+            // holds it); the floor is measured without it.
+            drop(prev);
+            self.update_floor();
             return Ok(built);
         }
         Err(PinError::Unstable(format!(
