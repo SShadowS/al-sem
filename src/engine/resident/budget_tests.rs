@@ -117,6 +117,34 @@ fn finishing_observes_the_peak_and_counts_an_overrun() {
     assert_eq!(b.status().overruns, 1);
 }
 
+/// The Windows meter's peak window (only a lifetime peak, never reset): a
+/// window whose lifetime peak rose reports it exactly; one where it did not
+/// reports 0, and a finished reservation then records no observation, so the
+/// case keeps its table estimate instead of a made-up peak.
+///
+/// DISCRIMINATION (2026-11-02): `lifetime >= at_reset` in `window_peak`
+/// reports an unrisen window's old peak: "did not rise: unknown" fails
+/// (1500, not 0).
+#[test]
+fn an_unknown_window_peak_records_no_observation() {
+    assert_eq!(window_peak(2_000, 1_500), 2_000, "rose: exact");
+    assert_eq!(window_peak(1_500, 1_500), 0, "did not rise: unknown");
+    assert_eq!(window_peak(1_000, 1_500), 0);
+    let (b, meter) = budget(1_000_000_000_000, 400);
+    let table = b.estimate(Case::Trees, InputSizes::default());
+    let r = b.reserve(Case::Trees, 100).unwrap();
+    meter
+        .peak
+        .store(window_peak(1_500, 1_500), Ordering::SeqCst);
+    meter.rss.store(600, Ordering::SeqCst);
+    assert_eq!(r.finish(), 200, "left resident: 600 - 400");
+    assert_eq!(
+        b.estimate(Case::Trees, InputSizes::default()),
+        table,
+        "an unknown peak changes no estimate"
+    );
+}
+
 /// Closed admission holds a new holder until the closer reopens it; a
 /// stopped request leaves; with no releaser in flight nothing waits.
 #[test]

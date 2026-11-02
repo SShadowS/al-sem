@@ -399,11 +399,162 @@ impl TelemetryFileConfig {
     }
 }
 
+/// A byte size in a config file: a number of bytes, or text the engine's
+/// `--memory-budget` takes (`"6GiB"`, `"512MiB"`, ...).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum ByteSize {
+    Bytes(u64),
+    Text(String),
+}
+
+impl ByteSize {
+    /// The number of bytes.
+    pub fn bytes(&self) -> Result<u64, String> {
+        match self {
+            ByteSize::Bytes(b) => Ok(*b),
+            ByteSize::Text(t) => crate::engine::resident::budget::parse_bytes(t),
+        }
+    }
+}
+
+/// The `engine` section of `~/.al-sem/config.json` and the workspace's
+/// `.al-sem.json` (pre-rename spellings read too, through
+/// [`crate::state_paths`]): how the LSP server's context-server requests
+/// (`al-call-hierarchy/explain`, ... — design 2026-11-01 §9) run their engine
+/// child. All fields optional; the workspace file overlays the global one
+/// per field.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct EngineFileConfig {
+    /// Whether the requests are served (default: yes; nothing runs until
+    /// the first one).
+    pub enabled: Option<bool>,
+    /// The `alsem` binary the engine child runs. A relative path is taken
+    /// relative to the folder of the file that names it. Default: `alsem`
+    /// next to the LSP server's own binary.
+    pub executable: Option<String>,
+    /// Each child's `--memory-budget` (default: the engine's, by universe).
+    pub memory_budget: Option<ByteSize>,
+    /// Start each child with `--low-mem`.
+    pub low_mem: Option<bool>,
+    /// Each child's `--idle-timeout` in seconds (0: never).
+    pub idle_timeout_secs: Option<u64>,
+    /// The most engine children alive at once (default 2).
+    pub max_children: Option<usize>,
+}
+
+impl EngineFileConfig {
+    /// The `engine` section of the file at `path`, its `executable` made
+    /// absolute against the file's folder. Empty when the file is missing
+    /// or does not parse (logged).
+    pub fn load_at(path: &Path) -> Self {
+        #[derive(Deserialize, Default)]
+        struct Wrapper {
+            #[serde(default)]
+            engine: EngineFileConfig,
+        }
+        let Ok(contents) = std::fs::read_to_string(path) else {
+            return Self::default();
+        };
+        let mut cfg = match serde_json::from_str::<Wrapper>(&contents) {
+            Ok(w) => w.engine,
+            Err(e) => {
+                warn!(
+                    "Failed to parse the engine section of {}: {e}",
+                    path.display()
+                );
+                return Self::default();
+            }
+        };
+        if let (Some(exe), Some(dir)) = (&cfg.executable, path.parent()) {
+            let p = Path::new(exe);
+            if p.is_relative() {
+                cfg.executable = Some(dir.join(p).to_string_lossy().into_owned());
+            }
+        }
+        cfg
+    }
+
+    /// The global file overlaid by `workspace_root`'s file (when given).
+    pub fn load_merged(workspace_root: Option<&Path>) -> Self {
+        let global = global_config_path()
+            .map(|p| Self::load_at(&p))
+            .unwrap_or_default();
+        match workspace_root {
+            Some(root) => Self::merge(
+                global,
+                Self::load_at(&crate::state_paths::workspace_config_for_read(root)),
+            ),
+            None => global,
+        }
+    }
+
+    fn merge(base: Self, overlay: Self) -> Self {
+        Self {
+            enabled: overlay.enabled.or(base.enabled),
+            executable: overlay.executable.or(base.executable),
+            memory_budget: overlay.memory_budget.or(base.memory_budget),
+            low_mem: overlay.low_mem.or(base.low_mem),
+            idle_timeout_secs: overlay.idle_timeout_secs.or(base.idle_timeout_secs),
+            max_children: overlay.max_children.or(base.max_children),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    /// The engine section: every field read, sizes as bytes or text, a
+    /// relative executable taken against the file's folder, the workspace
+    /// file overlaying the global one per field, and a missing or broken
+    /// file read as empty. DISCRIMINATION (2026-11-02): letting the global
+    /// file win for `enabled` fails "the workspace file wins"; reverted, it
+    /// passes.
+    #[test]
+    fn engine_section_is_read_and_merged() {
+        let dir = TempDir::new().unwrap();
+        let ws = dir.path().join(".al-sem.json");
+        fs::write(
+            &ws,
+            r#"{"engine": {"enabled": false, "executable": "bin/alsem", "memoryBudget": "3GiB", "lowMem": true, "idleTimeoutSecs": 5, "maxChildren": 1}}"#,
+        )
+        .unwrap();
+        let cfg = EngineFileConfig::load_at(&ws);
+        assert_eq!(cfg.enabled, Some(false));
+        assert_eq!(
+            cfg.executable.as_deref().map(PathBuf::from),
+            Some(dir.path().join("bin/alsem"))
+        );
+        assert_eq!(cfg.memory_budget.unwrap().bytes(), Ok(3 << 30));
+        assert_eq!(
+            (cfg.low_mem, cfg.idle_timeout_secs, cfg.max_children),
+            (Some(true), Some(5), Some(1))
+        );
+        let global = EngineFileConfig {
+            enabled: Some(true),
+            idle_timeout_secs: Some(9),
+            memory_budget: Some(ByteSize::Bytes(7)),
+            ..EngineFileConfig::default()
+        };
+        let overlay = EngineFileConfig {
+            enabled: Some(false),
+            ..EngineFileConfig::default()
+        };
+        let merged = EngineFileConfig::merge(global, overlay);
+        assert_eq!(merged.enabled, Some(false), "the workspace file wins");
+        assert_eq!(merged.idle_timeout_secs, Some(9), "the global file fills");
+        assert_eq!(merged.memory_budget, Some(ByteSize::Bytes(7)));
+        assert_eq!(
+            EngineFileConfig::load_at(&dir.path().join("missing.json")),
+            EngineFileConfig::default()
+        );
+        fs::write(&ws, "not json").unwrap();
+        assert_eq!(EngineFileConfig::load_at(&ws), EngineFileConfig::default());
+    }
 
     #[test]
     fn test_default_config() {

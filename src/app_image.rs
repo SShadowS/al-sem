@@ -32,6 +32,14 @@
 //! once from the buffer and never modified, read back by positional reads
 //! (design r5 §5.2 allows exactly this copy). If temp storage fails, the
 //! buffer stays in memory: the result never depends on the temp disk.
+//!
+//! **Windows.** `tempfile::tempfile()` (3.x) creates the file in `%TEMP%`
+//! with share mode 0 (exclusive: no other open of the name succeeds while
+//! the handle lives) and `FILE_FLAG_DELETE_ON_CLOSE` (the file goes when the
+//! handle closes, a crash included): the exclusive share mode §5.2 requires
+//! of the sealed copy. Positional reads are `seek_read` (`ReadFile` at an
+//! offset), which also moves the handle's file pointer; no reader uses that
+//! pointer, so concurrent readers stay correct.
 
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -391,6 +399,9 @@ impl std::fmt::Display for InputsUnstable {
 /// were built from exactly the bytes on disk before and after it. A package
 /// read as B while the disk held A before and after (an in-place overwrite
 /// and restore during consumption) fails here, though `before == after`.
+// A Windows `PathBuf` is a word larger, which puts the error just over
+// clippy's 128-byte bar there; it is built once per discarded build.
+#[cfg_attr(windows, allow(clippy::result_large_err))]
 pub fn check_consistent(
     before: &PackageManifest,
     consumed: &PackageManifest,
@@ -494,6 +505,27 @@ mod tests {
         assert_eq!(a, bytes[10..14]);
         assert_eq!(b, bytes[bytes.len() - 3..]);
         assert!(r1.seek(SeekFrom::Current(-100)).is_err());
+    }
+
+    /// §5.2 on Windows: the sealed copy's temp file (the same
+    /// `tempfile` call as [`private_copy`], in a folder the test can list)
+    /// cannot be opened by name while its handle lives (share mode 0), and is
+    /// gone once the handle closes (`FILE_FLAG_DELETE_ON_CLOSE`).
+    #[cfg(windows)]
+    #[test]
+    fn the_sealed_copy_is_exclusive_and_deleted_on_close_on_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut file = tempfile::tempfile_in(dir.path()).unwrap();
+        file.write_all(b"sealed").unwrap();
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(names.len(), 1, "{names:?}");
+        let e = std::fs::File::open(&names[0]).expect_err("opened a sealed copy by name");
+        assert_eq!(e.raw_os_error(), Some(32), "a sharing violation: {e}");
+        drop(file);
+        assert!(!names[0].exists(), "deleted when its handle closed");
     }
 
     fn present(bytes: &[u8]) -> PackageState {

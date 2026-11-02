@@ -52,6 +52,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (cold and seeded; the seeded solve itself re-solves 115 of 33,285 SCCs after
   a body edit). Same digests, so the same seeding decisions.
 
+### Added (context server: the LSP front end)
+
+- **The editor's LSP server answers explain / prove / digest / query
+  through the resident engine** (context-server design §9, the last stage-3
+  item). New custom requests under the frozen `al-call-hierarchy/` prefix:
+  `explain`, `prove`, `digest`, `queryEffects`, `queryTouches`,
+  `engineStatus`, `engineRefresh`. Params are the arguments of the matching
+  MCP tools (`alsem_explain`, ...; validated by the same code, so flags and
+  defaults are the CLI's), plus an optional `uri` (its workspace root
+  answers; default the first root) and `workDoneToken` (`$/progress`). The
+  result is the MCP envelope (`kind`, `revision`, `exitCode`, `stdoutText` /
+  `stdoutFile`, ...): the stdout is the CLI's byte for byte. The server is a
+  CLIENT of an `alsem engine-host` child, never a second in-process engine:
+  requests run on the engine pool's worker threads, so call hierarchy is
+  answered while one runs; the child starts on the first engine request
+  (never at server start), ends on its idle timeout and with the server.
+  `$/cancelRequest` sends the running request `session/cancel` (answered
+  `RequestCancelled`, the engine's `cancelled` answer as `data`); `didSave`
+  and the root's file watcher send `session/notifyChanged`, so an edit that
+  keeps a file's size and time is still seen.
+- **The engine executable** is the `alsem` binary next to `al-call-hierarchy`
+  (the packages ship both), or `engine.executable`. The server binary cannot
+  host the engine itself: the engine decodes each command line with the
+  `alsem` CLI's clap and planning, which live in that binary. A command that
+  reads paths (`--diff`, `--file`) has its file-system decisions made on the
+  server's side by the same binary (`alsem engine-ask --params`).
+- **Config**: an `engine` section in `~/.al-sem/config.json` and the
+  workspace's `.al-sem.json` (pre-rename spellings read too): `enabled`
+  (default true), `executable`, `memoryBudget`, `lowMem`, `idleTimeoutSecs`,
+  `maxChildren`; read at the first engine request. Output files go to
+  `~/.al-sem/lsp-out/<instance>/`.
+- **Measured on CDO** (release-fast, `IssueReminder`, a heavily loaded shared
+  machine): the LSP's RSS 6.0 MiB idle, 8.2 MiB after the first engine
+  request, 8.5 MiB after nine (the engine's memory is the child's: 3.96 GB
+  after the first explain, 4.1–4.3 GB after the warm asks). First explain
+  37–40 s (cold child and build), warm explain 7.7–8.5 s, warm query
+  0.04–0.16 s. Tests `tests/lsp/lsp_engine.rs`: transcript equal to the CLI
+  byte for byte; call hierarchy answered while a 4 s engine request runs;
+  `$/cancelRequest` reaches the engine; `didSave` and the watcher make an
+  answer fresh after a size- and time-preserving edit; the engine starts on
+  the first engine request only. Each with a recorded discrimination proof.
+
+### Changed (context server)
+
+- **`alsem mcp`'s engine workers moved to `src/mcp/pool.rs`**, shared by the
+  MCP and LSP front ends behind a small `Transport` trait (how a response is
+  wrapped, how a cancelled request ends, how progress is sent). MCP behaviour
+  and bytes unchanged (`tests/cli/mcp_server.rs` green). `EngineFront` gains
+  `notify_changed_if_running`, which never starts a child.
+
+### Fixed (context server: Windows)
+
+Everything in the context server was built and measured on Linux. Checked here:
+`cargo check` (dev and release) and `cargo clippy -- -D warnings` for
+`x86_64-pc-windows-gnu` of the lib, both binaries and every test target
+(cross-compiled with clang and the mingw-w64 headers; one Windows-only
+`clippy::result_large_err` allowed on `app_image::check_consistent`, whose
+error is a word larger there); the
+fixes below; the rest needs a real Windows run, scripted in
+`scripts/windows-ctxsrv-check.ps1`. Linux behaviour is unchanged.
+
+- **The Windows build had four warnings; now it has none**: dead helpers of the
+  child's output namespace (`leaf`, `refused`, `quota`) are Unix-only, and
+  `release_alloc::set_resident`'s `thp_off` is read off Linux too.
+  `child_tests`'s two instance-directory tests are Unix-only (they used
+  `std::os::unix` and expect a directory Windows never makes).
+- **A stray print could corrupt the protocol stream on Windows.** The child's
+  and `alsem mcp`'s protocol stream was plain stdout off Unix. It is now a
+  duplicate of the standard output handle, and the process's standard output
+  is pointed at its stderr (`SetStdHandle`), as `dup2` does on Unix. New hook
+  `stray-stdout-on-ask` and test `a_stray_print_never_reaches_the_protocol_stream`
+  (Linux: dropping the `dup2` fails it with a `protocol` answer).
+- **Windows answers over 64 KiB failed.** With no output directory (Windows
+  fails closed, design §10), a stdout over the ask's inline cap was a
+  `protocol` failure, so a CDO digest larger than 64 KiB could not be
+  delivered at all. The child now answers inline-only: the cap rises to
+  4 MiB, and a larger stdout is answered `refusedPath` as §10 states. New
+  hook `no-output-dir` takes this path on any platform, in the child and in
+  `alsem mcp`'s output folder. Tests `without_an_output_directory_answers_stay_inline`
+  and `the_inline_only_path_delivers_inline` (digest inline with its summary,
+  an over-cap stdout inline, `out` refused, nothing written) and
+  `inline_only_refuses_an_undeliverable_answer`, each with a recorded break.
+- **The memory budget read 0 on Windows**, so admission ignored the real RSS.
+  The child's meter now reads the working set (`K32GetProcessMemoryInfo`).
+  Windows cannot reset the peak, so a peak window reports the lifetime peak
+  only when it rose in that window, and otherwise records no observation
+  (`window_peak`, test `an_unknown_window_peak_records_no_observation`).
+- The engine child is started with `CREATE_NO_WINDOW` on Windows (a front end
+  with no console would otherwise give it a console window), and a Windows
+  NTSTATUS exit (a `release-ship` panic is 0xC0000409) is described in hex.
+- The interior release of freed blocks is now disabled outside Linux (it
+  was a no-op there, but still sent `realloc` down the copy path).
+- `app_image`'s sealed copy on Windows: `tempfile` opens it with share mode
+  0 and delete-on-close, which §5.2 requires; documented, with a
+  Windows-only test.
+
 ### Fixed (context server: the resident refresh)
 
 - **The default mode no longer extracts the dependency source text again on

@@ -484,6 +484,15 @@ pub mod test_hooks {
         /// After answering `session/open`, exit without reading another
         /// byte: the front end's next request write meets a closed pipe.
         ExitAfterOpen,
+        /// Print a line to the process's standard output before answering
+        /// an ask (then answer it normally): the protocol stream must not
+        /// see it ([`super::child::protocol_stdout`]).
+        StrayStdoutOnAsk,
+        /// Take the path of a platform with no handle-relative creation
+        /// (Windows, design §10): the child makes no output directory and
+        /// answers inline-only, and `alsem mcp`'s output folder writes
+        /// nothing. Lets the fail-closed path run on any platform.
+        NoOutputDir,
     }
 
     /// What a flood writes.
@@ -514,6 +523,8 @@ pub mod test_hooks {
             "oversized-frame-on-ask" => Hook::OversizedFrameOnAsk,
             "garbage-frame-on-ask" => Hook::GarbageFrameOnAsk,
             "exit-after-open" => Hook::ExitAfterOpen,
+            "stray-stdout-on-ask" => Hook::StrayStdoutOnAsk,
+            "no-output-dir" => Hook::NoOutputDir,
             "flood-after-open" => {
                 let (kind, count) = arg.split_once(':')?;
                 let kind = match kind {

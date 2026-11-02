@@ -176,6 +176,15 @@ fn read_rss() -> Option<Rss> {
     None
 }
 
+/// The process's (working set, lifetime peak working set) in bytes, `None`
+/// when the call fails: the resident budget's Windows meter
+/// (`engine::resident::budget::ProcMeter`), sharing this one declaration of
+/// `K32GetProcessMemoryInfo`.
+#[cfg(windows)]
+pub(crate) fn working_set() -> Option<(u64, u64)> {
+    read_rss().map(|r| (r.working_set, r.peak_working_set))
+}
+
 // ---------------------------------------------------------------------------
 // Chrome-Trace writer — always-closed JSON array, flush per event
 // ---------------------------------------------------------------------------

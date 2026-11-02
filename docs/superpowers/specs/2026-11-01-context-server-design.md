@@ -35,7 +35,8 @@ check as a declared need (`AbiIntegrity::{Check, Skip}`), and **stage 4** (the i
 model, `program::session`; see the as-built notes in §6.5, §6.13, §7 and §12). **Landed
 since:** the stage-2 completion (the resident child, §3's as-built note), **stage 3**
 (admission, reservation, eviction, idle children, lanes, MCP wiring; §7's as-built note) and
-**`--low-mem`** (§7, owner decision 2026-11-02). Everything else below is the build order
+**`--low-mem`** (§7, owner decision 2026-11-02) and the **LSP front end** (§9's as-built
+note). Everything else below is the build order
 from here.
 
 ## 0. Summary
@@ -894,6 +895,43 @@ to a per-root worker thread so `main_loop` never waits; `$/cancelRequest` →
 `.al-sem.json` / `~/.al-sem/config.json` through `state_paths` (legacy spellings for
 reads). The editor process never holds the FULL model.
 
+**As built (2026-11-02, `src/lsp/engine.rs`, `src/mcp/pool.rs`).**
+
+- *Requests*: `al-call-hierarchy/explain`, `/prove`, `/digest`, `/queryEffects`,
+  `/queryTouches`, `/engineStatus`, `/engineRefresh`. The design's single `/query` is two
+  requests, one per MCP tool (`alsem_query_effects`, `alsem_query_touches`), so params map
+  one to one. Params are the MCP tool's arguments, validated by `mcp::tools::parse_call`,
+  plus `uri` (its root answers; else the first root) and `workDoneToken` (`$/progress`
+  begin/end). The result is the §8.3 envelope itself (no MCP content blocks); invalid
+  params `-32602`, disabled `-32803`.
+- *One pool, two transports*: the MCP server's workers moved to `src/mcp/pool.rs` behind a
+  `Transport` trait (wrap a response, write a frame, report progress, end a cancelled
+  request). Workers are per (workspace, universe), as in MCP, not per root; the children
+  bound (`maxChildren`, default 2) and queue depth are the MCP ones.
+- *Cancellation*: `$/cancelRequest` drops a queued request or sends `session/cancel`; the
+  request is answered `RequestCancelled` (`-32800`, LSP requires an answer), with the
+  engine's `cancelled` envelope as `data` when it ran.
+- *Edits*: `didSave` and every watcher event with a path (through a forwarding thread
+  between the watcher and the updater) go to running children as `session/notifyChanged`
+  (`EngineFront::notify_changed_if_running`, never starts a child). The watcher runs only
+  for a root call hierarchy has built, so `didSave` is the edit signal otherwise.
+- *Executable*: `alsem` next to `al-call-hierarchy`, or `engine.executable`. The server
+  binary cannot host the engine: the child decodes each argv with the `alsem` CLI's clap
+  and planning, which live in that binary. The front end's decisions for an argv that reads
+  paths (`--diff`, `--file`) are made by the same binary on the server's side (`alsem
+  engine-ask --params`); other argvs need none (the child's answer is the same as with the
+  workspace as diff root).
+- *Config*: the `engine` section of `~/.al-sem/config.json` overlaid by the first root's
+  `.al-sem.json` (`enabled` default true, `executable`, `memoryBudget`, `lowMem`,
+  `idleTimeoutSecs`, `maxChildren`), read at the first engine request; outputs in
+  `~/.al-sem/lsp-out/<instance>/`.
+- *Measured on CDO* (release-fast, `IssueReminder`, a shared machine under heavy load —
+  load average 110–265 — so latencies are upper bounds): the LSP's RSS 6.0–6.1 MiB idle,
+  8.2 MiB after the first engine request, 8.5 MiB after nine; the child 3.96 GB after the
+  first explain (peak 4.78 GB), 4.09–4.27 GB after the warm asks. First explain (cold child
+  and build) 37.0–39.7 s; warm explain 7.7–8.5 s, warm query 0.04–0.16 s, warm prove 7.8 s
+  on the quieter run. Tests: `tests/lsp/lsp_engine.rs` (T-lsp).
+
 ## 10. Output policy and path safety
 
 - **Authorized read roots**: the workspace root, each source-dependency root, each
@@ -947,7 +985,7 @@ was seen to fail (CLAUDE.md). CDO-based tests run on a temporary copy of the bas
 |---|---|---|
 | 0, 1, 1b, ids, 2-plumbing, 4 | landed (4 without the semantics/locations split; §6.5) | — |
 | **2 (completion)** | resident revision; `ensure_prepared` (§4.2); the full-manifest three-way check; `requestFiles`, deadlines, cancel, `notifyChanged`, enforcement, mandatory `diffRootDecided`; lossless stderr, boundary-safe frame recovery, bounded front-end queue; private-namespace outputs; `Answer::terminal`; exit 3 | T-order, T-prepared (cold roots), T-acquire-*, T-exit3, T-terminal, T-frame, T-stderr, T-frame-boundary, T-queue-bound, T-paths, T-fresh/T-manifest, T-tier, T-failed-build, T-pin, T-plan; measured sequential warm numbers per command |
-| 3 | admission with fill workers counted; eviction via snapshots; `latest-built`; watcher; idle; LSP | **landed** (master `a48f8e0e`; §7's as-built note) **except** the LSP front end (§9, T-lsp), per-root cancellation inside `digest_effects_each`, and an automated T-mem bound (measured by hand, `census-probe resident`). The 3 GB resident target is superseded (§7: ~4.6 GB default, `--low-mem` 3.7 GB) |
+| 3 | admission with fill workers counted; eviction via snapshots; `latest-built`; watcher; idle; LSP | **landed** (master `a48f8e0e`; §7's as-built note; the LSP front end and T-lsp since, §9's as-built note) **except** per-root cancellation inside `digest_effects_each`, and an automated T-mem bound (measured by hand, `census-probe resident`). The 3 GB resident target is superseded (§7: ~4.6 GB default, `--low-mem` 3.7 GB) |
 | 5 | seeded L4; cone store with Δ_pd_output and per-member coverage refresh; tree store with whole sections and per-section spans; retained stores integrated only after T-prepared's publication invariants pass | T-cone, T-cone-edge, T-pd-out, T-typed-edges, T-callsite-res, T-coverage, T-obj-only, T-tree, T-prepared (live), T-incr end to end |
 | 6 | declaration pack; finer dependency rule behind its audit | fresh − pack path measured end to end |
 
@@ -982,6 +1020,20 @@ Open: an editor child beside an agent child is two children's memory; selective 
 Windows measurements (manifest check, directory walk, handle-relative creation, sealed
 copy share mode) before stage-2 exit numbers are quoted there; a shared server over a
 local socket for several agents on one workspace (the child protocol is socket-ready).
+
+Windows, checked on Linux (2026-11-02, branch `ctxsrv/windows`): the lib, both binaries
+and every test target cross-check clean for `x86_64-pc-windows-gnu`; fixed: the
+protocol stream (`SetStdHandle`, as `dup2` on Unix), inline-only answers (the cap rises
+to 4 MiB, larger is `refusedPath`, §10; before, any stdout over 64 KiB was a `protocol`
+failure), the budget meter (working set; a peak window is known only when the lifetime
+peak rose), `CREATE_NO_WINDOW`; the sealed copy's share mode is `tempfile`'s (0, delete
+on close), so §5.2 holds. Remaining for a real Windows run, scripted in
+`scripts/windows-ctxsrv-check.ps1`: the test subsets, the CDO transcript (wall times,
+the child's working set, the large digest's delivery), the manifest check against its
+10 ms target. Still open by design: handle-relative creation (`NtCreateFile` relative
+to a parent handle) so Windows gets file outputs; no interior release of freed blocks
+off Linux (the refresh RSS creep is unmeasured there); workspace keys are spelled
+paths, so `U:\x` and `u:/x` would start two children.
 
 ## 14. Re-measuring
 
