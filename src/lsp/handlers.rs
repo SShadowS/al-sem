@@ -1195,6 +1195,8 @@ mod tests {
             // Test fixture: assembled by hand, stands for the LSP build.
             profile: crate::program::profile::BuildProfile::LIGHT,
             files: Default::default(),
+            dep_trees: Default::default(),
+            dep_files_parsed: 0,
         };
         LspSnapshot::from_context(ctx, std::path::Path::new("/workspace")).0
     }

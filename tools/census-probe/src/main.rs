@@ -1578,7 +1578,7 @@ fn routine_fields(routines: Vec<al_sem::program::model::workspace::ModelRoutine>
 /// them, then one ask of each served kind (twice), then every retained part
 /// dropped in order, each drop delta printed. Live heap only: what the
 /// allocator keeps beyond it is the child's RSS minus these numbers.
-fn resident_mode(ws: PathBuf, routine: String) {
+fn resident_mode(ws: PathBuf, routine: String, low_mem: bool) {
     use al_sem::engine::batch::job::Job;
     use al_sem::engine::resident::revision::Revision;
     use al_sem::engine::resident::session::{REVISION_READ, build_target};
@@ -1600,11 +1600,19 @@ fn resident_mode(ws: PathBuf, routine: String) {
     };
     let base = live().0;
     PEAK.store(base, Relaxed);
-    println!("######## resident {} routine {routine}", ws.display());
+    println!(
+        "######## resident {} routine {routine}{}",
+        ws.display(),
+        if low_mem { " --low-mem" } else { "" }
+    );
     let t = std::time::Instant::now();
     let inputs = WorkspaceInputs::read(&ws, &REVISION_READ);
     line("read", base, t);
-    let mut session = WorkspaceSession::new();
+    let mut session = WorkspaceSession::with_mode(if low_mem {
+        al_sem::program::session::MemoryMode::LowMem
+    } else {
+        al_sem::program::session::MemoryMode::Default
+    });
     let t = std::time::Instant::now();
     let b0 = live().0;
     let target = build_target(&mut session, &inputs, false)
@@ -1865,9 +1873,13 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let source = match args.next().as_deref() {
         Some("resident") => {
-            let ws = PathBuf::from(args.next().expect("workspace"));
-            let routine = args.next().unwrap_or_else(|| "IssueReminder".into());
-            resident_mode(ws, routine);
+            // `resident <ws> [routine] [--low-mem]`
+            let rest: Vec<String> = args.collect();
+            let low_mem = rest.iter().any(|a| a == "--low-mem");
+            let mut plain = rest.into_iter().filter(|a| a != "--low-mem");
+            let ws = PathBuf::from(plain.next().expect("workspace"));
+            let routine = plain.next().unwrap_or_else(|| "IssueReminder".into());
+            resident_mode(ws, routine, low_mem);
             return;
         }
         Some("embedded") => DependencySource::Embedded,

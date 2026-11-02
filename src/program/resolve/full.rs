@@ -1905,6 +1905,13 @@ pub struct ProgramContext {
     /// #160 step 10 (§4.1): every parsed file of this build, numbered (the
     /// workspace's, then the dependency bodies' when kept). The only file table.
     pub(crate) files: crate::program::site_key::FileTable,
+    /// `DependencyBodies::OnDemand` only: the dependency trees this build
+    /// parsed (a tier miss's parse, or [`Self::ensure_dep_bodies`]). Never in
+    /// the tier, so they die with this context.
+    pub(crate) dep_trees: std::sync::OnceLock<Arc<Vec<ParsedUnit>>>,
+    /// How many dependency files the build's own parse parsed (all of them on
+    /// a tier miss, none on a hit).
+    pub(crate) dep_files_parsed: usize,
 }
 
 impl ProgramContext {
@@ -1955,16 +1962,53 @@ impl ProgramContext {
         &self.parsed
     }
 
-    /// The dependency `ParsedUnit`s, in `snap.apps` order: `Some` exactly
-    /// when the profile is `DependencyBodies::Keep` (a `Keep` build never
-    /// shares a tier built without them — see `DepKey`).
+    /// The dependency `ParsedUnit`s, in `snap.apps` order: `Some` when the
+    /// profile is `DependencyBodies::Keep` (a `Keep` build never shares a
+    /// tier built without them — see `DepKey`), and under `OnDemand` once
+    /// this build parsed them (a tier miss, or [`Self::ensure_dep_bodies`]).
     #[must_use]
     pub fn dep_bodies(&self) -> Option<&[ParsedUnit]> {
         self.dep_layer
             .dep_nodes
             .bodies
             .as_deref()
+            .or(self.dep_trees.get().map(|t| &**t))
             .map(Vec::as_slice)
+    }
+
+    /// How many dependency files this build parsed: its own parse's (a tier
+    /// miss), or [`Self::ensure_dep_bodies`]'s.
+    #[must_use]
+    pub fn dep_files_parsed(&self) -> usize {
+        if self.dep_files_parsed > 0 {
+            return self.dep_files_parsed;
+        }
+        self.dep_trees
+            .get()
+            .map_or(0, |t| t.iter().map(|u| u.files.len()).sum())
+    }
+
+    /// Parse the dependency trees now, when this `DependencyBodies::OnDemand`
+    /// build does not hold them yet (its tier was a hit), from the snapshot's
+    /// own text: the units and files [`Self::dep_bodies`] would hold under
+    /// `Keep`. A no-op when they are held. Call it before any parallel work
+    /// that reads them, never from inside it (declared-needs rule 7).
+    ///
+    /// # Panics
+    /// Under `Summary`, which never reads dependency trees.
+    pub fn ensure_dep_bodies(&self) {
+        if self.dep_bodies().is_some() {
+            return;
+        }
+        assert!(
+            self.profile.dependency_bodies == crate::program::profile::DependencyBodies::OnDemand,
+            "only an OnDemand build parses dependency trees on demand (profile {:?})",
+            self.profile
+        );
+        self.dep_trees.get_or_init(|| {
+            let _s = pt::span("preflight", "preflight.parse_dependency_bodies");
+            Arc::new(crate::program::dep_summary::parse_dep_bodies(&self.snap))
+        });
     }
 
     /// Every parsed unit in `snap.apps` order (workspace first, then the
@@ -2036,9 +2080,10 @@ impl ProgramContext {
     /// When the profile does not keep dependency bodies (`FULL`).
     #[must_use]
     pub fn resolve_dependency_bodies(&self) -> DependencyBodyResolution {
-        let bodies = self
-            .dep_bodies()
-            .expect("resolving dependency bodies needs DependencyBodies::Keep");
+        let bodies = self.dep_bodies().expect(
+            "resolving dependency bodies needs DependencyBodies::Keep \
+             (or OnDemand after ensure_dep_bodies)",
+        );
         let index = ResolveIndex::build(&self.graph);
         let surface = self.decl_surface();
         let mut files: Vec<(AppRef, &ParsedFile)> = Vec::new();
@@ -2253,6 +2298,20 @@ pub fn build_context_from_snapshot_reusing(
         parse_for_build_reusing(&snap, profile, shared_tier.is_some(), reuse)
     };
     let parsed: Vec<ParsedUnit> = parse.workspace.take().into_iter().collect();
+    let dep_files_parsed = parse.dep_summaries.iter().map(|u| u.files.len()).sum();
+    // `OnDemand`: the trees of a parse made anyway (a tier miss) stay with
+    // this build; the tier never holds them. A hit parsed no dependency (its
+    // list is empty, not the trees): nothing is held, and a step that reads
+    // them asks (`ensure_dep_bodies`).
+    let dep_trees = std::sync::OnceLock::new();
+    if profile.dependency_bodies == crate::program::profile::DependencyBodies::OnDemand {
+        let trees = parse.dep_bodies.take();
+        if shared_tier.is_none()
+            && let Some(trees) = trees
+        {
+            let _ = dep_trees.set(Arc::new(trees));
+        }
+    }
     crate::census_hook::mark("2.parse");
     let dep_layer = {
         let _s = pt::span("preflight", "preflight.dep_layer");
@@ -2303,15 +2362,42 @@ pub fn build_context_from_snapshot_reusing(
         )
     })?;
 
-    let files = crate::program::site_key::FileTable::build(
-        &graph,
-        &parsed,
-        dep_layer
-            .dep_nodes
-            .bodies
-            .as_deref()
-            .map_or(&[], Vec::as_slice),
-    );
+    let files = if profile.dependency_bodies == crate::program::profile::DependencyBodies::OnDemand
+    {
+        // Numbered from the snapshot's file lists, whether or not this build
+        // holds the trees: the units and files `parse_dep_bodies` would parse,
+        // in its order, so every build of one snapshot numbers alike.
+        let units: Vec<(&crate::snapshot::AppId, Vec<&str>)> = parsed
+            .iter()
+            .map(|u| {
+                let paths = u.files.iter().map(|f| f.virtual_path.as_str()).collect();
+                (&u.app, paths)
+            })
+            .chain(
+                snap.apps
+                    .iter()
+                    .filter(|u| u.id != snap.workspace_app)
+                    .filter_map(|u| {
+                        let s = u.source.as_ref()?;
+                        Some((
+                            &u.id,
+                            s.files.iter().map(|f| f.virtual_path.as_str()).collect(),
+                        ))
+                    }),
+            )
+            .collect();
+        crate::program::site_key::FileTable::build_from(&graph, &units)
+    } else {
+        crate::program::site_key::FileTable::build(
+            &graph,
+            &parsed,
+            dep_layer
+                .dep_nodes
+                .bodies
+                .as_deref()
+                .map_or(&[], Vec::as_slice),
+        )
+    };
     Ok(ProgramContext {
         files,
         snap,
@@ -2321,6 +2407,8 @@ pub fn build_context_from_snapshot_reusing(
         ws_file_set,
         dep_layer,
         profile,
+        dep_trees,
+        dep_files_parsed,
     })
 }
 

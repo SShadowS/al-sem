@@ -231,6 +231,7 @@ struct Shared {
 #[derive(Clone)]
 struct ChildConfig {
     cfg_budget: (u64, u64),
+    low_mem: bool,
     idle_timeout_secs: u64,
     max_children: usize,
 }
@@ -281,6 +282,7 @@ pub fn serve(
             cfg.child_budget(Universe::CrossApp),
             cfg.child_budget(Universe::SingleApp),
         ),
+        low_mem: cfg.low_mem,
         idle_timeout_secs: cfg.idle_timeout_secs,
         max_children: cfg.max_children.max(1),
     };
@@ -619,6 +621,9 @@ fn work(
         "--idle-timeout".into(),
         shared.children.idle_timeout_secs.to_string().into(),
     ]);
+    if shared.children.low_mem {
+        cfg.args.push("--low-mem".into());
+    }
     let mut front = match EngineFront::new(cfg) {
         Ok(f) => Some(f),
         Err(e) => {
@@ -810,6 +815,7 @@ fn status(
                     "revision": c.revision,
                     "memory": c.memory,
                     "idleTimeoutSecs": c.idle_timeout_secs,
+                    "lowMem": c.low_mem,
                 })),
                 "spawns": s.spawns,
                 "deaths": s.deaths,
@@ -843,6 +849,7 @@ fn status(
                 "singleApp": shared.children.cfg_budget.1,
             },
             "idleTimeoutSecs": shared.children.idle_timeout_secs,
+            "lowMem": shared.children.low_mem,
         },
         "engines": engines,
     })

@@ -1427,6 +1427,15 @@ mod tests {
         assert!(full.0, "precondition: FULL keeps CDO's dependency bodies");
         assert_same_text("program report", &light.1, &full.1);
         assert_same_text("LSP answers", &light.2, &full.2);
+        // `ON_DEMAND` (`--low-mem`): a tier miss holds its own parse's trees,
+        // the tier none; the same report and answers.
+        let on_demand = project(BuildProfile::ON_DEMAND);
+        assert!(
+            on_demand.0,
+            "precondition: an ON_DEMAND miss holds the trees"
+        );
+        assert_same_text("program report (ON_DEMAND)", &on_demand.1, &full.1);
+        assert_same_text("LSP answers (ON_DEMAND)", &on_demand.2, &full.2);
     }
 
     /// `assert_eq!` on texts this large would print hundreds of MiB; name

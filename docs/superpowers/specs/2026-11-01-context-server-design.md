@@ -32,8 +32,11 @@ stage-2 plumbing (owned package images, the engine child and its front end, hidd
 `alsem engine-host` / `alsem engine-ask`, `engine-test-hooks`) with the round-6 fixes
 (lossless stderr, boundary-safe frame recovery, bounded front-end queue), the ABI-integrity
 check as a declared need (`AbiIntegrity::{Check, Skip}`), and **stage 4** (the incremental
-model, `program::session`; see the as-built notes in §6.5, §6.13, §7 and §12). Everything
-else below is the build order from here.
+model, `program::session`; see the as-built notes in §6.5, §6.13, §7 and §12). **Landed
+since:** the stage-2 completion (the resident child, §3's as-built note), **stage 3**
+(admission, reservation, eviction, idle children, lanes, MCP wiring; §7's as-built note) and
+**`--low-mem`** (§7, owner decision 2026-11-02). Everything else below is the build order
+from here.
 
 ## 0. Summary
 
@@ -683,18 +686,120 @@ dependency rows 0.25 s (cloning the kept rows), `finish_resolved` 0.27–0.30 s,
 ## 7. Memory
 
 Budgeted and reported by the child (`status`): retained floor, reserved, snapshots
-pinned, tables retained, fill workers. Targets: resident after a build and one request
-of each kind ≤ 3 GB; peak ≤ one cold build (3.4–3.5 GB) — measured by T-mem, not assumed.
-`--memory-budget` (default 4 GB cross-app, 1.5 GB single-app), `--idle-timeout` 600 s;
-the front end's `--max-children` (default 2) and `--total-budget`. Eviction order:
-dependency subjects' raw and rows, tree indexes, det and runs, cones (digests kept);
-never the model, relation, tier or L4 seed.
+pinned, tables retained, fill workers. ~~Targets: resident after a build and one request
+of each kind ≤ 3 GB; peak ≤ one cold build (3.4–3.5 GB) — measured by T-mem, not
+assumed. `--memory-budget` (default 4 GB cross-app, 1.5 GB single-app)~~ — **superseded**
+by the owner's decision and stage 3's defaults below. `--idle-timeout` 600 s; the front
+end's `--max-children` (default 2) and `--total-budget`. Eviction order: dependency
+subjects' raw and rows, tree indexes, det and runs, cones (digests kept); never the model,
+relation, tier or L4 seed.
 
 **Measured cost of stage 4's retained rows:** about 1 GB. The peak of the whole
 `aldump --session-refresh --verify` run on CDO (session plus the verifying cold builds)
 rose from 5.46 GB to 6.50 GB. Stage 3's T-mem must account for it against the 3 GB
 resident target; dropping the dependency rows' copy (0.25 s per B) and sharing them
 instead is the first candidate if it does not fit.
+
+**Owner decision (2026-11-02).** The default keeps everything and is the fastest; about
+**4.6 GB resident on CDO** (cross-app, after a build and one ask of each served kind) is
+the accepted default target, replacing the 3 GB above. An opt-in **`--low-mem`** keeps no
+dependency syntax trees between revisions and parses dependency files again when a step
+needs them (below). The default budgets stay as stage 3 set them: **6 GiB cross-app,
+2 GiB single-app**, for both modes.
+
+**As built (stage 3, `engine::resident::budget`, master `a48f8e0e`).**
+
+- *Where the memory went* (`census-probe resident <ws> [routine]`, a counting allocator
+  over the build `alsem engine-host` makes, the four asks twice, then every retained part
+  dropped in order; CDO, master `e5b515be`): live heap after the build 3,522 MiB, after the
+  four asks 4,441 MiB. The workspace session held 2,635 MiB of it (dependency body parse
+  trees 1,121, only 115 of it source text; dependency rows 691; dependency resolution 595;
+  workspace rows 70; workspace trees and resolutions 69; metadata 72), the model and
+  cross-app base 888 MiB (routine rows 576), the artifacts 918 MiB (fold 602, det 191, l4
+  79, run 46). The child's RSS is about 0.7 GB above its live heap (28 M live
+  allocations); `mi_collect` after an ask frees none of it.
+- *What was reduced and how*: no spare capacity is retained. Each parse's arenas are
+  moved into exact allocations (`al_syntax::ir::exact_size`: mimalloc keeps a block a
+  `shrink_to_fit` still fills by half); the dependency edges and their route vectors are
+  exactly sized; the session keeps a clone of the dependency rows, not the push-built
+  original; a routine's `statement_tree` is behind an `Arc`, one exact copy shared by the
+  kept rows and every revision's model. Live heap after the build 2,792 MiB (was 3,522),
+  after the four asks 3,711 MiB (was 4,441); child RSS after the build 3.69 GB (was
+  4.26), after the four asks 4.55 GB (was 5.14), peak 5.37 GB (was 5.98). Answers
+  unchanged (every golden and T-order test).
+- *Admission and reservation* (§4.5): every build, fill and request's trees reserve
+  their estimated peak; `rss + reserved + estimate ≤ budget`, else admission closes, the
+  in-flight releasers are waited for, unheld artifacts are evicted in §7's order
+  (dependency raw, the session's dependency rows, runs, det, fold, ordering, rules; never
+  the model, relation, tier or L4 seed), and the reservation is tried once more, else
+  `budget` with `estimateKiB`, `budgetKiB`, `retainedFloorKiB`. An estimate that cannot
+  fit above the retained floor (RSS less every evictable artifact's measured bytes) fails
+  at once (`impossible`). A first build is estimated from the manifest's `.al` and
+  package bytes (floor 1.5 GiB cross-app, 0.5 GiB single-app) and refused before
+  anything is read; observed peaks (`/proc` peak windows) replace the table. A request's
+  artifacts stay pinned through its compute (found on CDO: a request's own fold was
+  evicted by its trees' reservation).
+- *Idle children*: `--idle-timeout` (600 s) — the child announces `engine/idleExit` and
+  ends after a grace; the front end starts a new child on its next call, no death counted.
+- *Lanes*: one heavy worker and four light workers (queries) in the child.
+- *Panic*: a panic in a request ends the child in every profile; the front end restarts
+  it (backoff, §3).
+- *MCP*: `notifications/cancelled` drops a queued call or sends the running one
+  `session/cancel` (not answered); `alsem_refresh` is `session/refresh {wait}`;
+  `--memory-budget`, `--idle-timeout`, `--max-children` (default 2: a call for another
+  workspace ends the least recently used idle child) and `--total-budget`.
+- *Default budgets, and why*: **6 GiB cross-app** — the design's 4 GiB is below what CDO
+  retains after one build (3.7 GB RSS), so it would refuse every first explain; 6 GiB
+  holds CDO's measured peak (5.4 GB) with margin. **2 GiB single-app** (CDO single-app
+  one-shot peak 0.75–0.9 GB). Measured with the default budget: no refusal, RSS after
+  query + explain + prove + digest 4.59 GB, retained floor 3.90 GB; with 5 GiB the
+  explain's trees reclaimed the dependency rows (10,881 files) and every answer was given
+  (RSS 4.34, peak 5.10 GB); with 4.5 GiB explain is refused `budget` (floor 3.75 GB plus
+  the trees' 0.9 GB).
+
+**As built (`--low-mem`, 2026-11-02).** `alsem engine-host --low-mem`, `alsem mcp
+--low-mem` (passed to each child), `aldump --session-refresh --low-mem`, `census-probe
+resident … --low-mem`. The cross-app workspace session builds with
+`BuildProfile::ON_DEMAND` (`DependencyBodies::OnDemand`): the tier keeps no tree (it is
+the `Summary` tier and shares its `DepKey`), and a build's context holds the trees only
+when it parsed them, so they die with it. The session keeps each source-bearing
+dependency's extracted text instead (117 MiB on CDO): the file list the snapshot shares,
+so the next snapshot reads that same text through the session's `DepCache` at the same
+`.app` stamp, and nothing is extracted again. §5.2's rules hold: the text is the one the
+snapshot read from the acquired package image, a tree is `al_syntax::parse` of it, and a
+changed package is P, which drops all of it. What is parsed when:
+
+| Case | Dependency files parsed |
+|---|---|
+| P | all (the tier is built from that parse, as in the default mode) |
+| S / F | all again (`ProgramContext::ensure_dep_bodies`): every dependency body is re-resolved |
+| B | none, except the files whose kept rows or routine ids miss in the model assembly (a demand expansion, changed assembly needs, rows evicted): those only, in parallel |
+
+The row cache keys a file's rows and a dependency file's routine ids on the text, not the
+tree's identity (the text stands for the parse), so it holds no tree in either mode; the
+on-demand file numbering comes from the snapshot's file lists in the parse's order.
+Measured on CDO (release-fast, `IssueReminder`, one child over the protocol; every
+refresh step equal to cold):
+
+| Measure | Default | `--low-mem` |
+|---|---:|---:|
+| RSS after query, explain, prove, digest | 4.70 GB | **3.72 GB** |
+| retained floor (`status.memory.retainedBytes`) | 3.90–3.91 GB | 2.95–2.97 GB |
+| peak during the asks | 5.56 GB | 4.56 GB |
+| live heap after the asks (census-probe) | 3,711 MiB (trees 925 MiB, text inside) | 2,903 MiB (text 117 MiB) |
+| warm query / explain / prove / digest | 0.04 / 6.3–6.4 / 6.1–6.4 / 5.5–5.7 s | 0.04 / 6.3–6.4 / 6.2–6.3 / 5.4–5.7 s |
+| refresh B | 2.52–2.86 s | 2.29–2.37 s (no text extracted again) |
+| refresh S / F | 6.8–7.2 s | 8.0–8.5 s (+1.2–1.4 s: 10,881 files parsed) |
+| refresh P | 12.3–13.1 s | 11.9–12.5 s |
+| RSS after a B, an S and an S edit, each with the four asks | 5.36 GB | 4.39 GB |
+
+The low-mem default budget stays 6 GiB, set by measurement: at 4.5 GiB the asks after
+the first S edit were refused, at 5 GiB the second S was refused as impossible (an S
+parses every dependency file, its observed peak becomes its estimate, and the floor
+creeps 0.2–0.3 GB per refresh in both modes, allocator retention); at 6 GiB nothing was
+refused or evicted. The saving is headroom, not a smaller default. Two findings left for
+later: the default mode extracts the dependency text again on every B (about 0.3 s that
+`--low-mem` does not pay), and the per-refresh RSS creep.
 
 ## 8. The MCP front end (`alsem mcp`)
 
@@ -809,7 +914,7 @@ was seen to fail (CLAUDE.md). CDO-based tests run on a temporary copy of the bas
 |---|---|---|
 | 0, 1, 1b, ids, 2-plumbing, 4 | landed (4 without the semantics/locations split; §6.5) | — |
 | **2 (completion)** | resident revision; `ensure_prepared` (§4.2); the full-manifest three-way check; `requestFiles`, deadlines, cancel, `notifyChanged`, enforcement, mandatory `diffRootDecided`; lossless stderr, boundary-safe frame recovery, bounded front-end queue; private-namespace outputs; `Answer::terminal`; exit 3 | T-order, T-prepared (cold roots), T-acquire-*, T-exit3, T-terminal, T-frame, T-stderr, T-frame-boundary, T-queue-bound, T-paths, T-fresh/T-manifest, T-tier, T-failed-build, T-pin, T-plan; measured sequential warm numbers per command |
-| 3 | admission with fill workers counted; eviction via snapshots; `latest-built`; watcher; idle; LSP | T-race, T-cancel, T-panic, T-mem, T-budget, T-lsp; resident ≤ 3 GB |
+| 3 | admission with fill workers counted; eviction via snapshots; `latest-built`; watcher; idle; LSP | **landed** (master `a48f8e0e`; §7's as-built note) **except** the LSP front end (§9, T-lsp), per-root cancellation inside `digest_effects_each`, and an automated T-mem bound (measured by hand, `census-probe resident`). The 3 GB resident target is superseded (§7: ~4.6 GB default, `--low-mem` 3.7 GB) |
 | 5 | seeded L4; cone store with Δ_pd_output and per-member coverage refresh; tree store with whole sections and per-section spans; retained stores integrated only after T-prepared's publication invariants pass | T-cone, T-cone-edge, T-pd-out, T-typed-edges, T-callsite-res, T-coverage, T-obj-only, T-tree, T-prepared (live), T-incr end to end |
 | 6 | declaration pack; finer dependency rule behind its audit | fresh − pack path measured end to end |
 
@@ -826,7 +931,7 @@ was seen to fail (CLAUDE.md). CDO-based tests run on a temporary copy of the bas
 | warm `explain`, one / three roots | roots 2.7–3.0 / 3.36 s + render 0.8–0.9 / 0.93 s | measured |
 | dependency-root request | emission 0.1–3 s (observed delta) + roots (ms) | hypothesis range |
 | cold start with pack | fresh − pack path | no number promised |
-| resident / peak | ≤ 3 GB / ≤ one cold build | T-mem |
+| resident / peak | ~~≤ 3 GB / ≤ one cold build~~ superseded: ~4.6 GB default (owner, 2026-11-02) | measured 4.70 / 5.56 GB default, 3.72 / 4.56 GB `--low-mem` (§7) |
 | manifest check | ≤ 10 ms (1.2–1.7 ms Linux) | Windows to measure |
 
 ## 13. Decisions taken and points still open
@@ -836,8 +941,11 @@ engine-host` in the `alsem` binary; the epic's "no daemon / no persistent cache"
 non-goals lifted; explain shares one tree and takes several roots; whole-step reruns
 where a precise key would be fragile.
 
-Open: the memory targets (3 GB resident, 4 GB budget per cross-app child; an editor child
-beside an agent child is two); selective cone retention if the store exceeds its target;
+Decided (owner, 2026-11-02): the memory targets — the default keeps everything (~4.6 GB
+resident on CDO), `--low-mem` is the opt-in, budgets 6 GiB cross-app / 2 GiB single-app
+(§7).
+
+Open: an editor child beside an agent child is two children's memory; selective cone retention if the store exceeds its target;
 Windows measurements (manifest check, directory walk, handle-relative creation, sealed
 copy share mode) before stage-2 exit numbers are quoted there; a shared server over a
 local socket for several agents on one workspace (the child protocol is socket-ready).

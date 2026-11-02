@@ -21,7 +21,7 @@ pub struct DepUnitSummary {
 pub struct BuildParse {
     pub workspace: Option<ParsedUnit>,
     pub dep_summaries: Vec<DepUnitSummary>,
-    /// `Some` only under `DependencyBodies::Keep`.
+    /// `Some` only under `DependencyBodies::Keep` or `OnDemand`.
     pub dep_bodies: Option<Vec<ParsedUnit>>,
 }
 
@@ -69,7 +69,12 @@ pub(crate) fn parse_for_build_observed(
     use rayon::prelude::*;
     use std::sync::atomic::Ordering::SeqCst;
 
-    let keep = profile.dependency_bodies == DependencyBodies::Keep;
+    // `OnDemand` keeps the trees of a parse it makes anyway: the build hands
+    // them to its own context, never to the tier (`build_context_from_snapshot_reusing`).
+    let keep = matches!(
+        profile.dependency_bodies,
+        DependencyBodies::Keep | DependencyBodies::OnDemand
+    );
     // Same interning order as `build_dep_layer_cached`'s Step 1, so these
     // `AppRef`s are the ones the dependency layer uses.
     let mut apps = AppRegistry::default();
@@ -159,6 +164,40 @@ pub(crate) fn parse_for_build_observed(
         crate::engine::perf_trace::counter_delta("deps.extract_cpu_ns", extract_ns.into_inner());
     }
     parsed
+}
+
+/// The dependency trees of `snap` alone, as [`parse_for_build`] keeps them
+/// under `Keep` (the same units in `snap.apps` order, each file parsed from
+/// the snapshot's own text, in its order), for a `DependencyBodies::OnDemand`
+/// build whose tier was a hit (`ProgramContext::ensure_dep_bodies`). Nothing
+/// is summarized: the tier holds the summaries already.
+#[must_use]
+pub fn parse_dep_bodies(snap: &AppSetSnapshot) -> Vec<ParsedUnit> {
+    use rayon::prelude::*;
+    crate::big_stack::big_stack_pool().install(|| {
+        snap.apps
+            .iter()
+            .filter(|unit| unit.id != snap.workspace_app)
+            .filter_map(|unit| {
+                let source = unit.source.as_ref()?;
+                assert!(
+                    !source.files.is_empty(),
+                    "dependency {} reached the parse without its text",
+                    unit.id.name
+                );
+                #[cfg(test)]
+                crate::snapshot::parse::parse_log::record(unit);
+                Some(ParsedUnit {
+                    app: unit.id.clone(),
+                    files: source
+                        .files
+                        .par_iter()
+                        .map(|f| crate::snapshot::parse::parse_file(unit, f))
+                        .collect(),
+                })
+            })
+            .collect()
+    })
 }
 
 /// Summarize one parsed dependency file. Uses the SAME extraction
@@ -507,6 +546,7 @@ codeunit 60002 "Plain Cu"
         snaps.push(("multi-app".into(), Box::new(multi_app_snapshot)));
 
         let mut with_bodies = 0;
+        let mut on_demand_hits = 0;
         for (name, snap) in &snaps {
             let full = build_context_from_snapshot(snap(), BuildProfile::FULL).expect("full");
             let light = build_context_from_snapshot(snap(), BuildProfile::LIGHT).expect("light");
@@ -519,11 +559,101 @@ codeunit 60002 "Plain Cu"
                 with_bodies += 1;
             }
             assert_eq!(report_text(&full), report_text(&light), "{name}");
+            if assert_on_demand_matches_full(name, snap.as_ref(), &full)
+                && bodies.iter().any(|u| !u.files.is_empty())
+            {
+                on_demand_hits += 1;
+            }
         }
         assert!(
             with_bodies >= 2,
             "precondition: fixtures with dependency source exercise both paths"
         );
+        assert!(
+            on_demand_hits >= 1,
+            "precondition: an ON_DEMAND tier hit parses dependency source on demand"
+        );
+    }
+
+    /// `ON_DEMAND` (rule 3 for the `--low-mem` profile): on a tier miss the
+    /// build holds the trees of its own parse, on a hit (a `LIGHT` build's
+    /// tier, whose key it shares) none until `ensure_dep_bodies`; either way
+    /// the report, the file numbering and the dependency bodies' resolution
+    /// are `FULL`'s, and the tier never holds a tree.
+    fn assert_on_demand_matches_full(
+        name: &str,
+        snap: &dyn Fn() -> AppSetSnapshot,
+        full: &crate::program::resolve::full::ProgramContext,
+    ) -> bool {
+        use crate::program::dep_cache::DepCache;
+        use crate::program::resolve::full::build_context_from_snapshot_cached;
+        let edges = |c: &crate::program::resolve::full::ProgramContext| {
+            format!("{:?}", c.resolve_dependency_bodies().edges)
+        };
+        let numbering = |c: &crate::program::resolve::full::ProgramContext| {
+            let mut v: Vec<_> = full
+                .dep_bodies()
+                .unwrap_or_default()
+                .iter()
+                .flat_map(|u| u.files.iter().map(move |f| (u.app.clone(), f)))
+                .map(|(app, f)| {
+                    let r = c.graph().apps.find(&app);
+                    (
+                        f.virtual_path.clone(),
+                        r.and_then(|r| c.file_ix(r, &f.virtual_path)),
+                    )
+                })
+                .collect();
+            v.sort();
+            v
+        };
+        let miss = build_context_from_snapshot_cached(
+            snap(),
+            BuildProfile::ON_DEMAND,
+            &DepCache::default(),
+        )
+        .expect("on demand");
+        assert!(
+            miss.dep_layer.dep_nodes.bodies.is_none(),
+            "{name}: tier keeps no tree"
+        );
+        assert!(
+            miss.dep_bodies().is_some(),
+            "{name}: a miss holds its parse's trees"
+        );
+        assert_eq!(report_text(&miss), report_text(full), "{name}");
+        assert_eq!(numbering(&miss), numbering(full), "{name}");
+        assert_eq!(edges(&miss), edges(full), "{name}");
+
+        let cache = DepCache::default();
+        let _light =
+            build_context_from_snapshot_cached(snap(), BuildProfile::LIGHT, &cache).expect("light");
+        let hit = build_context_from_snapshot_cached(snap(), BuildProfile::ON_DEMAND, &cache)
+            .expect("on demand hit");
+        if !std::sync::Arc::ptr_eq(&hit.dep_layer.dep_nodes, &_light.dep_layer.dep_nodes) {
+            // A dependency without a stamp is never shared (no hit to test).
+            return false;
+        }
+        assert!(hit.dep_bodies().is_none(), "{name}: a hit holds no tree");
+        assert_eq!(hit.dep_files_parsed(), 0, "{name}");
+        assert_eq!(report_text(&hit), report_text(full), "{name}");
+        assert_eq!(numbering(&hit), numbering(full), "{name}");
+        hit.ensure_dep_bodies();
+        assert_eq!(
+            hit.dep_files_parsed(),
+            full.dep_bodies()
+                .unwrap_or_default()
+                .iter()
+                .map(|u| u.files.len())
+                .sum::<usize>(),
+            "{name}"
+        );
+        assert_eq!(edges(&hit), edges(full), "{name}");
+        assert!(
+            hit.dep_layer.dep_nodes.bodies.is_none(),
+            "{name}: still none in the tier"
+        );
+        true
     }
 
     /// Review Focus 1: a dependency file whose parse is `Recovered` is still

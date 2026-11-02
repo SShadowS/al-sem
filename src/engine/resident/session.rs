@@ -176,6 +176,8 @@ pub struct ResidentSession {
     hook: Option<BuildHook>,
     /// The child's memory budget (stage 3); `None` admits everything.
     budget: Option<Arc<Budget>>,
+    /// `--low-mem` ([`Self::with_low_mem`]).
+    low_mem: bool,
 }
 
 impl ResidentSession {
@@ -196,6 +198,7 @@ impl ResidentSession {
             stats: Mutex::new(SessionStats::default()),
             hook: None,
             budget: None,
+            low_mem: false,
         }
     }
 
@@ -204,6 +207,29 @@ impl ResidentSession {
     pub fn with_hook(mut self, hook: BuildHook) -> ResidentSession {
         self.hook = Some(hook);
         self
+    }
+
+    /// The session in `--low-mem` mode when `low_mem` (design §7): the
+    /// cross-app workspace session keeps no dependency tree between revisions
+    /// ([`crate::program::session::MemoryMode::LowMem`]). A single-app
+    /// session builds cold and holds none either way.
+    #[must_use]
+    pub fn with_low_mem(self, low_mem: bool) -> ResidentSession {
+        let mode = if low_mem {
+            crate::program::session::MemoryMode::LowMem
+        } else {
+            crate::program::session::MemoryMode::Default
+        };
+        *lock(&self.builder) = Builder {
+            workspace: WorkspaceSession::with_mode(mode),
+        };
+        ResidentSession { low_mem, ..self }
+    }
+
+    /// Whether the session keeps no dependency tree between revisions.
+    #[must_use]
+    pub fn low_mem(&self) -> bool {
+        self.low_mem
     }
 
     /// The session under a memory budget (§4.5): every build reserves first.

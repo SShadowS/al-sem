@@ -210,6 +210,12 @@ struct McpCli {
     #[arg(long = "memory-budget")]
     memory_budget: Option<String>,
 
+    /// Start each engine child with --low-mem: it keeps no dependency syntax
+    /// trees between revisions (less memory; a declaration-level edit parses
+    /// the dependency files again).
+    #[arg(long = "low-mem", default_value_t = false)]
+    low_mem: bool,
+
     /// Seconds an engine child stays with nothing to do before it ends (the
     /// next call starts a new one, which builds again); 0 never.
     #[arg(long = "idle-timeout", default_value_t = al_sem::engine::resident::budget::DEFAULT_IDLE_TIMEOUT_SECS)]
@@ -236,6 +242,12 @@ struct EngineHostCli {
     /// single-app.
     #[arg(long = "memory-budget")]
     memory_budget: Option<String>,
+
+    /// Keep no dependency syntax trees between revisions: less memory, and a
+    /// declaration-level edit parses the dependency files again (cross-app
+    /// only; a single-app session holds none either way).
+    #[arg(long = "low-mem", default_value_t = false)]
+    low_mem: bool,
 
     /// End after this many seconds with no request and no work (the front
     /// end starts a new child on its next request); 0 never ends.
@@ -2846,6 +2858,7 @@ mod engine {
             (h.idle_timeout > 0).then(|| std::time::Duration::from_secs(h.idle_timeout));
         let engine = HostEngine {
             memory_budget,
+            low_mem: h.low_mem,
             idle_timeout_secs: idle_timeout.map(|d| d.as_secs()),
             estimate_per_al_byte: h.estimate_per_al_byte,
             estimate_floor: h.estimate_floor,
@@ -2887,6 +2900,7 @@ mod engine {
         open: std::sync::Mutex<Option<Open>>,
         asks: std::sync::atomic::AtomicU64,
         memory_budget: Option<u64>,
+        low_mem: bool,
         idle_timeout_secs: Option<u64>,
         estimate_per_al_byte: Option<u64>,
         estimate_floor: Option<u64>,
@@ -2919,14 +2933,13 @@ mod engine {
             if let Some(n) = self.estimate_floor {
                 estimates.floor = n;
             }
-            let bytes = self.memory_budget.unwrap_or(if single {
-                al_sem::engine::resident::budget::DEFAULT_BUDGET_SINGLE_APP
-            } else {
-                al_sem::engine::resident::budget::DEFAULT_BUDGET_CROSS_APP
+            let bytes = self.memory_budget.unwrap_or_else(|| {
+                al_sem::engine::resident::budget::default_budget(single, self.low_mem)
             });
             let budget = Arc::new(Budget::new(bytes, Arc::new(ProcMeter), estimates));
             let session =
                 ResidentSession::new(params.workspace.clone(), single, instance.to_string())
+                    .with_low_mem(self.low_mem)
                     .with_budget(Arc::clone(&budget));
             *self.open.lock().unwrap_or_else(|p| p.into_inner()) = Some(Open {
                 workspace: params.workspace.clone(),
@@ -2960,6 +2973,7 @@ mod engine {
                 pid: std::process::id(),
                 asks: self.asks.load(std::sync::atomic::Ordering::Relaxed),
                 idle_timeout_secs: self.idle_timeout_secs,
+                low_mem: self.low_mem,
                 ..ChildStatus::default()
             };
             if let Some(o) = open {
@@ -3473,6 +3487,7 @@ mod engine {
                 .map_or_else(al_sem::mcp::default_output_root, PathBuf::from),
         );
         cfg.memory_budget = memory_budget;
+        cfg.low_mem = m.low_mem;
         cfg.total_budget = total_budget;
         cfg.idle_timeout_secs = m.idle_timeout;
         cfg.max_children = m.max_children;

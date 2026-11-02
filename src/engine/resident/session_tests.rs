@@ -276,6 +276,63 @@ fn a_failed_build_is_published_with_no_revision() {
     assert_eq!(s.stats().builds, 1);
 }
 
+/// `--low-mem` (design §7) through the resident session: the query of a
+/// routine calling into a source-bearing dependency, answered off each
+/// revision, equals a cold run after the first build, a body edit (B) and a
+/// declaration edit (S, every dependency file parsed again), in both modes.
+#[test]
+fn low_mem_answers_equal_cold_after_b_and_s() {
+    fn query(inputs: &Arc<WorkspaceInputs>) -> crate::engine::l4::effect_query_cli::QueryJob<'_> {
+        crate::engine::l4::effect_query_cli::QueryJob::effects(
+            inputs,
+            "CallEmbeddedSourceDep",
+            "test",
+            true,
+            false,
+        )
+    }
+    for low_mem in [false, true] {
+        let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
+        let ws = dir.path();
+        let s = Arc::new(
+            ResidentSession::new(ws.to_path_buf(), false, "test".into()).with_low_mem(low_mem),
+        );
+        assert_eq!(s.low_mem(), low_mem);
+        let check = |what: &str| {
+            let p = s.pin(Freshness::Fresh, &never).unwrap();
+            let rev = revision(&p);
+            let warm = rev
+                .answer(&query(&rev.inputs), &Control::unreserved())
+                .unwrap();
+            let inputs = WorkspaceInputs::read(ws, &REVISION_READ);
+            let cold = crate::engine::batch::standalone_output(&query(&inputs));
+            assert!(
+                warm.exit == 0,
+                "precondition: {what} answers ({:?})",
+                warm.message()
+            );
+            assert_eq!(warm, cold, "low_mem={low_mem} {what}: warm equals cold");
+            s.last_refresh()
+        };
+        check("first build");
+        edit(ws, "DoWork(3)", "DoWork(4)");
+        let r = check("body edit").expect("a refresh report");
+        assert_eq!(r.class, ChangeClass::BodyOnly);
+        assert_eq!(r.dependency_files_parsed, 0);
+        edit(
+            ws,
+            "    procedure CallEmbeddedSourceDep()",
+            "    procedure Added()\n    begin\n    end;\n\n    procedure CallEmbeddedSourceDep()",
+        );
+        let r = check("declaration edit").expect("a refresh report");
+        assert_eq!(r.class, ChangeClass::Declaration);
+        assert!(r.dependency_bodies_resolved);
+        // The default mode resolves from the tier's trees; low-mem parses
+        // the dependency's one file again.
+        assert_eq!(r.dependency_files_parsed, usize::from(low_mem));
+    }
+}
+
 /// A request that stops before its build begins builds nothing.
 #[test]
 fn a_stopped_request_builds_nothing() {

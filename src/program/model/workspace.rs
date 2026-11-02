@@ -2251,9 +2251,21 @@ fn append_dependency_rows(
     needs: AssemblyNeeds,
     mut cache: Option<&mut super::row_cache::RowCache>,
 ) -> AbiRowIds {
-    let bodies = ctx
-        .dep_bodies()
-        .expect("the cross-app model needs DependencyBodies::Keep");
+    // The build's dependency trees, when it holds them. An `OnDemand` build
+    // that holds none (a session's body-only revision under `--low-mem`)
+    // parses only the files whose kept rows or ids miss (below) when it has
+    // a row cache, and every file when it has none (nothing is kept to
+    // reuse).
+    if ctx.dep_bodies().is_none() {
+        assert!(
+            ctx.profile().dependency_bodies == crate::program::profile::DependencyBodies::OnDemand,
+            "the cross-app model needs DependencyBodies::Keep"
+        );
+        if cache.is_none() {
+            ctx.ensure_dep_bodies();
+        }
+    }
+    let bodies = ctx.dep_bodies();
     let snap = &ctx.snap;
     let mut deps: Vec<&crate::snapshot::AppUnit> = snap
         .apps
@@ -2316,30 +2328,147 @@ fn append_dependency_rows(
         }
     };
 
+    // Each source-bearing dependency's files, in assembly order (units by
+    // package path, files by virtual path), with the tree when the build
+    // holds it.
+    struct DepFile<'a> {
+        virtual_path: &'a String,
+        text: &'a Arc<str>,
+        tree: Option<Arc<al_syntax::ir::AlFile>>,
+    }
+    let mut units: Vec<(&crate::snapshot::AppUnit, Vec<DepFile<'_>>)> = Vec::new();
+    for unit in deps.iter().filter(|u| u.source.is_some()) {
+        let mut files: Vec<DepFile<'_>> = match bodies {
+            Some(bodies) => {
+                let Some(parsed) = bodies.iter().find(|b| b.app == unit.id) else {
+                    continue;
+                };
+                parsed
+                    .files
+                    .iter()
+                    .map(|pf| DepFile {
+                        virtual_path: &pf.virtual_path,
+                        text: &pf.text,
+                        tree: Some(Arc::clone(&pf.file)),
+                    })
+                    .collect()
+            }
+            // The units and files `parse_dep_bodies` would parse.
+            None => unit
+                .source
+                .iter()
+                .flat_map(|s| s.files.iter())
+                .map(|f| DepFile {
+                    virtual_path: &f.virtual_path,
+                    text: &f.text,
+                    tree: None,
+                })
+                .collect(),
+        };
+        files.sort_by(|a, b| a.virtual_path.cmp(b.virtual_path));
+        units.push((unit, files));
+    }
+    // No tree held (`OnDemand`, a body-only revision): parse exactly the
+    // files whose kept routine ids or rows miss (the loop below reads a tree
+    // only for those), in parallel, from the snapshot's text. The text is the
+    // one the snapshot read from the acquired package image, at the stamp the
+    // tier and the cache are keyed by; a tree is `al_syntax::parse` of it.
+    if bodies.is_none() {
+        let c = cache.as_deref().expect("asserted above");
+        let mut need: Vec<(usize, usize)> = Vec::new();
+        // Two files under one key (never seen in a package) would update one
+        // cache entry in turn: both are parsed, so the loop never depends on
+        // the order of those updates.
+        let mut keys: HashMap<(crate::program::node::AppRef, &str), usize> = HashMap::new();
+        for (unit, files) in &units {
+            if let Some(app) = ctx.graph().apps.find(&unit.id) {
+                for pf in files {
+                    *keys.entry((app, pf.virtual_path.as_str())).or_default() += 1;
+                }
+            }
+        }
+        for (ui, (unit, files)) in units.iter().enumerate() {
+            let app = ctx.graph().apps.find(&unit.id);
+            for (fi, pf) in files.iter().enumerate() {
+                let unique = app.is_some_and(|a| keys[&(a, pf.virtual_path.as_str())] == 1);
+                let hit = unique
+                    && match (app, demand) {
+                        (Some(app), Some(d)) => c
+                            .kept_dependency_ids(app, pf.virtual_path, pf.text)
+                            .is_some_and(|ids| {
+                                let population = demanded_population_from_ids(&ids, d);
+                                let no_calls = std::collections::HashSet::new();
+                                let source_unit_id =
+                                    format!("dep:{}:{}", unit.id.guid, pf.virtual_path);
+                                let inputs = super::row_cache::ProjectionInputs {
+                                    text: pf.text,
+                                    population: &population,
+                                    parenless: parenless
+                                        .get(&(app, pf.virtual_path.clone()))
+                                        .unwrap_or(&no_calls),
+                                    file: ctx.file_ix(app, pf.virtual_path),
+                                    needs,
+                                    app_guid: &unit.id.guid,
+                                    source_unit_id: &source_unit_id,
+                                };
+                                c.kept_dependency_rows(&(app, pf.virtual_path.clone()), &inputs)
+                                    .is_some()
+                            }),
+                        // No cache key or no demand: projected from the tree.
+                        _ => false,
+                    };
+                if !hit {
+                    need.push((ui, fi));
+                }
+            }
+        }
+        let parsed: Vec<Arc<al_syntax::ir::AlFile>> = {
+            use rayon::prelude::*;
+            let _s = pt::span("l3", "l3.dependency_reparse");
+            crate::big_stack::big_stack_pool().install(|| {
+                need.par_iter()
+                    .map(|&(ui, fi)| Arc::new(al_syntax::parse(units[ui].1[fi].text)))
+                    .collect()
+            })
+        };
+        let c = cache.as_deref_mut().expect("asserted above");
+        c.last.dependency_parsed = need.len();
+        for (&(ui, fi), tree) in need.iter().zip(parsed) {
+            #[cfg(test)]
+            if let Some(p) = c.probe.as_mut() {
+                p.push(Arc::downgrade(&tree));
+            }
+            units[ui].1[fi].tree = Some(tree);
+        }
+    }
+
     let mut seen: std::collections::HashSet<(crate::program::node::AppRef, String)> =
         std::collections::HashSet::new();
-    for unit in deps.iter().filter(|u| u.source.is_some()) {
-        let Some(parsed) = bodies.iter().find(|b| b.app == unit.id) else {
-            continue;
-        };
+    for (unit, files) in &units {
         let guid = &unit.id.guid;
         let app = ctx.graph().apps.find(&unit.id);
-        let mut files: Vec<&crate::snapshot::parse::ParsedFile> = parsed.files.iter().collect();
-        files.sort_by(|a, b| a.virtual_path.cmp(&b.virtual_path));
         for pf in files {
+            // Read only on a miss; an `OnDemand` build parsed exactly those.
+            let tree = || {
+                pf.tree
+                    .as_ref()
+                    .expect("the dependency file's tree was parsed for its miss")
+            };
             // A session keeps each dependency file's routine ids (a pure
             // function of the app and the parse), so the demanded slice and
             // the rows' nodes are looked up, not hashed again.
             let ids = match (cache.as_deref_mut(), app) {
                 (Some(c), Some(app)) => {
-                    Some(c.dependency_ids(app, pf, || dependency_routine_ids(&pf.file, app)))
+                    Some(c.dependency_ids(app, pf.virtual_path, pf.text, || {
+                        dependency_routine_ids(tree(), app)
+                    }))
                 }
                 _ => None,
             };
             let population = match (demand, app, &ids) {
                 (Some(d), Some(_), Some(ids)) => demanded_population_from_ids(ids, d),
-                (Some(d), Some(app), None) => demanded_population(&pf.file, app, d),
-                _ => whole_file_population(&pf.file),
+                (Some(d), Some(app), None) => demanded_population(tree(), app, d),
+                _ => whole_file_population(tree()),
             };
             let no_calls = std::collections::HashSet::new();
             let calls = app
@@ -2347,11 +2476,10 @@ fn append_dependency_rows(
                 .unwrap_or(&no_calls);
             let source_unit_id = format!("dep:{guid}:{}", pf.virtual_path);
             let inputs = super::row_cache::ProjectionInputs {
-                tree: &pf.file,
-                text: &pf.text,
+                text: pf.text,
                 population: &population,
                 parenless: calls,
-                file: app.and_then(|a| ctx.file_ix(a, &pf.virtual_path)),
+                file: app.and_then(|a| ctx.file_ix(a, pf.virtual_path)),
                 needs,
                 app_guid: guid,
                 source_unit_id: &source_unit_id,
@@ -2379,12 +2507,12 @@ fn append_dependency_rows(
             let positions = match hit {
                 Some(p) => p,
                 None => {
-                    let cols = Utf16Cols::new(&pf.text);
+                    let cols = Utf16Cols::new(pf.text);
                     let project = |into: &mut ModelEntities| {
                         project_ir(
-                            &pf.file,
+                            tree(),
                             &population,
-                            &pf.text,
+                            pf.text,
                             guid,
                             &source_unit_id,
                             &cols,
@@ -2428,7 +2556,7 @@ fn append_dependency_rows(
             node_of.extend(positions.into_iter().map(|(oi, ri)| match &ids {
                 Some(ids) => Some(ids[oi][ri].clone()),
                 None => app.map(|app| {
-                    let o = &pf.file.objects[oi];
+                    let o = &tree().objects[oi];
                     crate::program::sig_fp::source_routine_node_id(
                         dep_object_node_id(app, o),
                         &o.routines[ri],
@@ -2713,7 +2841,6 @@ fn assemble_l3_workspace_from_program(
                     .get(&(ctx.primary_app_ref, pf.virtual_path.clone()))
                     .unwrap_or(&no_calls);
                 let inputs = super::row_cache::ProjectionInputs {
-                    tree: &pf.file,
                     text: &pf.text,
                     population: pop,
                     parenless: calls,
