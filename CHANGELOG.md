@@ -38,6 +38,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (default true), `executable`, `memoryBudget`, `lowMem`, `idleTimeoutSecs`,
   `maxChildren`; read at the first engine request. Output files go to
   `~/.al-sem/lsp-out/<instance>/`.
+- **Measured on CDO** (release-fast, `IssueReminder`, a heavily loaded shared
+  machine): the LSP's RSS 6.0 MiB idle, 8.2 MiB after the first engine
+  request, 8.5 MiB after nine (the engine's memory is the child's: 3.96 GB
+  after the first explain, 4.1–4.3 GB after the warm asks). First explain
+  37–40 s (cold child and build), warm explain 7.7–8.5 s, warm query
+  0.04–0.16 s. Tests `tests/lsp/lsp_engine.rs`: transcript equal to the CLI
+  byte for byte; call hierarchy answered while a 4 s engine request runs;
+  `$/cancelRequest` reaches the engine; `didSave` and the watcher make an
+  answer fresh after a size- and time-preserving edit; the engine starts on
+  the first engine request only. Each with a recorded discrimination proof.
 
 ### Changed (context server)
 
