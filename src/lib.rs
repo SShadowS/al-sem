@@ -52,6 +52,8 @@ pub mod language;
 /// it replaced was deleted at T3 Task 17 (the differential harness that
 /// licensed the deletion, and its CDO evidence, are recorded in CHANGELOG).
 pub mod lsp;
+/// `alsem mcp`: the MCP front end of the context server.
+pub mod mcp;
 pub mod program;
 pub mod protocol;
 /// The AL record-operation table both engines read.
