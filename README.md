@@ -296,9 +296,10 @@ the exact output of the matching `alsem` command, with its exit code. Explain an
 the human card by default (`format: json` for the schema); a digest always goes to a
 file, with a short summary in the answer; any output over 64 KiB goes to a file. Files
 are written only into a private folder the server makes under `--output-root`
-(default `~/.al-sem/mcp-out`). Today each call builds the model afresh, as the command
-would; keeping a built model between calls is the next step and will not change the
-tools.
+(default `~/.al-sem/mcp-out`). The server keeps the built model between calls: the first
+call on a workspace builds it (as the command would), later calls answer from it, and an
+edited file is picked up by an incremental refresh before the next answer. On the CDO
+workspace a repeated `query` answers in about 0.04 s instead of 12 s.
 
 **"What changed between two versions?"**
 

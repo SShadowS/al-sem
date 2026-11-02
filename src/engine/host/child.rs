@@ -163,6 +163,10 @@ pub fn serve(
 ) -> std::io::Result<()> {
     #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
     let hook = super::test_hooks::from_env();
+    #[cfg_attr(
+        not(any(feature = "engine-test-hooks", debug_assertions)),
+        allow(unused_mut)
+    )]
     let mut hello = Hello::of_this_process();
     #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
     match &hook {

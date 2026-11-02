@@ -170,9 +170,10 @@ enum Commands {
     /// `alsem_query_touches`, `alsem_status`, `alsem_refresh`.
     ///
     /// Files go only into a private folder the server creates under
-    /// `--output-root`; a tool's `out` must be inside it. Today each call
-    /// builds the model afresh (a cold run); a resident engine will answer
-    /// later calls from a kept model with no change to this interface.
+    /// `--output-root`; a tool's `out` must be inside it. The engine child
+    /// keeps the built model: the first call on a workspace builds it, later
+    /// calls answer from it, and an edit is picked up by an incremental
+    /// refresh before the next answer (with the default `fresh`).
     ///
     /// Register it with Claude Code:
     /// `claude mcp add alsem -- alsem mcp --workspace <ws>`.
@@ -192,8 +193,9 @@ struct McpCli {
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
 
-    /// The default freshness of a call: fresh | latest-built | verify. Until
-    /// the engine keeps a model, every answer is fresh whatever is asked.
+    /// The default freshness of a call: fresh (refresh first when an input
+    /// changed) | latest-built (answer at once from the last build, marked
+    /// stale, and refresh in the background) | verify (hash every input).
     #[arg(long = "freshness", default_value = "fresh")]
     freshness: String,
 

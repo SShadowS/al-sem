@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (`alsem mcp` help and README described the engine as not yet resident)
+
+- **`alsem mcp --help` and the README said each call builds the model afresh and that
+  every answer is fresh whatever is asked.** Both stopped being true when the resident
+  engine landed (stage 2 completion). They now say the engine keeps the built model,
+  refreshes incrementally on an edit, and describe the three freshness modes. Also
+  silenced the release-only `unused_mut` warning on `hello` in
+  `engine::host::child::serve` (it is mutated only under the test hooks).
+
 ### Measured (context-server stage 2: sequential warm asks through the resident child)
 
 - CDO baseline, release-fast, one `alsem engine-host` driven over the
