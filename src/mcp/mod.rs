@@ -111,6 +111,9 @@ pub struct McpConfig {
     /// Each child's `--memory-budget` (`None`: its universe's default),
     /// capped at `total_budget / max_children`.
     pub memory_budget: Option<u64>,
+    /// Start each child with `--low-mem` (it keeps no dependency tree
+    /// between revisions; its default budget is the low-mem one).
+    pub low_mem: bool,
     /// Each child's `--idle-timeout` in seconds (0: never).
     pub idle_timeout_secs: u64,
     /// The most children alive at once; a call for another workspace or
@@ -132,6 +135,7 @@ impl McpConfig {
             defaults,
             output_root,
             memory_budget: None,
+            low_mem: false,
             idle_timeout_secs: crate::engine::resident::budget::DEFAULT_IDLE_TIMEOUT_SECS,
             max_children: DEFAULT_MAX_CHILDREN,
             total_budget: None,
@@ -142,9 +146,8 @@ impl McpConfig {
     #[must_use]
     pub fn child_budget(&self, universe: tools::Universe) -> u64 {
         use crate::engine::resident::budget as b;
-        let own = self.memory_budget.unwrap_or(match universe {
-            tools::Universe::CrossApp => b::DEFAULT_BUDGET_CROSS_APP,
-            tools::Universe::SingleApp => b::DEFAULT_BUDGET_SINGLE_APP,
+        let own = self.memory_budget.unwrap_or_else(|| {
+            b::default_budget(universe == tools::Universe::SingleApp, self.low_mem)
         });
         match self.total_budget {
             Some(total) => own.min(total / self.max_children.max(1) as u64),

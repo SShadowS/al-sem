@@ -51,6 +51,31 @@ pub const DEFAULT_BUDGET_CROSS_APP: u64 = 6 * GIB;
 /// one-shot peak 0.75-0.9 GB).
 pub const DEFAULT_BUDGET_SINGLE_APP: u64 = 2 * GIB;
 
+/// The default `--memory-budget` of a cross-app child under `--low-mem`: the
+/// same 6 GiB, set by measurement (CDO, 2026-11-02, the four asks then a B,
+/// an S and an S edit, each followed by the four asks). `--low-mem` keeps the
+/// RSS about 1 GB lower (3.7 GB after the four asks, 4.4 GB after the edits,
+/// against 4.7 and 5.4 GB), but a lower budget refuses real work: an S
+/// refresh parses every dependency file again, its observed peak becomes its
+/// estimate, and the retained floor creeps up 0.2-0.3 GB per refresh
+/// (allocator retention). At 4.5 GiB the asks after the first S were refused,
+/// at 5 GiB the second S was refused as impossible; at 6 GiB nothing was
+/// refused or evicted. The saving is headroom (fewer evictions, room under
+/// `--total-budget` for a second child), not a smaller default.
+pub const DEFAULT_BUDGET_CROSS_APP_LOW_MEM: u64 = 6 * GIB;
+
+/// The default `--memory-budget` of a child: by universe, and for a
+/// cross-app child by memory mode (`--low-mem` keeps no dependency tree;
+/// a single-app child never holds one, so the mode changes nothing there).
+#[must_use]
+pub fn default_budget(single_app: bool, low_mem: bool) -> u64 {
+    match (single_app, low_mem) {
+        (true, _) => DEFAULT_BUDGET_SINGLE_APP,
+        (false, false) => DEFAULT_BUDGET_CROSS_APP,
+        (false, true) => DEFAULT_BUDGET_CROSS_APP_LOW_MEM,
+    }
+}
+
 /// The pre-model estimate's floor, cross-app (§4.5).
 pub const ESTIMATE_FLOOR_CROSS_APP: u64 = 3 * GIB / 2;
 

@@ -194,8 +194,7 @@ fn base_ws() -> Ws {
 /// The harness itself: two cold builds of one workspace give the same text
 /// (so a difference below is the session's, not the build's), and the first
 /// refresh is a cold build (P).
-#[test]
-fn first_refresh_is_cold_and_the_texts_are_deterministic() {
+fn first_refresh_is_cold_and_the_texts_are_deterministic(mode: MemoryMode) {
     let ws = base_ws();
     let inputs = ws.inputs();
     let a = ResolvedProgram::build(&inputs, ProgramScope::CrossApp).unwrap();
@@ -208,7 +207,7 @@ fn first_refresh_is_cold_and_the_texts_are_deterministic() {
     let ma = assemble_and_resolve_cross_app_program(&inputs, false, AssemblyNeeds::RULES).unwrap();
     let mb = assemble_and_resolve_cross_app_program(&inputs, false, AssemblyNeeds::RULES).unwrap();
     assert_eq!(model_text(&ma), model_text(&mb));
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     let r = refresh_and_compare(&mut s, &ws, "first refresh");
     assert_eq!(r.class, ChangeClass::Package);
     assert_eq!(r.parsed, 4);
@@ -224,10 +223,9 @@ fn first_refresh_is_cold_and_the_texts_are_deterministic() {
 
 /// T-incr B: a callee's body grows; only its file is parsed and resolved, the
 /// dependency bodies are reused.
-#[test]
-fn body_edit_reuses_every_other_resolution() {
+fn body_edit_reuses_every_other_resolution(mode: MemoryMode) {
     let ws = base_ws();
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     refresh_and_compare(&mut s, &ws, "cold");
     ws.edit(
         "Callee.Codeunit.al",
@@ -267,10 +265,9 @@ fn body_edit_reuses_every_other_resolution() {
 /// T-loc: text inserted before a callee moves its declaration; the unchanged
 /// workspace caller's witness, and the unchanged DEPENDENCY caller's witness to
 /// the workspace implementer, follow it (re-materialized, never stale).
-#[test]
-fn newline_before_a_callee_moves_every_witness() {
+fn newline_before_a_callee_moves_every_witness(mode: MemoryMode) {
     let ws = base_ws();
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     refresh_and_compare(&mut s, &ws, "cold");
     ws.edit(
         "Callee.Codeunit.al",
@@ -294,10 +291,9 @@ fn newline_before_a_callee_moves_every_witness() {
 
 /// T-incr S: a declaration reorder, a signature change and a return-type
 /// change each re-resolve every workspace file and the dependency bodies.
-#[test]
-fn declaration_changes_reresolve_everything() {
+fn declaration_changes_reresolve_everything(mode: MemoryMode) {
     let ws = base_ws();
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     refresh_and_compare(&mut s, &ws, "cold");
     ws.write(
         "Callee.Codeunit.al",
@@ -324,10 +320,9 @@ fn declaration_changes_reresolve_everything() {
 }
 
 /// T-incr F: a file added, removed and renamed (each S).
-#[test]
-fn file_add_remove_rename() {
+fn file_add_remove_rename(mode: MemoryMode) {
     let ws = base_ws();
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     refresh_and_compare(&mut s, &ws, "cold");
     ws.write(
         "Extra.Codeunit.al",
@@ -361,10 +356,9 @@ fn file_add_remove_rename() {
 /// `A` (W) to `B` (D1, which reaches `C`: D2), then removes it (contraction).
 /// The demand is computed whole every revision, from the reused dependency
 /// edges.
-#[test]
-fn demand_expansion_and_contraction() {
+fn demand_expansion_and_contraction(mode: MemoryMode) {
     let ws = base_ws();
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     refresh_and_compare(&mut s, &ws, "cold");
     ws.edit("Caller.Codeunit.al", "        D.A();", "        D.B();");
     let r = refresh_and_compare(&mut s, &ws, "W -> D1 -> D2");
@@ -383,10 +377,9 @@ fn demand_expansion_and_contraction() {
 
 /// The dependency raises an event the workspace subscribes to: a body edit in
 /// the subscriber (B), then a second subscriber (S).
-#[test]
-fn dependency_raiser_and_subscriber_edits() {
+fn dependency_raiser_and_subscriber_edits(mode: MemoryMode) {
     let ws = base_ws();
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     refresh_and_compare(&mut s, &ws, "cold");
     ws.edit(
         "Sub.Codeunit.al",
@@ -412,8 +405,7 @@ fn dependency_raiser_and_subscriber_edits() {
 /// the subscriber's span as its route witness, so the edge changes. Reusing
 /// the previous revision's event-flow edges under B, or recomputing only the
 /// publishers in changed files, would keep the stale span.
-#[test]
-fn event_flow_edge_of_an_unchanged_publisher_moves_under_b() {
+fn event_flow_edge_of_an_unchanged_publisher_moves_under_b(mode: MemoryMode) {
     use crate::program::resolve::edge::EdgeKind;
     let ws = base_ws();
     let edge = |ws: &Ws| {
@@ -429,7 +421,7 @@ fn event_flow_edge_of_an_unchanged_publisher_moves_under_b() {
         assert_eq!(e.len(), 1, "precondition: one edge for the publisher");
         e[0].clone()
     };
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     refresh_and_compare(&mut s, &ws, "cold");
     let before = edge(&ws);
     ws.edit(
@@ -450,15 +442,14 @@ fn event_flow_edge_of_an_unchanged_publisher_moves_under_b() {
 /// Several routines per file and a duplicate id (`#if` arms declare one
 /// procedure twice): a body edit in one arm is B, the duplicate's rows stay
 /// as cold builds them.
-#[test]
-fn duplicate_ids_across_if_arms() {
+fn duplicate_ids_across_if_arms(mode: MemoryMode) {
     let dup = "codeunit 50105 \"Dup\"\n{\n#if A\n    procedure Twice()\n    var\n        C: Codeunit \"Callee\";\n    begin\n        C.Q();\n    end;\n#else\n    procedure Twice()\n    begin\n    end;\n#endif\n\n    procedure Other()\n    begin\n        Twice();\n    end;\n}\n";
     let ws = Ws::new(&[
         ("Callee.Codeunit.al", CALLEE),
         ("Caller.Codeunit.al", CALLER),
         ("Dup.Codeunit.al", dup),
     ]);
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     refresh_and_compare(&mut s, &ws, "cold");
     ws.edit(
         "Dup.Codeunit.al",
@@ -484,13 +475,12 @@ const HOLDER_CALLER: &str = "codeunit 50314 \"H Caller\"\n{\n    procedure Go():
 /// argument X -> Y -> an interface value (unprovable) -> back to X; the
 /// holder's file is unchanged, its pre-refinement resolution reused, and the
 /// refinement rerun every revision.
-#[test]
-fn setter_argument_holder_refinement() {
+fn setter_argument_holder_refinement(mode: MemoryMode) {
     let ws = Ws::new(&[
         ("Holder.Codeunit.al", HOLDER),
         ("HolderCaller.Codeunit.al", HOLDER_CALLER),
     ]);
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     refresh_and_compare(&mut s, &ws, "cold (X)");
     let site = |s: &mut WorkspaceSession| {
         let p = s.refresh_program(&ws.inputs()).unwrap();
@@ -533,10 +523,9 @@ const TEMP_SUB: &str = "codeunit 50892 \"TP Sub\"\n{\n    [EventSubscriber(Objec
 /// The temp proof of an UNCHANGED subscriber is revoked when the raiser's body
 /// passes a physical record (B), and restored when it passes a temporary one
 /// again: the final passes rerun over the whole model every revision.
-#[test]
-fn temp_proof_revocation_in_an_unchanged_subscriber() {
+fn temp_proof_revocation_in_an_unchanged_subscriber(mode: MemoryMode) {
     let ws = Ws::new(&[("Pub.Codeunit.al", TEMP_PUB), ("Sub.Codeunit.al", TEMP_SUB)]);
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     refresh_and_compare(&mut s, &ws, "cold (proven)");
     let proven = |s: &mut WorkspaceSession| {
         let inputs = ws.inputs();
@@ -582,15 +571,14 @@ fn temp_proof_revocation_in_an_unchanged_subscriber() {
 /// the cold output of an UNCHANGED caller that calls by method id
 /// (`__alsem_mid_<n>`): were it classified B, the caller's reused resolution
 /// would be stale.
-#[test]
-fn method_id_change_through_a_synthesized_dispatch() {
+fn method_id_change_through_a_synthesized_dispatch(mode: MemoryMode) {
     let lib = "codeunit 50120 \"Mid Lib\"\n{\n    [MethodId(42)]\n    procedure P()\n    begin\n    end;\n}\n";
     let caller = "codeunit 50121 \"Mid Caller\"\n{\n    procedure Go()\n    var\n        L: Codeunit \"Mid Lib\";\n    begin\n        L.\"__alsem_mid_42\"();\n    end;\n}\n";
     let ws = Ws::new(&[
         ("MidLib.Codeunit.al", lib),
         ("MidCaller.Codeunit.al", caller),
     ]);
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     refresh_and_compare(&mut s, &ws, "cold");
     let resolved_to_p = |ws: &Ws| {
         let p = ResolvedProgram::build(&ws.inputs(), ProgramScope::CrossApp).unwrap();
@@ -624,14 +612,13 @@ const ENUM_USE: &str = "codeunit 50133 \"EI Use\"\n{\n    procedure Go(K: Enum \
 
 /// An enum's extensibility and implementation map (S) close or open an
 /// unchanged caller's interface dispatch.
-#[test]
-fn enum_extensibility_and_impls() {
+fn enum_extensibility_and_impls(mode: MemoryMode) {
     let ws = Ws::new(&[
         ("Shapes.al", ENUM_I),
         ("Kind.Enum.al", ENUM_E),
         ("Use.Codeunit.al", ENUM_USE),
     ]);
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     refresh_and_compare(&mut s, &ws, "cold (closed)");
     ws.edit("Kind.Enum.al", "Extensible = false;", "Extensible = true;");
     let r = refresh_and_compare(&mut s, &ws, "extensible");
@@ -645,10 +632,9 @@ fn enum_extensibility_and_impls() {
 /// P: the dependency package changes (a new procedure); the session rebuilds.
 /// A `roots.config.json` change alone is B with nothing re-resolved, and the
 /// model reads the new config.
-#[test]
-fn package_change_rebuilds_and_roots_config_is_b() {
+fn package_change_rebuilds_and_roots_config_is_b(mode: MemoryMode) {
     let ws = base_ws();
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     refresh_and_compare(&mut s, &ws, "cold");
     // The stamp is taken from mtime and length: a longer package.
     let lib2 = DEP_LIB.replace(
@@ -672,10 +658,9 @@ fn package_change_rebuilds_and_roots_config_is_b() {
 
 /// The root `app.json` is a P input: any change rebuilds (A-S is taken
 /// conservatively as P in this prefix).
-#[test]
-fn app_json_change_is_p() {
+fn app_json_change_is_p(mode: MemoryMode) {
     let ws = base_ws();
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     refresh_and_compare(&mut s, &ws, "cold");
     let app = std::fs::read_to_string(ws.root.join("app.json")).unwrap();
     std::fs::write(
@@ -695,8 +680,7 @@ fn app_json_change_is_p() {
 /// is loaded): naming an unloaded friend reopens an UNCHANGED caller's
 /// dispatch. Taken as P, the caller is resolved again; were it B, its reused
 /// resolution would keep the closed site.
-#[test]
-fn app_json_friend_reopens_an_internal_interface() {
+fn app_json_friend_reopens_an_internal_interface(mode: MemoryMode) {
     let i = "interface \"G28 I\"\n{\n    Access = Internal;\n    procedure M();\n}\ncodeunit 50140 \"G28 Impl\" implements \"G28 I\"\n{\n    procedure M()\n    begin\n    end;\n}\n";
     let use_ = "codeunit 50141 \"G28 Use\"\n{\n    procedure Go(X: Interface \"G28 I\")\n    begin\n        X.M();\n    end;\n}\n";
     let ws = Ws::new(&[("G28.al", i), ("Use.Codeunit.al", use_)]);
@@ -711,7 +695,7 @@ fn app_json_friend_reopens_an_internal_interface() {
         closed(&ws),
         "precondition: the internal interface is closed"
     );
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     refresh_and_compare(&mut s, &ws, "cold (closed)");
     let app = std::fs::read_to_string(ws.root.join("app.json")).unwrap();
     std::fs::write(
@@ -870,10 +854,9 @@ fn abi_routine_rows(x: &CrossAppProgram) -> usize {
 /// across B and S, and reprojected when the assembly needs change (a
 /// symbol-only row's `rule_drafts` / `card_text` follow the needs). Every
 /// step equals cold.
-#[test]
-fn abi_block_is_reused_while_its_inputs_hold() {
+fn abi_block_is_reused_while_its_inputs_hold(mode: MemoryMode) {
     let ws = ws_with_symbol_only_dependency();
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     let r = refresh_and_compare(&mut s, &ws, "cold");
     assert!(!rows(&r).abi_reused, "the first assembly builds the block");
     let inputs = ws.inputs();
@@ -923,11 +906,10 @@ fn abi_block_is_reused_while_its_inputs_hold() {
 /// not in its key; a changed symbol-only package is P, and the session drops
 /// its kept rows with the rest of its retained state, so the block is built
 /// again from the new package.
-#[test]
-fn symbol_only_package_change_rebuilds_the_abi_block() {
+fn symbol_only_package_change_rebuilds_the_abi_block(mode: MemoryMode) {
     use crate::engine::deps::app_package_zip::test_apps;
     let ws = ws_with_symbol_only_dependency();
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     refresh_and_compare(&mut s, &ws, "cold");
     let more = SYM_SYMBOLS.replace(
         r#"{"Name":"S","Id":1}"#,
@@ -955,8 +937,7 @@ fn symbol_only_package_change_rebuilds_the_abi_block() {
 /// while `Val` declares a procedure `V`; renaming it (S) leaves the file's
 /// text and parse as they were but drops the read from the program's
 /// parens-less calls, so the file's kept rows must not be reused.
-#[test]
-fn parenless_calls_of_an_unchanged_file_change_under_s() {
+fn parenless_calls_of_an_unchanged_file_change_under_s(mode: MemoryMode) {
     let val = "codeunit 50109 \"Val\"\n{\n    procedure V(): Integer\n    begin\n        exit(1);\n    end;\n}\n";
     let reader = "codeunit 50107 \"Reader\"\n{\n    procedure Go()\n    var\n        L: Codeunit \"Val\";\n        N: Integer;\n    begin\n        N := L.V;\n    end;\n}\n";
     let ws = Ws::new(&[("Val.Codeunit.al", val), ("Reader.Codeunit.al", reader)]);
@@ -974,7 +955,7 @@ fn parenless_calls_of_an_unchanged_file_change_under_s() {
         1,
         "precondition: `L.V` is a parens-less call"
     );
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     refresh_and_compare(&mut s, &ws, "cold");
     ws.edit("Val.Codeunit.al", "    procedure V()", "    procedure V2()");
     assert_eq!(parenless(&ws), 0, "precondition: the rename drops the call");
@@ -996,10 +977,9 @@ fn parenless_calls_of_an_unchanged_file_change_under_s() {
 /// one thing `project_ir` writes the index into), never with the old one, and
 /// the dependency files' rows (numbered after the workspace's) likewise.
 /// Equal to cold at each step.
-#[test]
-fn file_ix_shift_restamps_later_files() {
+fn file_ix_shift_restamps_later_files(mode: MemoryMode) {
     let ws = base_ws();
-    let mut s = WorkspaceSession::new();
+    let mut s = WorkspaceSession::with_mode(mode);
     refresh_and_compare(&mut s, &ws, "cold");
     let ix = |ws: &Ws, path: &str| {
         let p = ResolvedProgram::build(&ws.inputs(), ProgramScope::CrossApp).unwrap();
@@ -1029,3 +1009,140 @@ fn file_ix_shift_restamps_later_files() {
     let r = refresh_and_compare(&mut s, &ws, "file removed");
     assert_eq!(rows(&r).workspace_projected, 0);
 }
+
+/// The dependency files of [`base_ws`]'s package (`DepI`, `DepCaller`,
+/// `DepLib`).
+const DEP_FILES: usize = 3;
+
+/// One refresh as `refresh_and_compare`, keeping the session's model alive
+/// while the probe is read: how many probed dependency trees exist, and how
+/// many are still alive with the revision's model held.
+fn refresh_holding_the_model(
+    s: &mut WorkspaceSession,
+    ws: &Ws,
+    what: &str,
+) -> (RefreshReport, usize) {
+    let r = refresh_and_compare(s, ws, what);
+    let inputs = ws.inputs();
+    let program = s.refresh_program(&inputs);
+    let model = s
+        .refresh_model(program, &inputs, false, AssemblyNeeds::RULES)
+        .expect("session model");
+    let (_, alive) = s.probed_dependency_trees();
+    drop(model);
+    (r, alive)
+}
+
+/// `--low-mem` (context-server design §7): the session holds no dependency
+/// tree between revisions, not even while a revision's model is alive, and
+/// still answers every case cold-equal. P parses every dependency file (the
+/// tier is built from that parse), S parses every one again (every body is
+/// re-resolved), B parses none, a demand expansion parses exactly the file
+/// whose demanded rows changed, and evicted rows are projected again from a
+/// fresh parse. The default mode, probed the same way, holds them (so the
+/// probe can see a retained tree).
+fn low_mem_retains_no_dependency_tree(mode: MemoryMode) {
+    let low = mode == MemoryMode::LowMem;
+    let ws = base_ws();
+    let mut s = WorkspaceSession::with_mode(mode);
+    s.probe_dependency_trees();
+    let (r, alive) = refresh_holding_the_model(&mut s, &ws, "cold");
+    assert_eq!(r.class, ChangeClass::Package);
+    assert_eq!(r.dependency_files_parsed, DEP_FILES);
+    let (seen, _) = s.probed_dependency_trees();
+    assert!(seen >= DEP_FILES, "precondition: the probe saw the trees");
+    if !low {
+        assert!(alive >= DEP_FILES, "the default mode keeps the trees");
+        return;
+    }
+    assert_eq!(alive, 0, "P: no dependency tree outlives the build");
+
+    // B: nothing parsed, every dependency row reused.
+    ws.edit(
+        "Callee.Codeunit.al",
+        "        exit(X);",
+        "        X += 1;\n        exit(X);",
+    );
+    let (r, alive) = refresh_holding_the_model(&mut s, &ws, "body edit");
+    assert_eq!(r.class, ChangeClass::BodyOnly);
+    assert_eq!(r.dependency_files_parsed, 0);
+    assert_eq!(rows(&r).dependency_parsed, 0);
+    assert_eq!(rows(&r).dependency_projected, 0);
+    assert_eq!(alive, 0);
+
+    // B with a demand expansion (W -> D1 -> D2): only `DepLib`'s demanded
+    // routines change, so only it is parsed and projected again.
+    ws.edit("Caller.Codeunit.al", "        D.A();", "        D.B();");
+    let (r, alive) = refresh_holding_the_model(&mut s, &ws, "demand expansion");
+    assert_eq!(r.class, ChangeClass::BodyOnly);
+    assert_eq!(r.dependency_files_parsed, 0);
+    assert_eq!(
+        (rows(&r).dependency_parsed, rows(&r).dependency_projected),
+        (1, 1)
+    );
+    assert_eq!(alive, 0);
+
+    // S: every dependency body re-resolved, so every file parsed again; the
+    // rows, keyed by text, are reused.
+    ws.edit("Callee.Codeunit.al", "P(X: Integer)", "P(X: Decimal)");
+    let (r, alive) = refresh_holding_the_model(&mut s, &ws, "signature");
+    assert_eq!(r.class, ChangeClass::Declaration);
+    assert!(r.dependency_bodies_resolved);
+    assert_eq!(r.dependency_files_parsed, DEP_FILES);
+    assert_eq!(rows(&r).dependency_parsed, 0, "the build holds the trees");
+    assert_eq!(alive, 0);
+
+    // The rows evicted (§7): the next B parses and projects every file.
+    assert_eq!(s.evict_dependency_rows(), DEP_FILES);
+    let (r, alive) = refresh_holding_the_model(&mut s, &ws, "after eviction");
+    assert_eq!(r.class, ChangeClass::BodyOnly);
+    assert_eq!(
+        (rows(&r).dependency_parsed, rows(&r).dependency_projected),
+        (DEP_FILES, DEP_FILES)
+    );
+    assert_eq!(alive, 0);
+}
+
+/// Every session test above, in both memory modes: each step's program and
+/// model equal a cold build of the same inputs whichever mode the session
+/// keeps (`--low-mem` re-parses what the default keeps).
+macro_rules! in_both_modes {
+    ($($name:ident),* $(,)?) => {
+        mod default_mode {
+            $(#[test]
+            fn $name() {
+                super::$name(super::MemoryMode::Default);
+            })*
+        }
+        mod low_mem {
+            $(#[test]
+            fn $name() {
+                super::$name(super::MemoryMode::LowMem);
+            })*
+        }
+    };
+}
+
+in_both_modes!(
+    first_refresh_is_cold_and_the_texts_are_deterministic,
+    body_edit_reuses_every_other_resolution,
+    newline_before_a_callee_moves_every_witness,
+    declaration_changes_reresolve_everything,
+    file_add_remove_rename,
+    demand_expansion_and_contraction,
+    dependency_raiser_and_subscriber_edits,
+    event_flow_edge_of_an_unchanged_publisher_moves_under_b,
+    duplicate_ids_across_if_arms,
+    setter_argument_holder_refinement,
+    temp_proof_revocation_in_an_unchanged_subscriber,
+    method_id_change_through_a_synthesized_dispatch,
+    enum_extensibility_and_impls,
+    package_change_rebuilds_and_roots_config_is_b,
+    app_json_change_is_p,
+    app_json_friend_reopens_an_internal_interface,
+    abi_block_is_reused_while_its_inputs_hold,
+    symbol_only_package_change_rebuilds_the_abi_block,
+    parenless_calls_of_an_unchanged_file_change_under_s,
+    file_ix_shift_restamps_later_files,
+    low_mem_retains_no_dependency_tree,
+);

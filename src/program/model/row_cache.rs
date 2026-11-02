@@ -9,10 +9,12 @@
 //! writes record types, merged fields and root classifications into the
 //! model's own copy), with every input they were projected from:
 //!
-//! - the parse (`Arc<AlFile>`, compared by identity: the session reuses a
-//!   tree only for byte-equal text, and a dependency's tree belongs to the
-//!   tier, which lives as long as `DepKey` is unchanged) and the text (by
-//!   bytes, unless it is the same allocation);
+//! - the text (by bytes, unless it is the same allocation), which stands
+//!   for the parse: a tree is `al_syntax::parse` of the text and nothing
+//!   else, so equal text is an equal tree. No tree is kept here: a session
+//!   that holds no dependency tree between revisions (`--low-mem`,
+//!   `DependencyBodies::OnDemand`) parses again only the files whose rows
+//!   miss, and a reused row never needs its tree;
 //! - the population (which objects and routines are projected: the program
 //!   graph's physical rows for a workspace file, the demanded slice for a
 //!   dependency file), the file's parens-less calls, the assembly needs, the
@@ -46,9 +48,8 @@ use crate::program::node::{AppRef, RoutineNodeId};
 use crate::program::site_key::FileIx;
 
 /// Everything `project_ir` reads for one file, borrowed from the current
-/// revision.
+/// revision. Its tree is the text's parse (see the module doc).
 pub(crate) struct ProjectionInputs<'a> {
-    pub(crate) tree: &'a Arc<al_syntax::ir::AlFile>,
     pub(crate) text: &'a Arc<str>,
     pub(crate) population: &'a FilePopulation,
     pub(crate) parenless: &'a HashSet<al_syntax::ir::ExprId>,
@@ -60,7 +61,6 @@ pub(crate) struct ProjectionInputs<'a> {
 
 /// One file's raw rows and the inputs they were projected from.
 pub(crate) struct CachedFile {
-    tree: Arc<al_syntax::ir::AlFile>,
     text: Arc<str>,
     population: FilePopulation,
     parenless: HashSet<al_syntax::ir::ExprId>,
@@ -80,7 +80,6 @@ impl CachedFile {
         positions: Vec<(usize, usize)>,
     ) -> Self {
         CachedFile {
-            tree: Arc::clone(i.tree),
             text: Arc::clone(i.text),
             population: i.population.clone(),
             parenless: i.parenless.clone(),
@@ -97,9 +96,9 @@ impl CachedFile {
     /// what `project_ir` would push for `i`: every input equal but the
     /// `FileIx`, which `project_ir` only writes into each routine row's
     /// `file` (a per-build number: a file added before this one shifts it).
+    /// The text stands for the tree (its parse).
     pub(crate) fn matches(&self, i: &ProjectionInputs<'_>) -> bool {
-        Arc::ptr_eq(&self.tree, i.tree)
-            && (Arc::ptr_eq(&self.text, i.text) || *self.text == **i.text)
+        (Arc::ptr_eq(&self.text, i.text) || *self.text == **i.text)
             && self.population == *i.population
             && self.parenless == *i.parenless
             && self.needs == i.needs
@@ -145,6 +144,12 @@ pub struct RowCacheStats {
     pub dependency_reused: usize,
     /// Whether the ABI block was reused.
     pub abi_reused: bool,
+    /// Dependency files parsed again by this assembly because their rows or
+    /// routine ids missed and the build held no dependency tree
+    /// (`DependencyBodies::OnDemand`, a body-only revision): exactly the
+    /// files projected or whose ids were computed. Always 0 when the build
+    /// holds the trees.
+    pub dependency_parsed: usize,
 }
 
 /// The raw rows kept for the next revision (see the module doc).
@@ -153,43 +158,69 @@ pub struct RowCache {
     pub(crate) workspace: HashMap<String, CachedFile>,
     pub(crate) dependency: HashMap<(AppRef, String), CachedFile>,
     /// Each dependency file's routine ids per object (`dependency_routine_ids`,
-    /// a pure function of the app and the parse), with the parse they were
-    /// built from: the demanded slice and the rows' nodes are looked up.
+    /// a pure function of the app and the parse), with the text they were
+    /// built from (it stands for the parse): the demanded slice and the rows'
+    /// nodes are looked up.
     pub(crate) dependency_ids: HashMap<(AppRef, String), DependencyIds>,
     pub(crate) abi: Option<CachedAbi>,
     pub(crate) last: RowCacheStats,
+    /// Tests only: a `Weak` to every dependency tree an assembly parsed on
+    /// demand (`WorkspaceSession`'s tree probe).
+    #[cfg(test)]
+    pub(crate) probe: Option<Vec<std::sync::Weak<al_syntax::ir::AlFile>>>,
 }
 
-/// One dependency file's routine ids and the parse they belong to.
+/// One dependency file's routine ids and the text they were built from.
 pub(crate) struct DependencyIds {
-    tree: Arc<al_syntax::ir::AlFile>,
+    text: Arc<str>,
     ids: Arc<Vec<Vec<RoutineNodeId>>>,
 }
 
 impl RowCache {
-    /// The routine ids of dependency file `pf` of `app`: the kept ones when
-    /// they were built from this very parse, else `compute()`'s, kept.
+    /// The kept routine ids of dependency file `path` of `app`, when they
+    /// were built from this text. The text check is defensive: a dependency
+    /// text changes only with its package, a P change that drops the whole
+    /// cache (a discrimination break that skips it stays green, 2026-11-02).
+    pub(crate) fn kept_dependency_ids(
+        &self,
+        app: AppRef,
+        path: &str,
+        text: &Arc<str>,
+    ) -> Option<Arc<Vec<Vec<RoutineNodeId>>>> {
+        let d = self.dependency_ids.get(&(app, path.to_string()))?;
+        (Arc::ptr_eq(&d.text, text) || *d.text == **text).then(|| Arc::clone(&d.ids))
+    }
+
+    /// The routine ids of dependency file `path` of `app`: the kept ones when
+    /// they were built from this text, else `compute()`'s, kept.
     pub(crate) fn dependency_ids(
         &mut self,
         app: AppRef,
-        pf: &crate::snapshot::parse::ParsedFile,
+        path: &str,
+        text: &Arc<str>,
         compute: impl FnOnce() -> Vec<Vec<RoutineNodeId>>,
     ) -> Arc<Vec<Vec<RoutineNodeId>>> {
-        let key = (app, pf.virtual_path.clone());
-        if let Some(d) = self.dependency_ids.get(&key)
-            && Arc::ptr_eq(&d.tree, &pf.file)
-        {
-            return Arc::clone(&d.ids);
+        if let Some(ids) = self.kept_dependency_ids(app, path, text) {
+            return ids;
         }
         let ids = Arc::new(compute());
         self.dependency_ids.insert(
-            key,
+            (app, path.to_string()),
             DependencyIds {
-                tree: Arc::clone(&pf.file),
+                text: Arc::clone(text),
                 ids: Arc::clone(&ids),
             },
         );
         ids
+    }
+
+    /// The kept rows of dependency file `key`, when they match `inputs`.
+    pub(crate) fn kept_dependency_rows(
+        &self,
+        key: &(AppRef, String),
+        inputs: &ProjectionInputs<'_>,
+    ) -> Option<&CachedFile> {
+        self.dependency.get(key).filter(|f| f.matches(inputs))
     }
 
     /// What the last assembly through this cache reused.
@@ -210,25 +241,25 @@ impl RowCache {
 
     /// The dependency files' entries split into their parts, for a byte
     /// census (`WorkspaceSession::take_census_parts`): routine rows, the
-    /// other rows, the populations and parens-less sets, then the parses.
+    /// other rows, the populations and parens-less sets, then the texts.
     pub(crate) fn split_dependency_for_census(
         dependency: HashMap<(AppRef, String), CachedFile>,
     ) -> Vec<(&'static str, Box<dyn std::any::Any>)> {
         let mut routines = Vec::new();
         let mut other = Vec::new();
         let mut inputs = Vec::new();
-        let mut parses = Vec::new();
+        let mut texts = Vec::new();
         for (k, f) in dependency {
             routines.push(f.rows.routines);
             other.push((f.rows.objects, f.rows.tables, f.positions));
             inputs.push((k, f.population, f.parenless, f.app_guid, f.source_unit_id));
-            parses.push((f.tree, f.text));
+            texts.push(f.text);
         }
         vec![
             ("rows.dependency.routines", Box::new(routines)),
             ("rows.dependency.objects_tables", Box::new(other)),
             ("rows.dependency.inputs", Box::new(inputs)),
-            ("rows.dependency.parses", Box::new(parses)),
+            ("rows.dependency.texts", Box::new(texts)),
         ]
     }
 }

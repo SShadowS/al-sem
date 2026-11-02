@@ -694,6 +694,8 @@ impl LspSnapshot {
             dep_layer,
             profile: _,
             files: _,
+            dep_trees: _,
+            dep_files_parsed: _,
         } = ctx;
 
         // Locate the ONE primary (workspace) `ParsedUnit` — `snap.apps` is

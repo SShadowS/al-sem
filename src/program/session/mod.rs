@@ -8,4 +8,4 @@
 pub mod classify;
 pub mod workspace;
 
-pub use workspace::{RefreshReport, WorkspaceSession};
+pub use workspace::{MemoryMode, RefreshReport, WorkspaceSession};

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use crate::program::graph::ProgramGraph;
 use crate::program::node::AppRef;
-use crate::snapshot::ParsedUnit;
+use crate::snapshot::{AppId, ParsedUnit};
 
 /// A per-build number for one parsed file of one app.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -53,14 +53,30 @@ impl FileTable {
     /// graph does not know is skipped (as every other per-file table does).
     #[must_use]
     pub fn build(graph: &ProgramGraph, parsed: &[ParsedUnit], dep_bodies: &[ParsedUnit]) -> Self {
+        let units: Vec<(&AppId, Vec<&str>)> = parsed
+            .iter()
+            .chain(dep_bodies)
+            .map(|u| {
+                let paths = u.files.iter().map(|f| f.virtual_path.as_str()).collect();
+                (&u.app, paths)
+            })
+            .collect();
+        Self::build_from(graph, &units)
+    }
+
+    /// [`Self::build`] over each unit's app and file paths, in order: what a
+    /// `DependencyBodies::OnDemand` build numbers from the snapshot's file
+    /// lists, whether or not it holds the trees.
+    #[must_use]
+    pub fn build_from(graph: &ProgramGraph, units: &[(&AppId, Vec<&str>)]) -> Self {
         let mut by_key = HashMap::new();
-        for unit in parsed.iter().chain(dep_bodies) {
-            let Some(app) = graph.apps.find(&unit.app) else {
+        for (app_id, paths) in units {
+            let Some(app) = graph.apps.find(app_id) else {
                 continue;
             };
-            for pf in &unit.files {
+            for path in paths {
                 let next = FileIx(u32::try_from(by_key.len()).expect("fewer than 2^32 files"));
-                by_key.entry((app, pf.virtual_path.clone())).or_insert(next);
+                by_key.entry((app, (*path).to_string())).or_insert(next);
             }
         }
         Self { by_key }

@@ -364,6 +364,9 @@ pub struct ChildStatus {
     /// The idle timeout in seconds (`None`: never).
     #[serde(default)]
     pub idle_timeout_secs: Option<u64>,
+    /// `--low-mem`: the session keeps no dependency tree between revisions.
+    #[serde(default)]
+    pub low_mem: bool,
     /// The private output directory.
     #[serde(default)]
     pub output_dir: Option<PathBuf>,

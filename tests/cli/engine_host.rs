@@ -895,4 +895,31 @@ mod faults {
         assert_eq!(memory["budgetBytes"], 64 * 1024 * 1024);
         assert_eq!(memory["impossible"], 1);
     }
+
+    /// `--low-mem` reaches the child (design §7): its status says so, its
+    /// default budget is the low-mem one, and its answers are the CLI's
+    /// bytes. A child without the flag reports the default mode.
+    #[test]
+    fn a_low_mem_child_says_so_and_answers_the_cli_bytes() {
+        use al_sem::engine::resident::budget::default_budget;
+        let argv = explain_argv();
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let expected = cli(&argv);
+        for low_mem in [false, true] {
+            let mut cfg = FrontConfig::new(ALSEM, ws_explain());
+            if low_mem {
+                cfg.args.push("--low-mem".into());
+            }
+            let mut front = EngineFront::new(cfg).expect("front end");
+            assert_eq!(
+                cli_answer(front.ask(explain()).outcome),
+                expected,
+                "{low_mem}"
+            );
+            let status = front.status().expect("status");
+            assert_eq!(status.low_mem, low_mem);
+            let memory = status.memory.expect("memory status");
+            assert_eq!(memory["budgetBytes"], default_budget(false, low_mem));
+        }
+    }
 }

@@ -64,7 +64,7 @@ fn usage() -> ExitCode {
          \x20      aldump --dump-dependency-source <workspace> <out-dir>\n\
          \x20      aldump --switch-compare <dump-dir-A> <dump-dir-B> [--sample N] [--width N]\n\
          \x20      aldump --snapshot-memory <workspace> [--single-app] [--hash] [--pd-dump <file>]\n\
-         \x20      aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--verify]"
+         \x20      aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--verify] [--low-mem]"
     );
     ExitCode::FAILURE
 }
@@ -89,6 +89,9 @@ fn usage() -> ExitCode {
 /// The chosen file (`--file`, else the median-sized codeunit file with a
 /// procedure body) is restored after each pair, and the session's model
 /// needs are `AssemblyNeeds::BASE` (what a default command builds).
+/// `--low-mem` measures a session that keeps no dependency tree
+/// (`MemoryMode::LowMem`); each line then also counts the dependency files
+/// parsed by the program build and by the model assembly.
 fn session_refresh_cmd(args: &[String]) -> ExitCode {
     use al_sem::program::inputs::WorkspaceInputs;
     use al_sem::program::model::workspace::AssemblyNeeds;
@@ -96,13 +99,14 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
     use serde_json::json;
     use std::path::{Path, PathBuf};
 
-    const USAGE: &str =
-        "usage: aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--verify]";
+    const USAGE: &str = "usage: aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--verify] [--low-mem]";
     let (mut ws, mut file, mut verify) = (None::<PathBuf>, None::<String>, false);
+    let mut mode = al_sem::program::session::MemoryMode::Default;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--verify" => verify = true,
+            "--low-mem" => mode = al_sem::program::session::MemoryMode::LowMem,
             "--file" => file = it.next().cloned(),
             _ if ws.is_none() && !a.starts_with("--") => ws = Some(PathBuf::from(a)),
             _ => {
@@ -191,7 +195,7 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
         .join("SessionProbe.Codeunit.al");
     eprintln!("aldump --session-refresh: editing {}", target.display());
 
-    let mut session = WorkspaceSession::new();
+    let mut session = WorkspaceSession::with_mode(mode);
     let mut failed = false;
     let mut step = |name: &str, session: &mut WorkspaceSession| {
         let inputs = WorkspaceInputs::read(&ws, &Default::default());
@@ -208,6 +212,7 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
             row["parsed"] = json!(r.parsed);
             row["resolved"] = json!(r.resolved);
             row["dependencyBodiesResolved"] = json!(r.dependency_bodies_resolved);
+            row["dependencyFilesParsed"] = json!(r.dependency_files_parsed);
             row["copiedBytes"] = json!(r.copied_bytes);
             row["programMs"] = json!(r.program_ms);
             row["refreshMs"] = json!(r.wall_ms);
@@ -217,6 +222,7 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
                     "workspaceReused": rows.workspace_reused,
                     "dependencyProjected": rows.dependency_projected,
                     "dependencyReused": rows.dependency_reused,
+                    "dependencyParsed": rows.dependency_parsed,
                     "abiReused": rows.abi_reused,
                 });
             }

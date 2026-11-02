@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (context server: `--low-mem`, no dependency syntax trees kept between revisions)
+
+- **Owner decision (2026-11-02):** the default keeps everything (fastest); about
+  4.6 GB resident on CDO is the accepted default target, replacing the design's
+  3 GB. `--low-mem` is the opt-in for less memory.
+- `alsem engine-host --low-mem` and `alsem mcp --low-mem` (passed to each
+  child): the cross-app workspace session builds with the new profile
+  `BuildProfile::ON_DEMAND` (`DependencyBodies::OnDemand`). The dependency tier
+  keeps no syntax tree (it is the `Summary` tier and shares its `DepKey`); a
+  build's own context holds the trees only when it parsed them, and they die
+  with it. The session keeps each source-bearing dependency's extracted text
+  instead (the list the snapshot shares, so the next snapshot reads the same
+  text from the session's `DepCache` at the same `.app` stamp).
+  What is parsed when: **P** parses every dependency file (the tier is built
+  from that parse, as before); **S** parses every one again
+  (`ProgramContext::ensure_dep_bodies`), because every dependency body is
+  re-resolved; **B** parses none, except the files whose kept rows or routine
+  ids miss in the model assembly (a demand expansion, changed assembly needs,
+  rows evicted), which are parsed in parallel and only those. Single-app
+  children hold no dependency tree either way. `status` reports `lowMem`.
+- The row cache keys a file's rows and a dependency file's routine ids on the
+  **text** (a tree is `al_syntax::parse` of its text and nothing else) instead
+  of the tree's identity, so it holds no tree; equal answers in both modes.
+  On-demand file numbering (`FileTable::build_from`) comes from the
+  snapshot's file lists, in `parse_dep_bodies`' order.
+- `aldump --session-refresh --low-mem`; `census-probe resident <ws> [routine]
+  --low-mem`; `RefreshReport.dependency_files_parsed` and
+  `RowCacheStats.dependency_parsed` count the re-parses.
+- Measured on CDO (release-fast, `IssueReminder`, one child over the protocol):
+  RSS after query, explain, prove, digest **3.72 GB** low-mem against **4.70 GB**
+  default (retained floor 2.95-2.97 against 3.90-3.91 GB), peak 4.56 against
+  5.56 GB; live heap (census-probe) 2,903 against 3,711 MiB (the dependency
+  trees were 925 MiB, of which 117 MiB text, now kept alone). Warm asks
+  unchanged (query 0.04 s, explain 6.3-6.4 s, prove 6.1-6.3 s, digest
+  5.4-5.7 s, both modes). Refresh per change type (`aldump --session-refresh
+  --verify` on a copy, every step equal to cold): B **2.29-2.37 s** low-mem
+  against 2.52-2.86 s default (low-mem extracts no dependency text again);
+  S/F **8.0-8.5 s** against 6.8-7.2 s (+1.2-1.4 s: 10,881 dependency files
+  parsed); P 11.9-12.5 s against 12.3-13.1 s. After a B, an S and an S edit,
+  each followed by the four asks: RSS 4.39 GB low-mem against 5.36 GB default.
+- The low-mem default budget stays **6 GiB**, by measurement: at 4.5 GiB the
+  asks after the first S were refused, at 5 GiB the second S was refused as
+  impossible (the floor creeps 0.2-0.3 GB per refresh in both modes); at 6 GiB
+  nothing was refused or evicted.
+- Tests: every session cold-oracle test runs in both modes
+  (`program::session::workspace::tests::{default_mode,low_mem}`);
+  `low_mem_retains_no_dependency_tree` (a `Weak` probe on every dependency tree
+  a refresh builds or parses: none alive after P, B, a demand expansion, S and
+  an eviction, with the model held; exact parse counts 0 / 1 / all / all); the
+  `ON_DEMAND` profile against `FULL` (report, numbering, dependency body
+  resolution, miss and hit; and on CDO under `cdo-gate`); the resident session
+  answers cold-equal after B and S in both modes; an end-to-end `--low-mem`
+  child. Discrimination: keeping the trees despite the flag fails the probe
+  (6 alive); skipping the demand-expansion re-parse fails three low-mem tests;
+  dropping the text from the row key fails 25 tests in both modes; numbering
+  dependency files in another order fails 21 low-mem tests; skipping the S
+  re-parse fails the resident test. The text check on kept routine ids stays
+  green when broken (a dependency text changes only with a P, which drops the
+  cache): a stated limit.
+
 ### Added (context-server stage 3: admission, eviction, idle children, MCP wiring)
 
 - **Reservation before work** (`engine::resident::budget`): every build, fill and

@@ -127,6 +127,13 @@ pub(crate) fn build_dep_layer_cached(
             && profile.dependency_bodies == crate::program::profile::DependencyBodies::Keep),
         "a Parsed input keeps no dependency bodies; keying it Keep would publish a body-less Keep tier"
     );
+    // Only a `Keep` tier holds trees: an `OnDemand` build hands its parse's
+    // trees to its own context first, and its tier shares the `Summary` key.
+    assert!(
+        !(matches!(&input, DepInput::Built(p) if p.dep_bodies.is_some())
+            && profile.dependency_bodies != crate::program::profile::DependencyBodies::Keep),
+        "only a Keep tier keeps dependency trees; take them out of the parse first"
+    );
     // ── Step 1: intern all app identities (primary included, for AppRef stability) ──
     let mut apps = AppRegistry::default();
     let app_refs: Vec<AppRef> = snap.apps.iter().map(|u| apps.intern(&u.id)).collect();

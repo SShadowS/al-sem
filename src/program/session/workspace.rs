@@ -27,6 +27,22 @@
 //!   are re-resolved; the other files' and the dependency bodies' retained
 //!   resolutions are reused, their source witnesses re-materialized against
 //!   the current declaration surface (§6.5).
+//!
+//! **Memory modes** ([`MemoryMode`], context-server design §7). The default
+//! keeps every dependency tree in the tier (fastest). `LowMem` builds with
+//! `BuildProfile::ON_DEMAND`: the tier keeps no tree, and the session keeps
+//! each source-bearing dependency's extracted text instead (the list the
+//! snapshot shares, so the next snapshot reads the same text and nothing is
+//! extracted again). A revision parses dependency files only where a step
+//! reads their trees: P parses them all (the tier is built from that parse);
+//! S parses them all again (`ProgramContext::ensure_dep_bodies`) because every
+//! dependency body is re-resolved; B parses none, except the files whose kept
+//! rows or routine ids miss in the model assembly (a demand expansion, the
+//! needs changing, the rows evicted), which parses exactly those. The trees
+//! die with the revision's build context. Every answer is the same: a tree is
+//! `al_syntax::parse` of the file's text, and the text is the one the
+//! snapshot read from the acquired package image at the stamp the tier and the
+//! row cache are keyed by (a changed package is P, which drops all of it).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -60,6 +76,35 @@ struct Retained {
     identity: blake3::Hash,
     files: HashMap<String, RetainedFile>,
     dependency: Arc<DependencyBodyResolution>,
+    /// `LowMem` only: each source-bearing dependency's extracted file list
+    /// (texts), as the snapshot held it. Held so the next snapshot shares it
+    /// through the session's `DepCache` (same `.app` stamp) instead of
+    /// extracting the text again, and a file whose tree is needed is parsed
+    /// from it. Empty by default (the tier's trees hold their texts).
+    _dependency_sources: Vec<Arc<Vec<crate::snapshot::embedded::SourceFile>>>,
+}
+
+/// What a workspace session keeps between revisions (context-server design
+/// §7; see the module doc).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MemoryMode {
+    /// Every dependency tree kept in the tier: the fastest refresh.
+    #[default]
+    Default,
+    /// No dependency tree kept between revisions (`--low-mem`): a revision
+    /// parses the dependency files a step needs, from their kept text.
+    LowMem,
+}
+
+impl MemoryMode {
+    /// The build profile of a session in this mode.
+    #[must_use]
+    pub fn profile(self) -> BuildProfile {
+        match self {
+            MemoryMode::Default => BuildProfile::FULL,
+            MemoryMode::LowMem => BuildProfile::ON_DEMAND,
+        }
+    }
 }
 
 /// What one refresh did (the `revision.refresh` record).
@@ -74,6 +119,10 @@ pub struct RefreshReport {
     pub resolved: usize,
     /// Whether the dependency bodies were resolved again.
     pub dependency_bodies_resolved: bool,
+    /// Dependency files the program build parsed (every one on a tier miss;
+    /// under `LowMem` also every one for an S re-resolution). The model
+    /// assembly's own re-parses are in `rows.dependency_parsed`.
+    pub dependency_files_parsed: usize,
     /// Under B: whether the reused dependency edges had to be copied (a
     /// witness into a moved workspace declaration changed); otherwise they
     /// are shared with the previous revision.
@@ -93,12 +142,17 @@ pub struct RefreshReport {
 
 /// The incremental cross-app workspace model.
 pub struct WorkspaceSession {
+    mode: MemoryMode,
     dep_cache: DepCache,
     retained: Option<Retained>,
     /// The raw model rows of the last revision (§6.8 L3/L4); dropped with the
     /// retained state on a P change, so no kept row outlives its packages.
     rows: RowCache,
     last: Option<RefreshReport>,
+    /// Tests only: a `Weak` to every dependency tree a refresh's program
+    /// build held (`probe_dependency_trees`).
+    #[cfg(test)]
+    probe: Option<Vec<std::sync::Weak<al_syntax::ir::AlFile>>>,
 }
 
 impl Default for WorkspaceSession {
@@ -108,14 +162,51 @@ impl Default for WorkspaceSession {
 }
 
 impl WorkspaceSession {
+    /// A session in the default memory mode (every dependency tree kept).
     #[must_use]
     pub fn new() -> Self {
+        Self::with_mode(MemoryMode::Default)
+    }
+
+    /// A session in `mode` (see [`MemoryMode`]).
+    #[must_use]
+    pub fn with_mode(mode: MemoryMode) -> Self {
         WorkspaceSession {
+            mode,
             dep_cache: DepCache::default(),
             retained: None,
             rows: RowCache::default(),
             last: None,
+            #[cfg(test)]
+            probe: None,
         }
+    }
+
+    /// The session's memory mode.
+    #[must_use]
+    pub fn mode(&self) -> MemoryMode {
+        self.mode
+    }
+
+    /// Tests: from now on, record a `Weak` to every dependency tree a refresh
+    /// builds or parses (the program build's and the model assembly's).
+    #[cfg(test)]
+    pub(crate) fn probe_dependency_trees(&mut self) {
+        self.probe = Some(Vec::new());
+        self.rows.probe = Some(Vec::new());
+    }
+
+    /// Tests: how many probed dependency trees there were, and how many are
+    /// still alive (held by anything, anywhere).
+    #[cfg(test)]
+    pub(crate) fn probed_dependency_trees(&self) -> (usize, usize) {
+        let all = self.probe.iter().chain(self.rows.probe.iter()).flatten();
+        let (mut seen, mut alive) = (0, 0);
+        for w in all {
+            seen += 1;
+            alive += usize::from(w.strong_count() > 0);
+        }
+        (seen, alive)
     }
 
     /// What the last refresh did.
@@ -153,6 +244,10 @@ impl WorkspaceSession {
             parts.push(("retained.file_resolutions", Box::new(resolutions)));
             parts.push(("retained.file_trees", Box::new(trees)));
             parts.push(("retained.dependency_resolution", Box::new(r.dependency)));
+            parts.push((
+                "retained.dependency_sources",
+                Box::new(r._dependency_sources),
+            ));
             parts.push(("retained.tier", Box::new(r._tier)));
         }
         parts.push(("dep_cache", Box::new(std::mem::take(&mut self.dep_cache))));
@@ -214,7 +309,7 @@ impl WorkspaceSession {
         use crate::program::resolve::full as f;
         let start = std::time::Instant::now();
         pt::counter_delta("build.program", 1);
-        let profile = BuildProfile::FULL;
+        let profile = self.mode.profile();
         let (snap, load) = {
             let _s = pt::span("preflight", "preflight.snapshot_build");
             (SnapshotBuilder {
@@ -234,7 +329,13 @@ impl WorkspaceSession {
             // P: a full rebuild. The old tier is released; the cache misses on
             // the new key and builds it from the packages.
             self.retained = None;
+            #[cfg(test)]
+            let probe = self.rows.probe.take();
             self.rows = RowCache::default();
+            #[cfg(test)]
+            {
+                self.rows.probe = probe;
+            }
         }
 
         // L0: the parse, reusing the tree of every byte-equal file.
@@ -356,6 +457,7 @@ impl WorkspaceSession {
                     // declaration is an invariant failure; release redoes
                     // the resolution against the current semantics.
                     debug_assert!(false, "a reused dependency witness has no declaration");
+                    ctx.ensure_dep_bodies();
                     let d = {
                         let _s = pt::span("crossapp", "crossapp.resolve_dependency_bodies");
                         ctx.resolve_dependency_bodies()
@@ -365,6 +467,9 @@ impl WorkspaceSession {
                 }
             }
             _ => {
+                // `LowMem` on a tier hit (S): every dependency body is
+                // re-resolved, so every dependency file is parsed again.
+                ctx.ensure_dep_bodies();
                 let d = {
                     let _s = pt::span("crossapp", "crossapp.resolve_dependency_bodies");
                     ctx.resolve_dependency_bodies()
@@ -376,6 +481,26 @@ impl WorkspaceSession {
 
         // What the next revision reuses.
         let tier = Arc::clone(&ctx.dep_layer.dep_nodes);
+        let dependency_files_parsed = ctx.dep_files_parsed();
+        let dependency_sources = match self.mode {
+            MemoryMode::Default => Vec::new(),
+            MemoryMode::LowMem => ctx
+                .snap
+                .apps
+                .iter()
+                .filter(|u| u.id != ctx.snap.workspace_app)
+                .filter_map(|u| u.source.as_ref().map(|s| Arc::clone(&s.files)))
+                .collect(),
+        };
+        #[cfg(test)]
+        if let (Some(p), Some(bodies)) = (self.probe.as_mut(), ctx.dep_bodies()) {
+            p.extend(
+                bodies
+                    .iter()
+                    .flat_map(|u| u.files.iter())
+                    .map(|pf| Arc::downgrade(&pf.file)),
+            );
+        }
         let proj: HashMap<String, DeclProjection> = projections.into_iter().collect();
         let mut files = HashMap::new();
         let trees: HashMap<&str, (&Arc<al_syntax::ir::AlFile>, &Arc<str>)> = ws_files
@@ -410,6 +535,7 @@ impl WorkspaceSession {
             identity,
             files,
             dependency: dependency_arc,
+            _dependency_sources: dependency_sources,
         });
         self.last = Some(RefreshReport {
             class,
@@ -417,6 +543,7 @@ impl WorkspaceSession {
             parsed,
             resolved: resolved_now,
             dependency_bodies_resolved: dependency_resolved,
+            dependency_files_parsed,
             dependency_edges_copied,
             copied_bytes: copied.bytes as u64,
             program_ms: start.elapsed().as_millis(),
