@@ -164,14 +164,20 @@ fn answers_are_byte_identical_to_the_cli() {
             "{argv:?}: inline under the cap"
         );
         assert_eq!(cli_answer(answer.outcome), expected, "{argv:?}");
-        // Over the inline cap: the same bytes, as a file.
+        // Over the inline cap: the same bytes, as a file (off Unix there is
+        // no output directory: inline-only, `faults::without_an_output_
+        // directory_answers_stay_inline`).
         let mut small = ask(argv);
         small.max_inline_bytes = Some(16);
         let answer = front.ask(small);
         let Outcome::Cli { stdout, .. } = &answer.outcome else {
             panic!("{argv:?}: {:?}", answer.outcome)
         };
-        assert!(matches!(stdout, Stdout::File(_)), "{argv:?}: spilled");
+        assert_eq!(
+            matches!(stdout, Stdout::File(_)),
+            cfg!(unix),
+            "{argv:?}: spilled exactly where a directory exists"
+        );
         assert_eq!(cli_answer(answer.outcome), expected, "{argv:?} (file)");
     }
     let stats = front.stats();
@@ -710,6 +716,61 @@ mod faults {
         assert!(stats.peak_frames <= 2, "{stats:?}");
         assert_eq!(stats.failure, None);
         assert_eq!(front.stats().deaths, 0);
+    }
+
+    /// A stray print to the child's standard output (anywhere in the engine)
+    /// lands in its drained stderr, never in the protocol stream: the ask
+    /// answers the CLI's bytes and the child lives (Unix: fd 1 moved onto
+    /// stderr; Windows: the standard output handle moved,
+    /// `child::protocol_stdout`).
+    ///
+    /// DISCRIMINATION (2026-11-02, Linux): leaving fd 1 in place (the
+    /// `dup2(2, 1)` dropped from `protocol_stdout`) fails the ask
+    /// `protocol` ("engine protocol error"): the CLI-bytes assertion panics.
+    #[test]
+    fn a_stray_print_never_reaches_the_protocol_stream() {
+        let argv = explain_argv();
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let expected = cli(&argv);
+        let mut front = hooked("stray-stdout-on-ask");
+        assert_eq!(cli_answer(front.ask(explain()).outcome), expected);
+        assert_eq!(front.stats().deaths, 0);
+        let started = Instant::now();
+        while !front.stderr_tail().contains("a stray print to stdout") {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the print reached stderr: {}",
+                front.stderr_tail()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Inline-only (design §10, Windows fail-closed; the `no-output-dir`
+    /// hook takes that path on any platform): the child makes no output
+    /// directory, and an answer over the ask's inline cap still comes back
+    /// inline with the CLI's bytes (the cap raised to `MAX_INLINE_BYTES`).
+    ///
+    /// DISCRIMINATION (2026-11-02): not raising the cap (`ask_inline_only`
+    /// asking with the request's own params) answers `refusedPath` ("...
+    /// spilling stdout: no output directory on this platform: inline-only"):
+    /// the `Outcome::Cli` pattern panics.
+    #[test]
+    fn without_an_output_directory_answers_stay_inline() {
+        let w = ws_explain();
+        let w = w.to_str().unwrap();
+        let argv = ["query", "touches", w, "--table", "50400", "--deterministic"];
+        let expected = cli(&argv);
+        let mut front = hooked("no-output-dir");
+        let mut small = ask(&argv);
+        small.max_inline_bytes = Some(16);
+        let answer = front.ask(small);
+        let Outcome::Cli { stdout, .. } = &answer.outcome else {
+            panic!("a cli answer: {:?}", answer.outcome)
+        };
+        assert!(matches!(stdout, Stdout::Text(_)), "inline: {stdout:?}");
+        assert_eq!(cli_answer(answer.outcome), expected);
+        assert_eq!(front.status().expect("status").output_dir, None);
     }
 
     /// A child frame that is not JSON kills the child: `protocol`.

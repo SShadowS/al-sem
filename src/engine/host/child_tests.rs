@@ -5,7 +5,9 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use super::*;
-use crate::wire::{FailedOutcome, MESSAGE_INLINE_BYTES};
+use crate::wire::FailedOutcome;
+#[cfg(unix)]
+use crate::wire::MESSAGE_INLINE_BYTES;
 
 /// How a stub answers an ask.
 #[derive(Clone, Copy, Default)]
@@ -266,7 +268,9 @@ fn serve_recovers_at_every_oversize_boundary() {
 
 /// The child bounds its own response: an answer whose message is over 4 KiB
 /// is cut, its whole text in a diagnostic file inside the session's private
-/// instance directory `<outputRoot>/<engineInstanceId>/`.
+/// instance directory `<outputRoot>/<engineInstanceId>/` (Unix: off Unix
+/// there is no directory).
+#[cfg(unix)]
 #[test]
 fn serve_spills_a_long_message_into_the_instance_directory() {
     let dir = tempfile::tempdir().unwrap();
@@ -295,9 +299,50 @@ fn serve_spills_a_long_message_into_the_instance_directory() {
     assert_eq!(std::fs::read_to_string(&f.path).unwrap(), long);
 }
 
+/// Inline-only (no output directory, Windows): a failed spill is answered
+/// `refusedPath` with its cause kept; any other failure, and a CLI answer,
+/// pass unchanged.
+///
+/// DISCRIMINATION (2026-11-02): matching the prefix of another error
+/// (`WireError::Json` in place of `WireError::Spill`) leaves the first
+/// answer `protocol`: the `RefusedPath` assertion fails.
+#[test]
+fn inline_only_refuses_an_undeliverable_answer() {
+    let spill = crate::wire::WireError::Spill("no output directory".into()).to_string();
+    let a = refuse_undeliverable(Answer::new(
+        serde_json::json!(1),
+        Outcome::failed(FailedOutcome::Protocol, &spill),
+        None,
+    ));
+    let Outcome::Failed {
+        outcome, message, ..
+    } = &a.outcome
+    else {
+        panic!("a failed answer")
+    };
+    assert_eq!(*outcome, FailedOutcome::RefusedPath);
+    assert!(
+        message.contains("inline-only") && message.ends_with(&spill),
+        "{message}"
+    );
+    let other = refuse_undeliverable(Answer::new(
+        serde_json::json!(2),
+        Outcome::failed(FailedOutcome::Protocol, "encoding the answer failed"),
+        None,
+    ));
+    assert!(matches!(
+        other.outcome,
+        Outcome::Failed {
+            outcome: FailedOutcome::Protocol,
+            ..
+        }
+    ));
+}
+
 /// A second `session/open` of an open session is refused; the first made
 /// exactly one owner-only instance directory under the output root (the
 /// pre-existing-directory refusal is `output::tests`).
+#[cfg(unix)]
 #[test]
 fn open_makes_one_private_instance_directory() {
     use std::os::unix::fs::PermissionsExt;

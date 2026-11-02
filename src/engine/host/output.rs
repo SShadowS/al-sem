@@ -18,8 +18,10 @@
 //! Threat model (stated in §10): another process running as the same user
 //! can mutate the directory; the contract defends against the child's own
 //! races and other users. **Windows fails closed**: without handle-relative
-//! creation no directory is made, so every spill fails and an answer too
-//! large to inline is a terminal `kind: "failed"` answer.
+//! creation no directory is made, so every spill fails; the child then
+//! answers inline-only (an ask's inline cap raised to
+//! [`crate::wire::MAX_INLINE_BYTES`]; a stdout larger still is answered
+//! `refusedPath`, `child::ask_inline_only`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -46,11 +48,13 @@ struct State {
     next: u64,
 }
 
+#[cfg(unix)]
 fn refused(why: impl Into<String>) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::PermissionDenied, why.into())
 }
 
 /// A leaf name the namespace accepts: one component, no dot names.
+#[cfg(unix)]
 fn leaf(name: &str) -> std::io::Result<std::ffi::CString> {
     if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\0') {
         return Err(refused(format!("'{name}' is not a plain file name")));
@@ -278,6 +282,7 @@ impl OutputDir {
         Ok((dev, ino))
     }
 
+    #[cfg(unix)]
     fn quota(&self, s: &State, adding: u64, replacing: u64) -> std::io::Result<()> {
         if s.bytes - replacing + adding > QUOTA_BYTES {
             return Err(refused(format!(
