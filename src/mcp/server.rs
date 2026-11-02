@@ -81,6 +81,7 @@ enum Incoming {
     },
     Notification {
         method: String,
+        params: Value,
     },
     /// A response to a request of ours (we send none): ignored.
     Response,
@@ -129,6 +130,7 @@ fn classify(frame: &[u8]) -> Incoming {
     match id {
         None => Incoming::Notification {
             method: method.to_string(),
+            params: m.get("params").cloned().unwrap_or(Value::Null),
         },
         Some(_) if !valid_id => Incoming::Invalid(error(
             &null,
@@ -170,6 +172,7 @@ struct Snapshot {
     child: Option<crate::engine::host::ChildStatus>,
     spawns: u64,
     deaths: u64,
+    retired: u64,
     completed: u64,
     last_failure: Option<(FailedOutcome, String)>,
     stderr_tail: String,
@@ -184,11 +187,17 @@ enum Job {
         call: CommandCall,
         progress: Option<Value>,
         queued: Instant,
+        /// Set by the client's `notifications/cancelled`.
+        cancel: Arc<AtomicBool>,
     },
     Refresh {
         id: Value,
         call: EngineCall,
+        cancel: Arc<AtomicBool>,
     },
+    /// End the engine child (the `--max-children` bound): the worker stays,
+    /// and its next job starts a new child.
+    Retire,
 }
 
 /// One engine's worker.
@@ -197,6 +206,8 @@ struct Worker {
     pending: Arc<AtomicUsize>,
     snapshot: Arc<Mutex<Snapshot>>,
     thread: std::thread::JoinHandle<()>,
+    /// When a call was last handed to it (least recently used goes first).
+    last_used: Instant,
 }
 
 /// What every worker shares.
@@ -207,19 +218,38 @@ struct Shared {
     program: PathBuf,
     child_env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
     in_flight: Mutex<HashSet<String>>,
+    /// The cancel flag of every queued or running engine call, by id.
+    cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     closing: AtomicBool,
     protocol: Mutex<&'static str>,
+    /// What the engine children are started with (budget, idle timeout,
+    /// the children bound).
+    children: ChildConfig,
+}
+
+/// The engine children's configuration (design §7).
+#[derive(Clone)]
+struct ChildConfig {
+    cfg_budget: (u64, u64),
+    idle_timeout_secs: u64,
+    max_children: usize,
 }
 
 impl Shared {
     /// A finished request: its id leaves the in-flight set, then its line
     /// goes out.
     fn finish(&self, id: &Value, frame: &[u8]) {
+        self.forget(id);
+        self.out.line(frame);
+    }
+
+    /// A request that ends with no response (cancelled by the client).
+    fn forget(&self, id: &Value) {
         self.in_flight
             .lock()
             .expect("in flight")
             .remove(&id_key(id));
-        self.out.line(frame);
+        self.cancels.lock().expect("cancels").remove(&id_key(id));
     }
 
     fn finish_value(&self, id: &Value, msg: &Value) {
@@ -227,10 +257,7 @@ impl Shared {
             Ok(f) => self.finish(id, &f),
             Err(e) => {
                 log(&format!("a response does not encode: {e}"));
-                self.in_flight
-                    .lock()
-                    .expect("in flight")
-                    .remove(&id_key(id));
+                self.forget(id);
             }
         }
     }
@@ -249,6 +276,14 @@ pub fn serve(
     output: Box<dyn Write + Send>,
 ) -> Result<(), String> {
     let sink = OutputSink::create(&cfg.output_root, &super::output::new_instance_id())?;
+    let children = ChildConfig {
+        cfg_budget: (
+            cfg.child_budget(Universe::CrossApp),
+            cfg.child_budget(Universe::SingleApp),
+        ),
+        idle_timeout_secs: cfg.idle_timeout_secs,
+        max_children: cfg.max_children.max(1),
+    };
     let shared = Arc::new(Shared {
         out: Out(Arc::new(Mutex::new(output))),
         sink,
@@ -256,8 +291,10 @@ pub fn serve(
         program: cfg.program,
         child_env: cfg.child_env,
         in_flight: Mutex::new(HashSet::new()),
+        cancels: Mutex::new(HashMap::new()),
         closing: AtomicBool::new(false),
         protocol: Mutex::new(DEFAULT_PROTOCOL),
+        children,
     });
     let defaults = cfg.defaults;
     let mut state = State::Uninitialized;
@@ -292,13 +329,21 @@ pub fn serve(
                 continue;
             }
             Incoming::Response => continue,
-            Incoming::Notification { method } => {
+            Incoming::Notification { method, params } => {
                 match method.as_str() {
                     "notifications/initialized" if state == State::Initializing => {
                         state = State::Ready;
                     }
+                    // MCP cancellation: a queued call is dropped, a running
+                    // one is sent `session/cancel`; neither is answered (the
+                    // client stopped waiting for it).
                     "notifications/cancelled" => {
-                        log("a cancellation was received; requests run to completion");
+                        if let Some(rid) = params.get("requestId")
+                            && let Some(flag) =
+                                shared.cancels.lock().expect("cancels").get(&id_key(rid))
+                        {
+                            flag.store(true, Ordering::SeqCst);
+                        }
                     }
                     _ => {}
                 }
@@ -408,6 +453,7 @@ fn dispatch(
     call: ToolCall,
     progress: Option<Value>,
 ) {
+    let cancel = Arc::new(AtomicBool::new(false));
     let (key, job) = match call {
         ToolCall::Status(c) => {
             let body = status(shared, workers, &c, defaults);
@@ -422,6 +468,7 @@ fn dispatch(
                 Job::Refresh {
                     id: id.clone(),
                     call: c,
+                    cancel: Arc::clone(&cancel),
                 },
             )
         }
@@ -432,12 +479,60 @@ fn dispatch(
                 call: c,
                 progress,
                 queued: Instant::now(),
+                cancel: Arc::clone(&cancel),
             },
         ),
     };
+    // The children bound (design §7 `--max-children`): a call for an
+    // engine with no child while the bound is reached ends the least
+    // recently used idle child; when every child is busy it is `busy`.
+    // A worker with calls queued is about to have a child, if it has none.
+    let running = |w: &Worker| {
+        w.pending.load(Ordering::SeqCst) > 0 || w.snapshot.lock().expect("snapshot").hello.is_some()
+    };
+    let has_child = workers.get(&key).is_some_and(running);
+    if !has_child {
+        let live: Vec<&Key> = workers
+            .iter()
+            .filter(|(k, w)| **k != key && running(w))
+            .map(|(k, _)| k)
+            .collect();
+        if live.len() >= shared.children.max_children {
+            let idle = live
+                .iter()
+                .filter(|k| workers[**k].pending.load(Ordering::SeqCst) == 0)
+                .min_by_key(|k| workers[**k].last_used)
+                .map(|k| (*k).clone());
+            match idle {
+                Some(k) => {
+                    let w = workers.get(&k).expect("a live worker");
+                    // Marked gone at once: the worker publishes on retiring.
+                    w.snapshot.lock().expect("snapshot").hello = None;
+                    let _ = w.tx.send(Job::Retire);
+                }
+                None => {
+                    let envelope = json!({
+                        "kind": "failed",
+                        "revision": null,
+                        "outcome": FailedOutcome::Busy.as_str(),
+                        "message": format!(
+                            "{} engine children are running (--max-children) and none is idle",
+                            shared.children.max_children
+                        ),
+                        "universe": key.1.as_str(),
+                    });
+                    shared
+                        .out
+                        .send(&result(&id, tool_result(shared, &envelope, true, None)));
+                    return;
+                }
+            }
+        }
+    }
     let worker = workers
         .entry(key.clone())
         .or_insert_with(|| spawn_worker(shared, &key));
+    worker.last_used = Instant::now();
     if worker.pending.load(Ordering::SeqCst) >= WORKER_QUEUE_DEPTH {
         let envelope = json!({
             "kind": "failed",
@@ -456,6 +551,11 @@ fn dispatch(
         .lock()
         .expect("in flight")
         .insert(id_key(&id));
+    shared
+        .cancels
+        .lock()
+        .expect("cancels")
+        .insert(id_key(&id), cancel);
     worker.pending.fetch_add(1, Ordering::SeqCst);
     if worker.tx.send(job).is_err() {
         worker.pending.fetch_sub(1, Ordering::SeqCst);
@@ -489,6 +589,7 @@ fn spawn_worker(shared: &Arc<Shared>, key: &Key) -> Worker {
         pending,
         snapshot,
         thread,
+        last_used: Instant::now(),
     }
 }
 
@@ -507,6 +608,17 @@ fn work(
         Universe::CrossApp => crate::engine::host::Universe::CrossApp,
         Universe::SingleApp => crate::engine::host::Universe::SingleApp,
     };
+    // Its memory budget (its share of --total-budget) and idle timeout.
+    let budget = match key.1 {
+        Universe::CrossApp => shared.children.cfg_budget.0,
+        Universe::SingleApp => shared.children.cfg_budget.1,
+    };
+    cfg.args.extend([
+        "--memory-budget".into(),
+        budget.to_string().into(),
+        "--idle-timeout".into(),
+        shared.children.idle_timeout_secs.to_string().into(),
+    ]);
     let mut front = match EngineFront::new(cfg) {
         Ok(f) => Some(f),
         Err(e) => {
@@ -515,22 +627,44 @@ fn work(
         }
     };
     while let Ok(job) = rx.recv() {
+        if let Job::Retire = job {
+            if let Some(front) = front.as_mut() {
+                front.shutdown();
+                publish(front, snapshot, false);
+            }
+            continue;
+        }
         if shared.closing.load(Ordering::SeqCst) {
             pending.fetch_sub(1, Ordering::SeqCst);
             continue;
         }
         match job {
+            Job::Retire => unreachable!("handled above"),
+            // Cancelled while queued: dropped, unanswered (MCP).
+            Job::Command { id, cancel, .. } | Job::Refresh { id, cancel, .. }
+                if cancel.load(Ordering::SeqCst) =>
+            {
+                pending.fetch_sub(1, Ordering::SeqCst);
+                shared.forget(&id);
+            }
             Job::Command {
                 id,
                 call,
                 progress,
                 queued,
+                cancel,
             } => {
                 snapshot.lock().expect("snapshot").running_tool = Some(call.tool.to_string());
                 let frame = match front.as_mut() {
-                    Some(front) => {
-                        run_command(shared, front, &id, &call, progress.as_ref(), queued)
-                    }
+                    Some(front) => run_command(
+                        shared,
+                        front,
+                        &id,
+                        &call,
+                        progress.as_ref(),
+                        queued,
+                        &cancel,
+                    ),
                     None => encode_or_log(&result(
                         &id,
                         tool_result(
@@ -550,23 +684,50 @@ fn work(
                     publish(front, snapshot, true);
                 }
                 pending.fetch_sub(1, Ordering::SeqCst);
-                shared.finish(&id, &frame);
-            }
-            Job::Refresh { id, call } => {
-                if let Some(front) = front.as_mut() {
-                    front.reset();
-                    publish(front, snapshot, false);
+                if cancel.load(Ordering::SeqCst) {
+                    // Cancelled while it ran: the child stopped it; the
+                    // client is no longer waiting, so nothing is sent.
+                    shared.forget(&id);
+                } else {
+                    shared.finish(&id, &frame);
                 }
+            }
+            Job::Refresh { id, call, cancel } => {
+                // `session/refresh {wait}` (design §8.2): a failed front end
+                // is reset first, then the child brings its revision up to
+                // date with the disk (with `wait`, before answering).
+                let (outcome, is_error) = match front.as_mut() {
+                    Some(front) => {
+                        front.reset();
+                        let r = front.refresh(call.wait);
+                        publish(front, snapshot, false);
+                        match r {
+                            Ok(v) if v.get("error").is_none() => (v, false),
+                            Ok(v) => (v, true),
+                            Err(e) => (json!({"error": e}), true),
+                        }
+                    }
+                    None => (
+                        json!({"error": "the engine front end could not be created"}),
+                        true,
+                    ),
+                };
                 let body = json!({
                     "kind": "refresh",
                     "workspace": call.workspace,
                     "universe": call.universe.as_str(),
                     "waited": call.wait,
-                    "refreshed": front.is_some(),
-                    "note": "every call reads the workspace as it is now (one-shot engine); a refresh only leaves a failed state",
+                    "engine": outcome,
                 });
                 pending.fetch_sub(1, Ordering::SeqCst);
-                shared.finish_value(&id, &result(&id, tool_result(shared, &body, false, None)));
+                if cancel.load(Ordering::SeqCst) {
+                    shared.forget(&id);
+                } else {
+                    shared.finish_value(
+                        &id,
+                        &result(&id, tool_result(shared, &body, is_error, None)),
+                    );
+                }
             }
         }
     }
@@ -605,6 +766,7 @@ fn publish(front: &mut EngineFront, snapshot: &Mutex<Snapshot>, ask_status: bool
     }
     s.spawns = stats.spawns;
     s.deaths = stats.deaths;
+    s.retired = stats.retired;
     s.completed = stats.completed;
     s.last_failure = front.last_failure();
     s.stderr_tail = tail[start..].to_string();
@@ -645,9 +807,13 @@ fn status(
                 "child": s.child.as_ref().map(|c| json!({
                     "asks": c.asks,
                     "workspaceReads": c.workspace_reads,
+                    "revision": c.revision,
+                    "memory": c.memory,
+                    "idleTimeoutSecs": c.idle_timeout_secs,
                 })),
                 "spawns": s.spawns,
                 "deaths": s.deaths,
+                "retired": s.retired,
                 "completed": s.completed,
                 "backoffMs": s.backoff_ms,
                 "lastFailure": s.last_failure.as_ref().map(|(o, m)| json!({"outcome": o.as_str(), "message": m})),
@@ -670,7 +836,13 @@ fn status(
             "defaultFreshness": defaults.freshness.as_str(),
             "outputFolder": shared.sink.instance(),
             "outputBytes": shared.sink.written(),
-            "engineMode": "one-shot",
+            "engineMode": "resident",
+            "maxChildren": shared.children.max_children,
+            "childBudgetBytes": {
+                "crossApp": shared.children.cfg_budget.0,
+                "singleApp": shared.children.cfg_budget.1,
+            },
+            "idleTimeoutSecs": shared.children.idle_timeout_secs,
         },
         "engines": engines,
     })
@@ -843,6 +1015,7 @@ fn run_command(
     call: &CommandCall,
     progress: Option<&Value>,
     queued: Instant,
+    cancel: &AtomicBool,
 ) -> Vec<u8> {
     let queued_ms = queued.elapsed().as_millis();
     let notify = |p: u32, message: &str| {
@@ -857,7 +1030,12 @@ fn run_command(
     notify(0, &format!("{}: asking the engine", call.tool));
     let decisions = shared.decide.decide(&call.argv, call.diff_text.as_deref());
     let started = Instant::now();
-    let answer = front.ask(AskParams {
+    // A client cancellation becomes `session/cancel` for this ask.
+    let mut watch = crate::engine::host::front::Watch {
+        cancel: Some(cancel),
+        progress: None,
+    };
+    let params = AskParams {
         argv: call.argv.clone(),
         diff_text: call.diff_text.clone(),
         decisions,
@@ -870,7 +1048,8 @@ fn run_command(
             tools::Freshness::Verify => crate::engine::resident::session::Freshness::Verify,
         },
         ..AskParams::default()
-    });
+    };
+    let answer = front.ask_with(params, &mut watch);
     let compute_ms = started.elapsed().as_millis();
     let revision = answer.revision.clone();
     let meta = answer.meta.clone();
@@ -1022,7 +1201,8 @@ mod tests {
         assert_eq!(
             req(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#),
             Incoming::Notification {
-                method: "notifications/initialized".into()
+                method: "notifications/initialized".into(),
+                params: Value::Null,
             }
         );
         assert_eq!(

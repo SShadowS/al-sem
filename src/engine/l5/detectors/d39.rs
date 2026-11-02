@@ -206,7 +206,7 @@ pub fn detect_d39(
                 let mut reset_after_call = || {
                     load_point_after(
                         load_points.get(caller, ctx),
-                        caller.statement_tree.as_ref(),
+                        caller.statement_tree.as_deref(),
                         &source_name_lc,
                         binding.source_record_variable_id.as_deref(),
                         &cs.source_anchor,

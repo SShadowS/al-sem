@@ -59,6 +59,11 @@ pub fn lower_file(root: RawNode, source: &str) -> AlFile {
     collect_objects(root, source, &mut ir, &mut issues, &mut objects);
     let comments = collect_comments(root, source);
     attach_docs(&mut objects, &comments, source);
+    // The arenas are push-built; a parse can live as long as a resident
+    // session keeps its dependency tier (context-server stage 3), so it keeps
+    // no spare capacity.
+    ir.shrink_to_fit();
+    crate::ir::exact_size(&mut objects);
     AlFile {
         objects,
         ir,

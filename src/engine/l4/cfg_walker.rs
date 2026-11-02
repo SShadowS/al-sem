@@ -1891,7 +1891,7 @@ mod tests {
             return_type: None,
             call_sites: Vec::new(),
             operation_sites: Vec::new(),
-            statement_tree,
+            statement_tree: statement_tree.map(std::sync::Arc::new),
             loops: Vec::new(),
             file: None,
             site_exprs: Default::default(),

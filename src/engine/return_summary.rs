@@ -922,7 +922,7 @@ mod tests {
             return_type: None,
             call_sites: vec![],
             operation_sites: vec![],
-            statement_tree,
+            statement_tree: statement_tree.map(std::sync::Arc::new),
             loops: vec![],
             file: None,
             site_exprs: Default::default(),

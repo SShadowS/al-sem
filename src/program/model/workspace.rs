@@ -565,7 +565,10 @@ pub struct ModelRoutine {
     /// R3a-2 branch-aware CFG walker (`walkCFG` port) to join role state-sets at
     /// if/case/loop. `None` for opaque / TryFunction / bodyless routines (the
     /// walker then falls back to the straight-line pass, mirroring al-sem).
-    pub statement_tree: Option<crate::program::body::features::PCFNNode>,
+    /// Immutable once projected, so behind an `Arc`: a workspace session's
+    /// kept rows and every revision's model share one tree (context-server
+    /// stage 3).
+    pub statement_tree: Option<std::sync::Arc<crate::program::body::features::PCFNNode>>,
     /// The routine's loops (L2 body-walk output). L2 data that the L3
     /// record-type projection drops, forwarded here for L5 detectors (d4 reads
     /// `routine.features.loops`). Additive — never reaches an R0–R3 golden.
@@ -1850,7 +1853,12 @@ fn project_ir(
                 }
             }
             let operation_sites = std::mem::take(&mut features.operation_sites);
-            let statement_tree = features.statement_tree.take();
+            // A clone is exactly sized (the walk's push-built vectors carry
+            // spare capacity); the shared copy is the tight one.
+            let statement_tree = features
+                .statement_tree
+                .take()
+                .map(|t| std::sync::Arc::new(t.clone()));
             let loops = std::mem::take(&mut features.loops);
             // d19 reads the L2 identifier-reference set (lowercased / sorted /
             // deduped exactly as L2 produced it); d20 reads the unreachable list.
@@ -2398,10 +2406,18 @@ fn append_dependency_rows(
                             ws.tables.extend(rows.tables.iter().cloned());
                             ws.routines.extend(rows.routines.iter().cloned());
                             c.last.dependency_projected += 1;
+                            // The kept copy is a clone: exactly sized, where
+                            // the projection's push-built rows carry spare
+                            // capacity for as long as the session keeps them.
                             c.dependency.insert(
                                 k,
-                                super::row_cache::CachedFile::new(&inputs, rows, positions.clone()),
+                                super::row_cache::CachedFile::new(
+                                    &inputs,
+                                    rows.clone(),
+                                    positions.clone(),
+                                ),
                             );
+                            drop(rows);
                             positions
                         }
                         // The cold assembly projects straight into the model.

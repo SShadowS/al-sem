@@ -124,6 +124,41 @@ impl WorkspaceSession {
         self.last.as_ref()
     }
 
+    /// Drop the dependency files' kept rows (context-server design §7, the
+    /// first eviction): the next refresh projects them again, so it is slower
+    /// and its answer is the same. Returns how many files' rows were dropped.
+    pub fn evict_dependency_rows(&mut self) -> usize {
+        self.rows.evict_dependency()
+    }
+
+    /// The retained parts moved out one at a time, in the order a byte census
+    /// drops them (`tools/census-probe resident`): each part's drop delta is
+    /// the bytes no earlier-dropped part shared with it. Leaves the session
+    /// empty (the next refresh is a P).
+    #[doc(hidden)]
+    pub fn take_census_parts(&mut self) -> Vec<(&'static str, Box<dyn std::any::Any>)> {
+        let mut parts: Vec<(&'static str, Box<dyn std::any::Any>)> = Vec::new();
+        let rows = std::mem::take(&mut self.rows);
+        parts.push(("rows.abi", Box::new(rows.abi)));
+        parts.extend(RowCache::split_dependency_for_census(rows.dependency));
+        parts.push(("rows.dependency_ids", Box::new(rows.dependency_ids)));
+        parts.push(("rows.workspace", Box::new(rows.workspace)));
+        if let Some(r) = self.retained.take() {
+            let mut resolutions = Vec::new();
+            let mut trees = Vec::new();
+            for (_, f) in r.files {
+                resolutions.push(f.resolution);
+                trees.push((f.tree, f.text));
+            }
+            parts.push(("retained.file_resolutions", Box::new(resolutions)));
+            parts.push(("retained.file_trees", Box::new(trees)));
+            parts.push(("retained.dependency_resolution", Box::new(r.dependency)));
+            parts.push(("retained.tier", Box::new(r._tier)));
+        }
+        parts.push(("dep_cache", Box::new(std::mem::take(&mut self.dep_cache))));
+        parts
+    }
+
     /// The next revision's cross-app model from `inputs` (the whole refresh,
     /// under the `revision.refresh` span): the program
     /// ([`Self::refresh_program`]), then the cold model pipeline over it.

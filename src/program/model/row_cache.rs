@@ -197,4 +197,38 @@ impl RowCache {
     pub fn last_stats(&self) -> RowCacheStats {
         self.last
     }
+
+    /// Drop every dependency file's kept rows and routine ids (an eviction,
+    /// context-server design §7: the next assembly projects them again).
+    /// Returns how many files' rows were dropped.
+    pub(crate) fn evict_dependency(&mut self) -> usize {
+        let n = self.dependency.len();
+        self.dependency = HashMap::new();
+        self.dependency_ids = HashMap::new();
+        n
+    }
+
+    /// The dependency files' entries split into their parts, for a byte
+    /// census (`WorkspaceSession::take_census_parts`): routine rows, the
+    /// other rows, the populations and parens-less sets, then the parses.
+    pub(crate) fn split_dependency_for_census(
+        dependency: HashMap<(AppRef, String), CachedFile>,
+    ) -> Vec<(&'static str, Box<dyn std::any::Any>)> {
+        let mut routines = Vec::new();
+        let mut other = Vec::new();
+        let mut inputs = Vec::new();
+        let mut parses = Vec::new();
+        for (k, f) in dependency {
+            routines.push(f.rows.routines);
+            other.push((f.rows.objects, f.rows.tables, f.positions));
+            inputs.push((k, f.population, f.parenless, f.app_guid, f.source_unit_id));
+            parses.push((f.tree, f.text));
+        }
+        vec![
+            ("rows.dependency.routines", Box::new(routines)),
+            ("rows.dependency.objects_tables", Box::new(other)),
+            ("rows.dependency.inputs", Box::new(inputs)),
+            ("rows.dependency.parses", Box::new(parses)),
+        ]
+    }
 }

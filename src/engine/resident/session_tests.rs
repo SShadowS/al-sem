@@ -288,3 +288,246 @@ fn a_stopped_request_builds_nothing() {
     assert_eq!(err, PinError::Stopped(Stop::Deadline));
     assert_eq!(s.stats().builds, 0);
 }
+
+mod budget {
+    //! T-budget (design §4.5, §7, §11): reserve-or-fail, the impossible
+    //! budget, the eviction order, a workload refused before anything is
+    //! read, and recovery after a size-reducing edit.
+
+    use super::*;
+    use crate::engine::resident::budget::{
+        Budget, Case, Estimates, FakeMeter, InputSizes, MIB, Meter,
+    };
+    use crate::engine::resident::store::Guard;
+    use std::sync::atomic::Ordering;
+    use std::sync::{OnceLock, Weak};
+
+    /// One artifact's resident cost under [`FillMeter`].
+    const UNIT: u64 = 1_000;
+
+    /// A meter whose RSS is `base` plus [`UNIT`] per artifact the published
+    /// revision filled and did not evict: a fill leaves `UNIT` resident and
+    /// an eviction frees it, as the real allocator roughly does.
+    struct FillMeter {
+        base: u64,
+        session: OnceLock<Weak<ResidentSession>>,
+    }
+
+    impl Meter for FillMeter {
+        fn rss(&self) -> u64 {
+            let Some(s) = self.session.get().and_then(Weak::upgrade) else {
+                return self.base;
+            };
+            match s.published() {
+                Some(Built::Revision(r)) => {
+                    let fills: u64 = r.fill_counts().values().sum();
+                    self.base + UNIT * fills.saturating_sub(r.stats().evictions)
+                }
+                _ => self.base,
+            }
+        }
+        fn peak(&self) -> u64 {
+            self.rss()
+        }
+        fn reset_peak(&self) {}
+    }
+
+    /// Every case observed at `est`, so the estimates are the test's.
+    fn small_estimates(single_app: bool, est: u64) -> Estimates {
+        let mut e = Estimates::new(single_app);
+        for case in [
+            Case::Cold,
+            Case::Incremental,
+            Case::Trees,
+            Case::Fill("fold"),
+            Case::Fill("l4"),
+            Case::Fill("det"),
+            Case::Fill("run"),
+            Case::Fill("raw"),
+            Case::Fill("rules"),
+            Case::Fill("ordering"),
+        ] {
+            e.observe(case, est);
+        }
+        e
+    }
+
+    /// `job` answered off `rev` the way the child answers it: every fill
+    /// and the trees reserve through the session.
+    fn answer_budgeted(
+        s: &ResidentSession,
+        rev: &Revision,
+        job: &dyn crate::engine::batch::job::Job,
+    ) -> Result<JobOutput, crate::engine::resident::store::PrepareError> {
+        let budget = s.budget().unwrap();
+        let reserve = |kind: &'static str, _: usize| -> Result<Guard<'_>, String> {
+            let case = if kind == "trees" {
+                Case::Trees
+            } else {
+                Case::Fill(kind)
+            };
+            let estimate = budget.estimate(case, InputSizes::default());
+            s.reserve_or_reclaim(budget, case, estimate, 1, &|| false)
+                .map(|r| Box::new(r) as Guard<'_>)
+                .map_err(|f| f.message())
+        };
+        rev.answer(
+            job,
+            &Control {
+                stop: &|| None,
+                reserve: &reserve,
+            },
+        )
+    }
+
+    fn prove<'a>(rev: &'a Revision) -> crate::engine::l5::prove::ProveJob<'a> {
+        crate::engine::l5::prove::ProveJob {
+            detectors: crate::engine::l5::detectors::default_detectors(),
+            inputs: &rev.inputs,
+            routine_selector: "ForwardedAfterValidate",
+            question_text: "may-commit",
+            alsem_ver: "test",
+            deterministic: true,
+            single_app: true,
+            closed_world: false,
+            human: false,
+            out: None,
+        }
+    }
+
+    fn explain(rev: &Revision) -> crate::engine::l5::explain::ExplainJob<'_> {
+        use crate::engine::l5::explain::{ExplainJob, ExplainMode, ExplainRequest};
+        ExplainJob::new(
+            ExplainRequest {
+                inputs: &rev.inputs,
+                mode: ExplainMode::Routines(vec!["ForwardedAfterValidate".into()]),
+                single_app: true,
+            },
+            false,
+            None,
+        )
+    }
+
+    /// Reserve-or-fail with real artifacts: a fill that does not fit
+    /// evicts in the design's order (raw, rows, run, ...) only until it
+    /// fits, never the L4 seed, and its answer is the cold one; a fill that
+    /// cannot fit even above the retained floor fails at once with
+    /// `budget`, evicting nothing.
+    ///
+    /// DISCRIMINATION (2026-11-02): reclaiming L4 first (`"l4"` at the head
+    /// of `EVICTION_ORDER`) fails "L4 is never evicted" (the snapshot after
+    /// explain is `[fold, det, run]`); dropping the impossibility check in
+    /// `reserve_or_reclaim` (`Err(f) if false`) fails the last assertion
+    /// (`impossible` 2, not 1: the refusal went through a needless reclaim
+    /// and was refused again instead of failing at once).
+    #[test]
+    fn a_fill_that_does_not_fit_evicts_in_order_and_an_impossible_one_fails_at_once() {
+        let dir = copy_fixture("tests/r0-corpus/ws-d37");
+        let meter = Arc::new(FillMeter {
+            base: 100 * UNIT,
+            session: OnceLock::new(),
+        });
+        let budget = Arc::new(Budget::new(
+            u64::MAX / 4,
+            meter.clone(),
+            small_estimates(true, 10),
+        ));
+        let s = Arc::new(
+            ResidentSession::new(dir.path().to_path_buf(), true, "test".into())
+                .with_budget(Arc::clone(&budget)),
+        );
+        let _ = meter.session.set(Arc::downgrade(&s));
+        let pinned = s.pin(Freshness::Fresh, &never).unwrap();
+        let rev = revision(&pinned);
+        let cold_prove = crate::engine::batch::standalone_output(&prove(rev));
+        let cold_explain = crate::engine::batch::standalone_output(&explain(rev));
+        assert_eq!(answer_budgeted(&s, rev, &prove(rev)).unwrap(), cold_prove);
+        let kinds =
+            |r: &Revision| -> Vec<&'static str> { r.snapshot().keys().map(|k| k.kind()).collect() };
+        assert!(kinds(rev).contains(&"run") && kinds(rev).contains(&"l4"));
+        // Precondition by assignment: nothing more fits now.
+        let rss = meter.rss();
+        budget.set_budget(rss);
+        assert_eq!(
+            answer_budgeted(&s, rev, &explain(rev)).unwrap(),
+            cold_explain
+        );
+        let after = kinds(rev);
+        assert!(after.contains(&"l4"), "L4 is never evicted: {after:?}");
+        assert!(!after.contains(&"run"), "the run went first: {after:?}");
+        assert!(
+            after.contains(&"det"),
+            "and nothing more than needed: {after:?}"
+        );
+        let st = budget.status();
+        assert_eq!((st.reclaims, st.evicted), (1, 1), "{st:?}");
+        assert!(!st.admission_closed, "admission reopened");
+        // Impossible: the floor (the L4 seed and the base) plus the estimate
+        // exceeds the budget whatever is evicted.
+        s.update_floor();
+        budget.set_budget(budget.retained_floor() + 5);
+        let evictions = rev.stats().evictions;
+        let err = answer_budgeted(&s, rev, &prove(rev)).unwrap_err();
+        assert!(
+            matches!(&err, crate::engine::resident::store::PrepareError::Budget(m)
+                if m.contains("cannot fit above the retained floor")),
+            "{err:?}"
+        );
+        assert_eq!(
+            rev.stats().evictions,
+            evictions,
+            "an impossible fill evicts nothing"
+        );
+        assert_eq!(budget.status().impossible, 1);
+    }
+
+    /// A workload whose pre-model estimate exceeds the budget is refused
+    /// before anything is read (no acquisition, no model); a size-reducing
+    /// edit lowers the estimate and the next request builds.
+    ///
+    /// DISCRIMINATION (2026-11-02): estimating the build from no sizes
+    /// instead of the observed manifest's (`budget.estimate(case,
+    /// Default::default())` in `build_locked`) fails "refused": the padded
+    /// workspace is built (and read) in full.
+    #[test]
+    fn a_workload_over_the_budget_is_refused_before_reading_and_recovers_after_an_edit() {
+        let dir = copy_fixture("tests/r0-corpus/ws-d37");
+        let ws = dir.path();
+        let pad = ws.join("src").join("Padding.al");
+        // 200 KiB of comment: ~200 MiB at 1,000 bytes per `.al` byte.
+        std::fs::write(&pad, "// padding\n".repeat(200 * 1024 / 11)).unwrap();
+        let mut e = Estimates::new(true);
+        e.per_al_byte = 1_000;
+        e.floor = 0;
+        let meter = Arc::new(FakeMeter::default());
+        let budget = Arc::new(Budget::new(100 * MIB, meter, e));
+        let reads = Arc::new(AtomicUsize::new(0));
+        let r = Arc::clone(&reads);
+        let s = Arc::new(
+            ResidentSession::new(ws.to_path_buf(), true, "test".into())
+                .with_budget(Arc::clone(&budget))
+                .with_hook(Box::new(move |point, _| {
+                    if point == BuildPoint::BeforeRead {
+                        r.fetch_add(1, Ordering::SeqCst);
+                    }
+                })),
+        );
+        let err = s.pin(Freshness::Fresh, &never).err().expect("refused");
+        let PinError::Budget(refusal) = err else {
+            panic!("a budget refusal, got {err:?}")
+        };
+        assert!(
+            refusal.impossible && refusal.case == Case::Cold,
+            "{refusal:?}"
+        );
+        assert!(refusal.estimate > 100 * MIB);
+        assert_eq!(reads.load(Ordering::SeqCst), 0, "refused before the read");
+        assert!(s.published().is_none());
+        std::fs::remove_file(&pad).unwrap();
+        let pinned = s
+            .pin(Freshness::Fresh, &never)
+            .expect("recovery after the edit");
+        assert!(pinned.built.revision_id().is_some());
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+    }
+}

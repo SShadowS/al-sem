@@ -1450,7 +1450,7 @@ fn compute_routine_order(r: &ModelRoutine) -> RoutineOrder {
         variables: Vec::new(),
         var_assignments: Vec::new(),
         condition_references: Vec::new(),
-        statement_tree: r.statement_tree.clone(),
+        statement_tree: r.statement_tree.as_deref().cloned(),
         scope_frames: Vec::new(),
     };
     let attr_names_lc = routine_attr_names_lc(r);

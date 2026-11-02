@@ -155,6 +155,23 @@ fn path_text(p: &Path) -> String {
 }
 
 impl Manifest {
+    /// The `.al` and package bytes this manifest names (the pre-model
+    /// estimate's inputs, context-server design §4.5).
+    #[must_use]
+    pub fn input_sizes(&self) -> crate::engine::resident::budget::InputSizes {
+        let mut sizes = crate::engine::resident::budget::InputSizes::default();
+        for (k, v) in &self.entries {
+            if let Ident::Bytes { len, .. } = v {
+                if k.starts_with("al:") {
+                    sizes.al_bytes += len;
+                } else if k.starts_with("pkg:") {
+                    sizes.package_bytes += len;
+                }
+            }
+        }
+        sizes
+    }
+
     /// The identities, by key.
     #[must_use]
     pub fn entries(&self) -> &BTreeMap<String, Ident> {

@@ -151,7 +151,7 @@ enum Commands {
     /// The engine child of a context-server front end (internal): speaks the
     /// engine protocol on stdin/stdout (`al_sem::engine::host`).
     #[command(hide = true, name = "engine-host")]
-    EngineHost,
+    EngineHost(EngineHostCli),
     /// Ask one command through an engine child, as a front end does
     /// (internal): `alsem engine-ask -- <command line>` prints the answer's
     /// exact stdout and stderr and exits with its exit code.
@@ -204,6 +204,55 @@ struct McpCli {
     /// there; folders older than 24 hours are removed at start.
     #[arg(long = "output-root")]
     output_root: Option<String>,
+
+    /// Each engine child's memory budget (bytes, or with K, M or G; default
+    /// 6G cross-app, 2G single-app), capped by what --total-budget leaves.
+    #[arg(long = "memory-budget")]
+    memory_budget: Option<String>,
+
+    /// Seconds an engine child stays with nothing to do before it ends (the
+    /// next call starts a new one, which builds again); 0 never.
+    #[arg(long = "idle-timeout", default_value_t = al_sem::engine::resident::budget::DEFAULT_IDLE_TIMEOUT_SECS)]
+    idle_timeout: u64,
+
+    /// The most engine children alive at once (one per workspace and
+    /// universe); a call for another ends the least recently used idle one.
+    #[arg(long = "max-children", default_value_t = al_sem::mcp::DEFAULT_MAX_CHILDREN)]
+    max_children: usize,
+
+    /// The memory all engine children may budget together (bytes, or with
+    /// K, M or G); default: --max-children times the per-child budget.
+    #[arg(long = "total-budget")]
+    total_budget: Option<String>,
+}
+
+/// `EngineHostCli` — arguments for `alsem engine-host` (context-server
+/// design §7).
+#[derive(Parser)]
+struct EngineHostCli {
+    /// The memory budget (bytes, or with K, M or G): every build, fill and
+    /// request's trees reserve their estimated peak first, and evict or
+    /// refuse (`budget`) when it does not fit. Default 6G cross-app, 2G
+    /// single-app.
+    #[arg(long = "memory-budget")]
+    memory_budget: Option<String>,
+
+    /// End after this many seconds with no request and no work (the front
+    /// end starts a new child on its next request); 0 never ends.
+    #[arg(long = "idle-timeout", default_value_t = al_sem::engine::resident::budget::DEFAULT_IDLE_TIMEOUT_SECS)]
+    idle_timeout: u64,
+
+    /// Test override of the grace after the idle notice (milliseconds).
+    #[arg(long = "idle-grace-ms", hide = true)]
+    idle_grace_ms: Option<u64>,
+
+    /// Test override of the pre-model estimate's bytes per `.al` byte.
+    #[arg(long = "estimate-per-al-byte", hide = true)]
+    estimate_per_al_byte: Option<u64>,
+
+    /// Test override of the pre-model estimate's floor (bytes).
+    #[arg(long = "estimate-floor", hide = true)]
+    estimate_floor: Option<u64>,
 }
 
 /// `EngineAskCli` — arguments for `alsem engine-ask`.
@@ -929,7 +978,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let code = match cli.command {
         Commands::Batch(b) => run_batch_cmd(b),
-        Commands::EngineHost => engine::run_engine_host(),
+        Commands::EngineHost(h) => engine::run_engine_host(h),
         Commands::EngineAsk(a) => engine::run_engine_ask(a),
         Commands::Mcp(m) => engine::run_mcp(m),
         Commands::Policy(PolicyCli {
@@ -1145,7 +1194,7 @@ fn plan_command(command: Commands, in_batch: bool, cx: &PlanCx) -> Planned {
         Commands::Graph(g) => plan_graph(g),
         Commands::Cache(_)
         | Commands::Batch(_)
-        | Commands::EngineHost
+        | Commands::EngineHost(_)
         | Commands::EngineAsk(_)
         | Commands::Mcp(_) => {
             unreachable!("no job")
@@ -1159,7 +1208,7 @@ fn plan_command(command: Commands, in_batch: bool, cx: &PlanCx) -> Planned {
 fn refused(command: &Commands) -> Option<&'static str> {
     match command {
         Commands::Batch(_) => Some("batch"),
-        Commands::EngineHost => Some("engine-host"),
+        Commands::EngineHost(_) => Some("engine-host"),
         Commands::EngineAsk(_) => Some("engine-ask"),
         Commands::Mcp(_) => Some("mcp"),
         Commands::Cache(_) => Some("cache prune"),
@@ -1270,7 +1319,7 @@ fn job_paths(command: &Commands, streams: &JobStreams) -> JobPaths {
         Commands::Policy(_)
         | Commands::Cache(_)
         | Commands::Batch(_)
-        | Commands::EngineHost
+        | Commands::EngineHost(_)
         | Commands::EngineAsk(_)
         | Commands::Mcp(_) => (None, None),
     };
@@ -1502,7 +1551,7 @@ fn job_kind(command: &Commands) -> Option<JobKind> {
         Commands::Policy(_)
         | Commands::Cache(_)
         | Commands::Batch(_)
-        | Commands::EngineHost
+        | Commands::EngineHost(_)
         | Commands::EngineAsk(_)
         | Commands::Mcp(_) => return None,
     })
@@ -2760,9 +2809,10 @@ fn plan_analyze(a: AnalyzeCli, in_batch: bool) -> Planned {
 mod engine {
     use super::*;
     use al_sem::engine::batch::plan_cx::ProcessFs;
-    use al_sem::engine::host::child::{AskCx, Engine, protocol_stdout, serve};
+    use al_sem::engine::host::child::{AskCx, Engine, protocol_stdout, serve_with};
     use al_sem::engine::host::front::{EngineFront, FrontConfig};
     use al_sem::engine::host::{AskParams, ChildStatus, Decisions, OpenParams, Universe};
+    use al_sem::engine::resident::budget::{Budget, Case, Estimates, ProcMeter};
     use al_sem::engine::resident::revision::{SERVED_COMMANDS, answer_failed_build};
     use al_sem::engine::resident::session::{Built, PinError, ResidentSession};
     use al_sem::engine::resident::store::{Control, PrepareError, Stop};
@@ -2775,7 +2825,16 @@ mod engine {
 
     /// `alsem engine-host`: serve the engine protocol on stdin/stdout until
     /// the front end shuts the session down or closes stdin.
-    pub(super) fn run_engine_host() -> ExitCode {
+    pub(super) fn run_engine_host(h: EngineHostCli) -> ExitCode {
+        let memory_budget = match h
+            .memory_budget
+            .as_deref()
+            .map(al_sem::engine::resident::budget::parse_bytes)
+            .transpose()
+        {
+            Ok(b) => b,
+            Err(e) => return usage(format!("al-sem: engine-host: --memory-budget: {e}")),
+        };
         let out = match protocol_stdout() {
             Ok(out) => out,
             Err(e) => {
@@ -2783,9 +2842,24 @@ mod engine {
                 return ExitCode::from(1);
             }
         };
-        let engine = HostEngine::default();
+        let idle_timeout =
+            (h.idle_timeout > 0).then(|| std::time::Duration::from_secs(h.idle_timeout));
+        let engine = HostEngine {
+            memory_budget,
+            idle_timeout_secs: idle_timeout.map(|d| d.as_secs()),
+            estimate_per_al_byte: h.estimate_per_al_byte,
+            estimate_floor: h.estimate_floor,
+            ..HostEngine::default()
+        };
+        let mut config = al_sem::engine::host::child::ServeConfig {
+            idle_timeout,
+            ..Default::default()
+        };
+        if let Some(ms) = h.idle_grace_ms {
+            config.idle_grace = std::time::Duration::from_millis(ms);
+        }
         let stdin = std::io::BufReader::new(std::io::stdin());
-        match serve(&engine, stdin, std::io::BufWriter::new(out)) {
+        match serve_with(&engine, stdin, std::io::BufWriter::new(out), config) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 let _ = writeln!(std::io::stderr(), "al-sem: engine-host: {e}");
@@ -2803,13 +2877,19 @@ mod engine {
         absolute: PathBuf,
         universe: Universe,
         session: Arc<ResidentSession>,
+        budget: Arc<Budget>,
     }
 
-    /// The child's engine: the open session and its counters.
+    /// The child's engine: the open session, its counters and its memory
+    /// configuration (`--memory-budget`, the estimate's test overrides).
     #[derive(Default)]
     struct HostEngine {
         open: std::sync::Mutex<Option<Open>>,
         asks: std::sync::atomic::AtomicU64,
+        memory_budget: Option<u64>,
+        idle_timeout_secs: Option<u64>,
+        estimate_per_al_byte: Option<u64>,
+        estimate_floor: Option<u64>,
     }
 
     impl HostEngine {
@@ -2831,16 +2911,29 @@ mod engine {
             }
             let absolute =
                 std::path::absolute(&params.workspace).unwrap_or_else(|_| params.workspace.clone());
-            let session = ResidentSession::new(
-                params.workspace.clone(),
-                params.universe == Universe::SingleApp,
-                instance.to_string(),
-            );
+            let single = params.universe == Universe::SingleApp;
+            let mut estimates = Estimates::new(single);
+            if let Some(n) = self.estimate_per_al_byte {
+                estimates.per_al_byte = n;
+            }
+            if let Some(n) = self.estimate_floor {
+                estimates.floor = n;
+            }
+            let bytes = self.memory_budget.unwrap_or(if single {
+                al_sem::engine::resident::budget::DEFAULT_BUDGET_SINGLE_APP
+            } else {
+                al_sem::engine::resident::budget::DEFAULT_BUDGET_CROSS_APP
+            });
+            let budget = Arc::new(Budget::new(bytes, Arc::new(ProcMeter), estimates));
+            let session =
+                ResidentSession::new(params.workspace.clone(), single, instance.to_string())
+                    .with_budget(Arc::clone(&budget));
             *self.open.lock().unwrap_or_else(|p| p.into_inner()) = Some(Open {
                 workspace: params.workspace.clone(),
                 absolute,
                 universe: params.universe,
                 session: Arc::new(session),
+                budget,
             });
             Ok(())
         }
@@ -2866,9 +2959,14 @@ mod engine {
             let mut status = ChildStatus {
                 pid: std::process::id(),
                 asks: self.asks.load(std::sync::atomic::Ordering::Relaxed),
+                idle_timeout_secs: self.idle_timeout_secs,
                 ..ChildStatus::default()
             };
             if let Some(o) = open {
+                status.memory = o
+                    .session
+                    .memory_status()
+                    .and_then(|m| serde_json::to_value(m).ok());
                 let stats = o.session.stats();
                 status.workspace = Some(o.workspace.clone());
                 status.universe = Some(o.universe);
@@ -2927,6 +3025,7 @@ mod engine {
                     "error": match e {
                         PinError::Unstable(m) => m,
                         PinError::Stopped(_) => "stopped".to_string(),
+                        PinError::Budget(r) => r.message(),
                     },
                 }),
             }
@@ -3086,12 +3185,25 @@ mod engine {
                 ),
             );
         }
+        // Admission (§4.5): this request holds memory from here on; a
+        // reclaim in progress holds it at the gate (bounded: the reclaim
+        // makes one attempt and reopens).
+        let is_stopped = || (cx.stop)().is_some();
+        let Some(_admitted) = open.budget.admit(&is_stopped) else {
+            return stopped((cx.stop)().unwrap_or(Stop::Cancelled), &[]);
+        };
+        let over_budget = |r: &al_sem::engine::resident::budget::Refusal| {
+            let mut a = failed(FailedOutcome::Budget, &r.message());
+            a.meta.budget = Some(r.figures());
+            a
+        };
         // Freshness and pin: one state for the whole ask.
         (cx.progress)("pin");
         let pinned = match open.session.pin(ask.freshness, cx.stop) {
             Ok(p) => p,
             Err(PinError::Stopped(s)) => return stopped(s, &[]),
             Err(PinError::Unstable(m)) => return failed(FailedOutcome::InputsUnstable, &m),
+            Err(PinError::Budget(r)) => return over_budget(&r),
         };
         timing.waited_for_build_ms = pinned.waited_for_build_ms;
         if let Some(s) = (cx.stop)() {
@@ -3117,11 +3229,40 @@ mod engine {
         let compute = Instant::now();
         let (out, revision) = match &pinned.built {
             Built::Revision(rev) if served => {
+                // Every fill and the trees reserve first (fill workers are
+                // counted while they hold theirs).
+                let refused = std::sync::Mutex::new(None);
+                let reserve = |kind: &'static str,
+                               _: usize|
+                 -> Result<al_sem::engine::resident::store::Guard<'_>, String> {
+                    let case = if kind == "trees" {
+                        Case::Trees
+                    } else {
+                        Case::Fill(kind)
+                    };
+                    let estimate = open.budget.estimate(case, Default::default());
+                    match open.session.reserve_or_reclaim(
+                        &open.budget,
+                        case,
+                        estimate,
+                        1,
+                        &is_stopped,
+                    ) {
+                        Ok(r) => Ok(Box::new(r)),
+                        Err(f) => {
+                            let m = f.message();
+                            *refused.lock().unwrap_or_else(|p| p.into_inner()) = Some(f);
+                            Err(m)
+                        }
+                    }
+                };
                 let ctl = Control {
                     stop: cx.stop,
-                    reserve: &|_| Ok(()),
+                    reserve: &reserve,
                 };
-                match rev.answer_timed(job, &ctl) {
+                let answered = rev.answer_timed(job, &ctl);
+                open.session.update_floor();
+                match answered {
                     Ok((out, (fill_ms, compute_ms))) => {
                         timing.shared_fill_ms = fill_ms;
                         timing.compute_ms = compute_ms;
@@ -3131,7 +3272,12 @@ mod engine {
                         return stopped(Stop::Cancelled, &["pin"]);
                     }
                     Err(PrepareError::Deadline) => return stopped(Stop::Deadline, &["pin"]),
-                    Err(PrepareError::Budget(m)) => return failed(FailedOutcome::Budget, &m),
+                    Err(PrepareError::Budget(m)) => {
+                        return match refused.lock().unwrap_or_else(|p| p.into_inner()).take() {
+                            Some(r) => over_budget(&r),
+                            None => failed(FailedOutcome::Budget, &m),
+                        };
+                    }
                     Err(PrepareError::Engine(m)) => {
                         return failed(FailedOutcome::EngineError, &m);
                     }
@@ -3296,10 +3442,25 @@ mod engine {
             Ok(out) => out,
             Err(e) => return usage(format!("al-sem: mcp: {e}")),
         };
-        let cfg = al_sem::mcp::McpConfig {
+        let size = |flag: &str, v: Option<&str>| {
+            v.map(al_sem::engine::resident::budget::parse_bytes)
+                .transpose()
+                .map_err(|e| format!("al-sem: mcp: {flag}: {e}"))
+        };
+        let memory_budget = match size("--memory-budget", m.memory_budget.as_deref()) {
+            Ok(b) => b,
+            Err(e) => return usage(e),
+        };
+        let total_budget = match size("--total-budget", m.total_budget.as_deref()) {
+            Ok(b) => b,
+            Err(e) => return usage(e),
+        };
+        if m.max_children == 0 {
+            return usage("al-sem: mcp: --max-children must be at least 1".into());
+        }
+        let mut cfg = al_sem::mcp::McpConfig::new(
             program,
-            child_env: Vec::new(),
-            defaults: al_sem::mcp::tools::Defaults {
+            al_sem::mcp::tools::Defaults {
                 workspace: m.workspace,
                 universe: if m.single_app {
                     al_sem::mcp::tools::Universe::SingleApp
@@ -3308,10 +3469,13 @@ mod engine {
                 },
                 freshness,
             },
-            output_root: m
-                .output_root
+            m.output_root
                 .map_or_else(al_sem::mcp::default_output_root, PathBuf::from),
-        };
+        );
+        cfg.memory_budget = memory_budget;
+        cfg.total_budget = total_budget;
+        cfg.idle_timeout_secs = m.idle_timeout;
+        cfg.max_children = m.max_children;
         let stdin = std::io::BufReader::new(std::io::stdin().lock());
         match al_sem::mcp::serve(cfg, Arc::new(CliDecide), stdin, Box::new(out)) {
             Ok(()) => ExitCode::SUCCESS,

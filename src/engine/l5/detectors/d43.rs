@@ -318,8 +318,8 @@ fn classify_subscriber(
     // channel only).
     for setter in &sets {
         let a = &setter.source_anchor;
-        if !is_assignment_nested_in_tree(a, r.statement_tree.as_ref())
-            && !exit_before(r.statement_tree.as_ref(), (a.start_line, a.start_column))
+        if !is_assignment_nested_in_tree(a, r.statement_tree.as_deref())
+            && !exit_before(r.statement_tree.as_deref(), (a.start_line, a.start_column))
         {
             return SetterClassification::MustSetTrue;
         }
