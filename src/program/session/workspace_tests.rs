@@ -1103,6 +1103,74 @@ fn low_mem_retains_no_dependency_tree(mode: MemoryMode) {
     assert_eq!(alive, 0);
 }
 
+/// One session refresh, then the cold comparison: the program build's
+/// embedded-source extractions of the workspace's packages are counted
+/// around the session's own refresh only (the cold builds extract through
+/// their own caches).
+fn refresh_counting_extractions(
+    s: &mut WorkspaceSession,
+    ws: &Ws,
+    what: &str,
+) -> (RefreshReport, usize) {
+    use crate::snapshot::provider::extract_log::extractions_under;
+    let inputs = ws.inputs();
+    let before = extractions_under(&ws.root);
+    let program = s.refresh_program(&inputs).expect("session program");
+    let extracted = extractions_under(&ws.root) - before;
+    let report = s.last_report().cloned().expect("a report");
+    let cold = ResolvedProgram::build(&inputs, ProgramScope::CrossApp).expect("cold program");
+    let (a, b) = (program_text(&program), program_text(&cold));
+    assert!(
+        a == b,
+        "{what}: program differs from cold: {}",
+        first_diff(&a, &b)
+    );
+    compare_model(s, &inputs, Ok(program), AssemblyNeeds::RULES, what);
+    (s.last_report().cloned().unwrap_or(report), extracted)
+}
+
+/// The dependency source text is extracted once per package, in both modes:
+/// a B or S refresh shares the kept text through the session's `DepCache` at
+/// the same `.app` stamp (the default mode used to extract it again on every
+/// refresh, about 0.3 s on CDO), and a changed package is P, which extracts
+/// the new text. Every step equals a cold build.
+fn dependency_text_is_extracted_once_per_package(mode: MemoryMode) {
+    let ws = base_ws();
+    let mut s = WorkspaceSession::with_mode(mode);
+    let (r, n) = refresh_counting_extractions(&mut s, &ws, "cold");
+    assert_eq!(r.class, ChangeClass::Package);
+    assert_eq!(n, 1, "precondition: the cold refresh extracts the text");
+
+    ws.edit(
+        "Callee.Codeunit.al",
+        "        exit(X);",
+        "        X += 1;\n        exit(X);",
+    );
+    let (r, n) = refresh_counting_extractions(&mut s, &ws, "body edit");
+    assert_eq!(r.class, ChangeClass::BodyOnly);
+    assert_eq!(n, 0, "B: the kept text is shared");
+
+    ws.edit("Callee.Codeunit.al", "P(X: Integer)", "P(X: Decimal)");
+    let (r, n) = refresh_counting_extractions(&mut s, &ws, "signature");
+    assert_eq!(r.class, ChangeClass::Declaration);
+    assert_eq!(n, 0, "S: the kept text is shared");
+
+    // A changed package (a longer image: a new stamp) is P: its new text is
+    // extracted, and the next B shares that.
+    let lib2 = DEP_LIB.replace(
+        "    local procedure C()",
+        "    procedure D()\n    begin\n    end;\n\n    local procedure C()",
+    );
+    ws.write_dep(&[("src/DepLib.Codeunit.al", &lib2)]);
+    let (r, n) = refresh_counting_extractions(&mut s, &ws, "package change");
+    assert_eq!(r.class, ChangeClass::Package);
+    assert_eq!(n, 1, "P: the new package's text is extracted");
+    ws.edit("Caller.Codeunit.al", "        D.A();", "        D.D();");
+    let (r, n) = refresh_counting_extractions(&mut s, &ws, "body edit after P");
+    assert_eq!(r.class, ChangeClass::BodyOnly);
+    assert_eq!(n, 0, "B after P: the new text is shared");
+}
+
 /// Every session test above, in both memory modes: each step's program and
 /// model equal a cold build of the same inputs whichever mode the session
 /// keeps (`--low-mem` re-parses what the default keeps).
@@ -1145,4 +1213,5 @@ in_both_modes!(
     parenless_calls_of_an_unchanged_file_change_under_s,
     file_ix_shift_restamps_later_files,
     low_mem_retains_no_dependency_tree,
+    dependency_text_is_extracted_once_per_package,
 );

@@ -10,7 +10,7 @@
 //! Usage: census-probe <embedded|symbols> <root> [<root> ...]
 //! All roots share ONE DepCache, built sequentially, kept alive (like the server).
 
-use std::alloc::{GlobalAlloc, Layout, System};
+use std::alloc::{GlobalAlloc, Layout};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -38,39 +38,49 @@ struct Counting;
 static BYTES: AtomicIsize = AtomicIsize::new(0);
 static ALLOCS: AtomicIsize = AtomicIsize::new(0);
 static PEAK: AtomicIsize = AtomicIsize::new(0);
+/// Whether ≥ [`BIG`] requests are logged (`refresh-seq` turns it off: a
+/// long run would grow the log, which the live heap counts).
+static LOG_BIG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// The allocator the counting wrapper forwards to: `System`, or mimalloc
+/// with `--features mimalloc` (the resident child's).
+#[cfg(not(feature = "mimalloc"))]
+static INNER: std::alloc::System = std::alloc::System;
+#[cfg(feature = "mimalloc")]
+static INNER: al_sem::release_alloc::ReleasingMiMalloc = al_sem::release_alloc::ReleasingMiMalloc;
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
         let n = BYTES.fetch_add(l.size() as isize, Relaxed) + l.size() as isize;
         PEAK.fetch_max(n, Relaxed);
         ALLOCS.fetch_add(1, Relaxed);
-        if l.size() >= BIG {
+        if l.size() >= BIG && LOG_BIG.load(Relaxed) {
             log_big("alloc", l.size(), 0, n);
         }
-        unsafe { System.alloc(l) }
+        unsafe { INNER.alloc(l) }
     }
     unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
         let n = BYTES.fetch_add(l.size() as isize, Relaxed) + l.size() as isize;
         PEAK.fetch_max(n, Relaxed);
         ALLOCS.fetch_add(1, Relaxed);
-        if l.size() >= BIG {
+        if l.size() >= BIG && LOG_BIG.load(Relaxed) {
             log_big("alloc_zeroed", l.size(), 0, n);
         }
-        unsafe { System.alloc_zeroed(l) }
+        unsafe { INNER.alloc_zeroed(l) }
     }
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
         BYTES.fetch_sub(l.size() as isize, Relaxed);
         ALLOCS.fetch_sub(1, Relaxed);
-        unsafe { System.dealloc(p, l) }
+        unsafe { INNER.dealloc(p, l) }
     }
     unsafe fn realloc(&self, p: *mut u8, l: Layout, new: usize) -> *mut u8 {
         let n = BYTES.fetch_add(new as isize - l.size() as isize, Relaxed) + new as isize
             - l.size() as isize;
         PEAK.fetch_max(n, Relaxed);
-        if new >= BIG {
+        if new >= BIG && LOG_BIG.load(Relaxed) {
             log_big("realloc", new, l.size(), n);
         }
-        unsafe { System.realloc(p, l, new) }
+        unsafe { INNER.realloc(p, l, new) }
     }
 }
 
@@ -1624,53 +1634,7 @@ fn resident_mode(ws: PathBuf, routine: String, low_mem: bool) {
         inputs_stamp: "probe".into(),
     };
     let rev = Revision::new(id, Arc::clone(&inputs), target);
-    let ver = "probe";
-    let ask = |name: &str| -> Box<dyn Job + '_> {
-        use al_sem::engine::l5::digest_cli::{DiffRoot, DigestJob, DigestRequest};
-        use al_sem::engine::l5::explain::{ExplainJob, ExplainMode, ExplainRequest};
-        match name {
-            "query" => Box::new(al_sem::engine::l4::effect_query_cli::QueryJob::effects(
-                &inputs, &routine, ver, true, false,
-            )),
-            "explain" => Box::new(ExplainJob::new(
-                ExplainRequest {
-                    inputs: &inputs,
-                    mode: ExplainMode::Routines(vec![routine.clone()]),
-                    single_app: false,
-                },
-                true,
-                None,
-            )),
-            "prove" => Box::new(al_sem::engine::l5::prove::ProveJob {
-                detectors: al_sem::engine::l5::detectors::default_detectors(),
-                inputs: &inputs,
-                routine_selector: &routine,
-                question_text: "may-commit",
-                alsem_ver: ver,
-                deterministic: true,
-                single_app: false,
-                closed_world: false,
-                human: false,
-                out: None,
-            }),
-            _ => Box::new(DigestJob::new(
-                DigestRequest {
-                    inputs: &inputs,
-                    changed_files: None,
-                    changed_routines: Some(vec![routine.clone()]),
-                    diff_text: None,
-                    alsem_ver: ver,
-                    deterministic: true,
-                    single_app: false,
-                    tests: false,
-                    include_reads: false,
-                    diff_root: DiffRoot::Workspace,
-                },
-                false,
-                None,
-            )),
-        }
-    };
+    let ask = |name: &str| -> Box<dyn Job + '_> { resident_job(name, &inputs, &routine) };
     for round in 0..2 {
         for name in ["query", "explain", "prove", "digest"] {
             let t = std::time::Instant::now();
@@ -1869,6 +1833,525 @@ fn resident_mode(ws: PathBuf, routine: String, low_mem: bool) {
     println!("  remaining live {:>9.1} MiB", mib(live().0 - base));
 }
 
+/// One served ask over `inputs` for `routine`: `query`, `explain`, `prove`,
+/// else `digest` (the four kinds `resident` and `refresh-seq` ask).
+fn resident_job<'a>(
+    name: &str,
+    inputs: &'a Arc<al_sem::program::inputs::WorkspaceInputs>,
+    routine: &'a str,
+) -> Box<dyn al_sem::engine::batch::job::Job + 'a> {
+    use al_sem::engine::l5::digest_cli::{DiffRoot, DigestJob, DigestRequest};
+    use al_sem::engine::l5::explain::{ExplainJob, ExplainMode, ExplainRequest};
+    let ver = "probe";
+    match name {
+        "query" => Box::new(al_sem::engine::l4::effect_query_cli::QueryJob::effects(
+            inputs, routine, ver, true, false,
+        )),
+        "explain" => Box::new(ExplainJob::new(
+            ExplainRequest {
+                inputs,
+                mode: ExplainMode::Routines(vec![routine.to_string()]),
+                single_app: false,
+            },
+            true,
+            None,
+        )),
+        "prove" => Box::new(al_sem::engine::l5::prove::ProveJob {
+            detectors: al_sem::engine::l5::detectors::default_detectors(),
+            inputs,
+            routine_selector: routine,
+            question_text: "may-commit",
+            alsem_ver: ver,
+            deterministic: true,
+            single_app: false,
+            closed_world: false,
+            human: false,
+            out: None,
+        }),
+        _ => Box::new(DigestJob::new(
+            DigestRequest {
+                inputs,
+                changed_files: None,
+                changed_routines: Some(vec![routine.to_string()]),
+                diff_text: None,
+                alsem_ver: ver,
+                deterministic: true,
+                single_app: false,
+                tests: false,
+                include_reads: false,
+                diff_root: DiffRoot::Workspace,
+            },
+            false,
+            None,
+        )),
+    }
+}
+
+/// `/proc/self/status` field `key` (e.g. `VmRSS:`), in KiB.
+fn proc_status_kib(key: &str) -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with(key))?
+                .split_whitespace()
+                .nth(1)?
+                .parse()
+                .ok()
+        })
+        .unwrap_or(0)
+}
+
+/// The resident engine across a sequence of refreshes (the per-refresh
+/// memory creep): a `ResidentSession` on a workspace COPY, pinned `fresh`
+/// as `alsem engine-host` pins it, then `--b N` body-only edits and `--s N`
+/// declaration edits of one codeunit file, each followed by the four asks.
+/// Per step: the change class and refresh wall time, the live heap (the
+/// counting allocator) after the refresh and after the asks, and the RSS
+/// (meaningful with `--features mimalloc`, the child's allocator). The
+/// previous revision is released before each refresh, as the child releases
+/// it. The workspace must not be inside a git checkout (it is edited).
+fn refresh_seq_mode(ws: PathBuf, routine: String, low_mem: bool, nb: usize, ns: usize) {
+    use al_sem::engine::resident::session::{Built, Freshness, ResidentSession};
+    use al_sem::engine::resident::store::Control;
+
+    LOG_BIG.store(false, Relaxed);
+    let ws = ws.canonicalize().expect("the workspace copy");
+    let (target, original, steps) = edit_sequence(&ws, nb, ns);
+    println!(
+        "######## refresh-seq {} routine {routine}{} allocator {} target {}",
+        ws.display(),
+        if low_mem { " --low-mem" } else { "" },
+        if cfg!(feature = "mimalloc") {
+            "mimalloc"
+        } else {
+            "system"
+        },
+        target.display()
+    );
+    #[cfg(feature = "mimalloc")]
+    // SAFETY: an option store before any concurrent allocation matters; the
+    // index is `alsem`'s (`purge_delay`, one below `use_numa_nodes`).
+    unsafe {
+        libmimalloc_sys::mi_option_set(libmimalloc_sys::mi_option_use_numa_nodes - 1, 0)
+    };
+    // `PROBE_RELEASE=<bytes>` sets the release threshold, `0` measures plain
+    // mimalloc (huge pages left on); by default the child's settings as
+    // `alsem engine-host` makes them (`set_resident(RELEASE_MIN, low_mem)`:
+    // huge pages off under `--low-mem` only).
+    #[cfg(feature = "mimalloc")]
+    al_sem::release_alloc::set_resident(
+        std::env::var("PROBE_RELEASE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(al_sem::release_alloc::RELEASE_MIN),
+        low_mem,
+    );
+    println!(
+        "  release on free: {}, huge pages off: {}",
+        al_sem::release_alloc::release_on_free(),
+        al_sem::release_alloc::thp_disabled()
+    );
+
+    let session =
+        Arc::new(ResidentSession::new(ws.clone(), false, "probe".into()).with_low_mem(low_mem));
+    let base = live().0;
+    println!(
+        "  {:<5} {:>5} {:>8} {:>11} {:>11} {:>9} {:>9} {:>9}",
+        "step", "class", "refresh", "live-after", "live-asks", "rss", "hwm", "asks"
+    );
+    let mut first: Option<(isize, u64)> = None;
+    for (name, text) in &steps {
+        if name != "cold" {
+            std::fs::write(&target, text).expect("write the workspace copy");
+            session.notify_changed([target.clone()]);
+        }
+        let t = std::time::Instant::now();
+        let pinned = session
+            .pin(Freshness::Fresh, &|| None)
+            .unwrap_or_else(|e| panic!("{name}: no pin: {e:?}"));
+        let refresh_s = t.elapsed().as_secs_f64();
+        let Built::Revision(rev) = pinned.built.clone() else {
+            panic!("{name}: the build failed")
+        };
+        drop(pinned);
+        settle();
+        let live_after = live().0 - base;
+        let class = session
+            .stats()
+            .last_build_class
+            .unwrap_or_else(|| "?".into());
+        let t = std::time::Instant::now();
+        for kind in ["query", "explain", "prove", "digest"] {
+            let job = resident_job(kind, &rev.inputs, &routine);
+            let out = rev.answer(&*job, &Control::unreserved());
+            assert!(out.is_ok(), "{name}: {kind} failed");
+        }
+        let asks_s = t.elapsed().as_secs_f64();
+        drop(rev);
+        settle();
+        let live_asks = live().0 - base;
+        let rss = proc_status_kib("VmRSS:");
+        let hwm = proc_status_kib("VmHWM:");
+        if first.is_none() {
+            first = Some((live_asks, rss));
+        }
+        let (l0, r0) = first.unwrap();
+        println!(
+            "  {name:<5} {class:>5} {refresh_s:>7.2}s {:>8.1} MiB {:>8.1} MiB {:>6.2} GB {:>6.2} GB {asks_s:>8.1}s  (live {:+.1} MiB, rss {:+.2} GB vs cold)",
+            mib(live_after),
+            mib(live_asks),
+            rss as f64 / 1e6 * 1.024,
+            hwm as f64 / 1e6 * 1.024,
+            mib(live_asks - l0),
+            (rss as f64 - r0 as f64) / 1e6 * 1.024,
+        );
+        // Where the RSS beyond the live heap sits: C code (tree-sitter,
+        // zstd) allocates through glibc malloc, which the counting
+        // allocator never sees.
+        let g = glibc_heap();
+        let (releases, released) = al_sem::release_alloc::released();
+        println!(
+            "        glibc held {:.1} MiB in use {:.1} MiB (arena {:.1} mmap {:.1}); released blocks {releases} ({:.1} MiB) so far",
+            mibu(g.0),
+            mibu(g.1),
+            mibu(g.2),
+            mibu(g.3),
+            mibu(released)
+        );
+        #[cfg(feature = "mimalloc")]
+        if std::env::var_os("PROBE_COLLECT").is_some() {
+            // SAFETY: plain mimalloc calls, each on its own thread's heap.
+            rayon::broadcast(|_| unsafe { libmimalloc_sys::mi_collect(true) });
+            unsafe { libmimalloc_sys::mi_collect(true) };
+            println!(
+                "        after mi_collect on every global-pool thread and main: rss {:.2} GB",
+                proc_status_kib("VmRSS:") as f64 / 1e6 * 1.024
+            );
+        }
+        #[cfg(feature = "mimalloc")]
+        if std::env::var_os("PROBE_MI_AREAS").is_some() {
+            print!("{}", mi_areas_text());
+        }
+        #[cfg(feature = "mimalloc")]
+        if std::env::var_os("PROBE_MI_STATS").is_some() {
+            print!("{}", mi_stats_text());
+        }
+    }
+    std::fs::write(&target, &original).expect("restore the workspace copy");
+}
+
+/// mimalloc's statistics (`mi_stats_print_out`), as text.
+#[cfg(feature = "mimalloc")]
+fn mi_stats_text() -> String {
+    unsafe extern "C" fn out(msg: *const std::ffi::c_char, arg: *mut std::ffi::c_void) {
+        // SAFETY: `arg` is the `String` below; `msg` a C string mimalloc owns.
+        let s = unsafe { &mut *(arg as *mut String) };
+        s.push_str(&unsafe { std::ffi::CStr::from_ptr(msg) }.to_string_lossy());
+    }
+    let mut s = String::new();
+    // SAFETY: the callback writes only into `s`, alive for the call.
+    unsafe {
+        libmimalloc_sys::mi_stats_print_out(Some(out), &mut s as *mut String as *mut _);
+    }
+    s
+}
+
+/// mimalloc's pages by block size (`mi_heap_visit_blocks` over the main heap,
+/// owned and abandoned pages; run with `MIMALLOC_VISIT_ABANDONED=1`): the
+/// committed bytes, the bytes in use, and the waste (committed less in use),
+/// the totals and the 12 block sizes that waste the most.
+#[cfg(feature = "mimalloc")]
+fn mi_areas_text() -> String {
+    use libmimalloc_sys::{mi_heap_area_t, mi_heap_t};
+    unsafe extern "C" {
+        fn mi_heap_main() -> *mut mi_heap_t;
+        fn mi_heap_visit_abandoned_blocks(
+            heap: *mut mi_heap_t,
+            visit_blocks: bool,
+            visitor: libmimalloc_sys::mi_block_visit_fun,
+            arg: *mut std::ffi::c_void,
+        ) -> bool;
+    }
+    // block size -> (pages, committed, used bytes)
+    type Areas = std::collections::BTreeMap<usize, (u64, u64, u64)>;
+    unsafe extern "C" fn visit(
+        _heap: *const mi_heap_t,
+        area: *const mi_heap_area_t,
+        _block: *mut std::ffi::c_void,
+        _size: usize,
+        arg: *mut std::ffi::c_void,
+    ) -> bool {
+        // SAFETY: `arg` is the map below; `area` is mimalloc's.
+        let (m, a) = unsafe { (&mut *(arg as *mut Areas), &*area) };
+        let e = m.entry(a.block_size).or_default();
+        e.0 += 1;
+        e.1 += a.committed as u64;
+        e.2 += (a.used * a.block_size) as u64;
+        true
+    }
+    let mut m: Areas = Areas::new();
+    // SAFETY: the visitor writes only into `m`, alive for the calls. The
+    // visit allocates nothing through the global allocator (the map's
+    // inserts do, on this thread, which mimalloc allows during a visit).
+    unsafe {
+        let h = mi_heap_main();
+        libmimalloc_sys::mi_heap_visit_blocks(
+            h,
+            false,
+            Some(visit),
+            &mut m as *mut Areas as *mut _,
+        );
+        mi_heap_visit_abandoned_blocks(h, false, Some(visit), &mut m as *mut Areas as *mut _);
+    }
+    let (p, c, u) = m
+        .values()
+        .fold((0, 0, 0), |(p, c, u), e| (p + e.0, c + e.1, u + e.2));
+    let mut s = format!(
+        "        mi pages {p} committed {:.1} MiB used {:.1} MiB waste {:.1} MiB\n",
+        mibu(c),
+        mibu(u),
+        mibu(c - u)
+    );
+    let mut by: Vec<_> = m.iter().collect();
+    by.sort_by_key(|(_, e)| std::cmp::Reverse(e.1 - e.2));
+    for (bs, e) in by.into_iter().take(12) {
+        s.push_str(&format!(
+            "          block {bs:>8}: pages {:>6} committed {:>8.1} MiB used {:>8.1} MiB waste {:>7.1} MiB\n",
+            e.0,
+            mibu(e.1),
+            mibu(e.2),
+            mibu(e.1 - e.2)
+        ));
+    }
+    s
+}
+
+/// glibc malloc's own heap (`mallinfo2`, every arena): (held = arena bytes
+/// plus mmapped chunks, in use = allocated chunks plus mmapped chunks, arena,
+/// mmapped).
+fn glibc_heap() -> (u64, u64, u64, u64) {
+    #[repr(C)]
+    struct Mallinfo2 {
+        arena: usize,
+        ordblks: usize,
+        smblks: usize,
+        hblks: usize,
+        hblkhd: usize,
+        usmblks: usize,
+        fsmblks: usize,
+        uordblks: usize,
+        fordblks: usize,
+        keepcost: usize,
+    }
+    unsafe extern "C" {
+        fn mallinfo2() -> Mallinfo2;
+    }
+    // SAFETY: a plain glibc query.
+    let m = unsafe { mallinfo2() };
+    (
+        (m.arena + m.hblkhd) as u64,
+        (m.uordblks + m.hblkhd) as u64,
+        m.arena as u64,
+        m.hblkhd as u64,
+    )
+}
+
+/// The edit sequence `refresh-seq` and `front-seq` run on a workspace copy:
+/// the target file (the median-sized codeunit file with a procedure body),
+/// its original text, and the steps `cold`, `B1..Bnb` (a distinct comment in
+/// the first procedure body), `S1..Sns` (a distinct procedure added).
+fn edit_sequence(
+    ws: &std::path::Path,
+    nb: usize,
+    ns: usize,
+) -> (PathBuf, String, Vec<(String, String)>) {
+    fn al_files(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if !p
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+                {
+                    al_files(&p, out);
+                }
+            } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("al")) {
+                out.push(p);
+            }
+        }
+    }
+    assert!(
+        !ws.ancestors().any(|d| d.join(".git").exists()),
+        "{} is inside a git checkout: run on a copy",
+        ws.display()
+    );
+    let mut all = Vec::new();
+    al_files(ws, &mut all);
+    let mut cands: Vec<(u64, PathBuf)> = all
+        .into_iter()
+        .filter_map(|p| {
+            let t = std::fs::read_to_string(&p).ok()?;
+            (t.contains("\n    begin\n") && t.trim_start().to_lowercase().starts_with("codeunit"))
+                .then_some((t.len() as u64, p))
+        })
+        .collect();
+    cands.sort();
+    let target = cands[cands.len() / 2].1.clone();
+    let original = std::fs::read_to_string(&target).expect("the target file");
+    let mut steps: Vec<(String, String)> = vec![("cold".into(), original.clone())];
+    for i in 0..nb {
+        steps.push((
+            format!("B{}", i + 1),
+            original.replacen(
+                "\n    begin\n",
+                &format!("\n    begin\n        // refresh probe {i}\n"),
+                1,
+            ),
+        ));
+    }
+    let close = original.rfind('}').expect("a closing brace");
+    for j in 0..ns {
+        steps.push((
+            format!("S{}", j + 1),
+            format!(
+                "{}\n    procedure RefreshProbe{j}()\n    begin\n    end;\n{}",
+                &original[..close],
+                &original[close..]
+            ),
+        ));
+    }
+    (target, original, steps)
+}
+
+/// `refresh-seq`'s sequence against a real `alsem engine-host` child (the
+/// resident server as shipped, its own allocator): after each edit a
+/// `session/refresh {wait}`, then the four asks over the protocol, then the
+/// child's RSS (`status.memory.rssBytes`) and peak (`/proc/<pid>` VmHWM).
+fn front_seq_mode(
+    alsem: PathBuf,
+    ws: PathBuf,
+    routine: String,
+    low_mem: bool,
+    nb: usize,
+    ns: usize,
+) {
+    use al_sem::engine::host::AskParams;
+    use al_sem::engine::host::front::{EngineFront, FrontConfig};
+
+    let ws = ws.canonicalize().expect("the workspace copy");
+    let (target, original, steps) = edit_sequence(&ws, nb, ns);
+    let w = ws.to_str().expect("a UTF-8 path").to_string();
+    let params = |argv: &[&str]| -> AskParams {
+        let out = std::process::Command::new(&alsem)
+            .args(["engine-ask", "--params", "--"])
+            .args(argv)
+            .output()
+            .expect("alsem runs");
+        assert!(out.status.success(), "{argv:?}");
+        serde_json::from_slice(&out.stdout).expect("the params decode")
+    };
+    let asks: Vec<(&str, AskParams)> = vec![
+        (
+            "query",
+            params(&[
+                "query",
+                "effects",
+                &w,
+                "--routine",
+                &routine,
+                "--deterministic",
+            ]),
+        ),
+        (
+            "explain",
+            params(&["explain", &w, "--routine", &routine, "--format", "json"]),
+        ),
+        (
+            "prove",
+            params(&["prove", &w, &routine, "may-commit", "--deterministic"]),
+        ),
+        (
+            "digest",
+            params(&["digest", &w, "--routine", &routine, "--deterministic"]),
+        ),
+    ];
+    let mut cfg = FrontConfig::new(&alsem, &ws);
+    if low_mem {
+        cfg.args.push("--low-mem".into());
+    }
+    let mut front = EngineFront::new(cfg).expect("front end");
+    println!(
+        "######## front-seq {} {} routine {routine}{} target {}",
+        alsem.display(),
+        ws.display(),
+        if low_mem { " --low-mem" } else { "" },
+        target.display()
+    );
+    println!(
+        "  {:<5} {:>5} {:>8} {:>9} {:>9} {:>9} {:>9}",
+        "step", "class", "build", "rss", "floor", "hwm", "asks"
+    );
+    let mut first: Option<u64> = None;
+    for (name, text) in &steps {
+        if name != "cold" {
+            std::fs::write(&target, text).expect("write the workspace copy");
+            front
+                .notify_changed(vec![target.clone()])
+                .expect("notifyChanged");
+        }
+        front.refresh(true).expect("refresh");
+        let st = front.status().expect("status");
+        let session = st.session.clone().unwrap_or_default();
+        let class = session["lastBuildClass"]
+            .as_str()
+            .unwrap_or("?")
+            .to_string();
+        let build_s = session["lastBuildMs"].as_u64().unwrap_or(0) as f64 / 1000.0;
+        let t = std::time::Instant::now();
+        for (kind, p) in &asks {
+            let a = front.ask(p.clone());
+            assert!(
+                matches!(a.outcome, al_sem::wire::Outcome::Cli { .. }),
+                "{name}: {kind}: {:?}",
+                a.outcome
+            );
+        }
+        let asks_s = t.elapsed().as_secs_f64();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let st = front.status().expect("status");
+        let mem = serde_json::to_value(&st.memory).unwrap_or_default();
+        let rss = mem["rssBytes"].as_u64().unwrap_or(0);
+        let floor = mem["retainedBytes"].as_u64().unwrap_or(0);
+        let hwm = std::fs::read_to_string(format!("/proc/{}/status", st.pid))
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find(|l| l.starts_with("VmHWM:"))?
+                    .split_whitespace()
+                    .nth(1)?
+                    .parse::<u64>()
+                    .ok()
+            })
+            .unwrap_or(0)
+            * 1024;
+        let r0 = *first.get_or_insert(rss);
+        println!(
+            "  {name:<5} {class:>5} {build_s:>7.2}s {:>6.2} GB {:>6.2} GB {:>6.2} GB {asks_s:>8.1}s  (rss {:+.2} GB vs cold; released {} blocks so far)",
+            rss as f64 / 1e9,
+            floor as f64 / 1e9,
+            hwm as f64 / 1e9,
+            (rss as f64 - r0 as f64) / 1e9,
+            mem["releasedBlocks"].as_u64().unwrap_or(0)
+        );
+    }
+    std::fs::write(&target, &original).expect("restore the workspace copy");
+    front.shutdown();
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let source = match args.next().as_deref() {
@@ -1880,6 +2363,31 @@ fn main() {
             let ws = PathBuf::from(plain.next().expect("workspace"));
             let routine = plain.next().unwrap_or_else(|| "IssueReminder".into());
             resident_mode(ws, routine, low_mem);
+            return;
+        }
+        Some(mode @ ("refresh-seq" | "front-seq")) => {
+            // `refresh-seq <ws-copy> [routine] [--low-mem] [--b N] [--s N]`
+            // `front-seq <alsem> <ws-copy> [routine] [--low-mem] [--b N] [--s N]`
+            let front = mode == "front-seq";
+            let mut rest = args.peekable();
+            let mut plain: Vec<String> = Vec::new();
+            let (mut low_mem, mut nb, mut ns) = (false, 20usize, 10usize);
+            while let Some(a) = rest.next() {
+                match a.as_str() {
+                    "--low-mem" => low_mem = true,
+                    "--b" => nb = rest.next().expect("--b N").parse().expect("--b N"),
+                    "--s" => ns = rest.next().expect("--s N").parse().expect("--s N"),
+                    _ => plain.push(a),
+                }
+            }
+            let mut plain = plain.into_iter();
+            let alsem = front.then(|| PathBuf::from(plain.next().expect("alsem binary")));
+            let ws = PathBuf::from(plain.next().expect("workspace"));
+            let routine = plain.next().unwrap_or_else(|| "IssueReminder".into());
+            match alsem {
+                Some(alsem) => front_seq_mode(alsem, ws, routine, low_mem, nb, ns),
+                None => refresh_seq_mode(ws, routine, low_mem, nb, ns),
+            }
             return;
         }
         Some("embedded") => DependencySource::Embedded,

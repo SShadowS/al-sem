@@ -28,12 +28,15 @@
 //!   resolutions are reused, their source witnesses re-materialized against
 //!   the current declaration surface (§6.5).
 //!
-//! **Memory modes** ([`MemoryMode`], context-server design §7). The default
-//! keeps every dependency tree in the tier (fastest). `LowMem` builds with
-//! `BuildProfile::ON_DEMAND`: the tier keeps no tree, and the session keeps
-//! each source-bearing dependency's extracted text instead (the list the
-//! snapshot shares, so the next snapshot reads the same text and nothing is
-//! extracted again). A revision parses dependency files only where a step
+//! **Memory modes** ([`MemoryMode`], context-server design §7). Both modes
+//! keep each source-bearing dependency's extracted file list (the list the
+//! snapshot shares, so the next snapshot reads the same text through the
+//! session's `DepCache` at the same `.app` stamp and nothing is extracted
+//! again until a package changes, which is P). The default keeps every
+//! dependency tree in the tier too (fastest; the trees hold the same texts).
+//! `LowMem` builds with `BuildProfile::ON_DEMAND`: the tier keeps no tree, so
+//! the kept text is all it holds of the dependency source. A revision parses
+//! dependency files only where a step
 //! reads their trees: P parses them all (the tier is built from that parse);
 //! S parses them all again (`ProgramContext::ensure_dep_bodies`) because every
 //! dependency body is re-resolved; B parses none, except the files whose kept
@@ -76,11 +79,12 @@ struct Retained {
     identity: blake3::Hash,
     files: HashMap<String, RetainedFile>,
     dependency: Arc<DependencyBodyResolution>,
-    /// `LowMem` only: each source-bearing dependency's extracted file list
-    /// (texts), as the snapshot held it. Held so the next snapshot shares it
-    /// through the session's `DepCache` (same `.app` stamp) instead of
-    /// extracting the text again, and a file whose tree is needed is parsed
-    /// from it. Empty by default (the tier's trees hold their texts).
+    /// Each source-bearing dependency's extracted file list (texts), as the
+    /// snapshot held it, in both modes. Held so the next snapshot shares it
+    /// through the session's `DepCache` (same `.app` stamp, content hash
+    /// included) instead of extracting the text again; under `LowMem` a
+    /// file whose tree is needed is parsed from it. In the default mode the
+    /// tier's trees hold the same texts, so only the lists are extra.
     _dependency_sources: Vec<Arc<Vec<crate::snapshot::embedded::SourceFile>>>,
 }
 
@@ -482,16 +486,18 @@ impl WorkspaceSession {
         // What the next revision reuses.
         let tier = Arc::clone(&ctx.dep_layer.dep_nodes);
         let dependency_files_parsed = ctx.dep_files_parsed();
-        let dependency_sources = match self.mode {
-            MemoryMode::Default => Vec::new(),
-            MemoryMode::LowMem => ctx
-                .snap
-                .apps
-                .iter()
-                .filter(|u| u.id != ctx.snap.workspace_app)
-                .filter_map(|u| u.source.as_ref().map(|s| Arc::clone(&s.files)))
-                .collect(),
-        };
+        // Both modes: the next snapshot shares this text through the
+        // session's `DepCache` (same `.app` stamp, which carries the image's
+        // content hash) instead of extracting it again. In the default mode
+        // the tier's trees hold the same `Arc<str>` texts, so this costs only
+        // the lists.
+        let dependency_sources: Vec<_> = ctx
+            .snap
+            .apps
+            .iter()
+            .filter(|u| u.id != ctx.snap.workspace_app)
+            .filter_map(|u| u.source.as_ref().map(|s| Arc::clone(&s.files)))
+            .collect();
         #[cfg(test)]
         if let (Some(p), Some(bodies)) = (self.probe.as_mut(), ctx.dep_bodies()) {
             p.extend(

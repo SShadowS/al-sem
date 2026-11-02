@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (context server: the resident refresh)
+
+- **The default mode no longer extracts the dependency source text again on
+  every refresh.** The workspace session now keeps each source-bearing
+  dependency's extracted file list in both memory modes (before, only
+  `--low-mem` did), so the next snapshot shares that text through the
+  session's `DepCache` at the same `.app` stamp (size, time and the image's
+  blake3) instead of extracting it again; a changed package is a new stamp
+  and a P refresh, which extracts the new text. The tier's trees hold the same
+  `Arc<str>` texts, so only the lists are extra. Measured on CDO
+  (release-fast, `IssueReminder`, one `alsem engine-host` child through
+  `census-probe front-seq`, six B refreshes per run, two runs interleaved with
+  the old binary): B refresh median **2.76 s -> 2.61 s** (2.67-2.81 s before,
+  2.50-2.70 s after); S unchanged within noise (6.9-7.5 s). Test
+  `dependency_text_is_extracted_once_per_package` (both modes, every step
+  cold-equal): one extraction for the cold refresh, none for a B or an S,
+  one for a changed package, none for the B after it. Discrimination:
+  keeping the list only under `--low-mem` again fails the default-mode test
+  at the first B (1 extraction, expected 0); reverted, green.
+- **The resident child's per-refresh RSS creep: what it was, and the fix.**
+  *Measured first* (`census-probe refresh-seq`: the child's code in process,
+  a counting allocator over mimalloc; and `front-seq`: a real `alsem
+  engine-host` child; CDO copy, `IssueReminder`, each refresh followed by
+  query, explain, prove and digest). **Not a leak:** the live heap after the
+  asks stays within 2 MiB over 20 B and 10 S refreshes in both modes (default
+  3,701-3,703 MiB, `--low-mem` 2,894-2,895 MiB, flat after ten refreshes).
+  Not glibc (C code holds 2.9 MiB), not freed pages a thread keeps (a
+  `mi_collect(true)` on every thread frees nothing), not the per-call
+  big-stack pools (one persistent pool creeps the same). **It is mimalloc
+  page fragmentation**, made worse by transparent huge pages: each refresh
+  builds the next revision while the published one is alive and then frees
+  the old one, and a freed block stays resident inside any page that still
+  holds a live block (mimalloc's bytes beyond its blocks in use: 451 MiB after
+  the cold build, 835 MiB after 3 B and 3 S refreshes; pages 39.1 K -> 42.3 K).
+  It converges: before the fix, over 40 B then 20 S refreshes, the child's
+  RSS went 4.81 GB cold, 5.06 GB after the first refresh, then flattened at
+  5.22-5.25 GB (B, by about the 30th) and 5.44-5.46 GB (S, by about the
+  12th): a band of 0.40 GB over the first refresh.
+  *The fix* (`al_sem::release_alloc`, the `alsem` binary's allocator):
+  `alsem engine-host` hands the interior of every freed block of 16-512 KiB
+  back to the OS (`madvise(MADV_DONTNEED)` on the whole 4 KiB pages after its
+  first; mimalloc 3 has no option for freed memory inside a live page), and
+  a `--low-mem` child also turns transparent huge pages off for itself
+  (`PR_SET_THP_DISABLE`: with them on, `khugepaged` collapses part of the
+  released pages back into huge pages). Every other command keeps plain
+  mimalloc. Linux only. Same 60 refreshes (RSS cold / after the first
+  refresh / at most / band over the first):
+  default mode **4.58 / 4.78 / 5.07 GB, band 0.29 GB** (before 4.81 / 5.06 /
+  5.46, band 0.40), flat after about ten refreshes of each kind, 0.39 GB less
+  at the end; with huge pages off as well, 4.24 / 4.44 / 4.66 GB, band
+  0.22 GB (retained floor at the end 3.93 against 4.72 GB). `--low-mem` (20 B
+  then 10 S, huge pages off): **3.50 / 3.73 / 3.95 GB, band 0.22 GB** (before
+  3.81 / 4.03 / 4.37, band 0.34). Speed (two interleaved runs of 6 B and
+  2 S each, one child): the four asks 36.0 s before, 36.6 s with the release
+  (+1.7 %), 38.2 s with huge pages off as well (+6 %); B refresh 2.74 s
+  before, 2.67 s with the release (the dependency-text fix above included),
+  2.84 s with huge pages off as well. So the default mode, kept the fastest
+  by the owner's decision, releases with huge pages on; `--low-mem` trades
+  about 4 % on the asks for about 0.4 GB. `status.memory` reports `releaseFromBytes`,
+  `releasedBlocks`, `releasedBytes` and `thpDisabled`; `ALSEM_RELEASE_MIN`
+  (bytes, `0` = both off) is for measurement. Threshold by measurement (6 B
+  + 2 S, huge pages on): RSS 4.86 GB at 16 KiB, 5.00 GB at 64 KiB, 5.15 GB
+  off; 8 KiB released no more than 16 KiB with twice the calls (about 50,000
+  per B refresh at 16 KiB).
+- Tests: `release_alloc::tests::freed_large_blocks_are_released_only_when_on`
+  (mincore: a freed block's interior stays resident when off, is discarded
+  on `dealloc` and on a moving `realloc` when on; contents kept, zeroed
+  allocation still zero); `tests/resident_memory_bound.rs` (own binary, a
+  counting allocator: a `ResidentSession` over a fixture with a source
+  dependency, 24 B and 6 S refreshes each with the four asks, both modes, live
+  heap within 2 MiB of the first refresh's; the fixture's live heap moves by
+  up to 0.7 MB between refreshes with nothing kept, crossbeam-epoch's
+  deferred queue garbage); `engine_host::the_child_releases_freed_large_blocks`
+  (the child turns the release on, releases blocks after a refresh, turns
+  huge pages off under `--low-mem` only, answers the CLI's bytes;
+  `ALSEM_RELEASE_MIN=0` turns both off).
+  Discrimination (each broken with Edit, run, reverted, run green): no
+  release in `dealloc` fails the mincore test (79 of 79 pages resident); none
+  in the moving `realloc` fails it (63 of 63); the session keeping every
+  previous revision fails the bound at B9 (3.1 MB over 1.0 MB, about 230 KB
+  per kept revision); `engine-host` not turning the release on fails the e2e
+  test (`releaseFromBytes` 0); not turning huge pages off fails it
+  (`thpDisabled` false), and so do turning them off in the default mode and
+  never turning them off (the `--low-mem` child).
+- `census-probe`: `refresh-seq` and `front-seq` (the sequences above),
+  `--features mimalloc`, and the `PROBE_RELEASE`, `PROBE_COLLECT`,
+  `PROBE_MI_AREAS`, `PROBE_MI_STATS` diagnostics (`tools/census-probe/README.md`).
+
 ### Added (context server: `--low-mem`, no dependency syntax trees kept between revisions)
 
 - **Owner decision (2026-11-02):** the default keeps everything (fastest); about

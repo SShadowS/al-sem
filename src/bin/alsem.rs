@@ -25,8 +25,13 @@ use std::process::ExitCode;
 ///
 /// This does NOT excuse allocation churn — it makes a future churn regression
 /// *cheaper*, and therefore harder to see. Keep counting allocations.
+///
+/// `ReleasingMiMalloc` is `mimalloc::MiMalloc` for every command but
+/// `engine-host`, which turns on the release of freed large blocks (and,
+/// under `--low-mem`, turns transparent huge pages off): `al_sem::release_alloc`,
+/// the resident child's per-refresh RSS creep.
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: al_sem::release_alloc::ReleasingMiMalloc = al_sem::release_alloc::ReleasingMiMalloc;
 
 /// mimalloc's `purge_delay` option: freed OS pages are held for N milliseconds
 /// before being returned (default 10). `alsem` sets it to 0 — purge immediately.
@@ -2838,6 +2843,20 @@ mod engine {
     /// `alsem engine-host`: serve the engine protocol on stdin/stdout until
     /// the front end shuts the session down or closes stdin.
     pub(super) fn run_engine_host(h: EngineHostCli) -> ExitCode {
+        // The resident child frees each revision's model and artifacts on the
+        // next refresh: hand freed large blocks back to the OS, so the RSS
+        // does not keep the freed memory inside pages a live block holds;
+        // under `--low-mem` also turn transparent huge pages off, so the
+        // kernel does not fill them back in (slower, less memory:
+        // `al_sem::release_alloc`). `ALSEM_RELEASE_MIN` (bytes, 0 = both off)
+        // overrides the threshold, for measurement.
+        al_sem::release_alloc::set_resident(
+            std::env::var("ALSEM_RELEASE_MIN")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(al_sem::release_alloc::RELEASE_MIN),
+            h.low_mem,
+        );
         let memory_budget = match h
             .memory_budget
             .as_deref()
@@ -2981,6 +3000,22 @@ mod engine {
                     .session
                     .memory_status()
                     .and_then(|m| serde_json::to_value(m).ok());
+                // The allocator's release of freed large blocks (see
+                // `run_engine_host`): its threshold (0 = off) and what it
+                // handed back so far.
+                if let Some(serde_json::Value::Object(m)) = status.memory.as_mut() {
+                    let (blocks, bytes) = al_sem::release_alloc::released();
+                    m.insert(
+                        "releaseFromBytes".into(),
+                        al_sem::release_alloc::release_on_free().into(),
+                    );
+                    m.insert("releasedBlocks".into(), blocks.into());
+                    m.insert("releasedBytes".into(), bytes.into());
+                    m.insert(
+                        "thpDisabled".into(),
+                        al_sem::release_alloc::thp_disabled().into(),
+                    );
+                }
                 let stats = o.session.stats();
                 status.workspace = Some(o.workspace.clone());
                 status.universe = Some(o.universe);
