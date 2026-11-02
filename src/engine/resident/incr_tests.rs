@@ -130,6 +130,38 @@ pub(super) fn l4_and_cold(rev: &Revision) -> (L4Projection, L4Projection) {
     (warm, L4Projection::of(&l4, &core.0))
 }
 
+/// The pd arena as text: producers, states, links and edges in storage
+/// order, `by_routine` sorted.
+fn pd_text(pd: &crate::engine::l4::pd_solve::ConeArena) -> String {
+    let by: std::collections::BTreeMap<&str, &Vec<usize>> =
+        pd.by_routine.iter().map(|(k, v)| (&**k, v)).collect();
+    format!(
+        "{:?}\n{:?}\n{:?}\n{:?}\n{by:?}",
+        pd.producers, pd.states, pd.links, pd.edges
+    )
+}
+
+/// The revision's published fold's pd arena and a cold composition's over
+/// the same model, as text; and the fold's reuse report.
+pub(super) fn pd_and_cold(
+    rev: &Revision,
+) -> (String, String, crate::engine::l4::pd_solve::PdSolveReport) {
+    let snap = rev.snapshot();
+    let Some(ArtifactValue::Fold(f)) = snap.get(&ArtifactKey::Fold).map(|a| &a.value) else {
+        panic!("the fold is published");
+    };
+    let warm = pd_text(f.caps.pd.as_ref().expect("the fold keeps its arena"));
+    let target = rev.target();
+    let model = target.resolved();
+    let scope = crate::engine::l4::cone_derived::ConeScope {
+        derived: true,
+        raw: crate::engine::session::WitnessRequest::primary().scope(model),
+    };
+    let (caps, _) = crate::engine::session::compose_cone(model, &relation_of(target), scope);
+    let cold = pd_text(caps.pd.as_ref().expect("a composition keeps its arena"));
+    (warm, cold, f.pd_report)
+}
+
 fn rule_b_session() -> (tempfile::TempDir, Arc<ResidentSession>) {
     let dir = tempfile::tempdir().unwrap();
     crate::engine::l5::test_support::write_fixture_rule_b(dir.path());
@@ -153,6 +185,70 @@ pub(super) fn edit(ws: &Path, file: &str, from: &str, to: &str) {
 }
 
 const RULE_B_ROOTS: &[&str] = &["WriteThenCommit", "WriteCallCommit", "FillAndPost"];
+
+/// Design §6.10 "Producers" end to end (T-pd-out on a served revision): the
+/// rule-B workspace's `FillAndPost` passes a TEMPORARY Customer to the
+/// dependency's `Fill`, which inserts into its parameter (a producer). A body
+/// edit elsewhere (`WriteCallCommit`) re-solves no producer: the fold copies
+/// every producer's states from the previous revision's arena. Then
+/// `FillAndPost`'s record becomes PHYSICAL (the reviews' A→C→P counterexample:
+/// the caller's argument changes from a temporary to a physical record):
+/// `Fill`'s producer is re-solved, its state at `FillAndPost` changes, and
+/// the answers on `FillAndPost` change with it. After each step the fold's pd
+/// arena equals a cold composition's over the same model, and every served
+/// answer equals its cold standalone run.
+///
+/// DISCRIMINATION (2026-11-02): treating every producer as reusable
+/// (`reusable` ignoring both the reachability and the old-arena hits) fails
+/// "temp → physical: Explain on FillAndPost equals cold" (the stale
+/// temporary state at `FillAndPost` survives into the card); reverted, green.
+#[test]
+fn fold_reuses_untouched_producers_and_equals_cold() {
+    let (dir, s) = rule_b_session();
+    let ws = dir.path();
+    let rev = pin(&s);
+    assert_answers_equal_cold("cold", &rev, ws, RULE_B_ROOTS);
+    let (warm, cold, report) = pd_and_cold(&rev);
+    assert_eq!(warm, cold, "cold: the arena");
+    assert!(
+        report.producers > 0,
+        "precondition: the fixture has producers"
+    );
+    assert_eq!(report.reused, 0, "cold: nothing to reuse");
+
+    edit(
+        ws,
+        "src/Ws.al",
+        "        L.Insert();\n        Lib.MaybeCommit(true);\n        Commit();",
+        "        L.Insert();\n        L.Modify();\n        Lib.MaybeCommit(true);\n        Commit();",
+    );
+    let rev = pin(&s);
+    assert_eq!(s.stats().last_build_class.as_deref(), Some("B"));
+    assert_answers_equal_cold("body edit", &rev, ws, RULE_B_ROOTS);
+    let (warm, cold, report) = pd_and_cold(&rev);
+    assert_eq!(warm, cold, "body edit: the arena equals cold");
+    assert_eq!(
+        report.reused, report.producers,
+        "body edit: every producer copied ({report:?})"
+    );
+
+    let before = cold;
+    edit(
+        ws,
+        "src/Ws.al",
+        "        T: Record Customer temporary;",
+        "        T: Record Customer;",
+    );
+    let rev = pin(&s);
+    assert_answers_equal_cold("temp → physical", &rev, ws, &["FillAndPost"]);
+    let (warm, cold, report) = pd_and_cold(&rev);
+    assert_ne!(cold, before, "precondition: the edit moves the arena");
+    assert_eq!(warm, cold, "temp → physical: the arena equals cold");
+    assert!(
+        report.reused < report.producers,
+        "temp → physical: Fill's producer re-solved ({report:?})"
+    );
+}
 
 /// Design §6.9 (seeded L4, T-incr's L4 half): across a body edit (B), a
 /// declaration edit (S) and a package-identity change (P) of the rule-B

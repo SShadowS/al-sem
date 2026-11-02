@@ -2672,6 +2672,7 @@ type ComposedCones = (
     ConeDerivedStore,
     super::pd_solve::ConeArena,
     ComposeStats,
+    super::pd_solve::PdSolveReport,
 );
 
 /// Compute capabilityFactsInherited + coverage for EVERY routine via a single
@@ -2699,6 +2700,7 @@ fn compose_inherited_cones(
     routines_by_id: &HashMap<&str, &ModelRoutine>,
     frames: &HashMap<String, super::param_guard::FrameGuards>,
     scope: &ConeScope,
+    pd_reuse: Option<&super::pd_solve::PdReuse<'_>>,
 ) -> ComposedCones {
     let mut stats = ComposeStats::default();
     // #160 §4.1.1: the per-call untimed remainder. Entry snapshot only under
@@ -2753,7 +2755,8 @@ fn compose_inherited_cones(
     // A span beside the census timer (context-server design r3 §6.10: the
     // whole re-solve's cost decides whether the per-producer rule ships).
     let pd_span = crate::engine::perf_trace::span("cone", "pd.solve");
-    let (arena, resolved) = super::pd_solve::solve(producers, g, routines_by_id, frames);
+    let (arena, resolved, pd_report) =
+        super::pd_solve::solve_seeded(producers, g, routines_by_id, frames, pd_reuse);
     drop(pd_span);
     crate::engine::l5::detector_context::cones_census::add_since(
         &crate::engine::l5::detector_context::cones_census::PD_SOLVE_NANOS,
@@ -3194,6 +3197,7 @@ fn compose_inherited_cones(
         derived.finish(),
         arena,
         stats,
+        pd_report,
     )
 }
 
@@ -3277,6 +3281,12 @@ pub struct ConeOutcome {
     pub derived: ConeDerivedStore,
     /// The transitive producer solve (#69 D1), in cone (internal) ids.
     pub pd_solution: super::pd_solve::ConeArena,
+    /// The per-routine inputs the producer solve read
+    /// ([`pd_input_digests`]); empty unless the composition was asked to
+    /// retain them ([`PdRetain`]).
+    pub pd_digests: HashMap<String, [u8; 32]>,
+    /// What the producer solve reused.
+    pub pd_report: super::pd_solve::PdSolveReport,
     /// This call's SCC-shape and recursive-branch counts (#160 step 7a), for
     /// tests; production reads them through the census.
     #[cfg(test)]
@@ -3305,6 +3315,82 @@ pub fn compose_cone_over_graph(
     coverage_in: &HashMap<String, (String, Vec<String>)>,
     routines: &[ModelRoutine],
     scope: ConeScope,
+) -> ConeOutcome {
+    compose_cone_over_graph_retained(
+        typed,
+        nodes,
+        direct_in,
+        coverage_in,
+        routines,
+        scope,
+        PdRetain::No,
+    )
+}
+
+/// Whether a composition keeps what the NEXT revision's producer solve
+/// reuses (context-server design §6.10, stage 5), and the previous
+/// revision's solve to reuse.
+pub enum PdRetain<'a> {
+    /// A one-shot composition: no digests (they cost a pass over every row).
+    No,
+    /// Compute [`ConeOutcome::pd_digests`]; reuse `seed`'s producers that
+    /// Δ leaves untouched (`pd_solve::solve_seeded`).
+    Yes {
+        seed: Option<(
+            &'a super::pd_solve::ConeArena,
+            &'a HashMap<String, [u8; 32]>,
+        )>,
+    },
+}
+
+/// Each routine's producer-solve inputs, hashed (design §6.10 "Producers"):
+/// every model row of the id (`Debug`, model order), its guard frame
+/// (usable parameters and per-site requirements, sites sorted) and its typed
+/// out-edges. The solve reads nothing else of a routine: `cross_edge` reads
+/// the caller's row and frame and the callee's row, its expansion the
+/// incoming edges (the callers' out-edges), a producer's seed its owner's
+/// frame; the producer facts are compared whole. Ids of the graph's nodes
+/// and of the rows; hashed in parallel.
+pub(crate) fn pd_input_digests(
+    g: &TypedEdgeGraph,
+    routines: &[ModelRoutine],
+    frames: &HashMap<String, super::param_guard::FrameGuards>,
+) -> HashMap<String, [u8; 32]> {
+    use rayon::prelude::*;
+    let _s = crate::engine::perf_trace::span("cone", "pd.digests");
+    let mut rows_of: BTreeMap<&str, Vec<&ModelRoutine>> = BTreeMap::new();
+    for r in routines {
+        rows_of.entry(r.id.as_str()).or_default().push(r);
+    }
+    for id in &g.nodes {
+        rows_of.entry(id.as_str()).or_default();
+    }
+    let rows_of: Vec<(&str, Vec<&ModelRoutine>)> = rows_of.into_iter().collect();
+    rows_of
+        .into_par_iter()
+        .map(|(id, rows)| {
+            let frame = frames.get(id).map(|f| {
+                let sites: BTreeMap<&String, &Vec<super::param_guard::Req>> =
+                    f.by_site.iter().collect();
+                (&f.usable, sites)
+            });
+            let digest = super::summary_runner::sha256_of_debug(&(rows, frame, g.outgoing.get(id)));
+            (id.to_string(), digest)
+        })
+        .collect()
+}
+
+/// [`compose_cone_over_graph`], keeping (and reusing) the producer solve's
+/// inputs as `pd` says. The outcome equals a plain composition's in every
+/// other field.
+pub fn compose_cone_over_graph_retained(
+    typed: &[TypedEdge],
+    nodes: &[String],
+    direct_in: &HashMap<String, Vec<CapabilityFact>>,
+    coverage_in: &HashMap<String, (String, Vec<String>)>,
+    routines: &[ModelRoutine],
+    scope: ConeScope,
+    pd: PdRetain<'_>,
 ) -> ConeOutcome {
     crate::engine::perf_trace::counter_delta("build.cone", 1);
     let _t_graph = crate::engine::l5::detector_context::cones_census::start();
@@ -3365,7 +3451,16 @@ pub fn compose_cone_over_graph(
     let routines_by_id: HashMap<&str, &ModelRoutine> =
         routines.iter().map(|r| (r.id.as_str(), r)).collect();
     let frames = guard_frames(&g, routines, &routines_by_id);
-    let (coverage, raw, derived, pd_solution, _stats) = compose_inherited_cones(
+    let (pd_digests, seed) = match pd {
+        PdRetain::No => (HashMap::new(), None),
+        PdRetain::Yes { seed } => (pd_input_digests(&g, routines, &frames), seed),
+    };
+    let reuse = seed.map(|(old, old_digests)| super::pd_solve::PdReuse {
+        old,
+        old_digests,
+        new_digests: &pd_digests,
+    });
+    let (coverage, raw, derived, pd_solution, _stats, pd_report) = compose_inherited_cones(
         &g,
         &scc,
         &direct,
@@ -3375,6 +3470,7 @@ pub fn compose_cone_over_graph(
         &routines_by_id,
         &frames,
         &scope,
+        reuse.as_ref(),
     );
     if !raw.is_empty() {
         crate::engine::perf_trace::counter_delta("build.witness_pass", 1);
@@ -3435,6 +3531,8 @@ pub fn compose_cone_over_graph(
         raw,
         derived,
         pd_solution,
+        pd_digests,
+        pd_report,
         #[cfg(test)]
         stats: _stats,
     }
@@ -4737,7 +4835,7 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
     let routines_by_id: HashMap<&str, &ModelRoutine> =
         ws.routines.iter().map(|r| (r.id.as_str(), r)).collect();
     let frames = guard_frames(&g, &ws.routines, &routines_by_id);
-    let (cone_coverage, cone_raw, _derived, _pd_solution, _stats) = compose_inherited_cones(
+    let (cone_coverage, cone_raw, _derived, _pd_solution, _stats, _) = compose_inherited_cones(
         &g,
         &scc,
         &direct,
@@ -4750,6 +4848,7 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
             derived: false,
             raw: WitnessScope::All,
         },
+        None,
     );
 
     // ── Project ───────────────────────────────────────────────────────────

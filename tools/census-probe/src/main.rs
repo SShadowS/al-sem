@@ -2127,6 +2127,12 @@ fn incr_mode(ws: PathBuf, routine: String, low_mem: bool, verify: bool, steps: V
         let l4_ms = rev
             .prepare_keys(&[ArtifactKey::L4], &ctl)
             .unwrap_or_else(|e| panic!("{name}: l4: {e:?}"));
+        if let Some(p) = rev.pd_report() {
+            println!(
+                "        pd producers {} reused {} (states {}), delta routines {}",
+                p.producers, p.reused, p.reused_states, p.delta_routines
+            );
+        }
         if let Some((seeded, total, full)) = rev.l4_report() {
             println!(
                 "        l4 seeded {seeded} of {total} SCCs{}",

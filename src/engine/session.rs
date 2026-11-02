@@ -802,6 +802,26 @@ pub(crate) fn compose_cone(
     dc::compose_capabilities(model, rel.cone(), dc::det_cone_inputs(model, rel), scope)
 }
 
+/// [`compose_cone`] for a resident revision (context-server design §6.10,
+/// stage 5): it also keeps the producer solve's per-routine inputs, and
+/// reuses the previous revision's producer states `pd` names. Its analysis
+/// and raw facts equal [`compose_cone`]'s.
+pub(crate) fn compose_cone_retained(
+    model: &Model,
+    rel: &ExecRelation,
+    scope: ConeScope,
+    pd: crate::engine::l4::capability_cone::PdRetain<'_>,
+) -> (CapabilityAnalysis, InheritedFacts, dc::PdRetained) {
+    let _s = pt::span("context", "context.capability_cones");
+    dc::compose_capabilities_retained(
+        model,
+        rel.cone(),
+        dc::det_cone_inputs(model, rel),
+        scope,
+        pd,
+    )
+}
+
 /// The raw-emission phase: the raw facts of `subjects` (internal ids) alone,
 /// for a reader whose subjects a retained composition did not emit (a
 /// dependency root over a primary-scoped composition; a resident revision's

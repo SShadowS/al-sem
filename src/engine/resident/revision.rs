@@ -41,8 +41,8 @@ use crate::engine::resident::store::{
     Control, FillCx, PrepareError, Snapshot, Store, StoreKey, StoreStats, StoreValue,
 };
 use crate::engine::session::{
-    JobId, Plan, RunKey, TreeReadOut, View, WitnessRequest, compose_cone, emit_raw_ids, key,
-    read_tree, relation_of, run_once, tree_apps, tree_groups,
+    JobId, Plan, RunKey, TreeReadOut, View, WitnessRequest, compose_cone_retained, emit_raw_ids,
+    key, read_tree, relation_of, run_once, tree_apps, tree_groups,
 };
 use crate::program::inputs::WorkspaceInputs;
 use crate::program::model::calls::CallEdge;
@@ -92,6 +92,12 @@ pub struct Fold {
     pub(crate) caps: CapabilityAnalysis,
     /// The primary routines' raw facts.
     pub(crate) raw: InheritedFacts,
+    /// The per-routine inputs its producer solve read (design §6.10): the
+    /// next revision's fold re-solves only the producers Δ reaches and
+    /// copies every other producer's states from `caps.pd`.
+    pub(crate) pd_digests: std::collections::HashMap<String, [u8; 32]>,
+    /// What its producer solve reused.
+    pub pd_report: crate::engine::l4::pd_solve::PdSolveReport,
 }
 
 impl Fold {
@@ -110,6 +116,7 @@ impl Fold {
             ("fold.coverage", Box::new(coverage)),
             ("fold.derived", Box::new(derived)),
             ("fold.pd", Box::new(pd)),
+            ("fold.pd_digests", Box::new(self.pd_digests)),
         ]
     }
 }
@@ -164,7 +171,7 @@ pub fn seed_key(inputs: &WorkspaceInputs, single_app: bool) -> [u8; 32] {
 pub enum ArtifactValue {
     Ordering(OrderingFactsMap),
     Rules(RulesIndex),
-    Fold(Fold),
+    Fold(Box<Fold>),
     L4(Solved),
     Raw(InheritedFacts),
     Det(Arc<DetectorArtifacts>),
@@ -218,6 +225,10 @@ pub struct Revision {
     seed: std::sync::Mutex<Option<L4Seed>>,
     /// The last `L4` fill's report: `(seeded SCCs, total SCCs, full)`.
     l4_report: std::sync::Mutex<Option<(usize, usize, bool)>>,
+    /// The previous revision's `Fold` artifact (an `ArtifactValue::Fold`),
+    /// its producer states the seed of this revision's fold (§6.10), until
+    /// that fold publishes. Same key rule as the L4 seed.
+    fold_seed: std::sync::Mutex<Option<Arc<Artifact>>>,
 }
 
 impl ArtifactKey {
@@ -264,6 +275,9 @@ impl Revision {
         let seed = prev
             .and_then(Revision::l4_seed)
             .filter(|s| s.key == seed_key);
+        let fold_seed = prev
+            .filter(|p| p.seed_key == seed_key)
+            .and_then(Revision::fold_seed);
         Revision {
             id,
             inputs,
@@ -278,6 +292,30 @@ impl Revision {
             seed_key,
             seed: std::sync::Mutex::new(seed),
             l4_report: std::sync::Mutex::new(None),
+            fold_seed: std::sync::Mutex::new(fold_seed),
+        }
+    }
+
+    /// The fold a NEXT revision's fold may start from: this revision's
+    /// published `Fold`, else the seed it was given and has not used yet.
+    #[must_use]
+    pub fn fold_seed(&self) -> Option<Arc<Artifact>> {
+        match self.store.load().get(&ArtifactKey::Fold) {
+            Some(a) => Some(Arc::clone(a)),
+            None => self
+                .fold_seed
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone(),
+        }
+    }
+
+    /// The published fold's producer-solve report.
+    #[must_use]
+    pub fn pd_report(&self) -> Option<crate::engine::l4::pd_solve::PdSolveReport> {
+        match self.store.load().get(&ArtifactKey::Fold).map(|a| &a.value) {
+            Some(ArtifactValue::Fold(f)) => Some(f.pd_report),
+            _ => None,
         }
     }
 
@@ -483,8 +521,34 @@ impl Revision {
                         derived: true,
                         raw: primary.scope(model),
                     };
-                    let (caps, raw) = compose_cone(model, &self.rel, scope);
-                    ArtifactValue::Fold(Fold { caps, raw })
+                    // The previous revision's fold (§6.10): its producer
+                    // states are copied where Δ leaves them untouched.
+                    let seed = self
+                        .fold_seed
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .clone();
+                    let pd_seed = seed.as_ref().and_then(|a| match &a.value {
+                        ArtifactValue::Fold(f) => f.caps.pd.as_ref().map(|pd| (pd, &f.pd_digests)),
+                        _ => None,
+                    });
+                    let (caps, raw, kept) = compose_cone_retained(
+                        model,
+                        &self.rel,
+                        scope,
+                        crate::engine::l4::capability_cone::PdRetain::Yes { seed: pd_seed },
+                    );
+                    crate::engine::perf_trace::counter_delta(
+                        "revision.pd_producers_reused",
+                        kept.report.reused as u64,
+                    );
+                    drop(seed);
+                    ArtifactValue::Fold(Box::new(Fold {
+                        caps,
+                        raw,
+                        pd_digests: kept.digests,
+                        pd_report: kept.report,
+                    }))
                 }
                 ArtifactKey::L4 => {
                     // A shared fill is never cancelled by a request (§4.6).
@@ -752,6 +816,12 @@ impl Revision {
     fn release_used_seed(&self, snap: &ReadySnapshot) {
         if snap.get(&ArtifactKey::L4).is_some() {
             self.seed.lock().unwrap_or_else(|p| p.into_inner()).take();
+        }
+        if snap.get(&ArtifactKey::Fold).is_some() {
+            self.fold_seed
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .take();
         }
     }
 
