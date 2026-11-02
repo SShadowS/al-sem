@@ -38,6 +38,7 @@ use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -46,7 +47,7 @@ use super::{
     FAILED_COOLDOWN, HELLO_DEADLINE, Hello, Message, OpenParams, PROGRESS_METHOD, QUEUE_BYTES,
     QUEUE_FRAMES, SHUTDOWN_DEADLINE, STABLE_AFTER, STDERR_RETAIN, SUPPORTED_PROTOCOLS,
 };
-use crate::wire::{Answer, FailedOutcome, MESSAGE_INLINE_BYTES, Outcome, ReadFrame, decode_frame};
+use crate::wire::{Answer, FailedOutcome, ReadFrame, decode_frame};
 
 /// How a front end starts and supervises its child. [`FrontConfig::new`]
 /// gives the design's values; tests shorten the clocks.
@@ -60,6 +61,9 @@ pub struct FrontConfig {
     pub env: Vec<(OsString, OsString)>,
     /// The workspace the session serves.
     pub workspace: PathBuf,
+    /// Its universe (one child per workspace and universe; an ask of the
+    /// other universe is refused `notThisWorkspace`).
+    pub universe: super::Universe,
     pub hello_deadline: Duration,
     pub shutdown_deadline: Duration,
     pub backoff_initial: Duration,
@@ -83,6 +87,7 @@ impl FrontConfig {
             args: vec!["engine-host".into()],
             env: Vec::new(),
             workspace: workspace.into(),
+            universe: super::Universe::CrossApp,
             hello_deadline: HELLO_DEADLINE,
             shutdown_deadline: SHUTDOWN_DEADLINE,
             backoff_initial: BACKOFF_INITIAL,
@@ -379,6 +384,15 @@ pub struct EngineFront {
 /// A failure before an answer: its outcome and message.
 type Failure = (FailedOutcome, String);
 
+/// What a caller watches an ask with ([`EngineFront::ask_with`]).
+#[derive(Default)]
+pub struct Watch<'a> {
+    /// Set it (from another thread) to cancel the ask.
+    pub cancel: Option<&'a AtomicBool>,
+    /// Called with each progress notification's params (`{id, phase}`).
+    pub progress: Option<&'a mut dyn FnMut(&serde_json::Value)>,
+}
+
 impl EngineFront {
     /// A front end for `cfg`; nothing is started until the first ask. The
     /// spill directory (the child's `outputRoot`) is a private temp folder
@@ -402,18 +416,63 @@ impl EngineFront {
     /// Ask the engine one command. Every failure is an answer: a dead,
     /// silent or misbehaving child gives `kind: "failed"` with its outcome.
     pub fn ask(&mut self, params: AskParams) -> Answer {
+        self.ask_with(params, &mut Watch::default())
+    }
+
+    /// [`EngineFront::ask`], watched: once `watch.cancel` is set the child is
+    /// sent `session/cancel` for this ask (it answers `cancelled`), and every
+    /// progress notification for it is handed to `watch.progress` (ask with
+    /// `progress: true` to get them).
+    pub fn ask_with(&mut self, params: AskParams, watch: &mut Watch<'_>) -> Answer {
         let id = self.take_id();
-        match self.ask_inner(&id, params) {
+        match self.ask_inner(&id, params, watch) {
             Ok(answer) => answer,
             Err((outcome, message)) => failed(id, outcome, message),
         }
     }
 
-    fn ask_inner(&mut self, id: &serde_json::Value, params: AskParams) -> Result<Answer, Failure> {
+    /// Tell the child these paths changed (`session/notifyChanged`): the
+    /// next freshness check hashes them again. Starts the child if needed.
+    pub fn notify_changed(&mut self, paths: Vec<PathBuf>) -> Result<(), String> {
+        self.ensure_running().map_err(|(_, m)| m)?;
+        let params = serde_json::to_value(super::NotifyChangedParams { paths })
+            .map_err(|e| e.to_string())?;
+        self.notify("session/notifyChanged", params)
+            .map_err(|(_, m)| m)
+    }
+
+    /// `session/refresh {wait}`: with `wait`, the published revision after a
+    /// fresh check (and any rebuild); without, `{started: true}` at once.
+    pub fn refresh(&mut self, wait: bool) -> Result<serde_json::Value, String> {
+        self.ensure_running().map_err(|(_, m)| m)?;
+        let id = self.take_id();
+        let params =
+            serde_json::to_value(super::RefreshParams { wait }).map_err(|e| e.to_string())?;
+        self.call(id, "session/refresh", params, None, &mut Watch::default())
+            .map_err(|(_, m)| m)
+    }
+
+    /// One notification to the running child.
+    fn notify(&mut self, method: &str, params: serde_json::Value) -> Result<(), Failure> {
+        let frame = crate::wire::encode_frame(&Message::notification(method, params))
+            .map_err(|e| (FailedOutcome::Protocol, e.to_string()))?;
+        let run = self.running.as_mut().expect("a running child");
+        if let Err(e) = run.stdin.write_all(&frame).and_then(|()| run.stdin.flush()) {
+            return Err(self.died(format!("writing to the engine failed: {e}")));
+        }
+        Ok(())
+    }
+
+    fn ask_inner(
+        &mut self,
+        id: &serde_json::Value,
+        params: AskParams,
+        watch: &mut Watch<'_>,
+    ) -> Result<Answer, Failure> {
         self.ensure_running()?;
         let params = serde_json::to_value(params)
             .map_err(|e| (FailedOutcome::Protocol, format!("encoding the ask: {e}")))?;
-        let result = self.call(id.clone(), "session/ask", params, None)?;
+        let result = self.call(id.clone(), "session/ask", params, None, watch)?;
         match serde_json::from_value::<Answer>(result) {
             Ok(answer) if answer.id == *id => {
                 // A completed ask: the child is doing useful work.
@@ -437,7 +496,13 @@ impl EngineFront {
         self.ensure_running().map_err(|(_, m)| m)?;
         let id = self.take_id();
         let v = self
-            .call(id, "session/status", serde_json::Value::Null, None)
+            .call(
+                id,
+                "session/status",
+                serde_json::Value::Null,
+                None,
+                &mut Watch::default(),
+            )
             .map_err(|(_, m)| m)?;
         serde_json::from_value(v).map_err(|e| e.to_string())
     }
@@ -718,11 +783,12 @@ impl EngineFront {
         let open = OpenParams {
             workspace: self.cfg.workspace.clone(),
             output_root: self.output_root.path().to_path_buf(),
+            universe: self.cfg.universe,
         };
         let id = self.take_id();
         let params = serde_json::to_value(open).expect("open params serialize");
         let deadline = Some(self.cfg.hello_deadline);
-        match self.call(id, "session/open", params, deadline) {
+        match self.call(id, "session/open", params, deadline, &mut Watch::default()) {
             Ok(_) => Ok(()),
             Err((FailedOutcome::EngineError, why)) if self.running.is_some() => {
                 // The child refused the session: it is alive but useless.
@@ -741,6 +807,7 @@ impl EngineFront {
         method: &str,
         params: serde_json::Value,
         timeout: Option<Duration>,
+        watch: &mut Watch<'_>,
     ) -> Result<serde_json::Value, Failure> {
         let frame = crate::wire::encode_frame(&Message::request(id.clone(), method, params))
             .map_err(|e| {
@@ -754,15 +821,36 @@ impl EngineFront {
             return Err(self.died(format!("writing to the engine failed: {e}")));
         }
         let deadline = timeout.map(|t| Instant::now() + t);
+        let mut cancel_sent = false;
         loop {
+            if !cancel_sent && watch.cancel.is_some_and(|c| c.load(Ordering::SeqCst)) {
+                cancel_sent = true;
+                self.notify("session/cancel", serde_json::json!({ "id": id }))?;
+            }
+            // A watched call wakes up to look at its cancel flag.
+            let slice = watch.cancel.map(|_| Duration::from_millis(25));
+            let left = deadline.map(|d| d.saturating_duration_since(Instant::now()));
+            let wait = match (left, slice) {
+                (Some(l), Some(s)) => Some(l.min(s)),
+                (l, s) => l.or(s),
+            };
             let run = self.running.as_mut().expect("a running child");
-            let event = run
-                .frames
-                .recv(deadline.map(|d| d.saturating_duration_since(Instant::now())));
+            let event = run.frames.recv(wait);
             match event {
+                Err(RecvError::Timeout)
+                    if deadline.is_none_or(|d| Instant::now() < d) && slice.is_some() =>
+                {
+                    continue;
+                }
                 // Shapes were checked by the reader: a notification, or a
                 // response with exactly one of result and error.
-                Ok(Event::Frame(m)) if m.method.is_some() => {}
+                Ok(Event::Frame(m)) if m.method.is_some() => {
+                    let ours = m.method.as_deref() == Some(PROGRESS_METHOD)
+                        && m.params.as_ref().and_then(|p| p.get("id")) == Some(&id);
+                    if let (true, Some(f)) = (ours, watch.progress.as_mut()) {
+                        f(m.params.as_ref().expect("checked above"));
+                    }
+                }
                 Ok(Event::Frame(m)) if m.id.as_ref() == Some(&id) => {
                     if let Some(err) = m.error {
                         return Err((FailedOutcome::EngineError, err.message));
@@ -876,24 +964,7 @@ impl Drop for EngineFront {
 
 /// A `kind: "failed"` answer for ask `id`.
 fn failed(id: serde_json::Value, outcome: FailedOutcome, message: String) -> Answer {
-    Answer {
-        id,
-        outcome: Outcome::Failed {
-            outcome,
-            message: cut_front(&message, MESSAGE_INLINE_BYTES),
-            diagnostic_file: None,
-        },
-        revision: None,
-    }
-}
-
-/// `text`'s first `max` bytes on a character boundary.
-fn cut_front(text: &str, max: usize) -> String {
-    let mut end = text.len().min(max);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_string()
+    Answer::terminal(id, None, outcome, &message, None)
 }
 
 /// Copy `pipe` into `tail`, keeping its newest [`STDERR_RETAIN`] bytes.

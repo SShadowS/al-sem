@@ -508,12 +508,25 @@ impl Revision {
     /// answered off this revision: the exact output a standalone run of it
     /// writes. `Err` only when the request stopped or a fill failed.
     pub fn answer(&self, job: &dyn Job, ctl: &Control<'_>) -> Result<JobOutput, PrepareError> {
-        let r = self.answer_inner(job, ctl);
+        self.answer_timed(job, ctl).map(|(out, _)| out)
+    }
+
+    /// [`Revision::answer`] with where its time went: `(shared fill ms,
+    /// compute ms)` — `ensure_prepared`, then everything after it.
+    pub fn answer_timed(
+        &self,
+        job: &dyn Job,
+        ctl: &Control<'_>,
+    ) -> Result<(JobOutput, (u64, u64)), PrepareError> {
+        let start = std::time::Instant::now();
+        let mut prepare_ms = 0;
+        let r = self.answer_inner(job, ctl, &mut prepare_ms);
         if r.is_ok() {
             self.answered
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
-        r
+        let total = start.elapsed().as_millis() as u64;
+        r.map(|out| (out, (prepare_ms, total.saturating_sub(prepare_ms))))
     }
 
     /// How many requests this revision answered.
@@ -535,11 +548,15 @@ impl Revision {
         &self,
         plan: &Plan,
         ctl: &Control<'_>,
+        prepare_ms: &mut u64,
     ) -> Result<(View, Vec<String>), PrepareError> {
         let needs = self.needs_of(plan);
+        let start = std::time::Instant::now();
         let snap = self
             .store
-            .ensure_prepared(&needs, &|_| 0, &|cx| self.fill(plan, cx), ctl)?;
+            .ensure_prepared(&needs, &|_| 0, &|cx| self.fill(plan, cx), ctl);
+        *prepare_ms = start.elapsed().as_millis() as u64;
+        let snap = snap?;
         if let Some(stop) = (ctl.stop)() {
             return Err(stop.into());
         }
@@ -602,7 +619,12 @@ impl Revision {
         Ok((view, lines))
     }
 
-    fn answer_inner(&self, job: &dyn Job, ctl: &Control<'_>) -> Result<JobOutput, PrepareError> {
+    fn answer_inner(
+        &self,
+        job: &dyn Job,
+        ctl: &Control<'_>,
+        prepare_ms: &mut u64,
+    ) -> Result<JobOutput, PrepareError> {
         let mut demands = job.demands();
         if demands.len() != 1 {
             return Err(PrepareError::Engine(format!(
@@ -636,7 +658,7 @@ impl Revision {
         };
         let plan = Plan::merge([(JobId(0), part.plan)]);
         let (keys, has_tree) = (plan.keys(), plan.has_tree(JobId(0)));
-        let (mut view, mut lines) = self.serve_plan(&plan, ctl)?;
+        let (mut view, mut lines) = self.serve_plan(&plan, ctl, prepare_ms)?;
         if let Some(stop) = (ctl.stop)() {
             return Err(stop.into());
         }
@@ -658,6 +680,23 @@ impl Revision {
         let doc = job.finalize(vec![side]);
         Ok(crate::engine::batch::serialize(0, job, doc, lines))
     }
+}
+
+/// `job` (one view, one side) answered over a build that produced no model:
+/// its own `view_failed` text and exit, as the batch driver writes it for a
+/// standalone run (design §4.3 "Failed build").
+pub fn answer_failed_build(
+    job: &dyn Job,
+    failure: &crate::engine::batch::job::ViewFailure,
+) -> JobOutput {
+    let d = job
+        .demands()
+        .into_iter()
+        .next()
+        .expect("a served job reads one view");
+    let (side, lines) = capture(|| job.view_failed(d.side, failure));
+    let doc = job.finalize(vec![side]);
+    crate::engine::batch::serialize(0, job, doc, lines)
 }
 
 /// A job whose resolve failed, as the driver writes it.

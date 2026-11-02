@@ -211,6 +211,15 @@ struct EngineAskCli {
     #[arg(long = "max-inline")]
     max_inline: Option<u64>,
 
+    /// Print the `session/ask` params this front end would send (its
+    /// decisions and request files included) as JSON, and exit.
+    #[arg(long = "params")]
+    params: bool,
+
+    /// The ask's freshness: fresh | latest-built | verify.
+    #[arg(long = "freshness", default_value = "fresh")]
+    freshness: String,
+
     /// The command line to ask, after `--`.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
     argv: Vec<String>,
@@ -2733,32 +2742,34 @@ fn plan_analyze(a: AnalyzeCli, in_batch: bool) -> Planned {
 
 // ── the engine child and its stage-2 front end (context-server stage 2) ─────
 
-/// `alsem engine-host` (the child) and `alsem engine-ask` (a front end of
-/// one ask). The child answers each `session/ask` through the one-shot job
-/// path of a standalone run, in the design's order (r5 §4.3): **decode** the
-/// argv (clap), **validate** it through the CLI's own planning
-/// (`Planned::Failed | Ready`, with no workspace read bound: a planning
-/// failure answers its CLI text and exit and reads nothing), then **acquire**
-/// the workspace read (each package once, `M_before` and `M_after` around the
-/// run) and run the job off it. A semantic build failure is the job's own
-/// CLI answer (`view_failed`); infrastructure failures are `kind: "failed"`.
+/// `alsem engine-host` (the child), `alsem engine-ask` (a front end of one
+/// ask) and `alsem mcp`. The child keeps a resident session
+/// (`al_sem::engine::resident`) and answers each `session/ask` in the
+/// design's order (§4.3): **decode** the argv (clap), check the front end's
+/// mandatory decisions, **validate** through the CLI's own planning with no
+/// workspace bound (a planning failure answers its CLI text and exit, 3
+/// included, `revision: null`, and reads nothing), enforce the session's
+/// workspace and universe, **pin** a revision by the ask's freshness mode,
+/// plan again **bound** to the pinned read, and answer off the revision
+/// (explain, prove, digest, query) or through the one-shot job path over
+/// its read (every other command). A semantic build failure is the job's
+/// own CLI answer (`view_failed`); infrastructure failures are
+/// `kind: "failed"`.
 mod engine {
     use super::*;
-    use al_sem::app_image::{InputsUnstable, PackageManifest, check_consistent};
     use al_sem::engine::batch::plan_cx::ProcessFs;
-    use al_sem::engine::host::child::{Engine, protocol_stdout, serve};
+    use al_sem::engine::host::child::{AskCx, Engine, protocol_stdout, serve};
     use al_sem::engine::host::front::{EngineFront, FrontConfig};
-    use al_sem::engine::host::{AskParams, ChildStatus, Decisions, OpenParams};
-    use al_sem::program::inputs::WorkspaceInputs;
+    use al_sem::engine::host::{AskParams, ChildStatus, Decisions, OpenParams, Universe};
+    use al_sem::engine::resident::revision::{SERVED_COMMANDS, answer_failed_build};
+    use al_sem::engine::resident::session::{Built, PinError, ResidentSession};
+    use al_sem::engine::resident::store::{Control, PrepareError, Stop};
     use al_sem::wire::{
-        FailedOutcome, Outcome, Spill, Stderr, Stdout, WireError, clamp_inline, cli_outcome,
+        Answer, FailedOutcome, Outcome, Stderr, Stdout, Timing, WireError, WorkDone, clamp_inline,
+        cli_outcome,
     };
-    use std::collections::BTreeMap;
     use std::io::Write as _;
-
-    /// How many times an ask whose packages moved during the run is retried
-    /// before it answers `inputsUnstable` (r4 §5.2).
-    const ACQUIRE_ATTEMPTS: usize = 3;
+    use std::time::Instant;
 
     /// `alsem engine-host`: serve the engine protocol on stdin/stdout until
     /// the front end shuts the session down or closes stdin.
@@ -2770,9 +2781,9 @@ mod engine {
                 return ExitCode::from(1);
             }
         };
-        let mut engine = HostEngine::default();
-        let stdin = std::io::BufReader::new(std::io::stdin().lock());
-        match serve(&mut engine, stdin, std::io::BufWriter::new(out)) {
+        let engine = HostEngine::default();
+        let stdin = std::io::BufReader::new(std::io::stdin());
+        match serve(&engine, stdin, std::io::BufWriter::new(out)) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 let _ = writeln!(std::io::stderr(), "al-sem: engine-host: {e}");
@@ -2781,35 +2792,141 @@ mod engine {
         }
     }
 
-    /// The child's session: the workspace it serves and its counters.
+    /// The open session: the workspace as `session/open` named it, its
+    /// absolute spelling (the CLI's view-key rule), the universe, and the
+    /// resident session.
+    #[derive(Clone)]
+    struct Open {
+        workspace: PathBuf,
+        absolute: PathBuf,
+        universe: Universe,
+        session: Arc<ResidentSession>,
+    }
+
+    /// The child's engine: the open session and its counters.
     #[derive(Default)]
     struct HostEngine {
-        workspace: Option<PathBuf>,
-        asks: u64,
-        reads: u64,
+        open: std::sync::Mutex<Option<Open>>,
+        asks: std::sync::atomic::AtomicU64,
+    }
+
+    impl HostEngine {
+        fn session(&self) -> Option<Open> {
+            self.open.lock().unwrap_or_else(|p| p.into_inner()).clone()
+        }
     }
 
     impl Engine for HostEngine {
-        fn open(&mut self, params: &OpenParams) -> Result<(), String> {
+        fn open(&self, params: &OpenParams, instance: &str) -> Result<(), String> {
             if params.workspace.as_os_str().is_empty() {
                 return Err("session/open names no workspace".into());
             }
-            self.workspace = Some(params.workspace.clone());
+            if !params.workspace.is_dir() {
+                return Err(format!(
+                    "session/open: workspace '{}' is not a folder",
+                    params.workspace.display()
+                ));
+            }
+            let absolute =
+                std::path::absolute(&params.workspace).unwrap_or_else(|_| params.workspace.clone());
+            let session = ResidentSession::new(
+                params.workspace.clone(),
+                params.universe == Universe::SingleApp,
+                instance.to_string(),
+            );
+            *self.open.lock().unwrap_or_else(|p| p.into_inner()) = Some(Open {
+                workspace: params.workspace.clone(),
+                absolute,
+                universe: params.universe,
+                session: Arc::new(session),
+            });
             Ok(())
         }
 
-        fn ask(&mut self, params: AskParams, spill: &Spill<'_>) -> Outcome {
-            self.asks += 1;
-            let workspace = self.workspace.clone().unwrap_or_default();
-            answer(&params, &workspace, &mut self.reads, spill)
+        fn ask(&self, id: &serde_json::Value, params: AskParams, cx: &AskCx<'_>) -> Answer {
+            self.asks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let Some(open) = self.session() else {
+                return Answer::terminal(
+                    id.clone(),
+                    None,
+                    FailedOutcome::Protocol,
+                    "session/open first",
+                    None,
+                );
+            };
+            let mut answer = answer(id, params, &open, cx);
+            answer.meta.universe = Some(open.universe.as_str().to_string());
+            answer
         }
 
         fn status(&self) -> ChildStatus {
-            ChildStatus {
+            let open = self.session();
+            let mut status = ChildStatus {
                 pid: std::process::id(),
-                workspace: self.workspace.clone(),
-                asks: self.asks,
-                workspace_reads: self.reads,
+                asks: self.asks.load(std::sync::atomic::Ordering::Relaxed),
+                ..ChildStatus::default()
+            };
+            if let Some(o) = open {
+                let stats = o.session.stats();
+                status.workspace = Some(o.workspace.clone());
+                status.universe = Some(o.universe);
+                status.workspace_reads = stats.builds + stats.discarded_builds;
+                let published = o.session.published();
+                status.revision = published.as_ref().and_then(Built::revision_id);
+                if let Some(Built::Revision(r)) = &published {
+                    let store = r.stats();
+                    status.fills = Some(serde_json::json!({
+                        "byKind": r.fill_counts(),
+                        "answered": r.answered(),
+                        "fills": store.fills,
+                        "joins": store.joins,
+                        "discards": store.discards,
+                        "evictions": store.evictions,
+                        "failures": store.failures,
+                    }));
+                }
+                let mut s = serde_json::to_value(&stats).unwrap_or_default();
+                if let Some(r) = o.session.last_refresh() {
+                    s["lastRefresh"] = serde_json::json!({
+                        "changed": r.changed.len(),
+                        "parsed": r.parsed,
+                        "resolved": r.resolved,
+                        "dependencyBodiesResolved": r.dependency_bodies_resolved,
+                        "wallMs": r.wall_ms,
+                    });
+                }
+                status.session = Some(s);
+            }
+            status
+        }
+
+        fn notify_changed(&self, paths: &[PathBuf]) {
+            if let Some(o) = self.session() {
+                o.session.notify_changed(paths.iter().cloned());
+            }
+        }
+
+        fn refresh(&self, cx: &AskCx<'_>) -> serde_json::Value {
+            let Some(o) = self.session() else {
+                return serde_json::json!({"revision": null, "error": "session/open first"});
+            };
+            let start = Instant::now();
+            match o
+                .session
+                .pin(al_sem::engine::resident::session::Freshness::Fresh, cx.stop)
+            {
+                Ok(p) => serde_json::json!({
+                    "revision": p.built.revision_id(),
+                    "waitedForBuildMs": p.waited_for_build_ms,
+                    "wallMs": start.elapsed().as_millis() as u64,
+                }),
+                Err(e) => serde_json::json!({
+                    "revision": null,
+                    "error": match e {
+                        PinError::Unstable(m) => m,
+                        PinError::Stopped(_) => "stopped".to_string(),
+                    },
+                }),
             }
         }
     }
@@ -2842,94 +2959,201 @@ mod engine {
         }
     }
 
-    /// One ask's outcome (see the module doc for the order).
-    fn answer(ask: &AskParams, session: &Path, reads: &mut u64, spill: &Spill<'_>) -> Outcome {
-        let inline = clamp_inline(ask.max_inline_bytes);
-        let cli = |out: &JobOutput| match cli_outcome(out, inline, spill) {
-            Ok(o) => o,
-            Err(WireError::FileWrite(p)) => Outcome::failed(
-                FailedOutcome::RefusedPath,
-                format!("the engine does not write files yet (--out {p})"),
-            ),
-            Err(e) => Outcome::failed(FailedOutcome::Protocol, e.to_string()),
-        };
-        let mut unstable: Option<InputsUnstable> = None;
-        for _ in 0..ACQUIRE_ATTEMPTS {
-            // Decode and validate: planning reads only the request's own
-            // inputs (its diff text, the files its flags name), no workspace.
-            let command = match decode(&ask.argv) {
-                Ok(c) => c,
-                Err(out) => return cli(&out),
-            };
-            let plan_reads = PlanReads::request(ask.diff_text.clone(), Box::new(ProcessFs));
-            let shipped = ask.decisions.clone().map(
-                |Decisions {
-                     changed_is_file,
-                     diff_root,
-                 }| (changed_is_file, diff_root),
-            );
-            let (command, cx) = decide(command, PlanCx::new(&plan_reads), shipped);
-            let planned = plan(command, true, &cx);
-            let wanted = match &planned {
-                Planned::Failed(f) => return cli(&f.output),
-                Planned::Ready { reads, .. } => reads.clone(),
-            };
-            // One read per workspace, with the union of what the job needs of it.
-            let mut by_path: BTreeMap<PathBuf, (PathBuf, WorkspaceNeeds)> = BTreeMap::new();
-            for (path, needs) in &wanted {
-                let key = std::path::absolute(path).unwrap_or_else(|_| path.clone());
-                by_path
-                    .entry(key)
-                    .and_modify(|(_, n)| *n = n.union(*needs))
-                    .or_insert((path.clone(), *needs));
-            }
-            let session_abs =
-                std::path::absolute(session).unwrap_or_else(|_| session.to_path_buf());
-            if let Some((other, _)) = by_path.iter().find(|(abs, _)| **abs != session_abs) {
-                return Outcome::failed(
-                    FailedOutcome::NotThisWorkspace,
-                    format!(
-                        "workspace '{}' is not this session's ('{}')",
-                        other.display(),
-                        session.display()
-                    ),
-                );
-            }
-            // Acquire: M_before, the read (each package once), M_consumed.
-            let packages: Vec<PathBuf> = by_path
-                .values()
-                .flat_map(|(p, _)| al_sem::dependencies::discover_app_files(p).0)
-                .map(|f| f.path)
-                .collect();
-            let before = PackageManifest::observe(&packages);
-            let given: Vec<Arc<WorkspaceInputs>> = by_path
-                .values()
-                .map(|(p, needs)| WorkspaceInputs::read(p, needs))
-                .collect();
-            *reads += given.len() as u64;
-            let consumed =
-                PackageManifest(given.iter().flat_map(|g| g.closure.consumed().0).collect());
-            let reader = WorkspaceReader::new(wanted);
-            for g in given {
-                reader.give(g);
-            }
-            let slots = [Slot::new()];
-            let jobs = make_jobs(vec![planned], &reader, &slots);
-            let out = al_sem::engine::batch::standalone_output(&*jobs[0]);
-            drop(jobs);
-            let after = PackageManifest::observe(&packages);
-            match check_consistent(&before, &consumed, &after) {
-                Ok(()) => return cli(&out),
-                Err(e) => unstable = Some(e),
-            }
+    /// The decoded command with the front end's decisions applied, through
+    /// the request's shipped reads (never the file system). `Err`: the ask
+    /// reads paths but carries no decision for them (design §3: the child
+    /// never decides).
+    fn decided(
+        command: Commands,
+        ask: &AskParams,
+        reads: &Arc<PlanReads>,
+    ) -> Result<(Commands, PlanCx), String> {
+        let mut command = command;
+        let decisions = ask.decisions.clone().unwrap_or_default();
+        let cx = PlanCx::new(reads);
+        if let Commands::Digest(d) = &command
+            && d.changed.is_some()
+            && decisions.changed_is_file.is_none()
+        {
+            return Err("session/ask: `digest --changed` needs the front end's \
+                        decisions.changedIsFile: the engine never probes the file system"
+                .into());
         }
-        Outcome::failed(
-            FailedOutcome::InputsUnstable,
-            format!(
-                "{} (after {ACQUIRE_ATTEMPTS} attempts)",
-                unstable.map_or_else(String::new, |e| e.to_string())
+        pin_changed(&mut command, decisions.changed_is_file, &cx);
+        let reads_paths = match &command {
+            Commands::Digest(d) => DigestInputs::of(d).reads_paths(),
+            Commands::Explain(e) => e.diff.is_some(),
+            _ => false,
+        };
+        if reads_paths && decisions.diff_root.is_none() {
+            return Err(
+                "session/ask: the command reads changed paths; the front end must \
+                        decide their diff root (decisions.diffRoot, the design's \
+                        diffRootDecided): the engine never probes the file system"
+                    .into(),
+            );
+        }
+        let mut cx = cx;
+        cx.diff_root_decided = decisions.diff_root;
+        Ok((command, cx))
+    }
+
+    /// One ask's answer (see the module doc for the order).
+    fn answer(id: &serde_json::Value, ask: AskParams, open: &Open, cx: &AskCx<'_>) -> Answer {
+        let start = Instant::now();
+        let inline = clamp_inline(ask.max_inline_bytes);
+        let mut timing = Timing {
+            queued_ms: cx.queued_ms,
+            ..Timing::default()
+        };
+        let cli = |out: &JobOutput, revision, timing: Timing| {
+            let outcome = match cli_outcome(out, inline, cx.spill) {
+                Ok(o) => o,
+                Err(WireError::FileWrite(p)) => Outcome::failed(
+                    FailedOutcome::RefusedPath,
+                    format!("the engine writes no file a command names (--out {p})"),
+                ),
+                Err(e) => Outcome::failed(FailedOutcome::Protocol, e.to_string()),
+            };
+            let mut a = Answer::new(id.clone(), outcome, revision);
+            a.meta.timing = Some(timing);
+            a
+        };
+        let failed = |outcome, message: &str| {
+            Answer::new(id.clone(), Outcome::failed(outcome, message), None)
+        };
+        let stopped = |stop: Stop, done: &[&str]| {
+            let all = ["pin", "prepare", "compute"];
+            let (outcome, why) = match stop {
+                Stop::Cancelled => (FailedOutcome::Cancelled, "cancelled"),
+                Stop::Deadline => (FailedOutcome::Deadline, "the deadline passed"),
+            };
+            let mut a = Answer::new(id.clone(), Outcome::failed(outcome, why), None);
+            a.meta.work = Some(WorkDone {
+                work_done_ms: start.elapsed().as_millis() as u64,
+                skipped_phases: all
+                    .iter()
+                    .filter(|p| !done.contains(p))
+                    .map(|p| (*p).to_string())
+                    .collect(),
+            });
+            a
+        };
+        // Decode and validate: planning reads only the request's shipped
+        // inputs (its diff text, its request files), no workspace.
+        let command = match decode(&ask.argv) {
+            Ok(c) => c,
+            Err(out) => return cli(&out, None, timing),
+        };
+        let reads = PlanReads::shipped(
+            ask.diff_text.clone(),
+            ask.request_files.clone().unwrap_or_default(),
+        );
+        let (command, plan_cx) = match decided(command, &ask, &reads) {
+            Ok(d) => d,
+            Err(why) => return failed(FailedOutcome::Protocol, &why),
+        };
+        let universe = job_kind(&command).map(|(_, u)| u);
+        let planned = plan(command, true, &plan_cx);
+        let wanted = match &planned {
+            Planned::Failed(f) => return cli(&f.output, None, timing),
+            Planned::Ready { reads, .. } => reads.clone(),
+        };
+        drop(planned);
+        // The session's workspace and universe.
+        if let Some((other, _)) = wanted
+            .iter()
+            .find(|(p, _)| std::path::absolute(p).unwrap_or_else(|_| p.clone()) != open.absolute)
+        {
+            return failed(
+                FailedOutcome::NotThisWorkspace,
+                &format!(
+                    "workspace '{}' is not this session's ('{}')",
+                    other.display(),
+                    open.workspace.display()
+                ),
+            );
+        }
+        let single = open.universe == Universe::SingleApp;
+        if universe.is_some_and(|u| (u == ViewUniverse::SingleApp) != single) {
+            return failed(
+                FailedOutcome::NotThisWorkspace,
+                &format!(
+                    "this session serves the {} universe; ask a session of the other",
+                    open.universe.as_str()
+                ),
+            );
+        }
+        // Freshness and pin: one state for the whole ask.
+        (cx.progress)("pin");
+        let pinned = match open.session.pin(ask.freshness, cx.stop) {
+            Ok(p) => p,
+            Err(PinError::Stopped(s)) => return stopped(s, &[]),
+            Err(PinError::Unstable(m)) => return failed(FailedOutcome::InputsUnstable, &m),
+        };
+        timing.waited_for_build_ms = pinned.waited_for_build_ms;
+        if let Some(s) = (cx.stop)() {
+            return stopped(s, &["pin"]);
+        }
+        // Bind: plan again over the pinned read (it may read nothing else).
+        let command = match decode(&ask.argv) {
+            Ok(c) => c,
+            Err(out) => return cli(&out, None, timing),
+        };
+        let (command, mut bound) = match decided(command, &ask, &reads) {
+            Ok(d) => d,
+            Err(why) => return failed(FailedOutcome::Protocol, &why),
+        };
+        bound.inputs = Some(Arc::clone(pinned.built.inputs()));
+        let planned = plan(command, true, &bound);
+        let reader = reader_for(planned.reads(), &bound);
+        let slots = [Slot::new()];
+        let jobs = make_jobs(vec![planned], &reader, &slots);
+        let job = &*jobs[0];
+        (cx.progress)("prepare");
+        let served = SERVED_COMMANDS.contains(&job.name());
+        let compute = Instant::now();
+        let (out, revision) = match &pinned.built {
+            Built::Revision(rev) if served => {
+                let ctl = Control {
+                    stop: cx.stop,
+                    reserve: &|_| Ok(()),
+                };
+                match rev.answer_timed(job, &ctl) {
+                    Ok((out, (fill_ms, compute_ms))) => {
+                        timing.shared_fill_ms = fill_ms;
+                        timing.compute_ms = compute_ms;
+                        (out, Some(rev.id.clone()))
+                    }
+                    Err(PrepareError::Cancelled) => {
+                        return stopped(Stop::Cancelled, &["pin"]);
+                    }
+                    Err(PrepareError::Deadline) => return stopped(Stop::Deadline, &["pin"]),
+                    Err(PrepareError::Budget(m)) => return failed(FailedOutcome::Budget, &m),
+                    Err(PrepareError::Engine(m)) => {
+                        return failed(FailedOutcome::EngineError, &m);
+                    }
+                }
+            }
+            Built::Failed(f) if served => (answer_failed_build(job, &f.failure), None),
+            // The one-shot job path over the pinned read: the same inputs,
+            // its own model (equal to the revision's by the stage-4 contract).
+            Built::Revision(rev) => (
+                al_sem::engine::batch::standalone_output(job),
+                Some(rev.id.clone()),
             ),
-        )
+            Built::Failed(_) => (al_sem::engine::batch::standalone_output(job), None),
+        };
+        if timing.compute_ms == 0 {
+            timing.compute_ms = compute.elapsed().as_millis() as u64;
+        }
+        (cx.progress)("compute");
+        let mut a = cli(&out, revision, timing);
+        a.meta.stale = pinned.stale;
+        if let Outcome::Cli { changed_paths, .. } = &mut a.outcome {
+            *changed_paths = pinned.changed_paths;
+        }
+        a
     }
 
     /// Whether the command reads its diff from stdin (`--diff -`).
@@ -2960,6 +3184,53 @@ mod engine {
         let Some(workspace) = job_paths(&command, &streams).workspaces.into_iter().next() else {
             return usage("al-sem: engine-ask: the command names no workspace".into());
         };
+        let single_app = job_kind(&command).is_some_and(|(_, u)| u == ViewUniverse::SingleApp);
+        let Ok(freshness) = serde_json::from_value(serde_json::json!(a.freshness)) else {
+            return usage(format!(
+                "al-sem: engine-ask: --freshness must be fresh, latest-built or verify, not '{}'",
+                a.freshness
+            ));
+        };
+        let mut params = ask_params(command, a.argv, a.max_inline);
+        params.freshness = freshness;
+        if a.params {
+            let _ = writeln!(
+                std::io::stdout(),
+                "{}",
+                serde_json::to_string(&params).unwrap_or_default()
+            );
+            return ExitCode::SUCCESS;
+        }
+        let program = match std::env::current_exe() {
+            Ok(p) => p,
+            Err(e) => return usage(format!("al-sem: engine-ask: {e}")),
+        };
+        let mut cfg = FrontConfig::new(program, workspace);
+        if single_app {
+            cfg.universe = Universe::SingleApp;
+        }
+        let mut front = match EngineFront::new(cfg) {
+            Ok(f) => f,
+            Err(e) => return usage(format!("al-sem: engine-ask: {e}")),
+        };
+        let answer = front.ask(params);
+        let code = deliver(answer.outcome);
+        front.shutdown();
+        code
+    }
+
+    /// The `session/ask` params a front end sends for a decoded command
+    /// (design §3, §4.3): its file-system questions decided here, through
+    /// this process's file system (the diff root, `--changed`'s
+    /// file-or-list); its stdin read if it reads `--diff -`; and the bytes of
+    /// every file its planning reads (`requestFiles`), read here by planning
+    /// it once with no workspace bound. The child then probes and reads
+    /// nothing for the request.
+    pub(super) fn ask_params(
+        command: Commands,
+        argv: Vec<String>,
+        max_inline: Option<u64>,
+    ) -> AskParams {
         let plan_reads = PlanReads::process();
         let (command, cx) = decide(command, PlanCx::new(&plan_reads), None);
         let decisions = Decisions {
@@ -2969,23 +3240,18 @@ mod engine {
         let diff_text = reads_stdin(&command)
             .then(|| cx.stdin_text().map(str::to_string))
             .flatten();
-        let program = match std::env::current_exe() {
-            Ok(p) => p,
-            Err(e) => return usage(format!("al-sem: engine-ask: {e}")),
-        };
-        let mut front = match EngineFront::new(FrontConfig::new(program, workspace)) {
-            Ok(f) => f,
-            Err(e) => return usage(format!("al-sem: engine-ask: {e}")),
-        };
-        let answer = front.ask(AskParams {
-            argv: a.argv,
+        // Planning reads the request's files through `cx` (recorded once).
+        drop(plan(command, true, &cx));
+        let files = plan_reads.files();
+        let request_files = (!files.reads.is_empty() || !files.exists.is_empty()).then_some(files);
+        AskParams {
+            argv,
             diff_text,
+            request_files,
             decisions: Some(decisions),
-            max_inline_bytes: a.max_inline,
-        });
-        let code = deliver(answer.outcome);
-        front.shutdown();
-        code
+            max_inline_bytes: max_inline,
+            ..AskParams::default()
+        }
     }
 
     /// The MCP front end's decisions (context-server design r3 §4.3): the

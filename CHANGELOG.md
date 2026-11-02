@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (context-server stage 2: the resident engine child and the completed protocol)
+
+- **`alsem engine-host` is resident**: the first ask builds a revision of the
+  workspace (cross-app through the stage-4 incremental model), later asks
+  are answered off it after a per-ask freshness check, and an edit
+  refreshes it. `explain`, `prove`, `digest` and `query` are answered off
+  the revision's retained artifacts (`ensure_prepared`); every other command
+  runs the one-shot job path over the revision's acquired read. Answers stay
+  the CLI's exact bytes and now name their revision (`engineInstanceId`,
+  `generation`, `inputsStamp`).
+- **Protocol** (still version 1; every new field optional on the wire):
+  `session/open` takes `universe` (`crossApp` | `singleApp`, enforced: an ask
+  of the other universe or another workspace is `notThisWorkspace`; the
+  workspace must be a folder) and answers `outputDir`; `session/ask` takes
+  `requestFiles` (the bytes of every file the command's planning reads, as
+  the front end read them; the child never reads a request file),
+  `freshness` (`fresh` | `latest-built` | `verify`), `deadlineMs` and
+  `progress`; `decisions` (the diff root and `--changed`'s file-or-list) are
+  mandatory when the command reads paths, and an ask without them is
+  refused `protocol` (the child never probes the file system).
+  `session/cancel {id}`, `session/notifyChanged {paths}` (notifications or
+  requests) and `session/refresh {wait}` are new. Answers carry `stale`,
+  `universe`, `timing {queuedMs, waitedForBuildMs, sharedFillMs, computeMs}`
+  and, for a stopped ask, `workDoneMs` and `skippedPhases`. `session/status`
+  adds the universe, the published revision, the session's builds, the fill
+  counters, the queue and the output directory.
+- The child reads requests on its own thread and answers asks on one worker:
+  status, cancel and change notifications are answered while an ask runs;
+  at most 16 heavy and 64 light asks (16 MiB of parameters) wait, beyond is
+  `busy`; a cancelled queued ask answers `cancelled` at once, an expired one
+  `deadline`, both with no work; an ask in flight stops between phases and
+  tree groups. A shutdown is answered after every queued ask.
+- `Answer::terminal`, the one terminal constructor at both hops (the
+  child's frame fallback, every failure of `EngineFront`).
+- **Private output namespace** (design §10, `engine::host::output`): the
+  child creates `<outputRoot>/<engineInstanceId>/` relative to an opened
+  root handle, owner-only, refused if it exists; every spill is created
+  there `O_EXCL | O_NOFOLLOW` and recorded with its identity; an overwrite is
+  permitted only for a recorded entry whose identity still matches (temp
+  leaf + `renameat`); quota 1 GB. Non-Unix platforms fail closed
+  (inline-only).
+- `EngineFront`: `FrontConfig.universe`, `ask_with` (cancel flag, progress
+  callback), `notify_changed`, `refresh`. `alsem engine-ask` ships the
+  request's files and takes `--freshness` and `--params` (print the ask's
+  params and exit). The MCP front end opens its child in the call's universe,
+  passes its freshness, and reports the engine's `stale`, `waitedForBuildMs`
+  and `sharedFillMs`.
+- Tests: the child over stub engines (frames, queue order, cancel queued and
+  in flight, deadlines, busy, notifications, the instance directory), T-paths,
+  T-terminal, and end to end through `EngineFront`: T-order over one
+  revision, an edit between asks (fresh, latest-built, verify), T-exit3,
+  mandatory decisions with shipped request files, the universe refusal,
+  deadline and cancel.
+
 ### Added (context-server stage 2: the resident session core)
 
 - **`engine::resident`** (design §4-§5): the session core a resident engine

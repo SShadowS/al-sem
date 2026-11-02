@@ -379,7 +379,11 @@ fn a_transcript_answers_what_the_cli_answers() {
         assert_eq!(cli_bytes(&env), expected, "{tool} {args}");
         assert_eq!(env["universe"], "cross-app");
         assert_eq!(env["stale"], false);
-        assert_eq!(env["revision"], Value::Null, "one-shot child: no revision");
+        // The resident child: every call off one revision of the workspace.
+        assert_eq!(
+            env["revision"]["generation"], 1,
+            "one resident revision: {env}"
+        );
     }
 
     // JSON output is also given parsed, as `output`.

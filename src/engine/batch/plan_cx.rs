@@ -85,6 +85,54 @@ impl PlanFs for ProcessFs {
     }
 }
 
+/// A shipped request's file system: nothing. A file the front end did not
+/// ship reads as missing, an `exists` it did not answer is `false`, and the
+/// diff-root probes (`canonicalize`, `is_dir`) are refused: a resident
+/// engine never probes for a request (the front end decides the diff root).
+pub struct ShippedFs;
+
+impl PlanFs for ShippedFs {
+    fn read(&self, path: &Path) -> std::io::Result<Vec<u8>> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!(
+                "{}: the request did not carry this file (requestFiles)",
+                path.display()
+            ),
+        ))
+    }
+
+    fn exists(&self, _: &Path) -> bool {
+        false
+    }
+
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+        Err(refused_probe(path))
+    }
+
+    fn is_dir(&self, path: &Path) -> std::io::Result<bool> {
+        Err(refused_probe(path))
+    }
+
+    fn absolute(&self, path: &Path) -> std::io::Result<PathBuf> {
+        std::path::absolute(path)
+    }
+
+    fn read_stdin(&self) -> Option<String> {
+        None
+    }
+}
+
+fn refused_probe(path: &Path) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!(
+            "{}: the engine never probes the file system for a request",
+            path.display()
+        ),
+    )
+}
+
 /// What the requests of one run share: the file system they ask, the stdin
 /// read (given, or made once on the first ask) and each file read and
 /// `exists` answer, made once.
@@ -120,6 +168,19 @@ impl PlanReads {
             None => StdinRead::Failed,
         };
         PlanReads::new(fs, Some(read), PlanFiles::default())
+    }
+
+    /// A resident engine's request (context-server design §3, §10): its
+    /// stdin is `stdin`, its file reads and `exists` answers are `files`, the
+    /// ones its front end made and shipped; nothing else is read, and no
+    /// file-system question is asked ([`ShippedFs`]).
+    #[must_use]
+    pub fn shipped(stdin: Option<String>, files: PlanFiles) -> Arc<PlanReads> {
+        let read = match stdin {
+            Some(text) => StdinRead::Text(text),
+            None => StdinRead::Failed,
+        };
+        PlanReads::new(Box::new(ShippedFs), Some(read), files)
     }
 
     fn new(fs: Box<dyn PlanFs>, stdin: Option<StdinRead>, files: PlanFiles) -> Arc<PlanReads> {

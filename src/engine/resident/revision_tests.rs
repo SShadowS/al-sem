@@ -249,7 +249,9 @@ fn a_dependency_root_reads_a_raw_artifact() {
         .stable_routine_id
         .clone();
     let plan = || Plan::merge([(JobId(0), explain_plan(BTreeSet::from([raise.clone()])))]);
-    let (view, _) = rev.serve_plan(&plan(), &Control::unreserved()).unwrap();
+    let (view, _) = rev
+        .serve_plan(&plan(), &Control::unreserved(), &mut 0)
+        .unwrap();
     let warm = effects_text(view.effects(JobId(0)));
     let mut cold_view = View::new(
         build_view_model(
