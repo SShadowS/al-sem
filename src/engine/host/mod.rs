@@ -9,20 +9,46 @@
 //! which reports it and restarts the child with backoff. stderr is the
 //! child's log, drained and tailed by the front end, never protocol.
 //!
-//! **What stage 2's child serves.** Each `session/ask` runs the one-shot job
-//! path a standalone `alsem <command>` runs (`plan` → `make_job` → the batch
-//! driver, `engine::batch`), its writes held, and answers the exact CLI bytes.
-//! There is no resident revision yet (`revision: null` on every answer).
+//! **What the child serves (stage 2).** A resident session
+//! (`engine::resident`): the first ask builds a revision of the workspace
+//! (cross-app through the stage-4 incremental model by default), later asks
+//! are answered off it after a per-ask freshness check, and an edit refreshes
+//! it. `explain`, `prove`, `digest` and `query` are answered off the
+//! revision's retained artifacts; every other command runs the one-shot job
+//! path over the revision's acquired read. Every answer is the CLI's exact
+//! bytes and names the revision that answered (`revision: null` only for a
+//! planning failure or a failed build).
 //!
 //! **Protocol** (one JSON object per line, ≤ [`MAX_FRAME_BYTES`]):
 //!
 //! | Direction | Message | Shape |
 //! |---|---|---|
 //! | child → front | `engine/hello` (notification, the child's first line, within [`HELLO_DEADLINE`]) | [`Hello`] |
-//! | front → child | `session/open` | [`OpenParams`] → `{ok: true}` |
+//! | front → child | `session/open` | [`OpenParams`] → `{ok: true, outputDir}` |
 //! | front → child | `session/ask` | [`AskParams`] → [`crate::wire::Answer`] |
+//! | front → child | `session/cancel` (notification) | [`CancelParams`] |
+//! | front → child | `session/notifyChanged` (notification) | [`NotifyChangedParams`] |
+//! | front → child | `session/refresh` | [`RefreshParams`] → `{revision, waited}` |
 //! | front → child | `session/status` | → [`ChildStatus`] |
-//! | front → child | `session/shutdown` | → `{ok: true}`, then the child exits |
+//! | front → child | `session/shutdown` | → `{ok: true}` after every queued ask is answered, then the child exits |
+//! | child → front | [`PROGRESS_METHOD`] (notification, only when the ask set `progress`) | `{id, phase}` |
+//!
+//! **Order of an ask** (design §4.3): decode (the CLI's clap) → validate
+//! (the CLI's planning with no workspace bound: a planning failure is the
+//! CLI's text and exit, 3 included, `revision: null`) → enforce the session's
+//! workspace and universe (`notThisWorkspace`) → freshness and pin (one
+//! revision for the whole ask) → plan again bound to the pinned read →
+//! resolve → `ensure_prepared` → compute → one bounded frame. The child never
+//! probes the file system for a request: the diff root and `--changed`'s
+//! file-or-list are the front end's [`Decisions`] (mandatory when the
+//! command reads paths), request files travel as bytes (`requestFiles`).
+//!
+//! **Queue.** One worker answers asks in arrival order; at most
+//! [`QUEUE_HEAVY`] heavy and [`QUEUE_LIGHT`] light asks (query) wait, holding
+//! at most [`QUEUED_BYTES`] of parameters; beyond, `busy` at once. A
+//! cancelled queued ask is answered `cancelled` at once with no work; an ask
+//! whose `deadlineMs` passed while queued answers `deadline` with no work; an
+//! ask in flight reads its flag between phases and tree groups.
 //!
 //! A protocol version the front end does not support, a missing hello, a
 //! frame over the limit or one that does not parse kills the child, and so
@@ -34,6 +60,7 @@
 
 pub mod child;
 pub mod front;
+pub mod output;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -92,6 +119,16 @@ pub const PROGRESS_METHOD: &str = "engine/progress";
 /// The largest request id, as JSON, a child accepts (r5 §3).
 pub const MAX_ID_BYTES: usize = 1024;
 
+/// The most heavy asks (explain, prove, digest, everything but query) a
+/// child holds waiting (design §3 "Queues").
+pub const QUEUE_HEAVY: usize = 16;
+
+/// The most light asks (query) a child holds waiting.
+pub const QUEUE_LIGHT: usize = 64;
+
+/// The most bytes of ask parameters a child holds waiting.
+pub const QUEUED_BYTES: usize = 16 * 1024 * 1024;
+
 /// The JSON-RPC 2.0 error codes the protocol uses.
 pub mod codes {
     /// A frame that is not JSON, or over the frame limit.
@@ -137,6 +174,12 @@ impl Hello {
 const GRAMMAR_SHA: &str =
     include_str!("../../../crates/al-syntax/src/raw/generated/node-types.sha256");
 
+/// The committed `node-types.sha256` of the grammar this build links.
+#[must_use]
+pub fn grammar_sha() -> &'static str {
+    GRAMMAR_SHA.trim()
+}
+
 /// A fresh id for this engine process: its pid and start time, hashed.
 fn engine_instance_id() -> String {
     let now = std::time::SystemTime::now()
@@ -147,19 +190,50 @@ fn engine_instance_id() -> String {
     crate::engine::ids::sha256_bytes_hex(seed.as_bytes())[..16].to_string()
 }
 
-/// `session/open`: the workspace the session serves, and the directory the
-/// child writes spilled answers into (created and owned by the front end;
-/// the stage-2 seam for the anchored output sink of design r5 §10).
+/// The universe a session serves (one child per workspace and universe).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Universe {
+    /// The workspace and the dependencies it requires (the CLI default).
+    #[default]
+    CrossApp,
+    /// The workspace alone (`--single-app`).
+    SingleApp,
+}
+
+impl Universe {
+    /// The wire spelling.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Universe::CrossApp => "crossApp",
+            Universe::SingleApp => "singleApp",
+        }
+    }
+}
+
+/// `session/open`: the workspace the session serves (an existing folder),
+/// its universe, and the root under which the child creates its private
+/// output directory `<outputRoot>/<engineInstanceId>/` (design §10: created
+/// owner-only, refused if it exists; the open's result names it as
+/// `outputDir`). An ask naming another workspace, or the other universe, is
+/// refused `notThisWorkspace`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenParams {
     pub workspace: PathBuf,
     pub output_root: PathBuf,
+    /// Absent: `crossApp`.
+    #[serde(default)]
+    pub universe: Universe,
 }
 
 /// The front end's answers to a request's file-system questions, decided
-/// before it is sent (r3 §4.3: the child probes nothing for them): whether
-/// `digest --changed` names a file, and the diff root.
+/// before it is sent (design §3, §4.3: the child probes nothing for them):
+/// whether `digest --changed` names a file, and the diff root (the design's
+/// `diffRootDecided`). Mandatory when the command reads paths (`digest
+/// --diff/--file/--changed`, `explain --diff`): such an ask without them is
+/// refused `protocol`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Decisions {
@@ -167,8 +241,8 @@ pub struct Decisions {
     pub diff_root: Option<Result<crate::engine::l5::digest_cli::DiffRoot, String>>,
 }
 
-/// `session/ask`: one CLI command line (without the program name) and what
-/// it reads from outside its argv.
+/// `session/ask`: one CLI command line (without the program name) and
+/// everything it reads from outside its argv.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AskParams {
@@ -177,13 +251,60 @@ pub struct AskParams {
     /// unreadable stdin does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diff_text: Option<String>,
-    /// The front end's decisions; absent: the child decides through its own
-    /// file system (a stage-2 convenience for a client with no decoder).
+    /// The bytes (or read error) of every file the command's planning reads
+    /// (`--diff <path>`, a `--changed` diff file, a policy or baseline file)
+    /// and every `exists` answer it asks, by the path as the argv spells it:
+    /// what the front end's own planning read. The child never reads a
+    /// request file itself; one not shipped reads as missing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_files: Option<crate::engine::batch::worker::PlanFiles>,
+    /// The front end's decisions (see [`Decisions`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decisions: Option<Decisions>,
+    /// `fresh` (absent), `latest-built` or `verify` (design §5.1).
+    #[serde(default, skip_serializing_if = "is_fresh")]
+    pub freshness: crate::engine::resident::session::Freshness,
+    /// Milliseconds from the child's receipt: expired while queued →
+    /// `deadline` with no work; while waiting or computing → `deadline` at
+    /// the next phase boundary (a shared build or fill goes on for others).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline_ms: Option<u64>,
     /// The inline stdout cap (`crate::wire::clamp_inline`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_inline_bytes: Option<u64>,
+    /// Send [`PROGRESS_METHOD`] notifications for this ask.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub progress: bool,
+}
+
+fn is_fresh(f: &crate::engine::resident::session::Freshness) -> bool {
+    *f == crate::engine::resident::session::Freshness::Fresh
+}
+
+/// `session/cancel`: the ask to stop. A queued ask is answered `cancelled`
+/// at once; one in flight stops at its next phase boundary and answers
+/// `cancelled` with `workDoneMs` and `skippedPhases`; an unknown id is
+/// ignored.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CancelParams {
+    pub id: serde_json::Value,
+}
+
+/// `session/notifyChanged`: paths the front end saw change (a watcher):
+/// each is hashed again on the next freshness check, whatever its stat says.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotifyChangedParams {
+    pub paths: Vec<PathBuf>,
+}
+
+/// `session/refresh`: bring the published revision up to date with the
+/// disk (a `fresh` pin). `wait: true` answers after it, with the revision;
+/// `wait: false` answers `{started: true}` at once and refreshes in queue
+/// order.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefreshParams {
+    #[serde(default)]
+    pub wait: bool,
 }
 
 /// `session/status`.
@@ -192,11 +313,33 @@ pub struct AskParams {
 pub struct ChildStatus {
     pub pid: u32,
     pub workspace: Option<PathBuf>,
+    #[serde(default)]
+    pub universe: Option<Universe>,
     /// `session/ask` requests answered.
     pub asks: u64,
-    /// Workspace reads (acquisitions) the asks made: a request that fails
-    /// its planning makes none.
+    /// Workspace reads (acquisitions) the session made: one per build
+    /// attempt; a request that fails its planning, or is answered off the
+    /// published revision, makes none.
     pub workspace_reads: u64,
+    /// The published revision (`null` before the first build, or after a
+    /// failed one).
+    #[serde(default)]
+    pub revision: Option<crate::wire::RevisionId>,
+    /// The session's builds and freshness checks.
+    #[serde(default)]
+    pub session: Option<serde_json::Value>,
+    /// The published revision's artifact fills by kind, and its store's
+    /// counters.
+    #[serde(default)]
+    pub fills: Option<serde_json::Value>,
+    /// Asks waiting, and the id of the one in flight.
+    #[serde(default)]
+    pub queued: u64,
+    #[serde(default)]
+    pub in_flight: Option<serde_json::Value>,
+    /// The private output directory.
+    #[serde(default)]
+    pub output_dir: Option<PathBuf>,
 }
 
 /// One JSON-RPC 2.0 message, any of request, notification, response.

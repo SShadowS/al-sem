@@ -502,6 +502,11 @@ fn work(
 ) {
     let mut cfg = FrontConfig::new(&shared.program, &key.0);
     cfg.env.clone_from(&shared.child_env);
+    // The child enforces its universe (an ask of the other is refused).
+    cfg.universe = match key.1 {
+        Universe::CrossApp => crate::engine::host::Universe::CrossApp,
+        Universe::SingleApp => crate::engine::host::Universe::SingleApp,
+    };
     let mut front = match EngineFront::new(cfg) {
         Ok(f) => Some(f),
         Err(e) => {
@@ -857,9 +862,18 @@ fn run_command(
         diff_text: call.diff_text.clone(),
         decisions,
         max_inline_bytes: call.max_inline_bytes,
+        freshness: match call.freshness {
+            tools::Freshness::Fresh => crate::engine::resident::session::Freshness::Fresh,
+            tools::Freshness::LatestBuilt => {
+                crate::engine::resident::session::Freshness::LatestBuilt
+            }
+            tools::Freshness::Verify => crate::engine::resident::session::Freshness::Verify,
+        },
+        ..AskParams::default()
     });
     let compute_ms = started.elapsed().as_millis();
     let revision = answer.revision.clone();
+    let meta = answer.meta.clone();
     let mut summary = None;
     let mut parsed = None;
     let outcome = match answer.outcome {
@@ -912,18 +926,22 @@ fn run_command(
         },
     };
     notify(1, &format!("{}: answered", call.tool));
+    // The engine's timing, plus the front end's own queue time.
+    let engine_timing = meta.timing.unwrap_or_default();
+    let served = if meta.stale { "latest-built" } else { "fresh" };
     let answer = Answer {
         id: id.clone(),
         outcome,
         revision,
+        meta,
     };
     let extras = json!({
         "universe": call.universe.as_str(),
-        "freshness": {"requested": call.freshness.as_str(), "served": "fresh"},
+        "freshness": {"requested": call.freshness.as_str(), "served": served},
         "timing": {
-            "queuedMs": queued_ms,
-            "waitedForBuildMs": null,
-            "sharedFillMs": null,
+            "queuedMs": queued_ms as u64 + engine_timing.queued_ms,
+            "waitedForBuildMs": engine_timing.waited_for_build_ms,
+            "sharedFillMs": engine_timing.shared_fill_ms,
             "computeMs": compute_ms,
         },
     });

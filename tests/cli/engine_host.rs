@@ -35,10 +35,58 @@ fn front(workspace: &Path) -> EngineFront {
     EngineFront::new(FrontConfig::new(ALSEM, workspace)).expect("front end")
 }
 
+/// The params a real front end sends for `argv`: its decisions and request
+/// files made by `alsem engine-ask --params` (the binary's own decoder).
 fn ask(argv: &[&str]) -> AskParams {
+    let out = Command::new(ALSEM)
+        .args(["engine-ask", "--params", "--"])
+        .args(argv)
+        .output()
+        .expect("alsem runs");
+    assert!(
+        out.status.success(),
+        "{argv:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).expect("the params decode")
+}
+
+/// The bare params: the argv alone, no decisions, no files.
+fn bare(argv: &[&str]) -> AskParams {
     AskParams {
         argv: argv.iter().map(|s| s.to_string()).collect(),
         ..AskParams::default()
+    }
+}
+
+/// A temporary copy of a corpus workspace (edits never touch the corpus).
+fn copy_ws(name: &str) -> tempfile::TempDir {
+    fn copy(from: &Path, to: &Path) {
+        for e in std::fs::read_dir(from).unwrap() {
+            let e = e.unwrap();
+            let t = to.join(e.file_name());
+            if e.file_type().unwrap().is_dir() {
+                std::fs::create_dir_all(&t).unwrap();
+                copy(&e.path(), &t);
+            } else {
+                std::fs::copy(e.path(), &t).unwrap();
+            }
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    copy(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/r0-corpus")
+            .join(name),
+        dir.path(),
+    );
+    dir
+}
+
+fn failed_outcome(o: &Outcome) -> Option<FailedOutcome> {
+    match o {
+        Outcome::Failed { outcome, .. } => Some(*outcome),
+        Outcome::Cli { .. } => None,
     }
 }
 
@@ -70,11 +118,13 @@ fn cli_answer(outcome: Outcome) -> (Vec<u8>, Vec<u8>, u8) {
     (stdout, stderr, exit_code)
 }
 
-/// Stage-2 exit: front end → engine-host → explain / prove / digest / query
-/// on a fixture answers the CLI's stdout byte for byte (decoded
-/// `stdoutText`, its trailing newline included), its stderr and its exit; a
-/// stdout over the request's inline cap comes back as `stdoutFile` with the
-/// same bytes. One child answers every ask, and shuts down cleanly.
+/// Stage-2 exit (T-order at the protocol): front end → engine-host →
+/// explain / prove / digest / query on a fixture, all off ONE resident
+/// revision, answers the CLI's stdout byte for byte (decoded `stdoutText`,
+/// its trailing newline included), its stderr and its exit; a stdout over
+/// the request's inline cap comes back as `stdoutFile` with the same bytes.
+/// One child answers every ask from one build (one workspace read), every
+/// answer names revision generation 1, and it shuts down cleanly.
 #[test]
 fn answers_are_byte_identical_to_the_cli() {
     let ws = ws_explain();
@@ -86,6 +136,7 @@ fn answers_are_byte_identical_to_the_cli() {
         &["digest", w, "--routine", "PostOrder", "--deterministic"],
         &["query", "touches", w, "--table", "50400", "--deterministic"],
     ];
+    let mut stamp = None;
     for argv in commands {
         let expected = cli(argv);
         assert!(
@@ -93,7 +144,18 @@ fn answers_are_byte_identical_to_the_cli() {
             "{argv:?}: a CLI output ends its line"
         );
         let answer = front.ask(ask(argv));
-        assert_eq!(answer.revision, None, "no resident revision in stage 2");
+        let revision = answer
+            .revision
+            .clone()
+            .expect("a resident revision answers");
+        assert_eq!(revision.generation, 1, "{argv:?}: one revision");
+        assert!(revision.inputs_stamp.starts_with("al-sem-manifest-v1:"));
+        assert_eq!(
+            *stamp.get_or_insert(revision.inputs_stamp.clone()),
+            revision.inputs_stamp
+        );
+        assert_eq!(answer.meta.universe.as_deref(), Some("crossApp"));
+        assert!(answer.meta.timing.is_some());
         let Outcome::Cli { stdout, .. } = &answer.outcome else {
             panic!("{argv:?}: {:?}", answer.outcome)
         };
@@ -114,6 +176,11 @@ fn answers_are_byte_identical_to_the_cli() {
     }
     let stats = front.stats();
     assert_eq!((stats.spawns, stats.deaths, stats.completed), (1, 0, 8));
+    let status = front.status().unwrap();
+    assert_eq!(status.workspace_reads, 1, "one build served every ask");
+    let fills = status.fills.expect("the revision's fill counts");
+    assert_eq!(fills["byKind"]["fold"], 1, "{fills}");
+    assert_eq!(fills["byKind"]["l4"], 1, "{fills}");
     let report = front.shutdown();
     assert!(report.graceful, "{report:?}");
     assert!(report.status.is_some_and(|s| s.success()), "{report:?}");
@@ -263,6 +330,180 @@ fn another_workspace_is_refused() {
         answer.outcome
     );
     assert_eq!(front.status().unwrap().workspace_reads, 0);
+}
+
+/// T-fresh / T-manifest at the protocol: asks with no edit between them
+/// reuse the revision (no second read); a body edit is seen by the next ask
+/// (generation 2, a new stamp) whose answer equals a cold CLI run of the
+/// edited workspace; `latest-built` answers at once from the published
+/// revision, `stale` with the changed path; `verify` re-hashes everything.
+#[test]
+fn an_edit_between_asks_is_answered_from_a_refreshed_revision() {
+    let dir = copy_ws("ws-explain");
+    let w = dir.path().to_str().unwrap();
+    let argv = ["prove", w, "Archive", "may-commit", "--deterministic"];
+    let mut front = front(dir.path());
+    let first = front.ask(ask(&argv));
+    assert_eq!(cli_answer(first.outcome.clone()), cli(&argv));
+    let r1 = first.revision.unwrap();
+    let again = front.ask(ask(&argv));
+    assert_eq!(
+        again.revision.as_ref(),
+        Some(&r1),
+        "no edit: the same revision"
+    );
+    assert_eq!(front.status().unwrap().workspace_reads, 1, "no rebuild");
+    let post = dir.path().join("src/post.al");
+    let text = std::fs::read_to_string(&post).unwrap();
+    assert!(
+        text.contains("        Order.Modify();\n        Commit();"),
+        "precondition"
+    );
+    std::fs::write(
+        &post,
+        text.replace(
+            "        Order.Modify();\n        Commit();",
+            "        Order.Modify(true);\n        Commit();",
+        ),
+    )
+    .unwrap();
+    // latest-built: the old revision at once, stale, the path named.
+    let mut stale = ask(&argv);
+    stale.freshness = al_sem::engine::resident::session::Freshness::LatestBuilt;
+    let s = front.ask(stale);
+    assert!(s.meta.stale, "{:?}", s.meta);
+    let Outcome::Cli { changed_paths, .. } = &s.outcome else {
+        panic!("{:?}", s.outcome)
+    };
+    assert!(
+        changed_paths.iter().any(|p| p.ends_with("post.al")),
+        "{changed_paths:?}"
+    );
+    // fresh (a background refresh may have published already).
+    let fresh = front.ask(ask(&argv));
+    let r2 = fresh.revision.clone().unwrap();
+    assert_eq!(r2.generation, 2, "the edit is seen");
+    assert_ne!(r2.inputs_stamp, r1.inputs_stamp);
+    assert!(!fresh.meta.stale);
+    assert_eq!(
+        cli_answer(fresh.outcome),
+        cli(&argv),
+        "refreshed equals cold"
+    );
+    let mut verify = ask(&argv);
+    verify.freshness = al_sem::engine::resident::session::Freshness::Verify;
+    assert_eq!(
+        front.ask(verify).revision,
+        Some(r2),
+        "verify: nothing changed"
+    );
+}
+
+/// T-exit3 / T-plan: a planning failure with exit 3 (`digest --order`, a
+/// refused flag) is the CLI's own `kind: "cli"` answer, exit 3, with
+/// `revision: null` and no workspace read; so is an engine-only refusal
+/// (a command the engine does not run).
+#[test]
+fn exit_three_is_preserved() {
+    let ws = ws_explain();
+    let w = ws.to_str().unwrap();
+    let mut front = front(&ws);
+    let argv = ["digest", w, "--routine", "PostOrder", "--order"];
+    let expected = cli(&argv);
+    assert_eq!(expected.2, 3, "precondition: the CLI exits 3");
+    let answer = front.ask(ask(&argv));
+    assert_eq!(answer.revision, None);
+    assert_eq!(cli_answer(answer.outcome), expected);
+    let refused = front.ask(bare(&["batch", "x.json"]));
+    let (_, _, exit) = cli_answer(refused.outcome);
+    assert_eq!(exit, 3);
+    assert_eq!(front.status().unwrap().workspace_reads, 0);
+}
+
+/// The front end's decisions are mandatory when a command reads paths: an
+/// ask without them is refused `protocol` (the child never decides); with
+/// them and its diff file shipped as `requestFiles` (the child never reads
+/// it), the answer equals the CLI's.
+///
+/// DISCRIMINATION (2026-11-02): dropping the child's check (`if false &&
+/// reads_paths && …` in `decided`) answers the bare ask as a CLI outcome:
+/// "left: None, right: Some(Protocol)".
+#[test]
+fn decisions_and_request_files_come_from_the_front_end() {
+    let ws = ws_explain();
+    let w = ws.to_str().unwrap();
+    let diff_dir = tempfile::tempdir().unwrap();
+    let diff = diff_dir.path().join("change.diff");
+    std::fs::write(
+        &diff,
+        "--- a/src/post.al\n+++ b/src/post.al\n@@ -24,5 +24,5 @@\n     begin\n         Order.Status := Order.Status::Archived;\n-        Order.Modify(true);\n+        Order.Modify();\n         Commit();\n     end;\n",
+    )
+    .unwrap();
+    let d = diff.to_str().unwrap();
+    let argv = ["digest", w, "--diff", d, "--deterministic"];
+    let mut front = front(&ws);
+    let refused = front.ask(bare(&argv));
+    assert_eq!(
+        failed_outcome(&refused.outcome),
+        Some(FailedOutcome::Protocol)
+    );
+    let params = ask(&argv);
+    assert!(
+        params.request_files.is_some(),
+        "precondition: the diff is shipped"
+    );
+    let expected = cli(&argv);
+    // The child must not read the file: remove it before asking.
+    std::fs::remove_file(&diff).unwrap();
+    assert_eq!(cli_answer(front.ask(params).outcome), expected);
+}
+
+/// The child enforces its universe: a `--single-app` ask to a cross-app
+/// session is refused `notThisWorkspace`; a single-app session answers it.
+#[test]
+fn the_other_universe_is_refused() {
+    let ws = ws_explain();
+    let w = ws.to_str().unwrap();
+    let argv = ["query", "touches", w, "--table", "50400", "--single-app"];
+    let mut front = front(&ws);
+    let answer = front.ask(ask(&argv));
+    assert_eq!(
+        failed_outcome(&answer.outcome),
+        Some(FailedOutcome::NotThisWorkspace)
+    );
+    let mut cfg = FrontConfig::new(ALSEM, &ws);
+    cfg.universe = al_sem::engine::host::Universe::SingleApp;
+    let mut single = EngineFront::new(cfg).unwrap();
+    let answer = single.ask(ask(&argv));
+    assert_eq!(answer.meta.universe.as_deref(), Some("singleApp"));
+    assert_eq!(cli_answer(answer.outcome), cli(&argv));
+}
+
+/// A `deadlineMs` that passes before the ask runs answers `deadline` with no
+/// work done; a cancel through the front end's watch answers `cancelled`.
+#[test]
+fn deadline_and_cancel_through_the_front_end() {
+    let ws = ws_explain();
+    let w = ws.to_str().unwrap();
+    let mut front = front(&ws);
+    let mut p = ask(&["explain", w, "--routine", "Archive"]);
+    p.deadline_ms = Some(0);
+    let a = front.ask(p);
+    assert_eq!(failed_outcome(&a.outcome), Some(FailedOutcome::Deadline));
+    assert_eq!(a.meta.work.as_ref().map(|w| w.work_done_ms), Some(0));
+    let flag = std::sync::atomic::AtomicBool::new(true);
+    let mut watch = al_sem::engine::host::front::Watch {
+        cancel: Some(&flag),
+        progress: None,
+    };
+    let a = front.ask_with(ask(&["prove", w, "PostOrder", "may-commit"]), &mut watch);
+    // Cancelled before or during its run; never a CLI answer.
+    assert_eq!(
+        failed_outcome(&a.outcome),
+        Some(FailedOutcome::Cancelled),
+        "{:?}",
+        a.outcome
+    );
 }
 
 #[cfg(any(feature = "engine-test-hooks", debug_assertions))]

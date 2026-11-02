@@ -313,13 +313,88 @@ impl Outcome {
     }
 }
 
-/// One request's answer: its id, its outcome, the revision (or `null`).
+/// One request's answer: its id, its outcome, the revision (or `null`), and
+/// the envelope fields of §8.3 ([`AnswerMeta`]).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "RawAnswer", into = "RawAnswer")]
 pub struct Answer {
     pub id: serde_json::Value,
     pub outcome: Outcome,
     pub revision: Option<RevisionId>,
+    pub meta: AnswerMeta,
+}
+
+/// An answer's envelope fields beside its outcome (design §8.3), all
+/// optional on the wire: the CLI equality contract never covers them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AnswerMeta {
+    /// `latest-built`: the answer comes from a revision older than the disk.
+    pub stale: bool,
+    /// `crossApp` or `singleApp`: the universe of the session that answered.
+    pub universe: Option<String>,
+    pub timing: Option<Timing>,
+    /// A cancelled or expired request: what it did before it stopped.
+    pub work: Option<WorkDone>,
+}
+
+/// Where an answer's time went, in milliseconds (§8.3).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Timing {
+    /// Received until the child's worker took it.
+    pub queued_ms: u64,
+    /// Waiting for (or running) the revision build this request pinned.
+    pub waited_for_build_ms: u64,
+    /// Preparing the revision's artifacts (`ensure_prepared`: filling or
+    /// joining shared fills).
+    pub shared_fill_ms: u64,
+    /// Everything after: the request's trees, the compute, serialization.
+    pub compute_ms: u64,
+}
+
+/// A stopped request's progress (§4.6).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorkDone {
+    pub work_done_ms: u64,
+    /// The phases it did not reach, in order (`pin`, `prepare`, `compute`).
+    pub skipped_phases: Vec<String>,
+}
+
+impl Answer {
+    /// An answer with no envelope fields.
+    #[must_use]
+    pub fn new(id: serde_json::Value, outcome: Outcome, revision: Option<RevisionId>) -> Answer {
+        Answer {
+            id,
+            outcome,
+            revision,
+            meta: AnswerMeta::default(),
+        }
+    }
+
+    /// THE terminal constructor (§8.3), used for every terminal path at both
+    /// hops: a `kind: "failed"` answer whose message is cut to
+    /// [`MESSAGE_INLINE_BYTES`] (on a character boundary), with the whole
+    /// text in `diagnostic_file` when the caller spilled it, and no other
+    /// field.
+    #[must_use]
+    pub fn terminal(
+        id: serde_json::Value,
+        revision: Option<RevisionId>,
+        outcome: FailedOutcome,
+        message: &str,
+        diagnostic_file: Option<SpillFile>,
+    ) -> Answer {
+        Answer::new(
+            id,
+            Outcome::Failed {
+                outcome,
+                message: cut(message, MESSAGE_INLINE_BYTES).to_string(),
+                diagnostic_file,
+            },
+            revision,
+        )
+    }
 }
 
 /// [`Answer`]'s wire shape: the discriminator and every optional field,
@@ -351,6 +426,16 @@ struct RawAnswer {
     diagnostic_file: Option<SpillFile>,
     /// Always present; `null` before any revision exists.
     revision: Option<RevisionId>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    stale: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    universe: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timing: Option<Timing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    work_done_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    skipped_phases: Option<Vec<String>>,
 }
 
 impl From<Answer> for RawAnswer {
@@ -369,6 +454,11 @@ impl From<Answer> for RawAnswer {
             message: None,
             diagnostic_file: None,
             revision: a.revision,
+            stale: a.meta.stale,
+            universe: a.meta.universe,
+            timing: a.meta.timing,
+            work_done_ms: a.meta.work.as_ref().map(|w| w.work_done_ms),
+            skipped_phases: a.meta.work.map(|w| w.skipped_phases),
         };
         match a.outcome {
             Outcome::Cli {
@@ -445,10 +535,20 @@ impl TryFrom<RawAnswer> for Answer {
             },
             other => return Err(WireError::Json(format!("unknown kind '{other}'"))),
         };
+        let work = raw.work_done_ms.map(|work_done_ms| WorkDone {
+            work_done_ms,
+            skipped_phases: raw.skipped_phases.unwrap_or_default(),
+        });
         Ok(Answer {
             id: raw.id,
             outcome,
             revision: raw.revision,
+            meta: AnswerMeta {
+                stale: raw.stale,
+                universe: raw.universe,
+                timing: raw.timing,
+                work,
+            },
         })
     }
 }
@@ -560,23 +660,23 @@ pub fn bound_frame(
     let id = answer.id.clone();
     let revision = answer.revision.clone();
     let terminal = |message: String, diagnostic_file: Option<SpillFile>| {
-        let minimal = Answer {
-            id: id.clone(),
-            outcome: Outcome::Failed {
-                outcome: FailedOutcome::Protocol,
-                message: cut(&message, MESSAGE_INLINE_BYTES).to_string(),
-                diagnostic_file,
-            },
-            revision: revision.clone(),
-        };
+        let minimal = Answer::terminal(
+            id.clone(),
+            revision.clone(),
+            FailedOutcome::Protocol,
+            &message,
+            diagnostic_file,
+        );
         encode(&minimal).unwrap_or_else(|_| {
             // Not even the minimal frame fits (an id or a limit that leaves
             // no room): the same answer with an empty message and a null id.
-            let bare = Answer {
-                id: serde_json::Value::Null,
-                outcome: Outcome::failed(FailedOutcome::Protocol, ""),
-                revision: None,
-            };
+            let bare = Answer::terminal(
+                serde_json::Value::Null,
+                None,
+                FailedOutcome::Protocol,
+                "",
+                None,
+            );
             let mut b = serde_json::to_vec(&wrap(&bare)).unwrap_or_default();
             b.push(b'\n');
             b
@@ -786,11 +886,7 @@ mod tests {
     #[test]
     fn stdout_text_round_trips_exact_bytes_in_one_line() {
         let outcome = cli_outcome(&cli(PRETTY), DEFAULT_INLINE_BYTES, &no_spill).unwrap();
-        let answer = Answer {
-            id: serde_json::json!(7),
-            outcome,
-            revision: None,
-        };
+        let answer = Answer::new(serde_json::json!(7), outcome, None);
         let frame = encode_frame(&answer).unwrap();
         assert_eq!(frame.iter().filter(|&&b| b == b'\n').count(), 1);
         assert_eq!(frame.last(), Some(&b'\n'));
@@ -834,6 +930,18 @@ mod tests {
                     generation: i as u64 + 1,
                     inputs_stamp: "al-sem-manifest-v1:00".into(),
                 }),
+                // The envelope fields round-trip too.
+                meta: AnswerMeta {
+                    stale: i == 1,
+                    universe: Some("crossApp".into()),
+                    timing: Some(Timing {
+                        queued_ms: 1,
+                        waited_for_build_ms: 2,
+                        shared_fill_ms: 3,
+                        compute_ms: i as u64,
+                    }),
+                    work: None,
+                },
             })
             .collect();
         let mut stream = Vec::new();
@@ -1046,6 +1154,7 @@ mod tests {
                 changed_paths_truncated: false,
             },
             revision: None,
+            meta: AnswerMeta::default(),
         }
     }
 
@@ -1262,11 +1371,7 @@ mod tests {
             let sink = Sink::new();
             let outcome =
                 cli_outcome(&out, DEFAULT_INLINE_BYTES, &|k, b| sink.spill(k, b)).unwrap();
-            let answer = Answer {
-                id: serde_json::json!(1),
-                outcome,
-                revision: None,
-            };
+            let answer = Answer::new(serde_json::json!(1), outcome, None);
             let frame = bound_frame(answer.clone(), MAX_FRAME_BYTES, &rpc, &|k, b| {
                 sink.spill(k, b)
             });
@@ -1282,11 +1387,11 @@ mod tests {
             let mut standalone = Capture::default();
             crate::engine::batch::output::replay_on(&big, 1, &mut standalone);
             let sink = Sink::new();
-            let answer = Answer {
-                id: serde_json::json!(1),
-                outcome: cli_outcome(&big, DEFAULT_INLINE_BYTES, &|k, b| sink.spill(k, b)).unwrap(),
-                revision: None,
-            };
+            let answer = Answer::new(
+                serde_json::json!(1),
+                cli_outcome(&big, DEFAULT_INLINE_BYTES, &|k, b| sink.spill(k, b)).unwrap(),
+                None,
+            );
             let frame = bound_frame(answer, 4096, &rpc, &|k, b| sink.spill(k, b));
             assert!(frame.len() <= 4096, "{name}");
             let (bytes, spilled) = delivered_stderr(&decoded(&frame), &sink);
@@ -1295,17 +1400,83 @@ mod tests {
         }
     }
 
+    /// T-terminal (§8.3): `Answer::terminal` is `kind: "failed"` with its
+    /// message cut to 4 KiB on a character boundary and no other field
+    /// (no envelope extras); the frame fallback of `bound_frame` is that
+    /// constructor (its revision kept, outcome `protocol`).
+    ///
+    /// DISCRIMINATION (2026-11-02): building the fallback without the cut
+    /// (`message: message.into()` in `terminal`) fails "cut on a character
+    /// boundary" (10,000 bytes inline).
+    #[test]
+    fn the_terminal_constructor_bounds_its_message() {
+        let long = "é".repeat(5000);
+        let a = Answer::terminal(
+            serde_json::json!(3),
+            None,
+            FailedOutcome::EngineError,
+            &long,
+            None,
+        );
+        let Outcome::Failed { message, .. } = &a.outcome else {
+            panic!("failed")
+        };
+        assert_eq!(
+            message.len(),
+            MESSAGE_INLINE_BYTES,
+            "cut on a character boundary"
+        );
+        assert_eq!(a.meta, AnswerMeta::default());
+        let raw: serde_json::Value = serde_json::to_value(&a).unwrap();
+        let mut keys: Vec<&str> = raw
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["id", "kind", "message", "outcome", "revision"]);
+        // The frame fallback is the same constructor, its revision kept.
+        let rev = RevisionId {
+            engine_instance_id: "e".into(),
+            generation: 4,
+            inputs_stamp: "al-sem-manifest-v1:x".into(),
+        };
+        let big = Answer::new(
+            serde_json::json!(3),
+            Outcome::Cli {
+                exit_code: 0,
+                stdout: Stdout::Text("x".repeat(10_000)),
+                stderr: Stderr::Lines(StderrLines::from_lines(&["e"; 1])),
+                changed_paths: vec![],
+                changed_paths_truncated: false,
+            },
+            Some(rev.clone()),
+        );
+        let fail = |_: SpillKind, _: &[u8]| Err(std::io::Error::other("no room"));
+        let frame = bound_frame(big, 2048, &rpc, &fail);
+        let back = decoded(&frame);
+        assert_eq!(back.revision, Some(rev));
+        assert!(matches!(
+            back.outcome,
+            Outcome::Failed {
+                outcome: FailedOutcome::Protocol,
+                ..
+            }
+        ));
+    }
+
     /// r5 §8.3: a failed answer's message is at most 4 KiB inline, the whole
     /// text in its diagnostic file, at any frame size; a spill that fails
     /// ends in the terminal fallback carrying the write error.
     #[test]
     fn a_long_failed_message_is_cut_and_spilled() {
         let long = "é".repeat(5000); // 10,000 bytes, two per character
-        let answer = Answer {
-            id: serde_json::json!("a"),
-            outcome: Outcome::failed(FailedOutcome::InputsUnstable, long.clone()),
-            revision: None,
-        };
+        let answer = Answer::new(
+            serde_json::json!("a"),
+            Outcome::failed(FailedOutcome::InputsUnstable, long.clone()),
+            None,
+        );
         let sink = Sink::new();
         let f = bound_frame(answer.clone(), MAX_FRAME_BYTES, &rpc, &|k, b| {
             sink.spill(k, b)

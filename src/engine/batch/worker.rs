@@ -39,7 +39,7 @@ pub struct WorkerInput {
 /// nor answers anew what another job may have changed since. The paths
 /// cross as the platform's raw units ([`os_keys`]), so a path that is not
 /// UTF-8 crosses too (#277 final r3 F2).
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanFiles {
     #[serde(with = "os_keys")]
     pub reads: BTreeMap<PathBuf, Result<Vec<u8>, String>>,

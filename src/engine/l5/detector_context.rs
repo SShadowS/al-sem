@@ -1546,9 +1546,7 @@ pub(crate) fn build_detector_artifacts(
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum CapsInput<'a> {
     Owned(CapabilityAnalysis),
-    /// Built by the borrowed phase path only (the stage-1 tests; the resident
-    /// revision of stage 2).
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Built by the resident revision (`engine::resident::revision`).
     Borrowed(&'a CapabilityAnalysis),
 }
 
@@ -1559,7 +1557,6 @@ pub(crate) enum CapsInput<'a> {
 /// next seeded solve (`L4Reuse::core`).
 pub(crate) enum CoreInput<'a> {
     Owned(CoreSummaries),
-    #[cfg_attr(not(test), allow(dead_code))]
     Borrowed(&'a CoreSummaries),
 }
 
@@ -1572,8 +1569,7 @@ pub(crate) enum L4Input<'a> {
     /// pd arena was dropped, so the solve's peak never holds them. The solve
     /// is returned beside the artifacts.
     Solve(L4Request<'a>),
-    /// A retained solve and its core summaries (the borrowed phase path).
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// A retained solve and its core summaries (the resident revision).
     Solved(&'a L4Analysis, CoreInput<'a>),
 }
 

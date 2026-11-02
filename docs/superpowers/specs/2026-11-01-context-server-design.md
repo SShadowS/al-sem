@@ -214,6 +214,22 @@ of stable running; three deaths in 60 s → `failed` for 300 s; shutdown deadlin
   consumer is paused; the queue stays under its bound and the child is ended.
 - **Frame bounding** at both hops with one terminal constructor (§8.3).
 
+**As built (stage 2 completion, `src/engine/host/`, `src/engine/resident/`).** The child
+is resident (§4.3 order; `explain`, `prove`, `digest`, `query` off the revision's
+artifacts, every other command one-shot over the pinned revision's read). Protocol 1,
+fields additive: `session/open {workspace, outputRoot, universe}` → `{ok, outputDir}`;
+`session/ask {argv, diffText?, requestFiles?, decisions?, freshness?, deadlineMs?,
+maxInlineBytes?, progress?}`; `session/cancel {id}`, `session/notifyChanged {paths}`
+(notifications, or requests answered `{cancelled}` / `{ok}`); `session/refresh {wait}` →
+`{revision, waitedForBuildMs, wallMs}` or `{started: true}`; answers add `stale`,
+`universe`, `timing {queuedMs, waitedForBuildMs, sharedFillMs, computeMs}`, and
+`workDoneMs`/`skippedPhases` for a stopped ask. `diffRootDecided` travels as
+`decisions.diffRoot` (with `decisions.changedIsFile`), mandatory only when the command
+reads paths. Deviations: one FIFO with one worker (heavy 16 / light 64 depth caps), no
+per-root cancellation inside `digest_effects_each` (the flag is read between phases and
+tree groups), no reservation budget (stage 3), artifact snapshots without table `lens`
+(no append-only tables exist before stage 5), user `--out` still `refusedPath`.
+
 The alternative — one unwind-enabled server binary — was compared and not taken: it
 cannot contain a native abort, an OOM kill or a lowerer stack overflow, memory reclaim
 after eviction would depend on the allocator, and the editor's server would hold the

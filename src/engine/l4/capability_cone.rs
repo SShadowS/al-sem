@@ -4115,13 +4115,23 @@ pub(crate) fn build_cross_app_base_from(
     no_roots_config: bool,
     needs: crate::program::model::workspace::AssemblyNeeds,
 ) -> Result<R3a5CrossAppBase, crate::program::model::program_calls::CrossAppFailure> {
+    cross_app_base_of(
+        crate::program::model::program_calls::cross_app_program_from(
+            program,
+            inputs,
+            no_roots_config,
+            needs,
+        )?,
+    )
+}
+
+/// The base over a cross-app model built already: the cold path's
+/// ([`build_cross_app_base_from`]) or a workspace session's refresh (the
+/// resident revision, context-server design §6), the same steps after it.
+pub(crate) fn cross_app_base_of(
+    mut x: crate::program::model::program_calls::CrossAppProgram,
+) -> Result<R3a5CrossAppBase, crate::program::model::program_calls::CrossAppFailure> {
     use crate::engine::l4::summary_runner::base_intraprocedural_summary;
-    let mut x = crate::program::model::program_calls::cross_app_program_from(
-        program,
-        inputs,
-        no_roots_config,
-        needs,
-    )?;
     if x.resolved.primary_app.is_none() {
         return Err(
             crate::program::model::program_calls::CrossAppFailure::NoPrimaryApp {

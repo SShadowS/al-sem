@@ -485,8 +485,7 @@ impl LaterReads<'_> {
         everything: false,
     };
 
-    /// Everything is read later (the borrowed phase path's served views).
-    #[cfg(test)]
+    /// Everything is read later (a resident revision's served views).
     pub(crate) const EVERYTHING: LaterReads<'static> = LaterReads {
         last: None,
         pos: 0,
