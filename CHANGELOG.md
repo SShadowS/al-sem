@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (context server stage 5: incremental analysis)
+
+- **The resident revision's L4 solve is seeded from the previous
+  revision's** (design §6.9). A new revision keeps the complete seed triple of
+  the last published solve (its `SolveBaseline`, its bundle inside
+  `L4Analysis`, its core summaries) until its own `L4` fill publishes, then
+  releases it; the fill runs the L4 host's seeded solve (`L4Reuse`), which
+  compares the baseline's digests with the current inputs' and re-solves only
+  the SCCs they leave dirty. A seed is used only when the revision's
+  `seed_key` (universe, the packages consumed, the root `app.json` bytes, the
+  model-instance id, the source dependencies, the engine version) equals the
+  seed's; a P change is a full solve. Test
+  `seeded_l4_after_b_s_and_p_equals_a_cold_solve` (rule-B fixture: B, S and P
+  edits; every served answer and the solve's projection equal cold).
+- `census-probe incr <ws-copy> [routine] [--verify] [--steps B,S,P]`: the
+  resident session after each change type: refresh, the fold and the L4 fill
+  timed apart ("analysis prepared"), each served ask timed, and with
+  `--verify` each ask compared with a cold standalone run.
+
+### Changed (context server stage 5)
+
+- **The L4 solve's row digests are hashed in parallel.** Every resident `L4`
+  fill (seeded or not) digested the `Debug` text of every routine row
+  serially; on CDO that was about 1.8 s of a 2.2-2.4 s fill. Hashed per id on
+  the rayon pool (each id reads only its own rows): the fill is **0.57-0.60 s**
+  (cold and seeded; the seeded solve itself re-solves 115 of 33,285 SCCs after
+  a body edit). Same digests, so the same seeding decisions.
+
 ### Fixed (context server: the resident refresh)
 
 - **The default mode no longer extracts the dependency source text again on

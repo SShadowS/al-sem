@@ -29,7 +29,7 @@ use crate::engine::l4::analysis::{CoreSummaries, L4Analysis, L4Request, build_l4
 use crate::engine::l4::cone_derived::ConeScope;
 use crate::engine::l4::exec_relation::ExecRelation;
 use crate::engine::l4::inherited_facts::InheritedFacts;
-use crate::engine::l4::summary_runner::{L4Control, SolveBaseline};
+use crate::engine::l4::summary_runner::{L4Control, L4Reuse, SolveBaseline};
 use crate::engine::l5::detector_context::{
     self as dc, CapabilityAnalysis, CapsInput, CoreInput, DetectorArtifacts, L4Input,
     OrderingFactsMap,
@@ -122,6 +122,44 @@ pub struct Solved {
     pub baseline: SolveBaseline,
 }
 
+/// The L4 seed a revision's solve may start from (design §6.9, stage 5):
+/// the complete triple of an earlier revision's solve — its
+/// [`SolveBaseline`], its bundle (inside [`L4Analysis`]) and its core
+/// summaries — held as that revision's published `L4` artifact, and the
+/// [`seed_key`] of the revision that solved it. The seeded solve compares
+/// the baseline's digests with the current inputs' (the L4 host's R0-R3),
+/// so a seed from ANY earlier revision with an equal key gives the cold
+/// answer; a different key (a package, `app.json`, universe or engine
+/// change) is a full solve.
+#[derive(Clone)]
+pub struct L4Seed {
+    pub key: [u8; 32],
+    /// An `Artifact` whose value is `ArtifactValue::L4`.
+    pub artifact: Arc<Artifact>,
+}
+
+/// The half of the L4 host's R0 that the solve's own digests do not cover
+/// (`incremental.rs`'s `host_global`): the universe, the packages the read
+/// consumed (path and content hash, in closure order), the root `app.json`
+/// bytes, the model-instance id, the source dependencies and the engine
+/// version. Read from the revision's own acquired `inputs`, so the key and
+/// the build cannot disagree.
+#[must_use]
+pub fn seed_key(inputs: &WorkspaceInputs, single_app: bool) -> [u8; 32] {
+    let source_deps = inputs
+        .source_dependencies
+        .as_ref()
+        .map(|d| crate::program::source_deps::digest(d));
+    crate::engine::l4::summary_runner::sha256_of_debug(&(
+        single_app,
+        inputs.closure.consumed(),
+        inputs.app_json.bytes.as_ref().ok(),
+        &inputs.model_instance_id,
+        &source_deps,
+        &inputs.driver_version,
+    ))
+}
+
 /// An artifact's value.
 pub enum ArtifactValue {
     Ordering(OrderingFactsMap),
@@ -172,6 +210,14 @@ pub struct Revision {
     answered: std::sync::atomic::AtomicU64,
     /// Fills per artifact kind (`status`, the T-order fill counters).
     fills: std::sync::Mutex<BTreeMap<&'static str, u64>>,
+    /// [`seed_key`] of this revision's read.
+    seed_key: [u8; 32],
+    /// The seed this revision's `L4` fill starts from, until that fill
+    /// publishes (then released: the revision's own solve is the next
+    /// revision's seed).
+    seed: std::sync::Mutex<Option<L4Seed>>,
+    /// The last `L4` fill's report: `(seeded SCCs, total SCCs, full)`.
+    l4_report: std::sync::Mutex<Option<(usize, usize, bool)>>,
 }
 
 impl ArtifactKey {
@@ -194,16 +240,34 @@ impl Revision {
     /// A revision over `target`, built from `inputs`.
     #[must_use]
     pub fn new(id: RevisionId, inputs: Arc<WorkspaceInputs>, target: AnalysisTarget) -> Revision {
+        Revision::seeded(id, inputs, target, None)
+    }
+
+    /// A revision whose `L4` fill starts from `prev`'s seed (design §6.9):
+    /// `prev`'s published solve, else the seed `prev` itself still holds,
+    /// when its [`seed_key`] equals this revision's; else a full solve.
+    #[must_use]
+    pub fn seeded(
+        id: RevisionId,
+        inputs: Arc<WorkspaceInputs>,
+        target: AnalysisTarget,
+        prev: Option<&Revision>,
+    ) -> Revision {
         let rel = relation_of(&target);
         let dependency_calls = match &target {
             AnalysisTarget::CrossApp(b) => b.dependency_calls.clone(),
             AnalysisTarget::SingleApp(_) => None,
         };
         let primary = WitnessRequest::primary().subjects(target.resolved());
+        let single_app = matches!(target, AnalysisTarget::SingleApp(_));
+        let seed_key = seed_key(&inputs, single_app);
+        let seed = prev
+            .and_then(Revision::l4_seed)
+            .filter(|s| s.key == seed_key);
         Revision {
             id,
             inputs,
-            single_app: matches!(target, AnalysisTarget::SingleApp(_)),
+            single_app,
             target: Arc::new(target),
             rel,
             dependency_calls,
@@ -211,7 +275,38 @@ impl Revision {
             store: Store::new(),
             answered: std::sync::atomic::AtomicU64::new(0),
             fills: std::sync::Mutex::new(BTreeMap::new()),
+            seed_key,
+            seed: std::sync::Mutex::new(seed),
+            l4_report: std::sync::Mutex::new(None),
         }
+    }
+
+    /// The seed a NEXT revision's solve may start from: this revision's
+    /// published `L4`, else the seed it was given and has not used yet.
+    #[must_use]
+    pub fn l4_seed(&self) -> Option<L4Seed> {
+        match self.store.load().get(&ArtifactKey::L4) {
+            Some(a) => Some(L4Seed {
+                key: self.seed_key,
+                artifact: Arc::clone(a),
+            }),
+            None => self.seed.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+        }
+    }
+
+    /// Whether this revision holds a seed its `L4` fill has not used yet.
+    #[must_use]
+    pub fn has_pending_seed(&self) -> bool {
+        self.seed
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_some()
+    }
+
+    /// The last `L4` fill's `(seeded SCCs, total SCCs, full)`.
+    #[must_use]
+    pub fn l4_report(&self) -> Option<(usize, usize, bool)> {
+        *self.l4_report.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     /// The revision's target.
@@ -394,23 +489,40 @@ impl Revision {
                 ArtifactKey::L4 => {
                     // A shared fill is never cancelled by a request (§4.6).
                     let never = || false;
+                    // The seed (§6.9): the complete triple of an earlier
+                    // revision's solve, compared digest by digest.
+                    let seed = self.seed.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                    let reuse = seed.as_ref().and_then(|s| match &s.artifact.value {
+                        ArtifactValue::L4(prev) => Some(L4Reuse {
+                            solve: &prev.baseline,
+                            bundle: &prev.l4.bundle,
+                            core: &prev.core.0,
+                        }),
+                        _ => None,
+                    });
                     let req = L4Request {
                         extra_diagnostics: vec![],
                         control: Some(L4Control {
                             cancel: &never,
-                            reuse: None,
+                            reuse,
                         }),
                     };
                     let cross = target.cross_app_inputs();
                     let (l4, core, outcome) =
                         build_l4_controlled(model, &self.rel, req, cross.as_ref())
                             .map_err(|_| "the solve was cancelled".to_string())?;
+                    let outcome = outcome.ok_or("a controlled solve reports its outcome")?;
+                    *self.l4_report.lock().unwrap_or_else(|p| p.into_inner()) =
+                        Some((outcome.seeded, outcome.total, outcome.full));
+                    crate::engine::perf_trace::counter_delta(
+                        "revision.l4_sccs_seeded",
+                        outcome.seeded as u64,
+                    );
+                    drop(seed);
                     ArtifactValue::L4(Solved {
                         l4: Arc::new(l4),
                         core: Arc::new(core),
-                        baseline: outcome
-                            .ok_or("a controlled solve reports its outcome")?
-                            .baseline,
+                        baseline: outcome.baseline,
                     })
                 }
                 ArtifactKey::Raw(subjects) => {
@@ -611,6 +723,38 @@ impl Revision {
         r.map(|out| (out, (prepare_ms, total.saturating_sub(prepare_ms))))
     }
 
+    /// Fill `keys` (prerequisites first, each of phase 0: `Fold`, `L4`,
+    /// `Ordering`, `Rules`) through [`Store::ensure_prepared`], as a request
+    /// would: the measurement of "analysis prepared" (design §12.1) and the
+    /// warm-up a front end may run after a refresh. Returns the wall ms.
+    pub fn prepare_keys(
+        &self,
+        keys: &[ArtifactKey],
+        ctl: &Control<'_>,
+    ) -> Result<u64, PrepareError> {
+        if let Some(k) = keys.iter().find(|k| StoreKey::phase(*k) != 0) {
+            return Err(PrepareError::Engine(format!(
+                "{k:?} is not a shared phase-0 artifact"
+            )));
+        }
+        let plan = Plan::merge([]);
+        let needs: Vec<(ArtifactKey, u32)> = keys.iter().map(|k| (k.clone(), 0)).collect();
+        let start = std::time::Instant::now();
+        let snap = self
+            .store
+            .ensure_prepared(&needs, &|_| 0, &|cx| self.fill(&plan, cx), ctl)?;
+        self.release_used_seed(&snap);
+        Ok(start.elapsed().as_millis() as u64)
+    }
+
+    /// Once this revision's own solve is published, the seed it started
+    /// from is released (the solve is the next revision's seed).
+    fn release_used_seed(&self, snap: &ReadySnapshot) {
+        if snap.get(&ArtifactKey::L4).is_some() {
+            self.seed.lock().unwrap_or_else(|p| p.into_inner()).take();
+        }
+    }
+
     /// How many requests this revision answered.
     #[must_use]
     pub fn answered(&self) -> u64 {
@@ -639,6 +783,7 @@ impl Revision {
             .ensure_prepared(&needs, &|_| 0, &|cx| self.fill(plan, cx), ctl);
         *prepare_ms = start.elapsed().as_millis() as u64;
         let snap = snap?;
+        self.release_used_seed(&snap);
         if let Some(stop) = (ctl.stop)() {
             return Err(stop.into());
         }

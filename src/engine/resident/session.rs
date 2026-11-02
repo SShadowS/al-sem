@@ -532,7 +532,14 @@ impl ResidentSession {
                         generation,
                         inputs_stamp: consumed.stamp(),
                     };
-                    Built::Revision(Arc::new(Revision::new(id, inputs, target)))
+                    // The L4 seed of the last published revision (§6.9):
+                    // the new revision's solve starts from it when the
+                    // seed key matches.
+                    let seed_from = match prev.as_ref().map(|p| &p.built) {
+                        Some(Built::Revision(r)) => Some(&**r),
+                        _ => None,
+                    };
+                    Built::Revision(Arc::new(Revision::seeded(id, inputs, target, seed_from)))
                 }
                 Err(failure) => Built::Failed(Arc::new(FailedBuild { inputs, failure })),
             };
@@ -621,3 +628,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 #[cfg(test)]
 #[path = "session_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "incr_tests.rs"]
+mod incr_tests;

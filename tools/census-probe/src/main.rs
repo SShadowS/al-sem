@@ -2041,6 +2041,140 @@ fn refresh_seq_mode(ws: PathBuf, routine: String, low_mem: bool, nb: usize, ns: 
     std::fs::write(&target, &original).expect("restore the workspace copy");
 }
 
+/// Stage 5's measure (context-server design §12.1, "analysis prepared"): a
+/// `ResidentSession` on a workspace COPY, pinned `fresh`; per step (`cold`,
+/// then a body edit `B`, a declaration edit `S` and a package-identity
+/// change `P`, each restored by the next edit): the refresh, then the
+/// analysis every heavy request shares filled through `ensure_prepared`
+/// (the fold, then the L4 solve, each timed), then each served ask timed.
+/// `--verify` compares every ask's bytes and exit with a cold standalone run
+/// of the same job over the same read. The previous revision is released
+/// before each refresh, as the child releases it. `--steps B,S,P,B` picks
+/// the steps after `cold`.
+fn incr_mode(ws: PathBuf, routine: String, low_mem: bool, verify: bool, steps: Vec<String>) {
+    use al_sem::engine::resident::revision::ArtifactKey;
+    use al_sem::engine::resident::session::{Built, Freshness, ResidentSession};
+    use al_sem::engine::resident::store::Control;
+
+    LOG_BIG.store(false, Relaxed);
+    let ws = ws.canonicalize().expect("the workspace copy");
+    let (target, original, _) = edit_sequence(&ws, 0, 0);
+    let app_json = ws.join("app.json");
+    let app_original = std::fs::read(&app_json).expect("app.json");
+    #[cfg(feature = "mimalloc")]
+    // SAFETY: as in `refresh_seq_mode`.
+    unsafe {
+        libmimalloc_sys::mi_option_set(libmimalloc_sys::mi_option_use_numa_nodes - 1, 0)
+    };
+    #[cfg(feature = "mimalloc")]
+    al_sem::release_alloc::set_resident(al_sem::release_alloc::RELEASE_MIN, low_mem);
+    println!(
+        "######## incr {} routine {routine}{}{} target {}",
+        ws.display(),
+        if low_mem { " --low-mem" } else { "" },
+        if verify { " --verify" } else { "" },
+        target.display()
+    );
+    let session =
+        Arc::new(ResidentSession::new(ws.clone(), false, "probe".into()).with_low_mem(low_mem));
+    let mut all = vec!["cold".to_string()];
+    all.extend(steps);
+    let mut failed = false;
+    for (i, name) in all.iter().enumerate() {
+        // Restore what the previous step changed, then make this step's edit.
+        let body = original.replacen(
+            "\n    begin\n",
+            &format!("\n    begin\n        // incr probe {i}\n"),
+            1,
+        );
+        let close = original.rfind('}').expect("a closing brace");
+        let decl = format!(
+            "{}\n    procedure IncrProbe{i}()\n    begin\n    end;\n{}",
+            &original[..close],
+            &original[close..]
+        );
+        let (text, app): (&str, Vec<u8>) = match name.as_str() {
+            "cold" => (&original, app_original.clone()),
+            "B" => (&body, app_original.clone()),
+            "S" => (&decl, app_original.clone()),
+            "P" => {
+                let mut a = app_original.clone();
+                a.extend(std::iter::repeat_n(b'\n', i));
+                (&original, a)
+            }
+            other => panic!("unknown step {other}"),
+        };
+        std::fs::write(&target, text).expect("write the workspace copy");
+        std::fs::write(&app_json, &app).expect("write app.json");
+        session.notify_changed([target.clone(), app_json.clone()]);
+        let t = std::time::Instant::now();
+        let pinned = session
+            .pin(Freshness::Fresh, &|| None)
+            .unwrap_or_else(|e| panic!("{name}: no pin: {e:?}"));
+        let refresh_ms = t.elapsed().as_millis();
+        let Built::Revision(rev) = pinned.built.clone() else {
+            panic!("{name}: the build failed")
+        };
+        drop(pinned);
+        let class = session
+            .stats()
+            .last_build_class
+            .unwrap_or_else(|| "?".into());
+        let ctl = Control::unreserved();
+        let fold_ms = rev
+            .prepare_keys(&[ArtifactKey::Fold], &ctl)
+            .unwrap_or_else(|e| panic!("{name}: fold: {e:?}"));
+        let l4_ms = rev
+            .prepare_keys(&[ArtifactKey::L4], &ctl)
+            .unwrap_or_else(|e| panic!("{name}: l4: {e:?}"));
+        if let Some((seeded, total, full)) = rev.l4_report() {
+            println!(
+                "        l4 seeded {seeded} of {total} SCCs{}",
+                if full { " (full)" } else { "" }
+            );
+        }
+        let mut asks = Vec::new();
+        for kind in ["explain", "prove", "digest", "query"] {
+            let job = resident_job(kind, &rev.inputs, &routine);
+            let t = std::time::Instant::now();
+            let out = rev
+                .answer(&*job, &Control::unreserved())
+                .unwrap_or_else(|e| panic!("{name}: {kind}: {e:?}"));
+            let ms = t.elapsed().as_millis();
+            let equal = verify.then(|| {
+                let cold = al_sem::engine::batch::standalone_output(&*job);
+                cold.exit == out.exit && cold.actions == out.actions
+            });
+            if equal == Some(false) {
+                failed = true;
+            }
+            asks.push(format!(
+                "{kind} {ms} ms{}",
+                match equal {
+                    Some(true) => " =cold",
+                    Some(false) => " DIFFERS",
+                    None => "",
+                }
+            ));
+        }
+        drop(rev);
+        settle();
+        println!(
+            "  {name:<5} class {class:<4} refresh {refresh_ms:>6} ms  fold {fold_ms:>6} ms  l4 {l4_ms:>5} ms  prepared {:>6} ms  | {} | rss {:.2} GB hwm {:.2} GB",
+            fold_ms + l4_ms,
+            asks.join(", "),
+            proc_status_kib("VmRSS:") as f64 / 1e6 * 1.024,
+            proc_status_kib("VmHWM:") as f64 / 1e6 * 1.024,
+        );
+    }
+    std::fs::write(&target, &original).expect("restore the workspace copy");
+    std::fs::write(&app_json, &app_original).expect("restore app.json");
+    // `ALSEM_CONES_CENSUS=1`: the composition's attribution, summed over the
+    // steps.
+    al_sem::engine::l5::detector_context::report_cones_census();
+    assert!(!failed, "an answer differed from its cold run");
+}
+
 /// mimalloc's statistics (`mi_stats_print_out`), as text.
 #[cfg(feature = "mimalloc")]
 fn mi_stats_text() -> String {
@@ -2363,6 +2497,33 @@ fn main() {
             let ws = PathBuf::from(plain.next().expect("workspace"));
             let routine = plain.next().unwrap_or_else(|| "IssueReminder".into());
             resident_mode(ws, routine, low_mem);
+            return;
+        }
+        Some("incr") => {
+            // `incr <ws-copy> [routine] [--low-mem] [--verify] [--steps B,S,P]`
+            let mut rest = args.peekable();
+            let mut plain: Vec<String> = Vec::new();
+            let (mut low_mem, mut verify) = (false, false);
+            let mut steps: Vec<String> = vec!["B".into(), "S".into(), "P".into()];
+            while let Some(a) = rest.next() {
+                match a.as_str() {
+                    "--low-mem" => low_mem = true,
+                    "--verify" => verify = true,
+                    "--steps" => {
+                        steps = rest
+                            .next()
+                            .expect("--steps B,S,P")
+                            .split(',')
+                            .map(str::to_string)
+                            .collect()
+                    }
+                    _ => plain.push(a),
+                }
+            }
+            let mut plain = plain.into_iter();
+            let ws = PathBuf::from(plain.next().expect("workspace"));
+            let routine = plain.next().unwrap_or_else(|| "IssueReminder".into());
+            incr_mode(ws, routine, low_mem, verify, steps);
             return;
         }
         Some(mode @ ("refresh-seq" | "front-seq")) => {
