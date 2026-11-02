@@ -282,6 +282,24 @@ rules fewer writers apply, commented out, so you can confirm one by hand. Delete
 entries that are not real rules, and record a deliberate exception with
 `except: { routine.name: <name> }`.
 
+**"Can my AI agent ask these questions itself?"**
+
+```bash
+alsem mcp --workspace <ws>                     # an MCP server on stdin/stdout
+claude mcp add alsem -- alsem mcp --workspace <ws>   # register it with Claude Code
+```
+
+`alsem mcp` speaks the Model Context Protocol, so an agent (Claude Code and others) can
+call `alsem_explain`, `alsem_prove`, `alsem_digest`, `alsem_query_effects` and
+`alsem_query_touches` as tools, plus `alsem_status` and `alsem_refresh`. Each answer is
+the exact output of the matching `alsem` command, with its exit code. Explain answers
+the human card by default (`format: json` for the schema); a digest always goes to a
+file, with a short summary in the answer; any output over 64 KiB goes to a file. Files
+are written only into a private folder the server makes under `--output-root`
+(default `~/.al-sem/mcp-out`). Today each call builds the model afresh, as the command
+would; keeping a built model between calls is the next step and will not change the
+tools.
+
 **"What changed between two versions?"**
 
 ```bash
