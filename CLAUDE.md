@@ -256,6 +256,11 @@ part). The pieces:
   change type must give the same model as a cold build (the session tests compare).
   Measure it with `aldump --session-refresh <workspace-copy> --verify` (it EDITS the
   workspace, so only on a copy).
+- Memory (owner decision 2026-11-02): the default keeps everything, ~4.7 GB RSS on CDO after
+  one ask of each kind (budget 6 GiB cross-app, 2 GiB single-app). `--low-mem` (on
+  `engine-host` and `mcp`) keeps no dependency syntax trees between revisions: ~3.7 GB, and
+  a declaration-level (S) refresh costs +1.2–1.4 s to parse them again. Run the session
+  tests in both modes (`program::session::workspace::tests::{default_mode,low_mem}`).
 The installed copy used by Claude Code is `~/.al-sem/bin/alsem` (registered as the `alsem`
 MCP server); it does not update itself — rebuild and copy it after the server changes.
 

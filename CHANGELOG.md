@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default (retained floor 2.95-2.97 against 3.90-3.91 GB), peak 4.56 against
   5.56 GB; live heap (census-probe) 2,903 against 3,711 MiB (the dependency
   trees were 925 MiB, of which 117 MiB text, now kept alone). Warm asks
-  unchanged (query 0.04 s, explain 6.3-6.4 s, prove 6.1-6.3 s, digest
+  unchanged (query 0.04 s, explain 6.3-6.4 s, prove 6.1-6.4 s, digest
   5.4-5.7 s, both modes). Refresh per change type (`aldump --session-refresh
   --verify` on a copy, every step equal to cold): B **2.29-2.37 s** low-mem
   against 2.52-2.86 s default (low-mem extracts no dependency text again);
