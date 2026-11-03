@@ -526,22 +526,136 @@ fn finalize<'g>(
 /// The transitive product-state solve over the typed graph's INCOMING edges,
 /// returned in canonical (rank) order ([`finalize`]): the result does not
 /// depend on the order of `producers`, of the graph's edges or of the model's
-/// routines.
+/// routines. (Production composes through [`solve_seeded`].)
+#[cfg(test)]
 pub(crate) fn solve<'g>(
     producers: Vec<Producer>,
     g: &'g TypedEdgeGraph,
     routines_by_id: &HashMap<&str, &ModelRoutine>,
     frames: &HashMap<String, FrameGuards>,
 ) -> (ConeArena, ResolvedByRoutine<'g>) {
+    let (arena, resolved, _) = solve_seeded(producers, g, routines_by_id, frames, None);
+    (arena, resolved)
+}
+
+/// The previous revision's solve, for [`solve_seeded`] (context-server
+/// design §6.10 "Producers", stage 5): its finalized arena, the per-routine
+/// input digests it was solved over ([`super::capability_cone::pd_input_digests`])
+/// and the current ones.
+pub(crate) struct PdReuse<'a> {
+    pub old: &'a ConeArena,
+    pub old_digests: &'a HashMap<String, [u8; 32]>,
+    pub new_digests: &'a HashMap<String, [u8; 32]>,
+}
+
+/// What [`solve_seeded`] reused.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PdSolveReport {
+    /// Producers of this solve.
+    pub producers: usize,
+    /// Producers whose states were copied from the previous arena.
+    pub reused: usize,
+    /// Routines whose solve inputs changed (Δ).
+    pub delta_routines: usize,
+    /// States copied from the previous arena.
+    pub reused_states: usize,
+}
+
+/// For each of `producers`, the previous arena's index of the same producer
+/// when its states may be copied, else `None` (re-solve). Design §6.10:
+/// a producer is affected when its owner is reachable from Δ in the NEW
+/// graph (Δ = the routines whose input digest changed, appeared or
+/// vanished; a state of the producer can only be created, removed or
+/// changed at a routine that reaches the owner), when it held a state at a
+/// routine of Δ in the OLD arena (a removed edge or a changed row of a
+/// routine the producer reached), or when its fact is new or changed. The
+/// states never interact across producers, so every other producer's states,
+/// links and distances are exactly the previous solve's.
+fn reusable(
+    producers: &[Producer],
+    g: &TypedEdgeGraph,
+    reuse: &PdReuse<'_>,
+) -> (Vec<Option<usize>>, usize) {
+    let mut delta: HashSet<&str> = HashSet::new();
+    for (id, d) in reuse.new_digests {
+        if reuse.old_digests.get(id) != Some(d) {
+            delta.insert(id);
+        }
+    }
+    for id in reuse.old_digests.keys() {
+        if !reuse.new_digests.contains_key(id) {
+            delta.insert(id);
+        }
+    }
+    // Forward reachability from Δ in the new graph (callers reach callees).
+    let mut reach: HashSet<&str> = delta.clone();
+    let mut queue: Vec<&str> = delta.iter().copied().collect();
+    while let Some(r) = queue.pop() {
+        for e in g.outgoing.get(r).map_or(&[][..], Vec::as_slice) {
+            if reach.insert(e.to.as_str()) {
+                queue.push(e.to.as_str());
+            }
+        }
+    }
+    // Producers with a state at a routine of Δ in the old arena.
+    let mut old_hit: HashSet<usize> = HashSet::new();
+    for r in &delta {
+        for &s in reuse.old.by_routine.get(*r).map_or(&[][..], Vec::as_slice) {
+            old_hit.insert(reuse.old.states[s].producer);
+        }
+    }
+    let old_ix: HashMap<(&str, &str), usize> = reuse
+        .old
+        .producers
+        .iter()
+        .enumerate()
+        .map(|(i, p)| ((&*p.owner, p.operation_id.as_str()), i))
+        .collect();
+    let out = producers
+        .iter()
+        .map(|p| {
+            if reach.contains(&*p.owner) {
+                return None;
+            }
+            let o = *old_ix.get(&(&*p.owner, p.operation_id.as_str()))?;
+            (!old_hit.contains(&o) && reuse.old.producers[o].fact == p.fact).then_some(o)
+        })
+        .collect();
+    (out, delta.len())
+}
+
+/// [`solve`], copying from `reuse` the states of every producer
+/// [`reusable`] leaves untouched and solving only the others; the finalized
+/// arena equals a full solve's (the same states, links and distances, then
+/// the same canonical order).
+pub(crate) fn solve_seeded<'g>(
+    producers: Vec<Producer>,
+    g: &'g TypedEdgeGraph,
+    routines_by_id: &HashMap<&str, &ModelRoutine>,
+    frames: &HashMap<String, FrameGuards>,
+    reuse: Option<&PdReuse<'_>>,
+) -> (ConeArena, ResolvedByRoutine<'g>, PdSolveReport) {
     crate::engine::perf_trace::counter_delta("build.pd_solve", 1);
+    let mut report = PdSolveReport {
+        producers: producers.len(),
+        ..Default::default()
+    };
     let mut arena = ConeArena {
         producers,
         ..Default::default()
     };
     // A workspace without producers pays nothing.
     if arena.producers.is_empty() {
-        return (arena, HashMap::new());
+        return (arena, HashMap::new(), report);
     }
+    let delta_span = crate::engine::perf_trace::span("cone", "pd.delta");
+    let mut copy_from: Vec<Option<usize>> = vec![None; arena.producers.len()];
+    if let Some(reuse) = reuse {
+        let (c, d) = reusable(&arena.producers, g, reuse);
+        copy_from = c;
+        report.delta_routines = d;
+    }
+    drop(delta_span);
     let mut incoming: HashMap<&str, Vec<(&'g str, &'g TypedOutEdge)>> = HashMap::new();
     for (from, list) in &g.outgoing {
         for e in list {
@@ -598,7 +712,109 @@ pub(crate) fn solve<'g>(
         ix
     }
 
-    for p in 0..arena.producers.len() {
+    // Stage 5: the reused producers' states, links and edges, copied from the
+    // previous arena (each producer's states are one contiguous range there:
+    // the canonical order is producer-major). An edge is re-found in the
+    // current graph by its full identity; its absence would mean the
+    // producer's inputs moved without Δ seeing it, so that producer is solved
+    // afresh instead (and counted as not reused).
+    if let Some(reuse) = reuse.filter(|_| copy_from.iter().any(Option::is_some)) {
+        let copy_span = crate::engine::perf_trace::span("cone", "pd.copy");
+        let old = reuse.old;
+        let mut start = vec![usize::MAX; old.producers.len()];
+        let mut end = vec![0usize; old.producers.len()];
+        for (ix, s) in old.states.iter().enumerate() {
+            start[s.producer] = start[s.producer].min(ix);
+            end[s.producer] = ix + 1;
+        }
+        type FromEdge<'g> = (&'g str, &'g TypedOutEdge);
+        let mut by_from: HashMap<(&str, &str), Vec<FromEdge<'g>>> = HashMap::new();
+        for (from, list) in &g.outgoing {
+            for e in list {
+                by_from
+                    .entry((from.as_str(), e.sort_key.as_str()))
+                    .or_default()
+                    .push((from.as_str(), e));
+            }
+        }
+        // Each old edge is re-found once (an arena edge has one `from`: its
+        // identity includes it), then each link maps by index.
+        const UNSEEN: usize = usize::MAX;
+        const MISSING: usize = usize::MAX - 1;
+        let mut new_edge: Vec<usize> = vec![UNSEEN; old.edges.len()];
+        let mut map_edge = |from: &str, oe: usize| -> usize {
+            if new_edge[oe] == UNSEEN {
+                let e = &old.edges[oe];
+                new_edge[oe] = by_from
+                    .get(&(from, e.sort_key.as_str()))
+                    .and_then(|v| {
+                        v.iter()
+                            .copied()
+                            .find(|(f, c)| edge_cmp((f, c), (from, e)) == std::cmp::Ordering::Equal)
+                    })
+                    .map_or(MISSING, |(f, c)| {
+                        *edge_ix.entry(std::ptr::from_ref(c)).or_insert_with(|| {
+                            edges.push((f, c));
+                            edges.len() - 1
+                        })
+                    });
+            }
+            new_edge[oe]
+        };
+        // The previous revision's routine names, by address, to this solve's.
+        let mut names_of: HashMap<*const u8, Arc<str>> = HashMap::new();
+        for (p, slot) in copy_from.iter_mut().enumerate() {
+            let Some(o) = *slot else { continue };
+            let (s0, s1) = (start[o], end[o]);
+            debug_assert!(
+                s0 < s1 && old.states[s0..s1].iter().all(|s| s.producer == o),
+                "a producer's states are one range"
+            );
+            // First every link's edge in the current graph, then the copy.
+            let complete = old.states[s0..s1].iter().all(|st| {
+                old.links[st.links.clone()]
+                    .iter()
+                    .all(|l| map_edge(&st.routine, l.edge) != MISSING)
+            });
+            if !complete {
+                debug_assert!(false, "a reused producer's edge is missing from the graph");
+                *slot = None;
+                continue;
+            }
+            let base = arena.states.len();
+            for st in &old.states[s0..s1] {
+                let links = old.links[st.links.clone()]
+                    .iter()
+                    .map(|l| ConeLink {
+                        callee_state: base + (l.callee_state - s0),
+                        edge: map_edge(&st.routine, l.edge),
+                    })
+                    .collect();
+                let routine = names_of
+                    .entry(st.routine.as_ptr())
+                    .or_insert_with(|| intern(&st.routine));
+                arena.states.push(ConeState {
+                    producer: p,
+                    routine: Arc::clone(routine),
+                    t: st.t.clone(),
+                    reqs: st.reqs.clone(),
+                    seed: st.seed,
+                    dist: st.dist,
+                    links: 0..0,
+                });
+                raw_links.push(links);
+            }
+            report.reused += 1;
+            report.reused_states += s1 - s0;
+        }
+        drop(copy_span);
+    }
+    let first_fresh = arena.states.len();
+
+    for (p, from) in copy_from.iter().enumerate() {
+        if from.is_some() {
+            continue;
+        }
         let prod = &arena.producers[p];
         let i0 = fact_pd_index(&prod.fact).expect("a producer is parameter-dependent");
         let reqs = frames
@@ -615,7 +831,8 @@ pub(crate) fn solve<'g>(
         push(&mut arena, &mut ix_of, &mut raw_links, key, true, 0);
     }
 
-    let mut s: StateIx = 0;
+    // Only the fresh states are expanded: a copied state's links are copied.
+    let mut s: StateIx = first_fresh;
     while s < arena.states.len() {
         let st = &arena.states[s];
         let (p, c, t, reqs, dist) = (
@@ -669,7 +886,7 @@ pub(crate) fn solve<'g>(
     arena.by_routine.values_mut().for_each(Vec::shrink_to_fit);
     resolved.values_mut().for_each(Vec::shrink_to_fit);
     census(&arena, &resolved, &names, &reps);
-    (arena, resolved)
+    (arena, resolved, report)
 }
 
 /// D1.4: charge one solve to the `ALSEM_CONES_CENSUS` counters.
@@ -1777,5 +1994,131 @@ mod tests {
             Greater,
             "other shapes as strings"
         );
+    }
+
+    /// One revision's solve inputs for the reuse tests: rows, edges,
+    /// producers.
+    struct Rev {
+        routines: Vec<ModelRoutine>,
+        edges: Vec<(&'static str, TypedOutEdge)>,
+        producers: Vec<Producer>,
+    }
+
+    /// A solve kept as the next one's seed: its arena and digests.
+    type Kept = (ConeArena, HashMap<String, [u8; 32]>);
+
+    impl Rev {
+        /// The full solve's bytes, the reused solve's (seeded by `prev`), the
+        /// reuse report and the reused solve kept.
+        fn solve_both(&self, prev: Option<&Kept>) -> (String, String, PdSolveReport, Kept) {
+            let by_id: HashMap<&str, &ModelRoutine> =
+                self.routines.iter().map(|r| (r.id.as_str(), r)).collect();
+            let frames: HashMap<String, FrameGuards> = HashMap::new();
+            let g = graph_as_given(self.edges.clone());
+            let digests =
+                crate::engine::l4::capability_cone::pd_input_digests(&g, &self.routines, &frames);
+            let (full, full_r) = solve(self.producers.clone(), &g, &by_id, &frames);
+            let want = arena_bytes(&full, &full_r);
+            let reuse = prev.map(|(old, old_digests)| PdReuse {
+                old,
+                old_digests,
+                new_digests: &digests,
+            });
+            let (a, r, report) =
+                solve_seeded(self.producers.clone(), &g, &by_id, &frames, reuse.as_ref());
+            assert_canonical(&a, &r);
+            let got = arena_bytes(&a, &r);
+            drop(r);
+            (want, got, report, (a, digests))
+        }
+    }
+
+    /// Design §6.10 "Producers" (T-pd-out, T-arena-canon "incremental after
+    /// insertion/deletion equals cold"): a chain A → C → P where P inserts
+    /// into its parameter (a producer) and a second, unrelated producer Q
+    /// called by B. Each edit below is solved with the previous revision's
+    /// arena as the seed; the reused arena equals a full solve's, byte for
+    /// byte, and exactly the producers the rule names are re-solved:
+    /// - C's argument changes from a physical to a temporary record (C is Δ
+    ///   and reaches P): P re-solved, Q copied, and A's state changes too
+    ///   (the producer solve carries it, whatever the cone does);
+    /// - a new caller X → C (X has no old state: only the NEW-graph
+    ///   reachability catches it);
+    /// - C stops calling P (C had a state of P: only the OLD arena catches
+    ///   it; C no longer reaches P in the new graph);
+    /// - no edit: everything copied.
+    ///
+    /// DISCRIMINATION (2026-11-02, break with Edit, run, revert, run):
+    /// starting the reachability with an empty set instead of Δ fails "new
+    /// caller: equals full" (X's state is missing); skipping the old-arena
+    /// hits (`old_hit` left empty) fails the removed-edge step at the copy's
+    /// debug assertion "a reused producer's edge is missing from the graph"
+    /// (C's stale link crosses an edge the graph no longer has; a release
+    /// build would fall back to solving that producer afresh, so the rule and
+    /// the fallback both guard this shape).
+    #[test]
+    fn reused_producer_states_equal_a_full_solve() {
+        fn pass(id: &str, cs: &str, temp: bool) -> ModelRoutine {
+            // The argument: the caller's own parameter 0 (physical through
+            // the chain), or a temporary record.
+            let arg = if temp { pd_ts_known(true) } else { pd_ts_pd(0) };
+            let mut r = pd_routine(id);
+            r.call_sites
+                .push(pd_call_site(cs, "P", vec![pd_arg_binding(0, Some(arg))]));
+            r
+        }
+        let base = || Rev {
+            routines: vec![
+                pass("A", "a1", false),
+                pass("B", "b1", false),
+                pass("C", "c1", false),
+                pd_routine("P"),
+                pd_routine("Q"),
+            ],
+            edges: vec![
+                ("A", edge("direct-call", Some("a1"), "C")),
+                ("C", edge("direct-call", Some("c1"), "P")),
+                ("B", edge("direct-call", Some("b1"), "Q")),
+            ],
+            producers: vec![producer("P"), producer("Q")],
+        };
+        let r0 = base();
+        let (want, got, report, prev) = r0.solve_both(None);
+        assert_eq!(got, want, "cold: equals full");
+        assert_eq!(report.reused, 0);
+
+        // No edit: everything copied.
+        let (want, got, report, _) = base().solve_both(Some(&prev));
+        assert_eq!(got, want, "no edit: equals full");
+        assert_eq!((report.reused, report.delta_routines), (2, 0));
+
+        // C passes a temporary record: P re-solved, Q copied.
+        let mut r1 = base();
+        r1.routines[2] = pass("C", "c1", true);
+        let (want, got, report, prev1) = r1.solve_both(Some(&prev));
+        assert_eq!(got, want, "temp argument: equals full");
+        assert_eq!(report.reused, 1, "temp argument: Q copied, P re-solved");
+        assert_ne!(
+            want,
+            base().solve_both(None).0,
+            "precondition: the edit moves the arena"
+        );
+        let _ = prev1;
+
+        // A new caller X of C: only the new graph sees it.
+        let mut r2 = base();
+        r2.routines.push(pass("X", "x1", false));
+        r2.edges.push(("X", edge("direct-call", Some("x1"), "C")));
+        let (want, got, report, _) = r2.solve_both(Some(&prev));
+        assert_eq!(got, want, "new caller: equals full");
+        assert_eq!(report.reused, 1, "new caller: Q copied");
+
+        // C stops calling P: only the old arena sees it.
+        let mut r3 = base();
+        r3.routines[2] = pd_routine("C");
+        r3.edges.retain(|(f, _)| *f != "C");
+        let (want, got, report, _) = r3.solve_both(Some(&prev));
+        assert_eq!(got, want, "removed edge: equals full");
+        assert_eq!(report.reused, 1, "removed edge: Q copied");
     }
 }

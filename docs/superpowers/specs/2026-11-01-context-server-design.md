@@ -659,6 +659,59 @@ row including anchors**: any file in Δ_files marks every id with a row in it.
 | `operation_index`, `callsite_index`, `routine_order_frames` | all rows of an id, raw of the id | per id, same rule |
 | `pd_solution` | the arena at the pinned epoch, the view's subjects | per view |
 
+**As built (stage 5, a prefix: §6.9 and the producer half of §6.10; branch
+`ctxsrv/stage5`).**
+
+- *Seeded L4 (§6.9), done.* `Revision::seeded` takes the previous revision's
+  published `L4` artifact (the complete triple: `SolveBaseline`, the bundle in
+  `L4Analysis`, `Arc<CoreSummaries>`) as its seed, or the seed that revision
+  still held unused; the `L4` fill runs the host's seeded solve (`L4Reuse`)
+  and the seed is released once the revision's own solve publishes. A seed
+  is used only when `seed_key` (universe, the packages the read consumed,
+  root `app.json` bytes, model-instance id, source dependencies, engine
+  version — the host's `host_global`, read from the revision's own acquired
+  inputs) is equal; a P change is a full solve. The seed lives on the
+  revision chain rather than in a `WorkspaceState` column: the seeded
+  solve compares digests, so a seed from any earlier revision with an equal
+  key gives the cold answer. *Found while measuring:* the fill's 2.2-2.4 s
+  on CDO was almost all the serial `Debug` digest of every routine row (the
+  seeded solve itself is 0.13 s); the digests are now hashed in parallel and
+  the fill is 0.57-0.70 s cold or seeded (115 of 33,285 SCCs re-solved after a
+  body edit).
+- *Producers (§6.10 "Producers"), done, without the arena tables.* Each
+  resident fold keeps `pd_input_digests` (per routine: every model row of
+  the id, its guard frame with sites sorted, its typed out-edges). The next
+  revision's fold computes Δ, and `pd_solve::solve_seeded` re-solves a
+  producer when its owner is reachable from Δ in the new graph, when it held
+  a state at a routine of Δ in the old arena, or when its fact changed;
+  every other producer's states are copied from the previous fold's arena
+  (one contiguous range per producer in the canonical order) with each link's
+  edge re-found in the current graph by its full identity, and everything is
+  finalized by stage 1b's canonical pass, so the arena equals a full solve's.
+  CDO, body edit: 2,590 of 2,634 producers copied, `pd.solve` 4.0 s -> 1.4 s
+  (copy 0.37 s, finalize 0.86 s). **Deviation:** no append-only interner or
+  arena tables, no epochs and no `lens`: a revision's fold is a self-contained
+  immutable value that shares nothing mutable with the next revision (the
+  next fold reads the previous fold through an `Arc`), so §4.2's epoch
+  branch has nothing to guard and no reader can see a mix of revisions. The
+  cost is memory: the previous fold stays alive until the next fold
+  publishes.
+- *Not built (remaining stage-5 work):* the per-SCC cone store (fact cone,
+  coverage cone, memo row, input digest, product fingerprint, edge-transfer
+  digests, cut-off), Δ_pd_output feeding derived/raw/tree invalidation, raw
+  re-emission for Δ subjects only, the tree store (§6.11) and its per-section
+  spans, T-cone / T-cone-edge / T-coverage / T-typed-edges / T-callsite-res /
+  T-obj-only / T-tree, and the live T-prepared cases for retained stores.
+  The composition is otherwise recomputed whole every revision.
+- *Where the time goes after a body edit (CDO, release-fast, census over
+  the composition):* the fold is about 15 s: producer solve 1.4 s (was 4.0),
+  fact cones about 2.2 s, singleton walks about 2.6 s (memo rows, cone scans,
+  raw materialization), direct facts about 0.4 s, graph and Tarjan about
+  0.25 s, the recursive sets about 0.4 s, and an untimed remainder. Each
+  heavy answer then spends 7-11 s of its own on top of a prepared fold (its
+  tree: `snapshot.derive` 2.9-3.3 s, roots 3.2-3.7 s; prove's det and run
+  about 1.5 s): the tree store is the other half of the ≤ 1 s target.
+
 ### 6.12 Explain
 
 Landed: grouping by equal `tests`, repeatable `--routine` (sorted distinct roots,

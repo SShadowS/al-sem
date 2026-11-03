@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (context server stage 5: incremental analysis)
+
+- **The resident revision's L4 solve is seeded from the previous
+  revision's** (design §6.9). A new revision keeps the complete seed triple of
+  the last published solve (its `SolveBaseline`, its bundle inside
+  `L4Analysis`, its core summaries) until its own `L4` fill publishes, then
+  releases it; the fill runs the L4 host's seeded solve (`L4Reuse`), which
+  compares the baseline's digests with the current inputs' and re-solves only
+  the SCCs they leave dirty. A seed is used only when the revision's
+  `seed_key` (universe, the packages consumed, the root `app.json` bytes, the
+  model-instance id, the source dependencies, the engine version) equals the
+  seed's; a P change is a full solve. Test
+  `seeded_l4_after_b_s_and_p_equals_a_cold_solve` (rule-B fixture: B, S and P
+  edits; every served answer and the solve's projection equal cold).
+- `census-probe incr <ws-copy> [routine] [--verify] [--steps B,S,P]`: the
+  resident session after each change type: refresh, the fold and the L4 fill
+  timed apart ("analysis prepared"), each served ask timed, and with
+  `--verify` each ask compared with a cold standalone run.
+
+- **The resident fold re-solves only the producers an edit can reach**
+  (design §6.10 "Producers", the first part of the cone store). Each fold
+  keeps its producer solve's per-routine input digests (every model row of
+  the id, its guard frame, its typed out-edges); the next revision's fold
+  computes Δ (the routines whose digest changed, appeared or vanished) and
+  re-solves a producer only when its owner is reachable from Δ in the new
+  graph, when it held a state at a routine of Δ in the old arena, or when its
+  fact changed; every other producer's states, links and distances are
+  copied from the previous arena and the whole is finalized in the canonical
+  order (stage 1b), so the arena equals a full solve's. On CDO after a body
+  edit: 2,590 of 2,634 producers copied (2.73 M states), `pd.solve`
+  **4.0 s -> 1.4 s** (copy 0.37 s, canonical finalize 0.86 s). Tests
+  `reused_producer_states_equal_a_full_solve` (hand-stated graphs: a caller's
+  argument from physical to temporary, a new caller, a removed edge, no
+  edit) and `fold_reuses_untouched_producers_and_equals_cold` (the rule-B
+  workspace through the resident session, every answer cold-equal).
+
+### Changed (context server stage 5)
+
+- **The L4 solve's row digests are hashed in parallel.** Every resident `L4`
+  fill (seeded or not) digested the `Debug` text of every routine row
+  serially; on CDO that was about 1.8 s of a 2.2-2.4 s fill. Hashed per id on
+  the rayon pool (each id reads only its own rows): the fill is **0.57-0.60 s**
+  (cold and seeded; the seeded solve itself re-solves 115 of 33,285 SCCs after
+  a body edit). Same digests, so the same seeding decisions.
+
 ### Added (context server: the LSP front end)
 
 - **The editor's LSP server answers explain / prove / digest / query

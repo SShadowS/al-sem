@@ -1866,7 +1866,10 @@ impl<'c, 'a> Seeding<'c, 'a> {
         uncertainty_edges_by_from: &HashMap<String, Vec<usize>>,
     ) -> Self {
         let solve_global = solve_global_digest(inputs.fields, inputs.graph);
-        let rows = row_digests(inputs, shared_events, uncertainty_edges_by_from);
+        let rows = {
+            let _s = pt::span("context", "l4.row_digests");
+            row_digests(inputs, shared_events, uncertainty_edges_by_from)
+        };
         let reuse = control
             .reuse
             .as_ref()
@@ -1999,8 +2002,13 @@ fn row_digests(
     for id in inputs.leaf_summaries.keys() {
         rows_of.entry(id.as_str()).or_default();
     }
+    // Each id's digest reads only its own rows and the shared maps: hashed in
+    // parallel (stage 5: on CDO the serial `Debug` text of 33,285 ids was
+    // ~2 s of every resident L4 fill, seeded or not).
+    use rayon::prelude::*;
+    let rows_of: Vec<(&str, Vec<&ModelRoutine>)> = rows_of.into_iter().collect();
     rows_of
-        .into_iter()
+        .into_par_iter()
         .map(|(id, rows)| {
             let bindings: Vec<_> = rows
                 .iter()

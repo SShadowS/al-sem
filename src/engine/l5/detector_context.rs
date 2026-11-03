@@ -25,8 +25,8 @@ use std::sync::Arc;
 
 use crate::engine::l4::analysis::{CoreSummaries, L4Analysis, L4Request, build_l4};
 use crate::engine::l4::capability_cone::{
-    CapabilityFact, DeadSites, callsite_local_coverage_reasons, compose_cone_over_graph,
-    direct_facts_for_routine, fold_uncertainty_reasons,
+    CapabilityFact, DeadSites, callsite_local_coverage_reasons, direct_facts_for_routine,
+    fold_uncertainty_reasons,
 };
 use crate::engine::l4::combined_graph::{PrimaryGraph, TypedEdge};
 use crate::engine::l4::cone_derived::{ConeDerivedStore, ConeScope, WitnessScope};
@@ -1432,6 +1432,36 @@ pub(crate) fn compose_capabilities(
     CapabilityAnalysis,
     crate::engine::l4::inherited_facts::InheritedFacts,
 ) {
+    let (caps, raw, _) = compose_capabilities_retained(
+        model,
+        typed,
+        inputs,
+        scope,
+        crate::engine::l4::capability_cone::PdRetain::No,
+    );
+    (caps, raw)
+}
+
+/// What a retaining composition keeps for the next revision's producer
+/// solve beside its analysis (context-server design §6.10, stage 5).
+pub(crate) struct PdRetained {
+    pub digests: HashMap<String, [u8; 32]>,
+    pub report: crate::engine::l4::pd_solve::PdSolveReport,
+}
+
+/// [`compose_capabilities`], keeping and reusing the producer solve's inputs
+/// as `pd` says (`capability_cone::PdRetain`).
+pub(crate) fn compose_capabilities_retained(
+    model: &Model,
+    typed: &[crate::engine::l4::combined_graph::TypedEdge],
+    inputs: DetConeInputs,
+    scope: ConeScope,
+    pd: crate::engine::l4::capability_cone::PdRetain<'_>,
+) -> (
+    CapabilityAnalysis,
+    crate::engine::l4::inherited_facts::InheritedFacts,
+    PdRetained,
+) {
     let ws = &model.workspace;
     let DetConeInputs {
         nodes,
@@ -1444,13 +1474,14 @@ pub(crate) fn compose_capabilities(
         direct_full.values().map(|v| v.len() as u64).sum::<u64>(),
     );
     let _t_walk = cones_census::start();
-    let outcome = compose_cone_over_graph(
+    let outcome = crate::engine::l4::capability_cone::compose_cone_over_graph_retained(
         typed,
         &nodes,
         &direct_full,
         &coverage_in,
         &ws.routines,
         scope,
+        pd,
     );
     cones_census::add_since(&cones_census::WALK_NANOS, _t_walk);
     // ⟨C1 Task 4⟩ Both cone inputs are dead here (`nodes` is one more full
@@ -1478,6 +1509,10 @@ pub(crate) fn compose_capabilities(
             pd: Some(outcome.pd_solution),
         },
         outcome.raw,
+        PdRetained {
+            digests: outcome.pd_digests,
+            report: outcome.pd_report,
+        },
     )
 }
 
