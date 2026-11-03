@@ -33,7 +33,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::engine::l5::cross_rules::{CrossRules, Inh};
+use crate::engine::l5::cross_rules::{CrossRules, CrossRulesIndex, Inh};
 use crate::engine::l5::field_writers::{WriteKind, field_writes};
 use crate::program::body::features::PAnchor;
 use crate::program::body::rules::Stops;
@@ -127,9 +127,21 @@ impl RulesIndex {
     /// others left out.
     #[must_use]
     pub fn build_where(model: &Model, keep: impl Fn(&str, &str) -> bool) -> RulesIndex {
+        Self::build_where_over(model, &CrossRulesIndex::new(model), keep)
+    }
+
+    /// [`RulesIndex::build_where`] over `cross`, the cross-call rules' index
+    /// of `model` (a resident revision's explain indexes hold one), with a
+    /// walk of its own.
+    #[must_use]
+    pub fn build_where_over(
+        model: &Model,
+        cross: &CrossRulesIndex,
+        keep: impl Fn(&str, &str) -> bool,
+    ) -> RulesIndex {
         let routines = &model.workspace.routines;
         let tables = table_by_id_preferring_real(&model.workspace.tables);
-        let cross = CrossRules::new(model);
+        let cross = CrossRules::over(model, cross);
         let mut rows_of: HashMap<&str, Vec<usize>> = HashMap::new();
         for (i, r) in routines.iter().enumerate() {
             rows_of

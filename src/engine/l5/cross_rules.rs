@@ -90,6 +90,15 @@
 //! [`CrossRules::truncated`] says so (the card states it as a gap). No other
 //! cap.
 //!
+//! **One index, one walk per run** (context-server plan 2026-11-03 W2). What
+//! is a function of the model alone (the steps, the site targets, the
+//! callers, who may write) is a [`CrossRulesIndex`]: owned, never changed
+//! after it is built, so a resident revision keeps one and shares it. The
+//! memo, the stack, the budget and the stop flag are a [`CrossRules`] walk's
+//! own, made fresh by [`CrossRules::over`] once per run: the run's cards
+//! share them, as they always did, and no other run sees them. A budget or
+//! depth stop in one request therefore never shows in the next.
+//!
 //! **Stated limits.** A call after an early `if C then exit;` is `conditional`,
 //! not `top-level`, so its rules are not inherited even though the write after
 //! it is also past the exit. A call inside a branch is not inherited even when
@@ -188,7 +197,24 @@ pub struct SkippedTriggers {
     pub anchor: PAnchor,
 }
 
-/// One site of a row that runs another routine for sure when it runs.
+/// One site of a row, owned: an index into the row's call sites or record
+/// operations.
+#[derive(Debug, Clone, Copy)]
+enum SiteIx {
+    Call(usize),
+    Op(usize),
+}
+
+/// A [`Step`] as the index keeps it: the site as an index into its row.
+#[derive(Debug, Clone, Copy)]
+struct OwnedStep {
+    to: usize,
+    site: SiteIx,
+    top_level: bool,
+}
+
+/// One site of a row that runs another routine for sure when it runs: an
+/// [`OwnedStep`] resolved against the model, for the walk.
 #[derive(Debug, Clone)]
 struct Step<'m> {
     to: usize,
@@ -210,21 +236,38 @@ enum Kind {
 /// Finished `all` / `pre` results, per (row, kind).
 type Memo = HashMap<(usize, Kind), Rc<Vec<Inh>>>;
 
-/// Cross-call rules over one model. Build once per run, query per card.
-pub struct CrossRules<'m> {
-    model: &'m Model,
-    first_row: HashMap<&'m str, usize>,
+/// The part of [`CrossRules`] that is a function of the model alone: the
+/// steps, the site targets, the callers and who may write. Owned (rows and
+/// sites as indexes, ids as owned strings), so a resident revision keeps one
+/// beside its model and every request walks over it (plan 2026-11-03 W2).
+/// It is never changed after [`CrossRulesIndex::new`]: everything a walk
+/// changes (its memo, its stack, its expansion budget, whether it stopped)
+/// is the walk's own, in [`CrossRules`].
+#[derive(Debug)]
+pub struct CrossRulesIndex {
+    /// The model's routine count (checked by [`CrossRules::over`]).
+    routines: usize,
+    first_row: HashMap<String, usize>,
     /// Per row: its definite steps, in site order.
-    steps: HashMap<usize, Vec<Step<'m>>>,
+    steps: HashMap<usize, Vec<OwnedStep>>,
     /// Per row: every site that has an edge (call site id or op id) -> the
     /// target rows.
-    site_targets: HashMap<usize, HashMap<&'m str, Vec<usize>>>,
+    site_targets: HashMap<usize, HashMap<String, Vec<usize>>>,
     /// Per row: whether it may write (itself or through its callees).
     may_write: Vec<bool>,
-    /// Per row: the callers' edges into it: (caller row, site anchor).
-    callers: HashMap<usize, Vec<(usize, &'m PAnchor)>>,
+    /// Per row: the callers' edges into it: (caller row, the caller's site).
+    callers: HashMap<usize, Vec<(usize, SiteIx)>>,
     /// Object id -> its rows.
-    rows_of_object: HashMap<&'m str, Vec<usize>>,
+    rows_of_object: HashMap<String, Vec<usize>>,
+}
+
+/// Cross-call rules over one model: one walk, over a [`CrossRulesIndex`].
+/// Make one per run (a resident request is a run), query per card: the memo
+/// and the expansion budget are shared by the run's cards, as they always
+/// were, and by nothing else.
+pub struct CrossRules<'m> {
+    model: &'m Model,
+    ix: &'m CrossRulesIndex,
     usable: RefCell<HashMap<usize, Vec<u32>>>,
     memo: RefCell<Memo>,
     stack: RefCell<Vec<(usize, Kind)>>,
@@ -291,9 +334,18 @@ fn not_text(t: &str) -> String {
     }
 }
 
-impl<'m> CrossRules<'m> {
+/// The site `site` of `r`'s row.
+fn site_anchor(r: &ModelRoutine, site: SiteIx) -> &PAnchor {
+    match site {
+        SiteIx::Call(i) => &r.call_sites[i].source_anchor,
+        SiteIx::Op(i) => &r.record_operations[i].source_anchor,
+    }
+}
+
+impl CrossRulesIndex {
+    /// The index over `model` (see the module doc).
     #[must_use]
-    pub fn new(model: &'m Model) -> CrossRules<'m> {
+    pub fn new(model: &Model) -> CrossRulesIndex {
         let routines = &model.workspace.routines;
         let mut first_row: HashMap<&str, usize> = HashMap::new();
         let mut rows_of_object: HashMap<&str, Vec<usize>> = HashMap::new();
@@ -312,9 +364,9 @@ impl<'m> CrossRules<'m> {
                 .or_default()
                 .push(e);
         }
-        let mut steps: HashMap<usize, Vec<Step<'_>>> = HashMap::new();
-        let mut site_targets: HashMap<usize, HashMap<&str, Vec<usize>>> = HashMap::new();
-        let mut callers: HashMap<usize, Vec<(usize, &PAnchor)>> = HashMap::new();
+        let mut steps: HashMap<usize, Vec<OwnedStep>> = HashMap::new();
+        let mut site_targets: HashMap<usize, HashMap<String, Vec<usize>>> = HashMap::new();
+        let mut callers: HashMap<usize, Vec<(usize, SiteIx)>> = HashMap::new();
         for ((from, site), edges) in &groups {
             let from = *from;
             let r = &routines[from];
@@ -330,12 +382,12 @@ impl<'m> CrossRules<'m> {
             site_targets
                 .entry(from)
                 .or_default()
-                .insert(*site, tos.clone());
+                .insert((*site).to_string(), tos.clone());
             let trigger = edges
                 .iter()
                 .any(|e| e.dispatch_kind == DispatchKind::ImplicitTrigger);
             if trigger {
-                let Some(op) = r.record_operations.iter().find(|o| o.id == *site) else {
+                let Some(op_ix) = r.record_operations.iter().position(|o| o.id == *site) else {
                     continue;
                 };
                 let os = r.operation_sites.iter().find(|o| o.id == *site);
@@ -346,7 +398,7 @@ impl<'m> CrossRules<'m> {
                     callers
                         .entry(to)
                         .or_default()
-                        .push((from, &op.source_anchor));
+                        .push((from, SiteIx::Op(op_ix)));
                 }
                 if !reachable || under {
                     continue;
@@ -359,24 +411,23 @@ impl<'m> CrossRules<'m> {
                     let Some(&to) = e.to.as_deref().and_then(|t| first_row.get(t)) else {
                         continue;
                     };
-                    steps.entry(from).or_default().push(Step {
+                    steps.entry(from).or_default().push(OwnedStep {
                         to,
-                        anchor: &op.source_anchor,
+                        site: SiteIx::Op(op_ix),
                         top_level,
-                        call: None,
-                        op: Some(op),
                     });
                 }
                 continue;
             }
-            let Some(cs) = r.call_sites.iter().find(|c| c.id == *site) else {
+            let Some(cs_ix) = r.call_sites.iter().position(|c| c.id == *site) else {
                 continue;
             };
+            let cs = &r.call_sites[cs_ix];
             for &to in &tos {
                 callers
                     .entry(to)
                     .or_default()
-                    .push((from, &cs.source_anchor));
+                    .push((from, SiteIx::Call(cs_ix)));
             }
             let definite = edges.iter().all(|e| {
                 matches!(e.dispatch_kind, DispatchKind::Direct | DispatchKind::Method)
@@ -399,16 +450,15 @@ impl<'m> CrossRules<'m> {
             let top_level = context_to_conditionality(cs.control_context.as_deref())
                 == UNCONDITIONAL
                 && cs.under_asserterror != Some(true);
-            steps.entry(from).or_default().push(Step {
+            steps.entry(from).or_default().push(OwnedStep {
                 to,
-                anchor: &cs.source_anchor,
+                site: SiteIx::Call(cs_ix),
                 top_level,
-                call: Some(cs),
-                op: None,
             });
         }
-        for v in steps.values_mut() {
-            v.sort_by_key(|s| (pos_start(s.anchor), s.to));
+        for (&from, v) in &mut steps {
+            let r = &routines[from];
+            v.sort_by_key(|s| (pos_start(site_anchor(r, s.site)), s.to));
         }
         // May-write: own writes, or no body (cannot see), then up the callers.
         let mut may_write: Vec<bool> = routines
@@ -424,14 +474,35 @@ impl<'m> CrossRules<'m> {
                 }
             }
         }
-        CrossRules {
-            model,
-            first_row,
+        fn owned<V>(m: HashMap<&str, V>) -> HashMap<String, V> {
+            m.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
+        }
+        CrossRulesIndex {
+            routines: routines.len(),
+            first_row: owned(first_row),
             steps,
             site_targets,
             may_write,
             callers,
-            rows_of_object,
+            rows_of_object: owned(rows_of_object),
+        }
+    }
+}
+
+impl<'m> CrossRules<'m> {
+    /// One walk over `ix`, the index of `model` (built from it): a fresh
+    /// memo and a fresh expansion budget, so the walk answers the same
+    /// whatever other walks over `ix` did before it.
+    #[must_use]
+    pub fn over(model: &'m Model, ix: &'m CrossRulesIndex) -> CrossRules<'m> {
+        assert_eq!(
+            ix.routines,
+            model.workspace.routines.len(),
+            "a cross-rules index walked over another model than its own"
+        );
+        CrossRules {
+            model,
+            ix,
             usable: RefCell::new(HashMap::new()),
             memo: RefCell::new(HashMap::new()),
             stack: RefCell::new(Vec::new()),
@@ -442,6 +513,42 @@ impl<'m> CrossRules<'m> {
 
     fn row(&self, i: usize) -> &'m ModelRoutine {
         &self.model.workspace.routines[i]
+    }
+
+    /// `row`'s definite steps, in site order, resolved against the model.
+    fn steps(&self, row: usize) -> Vec<Step<'m>> {
+        let r = self.row(row);
+        self.ix
+            .steps
+            .get(&row)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+            .iter()
+            .map(|s| Step {
+                to: s.to,
+                anchor: site_anchor(r, s.site),
+                top_level: s.top_level,
+                call: match s.site {
+                    SiteIx::Call(i) => Some(&r.call_sites[i]),
+                    SiteIx::Op(_) => None,
+                },
+                op: match s.site {
+                    SiteIx::Op(i) => Some(&r.record_operations[i]),
+                    SiteIx::Call(_) => None,
+                },
+            })
+            .collect()
+    }
+
+    /// The callers' edges into `row`: (caller row, site anchor).
+    fn callers_of(&self, row: usize) -> impl Iterator<Item = (usize, &'m PAnchor)> + '_ {
+        self.ix
+            .callers
+            .get(&row)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+            .iter()
+            .map(|&(c, site)| (c, site_anchor(self.row(c), site)))
     }
 
     /// Whether the walk stopped at [`EXPANSION_BUDGET`].
@@ -455,11 +562,11 @@ impl<'m> CrossRules<'m> {
     pub fn first_write(&self, row: usize) -> Option<&'m PAnchor> {
         let r = self.row(row);
         let mut best: Option<&PAnchor> = own_writes(r).into_iter().min_by_key(|a| pos_start(a));
-        let sites = self.site_targets.get(&row);
+        let sites = self.ix.site_targets.get(&row);
         for cs in &r.call_sites {
             let writes = sites
                 .and_then(|s| s.get(cs.id.as_str()))
-                .is_some_and(|tos| tos.iter().any(|&t| self.may_write[t]));
+                .is_some_and(|tos| tos.iter().any(|&t| self.ix.may_write[t]));
             if writes && best.is_none_or(|b| pos_start(&cs.source_anchor) < pos_start(b)) {
                 best = Some(&cs.source_anchor);
             }
@@ -474,7 +581,7 @@ impl<'m> CrossRules<'m> {
         }
         let r = self.row(row);
         let routines = &self.model.workspace.routines;
-        let targets = self.site_targets.get(&row);
+        let targets = self.ix.site_targets.get(&row);
         let by_id: HashMap<&str, &ModelRoutine> = targets
             .into_iter()
             .flat_map(|m| m.values())
@@ -652,7 +759,7 @@ impl<'m> CrossRules<'m> {
                 None => i.rule.at_exit,
             })
             .collect();
-        let steps = self.steps.get(&row).cloned().unwrap_or_default();
+        let steps = self.steps(row);
         for s in steps.iter().filter(|s| s.top_level) {
             let sub_kind = match fw {
                 None => Some(Kind::All),
@@ -702,7 +809,7 @@ impl<'m> CrossRules<'m> {
             self.stack.borrow_mut().push((row, Kind::All));
             self.stack.borrow_mut().push((row, Kind::Pre));
             let fw = self.first_write(row);
-            let steps = self.steps.get(&row).cloned().unwrap_or_default();
+            let steps = self.steps(row);
             for s in &steps {
                 let mut low = usize::MAX;
                 if let Some(op) = s.op {
@@ -760,7 +867,7 @@ impl<'m> CrossRules<'m> {
             .into_iter()
             .filter(|i| i.rule.guards(site))
             .collect();
-        let steps = self.steps.get(&caller).cloned().unwrap_or_default();
+        let steps = self.steps(caller);
         for s in steps
             .iter()
             .filter(|s| s.top_level && ends_before(s.anchor, site))
@@ -781,7 +888,7 @@ impl<'m> CrossRules<'m> {
     #[must_use]
     pub fn effective_at(&self, row: usize, site: &PAnchor) -> Vec<Inh> {
         let mut out = self.before_site(row, site);
-        let steps = self.steps.get(&row).cloned().unwrap_or_default();
+        let steps = self.steps(row);
         for s in steps
             .iter()
             .filter(|s| s.op.is_some() && same_site(s.anchor, site))
@@ -810,7 +917,7 @@ impl<'m> CrossRules<'m> {
         let mut seen: BTreeSet<&str> = BTreeSet::new();
         let mut out: BTreeSet<usize> = BTreeSet::new();
         for r in rows {
-            for &(c, _) in self.callers.get(r).map(Vec::as_slice).unwrap_or(&[]) {
+            for (c, _) in self.callers_of(*r) {
                 if rows.contains(&c) {
                     continue;
                 }
@@ -829,7 +936,7 @@ impl<'m> CrossRules<'m> {
         // caller -> its sites into the routine.
         let mut sites: BTreeMap<usize, Vec<&PAnchor>> = BTreeMap::new();
         for r in rows {
-            for &(c, a) in self.callers.get(r).map(Vec::as_slice).unwrap_or(&[]) {
+            for (c, a) in self.callers_of(*r) {
                 if rows.contains(&c) {
                     continue;
                 }
@@ -933,7 +1040,7 @@ impl<'m> CrossRules<'m> {
         }
         let mut out: Vec<usize> = objects
             .iter()
-            .flat_map(|o| self.rows_of_object.get(o).into_iter().flatten())
+            .flat_map(|o| self.ix.rows_of_object.get(*o).into_iter().flatten())
             .copied()
             .filter(|&i| {
                 let r = self.row(i);
@@ -1020,7 +1127,7 @@ impl<'m> CrossRules<'m> {
                     &fa.source_anchor,
                 );
             }
-            let sites = self.site_targets.get(&row);
+            let sites = self.ix.site_targets.get(&row);
             for op in &r.record_operations {
                 let name = op.op.to_ascii_lowercase();
                 if !matches!(name.as_str(), "insert" | "modify" | "delete" | "deleteall") {
@@ -1032,10 +1139,12 @@ impl<'m> CrossRules<'m> {
                 let has_edge = sites
                     .and_then(|s| s.get(op.id.as_str()))
                     .is_some_and(|t| !t.is_empty());
-                let surely = self
-                    .steps
-                    .get(&row)
-                    .is_some_and(|s| s.iter().any(|x| x.op.is_some_and(|o| o.id == op.id)));
+                let surely = self.ix.steps.get(&row).is_some_and(|s| {
+                    s.iter().any(|x| match x.site {
+                        SiteIx::Op(i) => r.record_operations[i].id == op.id,
+                        SiteIx::Call(_) => false,
+                    })
+                });
                 let reason = match (has_edge, surely) {
                     (_, true) => continue,
                     (true, false) => "the RunTrigger argument is not a literal true",
@@ -1054,14 +1163,15 @@ impl<'m> CrossRules<'m> {
     /// The first row of a routine id.
     #[must_use]
     pub fn row_of(&self, id: &str) -> Option<usize> {
-        self.first_row.get(id).copied()
+        self.ix.first_row.get(id).copied()
     }
 
     /// The rows the edges at `site` (a call-site or operation id) of `row`
     /// reach.
     #[must_use]
     pub fn targets_at(&self, row: usize, site: &str) -> &[usize] {
-        self.site_targets
+        self.ix
+            .site_targets
             .get(&row)
             .and_then(|m| m.get(site))
             .map_or(&[], Vec::as_slice)

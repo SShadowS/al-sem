@@ -294,7 +294,7 @@ impl ResidentSession {
 
     /// Evict until `estimate` fits (§7's order): the roots' witnesses,
     /// dependency subjects' raw facts, the dependency rows the workspace session keeps (when no build
-    /// holds it), runs, the det, the fold, ordering and rules; never the
+    /// holds it), runs, the det, explain's indexes, the fold, ordering and rules; never the
     /// model, relation, tier or L4 seed. Returns how many entries went.
     pub fn reclaim(&self, budget: &Budget, estimate: u64) -> u64 {
         let rev = match self.published() {
@@ -510,8 +510,10 @@ impl ResidentSession {
             // ones no request holds before the build, not after it, so they
             // are not part of its peak.
             if let Some(Built::Revision(r)) = prev.as_ref().map(|p| &p.built) {
-                // Nor its witnesses (plan 2026-11-03 W: never carried).
+                // Nor its witnesses (plan 2026-11-03 W: never carried), nor
+                // explain's indexes (W2: the next model's are built anew).
                 r.reclaim_kind("witness");
+                r.reclaim_kind("explain_indexes");
                 r.reclaim_kind("tree");
                 r.reclaim_kind("tree_base");
             }

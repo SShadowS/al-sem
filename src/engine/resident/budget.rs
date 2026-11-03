@@ -140,6 +140,10 @@ impl Case {
             // indexes (~0.1 s of work), so the default's 60 MiB stands until
             // the fill's peak is measured apart.
             Case::Fill("witness") => 60,
+            // Explain's indexes (plan 2026-11-03 W2): the fill's peak over
+            // the live heap before it, +29.0 MiB on CDO, 25.7 MiB left
+            // resident (`census-probe incr --witness`, 2026-11-03).
+            Case::Fill("explain_indexes") => 30,
             Case::Fill(_) => 60,
             Case::Trees => 900,
         }

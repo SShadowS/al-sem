@@ -6,13 +6,14 @@
 //! over a served [`View`] holding `Arc` clones of the revision's cells. The
 //! answer is the CLI's exact output for the same inputs.
 //!
-//! **Artifacts** ([`ArtifactKey`], by phase): 0: `Ordering`, `Rules` (from
-//! the model alone), `Fold` (the one composition: every derived row, the pd
-//! arena, and the primary routines' raw facts), `L4` (the solve and its core
-//! summaries, never drained); 1: `Raw(subjects)` (the raw facts of subjects
-//! outside the primary emission: a dependency root), `Det` (the detector
-//! artifacts, harvested from the lent `Fold` and `L4`, at a mask); 2:
-//! `Run(key)`. Trees are the request's own (stage 5 retains their sections).
+//! **Artifacts** ([`ArtifactKey`], by phase): 0: `Ordering`, `Rules`,
+//! `ExplainIndexes` (from the model alone), `Fold` (the one composition:
+//! every derived row, the pd arena, and the primary routines' raw facts),
+//! `L4` (the solve and its core summaries, never drained); 1: `Raw(subjects)`
+//! (the raw facts of subjects outside the primary emission: a dependency
+//! root), `Det` (the detector artifacts, harvested from the lent `Fold` and
+//! `L4`, at a mask), `TreeBase`; 2: `Run(key)`, `Tree(subjects)`; 3:
+//! `Witness`.
 //!
 //! **Job lines.** A cold run prints the lines `prepare` printed (the solve's
 //! non-convergence line, …) only when its plan solves `l4`. Each artifact
@@ -36,6 +37,7 @@ use crate::engine::l5::detector_context::{
 };
 use crate::engine::l5::digest::DigestEntryResult;
 use crate::engine::l5::digest_cli::DigestEffects;
+use crate::engine::l5::explain::ExplainIndexes;
 use crate::engine::l5::registry::{RunOutput, substrate};
 use crate::engine::l5::rules_index::RulesIndex;
 use crate::engine::resident::store::{
@@ -90,6 +92,12 @@ pub enum ArtifactKey {
         root: String,
         include_reads: bool,
     },
+    /// Explain's indexes (plan 2026-11-03 W2): the model indexes every card
+    /// reads and the cross-call rules' index, a function of the model alone,
+    /// built once per revision and read by every explain over it. Immutable:
+    /// each request walks it with a walk of its own. Never carried to the
+    /// next revision.
+    ExplainIndexes,
 }
 
 impl StoreKey for ArtifactKey {
@@ -98,7 +106,11 @@ impl StoreKey for ArtifactKey {
     }
     fn phase(&self) -> usize {
         match self {
-            ArtifactKey::Ordering | ArtifactKey::Rules | ArtifactKey::Fold | ArtifactKey::L4 => 0,
+            ArtifactKey::Ordering
+            | ArtifactKey::Rules
+            | ArtifactKey::Fold
+            | ArtifactKey::L4
+            | ArtifactKey::ExplainIndexes => 0,
             ArtifactKey::Raw(_) | ArtifactKey::Det | ArtifactKey::TreeBase => 1,
             ArtifactKey::Run { .. } | ArtifactKey::Tree(_) => 2,
             ArtifactKey::Witness { .. } => 3,
@@ -207,6 +219,7 @@ pub enum ArtifactValue {
     /// not asked again. A read finishes CLONES of it (prove's literal reach
     /// mutates its entries), never the stored value.
     Witness(Arc<Option<DigestEntryResult>>),
+    ExplainIndexes(Arc<ExplainIndexes>),
 }
 
 /// A request's batch of witness entries (plan 2026-11-03, W item 3): the
@@ -296,6 +309,7 @@ impl ArtifactKey {
             ArtifactKey::Det => "det",
             ArtifactKey::Run { .. } => "run",
             ArtifactKey::Witness { .. } => "witness",
+            ArtifactKey::ExplainIndexes => "explain_indexes",
         }
     }
 }
@@ -463,15 +477,18 @@ impl Revision {
 
     /// The artifact kinds eviction may drop, in the design's order (§7):
     /// the roots' witnesses (small, plan 2026-11-03 W), dependency subjects'
-    /// raw facts, then the views' trees, runs and the det, then the tree
-    /// store's whole sections and the fold (the cones), then ordering and
-    /// rules. Never the model, the relation or the L4 seed.
+    /// raw facts, then the views' trees, runs and the det, then explain's
+    /// indexes (plan W2: ~1 s to rebuild from the model, cheaper than any
+    /// kind after it), then the tree store's whole sections and the fold
+    /// (the cones), then ordering and rules. Never the model, the relation
+    /// or the L4 seed.
     pub const EVICTION_ORDER: &'static [&'static str] = &[
         "witness",
         "raw",
         "tree",
         "run",
         "det",
+        "explain_indexes",
         "tree_base",
         "fold",
         "ordering",
@@ -547,6 +564,9 @@ impl Revision {
         }
         if plan.builds_l4() {
             needs.push((ArtifactKey::L4, 0));
+        }
+        if plan.reads_explain_indexes() {
+            needs.push((ArtifactKey::ExplainIndexes, 0));
         }
         // The tree store (§6.11): the whole sections once per revision, one
         // tree per distinct view (its subjects), each over the fold and, for
@@ -709,6 +729,10 @@ impl Revision {
             Ok(match cx.key {
                 ArtifactKey::Witness { .. } => {
                     ArtifactValue::Witness(self.fill_witness(plan, cx.key, cx.snapshot, scratch)?)
+                }
+                ArtifactKey::ExplainIndexes => {
+                    let _s = crate::engine::perf_trace::span("revision", "explain.indexes");
+                    ArtifactValue::ExplainIndexes(Arc::new(ExplainIndexes::build(model)))
                 }
                 ArtifactKey::Ordering => ArtifactValue::Ordering(dc::fill_ordering(model)),
                 ArtifactKey::Rules => ArtifactValue::Rules(dc::fill_rules(model)),
@@ -1229,6 +1253,12 @@ impl Revision {
             Some(ArtifactValue::Det(d)) if !plan.run_entries().is_empty() => Some(Arc::clone(d)),
             _ => None,
         };
+        let explain_indexes = match snap.get(&ArtifactKey::ExplainIndexes).map(|a| &a.value) {
+            Some(ArtifactValue::ExplainIndexes(x)) if plan.reads_explain_indexes() => {
+                Some(Arc::clone(x))
+            }
+            _ => None,
+        };
         let view = View::served(
             Arc::clone(&self.target),
             Arc::clone(&self.rel),
@@ -1237,6 +1267,7 @@ impl Revision {
             effects,
             tree_reads,
             runs,
+            explain_indexes,
         );
         // A cold run prints `prepare`'s lines only when its plan solves l4,
         // in `prepare`'s order: ordering, rules, the composition (and any

@@ -45,22 +45,58 @@ impl<'a> DeclaringObjects<'a> {
     /// none does (rows without an anchor), the LAST row,
     /// the owner an id -> name map gave before #241.
     pub fn of(&self, r: &ModelRoutine) -> Option<&'a ModelObject> {
-        let rows = self.by_id.get(r.object_id.as_str())?;
-        if let [only] = rows.as_slice() {
-            return Some(only);
-        }
-        let ra = &r.source_anchor;
-        rows.iter()
-            .filter_map(|o| Some((*o, o.source_anchor.as_ref()?)))
-            .filter(|(_, a)| {
-                a.source_unit_id == ra.source_unit_id && a.contains(ra.start_line, ra.start_column)
-            })
-            .min_by(|(_, a), (_, b)| {
-                let start = |x: &PAnchor| (x.start_line, x.start_column);
-                let end = |x: &PAnchor| (x.end_line, x.end_column);
-                start(b).cmp(&start(a)).then(end(a).cmp(&end(b)))
-            })
-            .map(|(o, _)| o)
-            .or(rows.last().copied())
+        pick(self.by_id.get(r.object_id.as_str())?.iter().copied(), r)
     }
+}
+
+/// [`DeclaringObjects`] in an owned form: each id's rows as indexes into the
+/// model's objects, so it can be kept beside the model it was built from (a
+/// resident revision's explain indexes, plan 2026-11-03 W2). Answers what
+/// [`DeclaringObjects::of`] answers over the same objects.
+#[derive(Clone, Debug, Default)]
+pub struct DeclaringRows {
+    by_id: HashMap<String, Vec<usize>>,
+}
+
+impl DeclaringRows {
+    pub fn new(objects: &[ModelObject]) -> Self {
+        let mut by_id: HashMap<String, Vec<usize>> = HashMap::new();
+        for (i, o) in objects.iter().enumerate() {
+            by_id.entry(o.id.clone()).or_default().push(i);
+        }
+        DeclaringRows { by_id }
+    }
+
+    /// [`DeclaringObjects::of`] over `objects`, the slice this was built
+    /// from.
+    pub fn of<'a>(&self, objects: &'a [ModelObject], r: &ModelRoutine) -> Option<&'a ModelObject> {
+        let rows = self.by_id.get(r.object_id.as_str())?;
+        pick(rows.iter().map(|&i| &objects[i]), r)
+    }
+}
+
+/// The declaring row among one id's `rows`, in model order (see
+/// [`DeclaringObjects::of`]).
+fn pick<'a, I>(rows: I, r: &ModelRoutine) -> Option<&'a ModelObject>
+where
+    I: Iterator<Item = &'a ModelObject> + Clone,
+{
+    let mut it = rows.clone();
+    let first = it.next()?;
+    if it.next().is_none() {
+        return Some(first);
+    }
+    let ra = &r.source_anchor;
+    rows.clone()
+        .filter_map(|o| Some((o, o.source_anchor.as_ref()?)))
+        .filter(|(_, a)| {
+            a.source_unit_id == ra.source_unit_id && a.contains(ra.start_line, ra.start_column)
+        })
+        .min_by(|(_, a), (_, b)| {
+            let start = |x: &PAnchor| (x.start_line, x.start_column);
+            let end = |x: &PAnchor| (x.end_line, x.end_column);
+            start(b).cmp(&start(a)).then(end(a).cmp(&end(b)))
+        })
+        .map(|(o, _)| o)
+        .or(rows.last())
 }

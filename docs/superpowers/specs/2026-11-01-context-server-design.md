@@ -839,6 +839,37 @@ against 5.9-6.1 / 5.6-6.0 / 3.2-3.6 s on master; RSS 5.82-6.00 GB, peak 5.94-6.2
 `explain.indexes` 0.87-1.14 s (cards 4-24 ms, reaching tests 3-4 ms), above W2's 0.4 s bar;
 prove's literal reach 0.29-0.31 s and `prove.reach_effects` 0.41-0.46 s.
 
+**As built (explain's indexes, plan item W2; branch `ctxsrv/explain-indexes`).** `Indexes` and
+`CrossRules` borrowed the model, so they got an owned form: `ExplainIndexes` (in
+`explain.rs`) holds `IndexData` (rows, objects and run actions as indexes into the model, ids
+as owned strings; `DeclaringRows` is `DeclaringObjects` by object index, sharing its pick) and
+a `CrossRulesIndex` (steps and callers as `SiteIx` indexes into their row's call sites or
+record operations). No `Arc<Model>` beside borrows: the indexes are read through short-lived
+views (`Indexes::over`, `CrossRules::over`) over the revision's model and the artifact, and
+`CrossRules::over` asserts the routine count matches. `CrossRules` held per-run mutable state
+(the memo, the stack, the 200,000-expansion budget, the stop flag, the `usable` cache); that is
+now the walk's own, made fresh per run, so the artifact is immutable and a request never sees
+an earlier request's stop (the memo alone keeps only complete, context-free results, so sharing
+it would not change bytes; the budget and the stop would). Within one run the cards still share
+one walk, as cold. `ArtifactKey::ExplainIndexes` (kind `explain_indexes`, phase 0, no
+prerequisites) is demanded by `explain_plan` (a new `Plan::explain_indexes` flag, also for an
+explain with no root, whose `--table/--field` answer reads the cross-rules index through
+`RulesIndex::build_where_over`); `serve_plan` hands it to `View::served`, and explain's compute
+asserts a served view carries it. The one-shot path builds the same owned form per run, so no
+output moves. Eviction: after the det, before `tree_base`; reclaimed at a refresh; never
+carried. `Case::Fill("explain_indexes")` is 30 MiB (measured peak). Deviation: the plan's
+"break: share the memo" does not discriminate (see above); the proof shares the stop flag.
+
+Measured on CDO (release-fast probe, mimalloc, `census-probe incr --witness`, cold and B,
+master `0d902458` beside it, same machine and hour): explain with its witness warm (hit) 1.16-1.17
+s → 0.20-0.22 s; explain over three roots 6.3-6.4 s → 5.2-5.4 s; a step's first explain 6.2-6.4 s
+→ 5.9 s; prove and digest unchanged. The fill takes 0.87-0.94 s, peaks +29.0 MiB and leaves 25.7
+MiB (212,165 allocations). RSS after each step 7.10 / 7.21 GB on both (the `--witness` runs'
+extra views); the HWM 7.49 / 7.56 GB against 7.32 / 7.39 GB, which includes the branch probe's
+extra evict-and-refill measure of the indexes. A `--verify` run after cold, B, S and P: every
+answer (the four commands, explain over three roots, explain with its indexes evicted and
+present) equal to its cold run; explain hit 0.22-0.24 s, fill 0.89-1.03 s.
+
 ### 6.12 Explain
 
 Landed: grouping by equal `tests`, repeatable `--routine` (sorted distinct roots,

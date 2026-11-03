@@ -178,7 +178,10 @@ fn assert_order_equals_cold(f: &Fixture, order: &[Cmd]) -> BTreeMap<&'static str
 /// Engine(\"filling Det failed: SUMMARIES/TRANSACTION_SPANS demanded without
 /// a composition …\")": the fill's panic is caught and fails the request);
 /// the trees lent an EMPTY pd arena instead of the fold's fails `[Query,
-/// Digest]: Digest on ForwardedAfterValidate` (bytes differ).
+/// Digest]: Digest on ForwardedAfterValidate` (bytes differ). Plan
+/// 2026-11-03 W2 (2026-11-03): the explain indexes not retained across
+/// requests (`answer_timed` evicting them after each answer) fails the
+/// `explain_indexes` count of `[Digest, Digest, Explain, Explain]`.
 #[test]
 fn mixed_orders_over_one_revision_equal_cold_runs() {
     use Cmd::*;
@@ -209,6 +212,13 @@ fn mixed_orders_over_one_revision_equal_cold_runs() {
             );
             assert_eq!(n("raw"), 0, "every root is primary");
             assert!(n("det") <= 2, "{order:?}: {fills:?}");
+            // Explain's indexes (plan 2026-11-03 W2): once per revision,
+            // however many explains, and only for an explain.
+            assert_eq!(
+                n("explain_indexes"),
+                u64::from(order.iter().any(|c| matches!(c, Explain))),
+                "{order:?}: {fills:?}"
+            );
         }
     }
 }
@@ -461,7 +471,11 @@ fn a_cancelled_request_stops_between_phases() {
 /// `ensure_prepared` (no `pins += 1`) fails it: an eviction lands between a
 /// request's phases, and the request ends "missing from the ready snapshot"
 /// (or a run without its det) instead of answering: 5 of 5 runs failed
-/// (6 rounds failed 1 run in 3, hence 40).
+/// (6 rounds failed 1 run in 3, hence 40). Plan 2026-11-03 W2 (2026-11-03):
+/// the explain indexes' kind name drifting from the name eviction uses
+/// (`ArtifactKey::kind` returning `"explain-indexes"`) fails "explain_indexes
+/// refilled after eviction" (one fill: nothing ever evicted it); reverted,
+/// it passes.
 #[test]
 fn concurrent_requests_and_evictions_answer_the_cold_bytes() {
     const ROUNDS: usize = 40;
@@ -510,6 +524,7 @@ fn concurrent_requests_and_evictions_answer_the_cold_bytes() {
                 for _ in 0..50 {
                     for k in [
                         "witness",
+                        "explain_indexes",
                         "tree",
                         "tree_base",
                         "run",
@@ -556,8 +571,9 @@ fn concurrent_requests_and_evictions_answer_the_cold_bytes() {
     // request's tree is pinned through its reads, and an evicted tree or
     // base is filled again, never read half-built. So do the witnesses
     // (plan 2026-11-03 W): one evicted between its claim and its
-    // publication is discarded (the generation moved) and filled again.
-    for kind in ["l4", "tree", "tree_base", "witness"] {
+    // publication is discarded (the generation moved) and filled again; and
+    // explain's indexes (W2), read by the explains of the heavy thread.
+    for kind in ["l4", "tree", "tree_base", "witness", "explain_indexes"] {
         assert!(
             rev.fill_counts().get(kind).copied().unwrap_or(0) > 1,
             "{kind} refilled after eviction: {:?}",
@@ -826,4 +842,205 @@ fn a_witness_reads_the_requests_own_tree() {
             .any(|k| matches!(k, ArtifactKey::Witness { .. })),
         "the witness is published beside {tree:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Explain's indexes (plan 2026-11-03, item W2).
+// ---------------------------------------------------------------------------
+
+/// An answer's stdout, as text.
+fn stdout(out: &JobOutput) -> String {
+    match &out.actions[..] {
+        [crate::engine::batch::output::WriteAction::Stdout(b), ..] => {
+            String::from_utf8_lossy(b).into_owned()
+        }
+        other => panic!("precondition: the answer writes stdout first: {other:?}"),
+    }
+}
+
+/// `explain --table <table> --field <field>`.
+fn explain_field<'a>(f: &'a Fixture, table: &str, field: &str) -> Box<dyn Job + 'a> {
+    use crate::engine::l5::explain::{ExplainJob, ExplainMode, ExplainRequest};
+    Box::new(ExplainJob::new(
+        ExplainRequest {
+            inputs: &f.inputs,
+            mode: ExplainMode::Field {
+                table: table.to_string(),
+                field: field.to_string(),
+            },
+            single_app: f.single_app,
+        },
+        false,
+        None,
+    ))
+}
+
+/// The explain indexes are filled once per revision, whatever the number
+/// and the kind of explains (one routine, several, `--table/--field`), and
+/// by explain alone; evicted, the next explain fills them again and still
+/// answers its cold bytes.
+///
+/// DISCRIMINATION (break with Edit, run, revert, run; 2026-11-03): (e) the
+/// artifact not retained across requests (`answer_timed` evicting
+/// `explain_indexes` after each answer) fails "one fill for four explains"
+/// (`Some(4)` against `Some(1)`; the B/S/F/P and cone tests fail too, on
+/// `assert_answers_equal_cold`'s once-per-revision check). (A first try,
+/// `Artifact::satisfies` false for it, is no test: the request refills it
+/// forever and the run never ends.) (f) the
+/// served view handed no indexes (`serve_plan` passing `None`) fails at the
+/// first explain with "a served explain view carries its revision's explain
+/// indexes" (it would otherwise build a second copy per request); each
+/// reverted, it passes.
+#[test]
+fn explain_indexes_are_built_once_per_revision_and_refilled_after_eviction() {
+    let f = witness_ws("DocBoth");
+    let rev = revision(&f);
+    for cmd in [Cmd::Query, Cmd::Digest, Cmd::Prove] {
+        assert_eq!(answer(&rev, cmd, &f), cold(cmd, &f), "{cmd:?}");
+    }
+    assert_eq!(
+        rev.fill_counts().get("explain_indexes"),
+        None,
+        "no other command reads them"
+    );
+    let jobs = [
+        explain_many(&f, &["DocBoth"]),
+        explain_many(&f, &["ReadThenQueue"]),
+        explain_many(&f, &["DocBoth", "QueueTwice", "ReadThenQueue"]),
+        explain_field(&f, "W Queue", "Code"),
+    ];
+    for job in &jobs {
+        let warm = rev.answer(&**job, &Control::unreserved()).unwrap();
+        assert_eq!(warm, crate::engine::batch::standalone_output(&**job));
+        assert_eq!(warm.exit, 0, "precondition: {}", warm.message());
+    }
+    assert!(
+        stdout(&crate::engine::batch::standalone_output(&*jobs[3])).contains("QueueMail"),
+        "precondition: the field has a writer"
+    );
+    assert_eq!(
+        rev.fill_counts().get("explain_indexes"),
+        Some(&1),
+        "one fill for four explains"
+    );
+    assert_eq!(rev.evict_kind("explain_indexes"), 1);
+    for job in &jobs {
+        let warm = rev.answer(&**job, &Control::unreserved()).unwrap();
+        assert_eq!(
+            warm,
+            crate::engine::batch::standalone_output(&**job),
+            "refilled"
+        );
+    }
+    assert_eq!(rev.fill_counts().get("explain_indexes"), Some(&2));
+}
+
+/// How deep [`deep_ws`]'s call chain is: past `cross_rules::MAX_DEPTH`.
+const DEEP_CHAIN: usize = 600;
+
+/// A workspace whose `Deep0` starts a call chain deeper than the cross-call
+/// rules' walk follows (its card states `cross-call-rules-truncated`), and
+/// whose `Plain` inherits a callee's rule over a short chain (its card,
+/// alone, states no truncation).
+fn deep_ws() -> Fixture {
+    let mut src = String::from(
+        "table 50240 \"D Log\"\n{\n    fields { field(1; Id; Integer) { } field(2; Amount; Decimal) { } }\n    keys { key(PK; Id) { } }\n}\ncodeunit 50241 \"D Chain\"\n{\n",
+    );
+    for i in 0..DEEP_CHAIN {
+        src.push_str(&format!(
+            "    procedure Deep{i}()\n    begin\n        Deep{}();\n    end;\n\n",
+            i + 1
+        ));
+    }
+    src.push_str(&format!(
+        "    procedure Deep{DEEP_CHAIN}()\n    begin\n    end;\n\n"
+    ));
+    src.push_str(
+        "    procedure Plain(Amount: Decimal)\n    var\n        L: Record \"D Log\";\n    begin\n        CheckAmount(Amount);\n        L.Amount := Amount;\n        L.Insert();\n    end;\n\n    local procedure CheckAmount(Amount: Decimal)\n    begin\n        if Amount < 0 then\n            Error('Amount must not be negative');\n    end;\n}\n",
+    );
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(
+        dir.path().join("app.json"),
+        r#"{"id":"24242424-0000-4000-8000-000000000240","name":"D","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("src/D.al"), src).unwrap();
+    Fixture {
+        inputs: WorkspaceInputs::read(dir.path(), &READ),
+        single_app: true,
+        routine: "Plain",
+        _dir: Some(dir),
+    }
+}
+
+/// `body` on a thread with a large stack: the cross-call rules' walk
+/// recurses once per call, [`DEEP_CHAIN`] deep (the binary's main thread has
+/// the room; a test thread's default stack does not, in a debug build).
+fn on_big_stack(body: impl FnOnce() + Send) {
+    std::thread::scope(|s| {
+        std::thread::Builder::new()
+            .stack_size(1 << 30)
+            .spawn_scoped(s, body)
+            .expect("a test thread")
+            .join()
+            .unwrap_or_else(|p| std::panic::resume_unwind(p));
+    });
+}
+
+/// The core correctness rule of W2: explain's per-revision indexes are
+/// immutable, and each request walks them with a walk of its own, so an
+/// answer never depends on what earlier requests did. Off one revision,
+/// explain over `Deep0` (its walk stops: truncated) then over `Plain`
+/// equals cold `Plain` (no truncation), and `Plain` then `Deep0` equals cold
+/// `Deep0`; one request over both equals the cold run over both (one walk
+/// shared by the run's cards, built in root-id order, as cold).
+///
+/// DISCRIMINATION (break with Edit, run, revert, run; 2026-11-03): (g) the
+/// walk's stop shared across requests (a `truncated` flag kept in the
+/// shared `CrossRulesIndex`, set by every walk over it and read by
+/// `CrossRules::truncated`) fails `["Deep0", "Plain"]: Plain` (bytes
+/// differ: Plain's card states `cross-call-rules-truncated`); reverted, it
+/// passes.
+#[test]
+fn an_explain_answer_does_not_depend_on_earlier_requests() {
+    on_big_stack(|| {
+        let f = deep_ws();
+        let cold_of =
+            |roots: &[&str]| crate::engine::batch::standalone_output(&*explain_many(&f, roots));
+        let (deep, plain, both) = (
+            cold_of(&["Deep0"]),
+            cold_of(&["Plain"]),
+            cold_of(&["Deep0", "Plain"]),
+        );
+        const GAP: &str = "cross-call-rules-truncated";
+        assert!(
+            stdout(&deep).contains(GAP),
+            "precondition: Deep0's walk stops"
+        );
+        assert!(
+            !stdout(&plain).contains(GAP) && stdout(&plain).contains("must not be negative"),
+            "precondition: Plain alone inherits CheckAmount's rule, untruncated: {}",
+            stdout(&plain)
+        );
+        assert!(
+            stdout(&both).contains(GAP),
+            "precondition: the run over both stops"
+        );
+        for order in [["Deep0", "Plain"], ["Plain", "Deep0"]] {
+            let rev = revision(&f);
+            for root in order {
+                let warm = rev
+                    .answer(&*explain_many(&f, &[root]), &Control::unreserved())
+                    .unwrap();
+                let cold = if root == "Deep0" { &deep } else { &plain };
+                assert_eq!(&warm, cold, "{order:?}: {root}");
+            }
+            let warm = rev
+                .answer(&*explain_many(&f, &order), &Control::unreserved())
+                .unwrap();
+            assert_eq!(warm, cold_of(&order), "{order:?}: both in one request");
+            assert_eq!(rev.fill_counts().get("explain_indexes"), Some(&1));
+        }
+    });
 }

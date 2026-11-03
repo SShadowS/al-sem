@@ -56,7 +56,9 @@ use crate::engine::l4::effect_query_cli::{
     OwnerIndex, Resolution, object_display, owner_qualified, resolve_table_selector,
 };
 use crate::engine::l5::conditionality::UNCONDITIONAL;
-use crate::engine::l5::cross_rules::{CallerRule, CrossRules, EXPANSION_BUDGET, Inh, MAX_DEPTH};
+use crate::engine::l5::cross_rules::{
+    CallerRule, CrossRules, CrossRulesIndex, EXPANSION_BUDGET, Inh, MAX_DEPTH,
+};
 use crate::engine::l5::digest::DigestEffectResult;
 use crate::engine::l5::digest_cli::{
     ChangedInput, ChangedRootsDiagnostic, DiffRoot, DigestEffects, FullAnchor, anchor_to_value,
@@ -70,7 +72,7 @@ use crate::program::body::features::PAnchor;
 use crate::program::body::rules::{
     CmpOp, ConditionAtom, MessageSource, PRule, RuleKind, RuleMessage, Stops,
 };
-use crate::program::model::declaring::DeclaringObjects;
+use crate::program::model::declaring::DeclaringRows;
 use crate::program::model::role::Role;
 use crate::program::model::workspace::{
     CardAction, Model, ModelField, ModelObject, ModelRoutine, ModelTable,
@@ -253,8 +255,15 @@ impl Job for ExplainJob<'_> {
         } else {
             DigestEffects::default()
         };
-        let model = cx.view().model();
-        let result = render(model, &self.req.mode, &resolved, &effects);
+        let view = cx.view();
+        // A served view carries its revision's indexes (plan 2026-11-03
+        // W2): never build a second copy behind the artifact's back.
+        let prepared = view.explain_indexes();
+        assert!(
+            prepared.is_some() || !view.is_served(),
+            "a served explain view carries its revision's explain indexes"
+        );
+        let result = render(view.model(), &self.req.mode, &resolved, &effects, prepared);
         drop(effects);
         cx.release(Cell::Effects);
         Ok(SideDoc::new(Ok::<_, String>(result)))
@@ -467,20 +476,52 @@ impl Gap {
     }
 }
 
-/// The model indexes every card reads, built once per run.
-struct Indexes<'m> {
-    model: &'m Model,
-    rows_of: HashMap<&'m str, Vec<usize>>,
+/// Everything explain reads that is a function of the model alone (plan
+/// 2026-11-03 W2): the model indexes every card reads and the cross-call
+/// rules' index. Owned (rows, objects and actions as indexes, ids as owned
+/// strings), so a resident revision keeps one beside its model, built once,
+/// and every explain over the revision reads it; the one-shot run builds one
+/// per run, with the same constructor. Never changed after
+/// [`ExplainIndexes::build`]: the walk state a request changes (the
+/// cross-call rules' memo and expansion budget) is the request's own
+/// ([`CrossRules::over`]).
+pub struct ExplainIndexes {
+    ix: IndexData,
+    cross: CrossRulesIndex,
+}
+
+impl ExplainIndexes {
+    /// The indexes of `model`.
+    #[must_use]
+    pub fn build(model: &Model) -> ExplainIndexes {
+        ExplainIndexes {
+            ix: IndexData::new(model),
+            cross: CrossRulesIndex::new(model),
+        }
+    }
+}
+
+/// The model indexes every card reads, owned ([`ExplainIndexes`]).
+struct IndexData {
+    rows_of: HashMap<String, Vec<usize>>,
     callees: HashMap<usize, Vec<usize>>,
     callers: HashMap<usize, Vec<usize>>,
-    declaring: DeclaringObjects<'m>,
+    declaring: DeclaringRows,
     /// record-operation id -> the row that holds it.
-    op_row: HashMap<&'m str, usize>,
-    /// (row, table id) -> the fields that row writes on that table.
-    row_fields: HashMap<(usize, &'m str), BTreeSet<&'m str>>,
+    op_row: HashMap<String, usize>,
+    /// row -> table id -> the fields that row writes on that table.
+    row_fields: HashMap<usize, HashMap<String, BTreeSet<String>>>,
     /// Codeunit object id -> the page actions whose `RunObject` runs it:
-    /// (the page's object index, the action, the raw `RunObject` value).
-    run_by: HashMap<&'m str, Vec<(usize, &'m CardAction, &'m str)>>,
+    /// (the page's object index, the action's index in its run actions, the
+    /// raw `RunObject` value's index in the action's).
+    run_by: HashMap<String, Vec<(usize, usize, usize)>>,
+}
+
+/// [`IndexData`] read against the model it was built from: what the cards
+/// call.
+struct Indexes<'m> {
+    model: &'m Model,
+    data: &'m IndexData,
 }
 
 /// The objects a raw `RunObject` value names (`Codeunit "Post"`,
@@ -574,20 +615,20 @@ fn via_human(ix: &Indexes<'_>, i: &Inh) -> String {
         .join(" > ")
 }
 
-impl<'m> Indexes<'m> {
-    fn new(model: &'m Model) -> Indexes<'m> {
+impl IndexData {
+    fn new(model: &Model) -> IndexData {
         let ws = &model.workspace;
-        let mut rows_of: HashMap<&str, Vec<usize>> = HashMap::new();
+        let mut rows_of: HashMap<String, Vec<usize>> = HashMap::new();
         let mut ix_of: HashMap<&str, usize> = HashMap::new();
-        let mut op_row: HashMap<&str, usize> = HashMap::new();
+        let mut op_row: HashMap<String, usize> = HashMap::new();
         for (i, r) in ws.routines.iter().enumerate() {
             rows_of
-                .entry(r.stable_routine_id.as_str())
+                .entry(r.stable_routine_id.clone())
                 .or_default()
                 .push(i);
             ix_of.entry(r.id.as_str()).or_insert(i);
             for op in &r.record_operations {
-                op_row.entry(op.id.as_str()).or_insert(i);
+                op_row.entry(op.id.clone()).or_insert(i);
             }
         }
         let mut callees: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -604,46 +645,88 @@ impl<'m> Indexes<'m> {
             v.sort_unstable();
             v.dedup();
         }
-        let mut row_fields: HashMap<(usize, &str), BTreeSet<&str>> = HashMap::new();
+        let mut row_fields: HashMap<usize, HashMap<String, BTreeSet<String>>> = HashMap::new();
         for w in field_writes(model) {
             row_fields
-                .entry((w.routine_ix, w.table_id))
+                .entry(w.routine_ix)
                 .or_default()
-                .insert(w.field);
+                .entry(w.table_id.to_string())
+                .or_default()
+                .insert(w.field.to_string());
         }
-        let mut run_by: HashMap<&str, Vec<(usize, &CardAction, &str)>> = HashMap::new();
+        let mut run_by: HashMap<String, Vec<(usize, usize, usize)>> = HashMap::new();
         for (oi, o) in ws.objects.iter().enumerate() {
-            for a in o.run_actions() {
-                for raw in &a.run_object {
+            for (ai, a) in o.run_actions().iter().enumerate() {
+                for (ri, raw) in a.run_object.iter().enumerate() {
                     for target in run_object_targets(model, &o.app_guid, raw) {
                         run_by
-                            .entry(target)
+                            .entry(target.to_string())
                             .or_default()
-                            .push((oi, a, raw.as_str()));
+                            .push((oi, ai, ri));
                     }
                 }
             }
         }
-        Indexes {
-            model,
+        IndexData {
             rows_of,
             callees,
             callers,
-            declaring: DeclaringObjects::new(&ws.objects),
+            declaring: DeclaringRows::new(&ws.objects),
             op_row,
             row_fields,
             run_by,
         }
+    }
+}
+
+impl<'m> Indexes<'m> {
+    fn over(model: &'m Model, data: &'m IndexData) -> Indexes<'m> {
+        Indexes { model, data }
     }
 
     fn row(&self, i: usize) -> &'m ModelRoutine {
         &self.model.workspace.routines[i]
     }
 
+    /// The rows of a stable routine id, in model order.
+    fn rows_of(&self, stable_id: &str) -> &'m [usize] {
+        self.data.rows_of.get(stable_id).map_or(&[], Vec::as_slice)
+    }
+
+    /// The row that holds a record operation.
+    fn op_row(&self, op: &str) -> Option<usize> {
+        self.data.op_row.get(op).copied()
+    }
+
+    /// The fields `row` writes on `table_id`.
+    fn row_fields(&self, row: usize, table_id: &str) -> Option<&'m BTreeSet<String>> {
+        self.data.row_fields.get(&row)?.get(table_id)
+    }
+
+    /// The page actions whose `RunObject` runs `object_id`: (the page's
+    /// object index, the action, the raw `RunObject` value).
+    fn run_by(&self, object_id: &str) -> Vec<(usize, &'m CardAction, &'m str)> {
+        let objects = &self.model.workspace.objects;
+        self.data
+            .run_by
+            .get(object_id)
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .map(|&(oi, ai, ri)| {
+                let a = &objects[oi].run_actions()[ai];
+                (oi, a, a.run_object[ri].as_str())
+            })
+            .collect()
+    }
+
     /// `(object type, object name)` of a row.
     fn object_of(&self, i: usize) -> (&'m str, &'m str) {
         let r = self.row(i);
-        let name = self.declaring.of(r).map_or("", |o| o.name.as_str());
+        let name = self
+            .data
+            .declaring
+            .of(&self.model.workspace.objects, r)
+            .map_or("", |o| o.name.as_str());
         (r.object_type.as_str(), name)
     }
 
@@ -694,18 +777,29 @@ fn path_names(
     out
 }
 
-/// Everything the document needs, rendered.
+/// Everything the document needs, rendered: over `prepared`, the indexes a
+/// resident revision keeps for `model`, else over indexes built here.
 fn render(
     model: &Model,
     mode: &ExplainMode,
     resolved: &Resolved,
     effects: &DigestEffects,
+    prepared: Option<&ExplainIndexes>,
 ) -> ExplainRunResult {
     use crate::engine::perf_trace::span;
-    let (ix, cross) = {
-        let _s = span("explain", "explain.indexes");
-        (Indexes::new(model), CrossRules::new(model))
+    let built;
+    let indexes = match prepared {
+        Some(p) => p,
+        None => {
+            let _s = span("explain", "explain.indexes");
+            built = ExplainIndexes::build(model);
+            &built
+        }
     };
+    let ix = Indexes::over(model, &indexes.ix);
+    // The walk is this run's own: its memo and expansion budget start empty
+    // whatever earlier runs over the same indexes did.
+    let cross = CrossRules::over(model, &indexes.cross);
     let tests_reaching = effects.coverage_graph.as_ref().map(|g| {
         let _s = span("explain", "explain.reaching_tests");
         crate::engine::l5::test_coverage::reaching_tests(
@@ -762,10 +856,11 @@ fn render(
     }
     // `--table/--field`: each writer's effective rules, from the index d65
     // reads (spec §4.4, §4.5 step 2).
-    let rules_index = resolved
-        .field
-        .as_ref()
-        .map(|f| RulesIndex::build_where(model, |t, n| t == f.table_id && n == f.field));
+    let rules_index = resolved.field.as_ref().map(|f| {
+        RulesIndex::build_where_over(model, &indexes.cross, |t, n| {
+            t == f.table_id && n == f.field
+        })
+    });
     let entry = resolved
         .field
         .as_ref()
@@ -845,9 +940,8 @@ fn field_json(ix: &Indexes<'_>, f: &FieldAnswer, entry: Option<&FieldWriters>) -
         .into_iter()
         .map(|(id, sites)| {
             let display = ix
-                .rows_of
-                .get(id.as_str())
-                .and_then(|r| r.first())
+                .rows_of(id.as_str())
+                .first()
                 .map_or_else(|| id.clone(), |&i| ix.qualified(i));
             let writer = entry.and_then(|e| e.writers.iter().find(|w| &w.stable_id == id));
             let caller_rules: Vec<Value> = writer
@@ -895,9 +989,8 @@ fn field_human(ix: &Indexes<'_>, f: &FieldAnswer, entry: Option<&FieldWriters>) 
     out.push_str(&format!(": {} writer(s)\n", f.writers.len()));
     for (id, sites) in writers_by_anchor(f) {
         let display = ix
-            .rows_of
-            .get(id.as_str())
-            .and_then(|r| r.first())
+            .rows_of(id.as_str())
+            .first()
             .map_or_else(|| id.clone(), |&i| ix.qualified(i));
         let at: Vec<String> = sites
             .iter()
@@ -1030,7 +1123,7 @@ impl Card {
         tests_reaching: Option<&BTreeMap<String, Vec<(String, bool)>>>,
     ) -> Card {
         let model = ix.model;
-        let rows: Vec<usize> = ix.rows_of.get(rid).cloned().unwrap_or_default();
+        let rows: Vec<usize> = ix.rows_of(rid).to_vec();
         let mut gaps: Vec<Gap> = Vec::new();
 
         // The routine: the first row (two `#if` arms share one stable id).
@@ -1211,10 +1304,10 @@ impl Card {
                 // The fields written, by the routines that hold the write.
                 let mut fields: BTreeSet<&str> = BTreeSet::new();
                 for op in &e.origin_operation_ids {
-                    if let Some(&row) = ix.op_row.get(op.as_str())
-                        && let Some(f) = ix.row_fields.get(&(row, table_id))
+                    if let Some(row) = ix.op_row(op.as_str())
+                        && let Some(f) = ix.row_fields(row, table_id)
                     {
-                        fields.extend(f.iter().copied());
+                        fields.extend(f.iter().map(String::as_str));
                     }
                 }
                 let mut captions = Map::new();
@@ -1420,7 +1513,7 @@ impl Card {
 
         // Reached from: the page actions whose trigger reaches a row of the
         // routine over the resolved calls (or is one).
-        let up = ix.reach(&rows, &ix.callers);
+        let up = ix.reach(&rows, &ix.data.callers);
         let mut reached_from = Vec::new();
         for &r in up.keys() {
             let row = ix.row(r);
@@ -1429,7 +1522,7 @@ impl Card {
                 && row.object_type == "Codeunit"
                 && row.name.eq_ignore_ascii_case("OnRun")
             {
-                for &(oi, a, raw) in ix.run_by.get(row.object_id.as_str()).into_iter().flatten() {
+                for (oi, a, raw) in ix.run_by(row.object_id.as_str()) {
                     let page = &model.workspace.objects[oi];
                     let caption = one_text(&a.caption).ok().flatten();
                     reached_from.push((
@@ -1518,11 +1611,7 @@ impl Card {
             .into_iter()
             .flatten()
         {
-            let row = ix
-                .rows_of
-                .get(test.as_str())
-                .and_then(|r| r.first())
-                .copied();
+            let row = ix.rows_of(test.as_str()).first().copied();
             let display = row.map_or_else(|| test.clone(), |i| ix.qualified(i));
             let asserts = row
                 .and_then(|i| ix.row(i).card_text.as_deref())
@@ -1570,10 +1659,8 @@ impl Card {
                 // The cone item's own anchor, else the call site's in the
                 // model (the ledger row of a to-less call can carry none).
                 let site = ix
-                    .rows_of
-                    .get(item.owning_routine.as_str())
-                    .into_iter()
-                    .flatten()
+                    .rows_of(item.owning_routine.as_str())
+                    .iter()
                     .flat_map(|&i| &ix.row(i).call_sites)
                     .find(|cs| cs.id == item.callsite_id)
                     .map(|cs| &cs.source_anchor);
@@ -1615,7 +1702,7 @@ impl Card {
                 ));
             }
         }
-        let down = ix.reach(&rows, &ix.callees);
+        let down = ix.reach(&rows, &ix.data.callees);
         let mut symbol_only: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut seen_incomplete: HashSet<usize> = HashSet::new();
         for &r in down.keys() {

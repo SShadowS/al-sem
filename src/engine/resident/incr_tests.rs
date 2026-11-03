@@ -92,6 +92,8 @@ pub(super) fn pin(s: &Arc<ResidentSession>) -> Arc<Revision> {
 
 /// Every command on every routine answered off `rev`, each equal to its cold
 /// standalone run over a fresh read of `ws`; at least one answer exits 0.
+/// Every explain read the revision's ONE `ExplainIndexes` fill (plan
+/// 2026-11-03 W2).
 pub(super) fn assert_answers_equal_cold(step: &str, rev: &Revision, ws: &Path, routines: &[&str]) {
     let fresh = WorkspaceInputs::read(ws, &REVISION_READ);
     let mut answered = false;
@@ -106,6 +108,101 @@ pub(super) fn assert_answers_equal_cold(step: &str, rev: &Revision, ws: &Path, r
         }
     }
     assert!(answered, "precondition: {step}: some answer exits 0");
+    assert_eq!(
+        rev.fill_counts().get("explain_indexes"),
+        Some(&1),
+        "{step}: explain's indexes are built once per revision"
+    );
+}
+
+/// `explain` over several routines in one request.
+fn explain_many<'a>(inputs: &'a Arc<WorkspaceInputs>, routines: &[&str]) -> Box<dyn Job + 'a> {
+    use crate::engine::l5::explain::{ExplainJob, ExplainMode, ExplainRequest};
+    Box::new(ExplainJob::new(
+        ExplainRequest {
+            inputs,
+            mode: ExplainMode::Routines(routines.iter().map(|r| r.to_string()).collect()),
+            single_app: false,
+        },
+        false,
+        None,
+    ))
+}
+
+/// Plan 2026-11-03 W2 across every change type: after a body edit (B, a new
+/// call: the call indexes move), a declaration edit (S), a file added and a
+/// file removed (F) and a package-identity change (P) of the rule-B
+/// workspace, every explain off the new revision, one routine at a time and
+/// all of them in one request, equals its cold run over a fresh read: each
+/// revision builds its own explain indexes, once, and none is carried.
+///
+/// DISCRIMINATION (break with Edit, run, revert, run; 2026-11-03): a stale
+/// artifact (the `ExplainIndexes` fill handing out the FIRST indexes any
+/// revision built, from a process-wide cache) fails "B: Explain on
+/// CallWrite equals cold" (bytes differ: the stale indexes lack the B
+/// edit's new call); reverted, it passes.
+#[test]
+fn explain_after_b_s_f_p_reads_the_revisions_own_indexes() {
+    let (dir, s) = rule_b_session();
+    let ws = dir.path();
+    let roots = ["CallWrite", "WriteThenCommit", "WriteCallCommit"];
+    let check = |step: &str, rev: &Revision| {
+        assert_answers_equal_cold(step, rev, ws, &roots);
+        let fresh = WorkspaceInputs::read(ws, &REVISION_READ);
+        let warm = rev
+            .answer(&*explain_many(&rev.inputs, &roots), &Control::unreserved())
+            .unwrap_or_else(|e| panic!("{step}: explain x3: {e:?}"));
+        let cold = crate::engine::batch::standalone_output(&*explain_many(&fresh, &roots));
+        assert_eq!(
+            warm, cold,
+            "{step}: explain over three routines equals cold"
+        );
+        assert_eq!(rev.fill_counts().get("explain_indexes"), Some(&1), "{step}");
+    };
+    check("cold", &pin(&s));
+
+    // B: WriteCallCommit now also calls CallWrite (a new call edge).
+    edit(
+        ws,
+        "src/Ws.al",
+        "        L.Insert();\n        Lib.MaybeCommit(true);\n        Commit();",
+        "        L.Insert();\n        Lib.MaybeCommit(true);\n        CallWrite();\n        Commit();",
+    );
+    let rev = pin(&s);
+    assert_eq!(s.stats().last_build_class.as_deref(), Some("B"));
+    check("B", &rev);
+
+    // S: a procedure is added, and CallWrite calls it.
+    edit(
+        ws,
+        "src/Ws.al",
+        "    begin\n        Lib.Write();\n    end;\n\n    procedure FillAndPost()",
+        "    begin\n        Lib.Write();\n        Added();\n    end;\n\n    procedure Added()\n    begin\n        Commit();\n    end;\n\n    procedure FillAndPost()",
+    );
+    let rev = pin(&s);
+    assert_eq!(s.stats().last_build_class.as_deref(), Some("S"));
+    check("S", &rev);
+
+    // F: a file with a new caller of WriteThenCommit, then without it.
+    std::fs::write(
+        ws.join("src/Extra.al"),
+        "codeunit 50191 \"Ws Extra\"\n{\n    procedure CallsWriteThenCommit()\n    var\n        R: Codeunit \"Ws RuleB\";\n    begin\n        R.WriteThenCommit();\n    end;\n}\n",
+    )
+    .unwrap();
+    check("F added", &pin(&s));
+    std::fs::remove_file(ws.join("src/Extra.al")).unwrap();
+    check("F removed", &pin(&s));
+
+    // P: the app's version moves (a package-identity field).
+    edit(
+        ws,
+        "app.json",
+        "\"version\":\"1.0.0.0\",\"runtime\"",
+        "\"version\":\"1.0.0.1\",\"runtime\"",
+    );
+    let rev = pin(&s);
+    assert_eq!(s.stats().last_build_class.as_deref(), Some("P"));
+    check("P", &rev);
 }
 
 /// The revision's published L4 solve projected, and a cold full solve's over
