@@ -56,6 +56,9 @@ use crate::program::model::events::{EventGraph, EventSymbol};
 use crate::program::model::taxonomy::DispatchKind;
 use crate::program::model::workspace::{Model, ModelRoutine};
 
+#[path = "snapshot_view.rs"]
+mod view;
+
 // ===========================================================================
 // ORDERED serde projections of ValueSource / CapabilityExtra.
 //
@@ -1811,7 +1814,7 @@ pub(crate) fn compose_tree(
     pd: std::borrow::Cow<'_, crate::engine::l4::pd_solve::ConeArena>,
     apps: &TreeApps,
 ) -> CapabilitySnapshot {
-    let base = derive_tree_base(model, typed, dependency_calls, caps, apps);
+    let base = derive_tree_base(model, typed, dependency_calls, caps, &pd, apps);
     compose_tree_over(
         std::borrow::Cow::Owned(base),
         model,
@@ -1832,10 +1835,17 @@ pub(crate) fn compose_tree(
 /// raw fact or the pd arena. A resident revision derives them once (its
 /// `TreeBase` artifact) and every view shares them; a one-shot tree derives
 /// and moves them ([`compose_tree`]).
+///
+/// It also holds the view-independent half of the per-view sections (plan
+/// item L4a, [`view`]): the evidence candidates, the direct-fact table and
+/// the pd arena's maps over the arena it was derived with, so a view derives
+/// only what its subjects add.
 #[derive(Clone)]
 pub struct TreeBase {
     identities: std::sync::Arc<SnapshotIdentityTable>,
     typed_edges: Vec<SnapshotGraphEdge>,
+    /// Read only by the whole derivation (`compose_tree_over_legacy`).
+    #[cfg_attr(not(test), allow(dead_code))]
     skipped: SkippedEdgeKeys,
     callsite_resolutions: Vec<SnapshotCallsiteResolution>,
     analysis_gaps: Vec<SnapshotAnalysisGap>,
@@ -1844,6 +1854,7 @@ pub struct TreeBase {
     root_classifications: Vec<SnapshotRootClassificationSlot>,
     routine_order_frames: Option<RoutineOrderFrames>,
     boundary: BoundaryRule,
+    view: view::ViewBase,
 }
 
 /// The inputs every tree section reads (the borrowed half of
@@ -1896,12 +1907,15 @@ impl<'m> TreeInputParts<'m> {
     }
 }
 
-/// [`TreeBase`] over the composition `caps` (one span per section).
+/// [`TreeBase`] over the composition `caps` and its pd arena `pd` (one span
+/// per section). Every view composed over the base must pass the same arena
+/// ([`compose_tree_over`] asserts its shape).
 pub(crate) fn derive_tree_base(
     model: &Model,
     typed: &[TypedEdge],
     dependency_calls: &[CallEdge],
     caps: &crate::engine::l5::detector_context::CapabilityAnalysis,
+    pd: &crate::engine::l4::pd_solve::ConeArena,
     apps: &TreeApps,
 ) -> TreeBase {
     let _s = crate::engine::perf_trace::span("snapshot", "tree.base");
@@ -1933,9 +1947,18 @@ pub(crate) fn derive_tree_base(
     let s = sec("tree.root_classifications");
     let root_classifications = derive_root_classifications(model, &inp);
     drop(s);
-    let s = sec("tree.routine_order_frames");
-    let routine_order_frames = derive_routine_order_frames(&inp, &collided);
+    // The order frames come with the evidence candidates: both read each
+    // row's `compute_routine_order`, run once per row here.
+    let s = sec("tree.evidence_base");
+    let (evidence, routine_order_frames) = view::derive_evidence_base(&inp, &collided);
     drop(s);
+    let s = sec("tree.fact_base");
+    let facts = view::derive_fact_base(&inp);
+    drop(s);
+    let s = sec("tree.pd_base");
+    let pd = view::derive_pd_base(pd, &typed_edges, &skipped, &facts, inp.routine_to_stable);
+    drop(s);
+    drop((inp, collided));
     TreeBase {
         identities: identities.into(),
         typed_edges,
@@ -1947,6 +1970,12 @@ pub(crate) fn derive_tree_base(
         root_classifications,
         routine_order_frames,
         boundary,
+        view: view::ViewBase {
+            routine_to_stable: parts.routine_to_stable,
+            facts,
+            evidence,
+            pd,
+        },
     }
 }
 
@@ -1954,10 +1983,175 @@ pub(crate) fn derive_tree_base(
 /// cloned when shared): the per-view sections — the operation and call-site
 /// evidence and the capability facts (direct rows for every covered routine,
 /// inherited rows for the subjects) and the pd arena scoped to the subjects'
-/// state closure — derived here. Equal to [`compose_tree`]'s for the same
-/// inputs whatever `base`'s ownership.
+/// state closure — spliced from the base's view-independent half
+/// ([`view`]) and the subjects' raw facts. Equal to [`compose_tree`]'s for
+/// the same inputs whatever `base`'s ownership. `base` must have been derived
+/// over the same composition and arena (`typed`, `dependency_calls`, `caps`,
+/// `pd`, `apps`); they are read again only when the base's direct table is
+/// not split by subject (an emitted subject holds `|`), where the facts are
+/// derived whole.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn compose_tree_over(
+    base: std::borrow::Cow<'_, TreeBase>,
+    model: &Model,
+    typed: &[TypedEdge],
+    dependency_calls: &[CallEdge],
+    caps: &crate::engine::l5::detector_context::CapabilityAnalysis,
+    raw: TreeRaw<'_>,
+    pd: std::borrow::Cow<'_, crate::engine::l4::pd_solve::ConeArena>,
+    apps: &TreeApps,
+) -> CapabilitySnapshot {
+    crate::engine::perf_trace::counter_delta("build.snapshot", 1);
+    let _s = crate::engine::perf_trace::span("snapshot", "snapshot.derive");
+    let sec = |name: &'static str| crate::engine::perf_trace::span("snapshot", name);
+    let vb = &base.view;
+    let routines = &model.workspace.routines;
+    // Facts derived whole (no split table) read the full inputs.
+    let parts = if vb.facts.split {
+        None
+    } else {
+        Some(TreeInputParts::of(model))
+    };
+    let inp = parts
+        .as_ref()
+        .map(|p| p.inputs(model, typed, dependency_calls, caps, apps));
+    // In drain mode the tree owns its subjects' entries and drops them once
+    // the raw readers ran.
+    let (subjects, (operation_index, callsite_index, facts)) = match raw {
+        TreeRaw::Drain(map) => {
+            let subjects: std::collections::BTreeSet<String> =
+                map.keys().map(str::to_string).collect();
+            let out = view_sections(vb, routines, inp.as_ref(), &subjects, &|id: &str| {
+                map.get(id)
+            });
+            drop(map);
+            (subjects, out)
+        }
+        TreeRaw::Borrow(acc) => {
+            let out = view_sections(vb, routines, inp.as_ref(), acc.subjects(), &|id: &str| {
+                acc.get(id)
+            });
+            (acc.subjects, out)
+        }
+    };
+    let s = sec("tree.pd_solution");
+    let (pd_solution, capability_facts) = {
+        let producers = match &facts {
+            ViewFactRows::Spliced(vf) => view::ProducerRows::Spliced(&vb.pd, vf),
+            ViewFactRows::Whole(rows) => view::ProducerRows::whole(rows),
+        };
+        let arena = view::view_pd(&pd, &subjects, &vb.pd, &producers, &vb.routine_to_stable);
+        drop(producers);
+        let rows = match facts {
+            ViewFactRows::Spliced(vf) => vf.rows,
+            ViewFactRows::Whole(rows) => rows,
+        };
+        (arena, rows)
+    };
+    drop(pd);
+    drop(s);
+    let s = sec("tree.base_sections");
+    // The whole sections, moved from an owned base, cloned from a shared one
+    // (never the view half: a view needs none of it).
+    let (
+        identities,
+        typed_edges,
+        callsite_resolutions,
+        analysis_gaps,
+        coverage,
+        event_declarations,
+        root_classifications,
+        routine_order_frames,
+        boundary,
+    ) = match base {
+        std::borrow::Cow::Owned(b) => (
+            b.identities,
+            b.typed_edges,
+            b.callsite_resolutions,
+            b.analysis_gaps,
+            b.coverage,
+            b.event_declarations,
+            b.root_classifications,
+            b.routine_order_frames,
+            b.boundary,
+        ),
+        std::borrow::Cow::Borrowed(b) => (
+            std::sync::Arc::clone(&b.identities),
+            b.typed_edges.clone(),
+            b.callsite_resolutions.clone(),
+            b.analysis_gaps.clone(),
+            std::sync::Arc::clone(&b.coverage),
+            b.event_declarations.clone(),
+            b.root_classifications.clone(),
+            b.routine_order_frames.clone(),
+            b.boundary.clone(),
+        ),
+    };
+    drop(s);
+
+    finish_snapshot(CapabilitySnapshot {
+        identities,
+        capability_facts,
+        typed_edges,
+        operation_index,
+        callsite_index,
+        callsite_resolutions,
+        analysis_gaps,
+        coverage,
+        event_declarations,
+        root_classifications,
+        routine_order_frames,
+        pd_solution,
+        boundary: Some(boundary),
+    })
+}
+
+/// A view's capability facts: spliced over the base's direct table, or
+/// derived whole when the table is not split by subject.
+enum ViewFactRows {
+    Spliced(view::ViewFacts),
+    Whole(Vec<SnapshotCapabilityFact>),
+}
+
+/// The raw readers of [`compose_tree_over`]: the evidence and the facts of
+/// `subjects` (`get` lends their raw facts; `inp` is set only when the facts
+/// are derived whole).
+fn view_sections<'r>(
+    vb: &view::ViewBase,
+    routines: &[ModelRoutine],
+    inp: Option<&TreeInputs<'r>>,
+    subjects: &std::collections::BTreeSet<String>,
+    get: &dyn Fn(&str) -> Option<InheritedSlice<'r>>,
+) -> (
+    Vec<SnapshotOperationEvidence>,
+    Vec<SnapshotCallsiteEvidence>,
+    ViewFactRows,
+) {
+    let sec = |name: &'static str| crate::engine::perf_trace::span("snapshot", name);
+    let s = sec("tree.evidence");
+    let (operation_index, callsite_index) = view::view_evidence(vb, routines, subjects, get);
+    drop(s);
+    let s = sec("tree.capability_facts");
+    let facts = match inp {
+        None => ViewFactRows::Spliced(view::view_facts(
+            &vb.facts,
+            subjects,
+            get,
+            &vb.routine_to_stable,
+        )),
+        Some(inp) => ViewFactRows::Whole(derive_capability_facts(inp, get)),
+    };
+    drop(s);
+    (operation_index, callsite_index, facts)
+}
+
+/// The whole per-view derivation [`compose_tree_over`] replaced (plan item
+/// L4a): every per-view section derived over every routine. Kept as the
+/// oracle of the view-equality tests until they pass on CDO and every
+/// fixture.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compose_tree_over_legacy(
     base: std::borrow::Cow<'_, TreeBase>,
     model: &Model,
     typed: &[TypedEdge],
@@ -2038,6 +2232,7 @@ pub(crate) fn compose_tree_over(
         root_classifications,
         routine_order_frames,
         boundary,
+        view: _,
     } = base.into_owned();
     drop(s);
 
@@ -2351,6 +2546,22 @@ impl<'r> SnapTablesBuilder<'r> {
         let Some(raw) = &g.raw else {
             return (direct_base, None);
         };
+        let mi = self.project_raw(group, subject, &g.subject, raw, routine_to_stable);
+        (direct_base, Some(mi))
+    }
+
+    /// Project the raw facts `raw` of group `group` (subject index `subject`,
+    /// stable subject `stable`) into the tables: [`Self::project_group`]'s
+    /// inherited half, shared with a view's splice over its tree base
+    /// (`view::view_facts`). Returns the raw tables' memo.
+    fn project_raw(
+        &mut self,
+        group: u32,
+        subject: u32,
+        stable: &str,
+        raw: &InheritedSlice<'r>,
+        routine_to_stable: &HashMap<String, String>,
+    ) -> usize {
         let mi = self.memo_of(raw.tables());
         for r in raw.refs() {
             if self.memos[mi].reps[r.rep as usize] == NO_HOP {
@@ -2366,7 +2577,7 @@ impl<'r> SnapTablesBuilder<'r> {
                         &self.memos[mi].raw.subjects[h.subject as usize],
                         routine_to_stable
                     ),
-                    g.subject,
+                    stable,
                     "snapshot: a raw first hop's subject is not its emitting group's"
                 );
                 let hop = SnapHop {
@@ -2386,11 +2597,11 @@ impl<'r> SnapTablesBuilder<'r> {
                 assert_eq!(
                     owner, group,
                     "snapshot: two emission groups share one raw first hop (subject {:?})",
-                    g.subject
+                    stable
                 );
             }
         }
-        (direct_base, Some(mi))
+        mi
     }
 }
 
