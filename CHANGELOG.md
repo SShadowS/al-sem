@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (context server: a per-revision memo of root witnesses)
+
+- **Explain, prove and digest asked about the same routine in one resident revision now
+  share one computed root entry** (plan `docs/superpowers/plans/2026-11-03-context-server-remaining.md`,
+  item W). A root's `DigestEntryResult` (its witnesses, the `digest.roots` pass) depends only
+  on the root and `--include-reads`, so the revision's store keeps it as an
+  `ArtifactKey::Witness { root, include_reads }` artifact (kind `witness`, phase 3), filled off
+  the request's own `Tree(scope)` and never carried to the next revision. A request's first
+  witness fill computes every absent root of the request in one pass over its tree (one index
+  build, the roots in parallel); the read finishes owned clones, because prove's literal-reach
+  pass mutates its entries. `digest_effects_each` is split into the pure `root_entries` and the
+  per-read `finish_effects`; the one-shot path calls both, so no output moves. Witnesses are
+  evicted first under memory pressure and dropped at a refresh with the trees. `status` reports
+  `fills.witness` (`hit`, `miss`, `batches`); `census-probe incr … --witness R2,R3` measures a
+  command's answer with and without its root's witness, the witness bytes, and the cross-view
+  case. Tests: every order of explain/prove/digest on one root plus
+  `[digest, digest --include-reads, digest]` (five fixtures), digest after prove reads the
+  unpruned entry (G23's dead path), a three-root explain computes in one pass and a later prove
+  finds the witness, a witness without its tree fails loudly, and the concurrency test now runs
+  two heavy requests on one root while witnesses are evicted. Discrimination proofs (each seen
+  to fail, then pass): the key without `include_reads`; memoizing the post-prove entry; no
+  `Tree` prerequisite; no batch. Measured on CDO (release-fast, quiet machine): explain, then
+  prove and digest on the same root now take 5.8-6.1 s, 2.55-2.63 s and 0.15-0.16 s, against
+  5.9-6.1 s, 5.6-6.0 s and 3.2-3.6 s on master; with the view's tree warm, a hit against a miss
+  is explain 1.1-1.2 s against 4.3-4.5 s, prove 0.86-0.92 s against 3.8-4.2 s, digest 0.15 s
+  against 3.1-3.4 s. A witness holds 5.6-7.9 MiB; resident memory is unchanged (5.8-6.0 GB).
+  What an explain hit still pays is `explain.indexes` (0.87-1.14 s), above the 0.4 s bar for
+  the plan's W2. Design note: `docs/superpowers/specs/2026-11-01-context-server-design.md` §6.11.
+
 ### Added (a guard on the ordering cell, #367)
 
 - **Test `served_plans_never_demand_the_ordering_cell`** (`engine::session`): the plans of
