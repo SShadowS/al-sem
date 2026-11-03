@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (context server: explain's indexes kept per revision)
+
+- **A resident explain no longer rebuilds its model indexes on every request** (plan
+  `docs/superpowers/plans/2026-11-03-context-server-remaining.md`, item W2). The indexes every
+  explain card reads (`Indexes`) and the cross-call rules' index (`CrossRules`) depend only on
+  the model, but borrowed it; they now have an owned form, `ExplainIndexes` (row, object and
+  action indexes, owned id strings; `DeclaringRows`, `CrossRulesIndex`), which a revision keeps
+  as `ArtifactKey::ExplainIndexes` (kind `explain_indexes`, phase 0), built once and read by
+  every explain over it. `CrossRules` is split: the immutable index is shared, while the memo,
+  the expansion budget and the stop flag belong to one walk per run, so an answer never depends
+  on earlier requests. `explain --table/--field` reuses the index
+  (`RulesIndex::build_where_over`). The one-shot CLI builds the same owned form per run, so no
+  output moves. The artifact is evicted after the det, freed at a refresh, and budgeted at 30
+  MiB. Tests: explain over a too-deep call chain then over a plain routine (and back) equals
+  cold; one fill for several explains; evict and refill equal cold; explain after B, S, a file
+  added and removed, and P equals cold. Discrimination proofs (each seen to fail, then pass):
+  a stop flag shared across requests; the artifact not retained; the served view without it; a
+  stale cross-revision artifact; a kind-name drift. Measured on CDO (release-fast): an explain
+  whose root witness is warm takes 0.20-0.22 s instead of 1.16-1.17 s, explain over three roots
+  5.2-5.4 s instead of 6.3-6.4 s; the artifact holds 25.7 MiB; resident memory is unchanged.
+  `census-probe incr --witness` now also measures the indexes. Design note: §6.11 of
+  `docs/superpowers/specs/2026-11-01-context-server-design.md`.
+
 ### Added (context server: a per-revision memo of root witnesses)
 
 - **Explain, prove and digest asked about the same routine in one resident revision now
