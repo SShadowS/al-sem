@@ -1226,7 +1226,7 @@ pub(crate) fn direct_facts_for_routine(
 
 /// A resolved outgoing typed edge (only edges with a `to`). Mirrors al-sem
 /// `TypedOutEdge`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedOutEdge {
     pub(crate) to: String,
     pub(crate) kind: String,
