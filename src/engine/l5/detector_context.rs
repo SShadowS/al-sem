@@ -465,6 +465,9 @@ pub(crate) mod cones_census {
     /// direct facts, built once per non-root SCC.
     pub(crate) static FACTCONE_NANOS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static FACTCONE_CALLS: AtomicU64 = AtomicU64::new(0);
+    /// Σ entries of the built (non-root) fact cones: what a cone store that
+    /// keeps every cone holds (design §6.10).
+    pub(crate) static FACTCONE_ENTRIES: AtomicU64 = AtomicU64::new(0);
     /// `merge_cone` traffic: total merges, and how many hit the tie-break path
     /// that calls `rep_key` TWICE (each call JSON-serializes two fields).
     pub(crate) static MERGE_CALLS: AtomicU64 = AtomicU64::new(0);
@@ -737,10 +740,11 @@ pub(crate) mod cones_census {
             ms(EMIT_NANOS.load(Ordering::Relaxed)),
         );
         eprintln!(
-            "[cones-census]   compose rest: derived_fold={:.1}ms fact_cone={:.1}ms x{}",
+            "[cones-census]   compose rest: derived_fold={:.1}ms fact_cone={:.1}ms x{} entries={}",
             ms(DERIVED_NANOS.load(Ordering::Relaxed)),
             ms(FACTCONE_NANOS.load(Ordering::Relaxed)),
             FACTCONE_CALLS.load(Ordering::Relaxed),
+            FACTCONE_ENTRIES.load(Ordering::Relaxed),
         );
         eprintln!(
             "[cones-census]   compose untimed: rest={:.3}ms pd_solve={:.1}ms x{}",
@@ -1346,6 +1350,7 @@ pub(crate) fn det_cone_inputs_over<'e>(
     resolved: &Model,
     uncertainty: impl IntoIterator<Item = &'e crate::engine::l4::combined_graph::UncertaintyEdge>,
 ) -> DetConeInputs {
+    let _s = crate::engine::perf_trace::span("cone", "cone.direct");
     let ws = &resolved.workspace;
     let mut publisher_events_by_routine: HashMap<String, Vec<&EventSymbol>> = HashMap::new();
     for evt in &resolved.events.graph.events {
@@ -1447,6 +1452,10 @@ pub(crate) fn compose_capabilities(
 pub(crate) struct PdRetained {
     pub digests: HashMap<String, [u8; 32]>,
     pub report: crate::engine::l4::pd_solve::PdSolveReport,
+    /// The cone store (design §6.10), when the composition kept one.
+    pub store: Option<crate::engine::l4::capability_cone::ConeStore>,
+    /// What the walk re-folded and copied.
+    pub cones: crate::engine::l4::capability_cone::ConeReport,
 }
 
 /// [`compose_capabilities`], keeping and reusing the producer solve's inputs
@@ -1512,6 +1521,8 @@ pub(crate) fn compose_capabilities_retained(
         PdRetained {
             digests: outcome.pd_digests,
             report: outcome.pd_report,
+            store: outcome.cone_store,
+            cones: outcome.cone_report,
         },
     )
 }

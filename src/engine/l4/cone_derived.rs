@@ -388,7 +388,10 @@ impl ResBitset {
 /// Workspace-global, lossless `String → u32` interner for cone resource ids.
 /// Serial (the cone walk is serial). Interning ORDER is irrelevant to any output:
 /// every query resolves to `String` and sorts by the resolved string.
-#[derive(Debug, Default)]
+/// (A resident fold's builder starts from a clone of the previous fold's
+/// interner, so the rows it copies keep their ids:
+/// [`ConeDerivedBuilder::continuing`].)
+#[derive(Debug, Default, Clone)]
 pub struct ResInterner {
     by_str: HashMap<String, ResId>,
     strings: Vec<String>,
@@ -493,6 +496,11 @@ impl ConeDerivedStore {
     /// This routine's row, or the empty row when it has none.
     pub fn row(&self, routine_id: &str) -> &ConeDerivedRow {
         self.rows.get(routine_id).unwrap_or(&EMPTY_ROW)
+    }
+
+    /// Whether `routine_id` has a row (an empty one included).
+    pub fn has_row(&self, routine_id: &str) -> bool {
+        self.rows.contains_key(routine_id)
     }
 
     /// True when no row was folded (e.g. a `derived: false` composition).
@@ -858,6 +866,66 @@ pub(crate) struct FoldedRow {
 }
 
 impl ConeDerivedBuilder {
+    /// A builder whose interner continues `old`'s (context-server design
+    /// §6.10, stage 5): every id of `old` names the same resource here, so
+    /// [`ConeDerivedBuilder::copy_row`] copies a row's windows verbatim. New
+    /// resources get new ids; interning order is irrelevant to every output
+    /// ([`ResInterner`]).
+    pub(crate) fn continuing(old: &ConeDerivedStore) -> Self {
+        ConeDerivedBuilder {
+            store: ConeDerivedStore {
+                interner: old.interner.clone(),
+                ..ConeDerivedStore::default()
+            },
+            ..ConeDerivedBuilder::default()
+        }
+    }
+
+    /// Copy `routine_id`'s row from `old` (this builder was made
+    /// [`ConeDerivedBuilder::continuing`] `old`): a resident fold's routine
+    /// whose inputs did not change. `false` when `old` has no row for it.
+    pub(crate) fn copy_row(&mut self, old: &ConeDerivedStore, routine_id: &str) -> bool {
+        debug_assert!(
+            self.store.interner.len() >= old.interner.len(),
+            "copy_row from a store this builder does not continue"
+        );
+        let Some(r) = old.rows.get(routine_id) else {
+            return false;
+        };
+        let s = &mut self.store;
+        let copy = |pool: &mut Vec<ResId>, from: &[ResId], w: &Range<u32>| {
+            let start = pool.len() as u32;
+            pool.extend_from_slice(window(from, w));
+            start..pool.len() as u32
+        };
+        let table_writes_all = copy(
+            &mut s.writes_all_pool,
+            &old.writes_all_pool,
+            &r.table_writes_all,
+        );
+        let physical_table_reads = copy(
+            &mut s.phys_reads_pool,
+            &old.phys_reads_pool,
+            &r.physical_table_reads,
+        );
+        let event_publishes = copy(&mut s.events_pool, &old.events_pool, &r.event_publishes);
+        let start = s.phys_writes_pool.len() as u32;
+        s.phys_writes_pool
+            .extend_from_slice(window(&old.phys_writes_pool, &r.physical_table_writes));
+        let physical_table_writes = start..s.phys_writes_pool.len() as u32;
+        s.rows.insert(
+            routine_id.to_string(),
+            ConeDerivedRow {
+                flags: r.flags,
+                table_writes_all,
+                physical_table_writes,
+                physical_table_reads,
+                event_publishes,
+            },
+        );
+        true
+    }
+
     /// Start a fresh routine (clears the scratch buffers, keeping their capacity).
     pub fn begin_routine(&mut self) {
         self.cur.clear();

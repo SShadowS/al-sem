@@ -712,6 +712,96 @@ row including anchors**: any file in Δ_files marks every id with a row in it.
   tree: `snapshot.derive` 2.9-3.3 s, roots 3.2-3.7 s; prove's det and run
   about 1.5 s): the tree store is the other half of the ≤ 1 s target.
 
+**As built (stage 5b: the cone store and the tree store; branch
+`ctxsrv/stage5b`).**
+
+- *Timers.* Every part of the fold has a span (`cone.direct`, `cone.graph`,
+  `cone.tarjan`, `cone.dedup`, `cone.frames`, `pd.digests`,
+  `cone.member_digests`, `pd.solve` with `pd.copy` / `pd.finalize`,
+  `pd.output_delta`, `cone.walk`, `cone.finish`, `revision.fold`,
+  `revision.seed_release`), and so does every tree section (`tree.base`
+  and its sections; `snapshot.derive` for a view). The earlier "untimed
+  remainder" was the SCC walk itself: 10.1 s of the 12.0 s fold after a body
+  edit (census: singleton walks 6.7 s with their raw scans 2.5 s and raw
+  emission 2.4 s, fact cones 1.9 s, recursive members 1.3 s).
+- *The cone store (§6.10), done.* Kept per SCC, keyed by the member set:
+  an input digest, a product fingerprint, the non-root fact and coverage
+  cones (`Arc`, shared with the next fold). The input digest covers each
+  member's producer-solve digest (rows, frame, typed out-edges), raw direct
+  facts, direct coverage input, unresolved-source status and scope mode;
+  per out-edge the transfer digest (the callee's parameters, read by the
+  publisher ↔ subscriber guard mapping, and the callee's frame); the member
+  order, the recursive and root flags; and each successor's key and
+  fingerprint. The fingerprint hashes every cone entry's representative
+  (full content hash), distance and guard in key order, and the coverage
+  cone; the entry key is not hashed, being a function of the representative
+  and the guard. A reused SCC's members copy their rows: derived rows by
+  window (the new builder continues the previous interner, whose order no
+  output reads), raw entries adopted with the table set they index
+  (`InheritedFacts` segments), coverage records cloned. Δ_pd_output is
+  computed exactly: per routine, the projection (producer, fact, temp
+  state, requirements, seed, distance, first-hop edge) over the states of
+  re-solved and vanished producers, old against new; a member in it
+  re-folds its rows inside a reused SCC. Deviations: (1) memo rows are not
+  kept: a memo row is F over its cone's closed entries, which the
+  fingerprint covers; a re-folded predecessor rebuilds the rows it reads.
+  (2) A root SCC keeps no cones, as before; one that gains a caller is
+  dirty (the root flag is in its digest) and is built then. (3) No
+  persistent maps: the next fold copies the reused rows into its own stores
+  (`cone.walk` 0.18-0.20 s after a body edit, almost all copying). (4)
+  BLAKE3 for the store's digests (SHA-256 over 4.7 M entries cost 2 s of a
+  cold fold). (5) The store is kept under `--low-mem` too.
+- *The tree store (§6.11), done for one revision.* `TreeBase` (identities,
+  typed edges with the skipped-edge keys, call-site resolutions, gaps,
+  coverage, event declarations, root classifications, routine order frames,
+  boundary) is derived once per revision, never carried over; each distinct
+  view is a `Tree(subjects)` artifact (evidence indexes, capability facts,
+  pd arena) over it. `routine_order_frames` moved to the whole sections: its
+  deriver reads rows only, never raw. Deviations: (1) no per-key sections
+  across revisions (operation and call-site evidence, capability facts are
+  derived per view per revision: 0.65 s; the pd projection 0.85-0.92 s);
+  (2) a view's tree holds clones of the whole sections (65 ms), not shared
+  `Arc`s, which would change `CapabilitySnapshot`'s field types at about 65
+  construction and assignment sites; so a revision with one view holds the
+  sections twice. A refresh frees the published revision's trees before it
+  builds.
+- *Measured on CDO* (release-fast census probe with mimalloc, quiet machine
+  unless noted; `--verify` runs: every answer equal to its cold run after B,
+  B, S and after B, S):
+
+  | step | refresh | fold | L4 | tree base | explain | prove | digest | query |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|
+  | cold | 18.0-18.8 s | 14.3-14.9 s | 0.57-0.59 s | 1.47 s | 6.1-6.3 s | 5.7-6.1 s | 3.2-3.4 s | 40 ms |
+  | B | 3.1-3.3 s | 2.16-2.25 s | 0.60-0.67 s | 1.45 s | 6.0-6.1 s | 5.8-6.3 s | 3.5 s | 37 ms |
+  | B (no Δ) | 3.3 s | 1.97 s | 0.63 s | 1.43 s | 5.9 s | 5.9 s | 3.5 s | 37 ms |
+  | S | 10.4-11.2 s | 2.27-2.33 s | 0.64 s | 1.46-1.55 s | 6.3 s | 5.9-6.2 s | 3.3-3.8 s | 36 ms |
+  | P | 19.5 s | 15.2 s | 0.58 s | 1.50 s | 6.2 s | 5.9 s | 3.5 s | 40 ms |
+
+  Before stage 5b (same machine): fold after B 12.0 s, explain 7.5-7.8 s,
+  prove 8.7-9.1 s, digest 6.3-6.5 s. Resident memory (no budget enforced by
+  the probe): default RSS 6.0 GB after B, peak 6.34 GB (6 GiB budget: 6.44
+  GB; the cone store holds 4.73 M entries, +0.6 GB; a revision's trees +0.6
+  GB until evicted or the next refresh); `--low-mem` 4.8 / 5.2 GB (5.9 GB
+  peak across S).
+- *The ≤ 1 s hypothesis is missed.* "Analysis prepared" after a non-hub
+  body edit is fold 2.2 s + L4 0.6 s = 2.8 s, and 4.2-4.4 s with the tree
+  base. The fold after a body edit: `pd.solve` 0.95-1.18 s (copy 0.32 s,
+  canonical finalize 0.58-0.74 s), `cone.direct` 0.33 s (every routine's
+  direct facts), `cone.walk` 0.19 s, `pd.digests` 0.16 s, graph, Tarjan and
+  dedup 0.18 s, `pd.output_delta` 0.02-0.08 s, the rest under 0.1 s. L4:
+  row digests 0.17 s of 0.6 s. The tree base is rebuilt whole by the rule
+  (typed edges 0.52 s, call-site resolutions 0.48 s, order frames 0.22 s).
+  A heavy answer's own work is now dominated by the root witnesses
+  (`digest.roots` 2.9-3.2 s per answer, recomputed by each of explain,
+  prove and digest for the same root), then `explain.indexes` 0.9 s and
+  prove's det and run about 1.5 s.
+- *Not built:* per-key tree sections carried across revisions; shared
+  (`Arc`) whole sections inside a view's tree; a per-producer merge in place
+  of the global canonical re-sort (0.58-0.74 s); parallel fresh-producer
+  solving for cold and P; incremental direct facts; a per-revision memo of
+  root witnesses (not in this design; the largest remaining per-answer
+  cost).
+
 ### 6.12 Explain
 
 Landed: grouping by equal `tests`, repeatable `--routine` (sorted distinct roots,

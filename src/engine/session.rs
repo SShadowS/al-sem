@@ -891,6 +891,34 @@ pub(crate) fn read_tree(
     effects: &mut BTreeMap<JobId, DigestEffects>,
     tree_reads: &mut BTreeMap<JobId, TreeReadOut>,
 ) {
+    if let TreeRead::Inventory(read) = &trees[group[0]].1.read {
+        let (job, _) = &trees[group[0]];
+        let t = tree.take().expect("tree filled above");
+        let out = read_inventory(t, read, target);
+        tree_reads.insert(*job, TreeReadOut::Inventory(out));
+        return;
+    }
+    read_tree_shared(
+        tree.as_ref().expect("tree filled above"),
+        trees,
+        group,
+        target,
+        effects,
+        tree_reads,
+    );
+}
+
+/// [`read_tree`] off a shared tree (a resident revision's tree store,
+/// design §6.11): the reads leave it in place; the inventory read, which
+/// consumes a tree, reads a copy.
+pub(crate) fn read_tree_shared(
+    tree: &CapabilitySnapshot,
+    trees: &[(JobId, TreeDemand)],
+    group: &[usize],
+    target: &AnalysisTarget,
+    effects: &mut BTreeMap<JobId, DigestEffects>,
+    tree_reads: &mut BTreeMap<JobId, TreeReadOut>,
+) {
     let model = target.resolved();
     // No tree read asks `primary`: digest, prove and the query ask their
     // roots, inventory nothing (#277 D5.1's table).
@@ -901,7 +929,7 @@ pub(crate) fn read_tree(
     let roots = &demand.subjects.ids;
     match &demand.read {
         TreeRead::Effects => {
-            let t = tree.as_ref().expect("tree filled above");
+            let t = tree;
             let roots: Vec<Vec<String>> = group
                 .iter()
                 .map(|&m| trees[m].1.subjects.ids.iter().cloned().collect())
@@ -921,13 +949,11 @@ pub(crate) fn read_tree(
             }
         }
         TreeRead::FingerprintQuery(read) => {
-            let t = tree.as_ref().expect("tree filled above");
-            let out = read_fingerprint_query(t, read, roots, model);
+            let out = read_fingerprint_query(tree, read, roots, model);
             tree_reads.insert(*job, TreeReadOut::FingerprintQuery(out));
         }
         TreeRead::Inventory(read) => {
-            let t = tree.take().expect("tree filled above");
-            let out = read_inventory(t, read, target);
+            let out = read_inventory(tree.clone(), read, target);
             tree_reads.insert(*job, TreeReadOut::Inventory(out));
         }
     }

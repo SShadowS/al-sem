@@ -483,6 +483,41 @@ fn eviction_skips_keys_pinned_for_assembly() {
     assert!(s.get(&K::A).is_some());
 }
 
+/// An eviction that evicts nothing (every key pinned) publishes nothing: a
+/// request reading the current snapshot stays its only reader, so a later
+/// reclaim can still free an unpinned value. Found by the tree store (stage
+/// 5b): a reclaim tried the request's own pinned tree first, which used to
+/// republish an equal snapshot, so every value had two owners and the next
+/// kind's unpinned run could not be evicted.
+///
+/// DISCRIMINATION (2026-11-03): removing `evict`'s early return for an empty
+/// eviction fails "the ready snapshot is still the current one" (and the
+/// budget test `a_fill_that_does_not_fit_evicts_in_order...`, whose reclaim
+/// then evicts nothing); reverted, green.
+#[test]
+fn an_empty_eviction_publishes_nothing() {
+    let store: Store<K, V> = Store::new();
+    let n = AtomicUsize::new(0);
+    let ready = store
+        .ensure_prepared(
+            &needs(&[K::A, K::X]),
+            &no_estimate,
+            &numbered(&n),
+            &Control::unreserved(),
+        )
+        .unwrap();
+    let held = store.hold(&[K::A]);
+    assert_eq!(store.evict_unheld(&[K::A]), 0, "A is pinned");
+    assert!(
+        Arc::ptr_eq(&ready, &store.load()),
+        "the ready snapshot is still the current one"
+    );
+    // The request still reads `ready`, which IS the current snapshot: X has
+    // one owner and a reclaim frees it.
+    assert_eq!(store.evict_unheld(&[K::X]), 1, "then the unpinned X goes");
+    drop((ready, held));
+}
+
 /// A reclaim evicts only what no request holds: a value in a ready
 /// snapshot a request still computes over stays (evicting it would free
 /// nothing until the request ends); once released it goes. Found on CDO:

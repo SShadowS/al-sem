@@ -1826,6 +1826,14 @@ fn candidate_wins(dist: usize, edge: &TypedOutEdge, cur: Option<(usize, &TypedOu
 /// first read and freed with the cone.
 type ClosedRowMemo = HashMap<usize, FoldedRow>;
 
+/// The fact cones a walk reads, by SCC index. Shared (`Arc`): a resident
+/// fold's cone store keeps every non-root cone for the next revision, which
+/// reads an unchanged SCC's cone instead of rebuilding it (design §6.10).
+type ConeMap = HashMap<usize, Arc<ConeFacts>>;
+
+/// The coverage cones a walk reads, by SCC index (shared like [`ConeMap`]).
+type CovMap = HashMap<usize, Arc<CoverageCone>>;
+
 /// Singleton non-recursive fast path. Mirrors `inheritedFactsForSingleton`.
 ///
 /// ⟨C1⟩ `best` holds BORROWED representatives/edges (it used to clone both on
@@ -1842,7 +1850,7 @@ fn inherited_facts_for_singleton<'g>(
     subject: &str,
     g: &'g TypedEdgeGraph,
     scc_id_by_routine: &HashMap<String, usize>,
-    cones: &'g HashMap<usize, ConeFacts>,
+    cones: &'g ConeMap,
     caller: Option<&ModelRoutine>,
     caller_frame: Option<&super::param_guard::FrameGuards>,
     routines_by_id: &HashMap<&str, &ModelRoutine>,
@@ -2151,7 +2159,7 @@ fn inherited_facts_by_bfs<'g>(
     g: &'g TypedEdgeGraph,
     direct: &'g RoutineDirectFacts,
     scc_id_by_routine: &HashMap<String, usize>,
-    cones: &'g HashMap<usize, ConeFacts>,
+    cones: &'g ConeMap,
     own: &'g [super::pd_solve::ResolvedEntry<'g>],
 ) -> Vec<(&'g Arc<CapabilityFact>, &'g TypedOutEdge)> {
     let my_scc = scc_id_by_routine.get(subject).copied();
@@ -2221,7 +2229,7 @@ fn inherited_facts_by_bfs<'g>(
             );
             let ycone = their_scc.and_then(|yj| cones.get(&yj));
             if let Some(ycone) = ycone {
-                for (key, entry) in ycone {
+                for (key, entry) in ycone.iter() {
                     // No frame here (recursive subject): a guard is dropped,
                     // and the fact keeps its one base key.
                     let key = base_key_of(key, entry);
@@ -2310,7 +2318,7 @@ fn build_succ_sccs(
 fn fact_cone_for_scc(
     members: &[String],
     succ_ids: &BTreeSet<usize>,
-    fact_cones: &HashMap<usize, ConeFacts>,
+    fact_cones: &ConeMap,
     direct: &RoutineDirectFacts,
     anchor: Option<GuardAnchor<'_>>,
 ) -> ConeFacts {
@@ -2440,7 +2448,7 @@ fn fact_cone_for_scc(
              provably non-root, so this cone should have been built and not yet freed"
         );
         if let Some(yc) = fact_cones.get(y) {
-            for (key, entry) in yc {
+            for (key, entry) in yc.iter() {
                 if anchor.is_some() && frame_bound(entry) {
                     continue; // carried per edge above
                 }
@@ -2519,7 +2527,7 @@ struct GuardAnchor<'a> {
 fn coverage_cone_for_scc(
     members: &[String],
     succ_ids: &BTreeSet<usize>,
-    cov_cones: &HashMap<usize, CoverageCone>,
+    cov_cones: &CovMap,
     cov: &RoutineDirectCoverage,
     unresolved_sources: &BTreeSet<String>,
 ) -> CoverageCone {
@@ -2664,16 +2672,312 @@ pub(crate) mod raw_fold_hook {
     }
 }
 
-/// What [`compose_inherited_cones`] returns: coverage, raw, the derived store,
-/// the producer arena and the stats.
-type ComposedCones = (
-    HashMap<String, CoverageRecord>,
-    InheritedFacts,
-    ConeDerivedStore,
-    super::pd_solve::ConeArena,
-    ComposeStats,
-    super::pd_solve::PdSolveReport,
-);
+// ===========================================================================
+// THE CONE STORE (context-server design §6.10, stage 5)
+// ===========================================================================
+
+/// A 32-byte digest (BLAKE3): the store's digests are compared only with
+/// each other, inside one resident session, never serialized.
+type Digest32 = [u8; 32];
+
+/// An incremental BLAKE3 over length-delimited parts. (BLAKE3, not SHA-256:
+/// a cold fold fingerprints every non-root cone, 4.7 M entries on CDO, and
+/// SHA-256 over them cost about 2 s of the cold fold.)
+struct Hasher(blake3::Hasher);
+
+impl Hasher {
+    fn new() -> Self {
+        Hasher(blake3::Hasher::new())
+    }
+    fn bytes(&mut self, b: &[u8]) -> &mut Self {
+        self.0.update(&(b.len() as u64).to_le_bytes());
+        self.0.update(b);
+        self
+    }
+    fn str(&mut self, s: &str) -> &mut Self {
+        self.bytes(s.as_bytes())
+    }
+    fn u64(&mut self, v: u64) -> &mut Self {
+        self.0.update(&v.to_le_bytes());
+        self
+    }
+    /// `v`'s `Debug` text, streamed into the hash (length-delimited by a
+    /// terminator the text cannot contain unescaped).
+    fn debug(&mut self, v: &impl std::fmt::Debug) -> &mut Self {
+        use std::fmt::Write;
+        struct W<'h>(&'h mut blake3::Hasher);
+        impl Write for W<'_> {
+            fn write_str(&mut self, s: &str) -> std::fmt::Result {
+                self.0.update(s.as_bytes());
+                Ok(())
+            }
+        }
+        write!(W(&mut self.0), "{v:?}").expect("hashing never fails");
+        self.0.update(&[0xff]);
+        self
+    }
+    fn finish(&mut self) -> Digest32 {
+        *std::mem::take(&mut self.0).finalize().as_bytes()
+    }
+}
+
+/// The full content hash of a representative fact.
+fn rep_digest(f: &CapabilityFact) -> Digest32 {
+    Hasher::new().debug(f).finish()
+}
+
+/// What a resident fold keeps of one SCC for the next revision's fold.
+#[derive(Clone)]
+struct SccRecord {
+    /// Everything the SCC's products and its members' rows read, besides
+    /// each member's own producer-solve entries ([`scc_input_digest`]).
+    input: Digest32,
+    /// The product fingerprint ([`Fingerprints::of`]): what a predecessor
+    /// reads of this SCC. Zero for a root (no predecessor reads it).
+    fingerprint: Digest32,
+    /// The fact cone; `None` for a root SCC (never built, as in a one-shot
+    /// composition).
+    fact: Option<Arc<ConeFacts>>,
+    /// The coverage cone; `None` for a root SCC.
+    cov: Option<Arc<CoverageCone>>,
+}
+
+/// The per-SCC cone store of one resident fold (design §6.10): every SCC's
+/// input digest, product fingerprint and non-root cones, keyed by the SCC's
+/// member set. The next revision's fold re-folds an SCC only when its input
+/// digest differs — a member's facts, coverage input, rows, frame or typed
+/// out-edges, an out-edge's transfer digest, its member order, or a
+/// successor's product fingerprint (cut-off: an SCC re-folded to equal
+/// products leaves its predecessors clean) — and copies every other SCC's
+/// cones and its members' rows (derived row, raw entry, coverage record)
+/// from the previous fold. A member in Δ_pd_output (its own producer-solve
+/// entries changed) has its rows re-folded regardless.
+///
+/// The memo rows are not kept: a memo row is a function of its SCC's fact
+/// cone (F over the cone's closed entries), which the fingerprint covers
+/// entry by entry; a re-folded predecessor rebuilds the memo rows it reads.
+#[derive(Default)]
+pub struct ConeStore {
+    sccs: HashMap<Digest32, SccRecord>,
+}
+
+impl ConeStore {
+    /// SCCs held, and how many of them carry a fact cone.
+    pub fn len(&self) -> (usize, usize) {
+        (
+            self.sccs.len(),
+            self.sccs.values().filter(|r| r.fact.is_some()).count(),
+        )
+    }
+
+    /// Whether the store holds nothing.
+    pub fn is_empty(&self) -> bool {
+        self.sccs.is_empty()
+    }
+
+    /// Σ entries over the kept fact cones (memory accounting).
+    pub fn cone_entries(&self) -> usize {
+        self.sccs
+            .values()
+            .filter_map(|r| r.fact.as_deref())
+            .map(BTreeMap::len)
+            .sum()
+    }
+}
+
+/// The previous resident fold, read by the next one's walk (design §6.10).
+pub struct ConeSeed<'a> {
+    pub store: &'a ConeStore,
+    pub derived: &'a ConeDerivedStore,
+    pub raw: &'a InheritedFacts,
+    pub coverage: &'a HashMap<String, CoverageRecord>,
+}
+
+/// What a re-folding walk did (`census-probe incr`, the tests).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ConeReport {
+    /// SCCs of the walk.
+    pub sccs: usize,
+    /// SCCs whose products were re-folded (input digest changed or new).
+    pub refolded: usize,
+    /// Re-folded SCCs whose product fingerprint came out equal (a cut-off).
+    pub cut_off: usize,
+    /// Members whose rows were re-folded inside a reused SCC because their
+    /// own producer-solve entries changed (Δ_pd_output).
+    pub pd_rows: usize,
+    /// Routines in Δ_pd_output.
+    pub pd_delta: usize,
+    /// Members whose rows were copied from the previous fold.
+    pub copied_rows: usize,
+}
+
+/// The key of an SCC: its member set (sorted).
+fn scc_key(members: &[String]) -> Digest32 {
+    let mut sorted: Vec<&str> = members.iter().map(String::as_str).collect();
+    sorted.sort_unstable();
+    let mut h = Hasher::new();
+    for m in sorted {
+        h.str(m);
+    }
+    h.finish()
+}
+
+/// Each routine's own inputs to the walk, hashed (design §6.10 "Dirty"):
+/// its producer-solve digest (every model row of the id, its guard frame,
+/// its typed out-edges: [`pd_input_digests`]), its raw direct facts, its
+/// direct coverage input, whether it is an unresolved object-run source, its
+/// scope mode, and per out-edge the **transfer digest** — what the guard
+/// step reads on the callee across that edge: the callee's parameters
+/// (name, index, type, by-ref; read by the publisher ↔ subscriber mapping
+/// on an `event-dispatch` edge) and the callee's guard frame. The caller's
+/// site requirements and argument bindings are in its own rows and frame.
+/// A validity rule, never subject to cut-off. Hashed in parallel.
+#[allow(clippy::too_many_arguments)]
+fn member_digests(
+    g: &TypedEdgeGraph,
+    direct_raw: &HashMap<String, Vec<CapabilityFact>>,
+    cov: &RoutineDirectCoverage,
+    frames: &HashMap<String, super::param_guard::FrameGuards>,
+    routines_by_id: &HashMap<&str, &ModelRoutine>,
+    pd_digests: &HashMap<String, Digest32>,
+    routine_ids: &BTreeSet<String>,
+    scope: &ConeScope,
+) -> HashMap<String, Digest32> {
+    use rayon::prelude::*;
+    let _s = crate::engine::perf_trace::span("cone", "cone.member_digests");
+    let frame_digest = |id: &str| {
+        frames.get(id).map(|f| {
+            let sites: BTreeMap<&String, &Vec<super::param_guard::Req>> =
+                f.by_site.iter().collect();
+            Hasher::new().debug(&(&f.usable, sites)).finish()
+        })
+    };
+    let ids: BTreeSet<&str> = g.nodes.iter().map(String::as_str).collect();
+    ids.into_par_iter()
+        .map(|id| {
+            let mut h = Hasher::new();
+            match pd_digests.get(id) {
+                Some(d) => h.bytes(d),
+                None => h.bytes(&[]),
+            };
+            h.debug(&direct_raw.get(id));
+            match cov.get(id) {
+                Some(c) => {
+                    h.u64(1).str(&c.direct_status).debug(&c.reasons);
+                }
+                None => {
+                    h.u64(0);
+                }
+            }
+            let mode = scope.member(id);
+            h.u64(u64::from(g.unresolved_sources.contains(id)))
+                .u64(u64::from(routine_ids.contains(id)))
+                .u64(u64::from(mode.wants_derived()))
+                .u64(u64::from(mode.wants_raw()));
+            for e in g.outgoing.get(id).map_or(&[][..], Vec::as_slice) {
+                h.str(&e.sort_key);
+                let callee = routines_by_id.get(e.to.as_str()).copied();
+                h.u64(u64::from(callee.is_some()));
+                if e.kind == "event-dispatch"
+                    && let Some(c) = callee
+                {
+                    h.debug(&c.parameters);
+                }
+                h.debug(&frame_digest(&e.to));
+            }
+            (id.to_string(), h.finish())
+        })
+        .collect()
+}
+
+/// The input digest of SCC `members` (in walk order): its shape, its
+/// members' digests, and each successor's key and product fingerprint
+/// (sorted by key: the walk's successor order is storage).
+fn scc_input_digest(
+    members: &[String],
+    recursive: bool,
+    root: bool,
+    member_digest: &HashMap<String, Digest32>,
+    succ: &mut [(Digest32, Digest32)],
+) -> Digest32 {
+    let mut h = Hasher::new();
+    h.u64(u64::from(recursive)).u64(u64::from(root));
+    for m in members {
+        h.str(m);
+        match member_digest.get(m) {
+            Some(d) => h.bytes(d),
+            None => h.bytes(&[]),
+        };
+    }
+    succ.sort_unstable();
+    for (k, f) in succ.iter() {
+        h.bytes(k).bytes(f);
+    }
+    h.finish()
+}
+
+/// Product fingerprints, with a per-walk memo of each representative's full
+/// content hash (by `Arc` address; the memo holds the `Arc`, so an address
+/// cannot be reused while it lives).
+#[derive(Default)]
+struct Fingerprints {
+    reps: HashMap<*const CapabilityFact, (Arc<CapabilityFact>, Digest32)>,
+}
+
+impl Fingerprints {
+    /// The product fingerprint (design §6.10): every fact-cone entry's
+    /// representative (its full content hash, which `rep_key` is a function
+    /// of), `dist` and guard, in key order; then the coverage cone. The
+    /// entry's key is not hashed: it is a function of the representative
+    /// (`inherited_fact_key`) and the guard (`guarded_key`).
+    fn of(&mut self, fact: &ConeFacts, cov: &CoverageCone) -> Digest32 {
+        let mut h = Hasher::new();
+        h.u64(fact.len() as u64);
+        for e in fact.values() {
+            let rep = &self
+                .reps
+                .entry(Arc::as_ptr(&e.rep))
+                .or_insert_with(|| (Arc::clone(&e.rep), rep_digest(&e.rep)))
+                .1;
+            h.bytes(rep).u64(e.dist as u64);
+            match &e.guard {
+                Some(g) => {
+                    h.u64(g.reqs.len() as u64);
+                    for (i, v) in &g.reqs {
+                        h.u64(u64::from(*i)).u64(u64::from(*v));
+                    }
+                }
+                None => {
+                    h.u64(u64::MAX);
+                }
+            }
+        }
+        h.u64(u64::from(cov.complete))
+            .debug(&cov.reasons)
+            .debug(&cov.unknown_targets);
+        h.finish()
+    }
+}
+
+/// A walk that keeps a cone store (a resident fold): every routine's member
+/// digest and the previous fold, if any.
+struct KeepCones<'a> {
+    member_digest: HashMap<String, Digest32>,
+    seed: Option<ConeSeed<'a>>,
+}
+
+/// What [`compose_inherited_cones`] returns.
+struct ComposedCones {
+    coverage: HashMap<String, CoverageRecord>,
+    raw: InheritedFacts,
+    derived: ConeDerivedStore,
+    arena: super::pd_solve::ConeArena,
+    stats: ComposeStats,
+    pd_report: super::pd_solve::PdSolveReport,
+    /// The cone store, when the walk was asked to keep one.
+    store: Option<ConeStore>,
+    cone_report: ConeReport,
+}
 
 /// Compute capabilityFactsInherited + coverage for EVERY routine via a single
 /// fused bottom-up SCC-cone pass. Mirrors `composeInheritedCones`. The engine
@@ -2701,8 +3005,13 @@ fn compose_inherited_cones(
     frames: &HashMap<String, super::param_guard::FrameGuards>,
     scope: &ConeScope,
     pd_reuse: Option<&super::pd_solve::PdReuse<'_>>,
+    keep: Option<KeepCones<'_>>,
 ) -> ComposedCones {
     let mut stats = ComposeStats::default();
+    let mut cone_report = ConeReport {
+        sccs: scc.sccs.len(),
+        ..ConeReport::default()
+    };
     // #160 §4.1.1: the per-call untimed remainder. Entry snapshot only under
     // the census (one OnceLock read otherwise); the function has one exit.
     let rest_entry = crate::engine::l5::detector_context::cones_census::enabled().then(|| {
@@ -2715,7 +3024,12 @@ fn compose_inherited_cones(
     // Cone-memory step 1: the raw half is interned as 8-byte refs into shared
     // rep / hop / subject tables; no inherited `CapabilityFact` is built.
     let mut raw_out = InheritedBuilder::default();
-    let mut derived = ConeDerivedBuilder::default();
+    // The previous fold, when this walk re-folds only what changed (§6.10).
+    let seed: Option<&ConeSeed<'_>> = keep.as_ref().and_then(|k| k.seed.as_ref());
+    let mut derived = match seed {
+        Some(s) => ConeDerivedBuilder::continuing(s.derived),
+        None => ConeDerivedBuilder::default(),
+    };
 
     // #69 D1: the producers (raw direct facts, in node order) leave the shared
     // cone and are resolved per routine by the transitive producer solve.
@@ -2755,9 +3069,21 @@ fn compose_inherited_cones(
     // A span beside the census timer (context-server design r3 §6.10: the
     // whole re-solve's cost decides whether the per-producer rule ships).
     let pd_span = crate::engine::perf_trace::span("cone", "pd.solve");
-    let (arena, resolved, pd_report) =
-        super::pd_solve::solve_seeded(producers, g, routines_by_id, frames, pd_reuse);
+    let (arena, resolved, pd_report, fresh) =
+        super::pd_solve::solve_seeded_fresh(producers, g, routines_by_id, frames, pd_reuse);
     drop(pd_span);
+    // Δ_pd_output (§6.10): the routines whose own producer-solve entries
+    // may have changed. Their rows are re-folded even inside a reused SCC.
+    // Without the previous arena every routine counts as changed.
+    let pd_delta: Option<HashSet<Arc<str>>> = match (seed, pd_reuse) {
+        (Some(_), Some(r)) => {
+            let _s = crate::engine::perf_trace::span("cone", "pd.output_delta");
+            Some(super::pd_solve::pd_output_delta(r.old, &arena, &fresh))
+        }
+        _ => None,
+    };
+    drop(fresh);
+    cone_report.pd_delta = pd_delta.as_ref().map_or(0, HashSet::len);
     crate::engine::l5::detector_context::cones_census::add_since(
         &crate::engine::l5::detector_context::cones_census::PD_SOLVE_NANOS,
         _t_pd,
@@ -2768,6 +3094,9 @@ fn compose_inherited_cones(
     );
     let own_entries = |m: &str| resolved.get(m).map_or(&[][..], Vec::as_slice);
 
+    // The SCC walk (fact and coverage cones, memo rows, derived rows, raw
+    // emission) under one span, the rest of the fold under their own.
+    let walk_span = crate::engine::perf_trace::span("cone", "cone.walk");
     let succ_sccs = build_succ_sccs(g, &scc.sccs, &scc.scc_id_by_routine);
     let mut remaining_uses: Vec<usize> = scc.sccs.iter().map(|_| 0usize).collect();
     for set in &succ_sccs {
@@ -2776,10 +3105,19 @@ fn compose_inherited_cones(
         }
     }
 
-    let mut fact_cones: HashMap<usize, ConeFacts> = HashMap::new();
-    let mut cov_cones: HashMap<usize, CoverageCone> = HashMap::new();
+    let mut fact_cones: ConeMap = HashMap::new();
+    let mut cov_cones: CovMap = HashMap::new();
     // #160 step 7b §4.4: a memo row lives exactly as long as its cone.
     let mut memo: ClosedRowMemo = HashMap::new();
+    // §6.10: the cone store this walk keeps, and per SCC index its key and
+    // product fingerprint (read by its predecessors' input digests).
+    let mut store = ConeStore::default();
+    let (mut scc_keys, mut scc_fps): (Vec<Digest32>, Vec<Digest32>) = if keep.is_some() {
+        (vec![[0; 32]; scc.sccs.len()], vec![[0; 32]; scc.sccs.len()])
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let mut fingerprints = Fingerprints::default();
 
     let empty_succ: BTreeSet<usize> = BTreeSet::new();
     for i in 0..scc.sccs.len() {
@@ -2817,7 +3155,51 @@ fn compose_inherited_cones(
         // every predecessor has already run and already read whatever this map
         // held, so skipping stays sound.)
         let root_scc = remaining_uses[i] == 0;
-        if !root_scc {
+        // §6.10: this SCC's record in the previous fold, reused when its
+        // input digest is unchanged and the previous fold holds every row
+        // its members need (a scope change is in the digest, so the check is
+        // a guard, not a rule).
+        let (key, input) = match &keep {
+            Some(k) => {
+                let mut succ: Vec<(Digest32, Digest32)> = succ_ids
+                    .iter()
+                    .map(|y| (scc_keys[*y], scc_fps[*y]))
+                    .collect();
+                (
+                    scc_key(&scc_entry.members),
+                    scc_input_digest(
+                        &scc_entry.members,
+                        scc_entry.recursive,
+                        root_scc,
+                        &k.member_digest,
+                        &mut succ,
+                    ),
+                )
+            }
+            None => ([0; 32], [0; 32]),
+        };
+        let old_record = seed.and_then(|s| s.store.sccs.get(&key));
+        let reused: Option<&SccRecord> = old_record.filter(|r| {
+            let s = seed.expect("a record comes from a seed");
+            r.input == input
+                && (root_scc || (r.fact.is_some() && r.cov.is_some()))
+                && scc_entry.members.iter().all(|m| {
+                    let mode = scope.member(m);
+                    !routine_ids.contains(m)
+                        || (s.coverage.contains_key(m.as_str())
+                            && (!mode.wants_derived() || s.derived.has_row(m))
+                            && (!mode.wants_raw() || s.raw.contains_key(m)))
+                })
+        });
+        // A member's rows are re-folded when its SCC is, or when its own
+        // producer-solve entries changed (Δ_pd_output).
+        let refold = |m: &str| reused.is_none() || pd_delta.as_ref().is_none_or(|d| d.contains(m));
+        if let Some(old) = reused {
+            if !root_scc {
+                fact_cones.insert(i, Arc::clone(old.fact.as_ref().expect("checked above")));
+                cov_cones.insert(i, Arc::clone(old.cov.as_ref().expect("checked above")));
+            }
+        } else if !root_scc {
             let _t_fc = crate::engine::l5::detector_context::cones_census::start();
             let anchor = match scc_entry.members.as_slice() {
                 [m] if !scc_entry.recursive => Some(GuardAnchor {
@@ -2832,7 +3214,11 @@ fn compose_inherited_cones(
             };
             let fcone =
                 fact_cone_for_scc(&scc_entry.members, succ_ids, &fact_cones, direct, anchor);
-            fact_cones.insert(i, fcone);
+            crate::engine::l5::detector_context::cones_census::add_gated(
+                &crate::engine::l5::detector_context::cones_census::FACTCONE_ENTRIES,
+                fcone.len() as u64,
+            );
+            fact_cones.insert(i, Arc::new(fcone));
             crate::engine::l5::detector_context::cones_census::add_since(
                 &crate::engine::l5::detector_context::cones_census::FACTCONE_NANOS,
                 _t_fc,
@@ -2842,23 +3228,55 @@ fn compose_inherited_cones(
                 1,
             );
         }
-        // The coverage cone is ALWAYS computed — `ccone` is what this SCC's own
-        // members' `CoverageRecord`s are built from below — but a root's copy is
-        // never published for the same reason.
-        let _t_cov = crate::engine::l5::detector_context::cones_census::start();
-        let ccone = coverage_cone_for_scc(
-            &scc_entry.members,
-            succ_ids,
-            &cov_cones,
-            cov,
-            &g.unresolved_sources,
-        );
-        crate::engine::l5::detector_context::cones_census::add_since(
-            &crate::engine::l5::detector_context::cones_census::COVERAGE_NANOS,
-            _t_cov,
-        );
-        if !root_scc {
-            cov_cones.insert(i, ccone.clone());
+        // The coverage cone is computed for every re-folded SCC — `ccone` is
+        // what this SCC's own members' `CoverageRecord`s are built from below
+        // — but a root's copy is never published for the same reason. A
+        // reused SCC's members copy their records.
+        let ccone: Option<Arc<CoverageCone>> = if reused.is_some() {
+            None
+        } else {
+            let _t_cov = crate::engine::l5::detector_context::cones_census::start();
+            let ccone = Arc::new(coverage_cone_for_scc(
+                &scc_entry.members,
+                succ_ids,
+                &cov_cones,
+                cov,
+                &g.unresolved_sources,
+            ));
+            crate::engine::l5::detector_context::cones_census::add_since(
+                &crate::engine::l5::detector_context::cones_census::COVERAGE_NANOS,
+                _t_cov,
+            );
+            if !root_scc {
+                cov_cones.insert(i, Arc::clone(&ccone));
+            }
+            Some(ccone)
+        };
+        // The record this fold keeps (§6.10), and the fingerprint its
+        // predecessors' input digests read.
+        if keep.is_some() {
+            let fingerprint = match (reused, &ccone) {
+                (Some(old), _) => old.fingerprint,
+                (None, Some(cc)) if !root_scc => fingerprints.of(&fact_cones[&i], cc),
+                _ => [0; 32],
+            };
+            if reused.is_none() {
+                cone_report.refolded += 1;
+                if !root_scc && old_record.is_some_and(|r| r.fingerprint == fingerprint) {
+                    cone_report.cut_off += 1;
+                }
+            }
+            scc_keys[i] = key;
+            scc_fps[i] = fingerprint;
+            store.sccs.insert(
+                key,
+                SccRecord {
+                    input,
+                    fingerprint,
+                    fact: (!root_scc).then(|| Arc::clone(&fact_cones[&i])),
+                    cov: (!root_scc).then(|| Arc::clone(&cov_cones[&i])),
+                },
+            );
         }
 
         crate::engine::l5::detector_context::cones_census::max(
@@ -2905,7 +3323,13 @@ fn compose_inherited_cones(
         // by every member's derived fold. A non-root borrows its fact cone
         // (built above, freed after the member loop); a root, whose cone is
         // never built, gets the same build here, dropped after the loop.
-        let use_set = recursive && emitted > 0 && scope.derived;
+        let use_set = recursive
+            && emitted > 0
+            && scope.derived
+            && scc_entry
+                .members
+                .iter()
+                .any(|m| routine_ids.contains(m) && refold(m));
         let _t_set = use_set
             .then(crate::engine::l5::detector_context::cones_census::start)
             .flatten();
@@ -2941,9 +3365,33 @@ fn compose_inherited_cones(
                 continue;
             }
             let mode = scope.member(m);
+            // A member's coverage record: from this walk's coverage cone, or
+            // the previous fold's when its SCC was reused (the record reads
+            // only the member's direct coverage and its SCC's coverage cone,
+            // both in the input digest).
+            let record = |m: &str| match &ccone {
+                Some(cc) => coverage_record(m, cov, cc),
+                None => seed.expect("a reused SCC has a seed").coverage[m].clone(),
+            };
+            if !refold(m) {
+                // §6.10: nothing this member's rows read changed.
+                let s = seed.expect("a reused SCC has a seed");
+                coverage_out.insert(m.clone(), record(m));
+                if mode.wants_derived() {
+                    derived.copy_row(s.derived, m);
+                }
+                if mode.wants_raw() {
+                    raw_out.adopt(s.raw, m);
+                }
+                cone_report.copied_rows += 1;
+                continue;
+            }
+            if reused.is_some() {
+                cone_report.pd_rows += 1;
+            }
             if !mode.wants_derived() && !mode.wants_raw() {
                 // Neither half: no walk, singleton or BFS (D1); coverage only.
-                coverage_out.insert(m.clone(), coverage_record(m, cov, &ccone));
+                coverage_out.insert(m.clone(), record(m));
                 continue;
             }
             if mode.wants_derived() {
@@ -3059,7 +3507,7 @@ fn compose_inherited_cones(
             #[cfg(test)]
             let inherited = raw_fold_hook::offer(m, inherited, raw_out.tables(), direct_raw.get(m));
             let _t_emit = crate::engine::l5::detector_context::cones_census::start();
-            coverage_out.insert(m.clone(), coverage_record(m, cov, &ccone));
+            coverage_out.insert(m.clone(), record(m));
             // Every member in raw scope gets an entry, an empty one included:
             // "composed, nothing inherited" is not "never composed".
             if mode.wants_raw() {
@@ -3109,6 +3557,7 @@ fn compose_inherited_cones(
         }
     }
 
+    drop(walk_span);
     // ⟨C1 Task 4⟩ Both maps MUST be empty here. Every non-root SCC's cone is
     // refcount-freed by its last predecessor (each of its predecessors runs
     // exactly once and decrements exactly once, so the counter always reaches
@@ -3139,7 +3588,7 @@ fn compose_inherited_cones(
         let mut fc_entries: u64 = 0;
         let mut fc_bytes: u64 = 0;
         for cone in fact_cones.values() {
-            for (key, entry) in cone {
+            for (key, entry) in cone.iter() {
                 fc_entries += 1;
                 fc_bytes += key.len() as u64
                     + std::mem::size_of::<ConeFactEntry>() as u64
@@ -3191,14 +3640,22 @@ fn compose_inherited_cones(
             std::sync::atomic::Ordering::Relaxed,
         );
     }
-    (
-        coverage_out,
-        raw_out.finish(),
-        derived.finish(),
+    let s_finish = crate::engine::perf_trace::span("cone", "cone.finish");
+    let raw = raw_out.finish();
+    let derived = derived.finish();
+    // The producer solve's per-routine entry lists, freed inside the span.
+    drop(resolved);
+    drop(s_finish);
+    ComposedCones {
+        coverage: coverage_out,
+        raw,
+        derived,
         arena,
         stats,
         pd_report,
-    )
+        store: keep.is_some().then_some(store),
+        cone_report,
+    }
 }
 
 /// Member `m`'s coverage record from its direct coverage and its SCC's cone.
@@ -3287,6 +3744,11 @@ pub struct ConeOutcome {
     pub pd_digests: HashMap<String, [u8; 32]>,
     /// What the producer solve reused.
     pub pd_report: super::pd_solve::PdSolveReport,
+    /// The cone store, when the composition was asked to keep one
+    /// ([`PdRetain::Yes`] with `cones`).
+    pub cone_store: Option<ConeStore>,
+    /// What the walk re-folded and copied.
+    pub cone_report: ConeReport,
     /// This call's SCC-shape and recursive-branch counts (#160 step 7a), for
     /// tests; production reads them through the census.
     #[cfg(test)]
@@ -3334,13 +3796,22 @@ pub enum PdRetain<'a> {
     /// A one-shot composition: no digests (they cost a pass over every row).
     No,
     /// Compute [`ConeOutcome::pd_digests`]; reuse `seed`'s producers that
-    /// Δ leaves untouched (`pd_solve::solve_seeded`).
+    /// Δ leaves untouched (`pd_solve::solve_seeded`). With `cones`, also
+    /// keep a cone store ([`ConeOutcome::cone_store`]) and, when the seed
+    /// carries the previous fold's, re-fold only the SCCs whose inputs
+    /// changed (design §6.10).
     Yes {
-        seed: Option<(
-            &'a super::pd_solve::ConeArena,
-            &'a HashMap<String, [u8; 32]>,
-        )>,
+        seed: Option<FoldSeed<'a>>,
+        cones: bool,
     },
+}
+
+/// The previous resident fold's parts a composition reuses.
+pub struct FoldSeed<'a> {
+    pub arena: &'a super::pd_solve::ConeArena,
+    pub pd_digests: &'a HashMap<String, [u8; 32]>,
+    /// The previous fold's cone store and rows, when it kept one.
+    pub cones: Option<ConeSeed<'a>>,
 }
 
 /// Each routine's producer-solve inputs, hashed (design §6.10 "Producers"):
@@ -3394,6 +3865,7 @@ pub fn compose_cone_over_graph_retained(
 ) -> ConeOutcome {
     crate::engine::perf_trace::counter_delta("build.cone", 1);
     let _t_graph = crate::engine::l5::detector_context::cones_census::start();
+    let s_graph = crate::engine::perf_trace::span("cone", "cone.graph");
     let g = build_typed_edge_graph(typed, nodes, &DeadSites::of(routines));
     let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
     for (from, list) in &g.outgoing {
@@ -3403,7 +3875,9 @@ pub fn compose_cone_over_graph_retained(
         &crate::engine::l5::detector_context::cones_census::WALK_GRAPH_NANOS,
         _t_graph,
     );
+    drop(s_graph);
     let _t_scc = crate::engine::l5::detector_context::cones_census::start();
+    let s_scc = crate::engine::perf_trace::span("cone", "cone.tarjan");
     crate::engine::perf_trace::counter_delta("build.graph_scc", 1);
     let scc = tarjan_scc(&SccInputGraph {
         nodes: &g.nodes,
@@ -3420,7 +3894,9 @@ pub fn compose_cone_over_graph_retained(
         &crate::engine::l5::detector_context::cones_census::WALK_SCC_NANOS,
         _t_scc,
     );
+    drop(s_scc);
     let _t_dedup = crate::engine::l5::detector_context::cones_census::start();
+    let s_dedup = crate::engine::perf_trace::span("cone", "cone.dedup");
     let mut direct: RoutineDirectFacts = HashMap::new();
     let mut cov: RoutineDirectCoverage = HashMap::new();
     let mut routine_ids: BTreeSet<String> = BTreeSet::new();
@@ -3447,20 +3923,45 @@ pub fn compose_cone_over_graph_retained(
         &crate::engine::l5::detector_context::cones_census::WALK_DEDUP_NANOS,
         _t_dedup,
     );
+    drop(s_dedup);
     let _t_compose = crate::engine::l5::detector_context::cones_census::start();
+    let s_frames = crate::engine::perf_trace::span("cone", "cone.frames");
     let routines_by_id: HashMap<&str, &ModelRoutine> =
         routines.iter().map(|r| (r.id.as_str(), r)).collect();
     let frames = guard_frames(&g, routines, &routines_by_id);
-    let (pd_digests, seed) = match pd {
-        PdRetain::No => (HashMap::new(), None),
-        PdRetain::Yes { seed } => (pd_input_digests(&g, routines, &frames), seed),
+    drop(s_frames);
+    let (pd_digests, seed, keep_cones) = match pd {
+        PdRetain::No => (HashMap::new(), None, false),
+        PdRetain::Yes { seed, cones } => (pd_input_digests(&g, routines, &frames), seed, cones),
     };
-    let reuse = seed.map(|(old, old_digests)| super::pd_solve::PdReuse {
-        old,
-        old_digests,
+    let reuse = seed.as_ref().map(|s| super::pd_solve::PdReuse {
+        old: s.arena,
+        old_digests: s.pd_digests,
         new_digests: &pd_digests,
     });
-    let (coverage, raw, derived, pd_solution, _stats, pd_report) = compose_inherited_cones(
+    let keep = keep_cones.then(|| KeepCones {
+        member_digest: member_digests(
+            &g,
+            direct_in,
+            &cov,
+            &frames,
+            &routines_by_id,
+            &pd_digests,
+            &routine_ids,
+            &scope,
+        ),
+        seed: seed.and_then(|s| s.cones),
+    });
+    let ComposedCones {
+        coverage,
+        raw,
+        derived,
+        arena: pd_solution,
+        stats: _stats,
+        pd_report,
+        store: cone_store,
+        cone_report,
+    } = compose_inherited_cones(
         &g,
         &scc,
         &direct,
@@ -3471,6 +3972,7 @@ pub fn compose_cone_over_graph_retained(
         &frames,
         &scope,
         reuse.as_ref(),
+        keep,
     );
     if !raw.is_empty() {
         crate::engine::perf_trace::counter_delta("build.witness_pass", 1);
@@ -3533,6 +4035,8 @@ pub fn compose_cone_over_graph_retained(
         pd_solution,
         pd_digests,
         pd_report,
+        cone_store,
+        cone_report,
         #[cfg(test)]
         stats: _stats,
     }
@@ -4835,7 +5339,11 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
     let routines_by_id: HashMap<&str, &ModelRoutine> =
         ws.routines.iter().map(|r| (r.id.as_str(), r)).collect();
     let frames = guard_frames(&g, &ws.routines, &routines_by_id);
-    let (cone_coverage, cone_raw, _derived, _pd_solution, _stats, _) = compose_inherited_cones(
+    let ComposedCones {
+        coverage: cone_coverage,
+        raw: cone_raw,
+        ..
+    } = compose_inherited_cones(
         &g,
         &scc,
         &direct,
@@ -4848,6 +5356,7 @@ pub fn project_r3a3(resolved: &Model) -> R3a3Projection {
             derived: false,
             raw: WitnessScope::All,
         },
+        None,
         None,
     );
 
@@ -5411,7 +5920,7 @@ mod pd_uses_tests {
         let scc: HashMap<String, usize> = [("C".to_string(), 0)].into();
         let g = empty_graph();
         let direct: RoutineDirectFacts = HashMap::new();
-        let cones: HashMap<usize, ConeFacts> = HashMap::new();
+        let cones: ConeMap = HashMap::new();
         let picks = inherited_facts_by_bfs("C", &g, &direct, &scc, &cones, &own);
         assert_eq!(picks.len(), 1);
         assert_eq!(picks[0].0.witness_operation_id.as_deref(), Some("H/op1"));
@@ -8562,7 +9071,7 @@ mod cone_memory_step1_tests {
             dist: 1,
             first_hop: &edge_own,
         }];
-        let cones: HashMap<usize, ConeFacts> = HashMap::new();
+        let cones: ConeMap = HashMap::new();
         // Precondition: the own entry wins K1 (same distance, smaller sort key).
         assert!(edge_own.sort_key < edge_cx.sort_key);
         let picks = inherited_facts_by_bfs("C", &g, &direct, &scc, &cones, &own);
