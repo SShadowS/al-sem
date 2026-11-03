@@ -2197,6 +2197,49 @@ mod tests {
         assert!(p.trees.is_empty() && p.runs.is_empty() && p.fills().is_empty());
     }
 
+    /// #367 (plan item I(4)): the commands the resident host serves (prove,
+    /// digest, explain, query), each built the way its job builds it (the
+    /// default detectors), never demand the ordering cell. Its fill
+    /// (`detector_context::fill_ordering`) composes a private whole-model
+    /// snapshot; a served command that needs it must first get a fill that
+    /// reads the revision's fold (see that function's doc). The analyze plan
+    /// with d47 does demand it, so the predicate can fail.
+    #[test]
+    fn served_plans_never_demand_the_ordering_cell() {
+        use crate::engine::l5::detectors::{default_detectors, opt_in_detectors};
+        let demands = |p: &Plan| (p.union() | p.own_bits()) & substrate::ORDERING_FACTS != 0;
+        let roots: BTreeSet<String> = ["a:Codeunit:1#x".to_string()].into();
+        let served = [
+            (
+                "digest",
+                digest_plan(default_detectors(), roots.clone(), false),
+            ),
+            (
+                "digest --tests",
+                digest_plan(default_detectors(), roots.clone(), true),
+            ),
+            (
+                "digest --include-reads",
+                digest_reads_plan(default_detectors(), roots.clone(), false, true),
+            ),
+            (
+                "prove",
+                prove_plan(default_detectors(), Some("a:Codeunit:1#x".to_string())),
+            ),
+            ("explain", explain_plan(roots)),
+            ("query", query_plan()),
+        ];
+        for (name, plan) in &served {
+            assert!(!demands(plan), "served `{name}` demands ORDERING_FACTS");
+        }
+        let d47: Vec<Detector> = opt_in_detectors()
+            .into_iter()
+            .filter(|d| d.name == "d47-io-unsafe-txn")
+            .collect();
+        assert_eq!(d47.len(), 1);
+        assert!(demands(&analyze_plan(d47, true)));
+    }
+
     #[test]
     fn digest_plan_asks_a_tree_only_for_roots() {
         let roots: BTreeSet<String> = ["a:Codeunit:1#x".to_string()].into();
