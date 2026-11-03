@@ -2211,6 +2211,39 @@ fn witness_measure(
     }
 }
 
+/// `PROBE_TREE_BYTES=1` (plan 2026-11-03 items L4a and L3), after a step's
+/// asks: the live bytes the revision's trees hold (evicted first, so only
+/// the store held them), then its tree base's, then the base's refill (its
+/// time, its peak over the live heap before it, the bytes it leaves).
+/// Meaningful only counted (not under `PROBE_NO_COUNT=1`).
+fn tree_bytes(rev: &al_sem::engine::resident::revision::Revision) {
+    use al_sem::engine::resident::revision::ArtifactKey;
+    use al_sem::engine::resident::store::Control;
+    let trees = rev.keys_where(|k| k.kind() == "tree");
+    let (b0, a0) = live();
+    rev.evict(&trees);
+    let (b1, a1) = live();
+    rev.evict_kind("tree_base");
+    let (b2, a2) = live();
+    reset_peak();
+    let t = std::time::Instant::now();
+    rev.prepare_keys(&[ArtifactKey::TreeBase], &Control::unreserved())
+        .unwrap_or_else(|e| panic!("tree base: {e:?}"));
+    let fill_ms = t.elapsed().as_millis();
+    let (b3, _) = live();
+    let peak = PEAK.load(Relaxed);
+    println!(
+        "        tree bytes: {} trees {:.1} MiB ({} allocs); base {:.1} MiB ({} allocs); base refill {fill_ms} ms, +{:.1} MiB live, peak +{:.1} MiB",
+        trees.len(),
+        mib(b0 - b1),
+        a0 - a1,
+        mib(b1 - b2),
+        a1 - a2,
+        mib(b3 - b2),
+        mib(peak - b2)
+    );
+}
+
 fn incr_mode(
     ws: PathBuf,
     routine: String,
@@ -2342,6 +2375,9 @@ fn incr_mode(
         }
         if let Some(extra) = &witness {
             witness_measure(&rev, &routine, extra, verify, &mut failed);
+        }
+        if std::env::var_os("PROBE_TREE_BYTES").is_some_and(|v| v == "1") {
+            tree_bytes(&rev);
         }
         drop(rev);
         settle();
