@@ -506,6 +506,44 @@ fn an_object_only_table_rename_equals_cold() {
 // The tree store (design §6.11)
 // ---------------------------------------------------------------------------
 
+/// A refresh frees the published revision's trees before it builds (they
+/// seed nothing in the next revision): the old revision keeps its fold (the
+/// next fold's seed) but no tree and no base.
+///
+/// DISCRIMINATION (2026-11-03): removing the two `reclaim_kind` calls in
+/// the refresh fails "the old revision's trees are freed"; reverted, green.
+#[test]
+fn a_refresh_frees_the_published_revisions_trees() {
+    let (dir, s) = session(&[
+        ("src/Tables.al", TABLES),
+        ("src/Leaf.al", LEAF),
+        ("src/Mid.al", MID),
+        ("src/Top.al", TOP),
+    ]);
+    let ws = dir.path();
+    let (old, _, _) = step("cold", &s, ws, &["Go"]);
+    let kinds = |r: &Revision| -> Vec<&'static str> {
+        r.snapshot().keys().map(ArtifactKey::kind).collect()
+    };
+    assert!(
+        kinds(&old).contains(&"tree") && kinds(&old).contains(&"tree_base"),
+        "precondition: the answers filled trees: {:?}",
+        kinds(&old)
+    );
+    edit(
+        ws,
+        "src/Leaf.al",
+        "    begin\n        R.Insert();",
+        "    begin\n        // a comment\n        R.Insert();",
+    );
+    step("comment", &s, ws, &["Go"]);
+    let after = kinds(&old);
+    assert!(
+        !after.contains(&"tree") && !after.contains(&"tree_base") && after.contains(&"fold"),
+        "the old revision's trees are freed, its fold kept: {after:?}"
+    );
+}
+
 /// A tree as text: every serialized section in order, the routine order
 /// frames, the pd arena (`by_routine` sorted) and rule B's boundary (sorted).
 fn tree_text(t: &crate::engine::l5::snapshot::CapabilitySnapshot) -> String {

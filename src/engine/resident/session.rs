@@ -504,6 +504,14 @@ impl ResidentSession {
                 }
                 None => None,
             };
+            // The published revision's trees (§6.11) seed nothing in the next
+            // one, which rebuilds its whole sections and its views: free the
+            // ones no request holds before the build, not after it, so they
+            // are not part of its peak.
+            if let Some(Built::Revision(r)) = prev.as_ref().map(|p| &p.built) {
+                r.reclaim_kind("tree");
+                r.reclaim_kind("tree_base");
+            }
             self.hook(BuildPoint::BeforeRead, attempt);
             let inputs = WorkspaceInputs::read(&self.workspace, &REVISION_READ);
             self.hook(BuildPoint::AfterRead, attempt);
