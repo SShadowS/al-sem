@@ -26,7 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   build): 10,881 dependency files, 499,011 recorded queries, record ~68 MB; adding a procedure, a
   signature change and adding a file each re-resolve 0 files (no answer changed); a new
   implementer of a dependency interface (`CTS-CDN ISenderProfileRetriever`) re-resolves 2. The
-  query check costs ~30 ms and the digests ~40 ms per S. New session tests (both memory modes):
+  query check costs ~30 ms and the digests ~40 ms per S. Timed on CDO (release-fast, quiet
+  machine, two rounds each, master `7b97a134` beside it): the resident S refresh
+  (`census-probe incr`, uncounted, a procedure added) 7.2-8.0 s → 3.09-3.16 s; the model refresh
+  (`aldump --session-refresh`) for a procedure added 6.65-7.21 s → 2.43-2.70 s, a signature change
+  2.47-2.67 s, a file added 6.97-7.31 s → 3.50-3.81 s (every dependency file renumbered, so the
+  kept edges are copied to re-stamp them), the new implementer 3.67-3.85 s. The recording's cost
+  on a cold build: program 7.27-7.56 s → 7.80-8.20 s, resident cold refresh 11.5-12.0 s →
+  12.1-12.6 s, P unchanged within noise (12.9 s); peak RSS of the cold step 3.48 → 3.71 GB.
+  New session tests (both memory modes):
   a first workspace implementer of a dependency interface (a negative lookup), an implementer's
   method arity and access changed under an unchanged `implements` list (a read through a returned
   id), a procedure added above that method (witness moved, nothing re-resolved), a workspace

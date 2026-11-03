@@ -465,7 +465,8 @@ attributes play no part. `DefSurface` stays for the LSP.
 | Case | Condition | Reruns |
 |---|---|---|
 | **B** body-only | every file in Δ_files has an equal projection; M = P = ∅ | parse Δ_body; resolve Δ_body's files; the whole-program refinements; demand; rows for changed files; finishing, attach, final passes (whole); relation, base facts; seeded L4; cone dirty set; tree sections |
-| **S** declaration (incl. **F** file add/remove/rename) | some projection changed, or a file added or removed; M ∩ P-fields = ∅; P = ∅ | as B plus: graph layer, `DeclSemantics`, `ResolveIndex`; every workspace file re-resolved; **every dependency body re-resolved** (4.0–4.7 s, conservative); projections for every re-resolved file |
+| **S** declaration (incl. **F** file add/remove/rename) | some projection changed, or a file added or removed; M ∩ P-fields = ∅; P = ∅ | as B plus: graph layer, `DeclSemantics`, `ResolveIndex`; every workspace file re-resolved; **every dependency body re-resolved** (4.0–4.7 s, conservative; *as built since plan item S:
+only the dependency files whose recorded answers changed, §6.6*); projections for every re-resolved file |
 | **A-S** config | `app.json` fields outside the P set, `roots.config.json`, coverage yaml | root `app.json` → S plus model fields; `roots.config.json` → finishing and the root-classification section; coverage yaml → nothing served reads it |
 | **P** package / identity | a `.app` or source dependency changed, or `app.json`'s `id`, `name`, `publisher`, `version`, `dependencies`, `application`, `platform`, `internalsVisibleTo`, `propagateDependencies` | full rebuild (§4.5) |
 
@@ -563,6 +564,66 @@ inputs (< 1 ms); its output is diffed per obligation and changed obligations joi
 extensions, name uniqueness) and a precise dependency key was judged fragile. A finer,
 object-level rule is a later refinement gated by a tripwire test proving no read bypasses
 its recording facade.
+
+**As built (the finer rule, plan `2026-11-03-context-server-remaining.md` item S; branch
+`ctxsrv/s-finer-deps`).** Per dependency *file*, not per object, keyed by semantic queries.
+
+- **The facade** (`program/resolve/reads.rs`). `resolve_file_obligations` and everything it
+  reaches take `&dyn GraphReads`, `&dyn IndexReads`, `&dyn SurfaceReads`, never the concrete
+  graph, index or surface: the code cannot name a graph field or an index map, so every read is
+  a trait method, and each method is one semantic query (29 kinds, `reads::Query`: objects and
+  routine runs by id, object and name; `resolve_object` by name and number; closure; friends;
+  the whole-program flags; every `ResolveIndex` accessor, negative answers included; the
+  surface). The `from_object` index accessors read only `from_object.id.app`; their `*_from`
+  forms make that a code fact and key the query. Reaching the raw graph needs a `Token` only
+  `reads.rs` can make. A `Recorder` answers through the plain implementations and logs the
+  query.
+- **The tripwire.** Under `cfg(test)` a counting hook sits on the raw state (node-set reads,
+  index accessors, `DeclSurface::get`, `DependencyGraph::closure`). Inside a recording scope a
+  raw read outside a recorder method is a bypass. `resolve::reads::tests` resolves every file
+  of every r0-corpus workspace and two dependency fixtures through recorders (and, gated on
+  `CDO_WS`, every CDO dependency file) and asserts zero bypasses and an unchanged resolution.
+  Passing the plain graph instead of the recorder fails it (13,313 bypassing reads), and so
+  does one recorder method reading without its guard (8,364).
+- **The answer** (`program/session/dep_record.rs`, `eval`) is blake3 over the declaration
+  projection's encoding (§6.1's `Classify`) of everything the query hands out: ids by value;
+  a node or a run of nodes by the whole node, so a field read later off a returned node is
+  covered; a `RoutineMeta` likewise. A node of the dependency tier's shared part is named by its
+  position, a frozen dependency `RoutineMeta` by its address; the record pins the identity of
+  those immutable parts (and the facade version), so a record of another tier is never used.
+  Positions (`RoutineMeta.origin`) are left out exactly as in the projection: resolution reads
+  them only for source witnesses, which are re-materialized for every kept edge as under B.
+- **The rule.** P and the first build resolve every dependency file recorded and keep the
+  record: per file its edge range, `FileIx` and query ids; per distinct query its digest. B
+  keeps the record with the edges. S asks every kept query again (in parallel) against the new
+  revision; a file with a changed answer (or newly given a `FileIx`) is resolved again,
+  recorded; the others keep their edges, site facts and parens-less calls, with their sites
+  re-stamped to the file's current `FileIx` (a workspace file added or removed renumbers every
+  dependency file). When no file changes and none is renumbered the old resolution is shared
+  outright. Witnesses are then checked and re-materialized against the current surface. The
+  whole re-resolution remains the fallback: a changed tier or facade version, a changed file
+  list, a kept witness naming no declaration, or a record that cannot recover a kept file's
+  site facts (two files' facts sharing an obligation id: then no record is kept).
+- **Proof.** Every session test compares program and model with a cold build after every step,
+  in both memory modes; the S cases now include a first workspace implementer of a dependency
+  interface, an implementer's method arity and access changed under an unchanged
+  `implements` list, a method moved by a procedure added above it, a table extension of a
+  dependency table added and removed, a name collision, a closed enum over the dependency
+  interface, and declaration changes no dependency file reads. Breaking the rule four ways
+  (no negative `implementers_of` answers, no `routines_named` records, comparing queries
+  without answers, no witness re-materialization on the shared path) each fails a named test.
+- **Measured on CDO** (`aldump --session-refresh --verify`, every step equal to cold): 10,881
+  dependency files, 499,011 distinct queries, record ~68 MB. Adding a procedure, a signature
+  change and adding a file re-resolve 0 files (no answer changed: no dependency file reads
+  them); a new implementer of a dependency interface re-resolves 2. The check costs ~30 ms and
+  the digests ~40 ms per S. Timed (release-fast, quiet machine, two rounds, against master
+  `7b97a134`): resident S refresh 7.2-8.0 s → 3.09-3.16 s (`census-probe incr`, uncounted);
+  model refresh for a procedure added 6.65-7.21 s → 2.43-2.70 s, a signature change
+  2.47-2.67 s, a file added 6.97-7.31 s → 3.50-3.81 s, the new implementer 3.67-3.85 s. The
+  file-added case pays ~1 s to copy the kept edges and re-stamp their `FileIx` (every
+  dependency file is renumbered); numbering dependency files apart from workspace files would
+  remove it. The recording costs a cold build ~0.5 s (program 7.27-7.56 s → 7.80-8.20 s) and
+  0.23 GB of peak RSS (3.48 → 3.71 GB); P is unchanged within noise.
 
 ### 6.7 Routine ids
 
