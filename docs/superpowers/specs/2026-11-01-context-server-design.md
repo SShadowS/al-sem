@@ -870,6 +870,30 @@ extra evict-and-refill measure of the indexes. A `--verify` run after cold, B, S
 answer (the four commands, explain over three roots, explain with its indexes evicted and
 present) equal to its cold run; explain hit 0.22-0.24 s, fill 0.89-1.03 s.
 
+**As built (direct facts in parallel and the finalize split, plan items L5 and L1's
+measurement; branch `ctxsrv/l5-l1`).** `det_cone_inputs_over` extracts each row's direct facts
+on rayon (`par_iter` with an indexed `unzip`, so row order is kept for `merge_per_id`); the
+extraction reads only the row, its publisher events and the uncertainty reasons, with no shared
+mutable state. `pd.finalize` has two child spans: `pd.finalize.sort` (the producer, edge and
+state rankings) and `pd.finalize.build` (the pass that places states, remaps and sorts links,
+and builds `by_routine` and the resolved entries). Measured on CDO (release-fast probe,
+mimalloc, `PROBE_NO_COUNT=1`; serial and parallel builds back to back): `cone.direct`
+0.28-0.31 s → 0.058-0.068 s; the fold after B 2.03-2.07 s → 1.79-1.92 s; analysis prepared
+after B 3.88-3.91 s → 3.59-3.69 s; cold fold 14.2-14.3 s either way. `pd.finalize.sort`
+0.20-0.24 s and `pd.finalize.build` 0.45-0.61 s at every step. Deviations: (1) L5 step 2 (the
+per-routine memo) is not built: step 1 leaves 0.06 s, under the 0.1 s bar. (2) L1 proper (the
+per-producer merge) is not built: its gate is a sort half ≥ 0.3 s. The claim it would rest on
+holds in the code (a copied producer's range keeps the previous canonical order, and its rank
+key `(dist, routine in string order, t, reqs)` does not depend on the rest of the solve), but
+fresh producers' states are interleaved in BFS order, so a merge would also bucket them by
+producer first; the build half is the larger target for L2 or a later item. (3) The probe's
+counting allocator (three shared atomics per allocation) made the parallel pass look slower
+(0.55 s counted); `census-probe` gained `PROBE_NO_COUNT=1`, and every number above is
+uncounted. Earlier tables in this section were counted, so they read higher, most on parallel,
+allocation-heavy steps (same master code, same day: fold after B 2.23 s counted against 2.07 s
+uncounted; cold refresh 17.7 s against 12.2 s; prove 2.6 s against 1.6-1.7 s). A `--verify`
+run after cold, B, S and P: every answer equal to its cold run.
+
 ### 6.12 Explain
 
 Landed: grouping by equal `tests`, repeatable `--routine` (sorted distinct roots,

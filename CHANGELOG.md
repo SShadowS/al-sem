@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (context server: direct facts in parallel; the finalize split measured)
+
+- **The fold's direct facts are extracted in parallel** (plan
+  `docs/superpowers/plans/2026-11-03-context-server-remaining.md`, item L5 step 1).
+  `det_cone_inputs_over` computed every routine's direct facts in a serial loop on every fold
+  and on cold start. Each row's extraction is a pure function of the row, its publisher events
+  and its uncertainty reasons, so the rows now run on rayon with an order-preserving collect;
+  the per-id merge is unchanged. Measured on CDO (release-fast probe, mimalloc, uncounted):
+  `cone.direct` 0.28-0.31 s → 0.058-0.068 s on every fold; the fold after a body edit 2.03-2.07
+  s → 1.79-1.92 s; "analysis prepared" after a body edit 3.88-3.91 s → 3.59-3.69 s. Step 2 (a
+  per-routine memo) is not built: step 1 leaves well under the plan's 0.1 s bar. A `--verify`
+  run after cold, B, S and P: every answer equal to its cold run. Tests: `direct_full` and
+  `coverage_in` equal (as maps and as a key-ordered digest) to a serial oracle on all 274
+  fixture app dirs and on CDO, single-app and cross-app. Discrimination: reversing the
+  parallel collect's order moves both digests on CDO and on the fixtures and fails both tests;
+  restored, both pass.
+- **`pd.finalize` now has two spans, `pd.finalize.sort` and `pd.finalize.build`** (item L1's
+  measurement). On CDO the sort half is 0.20-0.24 s (cold, B, S and P alike) and the build
+  pass 0.45-0.61 s, so L1's per-producer merge (gate: sort ≥ 0.3 s) is not built; the build
+  pass is the larger half.
+- **`census-probe`: `PROBE_NO_COUNT=1` turns the counting allocator off.** Its three shared
+  atomics per allocation serialize parallel passes: the parallel `cone.direct` measured 0.55 s
+  counted against 0.06 s uncounted. Time parallel code uncounted.
+
 ### Added (context server: explain's indexes kept per revision)
 
 - **A resident explain no longer rebuilds its model indexes on every request** (plan

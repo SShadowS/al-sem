@@ -408,6 +408,9 @@ fn finalize<'g>(
         rank
     }
 
+    // The two halves the plan (2026-11-03 L1) measures apart: the ranking
+    // sorts, then the one build pass over the ranked states.
+    let sort_span = crate::engine::perf_trace::span("cone", "pd.finalize.sort");
     let mut p_order: Vec<usize> = (0..producers.len()).collect();
     p_order.sort_unstable_by(|&a, &b| producer_cmp(&producers[a], &producers[b]));
     debug_assert!(
@@ -459,6 +462,8 @@ fn finalize<'g>(
     });
     drop(head);
     let s_rank = ranks(&s_order);
+    drop(sort_span);
+    let _build_span = crate::engine::perf_trace::span("cone", "pd.finalize.build");
 
     let mut producers: Vec<Option<Producer>> = producers.into_iter().map(Some).collect();
     let mut states: Vec<Option<ConeState>> = states.into_iter().map(Some).collect();

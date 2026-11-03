@@ -7185,7 +7185,7 @@ pub(crate) mod callsite_local_scan_tests {
         assemble_and_resolve_inline_program_default(&files, APP)
     }
 
-    pub(super) fn workspace_model(dir: &Path) -> Option<Model> {
+    pub(crate) fn workspace_model(dir: &Path) -> Option<Model> {
         assemble_and_resolve_workspace_program(
             &crate::program::inputs::WorkspaceInputs::read(dir, &Default::default()),
             false,
@@ -7330,7 +7330,7 @@ codeunit 50111 "Cell Calls"
     ];
 
     /// Sorted dirs at most `max_depth` levels under `root` holding an `app.json`.
-    pub(super) fn app_dirs(root: &Path, max_depth: usize) -> Vec<PathBuf> {
+    pub(crate) fn app_dirs(root: &Path, max_depth: usize) -> Vec<PathBuf> {
         let walk = walkdir::WalkDir::new(root).max_depth(max_depth);
         let mut dirs: Vec<PathBuf> = walk
             .into_iter()
