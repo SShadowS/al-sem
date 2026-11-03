@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (context server: raw facts emitted on demand for every view)
+
+- **The resident fold no longer emits raw inherited facts for every primary routine** (plan
+  `docs/superpowers/plans/2026-11-03-context-server-remaining.md`, item L6; an owner-approved
+  amendment to the context-server design's §6.10 eager emission; `src/engine/l4/capability_cone.rs`,
+  `src/engine/l4/pd_solve.rs`, `src/engine/resident/revision.rs`). Measured first: the eager
+  emission was 6.7-7.5 s of the 11.3-13.1 s cold fold. The fold's cone store now keeps what a
+  subject's emission reads (the typed-edge graph, its SCCs and successors, the non-root fact cones
+  by SCC index, the guard frames, the members it re-folded), and every view's `Raw(scope)`
+  artifact, primary or dependency, is emitted from it (`ConeStore::emit_raw`; the producer
+  entries are read back from the arena by `finalize`'s rule). A subject another view already
+  emitted is adopted, and so is one the previous revision emitted when the fold did not re-fold
+  its rows (stage 5b's rule). The one-shot CLI path is unchanged; no golden moves. Measured on
+  CDO (release-fast probe, mimalloc, uncounted, master beside it): cold fold 11.3-13.1 s →
+  5.0-5.3 s, P fold 12.2-12.5 s → 5.2-5.5 s, cold refresh to first explain 29.2 s → 22.4-23.3 s,
+  B and S folds unchanged (1.45-1.51 s); the first answer on a never-emitted primary root pays
+  13.6 ms of emission (2.7 ms when adopted after B). Memory: the fold's raw map (77.7 MiB) is gone,
+  the cone store grew 52.7 MiB; RSS 5.89 → 5.84-5.86 GB cold, peak unchanged. T-order fill counts
+  amended (one `raw` fill per view, primary roots included); the raw fill's budget estimate is
+  60 MiB (was 600, sized for the former raw-only composition). Tests: the retained emission equals
+  a composition for every routine of every r0 app and three fixtures, and on CDO (every primary
+  routine, 200 dependency routines); on-demand, eviction, adoption and cross-revision
+  re-emission tests, each with a discrimination proof; a `--verify` run after cold, B, S and P
+  gave every answer equal to cold.
+
 ### Changed (context server: the producer solve's fresh producers in parallel)
 
 - **Fresh producers are solved in parallel** (plan

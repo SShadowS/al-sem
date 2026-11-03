@@ -414,6 +414,10 @@ a design decision and the T-order fill expectations, so it is listed for the own
 scheduled. Measure the eager emission's share of the cold fold first (`cone.walk` and the raw
 spans on a cold refresh).
 
+*Done (branch `ctxsrv/l6-lazy-raw`): the share was 6.7–7.5 s; cold fold 11.3–13.1 s → 5.0–5.3 s,
+P 12.2–12.5 s → 5.2–5.5 s, the on-demand emission 13.6 ms per root. See the design's L6 as-built
+note (§6.11).*
+
 ## 3. Order and dependencies
 
 1. **W.** Biggest per-answer win, self-contained (`digest_cli.rs`, `revision.rs`, `session.rs`

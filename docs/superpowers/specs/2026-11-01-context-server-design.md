@@ -637,7 +637,10 @@ stable id stay two states. Storage indices are epoch-local and never serialized.
 
 **Raw emission** for primary subjects eagerly; dependency subjects on demand from the
 retained cones (the all-subject emission measured 24 s, and a Base App subject's
-emission can cost seconds, so it is never eager).
+emission can cost seconds, so it is never eager). *Amended 2026-11-03 (owner decision,
+plan `2026-11-03-context-server-remaining.md` item L6): every subject, primary too, is
+emitted on demand from the retained cones, per view (`Raw(scope)`); the eager primary
+emission was 6.7–7.5 s of a 11.3–13.1 s cold fold. See the L6 as-built note in §6.11.*
 
 **Compaction** of the interner tables and the arena when garbage exceeds 25 % or every 64
 revisions, under §4.5's rules.
@@ -989,6 +992,81 @@ noise (counted: 6.24 → 6.30 GB over the run). Found on the way: a witness fill
 concurrent request published between the store's claim and its fill failed ("not a witness of
 the request's plan"); it now returns the published entry. What is left of a cold `pd.solve` is
 serial: the concatenation's moves and the build pass's placement (~0.45 s together).
+
+**As built (lazy raw emission for primary subjects, plan item L6; branch `ctxsrv/l6-lazy-raw`;
+an amendment, approved by the owner, to §6.10's "raw emission for primary subjects eagerly"
+and to the T-order fill expectations).** Measured first (CDO, release-fast probe, mimalloc,
+uncounted, two rounds, the fold's raw scope switched off by a throwaway knob): the eager
+primary emission was 6.7–7.5 s of a 11.3–13.1 s cold fold (12.3/12.5 s → 5.5/5.1 s) and
+7.0–7.1 s of the P fold, far above the plan's 1.5 s stop bar. The resident fold now composes
+with `raw: None` (derived rows, coverage, the pd arena, the cones; no raw facts; the singleton
+walks' raw scans and the recursive members' BFS walks are gone). Its `ConeStore` also keeps
+what a subject's emission reads (`EmitSource`): the typed-edge graph, its SCCs and each SCC's
+successors, every non-root SCC's fact cone by SCC index (the store's own `Arc`s), the guard
+frames, and the members the walk re-folded against the seed fold (`changed`; `None` without a
+seed). `ConeStore::emit_raw` runs the walk's own per-member functions
+(`inherited_facts_for_singleton` in raw-only mode, `inherited_facts_by_bfs` + `emit_picks`)
+over the subject's successor cones, its siblings' deduplicated direct facts (a recursive
+member) and its own producer entries, which `pd_solve::resolved_entries_of` reads back from the
+fold's arena by `finalize`'s rule (every non-seed state of the routine in state order, first hop
+the lowest-ranked link to a state at `dist − 1`, the edge borrowed from the arena's table). A
+subject outside the graph gets no entry, as in a composition. Every view's `Raw(scope)` artifact
+— primary or dependency, the former dependency path's whole raw-only composition is gone — is
+filled this way (phase 1, after the fold); `needs_of` demands it for every tree scope and the
+`Tree` fill always reads it. Reuse: a subject another published `Raw` of the revision holds is
+adopted (`InheritedBuilder::adopt`, its table set shared); so is a subject the previous revision
+emitted when this fold did not re-fold its rows (`!ConeStore::changed`: its SCC reused and not in
+Δ_pd_output — exactly stage 5b's raw-adoption rule). The previous revision's `Raw` artifacts
+travel with the fold seed (`Revision::fold_seed_with_raws`, one snapshot), so `changed` is always
+relative to the fold they were emitted over; a fold refilled without its seed re-folds everything
+and adopts nothing. `ConeSeed` no longer carries raw entries; a member that wants raw facts is
+never copied by a seeded walk. `Revision::raw_counts` reports `(emitted, adopted)`.
+
+Readers of the primary raw (the audit): on the served path (`query`, `digest`, `explain`,
+`prove`) the only reader is the `Tree(scope)` fill, and every tree scope is the rows of a
+request's roots (`WitnessRequest::roots`; `digest --tests` with no root is an empty scope; a
+served plan never asks `WitnessRequest::primary`, `read_tree_shared` asserts no tree read does).
+`View::served` takes no raw cell. The fold's raw was also read by the next fold's seed (removed)
+and the census (`fold.raw`, removed). Not served, one-shot only, unchanged: `policy check` (its
+rule engine reads `View::raw` under `WitnessRequest::primary`), `fingerprint --routine` and
+`--inventory-only`, the r3a3/r3a5 projections and `aldump` modes (their own compositions), the
+ordering cell (`fill_ordering`, the model alone). A served reader that needs every primary
+subject would demand them explicitly as one view; `a_view_over_every_primary_routine_gets_them_all`
+shows it works. The one-shot path composes as before (one composition, raw for the plan's
+subjects), so no output and no golden moves; `session::emit_raw_ids` remains as a test oracle.
+
+T-order fill expectations amended: a request with a tree now fills one `raw` per distinct view
+(primary roots included; was 0 for a primary root); the dependency-root test now counts 2 (the
+primary explain's view and the dependency root's). Budget: `Case::Fill("raw")` 600 → 60 MiB (one
+root on CDO leaves 0.32 MiB). Tests: `retained_emission_equals_a_composition_for_every_routine`
+(every routine of every r0 app, rule B, the witness fixture and a new two-call-site producer
+fixture, against a raw-`All` composition), `retained_emission_equals_a_composition_on_cdo`
+(every primary routine and 200 dependency routines, CDO-gated),
+`a_primary_root_gets_its_raw_facts_on_demand` (no raw after the fold; one on-demand emission equal
+to the one-shot emission and to cold; re-emitted after eviction; a tree refill over a published
+raw emits nothing; a wider view adopts), `a_view_over_every_primary_routine_gets_them_all`,
+`a_changed_subject_is_re_emitted_and_an_unchanged_one_adopted` (two B edits: `Go` re-emitted,
+`Call` adopted, then adopted from an adopted entry), and every cone test now compares each
+published `Raw` (adopted entries included) with a cold composition. Discrimination (break with
+Edit, run, revert, run): `rfind` for the first hop fails on the two-sites fixture (green without
+it: no corpus state has two shortest links, hence the fixture); no sibling direct facts fails on
+`ws-d7-event-cycle`; the emission recording no entry fails the first on-demand answer; adopting
+the previous entry whatever was re-folded fails "insert to modify: Explain on Go equals cold"
+(and seven other cone/incremental tests); a `changed` set without Δ_pd_output fails the producer
+cone test. Each reverted, green.
+
+Measured on CDO (release-fast probe, mimalloc, uncounted, master `73072c34` beside it, same hour,
+load 4–7, two rounds; the first master round's explain was noisy): cold fold 11.3–13.1 s →
+5.0–5.3 s; P fold 12.2–12.5 s → 5.2–5.5 s; analysis prepared cold 13.1–15.1 s → 6.7–7.0 s, P
+14.2–14.5 s → 7.1–7.4 s; cold refresh + prepared + first explain 29.2 s (quiet round) → 22.4–23.3
+s; B fold 1.49–1.76 s → 1.45–1.46 s, S 1.52–1.66 s → 1.50–1.51 s (unchanged within noise); the
+first answer on a never-emitted primary root pays `cone.emit_raw` 13.6 ms (`IssueReminder`; 38 ms
+for an explain over three roots; 2.7 ms when adopted after B). Memory: the fold's raw (77.7 MiB)
+is gone and the cone store grew 573.2 → 625.9 MiB (the graph, SCCs and frames), net −25 MiB
+(counted `census-probe resident`); RSS cold 5.89 → 5.84–5.86 GB, after B 5.99–6.01 → 5.93–5.97
+GB, peak 6.00–6.04 → 5.97–5.98 GB cold and unchanged later (6.25–6.32 GB). A `--verify` run after
+cold, B, S and P (explain, prove, digest, query, witness miss and hit, explain over three roots,
+explain with its indexes evicted and present): every answer equal to its cold run.
 
 ### 6.12 Explain
 
