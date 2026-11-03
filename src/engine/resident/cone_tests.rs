@@ -2,7 +2,9 @@
 //! each a resident session over a temporary single-app workspace edited step
 //! by step. After every step every served answer equals a cold standalone run
 //! over a fresh read of the edited disk, and the revision's fold (coverage,
-//! derived rows, raw facts) equals a cold composition over the same model.
+//! derived rows) and every `Raw` artifact it published (plan 2026-11-03 L6:
+//! emitted on demand, or adopted from the previous revision) equal a cold
+//! composition over the same model.
 //! Each test also states, as a precondition, that the step's fold re-folded
 //! only part of the program (so it exercises the store, not a full fold).
 
@@ -49,22 +51,68 @@ fn fold_text(
     out
 }
 
-/// The revision's fold as text, a cold composition's over the same model,
-/// and the fold's cone report.
+/// The revision's fold as text, with every `Raw` artifact it published (plan
+/// 2026-11-03 L6: the fold emits no raw facts; each view's are emitted on
+/// demand, or adopted), and a cold composition's over the same model whose
+/// raw scope is every published artifact's subjects; and the fold's cone
+/// report. Each artifact's entries are listed under its scope, so an entry
+/// adopted from an earlier revision is compared too.
 fn fold_and_cold(rev: &Revision) -> (String, String, ConeReport) {
+    use crate::engine::l4::inherited_facts::InheritedFacts;
     let snap = rev.snapshot();
     let Some(ArtifactValue::Fold(f)) = snap.get(&ArtifactKey::Fold).map(|a| &a.value) else {
         panic!("the fold is published");
     };
-    let warm = fold_text(&f.caps, &f.raw);
+    let raws: Vec<(&std::collections::BTreeSet<String>, &InheritedFacts)> = snap
+        .keys()
+        .filter_map(|k| match (k, snap.get(k).map(|a| &a.value)) {
+            (ArtifactKey::Raw(scope), Some(ArtifactValue::Raw(r))) => Some((scope, r)),
+            _ => None,
+        })
+        .collect();
+    let raws_text = |of: &dyn Fn(&std::collections::BTreeSet<String>) -> String| {
+        raws.iter()
+            .map(|(scope, _)| format!("raw artifact {scope:?}\n{}", of(scope)))
+            .collect::<String>()
+    };
+    let no_raw = InheritedFacts::default();
+    let warm = fold_text(&f.caps, &no_raw)
+        + &raws_text(&|scope| {
+            let (_, r) = raws.iter().find(|(s, _)| *s == scope).expect("listed");
+            fold_text_raw(r)
+        });
     let target = rev.target();
     let model = target.resolved();
+    let subjects: std::collections::BTreeSet<String> =
+        raws.iter().flat_map(|(s, _)| s.iter().cloned()).collect();
     let scope = crate::engine::l4::cone_derived::ConeScope {
         derived: true,
-        raw: crate::engine::session::WitnessRequest::primary().scope(model),
+        raw: crate::engine::l4::cone_derived::WitnessScope::Subjects(subjects),
     };
     let (caps, raw) = crate::engine::session::compose_cone(model, &relation_of(target), scope);
-    (warm, fold_text(&caps, &raw), f.cone_report)
+    let cold = fold_text(&caps, &no_raw)
+        + &raws_text(&|scope| {
+            let mut out = String::new();
+            for k in scope {
+                if let Some(facts) = raw.get(k) {
+                    writeln!(out, "raw {k} {:?}", facts.materialize()).unwrap();
+                }
+            }
+            out
+        });
+    (warm, cold, f.cone_report)
+}
+
+/// [`fold_text`]'s raw half alone.
+fn fold_text_raw(raw: &crate::engine::l4::inherited_facts::InheritedFacts) -> String {
+    let mut out = String::new();
+    let mut keys: Vec<&str> = raw.keys().collect();
+    keys.sort_unstable();
+    for k in keys {
+        let facts = raw.get(k).expect("a listed subject").materialize();
+        writeln!(out, "raw {k} {facts:?}").unwrap();
+    }
+    out
 }
 
 /// A session over a single-app workspace of `files`.
@@ -727,5 +775,89 @@ fn heavy_answers_share_trees_that_equal_cold_trees_after_each_edit() {
         let after = assert_trees_equal_cold(what, &rev);
         assert_ne!(before, after, "precondition: {what} moves a tree");
         before = after;
+    }
+}
+
+/// The `Raw` artifact over `routine`'s view on `rev`, as text.
+fn raw_of(rev: &Revision, routine: &str) -> String {
+    let snap = rev.snapshot();
+    let model = rev.target().resolved();
+    let ids: std::collections::BTreeSet<String> = model
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| r.name == routine)
+        .map(|r| r.id.clone())
+        .collect();
+    match snap.get(&ArtifactKey::Raw(ids)).map(|a| &a.value) {
+        Some(ArtifactValue::Raw(r)) => fold_text_raw(r),
+        _ => panic!("{routine}'s view has a raw artifact"),
+    }
+}
+
+/// Plan 2026-11-03 L6 across revisions (design §6.10's re-emission rule,
+/// amended): the fold emits no raw facts, and a new revision's `Raw` fill
+/// re-emits a demanded subject only when the fold re-folded its rows
+/// against the previous fold; every other demanded subject adopts the
+/// previous revision's entry. A body edit in `WriteLog` (insert → modify)
+/// changes `Go`'s inherited facts: the next revision re-emits `Go` and
+/// adopts `Call` (nothing it reaches moved), both answers equal cold, and
+/// every published raw entry equals a cold composition's (`step`). A
+/// second edit chains it: `Call`'s entry is adopted from an entry that was
+/// itself adopted.
+///
+/// DISCRIMINATION (break with Edit, run, revert, run; 2026-11-03): (d)
+/// adopting the previous revision's entry whatever the fold re-folded (the
+/// `!store.changed(id)` test made `true ||` in the `Raw` fill's `reuse`)
+/// serves `Go`'s stale raw facts: "insert to modify: Explain on Go equals
+/// cold" fails (and seven other cone and incremental tests' answers). (e)
+/// the changed set missing Δ_pd_output (a member recorded only when its SCC
+/// re-folded) fails `a_changed_producer_refolds_the_rows_of_every_routine_
+/// holding_its_states` ("producer edit: Explain on A equals cold"). Each
+/// reverted, green.
+#[test]
+fn a_changed_subject_is_re_emitted_and_an_unchanged_one_adopted() {
+    let (dir, s) = session(&[
+        ("src/Tables.al", TABLES),
+        ("src/Leaf.al", LEAF),
+        ("src/Mid.al", MID),
+        ("src/Top.al", TOP),
+        ("src/Aside.al", ASIDE),
+        ("src/Caller.al", CALLER),
+    ]);
+    let ws = dir.path();
+    let roots = ["Go", "Call"];
+    let (rev, _, _) = step("cold", &s, ws, &roots);
+    assert_eq!(rev.raw_counts(), (2, 0), "cold: each view emitted");
+    let (mut go, call) = (raw_of(&rev, "Go"), raw_of(&rev, "Call"));
+    drop(rev);
+    for (what, from, to) in [
+        (
+            "insert to modify",
+            "        R.Insert();",
+            "        R.Modify();",
+        ),
+        (
+            "modify to delete",
+            "        R.Modify();",
+            "        R.Delete();",
+        ),
+    ] {
+        edit(ws, "src/Leaf.al", from, to);
+        let (next, _, r) = step(what, &s, ws, &roots);
+        assert_partial(what, &r);
+        let moved = raw_of(&next, "Go");
+        assert_ne!(moved, go, "precondition: {what} moves Go's raw");
+        assert_eq!(
+            raw_of(&next, "Call"),
+            call,
+            "precondition: Call's raw is unchanged"
+        );
+        assert_eq!(
+            next.raw_counts(),
+            (1, 1),
+            "{what}: Go re-emitted, Call adopted"
+        );
+        go = moved;
     }
 }

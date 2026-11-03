@@ -126,7 +126,12 @@ impl Case {
             Case::Cold => 3_800,
             Case::Incremental => 1_600,
             Case::Fill("fold") => 900,
-            Case::Fill("raw") => 600,
+            // A view's raw facts (plan 2026-11-03 L6): emitted from the
+            // fold's retained cones, no longer a raw-only composition (the
+            // old 600). One root on CDO: 14 ms, 0.32 MiB left resident
+            // (`census-probe incr`, `PROBE_RAW_BYTES=1`); the default's
+            // 60 MiB until the fill's peak is measured apart.
+            Case::Fill("raw") => 60,
             Case::Fill("det") => 350,
             Case::Fill("l4") => 250,
             Case::Fill("run") => 120,

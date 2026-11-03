@@ -2749,9 +2749,12 @@ struct SccRecord {
 /// out-edges, an out-edge's transfer digest, its member order, or a
 /// successor's product fingerprint (cut-off: an SCC re-folded to equal
 /// products leaves its predecessors clean) — and copies every other SCC's
-/// cones and its members' rows (derived row, raw entry, coverage record)
-/// from the previous fold. A member in Δ_pd_output (its own producer-solve
-/// entries changed) has its rows re-folded regardless.
+/// cones and its members' rows (derived row, coverage record) from the
+/// previous fold. A member in Δ_pd_output (its own producer-solve entries
+/// changed) has its rows re-folded regardless. A resident fold emits no raw
+/// facts: a subject's are emitted on demand ([`ConeStore::emit_raw`]), and
+/// an entry emitted over the previous fold stays valid for every member
+/// this walk did not re-fold ([`ConeStore::changed`]; plan 2026-11-03 L6).
 ///
 /// The memo rows are not kept: a memo row is a function of its SCC's fact
 /// cone (F over the cone's closed entries), which the fingerprint covers
@@ -2759,9 +2762,155 @@ struct SccRecord {
 #[derive(Default)]
 pub struct ConeStore {
     sccs: HashMap<Digest32, SccRecord>,
+    /// What [`ConeStore::emit_raw`] reads: a resident fold emits no raw
+    /// facts, so a subject's are emitted on demand from the fold's retained
+    /// cones (plan 2026-11-03 L6). `None` only for an empty store.
+    emit: Option<EmitSource>,
+}
+
+/// What one [`ConeStore::emit_raw`] did: the subjects it emitted from the
+/// cones and the ones it adopted.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RawEmitReport {
+    pub emitted: u64,
+    pub adopted: u64,
+}
+
+/// The walk's inputs and cones a subject's raw emission reads, kept by a
+/// resident fold (plan 2026-11-03 L6): the typed-edge graph, its SCCs and
+/// each SCC's successors, every non-root SCC's fact cone by SCC index (the
+/// store's own `Arc`s), the guard frames, and the routines whose rows the
+/// walk re-folded against the previous fold. A member's raw facts read its
+/// out-edges, its successor SCCs' fact cones, its own producer-solve
+/// entries, its frame and its callees' rows (a singleton), or its SCC's
+/// siblings' direct facts and out-edges (a recursive member): every input
+/// is here, in the fold's arena, or in the model.
+struct EmitSource {
+    g: TypedEdgeGraph,
+    scc: SccResult,
+    succ: Vec<BTreeSet<usize>>,
+    cones: Vec<Option<Arc<ConeFacts>>>,
+    frames: HashMap<String, super::param_guard::FrameGuards>,
+    /// The members re-folded against the previous fold (its SCC re-folded,
+    /// or its own producer-solve entries changed: Δ_pd_output); `None`: no
+    /// previous fold, so every member. A raw entry emitted over the previous
+    /// fold is this fold's entry for every member NOT here: exactly the
+    /// rule stage 5b adopted a raw entry by (`refold`).
+    changed: Option<HashSet<String>>,
 }
 
 impl ConeStore {
+    /// Whether `id`'s raw facts may have changed since the previous fold
+    /// (see [`EmitSource::changed`]); true without one.
+    pub fn changed(&self, id: &str) -> bool {
+        self.emit
+            .as_ref()
+            .is_none_or(|e| e.changed.as_ref().is_none_or(|c| c.contains(id)))
+    }
+
+    /// The raw inherited facts of `subjects` (internal ids) over this fold's
+    /// retained cones (plan 2026-11-03 L6): for each subject that is a node
+    /// of the fold's graph, the entry a composition over any scope holding
+    /// it emits (an empty one included); a subject outside the graph gets
+    /// no entry, as in a composition. `direct_raw`, `arena` and `routines`
+    /// are the fold's (`CapabilityAnalysis::direct_full`, `pd`) and the
+    /// model's rows. A subject `reuse` hands an entry for is adopted from it
+    /// instead of emitted (its table set shared, `InheritedBuilder::adopt`):
+    /// the caller hands only entries that are this fold's. Also returns how
+    /// many subjects were emitted and adopted.
+    pub fn emit_raw<'r>(
+        &self,
+        routines: &[ModelRoutine],
+        direct_raw: &HashMap<String, Vec<CapabilityFact>>,
+        arena: Option<&super::pd_solve::ConeArena>,
+        subjects: &BTreeSet<String>,
+        reuse: &dyn Fn(&str) -> Option<&'r InheritedFacts>,
+    ) -> (InheritedFacts, RawEmitReport) {
+        let _s = crate::engine::perf_trace::span("cone", "cone.emit_raw");
+        let mut out = InheritedBuilder::default();
+        let Some(src) = &self.emit else {
+            return (out.finish(), RawEmitReport::default());
+        };
+        let no_arena = super::pd_solve::ConeArena::default();
+        let arena = arena.unwrap_or(&no_arena);
+        let routines_by_id: HashMap<&str, &ModelRoutine> =
+            routines.iter().map(|r| (r.id.as_str(), r)).collect();
+        let mut reps = super::pd_solve::EntryReps::new();
+        let mode = MemberMode {
+            derived: false,
+            raw: true,
+        };
+        let (mut emitted, mut adopted) = (0u64, 0u64);
+        for m in subjects {
+            let Some(&i) = src.scc.scc_id_by_routine.get(m) else {
+                continue;
+            };
+            if let Some(old) = reuse(m)
+                && out.adopt(old, m)
+            {
+                adopted += 1;
+                continue;
+            }
+            emitted += 1;
+            // The successor SCCs' cones: every cone the member's walk reads
+            // (`compose_inherited_cones`'s note on a cone's readers).
+            let cones: ConeMap = src.succ[i]
+                .iter()
+                .map(|&y| {
+                    let cone = src.cones[y]
+                        .as_ref()
+                        .expect("a successor SCC is not a root, so its cone is kept");
+                    (y, Arc::clone(cone))
+                })
+                .collect();
+            let own = super::pd_solve::resolved_entries_of(arena, m, &mut reps);
+            let scc_entry = &src.scc.sccs[i];
+            let refs = if scc_entry.recursive {
+                // The walk reads only its siblings' direct facts.
+                let direct: RoutineDirectFacts = scc_entry
+                    .members
+                    .iter()
+                    .filter_map(|id| {
+                        let byk = dedup_direct(direct_raw.get(id)?);
+                        (!byk.is_empty()).then(|| (id.clone(), byk))
+                    })
+                    .collect();
+                let picks = inherited_facts_by_bfs(
+                    m,
+                    &src.g,
+                    &direct,
+                    &src.scc.scc_id_by_routine,
+                    &cones,
+                    &own,
+                );
+                emit_picks(m, picks, mode, &mut out)
+            } else {
+                let mut derived = ConeDerivedBuilder::default();
+                let mut memo = ClosedRowMemo::new();
+                let mut stats = ComposeStats::default();
+                inherited_facts_for_singleton(
+                    m,
+                    &src.g,
+                    &src.scc.scc_id_by_routine,
+                    &cones,
+                    routines_by_id.get(m.as_str()).copied(),
+                    src.frames.get(m),
+                    &routines_by_id,
+                    &own,
+                    mode,
+                    &mut derived,
+                    &mut memo,
+                    &mut stats,
+                    &mut out,
+                )
+            };
+            out.insert(m.clone(), refs);
+        }
+        crate::engine::perf_trace::counter_delta("raw.emitted", emitted);
+        crate::engine::perf_trace::counter_delta("raw.adopted", adopted);
+        (out.finish(), RawEmitReport { emitted, adopted })
+    }
+
     /// SCCs held, and how many of them carry a fact cone.
     pub fn len(&self) -> (usize, usize) {
         (
@@ -2789,7 +2938,6 @@ impl ConeStore {
 pub struct ConeSeed<'a> {
     pub store: &'a ConeStore,
     pub derived: &'a ConeDerivedStore,
-    pub raw: &'a InheritedFacts,
     pub coverage: &'a HashMap<String, CoverageRecord>,
 }
 
@@ -2974,9 +3122,20 @@ struct ComposedCones {
     arena: super::pd_solve::ConeArena,
     stats: ComposeStats,
     pd_report: super::pd_solve::PdSolveReport,
-    /// The cone store, when the walk was asked to keep one.
+    /// The cone store, when the walk was asked to keep one (its emission
+    /// source still empty: the caller adds the graph and frames it owns).
     store: Option<ConeStore>,
     cone_report: ConeReport,
+    /// With a store: each SCC's successors, each SCC's kept fact cone, and
+    /// the members re-folded against the seed (plan 2026-11-03 L6).
+    emit_parts: Option<EmitParts>,
+}
+
+/// What [`compose_inherited_cones`] hands over for an [`EmitSource`].
+struct EmitParts {
+    succ: Vec<BTreeSet<usize>>,
+    cones: Vec<Option<Arc<ConeFacts>>>,
+    changed: Option<HashSet<String>>,
 }
 
 /// Compute capabilityFactsInherited + coverage for EVERY routine via a single
@@ -3118,6 +3277,15 @@ fn compose_inherited_cones(
         (Vec::new(), Vec::new())
     };
     let mut fingerprints = Fingerprints::default();
+    // Plan 2026-11-03 L6: per SCC index, the fact cone the store keeps (for
+    // the on-demand raw emission), and the members whose rows this walk
+    // re-folded against the seed (`None`: no seed, every member).
+    let mut kept_cones: Vec<Option<Arc<ConeFacts>>> = if keep.is_some() {
+        vec![None; scc.sccs.len()]
+    } else {
+        Vec::new()
+    };
+    let mut changed: Option<HashSet<String>> = seed.map(|_| HashSet::new());
 
     let empty_succ: BTreeSet<usize> = BTreeSet::new();
     for i in 0..scc.sccs.len() {
@@ -3179,6 +3347,8 @@ fn compose_inherited_cones(
             None => ([0; 32], [0; 32]),
         };
         let old_record = seed.and_then(|s| s.store.sccs.get(&key));
+        // A seed keeps no raw entries (a resident fold emits none, plan
+        // 2026-11-03 L6), so a member that wants raw facts is never copied.
         let reused: Option<&SccRecord> = old_record.filter(|r| {
             let s = seed.expect("a record comes from a seed");
             r.input == input
@@ -3188,7 +3358,7 @@ fn compose_inherited_cones(
                     !routine_ids.contains(m)
                         || (s.coverage.contains_key(m.as_str())
                             && (!mode.wants_derived() || s.derived.has_row(m))
-                            && (!mode.wants_raw() || s.raw.contains_key(m)))
+                            && !mode.wants_raw())
                 })
         });
         // A member's rows are re-folded when its SCC is, or when its own
@@ -3268,6 +3438,7 @@ fn compose_inherited_cones(
             }
             scc_keys[i] = key;
             scc_fps[i] = fingerprint;
+            kept_cones[i] = (!root_scc).then(|| Arc::clone(&fact_cones[&i]));
             store.sccs.insert(
                 key,
                 SccRecord {
@@ -3380,11 +3551,11 @@ fn compose_inherited_cones(
                 if mode.wants_derived() {
                     derived.copy_row(s.derived, m);
                 }
-                if mode.wants_raw() {
-                    raw_out.adopt(s.raw, m);
-                }
                 cone_report.copied_rows += 1;
                 continue;
+            }
+            if let Some(c) = &mut changed {
+                c.insert(m.clone());
             }
             if reused.is_some() {
                 cone_report.pd_rows += 1;
@@ -3653,6 +3824,11 @@ fn compose_inherited_cones(
         arena,
         stats,
         pd_report,
+        emit_parts: keep.is_some().then(|| EmitParts {
+            succ: succ_sccs,
+            cones: kept_cones,
+            changed,
+        }),
         store: keep.is_some().then_some(store),
         cone_report,
     }
@@ -3959,8 +4135,9 @@ pub fn compose_cone_over_graph_retained(
         arena: pd_solution,
         stats: _stats,
         pd_report,
-        store: cone_store,
+        store: mut cone_store,
         cone_report,
+        emit_parts,
     } = compose_inherited_cones(
         &g,
         &scc,
@@ -3974,6 +4151,19 @@ pub fn compose_cone_over_graph_retained(
         reuse.as_ref(),
         keep,
     );
+    // Plan 2026-11-03 L6: a kept store also keeps what a subject's raw
+    // emission reads, the graph, its SCCs and the frames among them (their
+    // last use was the walk).
+    if let (Some(store), Some(parts)) = (&mut cone_store, emit_parts) {
+        store.emit = Some(EmitSource {
+            g,
+            scc,
+            succ: parts.succ,
+            cones: parts.cones,
+            frames,
+            changed: parts.changed,
+        });
+    }
     if !raw.is_empty() {
         crate::engine::perf_trace::counter_delta("build.witness_pass", 1);
     }

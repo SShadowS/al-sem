@@ -8,12 +8,12 @@
 //!
 //! **Artifacts** ([`ArtifactKey`], by phase): 0: `Ordering`, `Rules`,
 //! `ExplainIndexes` (from the model alone), `Fold` (the one composition:
-//! every derived row, the pd arena, and the primary routines' raw facts),
+//! every derived row, the pd arena and the retained cones; no raw facts),
 //! `L4` (the solve and its core summaries, never drained); 1: `Raw(subjects)`
-//! (the raw facts of subjects outside the primary emission: a dependency
-//! root), `Det` (the detector artifacts, harvested from the lent `Fold` and
-//! `L4`, at a mask), `TreeBase`; 2: `Run(key)`, `Tree(subjects)`; 3:
-//! `Witness`.
+//! (the raw facts of one view's subjects, primary or dependency, emitted on
+//! demand from the fold's retained cones: plan 2026-11-03 L6), `Det` (the
+//! detector artifacts, harvested from the lent `Fold` and `L4`, at a mask),
+//! `TreeBase`; 2: `Run(key)`, `Tree(subjects)`; 3: `Witness`.
 //!
 //! **Job lines.** A cold run prints the lines `prepare` printed (the solve's
 //! non-convergence line, …) only when its plan solves `l4`. Each artifact
@@ -44,8 +44,8 @@ use crate::engine::resident::store::{
     Control, FillCx, PrepareError, Snapshot, Store, StoreKey, StoreStats, StoreValue,
 };
 use crate::engine::session::{
-    JobId, Plan, RunKey, TreeRead, TreeReadOut, View, WitnessRequest, compose_cone_retained,
-    emit_raw_ids, key, relation_of, run_once, tree_apps, tree_groups,
+    JobId, Plan, RunKey, TreeRead, TreeReadOut, View, WitnessRequest, compose_cone_retained, key,
+    relation_of, run_once, tree_apps, tree_groups,
 };
 use crate::program::inputs::WorkspaceInputs;
 use crate::program::model::calls::CallEdge;
@@ -64,8 +64,10 @@ pub enum ArtifactKey {
     Rules,
     Fold,
     L4,
-    /// The raw facts of these subjects (internal ids), outside the primary
-    /// emission.
+    /// The raw facts of these subjects (internal ids): one view's, emitted
+    /// on demand from the fold's retained cones (plan 2026-11-03 L6; the
+    /// fold emits none). A subject another published `Raw` holds, or the
+    /// previous revision's when its rows were not re-folded, is adopted.
     Raw(BTreeSet<String>),
     /// The tree store's whole sections (design §6.11): derived once per
     /// revision over the fold, shared by every view.
@@ -121,8 +123,6 @@ impl StoreKey for ArtifactKey {
 /// The one composition a revision keeps.
 pub struct Fold {
     pub(crate) caps: CapabilityAnalysis,
-    /// The primary routines' raw facts.
-    pub(crate) raw: InheritedFacts,
     /// The per-routine inputs its producer solve read (design §6.10): the
     /// next revision's fold re-solves only the producers Δ reaches and
     /// copies every other producer's states from `caps.pd`.
@@ -130,7 +130,9 @@ pub struct Fold {
     /// What its producer solve reused.
     pub pd_report: crate::engine::l4::pd_solve::PdSolveReport,
     /// Its per-SCC cone store (design §6.10): the next revision's fold
-    /// re-folds only the SCCs whose inputs changed and copies the rest.
+    /// re-folds only the SCCs whose inputs changed and copies the rest; and
+    /// what a `Raw` fill emits a subject's raw facts from (plan 2026-11-03
+    /// L6).
     pub(crate) cones: Option<crate::engine::l4::capability_cone::ConeStore>,
     /// What its walk re-folded and copied.
     pub cone_report: crate::engine::l4::capability_cone::ConeReport,
@@ -147,7 +149,6 @@ impl Fold {
             pd,
         } = self.caps;
         vec![
-            ("fold.raw", Box::new(self.raw)),
             ("fold.direct_full", Box::new(direct_full)),
             ("fold.coverage", Box::new(coverage)),
             ("fold.derived", Box::new(derived)),
@@ -262,8 +263,6 @@ pub struct Revision {
     target: Arc<AnalysisTarget>,
     rel: Arc<ExecRelation>,
     dependency_calls: Option<Arc<Vec<CallEdge>>>,
-    /// The internal ids of the primary routines (the `Fold`'s raw subjects).
-    primary: BTreeSet<String>,
     store: Store<ArtifactKey, Artifact>,
     answered: std::sync::atomic::AtomicU64,
     /// Fills per artifact kind (`status`, the T-order fill counters).
@@ -280,8 +279,26 @@ pub struct Revision {
     /// its producer states the seed of this revision's fold (§6.10), until
     /// that fold publishes. Same key rule as the L4 seed.
     fold_seed: std::sync::Mutex<Option<Arc<Artifact>>>,
+    /// The raw facts emitted over that seed fold (its revision's `Raw`
+    /// artifacts, plan 2026-11-03 L6): a `Raw` fill adopts a subject's
+    /// entry from them when this revision's fold did not re-fold the
+    /// subject's rows against the seed (`ConeStore::changed`), and emits it
+    /// otherwise. Kept for the revision's life (a fold refilled without its
+    /// seed re-folds everything, so nothing is adopted then); taken with the
+    /// fold seed, so the two always belong together.
+    raw_seed: Vec<Arc<Artifact>>,
+    /// The `Raw` fills' subjects ([`Revision::raw_counts`]).
+    raw_counts: RawCounts,
     /// The witness memo's counters ([`Revision::witness_counts`]).
     witness: WitnessCounts,
+}
+
+/// The subjects this revision's `Raw` fills emitted from the cones and the
+/// ones they adopted (plan 2026-11-03 L6).
+#[derive(Debug, Default)]
+struct RawCounts {
+    emitted: std::sync::atomic::AtomicU64,
+    adopted: std::sync::atomic::AtomicU64,
 }
 
 /// The witness memo's counters (`status`): roots a request found published
@@ -336,15 +353,15 @@ impl Revision {
             AnalysisTarget::CrossApp(b) => b.dependency_calls.clone(),
             AnalysisTarget::SingleApp(_) => None,
         };
-        let primary = WitnessRequest::primary().subjects(target.resolved());
         let single_app = matches!(target, AnalysisTarget::SingleApp(_));
         let seed_key = seed_key(&inputs, single_app);
         let seed = prev
             .and_then(Revision::l4_seed)
             .filter(|s| s.key == seed_key);
-        let fold_seed = prev
+        let (fold_seed, raw_seed) = prev
             .filter(|p| p.seed_key == seed_key)
-            .and_then(Revision::fold_seed);
+            .and_then(Revision::fold_seed_with_raws)
+            .map_or((None, Vec::new()), |(f, r)| (Some(f), r));
         Revision {
             id,
             inputs,
@@ -352,7 +369,6 @@ impl Revision {
             target: Arc::new(target),
             rel,
             dependency_calls,
-            primary,
             store: Store::new(),
             answered: std::sync::atomic::AtomicU64::new(0),
             fills: std::sync::Mutex::new(BTreeMap::new()),
@@ -360,6 +376,8 @@ impl Revision {
             seed: std::sync::Mutex::new(seed),
             l4_report: std::sync::Mutex::new(None),
             fold_seed: std::sync::Mutex::new(fold_seed),
+            raw_seed,
+            raw_counts: RawCounts::default(),
             witness: WitnessCounts::default(),
         }
     }
@@ -368,13 +386,31 @@ impl Revision {
     /// published `Fold`, else the seed it was given and has not used yet.
     #[must_use]
     pub fn fold_seed(&self) -> Option<Arc<Artifact>> {
-        match self.store.load().get(&ArtifactKey::Fold) {
-            Some(a) => Some(Arc::clone(a)),
+        self.fold_seed_with_raws().map(|(f, _)| f)
+    }
+
+    /// [`Revision::fold_seed`] with the raw facts emitted over that fold
+    /// (plan 2026-11-03 L6), read off one snapshot: this revision's
+    /// published `Fold` and `Raw` artifacts, else the seed it was given and
+    /// the raw seed that came with it.
+    #[must_use]
+    pub fn fold_seed_with_raws(&self) -> Option<(Arc<Artifact>, Vec<Arc<Artifact>>)> {
+        let snap = self.store.load();
+        match snap.get(&ArtifactKey::Fold) {
+            Some(a) => {
+                let raws = snap
+                    .keys()
+                    .filter(|k| matches!(k, ArtifactKey::Raw(_)))
+                    .filter_map(|k| snap.get(k).cloned())
+                    .collect();
+                Some((Arc::clone(a), raws))
+            }
             None => self
                 .fold_seed
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
-                .clone(),
+                .clone()
+                .map(|f| (f, self.raw_seed.clone())),
         }
     }
 
@@ -476,8 +512,9 @@ impl Revision {
     }
 
     /// The artifact kinds eviction may drop, in the design's order (§7):
-    /// the roots' witnesses (small, plan 2026-11-03 W), dependency subjects'
-    /// raw facts, then the views' trees, runs and the det, then explain's
+    /// the roots' witnesses (small, plan 2026-11-03 W), the views' raw
+    /// facts (re-emitted from the fold's cones, plan L6), then the views'
+    /// trees, runs and the det, then explain's
     /// indexes (plan W2: ~1 s to rebuild from the model, cheaper than any
     /// kind after it), then the tree store's whole sections and the fold
     /// (the cones), then ordering and rules. Never the model, the relation
@@ -569,15 +606,17 @@ impl Revision {
             needs.push((ArtifactKey::ExplainIndexes, 0));
         }
         // The tree store (§6.11): the whole sections once per revision, one
-        // tree per distinct view (its subjects), each over the fold and, for
-        // subjects outside the primary emission, their raw artifact.
+        // tree per distinct view (its subjects), each over the fold and its
+        // subjects' raw artifact (plan 2026-11-03 L6: the fold emits no raw
+        // facts; a view's are emitted on demand, primary or dependency).
         let scopes = self.tree_scopes(plan);
         if !scopes.is_empty() {
             needs.push((ArtifactKey::TreeBase, 0));
         }
         for scope in scopes {
-            if !scope.is_subset(&self.primary) {
-                needs.push((ArtifactKey::Raw(scope.clone()), 0));
+            let raw = ArtifactKey::Raw(scope.clone());
+            if !needs.iter().any(|(k, _)| *k == raw) {
+                needs.push((raw, 0));
             }
             let tree = ArtifactKey::Tree(scope);
             if !needs.iter().any(|(k, _)| *k == tree) {
@@ -747,10 +786,11 @@ impl Revision {
                 ArtifactKey::Rules => ArtifactValue::Rules(dc::fill_rules(model)),
                 ArtifactKey::Fold => {
                     let _s = crate::engine::perf_trace::span("revision", "revision.fold");
-                    let primary = WitnessRequest::primary();
+                    // No raw facts (plan 2026-11-03 L6): a view's are
+                    // emitted on demand from the retained cones (`Raw`).
                     let scope = ConeScope {
                         derived: true,
-                        raw: primary.scope(model),
+                        raw: crate::engine::l4::cone_derived::WitnessScope::None,
                     };
                     // The previous revision's fold (§6.10): its producer
                     // states are copied where Δ leaves them untouched.
@@ -768,13 +808,12 @@ impl Revision {
                             cones: f.cones.as_ref().map(|store| ConeSeed {
                                 store,
                                 derived: &f.caps.derived,
-                                raw: &f.raw,
                                 coverage: &f.caps.coverage,
                             }),
                         }),
                         _ => None,
                     });
-                    let (caps, raw, kept) = compose_cone_retained(
+                    let (caps, _no_raw, kept) = compose_cone_retained(
                         model,
                         &self.rel,
                         scope,
@@ -794,7 +833,6 @@ impl Revision {
                     drop(seed);
                     ArtifactValue::Fold(Box::new(Fold {
                         caps,
-                        raw,
                         pd_digests: kept.digests,
                         pd_report: kept.report,
                         cones: kept.store,
@@ -841,7 +879,54 @@ impl Revision {
                     })
                 }
                 ArtifactKey::Raw(subjects) => {
-                    ArtifactValue::Raw(emit_raw_ids(model, &self.rel, subjects.clone()))
+                    // Plan 2026-11-03 L6: emitted from the fold's retained
+                    // cones. A subject another published `Raw` holds is
+                    // adopted (it is this fold's entry); so is one the
+                    // previous revision emitted, when this fold did not
+                    // re-fold its rows against that revision's fold.
+                    let Some(ArtifactValue::Fold(fold)) =
+                        cx.snapshot.get(&ArtifactKey::Fold).map(|a| &a.value)
+                    else {
+                        return Err("raw facts need the fold, which is not published".into());
+                    };
+                    let store = fold.cones.as_ref().ok_or("the fold kept no cone store")?;
+                    fn raws_of<'a>(
+                        arts: impl Iterator<Item = &'a Arc<Artifact>>,
+                    ) -> Vec<&'a InheritedFacts> {
+                        arts.filter_map(|a| match &a.value {
+                            ArtifactValue::Raw(r) => Some(r),
+                            _ => None,
+                        })
+                        .collect()
+                    }
+                    let same = raws_of(
+                        cx.snapshot
+                            .keys()
+                            .filter(|k| matches!(k, ArtifactKey::Raw(_)))
+                            .filter_map(|k| cx.snapshot.get(k)),
+                    );
+                    let prev = raws_of(self.raw_seed.iter());
+                    let reuse = |id: &str| {
+                        same.iter()
+                            .find(|r| r.contains_key(id))
+                            .or_else(|| {
+                                (!store.changed(id))
+                                    .then(|| prev.iter().find(|r| r.contains_key(id)))
+                                    .flatten()
+                            })
+                            .copied()
+                    };
+                    let (raw, report) = store.emit_raw(
+                        &model.workspace.routines,
+                        &fold.caps.direct_full,
+                        fold.caps.pd.as_ref(),
+                        subjects,
+                        &reuse,
+                    );
+                    use std::sync::atomic::Ordering::Relaxed;
+                    self.raw_counts.emitted.fetch_add(report.emitted, Relaxed);
+                    self.raw_counts.adopted.fetch_add(report.adopted, Relaxed);
+                    ArtifactValue::Raw(raw)
                 }
                 ArtifactKey::TreeBase => {
                     let Some(ArtifactValue::Fold(fold)) =
@@ -874,17 +959,13 @@ impl Revision {
                         return Err("a tree needs the tree base, which is not published".into());
                     };
                     let pd = fold.caps.pd.as_ref().ok_or("the fold kept no pd arena")?;
-                    let map = if scope.is_subset(&self.primary) {
-                        &fold.raw
-                    } else {
-                        match cx
-                            .snapshot
-                            .get(&ArtifactKey::Raw(scope.clone()))
-                            .map(|a| &a.value)
-                        {
-                            Some(ArtifactValue::Raw(r)) => r,
-                            _ => return Err("a tree's raw facts are missing".into()),
-                        }
+                    let map = match cx
+                        .snapshot
+                        .get(&ArtifactKey::Raw(scope.clone()))
+                        .map(|a| &a.value)
+                    {
+                        Some(ArtifactValue::Raw(r)) => r,
+                        _ => return Err("a tree's raw facts are missing".into()),
                     };
                     ArtifactValue::Tree(Arc::new(compose_tree_over(
                         std::borrow::Cow::Borrowed(&**base),
@@ -1183,6 +1264,18 @@ impl Revision {
             self.witness.hit.load(Relaxed),
             self.witness.miss.load(Relaxed),
             self.witness.batches.load(Relaxed),
+        )
+    }
+
+    /// The `Raw` fills' subjects `(emitted, adopted)` (plan 2026-11-03 L6):
+    /// emitted from the fold's cones, or adopted from another view's
+    /// emission or the previous revision's.
+    #[must_use]
+    pub fn raw_counts(&self) -> (u64, u64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        (
+            self.raw_counts.emitted.load(Relaxed),
+            self.raw_counts.adopted.load(Relaxed),
         )
     }
 

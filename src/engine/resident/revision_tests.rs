@@ -210,7 +210,15 @@ fn mixed_orders_over_one_revision_equal_cold_runs() {
                 u64::from(order.iter().any(|c| matches!(c, Query | Digest | Prove))),
                 "{order:?}"
             );
-            assert_eq!(n("raw"), 0, "every root is primary");
+            // Plan 2026-11-03 L6 (an amendment to design §6.10's eager
+            // primary emission): the fold emits no raw facts; each view's
+            // are one `Raw` fill, primary subjects too. Every request here
+            // reads one view, the routine's.
+            assert_eq!(
+                n("raw"),
+                u64::from(order.iter().any(|c| !matches!(c, Query))),
+                "{order:?}: one emission for the one view"
+            );
             assert!(n("det") <= 2, "{order:?}: {fills:?}");
             // Explain's indexes (plan 2026-11-03 W2): once per revision,
             // however many explains, and only for an explain.
@@ -237,15 +245,17 @@ fn effects_text(e: &DigestEffects) -> String {
 
 /// T-prepared, the first dependency subject: a root inside a dependency
 /// (rule B's `Dep Rec Lib.Raise`; no CLI selector names one today, so the
-/// plan is built by hand) is outside the fold's primary emission, so the
-/// store fills a `Raw` artifact for it, and its effects equal a cold
-/// one-shot view's over the same plan, after a primary request on the same
-/// revision.
+/// plan is built by hand) gets a `Raw` artifact of its own, and its effects
+/// equal a cold one-shot view's over the same plan, after a primary request
+/// on the same revision. Since plan 2026-11-03 L6 every view's raw facts,
+/// primary or dependency, are one `Raw` fill emitted from the fold's
+/// retained cones.
 ///
-/// DISCRIMINATION (2026-11-02): borrowing the fold's primary map for the
-/// dependency root (the `is_subset` test forced true) leaves its tree
-/// without the root's raw facts: `assert_eq!(warm, cold)` fails (empty
-/// against the inherited insert).
+/// DISCRIMINATION (2026-11-02, before L6): borrowing the fold's primary map
+/// for the dependency root (the `is_subset` test forced true) leaves its
+/// tree without the root's raw facts: `assert_eq!(warm, cold)` fails (empty
+/// against the inherited insert). L6's own proofs are on
+/// `a_primary_root_gets_its_raw_facts_on_demand`.
 #[test]
 fn a_dependency_root_reads_a_raw_artifact() {
     let f = rule_b("WriteThenCommit");
@@ -285,10 +295,12 @@ fn a_dependency_root_reads_a_raw_artifact() {
     assert_eq!(warm, cold);
     let fills = rev.fill_counts();
     assert_eq!(fills.get("fold"), Some(&1));
+    // Plan 2026-11-03 L6: one emission per view, the primary routine's (the
+    // explain above) and the dependency root's.
     assert_eq!(
         fills.get("raw"),
-        Some(&1),
-        "one scoped emission for the dependency root"
+        Some(&2),
+        "one scoped emission per view, the dependency root's included"
     );
 }
 
@@ -525,6 +537,7 @@ fn concurrent_requests_and_evictions_answer_the_cold_bytes() {
                     for k in [
                         "witness",
                         "explain_indexes",
+                        "raw",
                         "tree",
                         "tree_base",
                         "run",
@@ -572,8 +585,16 @@ fn concurrent_requests_and_evictions_answer_the_cold_bytes() {
     // base is filled again, never read half-built. So do the witnesses
     // (plan 2026-11-03 W): one evicted between its claim and its
     // publication is discarded (the generation moved) and filled again; and
-    // explain's indexes (W2), read by the explains of the heavy thread.
-    for kind in ["l4", "tree", "tree_base", "witness", "explain_indexes"] {
+    // explain's indexes (W2), read by the explains of the heavy thread; and
+    // the view's raw facts (L6: every heavy request reads a `Raw` artifact).
+    for kind in [
+        "l4",
+        "raw",
+        "tree",
+        "tree_base",
+        "witness",
+        "explain_indexes",
+    ] {
         assert!(
             rev.fill_counts().get(kind).copied().unwrap_or(0) > 1,
             "{kind} refilled after eviction: {:?}",
@@ -1078,4 +1099,397 @@ fn an_explain_answer_does_not_depend_on_earlier_requests() {
             assert_eq!(rev.fill_counts().get("explain_indexes"), Some(&1));
         }
     });
+}
+
+/// A producer reached over two call sites at one distance: `Twice` passes a
+/// temporary record to `Fill` (which inserts into its parameter: a producer)
+/// at two sites, so its state has two shortest links, and its own entry's
+/// first hop is the lower-ranked edge's (plan 2026-11-03 L6: the emission
+/// reads the entries back from the arena by `finalize`'s rule).
+const TWO_SITES_SOURCE: &str = r#"table 50300 "P Rec"
+{
+    fields { field(1; Id; Integer) { } }
+    keys { key(PK; Id) { } }
+}
+codeunit 50301 "P Lib"
+{
+    procedure Fill(var R: Record "P Rec")
+    begin
+        R.Id := 1;
+        R.Insert();
+    end;
+}
+codeunit 50302 "P Use"
+{
+    procedure Twice()
+    var
+        T: Record "P Rec" temporary;
+        L: Codeunit "P Lib";
+    begin
+        L.Fill(T);
+        L.Fill(T);
+    end;
+
+    procedure Outer()
+    begin
+        Twice();
+    end;
+}
+"#;
+
+fn two_sites_ws(routine: &'static str) -> Fixture {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(
+        dir.path().join("app.json"),
+        r#"{"id":"23232323-0000-4000-8000-000000000302","name":"P","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("src/P.al"), TWO_SITES_SOURCE).unwrap();
+    Fixture {
+        inputs: WorkspaceInputs::read(dir.path(), &READ),
+        single_app: true,
+        routine,
+        _dir: Some(dir),
+    }
+}
+
+/// The revision's published fold (filled first if absent).
+fn fold_of(rev: &Revision) -> ReadySnapshot {
+    rev.prepare_keys(&[ArtifactKey::Fold], &Control::unreserved())
+        .expect("the fold fills");
+    rev.snapshot()
+}
+
+/// `raw`'s entries as text: every subject sorted, materialized.
+fn raw_text(raw: &InheritedFacts) -> String {
+    let mut keys: Vec<&str> = raw.keys().collect();
+    keys.sort_unstable();
+    keys.into_iter()
+        .map(|k| format!("{k} {:?}\n", raw.get(k).expect("listed").materialize()))
+        .collect()
+}
+
+/// Every `Raw` artifact the revision holds, as `(subjects, text)`.
+fn raw_artifacts(rev: &Revision) -> Vec<(BTreeSet<String>, String)> {
+    let snap = rev.snapshot();
+    snap.keys()
+        .filter_map(|k| match (k, snap.get(k).map(|a| &a.value)) {
+            (ArtifactKey::Raw(scope), Some(ArtifactValue::Raw(r))) => {
+                Some((scope.clone(), raw_text(r)))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Plan 2026-11-03 L6 (the on-demand emission's contract): the raw facts a
+/// resident fold's retained cones emit, for EVERY routine of the model at
+/// once, equal a raw-only composition's (`raw: All`, the one-shot path's
+/// emission), entry for entry and key for key, on every r0 corpus app that
+/// builds single-app, the rule-B cross-app fixture and the witness fixture
+/// (a singleton over a recursive SCC, and that SCC's members).
+///
+/// DISCRIMINATION (break with Edit, run, revert, run; 2026-11-03): (a)
+/// `resolved_entries_of` taking the HIGHEST-ranked shortest link (`rfind`)
+/// fails on the two-sites fixture (`Twice`'s witness call site `cs1`
+/// against `cs0`); without that fixture the break stayed green (no corpus
+/// app has a state with two shortest links), which is why it is here. (b)
+/// a recursive member's walk handed no sibling direct facts fails on
+/// `ws-d7-event-cycle`. Each reverted, green.
+#[test]
+fn retained_emission_equals_a_composition_for_every_routine() {
+    use crate::engine::l4::cone_derived::{ConeScope, WitnessScope};
+    let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
+    let mut dirs: Vec<std::path::PathBuf> = std::fs::read_dir(&corpus)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.join("app.json").exists())
+        .collect();
+    dirs.sort();
+    let mut fixtures: Vec<Fixture> = Vec::new();
+    for dir in &dirs {
+        fixtures.push(Fixture {
+            inputs: WorkspaceInputs::read(dir, &READ),
+            single_app: true,
+            routine: "",
+            _dir: None,
+        });
+    }
+    fixtures.push(rule_b(""));
+    fixtures.push(witness_ws(""));
+    fixtures.push(two_sites_ws(""));
+    let (mut checked, mut inherited) = (0, 0);
+    for f in &fixtures {
+        let key = ViewKey::new(&f.inputs.workspace, f.single_app, false);
+        let Ok(Some(built)) = build_view_model(&f.inputs, &key, REVISION_NEEDS, |_| {}) else {
+            continue;
+        };
+        let rev = Revision::new(test_id(1), Arc::clone(&f.inputs), built.target);
+        let snap = fold_of(&rev);
+        let Some(ArtifactValue::Fold(fold)) = snap.get(&ArtifactKey::Fold).map(|a| &a.value) else {
+            panic!("the fold is published");
+        };
+        let model = rev.target().resolved();
+        let all: BTreeSet<String> = model
+            .workspace
+            .routines
+            .iter()
+            .map(|r| r.id.clone())
+            .collect();
+        let (warm, report) = fold.cones.as_ref().expect("a cone store").emit_raw(
+            &model.workspace.routines,
+            &fold.caps.direct_full,
+            fold.caps.pd.as_ref(),
+            &all,
+            &|_| None,
+        );
+        assert_eq!(report.adopted, 0);
+        let (_, cold) = crate::engine::session::compose_cone(
+            model,
+            &crate::engine::session::relation_of(rev.target()),
+            ConeScope {
+                derived: false,
+                raw: WitnessScope::All,
+            },
+        );
+        assert_eq!(
+            raw_text(&warm),
+            raw_text(&cold),
+            "{}: the retained emission equals the composition's",
+            f.inputs.workspace.display()
+        );
+        checked += 1;
+        inherited += warm
+            .keys()
+            .filter(|k| !warm.materialized(k).is_empty())
+            .count();
+    }
+    assert!(
+        checked >= 50,
+        "precondition: most fixtures build ({checked})"
+    );
+    assert!(
+        inherited >= 100,
+        "precondition: many routines inherit facts ({inherited})"
+    );
+}
+
+/// [`retained_emission_equals_a_composition_for_every_routine`] on the
+/// cross-app CDO model (skips without `CDO_WS`, panics under
+/// `ENFORCE_CDO_WS=1`): every primary routine and the first 200 dependency
+/// routines (by internal id) emitted from a resident fold's cones equal a
+/// composition's raw half over the same subjects.
+#[test]
+fn retained_emission_equals_a_composition_on_cdo() {
+    use crate::engine::l4::cone_derived::{ConeScope, WitnessScope};
+    let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
+        return;
+    };
+    crate::big_stack::run_with_big_stack(move || {
+        let inputs = WorkspaceInputs::read(&ws, &READ);
+        let key = ViewKey::new(&inputs.workspace, false, false);
+        let built = build_view_model(&inputs, &key, REVISION_NEEDS, |_| {})
+            .expect("cross-app CDO builds")
+            .expect("a model view");
+        let rev = Revision::new(test_id(1), Arc::clone(&inputs), built.target);
+        let snap = fold_of(&rev);
+        let Some(ArtifactValue::Fold(fold)) = snap.get(&ArtifactKey::Fold).map(|a| &a.value) else {
+            panic!("the fold is published");
+        };
+        let model = rev.target().resolved();
+        let mut subjects = crate::engine::session::WitnessRequest::primary().subjects(model);
+        let primary = subjects.len();
+        let dependency: BTreeSet<String> = model
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| model.routine_role(r) == Role::Dependency)
+            .map(|r| r.id.clone())
+            .collect();
+        subjects.extend(dependency.into_iter().take(200));
+        assert!(
+            primary > 1000,
+            "precondition: CDO's primary routines ({primary})"
+        );
+        assert!(
+            subjects.len() > primary,
+            "precondition: dependency subjects"
+        );
+        let (warm, report) = fold.cones.as_ref().expect("a cone store").emit_raw(
+            &model.workspace.routines,
+            &fold.caps.direct_full,
+            fold.caps.pd.as_ref(),
+            &subjects,
+            &|_| None,
+        );
+        assert!(report.emitted as usize > primary, "{report:?}");
+        let (_, cold) = crate::engine::session::compose_cone(
+            model,
+            &crate::engine::session::relation_of(rev.target()),
+            ConeScope {
+                derived: false,
+                raw: WitnessScope::Subjects(subjects),
+            },
+        );
+        let (warm, cold) = (raw_text(&warm), raw_text(&cold));
+        assert!(
+            warm == cold,
+            "the retained emission equals the composition's on CDO"
+        );
+    });
+}
+
+/// Plan 2026-11-03 L6, on one revision: the fold emits no raw facts; a
+/// request on a primary root whose raw facts were never emitted fills ONE
+/// `Raw` artifact for its view, emitted from the fold's cones (equal to the
+/// one-shot emission for the same subjects), and answers what a cold run
+/// answers; after the raw and the tree are evicted, the next request
+/// re-emits and still equals cold; a tree refilled over a published `Raw`
+/// emits nothing; a wider view adopts the published subject's entry and
+/// emits only the new one. Singleton roots, a recursive member (`RunReportRec`)
+/// and the cross-app rule-B fixture.
+///
+/// DISCRIMINATION (break with Edit, run, revert, run; 2026-11-03): (c) the
+/// emission skipped (`emit_raw` recording no entry for an emitted subject)
+/// fails `["DocBoth", "RunReportRec"]: first` (bytes differ from cold: the
+/// root's tree has no inherited facts); reverted, green.
+#[test]
+fn a_primary_root_gets_its_raw_facts_on_demand() {
+    let cases: [(Fixture, &[&str]); 3] = [
+        (witness_ws("DocBoth"), &["DocBoth", "RunReportRec"]),
+        (
+            rule_b("WriteThenCommit"),
+            &["WriteThenCommit", "FillAndPost"],
+        ),
+        (
+            witness_ws("ReadThenQueue"),
+            &["ReadThenQueue", "QueueTwice"],
+        ),
+    ];
+    for (f, roots) in &cases {
+        let rev = revision(f);
+        let _ = fold_of(&rev);
+        assert!(
+            raw_artifacts(&rev).is_empty(),
+            "{}: the fold emitted no raw facts",
+            f.routine
+        );
+        // The first root's view: one emission, on demand.
+        let one = explain_many(f, &roots[..1]);
+        let warm = rev.answer(&*one, &Control::unreserved()).unwrap();
+        assert_eq!(
+            warm,
+            crate::engine::batch::standalone_output(&*one),
+            "{roots:?}: first"
+        );
+        assert_eq!(warm.exit, 0, "precondition: {}", warm.message());
+        let raws = raw_artifacts(&rev);
+        assert_eq!(raws.len(), 1, "one view, one raw: {raws:?}");
+        let (scope, text) = &raws[0];
+        assert!(
+            text.contains("inherited"),
+            "precondition: {:?} inherits facts: {text}",
+            roots[0]
+        );
+        let model = rev.target().resolved();
+        let oracle = crate::engine::session::emit_raw_ids(
+            model,
+            &crate::engine::session::relation_of(rev.target()),
+            scope.clone(),
+        );
+        assert_eq!(*text, raw_text(&oracle), "the one-shot emission");
+        let (emitted, adopted) = rev.raw_counts();
+        assert_eq!((emitted, adopted), (scope.len() as u64, 0));
+        // Evicted, then the same view again: re-emitted, equal to cold.
+        assert!(rev.evict_kind("raw") + rev.evict_kind("tree") + rev.evict_kind("witness") >= 2);
+        assert_eq!(
+            answer(&rev, Cmd::Prove, f),
+            cold(Cmd::Prove, f),
+            "after eviction"
+        );
+        assert_eq!(rev.raw_counts().0, 2 * scope.len() as u64, "re-emitted");
+        // A tree refilled over the published raw emits nothing.
+        rev.evict_kind("tree");
+        rev.evict_kind("witness");
+        assert_eq!(
+            answer(&rev, Cmd::Digest, f),
+            cold(Cmd::Digest, f),
+            "tree refill"
+        );
+        assert_eq!(
+            rev.fill_counts().get("raw"),
+            Some(&2),
+            "no raw fill for a tree refill"
+        );
+        // A wider view adopts the first root's entry, emits the second's.
+        let both = explain_many(f, roots);
+        let warm = rev.answer(&*both, &Control::unreserved()).unwrap();
+        assert_eq!(
+            warm,
+            crate::engine::batch::standalone_output(&*both),
+            "{roots:?}: both"
+        );
+        let (_, adopted) = rev.raw_counts();
+        assert_eq!(
+            adopted,
+            scope.len() as u64,
+            "the published subject is adopted"
+        );
+        for (scope, text) in raw_artifacts(&rev) {
+            let oracle = crate::engine::session::emit_raw_ids(
+                model,
+                &crate::engine::session::relation_of(rev.target()),
+                scope.clone(),
+            );
+            assert_eq!(text, raw_text(&oracle), "{scope:?}: the one-shot emission");
+        }
+    }
+}
+
+/// Plan 2026-11-03 L6: a reader that needs every primary subject's raw facts
+/// demands them explicitly — no served command does (each reads its roots'
+/// view), but a plan over every primary routine (built by hand, as the
+/// dependency-root test builds its plan) fills one `Raw` artifact holding
+/// every primary routine that is a graph node, and its effects equal a cold
+/// one-shot view's over the same plan.
+#[test]
+fn a_view_over_every_primary_routine_gets_them_all() {
+    let f = rule_b("WriteThenCommit");
+    let rev = revision(&f);
+    let model = rev.target().resolved();
+    let primary: BTreeSet<String> = model
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| model.routine_role(r) == Role::Primary)
+        .map(|r| r.stable_routine_id.clone())
+        .collect();
+    assert!(primary.len() >= 5, "precondition: {primary:?}");
+    let plan = || Plan::merge([(JobId(0), explain_plan(primary.clone()))]);
+    let (view, _) = rev
+        .serve_plan(&plan(), &Control::unreserved(), &mut 0)
+        .unwrap();
+    let warm = effects_text(view.effects(JobId(0)));
+    let mut cold_view = View::new(
+        build_view_model(
+            &f.inputs,
+            &ViewKey::new(&f.inputs.workspace, false, false),
+            REVISION_NEEDS,
+            |_| {},
+        )
+        .unwrap()
+        .unwrap()
+        .target,
+    );
+    cold_view.prepare(&plan());
+    assert_eq!(warm, effects_text(cold_view.effects(JobId(0))));
+    let raws = raw_artifacts(&rev);
+    assert_eq!(raws.len(), 1, "one view, one emission");
+    let ids: BTreeSet<String> = crate::engine::session::WitnessRequest::primary().subjects(model);
+    assert_eq!(
+        raws[0].0, ids,
+        "the view's subjects are every primary routine"
+    );
+    assert_eq!(rev.raw_counts(), (ids.len() as u64, 0));
 }
