@@ -759,12 +759,14 @@ row including anchors**: any file in Δ_files marks every id with a row in it.
   pd arena) over it. `routine_order_frames` moved to the whole sections: its
   deriver reads rows only, never raw. Deviations: (1) no per-key sections
   across revisions (operation and call-site evidence, capability facts are
-  derived per view per revision: 0.65 s; the pd projection 0.85-0.92 s);
+  derived per view per revision: 0.65 s; the pd projection 0.85-0.92 s;
+  counted figures, see the L4a/L3 note below for uncounted ones and for the
+  view-independent half moved into the base);
   (2) a view's tree holds clones of the whole sections (65 ms), not shared
   `Arc`s, which would change `CapabilitySnapshot`'s field types at about 65
   construction and assignment sites; so a revision with one view holds the
-  sections twice. A refresh frees the published revision's trees before it
-  builds.
+  sections twice (*superseded by L3 below: the sections are `Arc`s*). A
+  refresh frees the published revision's trees before it builds.
 - *Measured on CDO* (release-fast census probe with mimalloc, quiet machine
   unless noted; `--verify` runs: every answer equal to its cold run after B,
   B, S and after B, S):
@@ -893,6 +895,69 @@ uncounted. Earlier tables in this section were counted, so they read higher, mos
 allocation-heavy steps (same master code, same day: fold after B 2.23 s counted against 2.07 s
 uncounted; cold refresh 17.7 s against 12.2 s; prove 2.6 s against 1.6-1.7 s). A `--verify`
 run after cold, B, S and P: every answer equal to its cold run.
+
+**As built (the view-independent tree work in the base, and shared sections; plan items L4a
+and L3; branch `ctxsrv/l4a-l3`).** `TreeBase` now also holds the view-independent half of a
+view's per-view sections (`src/engine/l5/snapshot_view.rs`, `ViewBase`): (a) the evidence
+candidates: `compute_routine_order` runs once per row, rows in parallel on the big-stack pool
+(it ran three times per view, plus once for the order frames, which now come from the same
+pass), and the base keeps the operation and call-site evidence of every id the base
+references (every covered routine's direct witnesses, the typed edges' anchors), plus
+`(hash of id, row)` lists of the other candidates; a view adds the ids only its subjects'
+inherited facts name and recomputes just their rows; (b) the direct-fact table: every covered
+routine's direct reps interned once, each subject's run sorted; a view rebuilds only the runs
+of its subjects with raw facts (direct + raw rows, re-sorted) into its own small tables and
+copies every other row's 16-byte handle, shifting positions after a rebuilt run; (c) the pd
+maps: each cone edge's snapshot edge (one routine crosses each cone edge; the base asserts it)
+and each producer's owner-direct row as a base position; a view walks only its subjects'
+state closure (a bitset), and keys `by_routine` by the routine's `Arc`. The base is derived
+with the fold's arena and a view asserts its arena has the same shape. Facts whose emitted
+subjects hold `|` (no split table) are still derived whole per view. L3:
+`CapabilitySnapshot`'s typed edges, call-site resolutions, gaps, event declarations, root
+classifications and order frames are `Arc`s, as identities and coverage were; writers use
+`Arc::make_mut` (the full snapshot's key-class filter owns its tree, so nothing is copied).
+Proof: until the whole per-view derivation was deleted (commit `bf1fa3d6`), it was the oracle
+of a section-by-section equality test, `Debug` of every field plus the facts' JSON and the pd
+arena: 1,508 views over the r0 corpus and eight cross-app fixtures (no subject, each primary
+routine, every primary routine, dependency roots, a dependency root with a primary routine;
+shared base with borrowed raw facts and owned base with drained ones) and six cross-app CDO
+views (the primary routine with most raw facts, the top three, a dependency root with
+inherited rows, that root with the top routine, every primary routine, none), all equal
+(`39dedcb4`). No view on any fixture or on CDO adds an evidence id beyond the base (an
+inherited row's call site is its first hop's, a typed-edge anchor; its operation is a covered
+callee's direct witness), so the plan's discrimination "leave a subject's inherited references
+out of the per-view filter" changes no real answer; the view's own half is pinned by a
+hand-stated test instead (`a_site_only_a_subjects_inherited_fact_names_is_in_its_view`: a site
+and an operation a subject's inherited row names are moved by assignment from the base's rows
+to its rest lists). Deviation: the evidence's base rows are cloned into each view (22-28 ms);
+they could be shared like the whole sections, but stay per view as the plan scoped them.
+
+Measured on CDO (release-fast probe, mimalloc, uncounted, `census-probe incr --witness`; master
+`75d0e65e` beside it, same machine and day): per view, `snapshot.derive` 1.32-1.48 s → 0.18-0.24
+s (master: operation index 0.20-0.24 s, call-site index 0.22-0.27 s, facts 0.08-0.10 s, pd
+0.72-0.85 s, cloning the whole sections 0.04-0.06 s; now `tree.evidence` 21-28 ms,
+`tree.capability_facts` 6-10 ms, `tree.pd_solution` 0.14-0.21 s over ~916,000 kept states,
+the sections 1-3 ms). `tree.base` 1.15-1.29 s → 1.28-1.46 s (`tree.evidence_base` 0.11-0.13 s,
+`tree.fact_base` 0.09 s, `tree.pd_base` 0.05 s; the 0.17-0.18 s order-frames pass is folded into
+the first). First heavy answer on a root (its view's tree new, base prepared): explain 5.0-5.8
+s → 4.1-4.6 s; explain over three roots 4.5-4.7 s → 3.4-3.7 s. Analysis prepared after B 3.60-3.70
+s → 3.74-4.01 s (the base's extra 0.1-0.25 s). Memory (counted, `PROBE_TREE_BYTES=1`, four views
+per revision): the trees 1,607 MiB → 1,438 MiB (L4a) → 992 MiB (L3), the base 185 → 286 MiB, so
+1,792 → 1,278 MiB per revision. RSS (uncounted) with four views 7.12-7.27 GB → 6.60-6.78 GB, peak
+7.51-7.62 → 6.99-7.13 GB; with one view per revision unchanged (default 5.89-6.07 → 5.83-6.03 GB,
+peak 6.27 both; `--low-mem` 4.68-5.10 → 4.64-5.07 GB, peak 5.90 → 5.89 GB). Uncounted master
+figures for the earlier (counted) tables: tree base 1.15-1.29 s (counted 1.45-1.55 s), per-view
+tree 1.32-1.48 s (counted 0.65 + 0.85-0.92 s plus clones). A `--verify` run after cold, B, S and P
+(explain, prove, digest, query, explain over three roots, explain with its indexes evicted and
+present): every answer equal to its cold run.
+
+**L4b (cross-revision per-key sections) is not recommended.** A view's own tree work is now
+0.18-0.24 s, of which ~0.15 s is projecting ~916,000 pd states, which L4b does not touch (the
+pd arena is per view by §6.11). L4b's other target, the tree base's per-row halves (typed edges
+0.41-0.43 s, call-site resolutions 0.39-0.42 s, evidence and facts bases 0.2 s), is at most
+~1 s per edit, against a cost of per-key digests and carry rules across three sections. The
+remaining per-view lever is the pd projection's representation (an owned routine string per
+state), not L4b.
 
 ### 6.12 Explain
 
