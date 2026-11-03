@@ -1829,8 +1829,7 @@ pub(crate) fn compose_tree(
 
 /// The whole-program sections of a tree (context-server design §6.11): what
 /// every tree over the same composition carries whatever its subjects —
-/// identities, typed edges (and the keys of the edges they skipped), call-site
-/// resolutions, analysis gaps, coverage, event declarations, root
+/// identities, typed edges, call-site resolutions, analysis gaps, coverage, event declarations, root
 /// classifications, routine order frames and rule B's boundary. None reads a
 /// raw fact or the pd arena. A resident revision derives them once (its
 /// `TreeBase` artifact) and every view shares them; a one-shot tree derives
@@ -1844,9 +1843,6 @@ pub(crate) fn compose_tree(
 pub struct TreeBase {
     identities: std::sync::Arc<SnapshotIdentityTable>,
     typed_edges: Vec<SnapshotGraphEdge>,
-    /// Read only by the whole derivation (`compose_tree_over_legacy`).
-    #[cfg_attr(not(test), allow(dead_code))]
-    skipped: SkippedEdgeKeys,
     callsite_resolutions: Vec<SnapshotCallsiteResolution>,
     analysis_gaps: Vec<SnapshotAnalysisGap>,
     coverage: std::sync::Arc<Vec<SnapshotCoverageRecord>>,
@@ -1958,11 +1954,10 @@ pub(crate) fn derive_tree_base(
     let s = sec("tree.pd_base");
     let pd = view::derive_pd_base(pd, &typed_edges, &skipped, &facts, inp.routine_to_stable);
     drop(s);
-    drop((inp, collided));
+    drop((inp, collided, skipped));
     TreeBase {
         identities: identities.into(),
         typed_edges,
-        skipped,
         callsite_resolutions,
         analysis_gaps,
         coverage: coverage.into(),
@@ -2143,114 +2138,6 @@ fn view_sections<'r>(
     };
     drop(s);
     (operation_index, callsite_index, facts)
-}
-
-/// The whole per-view derivation [`compose_tree_over`] replaced (plan item
-/// L4a): every per-view section derived over every routine. Kept as the
-/// oracle of the view-equality tests until they pass on CDO and every
-/// fixture.
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn compose_tree_over_legacy(
-    base: std::borrow::Cow<'_, TreeBase>,
-    model: &Model,
-    typed: &[TypedEdge],
-    dependency_calls: &[CallEdge],
-    caps: &crate::engine::l5::detector_context::CapabilityAnalysis,
-    raw: TreeRaw<'_>,
-    pd: std::borrow::Cow<'_, crate::engine::l4::pd_solve::ConeArena>,
-    apps: &TreeApps,
-) -> CapabilitySnapshot {
-    crate::engine::perf_trace::counter_delta("build.snapshot", 1);
-    let _s = crate::engine::perf_trace::span("snapshot", "snapshot.derive");
-    let sec = |name: &'static str| crate::engine::perf_trace::span("snapshot", name);
-    let s = sec("tree.view_prelude");
-    let ws = &model.workspace;
-    let parts = TreeInputParts::of(model);
-    let inp = parts.inputs(model, typed, dependency_calls, caps, apps);
-    let collided = CollidedRows::build(&ws.routines);
-    let cone_pd = pd;
-    drop(s);
-    // The two evidence indexes read the raw facts, so they run first; in
-    // drain mode the tree owns its subjects' entries and drops them after.
-    let (subjects, operation_index, callsite_index, capability_facts) = match raw {
-        TreeRaw::Drain(map) => {
-            let subjects: std::collections::BTreeSet<String> =
-                map.keys().map(str::to_string).collect();
-            let get = |id: &str| map.get(id);
-            let s = sec("tree.operation_index");
-            let operation_index = derive_operation_evidence(&inp, get, &collided);
-            drop(s);
-            let s = sec("tree.callsite_index");
-            let callsite_index = derive_callsite_evidence(&inp, get, &collided);
-            drop(s);
-            let s = sec("tree.capability_facts");
-            let capability_facts = derive_capability_facts(&inp, get);
-            drop(s);
-            drop(map);
-            (subjects, operation_index, callsite_index, capability_facts)
-        }
-        TreeRaw::Borrow(acc) => {
-            let get = |id: &str| acc.get(id);
-            let s = sec("tree.operation_index");
-            let operation_index = derive_operation_evidence(&inp, get, &collided);
-            drop(s);
-            let s = sec("tree.callsite_index");
-            let callsite_index = derive_callsite_evidence(&inp, get, &collided);
-            drop(s);
-            let s = sec("tree.capability_facts");
-            let capability_facts = derive_capability_facts(&inp, get);
-            drop(s);
-            (
-                acc.subjects,
-                operation_index,
-                callsite_index,
-                capability_facts,
-            )
-        }
-    };
-    let s = sec("tree.pd_solution");
-    let pd_solution = derive_pd_arena(
-        &inp,
-        &cone_pd,
-        Some(&subjects),
-        &base.typed_edges,
-        &capability_facts,
-        &base.skipped,
-    );
-    drop(cone_pd);
-    drop(s);
-    let s = sec("tree.base_sections");
-    let TreeBase {
-        identities,
-        typed_edges,
-        skipped: _,
-        callsite_resolutions,
-        analysis_gaps,
-        coverage,
-        event_declarations,
-        root_classifications,
-        routine_order_frames,
-        boundary,
-        view: _,
-    } = base.into_owned();
-    drop(s);
-
-    finish_snapshot(CapabilitySnapshot {
-        identities,
-        capability_facts,
-        typed_edges,
-        operation_index,
-        callsite_index,
-        callsite_resolutions,
-        analysis_gaps,
-        coverage,
-        event_declarations,
-        root_classifications,
-        routine_order_frames,
-        pd_solution,
-        boundary: Some(boundary),
-    })
 }
 
 /// Rule B's dependency routines of `model` (THE role rule, #220), each named
