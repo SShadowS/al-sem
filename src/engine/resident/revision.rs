@@ -665,6 +665,15 @@ impl Revision {
         scratch: &WitnessScratch,
     ) -> Result<Arc<Option<DigestEntryResult>>, String> {
         use crate::engine::l5::digest_cli::{BoundaryMode, root_entries};
+        // The key may already be in `snapshot`: a request that read the
+        // snapshot before a concurrent request published the key claims it
+        // once that fill is over (the store's step (a)), then fills off the
+        // newer snapshot (step (c)). The batch below skips every key the
+        // snapshot holds, this one too, so return the published entry: it is
+        // this revision's value for the key.
+        if let Some(ArtifactValue::Witness(e)) = snapshot.get(key).map(|a| &a.value) {
+            return Ok(Arc::clone(e));
+        }
         let mut held = scratch.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(e) = held.get(key) {
             return Ok(Arc::clone(e));
