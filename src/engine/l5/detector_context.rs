@@ -1194,6 +1194,20 @@ pub(crate) fn fill_rules(model: &Model) -> RulesIndex {
 /// The ordering facts of `model`, computed on the big-stack pool (the fill
 /// recurses over statement trees, `compute_return_summaries`). Call it BEFORE
 /// the parallel detector loop, never inside it (`substrate::ORDERING_FACTS`).
+///
+/// It composes a private snapshot of the whole model over the cut graph
+/// (`compute_digest_effects_for_ordering_with` → `compose_snapshot`), apart
+/// from any tree a view or a resident revision holds. That is fine for
+/// `alsem analyze`, its only caller that asks for d47/d49/d51 (#367 measured
+/// it on cross-app CDO: the snapshot is ~2.4 s and ~30 MB of peak in a ~45 s,
+/// 5.2 GB run; the cell's cost is the per-root witness work, ~30 s and
+/// ~2.1 GB, not the snapshot). **No served
+/// command (MCP, LSP, the resident host) demands `ORDERING_FACTS` today**, and
+/// `served_plans_never_demand_the_ordering_cell` (`engine::session`) pins it.
+/// If one ever does, its `Ordering` fill must read the revision's fold and a
+/// tree over the kept roots (`ordering_kept_roots`), not this function: a
+/// resident revision calling it would build a whole second composition on
+/// every revision.
 pub(crate) fn fill_ordering(model: &Model) -> OrderingFactsMap {
     assert!(
         !crate::engine::l5::registry::in_detector_loop(),
