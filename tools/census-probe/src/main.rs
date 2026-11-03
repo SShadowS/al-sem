@@ -2127,6 +2127,10 @@ fn incr_mode(ws: PathBuf, routine: String, low_mem: bool, verify: bool, steps: V
         let l4_ms = rev
             .prepare_keys(&[ArtifactKey::L4], &ctl)
             .unwrap_or_else(|e| panic!("{name}: l4: {e:?}"));
+        // The tree store's whole sections (§6.11), request-independent.
+        let base_ms = rev
+            .prepare_keys(&[ArtifactKey::TreeBase], &ctl)
+            .unwrap_or_else(|e| panic!("{name}: tree base: {e:?}"));
         if let Some(p) = rev.pd_report() {
             println!(
                 "        pd producers {} reused {} (states {}), delta routines {}",
@@ -2172,8 +2176,8 @@ fn incr_mode(ws: PathBuf, routine: String, low_mem: bool, verify: bool, steps: V
         drop(rev);
         settle();
         println!(
-            "  {name:<5} class {class:<4} refresh {refresh_ms:>6} ms  fold {fold_ms:>6} ms  l4 {l4_ms:>5} ms  prepared {:>6} ms  | {} | rss {:.2} GB hwm {:.2} GB",
-            fold_ms + l4_ms,
+            "  {name:<5} class {class:<4} refresh {refresh_ms:>6} ms  fold {fold_ms:>6} ms  l4 {l4_ms:>5} ms  tree base {base_ms:>5} ms  prepared {:>6} ms  | {} | rss {:.2} GB hwm {:.2} GB",
+            fold_ms + l4_ms + base_ms,
             asks.join(", "),
             proc_status_kib("VmRSS:") as f64 / 1e6 * 1.024,
             proc_status_kib("VmHWM:") as f64 / 1e6 * 1.024,

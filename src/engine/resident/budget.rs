@@ -126,6 +126,10 @@ impl Case {
             Case::Fill("det") => 350,
             Case::Fill("l4") => 250,
             Case::Fill("run") => 120,
+            // The tree store (stage 5): a view's tree and the whole sections,
+            // the `Trees` case's composition half; not measured apart.
+            Case::Fill("tree") => 900,
+            Case::Fill("tree_base") => 450,
             Case::Fill(_) => 60,
             Case::Trees => 900,
         }

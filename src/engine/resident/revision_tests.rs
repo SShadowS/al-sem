@@ -497,7 +497,16 @@ fn concurrent_requests_and_evictions_answer_the_cold_bytes() {
             let mut evicted = 0;
             while evict_rx.recv().is_ok() {
                 for _ in 0..50 {
-                    for k in ["run", "det", "fold", "l4", "rules", "ordering"] {
+                    for k in [
+                        "tree",
+                        "tree_base",
+                        "run",
+                        "det",
+                        "fold",
+                        "l4",
+                        "rules",
+                        "ordering",
+                    ] {
                         evicted += rev.evict_kind(k);
                     }
                     std::thread::yield_now();
@@ -527,9 +536,14 @@ fn concurrent_requests_and_evictions_answer_the_cold_bytes() {
             "precondition: evictions happened"
         );
     });
-    assert!(
-        rev.fill_counts().get("l4").copied().unwrap_or(0) > 1,
-        "refilled after eviction: {:?}",
-        rev.fill_counts()
-    );
+    // The tree store's artifacts (stage 5b) churn like the others: a
+    // request's tree is pinned through its reads, and an evicted tree or
+    // base is filled again, never read half-built.
+    for kind in ["l4", "tree", "tree_base"] {
+        assert!(
+            rev.fill_counts().get(kind).copied().unwrap_or(0) > 1,
+            "{kind} refilled after eviction: {:?}",
+            rev.fill_counts()
+        );
+    }
 }

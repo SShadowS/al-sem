@@ -75,10 +75,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fold timers: `cone.direct`, `cone.graph`, `cone.tarjan`, `cone.dedup`,
   `cone.frames`, `cone.member_digests`, `pd.output_delta`, `cone.walk`,
   `cone.finish`, `revision.fold`, `revision.seed_release`, and one
-  `tree.*` span per tree section under `snapshot.derive`. They account for
-  the whole fold: the "untimed remainder" was the SCC walk itself (10.1 s
-  of the 12.0 s fold after a body edit). `census-probe incr` prints the cone
-  report and the census per step.
+  `tree.*` span per tree section (`tree.base` for the whole sections,
+  `snapshot.derive` for a view). They account for the whole fold: the
+  "untimed remainder" was the SCC walk itself (10.1 s of the 12.0 s fold
+  after a body edit). `census-probe incr` prints the cone report and the
+  census per step.
+- **The tree store: heavy answers share their revision's trees** (design
+  §6.11). A resident revision derives the trees' whole sections once
+  (`TreeBase`: identities, typed edges and the skipped-edge keys, call-site
+  resolutions, analysis gaps, coverage, event declarations, root
+  classifications, routine order frames, rule B's boundary; rebuilt whole
+  every revision, never carried over) and one tree per distinct view (its
+  subjects: `Tree(subjects)`, the view's evidence indexes, capability facts
+  and pd arena over the shared sections). Both are artifacts of the
+  revision's store, so concurrent requests join one fill, a request's tree
+  stays pinned through its reads, and eviction drops trees first
+  (`EVICTION_ORDER`: raw, tree, run, det, tree_base, fold, ...); a refresh
+  frees the published revision's trees before it builds. A one-shot tree is
+  unchanged (`compose_tree` = the base derived and moved into one view).
+  CDO after a body edit, explain then prove then digest on one routine:
+  explain **7.8 s -> 6.1 s** (its view's tree 1.6 s instead of a whole tree
+  2.9-3.0 s), prove **9.1 s -> 5.8 s** and digest **6.5 s -> 3.5 s** (they
+  read explain's tree); the whole sections cost 1.4-1.5 s once per revision.
+  Every answer equals its cold run (`census-probe incr --verify`, B and S).
+  `census-probe incr` prepares and times the tree base apart. Tests:
+  `heavy_answers_share_trees_that_equal_cold_trees_after_each_edit` (one
+  tree per view and one base per revision, every served tree equal to a cold
+  one-shot tree after a new call, a call to no routine and an object-only
+  table rename), and the concurrent request/eviction test now evicts trees
+  and bases too.
+
+### Fixed (context server stage 5)
+
+- **An eviction that evicted nothing republished the snapshot.** Every
+  value then had a second owner while a request held the old snapshot, so a
+  reclaim that first tried a pinned key could free nothing after it (found
+  when the tree store put a request's own pinned tree ahead of the runs in
+  the eviction order). `Store::evict` now publishes nothing when every key
+  is pinned. Test `an_empty_eviction_publishes_nothing`.
 
 ### Changed (context server stage 5)
 

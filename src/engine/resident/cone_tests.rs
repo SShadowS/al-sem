@@ -501,3 +501,193 @@ fn an_object_only_table_rename_equals_cold() {
     let (_, _, r) = step("rename", &s, ws, &["Go"]);
     assert_eq!(r.refolded, 0, "nothing re-folds ({r:?})");
 }
+
+// ---------------------------------------------------------------------------
+// The tree store (design §6.11)
+// ---------------------------------------------------------------------------
+
+/// A tree as text: every serialized section in order, the routine order
+/// frames, the pd arena (`by_routine` sorted) and rule B's boundary (sorted).
+fn tree_text(t: &crate::engine::l5::snapshot::CapabilitySnapshot) -> String {
+    let j = |v: serde_json::Result<String>| v.expect("a tree section serializes");
+    let mut out = String::new();
+    for (name, text) in [
+        ("identities", j(serde_json::to_string(&t.identities))),
+        ("facts", j(serde_json::to_string(&t.capability_facts))),
+        ("edges", j(serde_json::to_string(&t.typed_edges))),
+        ("ops", j(serde_json::to_string(&t.operation_index))),
+        ("sites", j(serde_json::to_string(&t.callsite_index))),
+        ("res", j(serde_json::to_string(&t.callsite_resolutions))),
+        ("gaps", j(serde_json::to_string(&t.analysis_gaps))),
+        ("coverage", j(serde_json::to_string(&t.coverage))),
+        ("events", j(serde_json::to_string(&t.event_declarations))),
+        ("roots", j(serde_json::to_string(&t.root_classifications))),
+        ("frames", j(serde_json::to_string(&t.routine_order_frames))),
+    ] {
+        writeln!(out, "{name} {text}").unwrap();
+    }
+    let by: BTreeMap<&String, &Vec<usize>> = t.pd_solution.by_routine.iter().collect();
+    writeln!(
+        out,
+        "pd {:?} {:?} {by:?}",
+        t.pd_solution.states, t.pd_solution.links
+    )
+    .unwrap();
+    let boundary: Option<BTreeMap<&String, &Arc<str>>> = t
+        .boundary
+        .as_ref()
+        .map(|b| b.dependency_app.iter().collect());
+    writeln!(out, "boundary {boundary:?}").unwrap();
+    out
+}
+
+/// Every tree the revision's store holds, as text, each with a cold
+/// one-shot tree over the same view (a cold composition, the subjects' raw
+/// facts, the pd arena): `(subjects, served, cold)`.
+fn trees_and_cold(rev: &Revision) -> Vec<(Vec<String>, String, String)> {
+    use crate::engine::gate::run::AnalysisTarget;
+    use crate::engine::l5::snapshot::{SubjectRaw, TreeRaw, compose_tree};
+    let target = rev.target();
+    let model = target.resolved();
+    let rel = relation_of(target);
+    let primary = crate::engine::session::WitnessRequest::primary();
+    let (caps, raw) = crate::engine::session::compose_cone(
+        model,
+        &rel,
+        crate::engine::l4::cone_derived::ConeScope {
+            derived: true,
+            raw: primary.scope(model),
+        },
+    );
+    let primary = primary.subjects(model);
+    let cross = match target {
+        AnalysisTarget::CrossApp(b) => Some(&**b),
+        AnalysisTarget::SingleApp(_) => None,
+    };
+    let calls = cross
+        .and_then(|b| b.dependency_calls.as_deref())
+        .map_or(&[][..], Vec::as_slice);
+    let snap = rev.snapshot();
+    snap.keys()
+        .filter_map(|k| match (k, snap.get(k).map(|a| &a.value)) {
+            (ArtifactKey::Tree(scope), Some(ArtifactValue::Tree(t))) => Some((scope, t)),
+            _ => None,
+        })
+        .map(|(scope, served)| {
+            let own;
+            let map = if scope.is_subset(&primary) {
+                &raw
+            } else {
+                own = crate::engine::session::emit_raw_ids(model, &rel, scope.clone());
+                &own
+            };
+            let cold = compose_tree(
+                model,
+                rel.cone(),
+                calls,
+                &caps,
+                TreeRaw::Borrow(SubjectRaw::new(map, scope)),
+                std::borrow::Cow::Borrowed(caps.pd.as_ref().expect("an arena")),
+                &crate::engine::session::tree_apps(cross),
+            );
+            (
+                scope.iter().cloned().collect(),
+                tree_text(served),
+                tree_text(&cold),
+            )
+        })
+        .collect()
+}
+
+/// Every served tree equals its cold one; returns the trees' texts.
+fn assert_trees_equal_cold(what: &str, rev: &Revision) -> Vec<String> {
+    let trees = trees_and_cold(rev);
+    assert!(!trees.is_empty(), "precondition: {what}: some tree served");
+    trees
+        .into_iter()
+        .map(|(scope, served, cold)| {
+            assert_eq!(served, cold, "{what}: the tree over {scope:?} equals cold");
+            served
+        })
+        .collect()
+}
+
+const CALLER: &str = r#"codeunit 50109 "Caller"
+{
+    procedure Call()
+    var
+        A: Codeunit "Aside";
+    begin
+        A.Alone();
+    end;
+}
+"#;
+
+/// Design §6.11 (T-tree, T-typed-edges, T-callsite-res, T-obj-only): the
+/// heavy answers on one revision share its trees — one tree per distinct
+/// view, the whole sections derived once — and every served tree equals a
+/// cold one-shot tree over the same view after each step: a new call (the
+/// typed edges move), a call to no routine (the call-site resolutions
+/// move), and a rename of a table no routine declares (the identities move).
+/// `Go` and `Call` have different subjects, so each step serves two views.
+///
+/// DISCRIMINATION (break with Edit, run, revert, run; 2026-11-03): reading
+/// the first published tree whatever the group's subjects (one tree for
+/// every view) fails an answer's "equals cold" (and the producer-chain
+/// test's, whose two roots are two views); without the second `Go` this
+/// test stayed green, which is why it answers `Go` twice. Keeping
+/// the first revision's whole sections for every later revision (a base
+/// held across revisions) fails "new call: the tree over [Go] equals cold"
+/// (and three cone tests' answers); each reverted, green.
+#[test]
+fn heavy_answers_share_trees_that_equal_cold_trees_after_each_edit() {
+    let (dir, s) = session(&[
+        ("src/Tables.al", TABLES),
+        ("src/Leaf.al", LEAF),
+        ("src/Mid.al", MID),
+        ("src/Top.al", TOP),
+        ("src/Aside.al", ASIDE),
+        ("src/Caller.al", CALLER),
+        ("src/Unused.al", UNUSED),
+    ]);
+    let ws = dir.path();
+    // `Go` again after `Call`: its answers then read a revision holding both
+    // views' trees.
+    let roots = ["Go", "Call", "Go"];
+    let (rev, _, _) = step("cold", &s, ws, &roots);
+    let fills = rev.fill_counts();
+    let views = trees_and_cold(&rev).len();
+    assert!(views >= 2, "precondition: two views ({views})");
+    assert_eq!(
+        (fills.get("tree").copied(), fills.get("tree_base").copied()),
+        (Some(views as u64), Some(1)),
+        "one tree per view, one base, shared by every answer: {fills:?}"
+    );
+    let mut before = assert_trees_equal_cold("cold", &rev);
+    for (what, file, from, to) in [
+        (
+            "new call",
+            "src/Top.al",
+            "        M.CallLeaf();\n        L.WriteLog();",
+            "        M.CallLeaf();\n        L.WriteLog();\n        L.WriteLog();",
+        ),
+        (
+            "call to no routine",
+            "src/Caller.al",
+            "        A.Alone();",
+            "        A.Alone();\n        A.NoSuchMethod();",
+        ),
+        (
+            "object-only rename",
+            "src/Unused.al",
+            "\"T Unused\"",
+            "\"T Renamed\"",
+        ),
+    ] {
+        edit(ws, file, from, to);
+        let (rev, _, _) = step(what, &s, ws, &roots);
+        let after = assert_trees_equal_cold(what, &rev);
+        assert_ne!(before, after, "precondition: {what} moves a tree");
+        before = after;
+    }
+}

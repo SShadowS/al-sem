@@ -42,7 +42,7 @@ use crate::engine::resident::store::{
 };
 use crate::engine::session::{
     JobId, Plan, RunKey, TreeReadOut, View, WitnessRequest, compose_cone_retained, emit_raw_ids,
-    key, read_tree, relation_of, run_once, tree_apps, tree_groups,
+    key, relation_of, run_once, tree_apps, tree_groups,
 };
 use crate::program::inputs::WorkspaceInputs;
 use crate::program::model::calls::CallEdge;
@@ -64,6 +64,13 @@ pub enum ArtifactKey {
     /// The raw facts of these subjects (internal ids), outside the primary
     /// emission.
     Raw(BTreeSet<String>),
+    /// The tree store's whole sections (design §6.11): derived once per
+    /// revision over the fold, shared by every view.
+    TreeBase,
+    /// One view's tree over these subjects (internal ids): the whole
+    /// sections of `TreeBase` with the view's own sections. Every request
+    /// whose tree group has these subjects reads it.
+    Tree(BTreeSet<String>),
     Det,
     /// One run, with whether its plan filled ordering and rules (a run's
     /// context reads them when they are filled, `run_once`).
@@ -81,8 +88,8 @@ impl StoreKey for ArtifactKey {
     fn phase(&self) -> usize {
         match self {
             ArtifactKey::Ordering | ArtifactKey::Rules | ArtifactKey::Fold | ArtifactKey::L4 => 0,
-            ArtifactKey::Raw(_) | ArtifactKey::Det => 1,
-            ArtifactKey::Run { .. } => 2,
+            ArtifactKey::Raw(_) | ArtifactKey::Det | ArtifactKey::TreeBase => 1,
+            ArtifactKey::Run { .. } | ArtifactKey::Tree(_) => 2,
         }
     }
 }
@@ -180,6 +187,8 @@ pub enum ArtifactValue {
     Fold(Box<Fold>),
     L4(Solved),
     Raw(InheritedFacts),
+    TreeBase(Arc<crate::engine::l5::snapshot::TreeBase>),
+    Tree(Arc<crate::engine::l5::snapshot::CapabilitySnapshot>),
     Det(Arc<DetectorArtifacts>),
     Run(Arc<RunOutput>),
 }
@@ -247,6 +256,8 @@ impl ArtifactKey {
             ArtifactKey::Fold => "fold",
             ArtifactKey::L4 => "l4",
             ArtifactKey::Raw(_) => "raw",
+            ArtifactKey::TreeBase => "tree_base",
+            ArtifactKey::Tree(_) => "tree",
             ArtifactKey::Det => "det",
             ArtifactKey::Run { .. } => "run",
         }
@@ -414,11 +425,19 @@ impl Revision {
     }
 
     /// The artifact kinds eviction may drop, in the design's order (§7):
-    /// dependency subjects' raw facts, then runs and the det, then the fold
-    /// (the cones), then ordering and rules. Never the model, the relation
-    /// or the L4 seed.
-    pub const EVICTION_ORDER: &'static [&'static str] =
-        &["raw", "run", "det", "fold", "ordering", "rules"];
+    /// dependency subjects' raw facts, then the views' trees, runs and the
+    /// det, then the tree store's whole sections and the fold (the cones),
+    /// then ordering and rules. Never the model, the relation or the L4 seed.
+    pub const EVICTION_ORDER: &'static [&'static str] = &[
+        "raw",
+        "tree",
+        "run",
+        "det",
+        "tree_base",
+        "fold",
+        "ordering",
+        "rules",
+    ];
 
     /// The measured bytes of every evictable artifact the current snapshot
     /// holds (what their fills left resident).
@@ -490,9 +509,20 @@ impl Revision {
         if plan.builds_l4() {
             needs.push((ArtifactKey::L4, 0));
         }
-        for scope in self.tree_scopes(plan) {
+        // The tree store (§6.11): the whole sections once per revision, one
+        // tree per distinct view (its subjects), each over the fold and, for
+        // subjects outside the primary emission, their raw artifact.
+        let scopes = self.tree_scopes(plan);
+        if !scopes.is_empty() {
+            needs.push((ArtifactKey::TreeBase, 0));
+        }
+        for scope in scopes {
             if !scope.is_subset(&self.primary) {
-                needs.push((ArtifactKey::Raw(scope), 0));
+                needs.push((ArtifactKey::Raw(scope.clone()), 0));
+            }
+            let tree = ArtifactKey::Tree(scope);
+            if !needs.iter().any(|(k, _)| *k == tree) {
+                needs.push((tree, 0));
             }
         }
         if det {
@@ -640,6 +670,58 @@ impl Revision {
                 ArtifactKey::Raw(subjects) => {
                     ArtifactValue::Raw(emit_raw_ids(model, &self.rel, subjects.clone()))
                 }
+                ArtifactKey::TreeBase => {
+                    let Some(ArtifactValue::Fold(fold)) =
+                        cx.snapshot.get(&ArtifactKey::Fold).map(|a| &a.value)
+                    else {
+                        return Err("the tree base needs the fold, which is not published".into());
+                    };
+                    ArtifactValue::TreeBase(Arc::new(
+                        crate::engine::l5::snapshot::derive_tree_base(
+                            model,
+                            self.rel.cone(),
+                            self.dependency_calls(),
+                            &fold.caps,
+                            &tree_apps(self.cross_base()),
+                        ),
+                    ))
+                }
+                ArtifactKey::Tree(scope) => {
+                    use crate::engine::l5::snapshot::{SubjectRaw, TreeRaw, compose_tree_over};
+                    let Some(ArtifactValue::Fold(fold)) =
+                        cx.snapshot.get(&ArtifactKey::Fold).map(|a| &a.value)
+                    else {
+                        return Err("a tree needs the fold, which is not published".into());
+                    };
+                    let Some(ArtifactValue::TreeBase(base)) =
+                        cx.snapshot.get(&ArtifactKey::TreeBase).map(|a| &a.value)
+                    else {
+                        return Err("a tree needs the tree base, which is not published".into());
+                    };
+                    let pd = fold.caps.pd.as_ref().ok_or("the fold kept no pd arena")?;
+                    let map = if scope.is_subset(&self.primary) {
+                        &fold.raw
+                    } else {
+                        match cx
+                            .snapshot
+                            .get(&ArtifactKey::Raw(scope.clone()))
+                            .map(|a| &a.value)
+                        {
+                            Some(ArtifactValue::Raw(r)) => r,
+                            _ => return Err("a tree's raw facts are missing".into()),
+                        }
+                    };
+                    ArtifactValue::Tree(Arc::new(compose_tree_over(
+                        std::borrow::Cow::Borrowed(&**base),
+                        model,
+                        self.rel.cone(),
+                        self.dependency_calls(),
+                        &fold.caps,
+                        TreeRaw::Borrow(SubjectRaw::new(map, scope)),
+                        std::borrow::Cow::Borrowed(pd),
+                        &tree_apps(self.cross_base()),
+                    )))
+                }
                 ArtifactKey::Det => {
                     // A det refill keeps what the det it replaces covered
                     // when the snapshot holds what that wider mask reads.
@@ -743,71 +825,56 @@ impl Revision {
         }
     }
 
-    /// The plan's trees, each over the ready snapshot's composition: raw
-    /// borrowed from the primary emission or a `Raw` artifact, the pd arena
-    /// and the dependency calls lent. Stops between groups.
+    /// The calls dependency routines make (none single-app).
+    fn dependency_calls(&self) -> &[CallEdge] {
+        self.dependency_calls
+            .as_deref()
+            .map_or(&[][..], Vec::as_slice)
+    }
+
+    /// The plan's tree reads, each off its group's published tree (design
+    /// §6.11: one tree per view, filled once per revision, shared by every
+    /// request reading it), with the job lines a cold run prints for the
+    /// trees: per group, the tree's composition (its base sections' lines,
+    /// then its own), then the group's read. Stops between groups.
     fn trees(
         &self,
         plan: &Plan,
         snap: &ReadySnapshot,
         ctl: &Control<'_>,
-    ) -> Result<TreeReads, PrepareError> {
-        use crate::engine::l5::snapshot::{SubjectRaw, TreeRaw, compose_tree};
+    ) -> Result<(TreeReads, Vec<String>), PrepareError> {
+        use crate::engine::session::read_tree_shared;
         let (mut effects, mut tree_reads) = (BTreeMap::new(), BTreeMap::new());
+        let mut lines = Vec::new();
         let trees = plan.tree_demands();
         if trees.is_empty() {
-            return Ok((effects, tree_reads));
+            return Ok(((effects, tree_reads), lines));
         }
         let target = &*self.target;
-        let model = target.resolved();
-        let apps = tree_apps(self.cross_base());
-        let Some(ArtifactValue::Fold(fold)) = snap.get(&ArtifactKey::Fold).map(|a| &a.value) else {
-            return Err(PrepareError::Engine("a tree without the fold".into()));
-        };
-        let pd = fold
-            .caps
-            .pd
-            .as_ref()
-            .ok_or_else(|| PrepareError::Engine("the fold kept no pd arena".into()))?;
-        let calls = self
-            .dependency_calls
-            .as_deref()
-            .map_or(&[][..], Vec::as_slice);
+        let base_lines = snap
+            .get(&ArtifactKey::TreeBase)
+            .map(|a| a.lines.clone())
+            .unwrap_or_default();
         for (group, scope) in tree_groups(trees).iter().zip(self.tree_scopes(plan)) {
             if let Some(stop) = (ctl.stop)() {
                 return Err(stop.into());
             }
-            let map = if scope.is_subset(&self.primary) {
-                &fold.raw
-            } else {
-                match snap.get(&ArtifactKey::Raw(scope.clone())).map(|a| &a.value) {
-                    Some(ArtifactValue::Raw(r)) => r,
-                    _ => {
-                        return Err(PrepareError::Engine(
-                            "a tree's raw facts are missing".into(),
-                        ));
-                    }
-                }
+            let Some(artifact) = snap.get(&ArtifactKey::Tree(scope)) else {
+                return Err(PrepareError::Engine("a tree is not published".into()));
             };
-            let tree = compose_tree(
-                model,
-                self.rel.cone(),
-                calls,
-                &fold.caps,
-                TreeRaw::Borrow(SubjectRaw::new(map, &scope)),
-                std::borrow::Cow::Borrowed(pd),
-                &apps,
-            );
-            read_tree(
-                &mut Some(tree),
-                trees,
-                group,
-                target,
-                &mut effects,
-                &mut tree_reads,
-            );
+            let ArtifactValue::Tree(tree) = &artifact.value else {
+                return Err(PrepareError::Engine(
+                    "a tree key holds another value".into(),
+                ));
+            };
+            lines.extend(base_lines.iter().cloned());
+            lines.extend(artifact.lines.iter().cloned());
+            let ((), read_lines) = capture(|| {
+                read_tree_shared(tree, trees, group, target, &mut effects, &mut tree_reads);
+            });
+            lines.extend(read_lines);
         }
-        Ok((effects, tree_reads))
+        Ok(((effects, tree_reads), lines))
     }
 
     /// `job` (one of [`SERVED_COMMANDS`], made over [`Revision::inputs`])
@@ -836,7 +903,8 @@ impl Revision {
     }
 
     /// Fill `keys` (prerequisites first, each of phase 0: `Fold`, `L4`,
-    /// `Ordering`, `Rules`) through [`Store::ensure_prepared`], as a request
+    /// `Ordering`, `Rules`; or `TreeBase`, after the fold) through
+    /// [`Store::ensure_prepared`], as a request
     /// would: the measurement of "analysis prepared" (design §12.1) and the
     /// warm-up a front end may run after a refresh. Returns the wall ms.
     pub fn prepare_keys(
@@ -844,9 +912,14 @@ impl Revision {
         keys: &[ArtifactKey],
         ctl: &Control<'_>,
     ) -> Result<u64, PrepareError> {
-        if let Some(k) = keys.iter().find(|k| StoreKey::phase(*k) != 0) {
+        // The shared artifacts no request parameter shapes: phase 0, and the
+        // tree store's whole sections (which read only the fold).
+        if let Some(k) = keys
+            .iter()
+            .find(|k| StoreKey::phase(*k) != 0 && **k != ArtifactKey::TreeBase)
+        {
             return Err(PrepareError::Engine(format!(
-                "{k:?} is not a shared phase-0 artifact"
+                "{k:?} is not a shared request-independent artifact"
             )));
         }
         let plan = Plan::merge([]);
@@ -915,11 +988,11 @@ impl Revision {
         } else {
             Some((ctl.reserve)("trees", 0).map_err(PrepareError::Budget)?)
         };
-        let (trees, tree_lines) = capture(|| self.trees(plan, &snap, ctl));
+        let trees = self.trees(plan, &snap, ctl);
         if let Some(g) = guard {
             g.finish();
         }
-        let (effects, tree_reads) = trees?;
+        let ((effects, tree_reads), tree_lines) = trees?;
         let runs: BTreeMap<RunKey, Arc<RunOutput>> = needs
             .iter()
             .filter_map(|(k, _)| match (k, snap.get(k).map(|a| &a.value)) {

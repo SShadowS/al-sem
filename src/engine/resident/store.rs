@@ -382,6 +382,13 @@ impl<K: StoreKey, V: StoreValue> Store<K, V> {
             }
             gone.push(k.clone());
         }
+        // Nothing to evict (every key pinned): publish nothing. A new
+        // snapshot with the same entries would only add a second owner to
+        // every value while a request holds the old one, so no later reclaim
+        // could free any of them (`evict_unheld` counts owners).
+        if gone.is_empty() {
+            return 0;
+        }
         let mut cell = self.cell();
         let mut entries = cell.entries.clone();
         for k in &gone {
