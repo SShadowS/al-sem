@@ -36,6 +36,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   What an explain hit still pays is `explain.indexes` (0.87-1.14 s), above the 0.4 s bar for
   the plan's W2. Design note: `docs/superpowers/specs/2026-11-01-context-server-design.md` §6.11.
 
+### Added (a guard on the ordering cell, #367)
+
+- **Test `served_plans_never_demand_the_ordering_cell`** (`engine::session`): the plans of
+  the commands the resident host serves (prove, digest, explain, query, built with the
+  default detectors) never ask for `substrate::ORDERING_FACTS`. The ordering cell
+  (`detector_context::fill_ordering`, read by the opt-in d47/d49/d51) composes its own
+  snapshot of the whole model; its doc now says a served command that needs it must first
+  get a fill over the revision's fold and a tree of the kept roots. Discrimination: giving
+  `digest_plan` `own: ORDERING_FACTS` fails the test; reverting passes.
+- **#367 closed as not worth it, with numbers** (cross-app CDO, `alsem analyze --detector
+  d47,d49,d51`, release-fast, both scopes): the cell's private snapshot holds 246,708
+  facts (207,279 inherited), not the 17.0 M of the cross-app cone graph, because it is
+  composed over the cut graph. It costs ~2.4 s and ~30 MB of peak in a ~45–50 s, 5.1–6.0 GB
+  run. The 1,456 kept roots (of 5,479) already hold 187,102 of the inherited facts (90 %),
+  and event-publish facts are 66,645 of those. The cell's real cost is the per-root witness
+  work (`digest.roots`, ~30 s, ~2.1 GB of peak), which neither a subject nor a fact-kind
+  restriction of the snapshot touches.
+
 ### Changed (the default cross-app memory budget is 8 GiB)
 
 - **`--memory-budget` now defaults to 8 GiB for a cross-app engine child (was 6 GiB).**
