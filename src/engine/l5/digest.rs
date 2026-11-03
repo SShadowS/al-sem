@@ -286,7 +286,7 @@ fn build_fingerprint_indexes_in(
     // incomingEdges[to] ← set of `from` ids — the reverse graph, built in the same pass.
     let mut outgoing_edges: HashMap<String, Vec<&SnapshotGraphEdge>> = HashMap::new();
     let mut incoming_edges: HashMap<String, Vec<String>> = HashMap::new();
-    for edge in &snap.typed_edges {
+    for edge in snap.typed_edges.iter() {
         let from = edge_from(edge).to_string();
         outgoing_edges.entry(from.clone()).or_default().push(edge);
         if let Some(to) = edge_to(edge) {
@@ -348,7 +348,7 @@ fn build_fingerprint_indexes_in(
 
     // eventDisplayById ← publisher event declarations; eventName = eventId.split("::")[1].
     let mut event_display_by_id: HashMap<String, String> = HashMap::new();
-    for decl in &snap.event_declarations {
+    for decl in snap.event_declarations.iter() {
         if decl.kind != "publisher" {
             continue;
         }
@@ -5774,14 +5774,14 @@ mod tests {
             }
             .into(),
             capability_facts: vec![],
-            typed_edges: vec![],
+            typed_edges: Default::default(),
             operation_index: vec![],
             callsite_index: vec![],
-            callsite_resolutions: vec![],
-            analysis_gaps: vec![],
+            callsite_resolutions: Default::default(),
+            analysis_gaps: Default::default(),
             coverage: vec![].into(),
-            event_declarations: vec![],
-            root_classifications: vec![],
+            event_declarations: Default::default(),
+            root_classifications: Default::default(),
             routine_order_frames: None,
             pd_solution: Default::default(),
             boundary: None,
@@ -6973,7 +6973,7 @@ codeunit 50101 "T7b Temp Classes"
             SnapTempState::ParameterDependent { parameter_index: 0 },
         )];
         // 0: Root → Perm, 1: Perm → Perm (the swap), 2: Perm → Helper.
-        snap.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
             call_edge("Root", "Perm", "cs-root"),
             call_edge("Perm", "Perm", "cs-self"),
             call_edge("Perm", "Helper", "cs-help"),
@@ -7042,7 +7042,7 @@ codeunit 50101 "T7b Temp Classes"
             SnapTempState::ParameterDependent { parameter_index: 0 },
         )];
         // 0: Root → A, 1: A → H, 2: A → B, 3: B → H.
-        snap.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
             call_edge("Root", "A", "cs-root"),
             call_edge("A", "H", "cs-a1"),
             call_edge("A", "B", "cs-a2"),
@@ -7137,7 +7137,7 @@ codeunit 50101 "T7b Temp Classes"
             ),
         ];
         // 0: Root → A, 1: A → Hz, 2: A → Hb.
-        snap.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
             call_edge("Root", "A", "cs-root"),
             call_edge("A", "Hz", "cs-z"),
             call_edge("A", "Hb", "cs-b"),
@@ -7221,7 +7221,8 @@ codeunit 50101 "T7b Temp Classes"
         // Edge i: R{i} → R{i+1}. State j sits at R{N-j}; state 0 is the seed.
         snap.typed_edges = (0..N)
             .map(|i| call_edge(&format!("R{i}"), &format!("R{}", i + 1), &format!("c{i}")))
-            .collect();
+            .collect::<Vec<_>>()
+            .into();
         let arena = &mut snap.pd_solution;
         arena.states.push(state(
             &last,
@@ -7413,7 +7414,7 @@ codeunit 50410 DupProducer
     fn capped_ordinary_witness_is_a_prefix_of_the_uncapped_one() {
         let mut snap = empty_snapshot();
         snap.capability_facts = vec![ordinary_carrier("Hz", "opz"), ordinary_carrier("Hb", "opb")];
-        snap.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
             call_edge("Root", "A", "cs-root"),
             call_edge("A", "Hz", "cs-a"),
             call_edge("A", "Hb", "cs-z"),
@@ -7440,7 +7441,7 @@ codeunit 50410 DupProducer
     fn capped_ordinary_witness_at_exactly_the_cap_is_not_truncated() {
         let mut snap = empty_snapshot();
         snap.capability_facts = vec![ordinary_carrier("H", "oph")];
-        snap.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
             call_edge("Root", "A", "cs-root"),
             call_edge("A", "H", "cs-a"),
             call_edge("A", "D", "cs-b"),
@@ -7462,7 +7463,7 @@ codeunit 50410 DupProducer
     fn capped_ordinary_witness_reports_opaque_boundaries_of_kept_paths_only() {
         let mut snap = empty_snapshot();
         snap.capability_facts = vec![ordinary_carrier("A", "opa")];
-        snap.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
             call_edge("Root", "A", "cs-root"),
             call_edge("Root", "Y", "cs-root"),
             call_edge("Root", "Z", "cs-root"),
@@ -7519,7 +7520,7 @@ codeunit 50410 DupProducer
     ) -> WitnessOutcomeExt {
         const EV: &str = "app/Codeunit/1/event/onx";
         for s in subs {
-            snap.typed_edges.push(event_edge("Root", s, EV));
+            std::sync::Arc::make_mut(&mut snap.typed_edges).push(event_edge("Root", s, EV));
         }
         let mut f = insert_fact(
             "Root",
@@ -7588,7 +7589,7 @@ codeunit 50410 DupProducer
     fn event_first_hop_subscriber_that_cannot_reach_the_write_gives_no_path() {
         let mut snap = empty_snapshot();
         snap.capability_facts = vec![ordinary_carrier("W", "opw")];
-        snap.typed_edges = vec![call_edge("N", "X", "cs-n")];
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![call_edge("N", "X", "cs-n")];
         let out = event_witness(&mut snap, &["N", "W"], 1);
         assert_eq!(chains(&out), vec!["W"]);
         assert!(!out.truncated && !out.incomplete, "{:?}", out.diagnostics);
@@ -7674,7 +7675,7 @@ codeunit 50410 DupProducer
     fn w1_dag_witness_is_the_shortest_path_only() {
         let mut snap = empty_snapshot();
         snap.capability_facts = vec![ordinary_carrier("W1", "op1"), ordinary_carrier("W2", "op2")];
-        snap.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
             call_edge("Root", "A", "cs-root"),
             call_edge("A", "W1", "cs-a1"),
             call_edge("A", "B", "cs-a2"),
@@ -7690,7 +7691,7 @@ codeunit 50410 DupProducer
     fn w2_dag_witness_keeps_every_shortest_path() {
         let mut snap = empty_snapshot();
         snap.capability_facts = vec![ordinary_carrier("W", "opw")];
-        snap.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
             call_edge("Root", "X", "cs-root"),
             call_edge("X", "A", "cs-xa"),
             call_edge("X", "B", "cs-xb"),
@@ -7707,15 +7708,15 @@ codeunit 50410 DupProducer
     fn diamond_ladder(k: usize) -> CapabilitySnapshot {
         let mut snap = empty_snapshot();
         snap.capability_facts = vec![ordinary_carrier(&format!("N{k:02}"), "opw")];
-        snap.typed_edges = vec![call_edge("Root", "N00", "cs-root")];
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) =
+            vec![call_edge("Root", "N00", "cs-root")];
         for i in 0..k {
             let (n, next) = (format!("N{i:02}"), format!("N{:02}", i + 1));
             for side in ["a", "b"] {
                 let mid = format!("{side}{i:02}");
-                snap.typed_edges
-                    .push(call_edge(&n, &mid, &format!("cs-{side}{i:02}")));
-                snap.typed_edges
-                    .push(call_edge(&mid, &next, &format!("cs-{side}n{i:02}")));
+                let edges = std::sync::Arc::make_mut(&mut snap.typed_edges);
+                edges.push(call_edge(&n, &mid, &format!("cs-{side}{i:02}")));
+                edges.push(call_edge(&mid, &next, &format!("cs-{side}n{i:02}")));
             }
         }
         snap
@@ -7725,13 +7726,12 @@ codeunit 50410 DupProducer
     fn fan(n: usize) -> CapabilitySnapshot {
         let mut snap = empty_snapshot();
         snap.capability_facts = vec![ordinary_carrier("W", "opw")];
-        snap.typed_edges = vec![call_edge("Root", "F", "cs-root")];
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![call_edge("Root", "F", "cs-root")];
         for j in 0..n {
             let c = format!("c{j}");
-            snap.typed_edges
-                .push(call_edge("F", &c, &format!("cs-f{j}")));
-            snap.typed_edges
-                .push(call_edge(&c, "W", &format!("cs-c{j}")));
+            let edges = std::sync::Arc::make_mut(&mut snap.typed_edges);
+            edges.push(call_edge("F", &c, &format!("cs-f{j}")));
+            edges.push(call_edge(&c, "W", &format!("cs-c{j}")));
         }
         snap
     }
@@ -7763,7 +7763,7 @@ codeunit 50410 DupProducer
     fn w4c_carrier_and_opaque_tie_is_ordered_by_projected_json() {
         let mut snap = empty_snapshot();
         snap.capability_facts = vec![ordinary_carrier("A", "opa")];
-        snap.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
             call_edge("Root", "A", "cs-root"),
             call_edge("Root", "Y", "cs-root"),
             call_edge("Root", "Z", "cs-root"),
@@ -7782,17 +7782,16 @@ codeunit 50410 DupProducer
     fn w5_dag_witness_has_no_state_budget() {
         let mut snap = empty_snapshot();
         snap.capability_facts = vec![ordinary_carrier("W", "opw")];
-        snap.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
             call_edge("Root", "A", "cs-root"),
             call_edge("A", "Z", "cs-z"),
             call_edge("Z", "W", "cs-zw"),
         ];
         for i in 0..MAX_STATES {
             let sib = format!("I{i:05}");
-            snap.typed_edges
-                .push(call_edge("A", &sib, &format!("cs-m{i:05}")));
-            snap.typed_edges
-                .push(call_edge(&sib, "A", &format!("cs-n{i:05}")));
+            let edges = std::sync::Arc::make_mut(&mut snap.typed_edges);
+            edges.push(call_edge("A", &sib, &format!("cs-m{i:05}")));
+            edges.push(call_edge(&sib, "A", &format!("cs-n{i:05}")));
         }
         let out = witness_of(&snap, &root_insert("cs-root"), HARD_PATH_CAP);
         assert_eq!(chains(&out), vec!["A>Z>W"], "{:?}", out.diagnostics);
@@ -7803,9 +7802,9 @@ codeunit 50410 DupProducer
     /// A call chain `Root → R1 → … → R{n}`, first hop `c0`.
     fn chain_snapshot(n: usize) -> CapabilitySnapshot {
         let mut snap = empty_snapshot();
-        snap.typed_edges.push(call_edge("Root", "R1", "c0"));
+        std::sync::Arc::make_mut(&mut snap.typed_edges).push(call_edge("Root", "R1", "c0"));
         for i in 1..n {
-            snap.typed_edges.push(call_edge(
+            std::sync::Arc::make_mut(&mut snap.typed_edges).push(call_edge(
                 &format!("R{i}"),
                 &format!("R{}", i + 1),
                 &format!("c{i}"),
@@ -7843,7 +7842,7 @@ codeunit 50410 DupProducer
         let mut modify_x = ordinary_carrier("X", "opx").fields();
         modify_x.op = "modify".to_string();
         snap.capability_facts = vec![ordinary_carrier("W", "opw"), modify_x.into()];
-        snap.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
             call_edge("Root", "A", "cs-root"),
             call_edge("A", "W", "cs-aw"),
             call_edge("A", "L01", "cs-al"),
@@ -7851,7 +7850,7 @@ codeunit 50410 DupProducer
             call_edge("L70", "X", "cs-lx"),
         ];
         for i in 1..70 {
-            snap.typed_edges.push(call_edge(
+            std::sync::Arc::make_mut(&mut snap.typed_edges).push(call_edge(
                 &format!("L{i:02}"),
                 &format!("L{:02}", i + 1),
                 &format!("cs-l{i:02}"),
@@ -7891,7 +7890,7 @@ codeunit 50410 DupProducer
             ordinary_carrier("W2#1", "opw2"),
             inherited.into(),
         ];
-        snap.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
             call_edge("R#1", "A#1", "cs1"),
             call_edge("A#1", "W#1", "csG"),
             call_edge("A#1", "B#1", "csU1"),
@@ -7960,7 +7959,7 @@ codeunit 50410 DupProducer
         let mut inherited = root_insert("cs1").fields();
         inherited.subject = "R#1".to_string();
         snap.capability_facts = vec![ordinary_carrier("T#1", "opw"), inherited.into()];
-        snap.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
             call_edge("R#1", "S#1", "cs1"),
             trigger_edge("S#1", "T#1", "opC"),
             trigger_edge("S#1", "T#1", "opU"),
@@ -8018,7 +8017,7 @@ codeunit 50410 DupProducer
     fn w9_opaque_seeds_are_candidates_and_other_opaque_nodes_are_not() {
         let mut snap = empty_snapshot();
         snap.capability_facts = vec![ordinary_carrier("A", "opa"), ordinary_carrier("W", "opw")];
-        snap.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
             call_edge("Root", "A", "cs-root"),
             call_edge("Root", "M", "cs-root"),
             call_edge("Root", "Z", "cs-root"),
@@ -8050,7 +8049,7 @@ codeunit 50410 DupProducer
         // M, and O is still not reported.
         let mut beside = empty_snapshot();
         beside.capability_facts = vec![ordinary_carrier("W", "opw")];
-        beside.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut beside.typed_edges) = vec![
             call_edge("Root", "M", "cs-root"),
             call_edge("M", "O", "cs-mo"),
             call_edge("M", "W", "cs-mw"),
@@ -8061,7 +8060,7 @@ codeunit 50410 DupProducer
         assert!(!has_diag(&out, "opaque-or-unresolved-boundary"));
         // A4-01: no carrier anywhere; the opaque seed is the one witness.
         let mut lone = empty_snapshot();
-        lone.typed_edges = vec![call_edge("Root", "Z", "cs-root")];
+        lone.typed_edges = vec![call_edge("Root", "Z", "cs-root")].into();
         lone.coverage = vec![opaque_coverage("Z")].into();
         let out = witness_of(&lone, &f, HARD_PATH_CAP);
         assert_eq!(chains(&out), vec!["Z(opaque)"]);
@@ -8076,7 +8075,7 @@ codeunit 50410 DupProducer
         let mut modify_w = ordinary_carrier("W", "opm").fields();
         modify_w.op = "modify".to_string();
         snap.capability_facts = vec![ordinary_carrier("W", "opw"), modify_w.into()];
-        snap.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
             call_edge("Root", "A", "cs1"),
             call_edge("Root", "B", "cs2"),
             call_edge("A", "W", "cs-a"),
@@ -8237,7 +8236,7 @@ codeunit 50410 DupProducer
         // event dispatches out of M) and two carriers: 6 candidates.
         let mut s1 = empty_snapshot();
         s1.capability_facts = vec![ordinary_carrier("W1", "op1"), ordinary_carrier("W2", "op2")];
-        s1.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut s1.typed_edges) = vec![
             call_edge("Root", "S", "cs-root"),
             call_edge("S", "a", "cs-sa"),
             object_run_edge("S", "b", "cs-sb"),
@@ -8262,7 +8261,7 @@ codeunit 50410 DupProducer
             ordinary_carrier("W3", "op3"),
             ordinary_carrier("W4", "op4"),
         ];
-        s2.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut s2.typed_edges) = vec![
             call_edge("Root", "S", "cs-root"),
             trigger_edge("S", "T", "op-t1"),
             trigger_edge("S", "T", "op-t2"),
@@ -8278,7 +8277,7 @@ codeunit 50410 DupProducer
         // first hop's JSON sorts BEFORE the opaque one's.
         let mut s3 = empty_snapshot();
         s3.capability_facts = vec![ordinary_carrier("W1", "op1"), ordinary_carrier("W2", "op2")];
-        s3.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut s3.typed_edges) = vec![
             call_edge("Root", "A", "cs-root"),
             call_edge("Root", "Z", "cs-root"),
             call_edge("A", "B", "cs-ab"),
@@ -8291,7 +8290,7 @@ codeunit 50410 DupProducer
         // (5) An opaque seed beside carriers at `dmin = 2` (A4-01).
         let mut s5 = empty_snapshot();
         s5.capability_facts = vec![ordinary_carrier("W", "opw")];
-        s5.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut s5.typed_edges) = vec![
             call_edge("Root", "A", "cs-root"),
             call_edge("Root", "B", "cs-root"),
             call_edge("Root", "Z", "cs-root"),
@@ -8573,7 +8572,7 @@ codeunit 50102 "W10 Merge"
             &["DepOuter", "DepInner"],
             &[(18, "Customer"), (36, "Sales Header")],
         );
-        snap.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
             rb_call("R", "DepOuter", "cs1"),
             rb_call("DepOuter", "DepInner", "cs-oi"),
         ];
@@ -8615,7 +8614,8 @@ codeunit 50102 "W10 Merge"
             &["DepA", "DepB"],
             &[(18, "Customer"), (36, "Sales Header")],
         );
-        snap.typed_edges = vec![rb_call("R", "DepB", "cs1"), rb_call("R", "DepA", "cs1")];
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) =
+            vec![rb_call("R", "DepB", "cs1"), rb_call("R", "DepA", "cs1")];
         snap.capability_facts = vec![
             rb_fact("DepA", "modify", 18, Some("op18"), None),
             rb_fact("DepB", "modify", 36, Some("op36"), None),
@@ -8638,7 +8638,8 @@ codeunit 50102 "W10 Merge"
             &["DepOuter"],
             &[(18, "Customer"), (50, "Ws Log")],
         );
-        snap.typed_edges = vec![rb_call("R", "P", "cs0"), rb_call("R", "DepOuter", "cs1")];
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) =
+            vec![rb_call("R", "P", "cs0"), rb_call("R", "DepOuter", "cs1")];
         snap.capability_facts = vec![
             rb_fact("P", "modify", 50, Some("op50"), None),
             rb_fact("DepOuter", "modify", 18, Some("op18"), None),
@@ -8664,7 +8665,7 @@ codeunit 50102 "W10 Merge"
         let tables: Vec<(u32, String)> = (101..=112).map(|n| (n, format!("T{n}"))).collect();
         let named: Vec<(u32, &str)> = tables.iter().map(|(n, t)| (*n, t.as_str())).collect();
         let mut snap = rb_snapshot(&["R", "DepOuter"], &["DepOuter"], &named);
-        snap.typed_edges = vec![rb_call("R", "DepOuter", "cs1")];
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![rb_call("R", "DepOuter", "cs1")];
         // Root facts first, in reverse: the list order is the resource ids'.
         for (n, _) in tables.iter().rev() {
             snap.capability_facts
@@ -8701,7 +8702,7 @@ codeunit 50102 "W10 Merge"
             &deps,
             &[(18, "Customer")],
         );
-        snap.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
             rb_call("R", "Helper", "cs-h"),
             rb_call("Helper", "DepA", "cs1"),
             rb_call("Helper", "DepB", "cs2"),
@@ -8870,7 +8871,7 @@ codeunit 50102 "W10 Merge"
             &["DepD1", "DepX", "DepW1", "DepD2", "DepW2", "DepD3"],
             &[(18, "Customer")],
         );
-        s3.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut s3.typed_edges) = vec![
             rb_call("R", "A", "cs-root"),
             rb_call("A", "DepD1", "cs-ad1"),
             rb_call("DepD1", "DepX", "cs-d1x"),
@@ -8894,7 +8895,7 @@ codeunit 50102 "W10 Merge"
             &["DepA", "DepX1", "DepX2", "DepC", "DepB", "DepY", "DepC2"],
             &[(18, "Customer")],
         );
-        s4.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut s4.typed_edges) = vec![
             rb_call("R", "Helper", "cs-root"),
             rb_call("Helper", "DepA", "cs1"),
             rb_call("Helper", "DepB", "cs2"),
@@ -8950,7 +8951,7 @@ codeunit 50102 "W10 Merge"
             &["DepA", "DepB", "DepC", "X", "Y", "H1", "H2", "H3", "H4"],
             &[],
         );
-        snap.typed_edges = vec![
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![
             rb_call("R", "P", "cs-root"),
             rb_call("P", "DepA", "cs-a"),
             rb_call("P", "DepC", "cs-c"),
@@ -9115,7 +9116,7 @@ codeunit 50102 "W10 Merge"
         let dep_w = rows.len() - 1;
         rows.push(("P#".into(), false, vec![(3, e_a), (dep_w, e_w)]));
         rows.push(("R#".into(), false, vec![(rows.len() - 1, e_root)]));
-        snap.typed_edges = edges;
+        snap.typed_edges = edges.into();
         snap.capability_facts = vec![insert_fact(
             "H1#",
             "direct",

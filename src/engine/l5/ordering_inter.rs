@@ -184,7 +184,7 @@ pub type ResolutionByCallsiteId<'a> = HashMap<&'a str, &'a SnapshotCallsiteResol
 /// each call.
 pub fn resolution_by_callsite_id(snap: &CapabilitySnapshot) -> ResolutionByCallsiteId<'_> {
     let mut m: ResolutionByCallsiteId = HashMap::new();
-    for row in &snap.callsite_resolutions {
+    for row in snap.callsite_resolutions.iter() {
         m.insert(row.callsite_id.as_str(), row);
     }
     m
@@ -1130,7 +1130,7 @@ pub fn error_escapes_chain(
     }
     // B13/B14 + B6/B7/B8/B9 on links.
     let mut cs_res_by_id: HashMap<&str, &SnapshotCallsiteResolution> = HashMap::new();
-    for cr in &snap.callsite_resolutions {
+    for cr in snap.callsite_resolutions.iter() {
         cs_res_by_id.insert(cr.callsite_id.as_str(), cr);
     }
     for link in &occ_chain.chain.links {
@@ -1202,14 +1202,14 @@ mod tests {
             }
             .into(),
             capability_facts: vec![],
-            typed_edges: vec![],
+            typed_edges: Default::default(),
             operation_index: vec![],
             callsite_index: vec![],
-            callsite_resolutions: vec![],
-            analysis_gaps: vec![],
+            callsite_resolutions: Default::default(),
+            analysis_gaps: Default::default(),
             coverage: vec![].into(),
-            event_declarations: vec![],
-            root_classifications: vec![],
+            event_declarations: Default::default(),
+            root_classifications: Default::default(),
             routine_order_frames: None,
             pd_solution: Default::default(),
             boundary: None,
@@ -2063,7 +2063,7 @@ mod tests {
             order: evidence_order(2),
             under_asserterror: None,
         });
-        snap.callsite_resolutions.push(SnapshotCallsiteResolution {
+        std::sync::Arc::make_mut(&mut snap.callsite_resolutions).push(SnapshotCallsiteResolution {
             callsite_id: "csHelper".to_string(),
             from: "root".to_string(),
             callee_display: "Helper".to_string(),

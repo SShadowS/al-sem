@@ -56,6 +56,9 @@ use crate::program::model::events::{EventGraph, EventSymbol};
 use crate::program::model::taxonomy::DispatchKind;
 use crate::program::model::workspace::{Model, ModelRoutine};
 
+#[path = "snapshot_view.rs"]
+mod view;
+
 // ===========================================================================
 // ORDERED serde projections of ValueSource / CapabilityExtra.
 //
@@ -1178,19 +1181,28 @@ pub struct CapabilitySnapshot {
     /// the table itself (context-server design r3 §13 item 3).
     pub identities: std::sync::Arc<SnapshotIdentityTable>,
     pub capability_facts: Vec<SnapshotCapabilityFact>,
-    pub typed_edges: Vec<SnapshotGraphEdge>,
+    /// Whole-program and shared, as `identities` (plan
+    /// `2026-11-03-context-server-remaining.md` item L3: every view of a
+    /// revision shares its tree base's sections; a writer goes through
+    /// `Arc::make_mut`).
+    pub typed_edges: std::sync::Arc<Vec<SnapshotGraphEdge>>,
     pub operation_index: Vec<SnapshotOperationEvidence>,
     pub callsite_index: Vec<SnapshotCallsiteEvidence>,
-    pub callsite_resolutions: Vec<SnapshotCallsiteResolution>,
-    pub analysis_gaps: Vec<SnapshotAnalysisGap>,
+    /// Whole-program and shared, as `typed_edges`.
+    pub callsite_resolutions: std::sync::Arc<Vec<SnapshotCallsiteResolution>>,
+    /// Whole-program and shared, as `typed_edges`.
+    pub analysis_gaps: std::sync::Arc<Vec<SnapshotAnalysisGap>>,
     /// Whole-program and shared, as `identities`.
     pub coverage: std::sync::Arc<Vec<SnapshotCoverageRecord>>,
-    pub event_declarations: Vec<SnapshotEventDeclaration>,
-    pub root_classifications: Vec<SnapshotRootClassificationSlot>,
+    /// Whole-program and shared, as `typed_edges`.
+    pub event_declarations: std::sync::Arc<Vec<SnapshotEventDeclaration>>,
+    /// Whole-program and shared, as `typed_edges`.
+    pub root_classifications: std::sync::Arc<Vec<SnapshotRootClassificationSlot>>,
     /// Absent when no routine has scope frames (symbol-only). A sorted-key map
     /// (StableRoutineId → ScopeFrame[]); serialized in sorted-key order with
-    /// declaration-ordered frame fields via `RoutineOrderFrames`.
-    pub routine_order_frames: Option<RoutineOrderFrames>,
+    /// declaration-ordered frame fields via `RoutineOrderFrames`. Shared, as
+    /// `typed_edges`.
+    pub routine_order_frames: Option<std::sync::Arc<RoutineOrderFrames>>,
     /// #69 D2: the producer solve (`l4::pd_solve`) over `typed_edges`. Never
     /// serialized: the serialized snapshot moves only where fact values move.
     pub pd_solution: PdArena,
@@ -1654,15 +1666,15 @@ pub fn compose_snapshot_from_base(
     finish_snapshot(CapabilitySnapshot {
         identities: identities.into(),
         capability_facts,
-        typed_edges,
+        typed_edges: typed_edges.into(),
         operation_index,
         callsite_index,
-        callsite_resolutions,
-        analysis_gaps,
+        callsite_resolutions: callsite_resolutions.into(),
+        analysis_gaps: analysis_gaps.into(),
         coverage: coverage.into(),
-        event_declarations,
-        root_classifications,
-        routine_order_frames,
+        event_declarations: event_declarations.into(),
+        root_classifications: root_classifications.into(),
+        routine_order_frames: routine_order_frames.map(std::sync::Arc::new),
         pd_solution,
         boundary: None,
     })
@@ -1811,7 +1823,7 @@ pub(crate) fn compose_tree(
     pd: std::borrow::Cow<'_, crate::engine::l4::pd_solve::ConeArena>,
     apps: &TreeApps,
 ) -> CapabilitySnapshot {
-    let base = derive_tree_base(model, typed, dependency_calls, caps, apps);
+    let base = derive_tree_base(model, typed, dependency_calls, caps, &pd, apps);
     compose_tree_over(
         std::borrow::Cow::Owned(base),
         model,
@@ -1826,24 +1838,28 @@ pub(crate) fn compose_tree(
 
 /// The whole-program sections of a tree (context-server design §6.11): what
 /// every tree over the same composition carries whatever its subjects —
-/// identities, typed edges (and the keys of the edges they skipped), call-site
-/// resolutions, analysis gaps, coverage, event declarations, root
+/// identities, typed edges, call-site resolutions, analysis gaps, coverage, event declarations, root
 /// classifications, routine order frames and rule B's boundary. None reads a
 /// raw fact or the pd arena. A resident revision derives them once (its
 /// `TreeBase` artifact) and every view shares them; a one-shot tree derives
 /// and moves them ([`compose_tree`]).
+///
+/// It also holds the view-independent half of the per-view sections (plan
+/// item L4a, [`view`]): the evidence candidates, the direct-fact table and
+/// the pd arena's maps over the arena it was derived with, so a view derives
+/// only what its subjects add.
 #[derive(Clone)]
 pub struct TreeBase {
     identities: std::sync::Arc<SnapshotIdentityTable>,
-    typed_edges: Vec<SnapshotGraphEdge>,
-    skipped: SkippedEdgeKeys,
-    callsite_resolutions: Vec<SnapshotCallsiteResolution>,
-    analysis_gaps: Vec<SnapshotAnalysisGap>,
+    typed_edges: std::sync::Arc<Vec<SnapshotGraphEdge>>,
+    callsite_resolutions: std::sync::Arc<Vec<SnapshotCallsiteResolution>>,
+    analysis_gaps: std::sync::Arc<Vec<SnapshotAnalysisGap>>,
     coverage: std::sync::Arc<Vec<SnapshotCoverageRecord>>,
-    event_declarations: Vec<SnapshotEventDeclaration>,
-    root_classifications: Vec<SnapshotRootClassificationSlot>,
-    routine_order_frames: Option<RoutineOrderFrames>,
+    event_declarations: std::sync::Arc<Vec<SnapshotEventDeclaration>>,
+    root_classifications: std::sync::Arc<Vec<SnapshotRootClassificationSlot>>,
+    routine_order_frames: Option<std::sync::Arc<RoutineOrderFrames>>,
     boundary: BoundaryRule,
+    view: view::ViewBase,
 }
 
 /// The inputs every tree section reads (the borrowed half of
@@ -1896,12 +1912,15 @@ impl<'m> TreeInputParts<'m> {
     }
 }
 
-/// [`TreeBase`] over the composition `caps` (one span per section).
+/// [`TreeBase`] over the composition `caps` and its pd arena `pd` (one span
+/// per section). Every view composed over the base must pass the same arena
+/// ([`compose_tree_over`] asserts its shape).
 pub(crate) fn derive_tree_base(
     model: &Model,
     typed: &[TypedEdge],
     dependency_calls: &[CallEdge],
     caps: &crate::engine::l5::detector_context::CapabilityAnalysis,
+    pd: &crate::engine::l4::pd_solve::ConeArena,
     apps: &TreeApps,
 ) -> TreeBase {
     let _s = crate::engine::perf_trace::span("snapshot", "tree.base");
@@ -1933,29 +1952,48 @@ pub(crate) fn derive_tree_base(
     let s = sec("tree.root_classifications");
     let root_classifications = derive_root_classifications(model, &inp);
     drop(s);
-    let s = sec("tree.routine_order_frames");
-    let routine_order_frames = derive_routine_order_frames(&inp, &collided);
+    // The order frames come with the evidence candidates: both read each
+    // row's `compute_routine_order`, run once per row here.
+    let s = sec("tree.evidence_base");
+    let (evidence, routine_order_frames) = view::derive_evidence_base(&inp, &collided);
     drop(s);
+    let s = sec("tree.fact_base");
+    let facts = view::derive_fact_base(&inp);
+    drop(s);
+    let s = sec("tree.pd_base");
+    let pd = view::derive_pd_base(pd, &typed_edges, &skipped, &facts, inp.routine_to_stable);
+    drop(s);
+    drop((inp, collided, skipped));
     TreeBase {
         identities: identities.into(),
-        typed_edges,
-        skipped,
-        callsite_resolutions,
-        analysis_gaps,
+        typed_edges: typed_edges.into(),
+        callsite_resolutions: callsite_resolutions.into(),
+        analysis_gaps: analysis_gaps.into(),
         coverage: coverage.into(),
-        event_declarations,
-        root_classifications,
-        routine_order_frames,
+        event_declarations: event_declarations.into(),
+        root_classifications: root_classifications.into(),
+        routine_order_frames: routine_order_frames.map(std::sync::Arc::new),
         boundary,
+        view: view::ViewBase {
+            routine_to_stable: parts.routine_to_stable,
+            facts,
+            evidence,
+            pd,
+        },
     }
 }
 
-/// The tree of one view over `base` (the whole sections, moved when owned,
-/// cloned when shared): the per-view sections — the operation and call-site
+/// The tree of one view over `base` (the whole sections, `Arc`s moved when
+/// owned, shared when shared): the per-view sections — the operation and call-site
 /// evidence and the capability facts (direct rows for every covered routine,
 /// inherited rows for the subjects) and the pd arena scoped to the subjects'
-/// state closure — derived here. Equal to [`compose_tree`]'s for the same
-/// inputs whatever `base`'s ownership.
+/// state closure — spliced from the base's view-independent half
+/// ([`view`]) and the subjects' raw facts. Equal to [`compose_tree`]'s for
+/// the same inputs whatever `base`'s ownership. `base` must have been derived
+/// over the same composition and arena (`typed`, `dependency_calls`, `caps`,
+/// `pd`, `apps`); they are read again only when the base's direct table is
+/// not split by subject (an emitted subject holds `|`), where the facts are
+/// derived whole.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn compose_tree_over(
     base: std::borrow::Cow<'_, TreeBase>,
@@ -1970,67 +2008,59 @@ pub(crate) fn compose_tree_over(
     crate::engine::perf_trace::counter_delta("build.snapshot", 1);
     let _s = crate::engine::perf_trace::span("snapshot", "snapshot.derive");
     let sec = |name: &'static str| crate::engine::perf_trace::span("snapshot", name);
-    let s = sec("tree.view_prelude");
-    let ws = &model.workspace;
-    let parts = TreeInputParts::of(model);
-    let inp = parts.inputs(model, typed, dependency_calls, caps, apps);
-    let collided = CollidedRows::build(&ws.routines);
-    let cone_pd = pd;
-    drop(s);
-    // The two evidence indexes read the raw facts, so they run first; in
-    // drain mode the tree owns its subjects' entries and drops them after.
-    let (subjects, operation_index, callsite_index, capability_facts) = match raw {
+    let vb = &base.view;
+    let routines = &model.workspace.routines;
+    // Facts derived whole (no split table) read the full inputs.
+    let parts = if vb.facts.split {
+        None
+    } else {
+        Some(TreeInputParts::of(model))
+    };
+    let inp = parts
+        .as_ref()
+        .map(|p| p.inputs(model, typed, dependency_calls, caps, apps));
+    // In drain mode the tree owns its subjects' entries and drops them once
+    // the raw readers ran.
+    let (subjects, (operation_index, callsite_index, facts)) = match raw {
         TreeRaw::Drain(map) => {
             let subjects: std::collections::BTreeSet<String> =
                 map.keys().map(str::to_string).collect();
-            let get = |id: &str| map.get(id);
-            let s = sec("tree.operation_index");
-            let operation_index = derive_operation_evidence(&inp, get, &collided);
-            drop(s);
-            let s = sec("tree.callsite_index");
-            let callsite_index = derive_callsite_evidence(&inp, get, &collided);
-            drop(s);
-            let s = sec("tree.capability_facts");
-            let capability_facts = derive_capability_facts(&inp, get);
-            drop(s);
+            let out = view_sections(vb, routines, inp.as_ref(), &subjects, &|id: &str| {
+                map.get(id)
+            });
             drop(map);
-            (subjects, operation_index, callsite_index, capability_facts)
+            (subjects, out)
         }
         TreeRaw::Borrow(acc) => {
-            let get = |id: &str| acc.get(id);
-            let s = sec("tree.operation_index");
-            let operation_index = derive_operation_evidence(&inp, get, &collided);
-            drop(s);
-            let s = sec("tree.callsite_index");
-            let callsite_index = derive_callsite_evidence(&inp, get, &collided);
-            drop(s);
-            let s = sec("tree.capability_facts");
-            let capability_facts = derive_capability_facts(&inp, get);
-            drop(s);
-            (
-                acc.subjects,
-                operation_index,
-                callsite_index,
-                capability_facts,
-            )
+            let out = view_sections(vb, routines, inp.as_ref(), acc.subjects(), &|id: &str| {
+                acc.get(id)
+            });
+            (acc.subjects, out)
         }
     };
     let s = sec("tree.pd_solution");
-    let pd_solution = derive_pd_arena(
-        &inp,
-        &cone_pd,
-        Some(&subjects),
-        &base.typed_edges,
-        &capability_facts,
-        &base.skipped,
-    );
-    drop(cone_pd);
+    let (pd_solution, capability_facts) = {
+        let producers = match &facts {
+            ViewFactRows::Spliced(vf) => view::ProducerRows::Spliced(&vb.pd, vf),
+            ViewFactRows::Whole(rows) => view::ProducerRows::whole(rows),
+        };
+        let arena = view::view_pd(&pd, &subjects, &vb.pd, &producers, &vb.routine_to_stable);
+        drop(producers);
+        let rows = match facts {
+            ViewFactRows::Spliced(vf) => vf.rows,
+            ViewFactRows::Whole(rows) => rows,
+        };
+        (arena, rows)
+    };
+    drop(pd);
     drop(s);
     let s = sec("tree.base_sections");
-    let TreeBase {
+    // The whole sections (plan item L3: `Arc`s, moved from an owned base,
+    // shared with a shared one; never the view half, which a view's tree
+    // does not hold).
+    let (
         identities,
         typed_edges,
-        skipped: _,
         callsite_resolutions,
         analysis_gaps,
         coverage,
@@ -2038,7 +2068,30 @@ pub(crate) fn compose_tree_over(
         root_classifications,
         routine_order_frames,
         boundary,
-    } = base.into_owned();
+    ) = match base {
+        std::borrow::Cow::Owned(b) => (
+            b.identities,
+            b.typed_edges,
+            b.callsite_resolutions,
+            b.analysis_gaps,
+            b.coverage,
+            b.event_declarations,
+            b.root_classifications,
+            b.routine_order_frames,
+            b.boundary,
+        ),
+        std::borrow::Cow::Borrowed(b) => (
+            std::sync::Arc::clone(&b.identities),
+            std::sync::Arc::clone(&b.typed_edges),
+            std::sync::Arc::clone(&b.callsite_resolutions),
+            std::sync::Arc::clone(&b.analysis_gaps),
+            std::sync::Arc::clone(&b.coverage),
+            std::sync::Arc::clone(&b.event_declarations),
+            std::sync::Arc::clone(&b.root_classifications),
+            b.routine_order_frames.clone(),
+            b.boundary.clone(),
+        ),
+    };
     drop(s);
 
     finish_snapshot(CapabilitySnapshot {
@@ -2056,6 +2109,45 @@ pub(crate) fn compose_tree_over(
         pd_solution,
         boundary: Some(boundary),
     })
+}
+
+/// A view's capability facts: spliced over the base's direct table, or
+/// derived whole when the table is not split by subject.
+enum ViewFactRows {
+    Spliced(view::ViewFacts),
+    Whole(Vec<SnapshotCapabilityFact>),
+}
+
+/// The raw readers of [`compose_tree_over`]: the evidence and the facts of
+/// `subjects` (`get` lends their raw facts; `inp` is set only when the facts
+/// are derived whole).
+fn view_sections<'r>(
+    vb: &view::ViewBase,
+    routines: &[ModelRoutine],
+    inp: Option<&TreeInputs<'r>>,
+    subjects: &std::collections::BTreeSet<String>,
+    get: &dyn Fn(&str) -> Option<InheritedSlice<'r>>,
+) -> (
+    Vec<SnapshotOperationEvidence>,
+    Vec<SnapshotCallsiteEvidence>,
+    ViewFactRows,
+) {
+    let sec = |name: &'static str| crate::engine::perf_trace::span("snapshot", name);
+    let s = sec("tree.evidence");
+    let (operation_index, callsite_index) = view::view_evidence(vb, routines, subjects, get);
+    drop(s);
+    let s = sec("tree.capability_facts");
+    let facts = match inp {
+        None => ViewFactRows::Spliced(view::view_facts(
+            &vb.facts,
+            subjects,
+            get,
+            &vb.routine_to_stable,
+        )),
+        Some(inp) => ViewFactRows::Whole(derive_capability_facts(inp, get)),
+    };
+    drop(s);
+    (operation_index, callsite_index, facts)
 }
 
 /// Rule B's dependency routines of `model` (THE role rule, #220), each named
@@ -2351,6 +2443,22 @@ impl<'r> SnapTablesBuilder<'r> {
         let Some(raw) = &g.raw else {
             return (direct_base, None);
         };
+        let mi = self.project_raw(group, subject, &g.subject, raw, routine_to_stable);
+        (direct_base, Some(mi))
+    }
+
+    /// Project the raw facts `raw` of group `group` (subject index `subject`,
+    /// stable subject `stable`) into the tables: [`Self::project_group`]'s
+    /// inherited half, shared with a view's splice over its tree base
+    /// (`view::view_facts`). Returns the raw tables' memo.
+    fn project_raw(
+        &mut self,
+        group: u32,
+        subject: u32,
+        stable: &str,
+        raw: &InheritedSlice<'r>,
+        routine_to_stable: &HashMap<String, String>,
+    ) -> usize {
         let mi = self.memo_of(raw.tables());
         for r in raw.refs() {
             if self.memos[mi].reps[r.rep as usize] == NO_HOP {
@@ -2366,7 +2474,7 @@ impl<'r> SnapTablesBuilder<'r> {
                         &self.memos[mi].raw.subjects[h.subject as usize],
                         routine_to_stable
                     ),
-                    g.subject,
+                    stable,
                     "snapshot: a raw first hop's subject is not its emitting group's"
                 );
                 let hop = SnapHop {
@@ -2386,11 +2494,11 @@ impl<'r> SnapTablesBuilder<'r> {
                 assert_eq!(
                     owner, group,
                     "snapshot: two emission groups share one raw first hop (subject {:?})",
-                    g.subject
+                    stable
                 );
             }
         }
-        (direct_base, Some(mi))
+        mi
     }
 }
 
@@ -3848,7 +3956,7 @@ struct SnapshotEnvelope<'a> {
     #[serde(rename = "rootClassifications")]
     root_classifications: &'a [SnapshotRootClassificationSlot],
     #[serde(rename = "routineOrderFrames", skip_serializing_if = "Option::is_none")]
-    routine_order_frames: &'a Option<RoutineOrderFrames>,
+    routine_order_frames: Option<&'a RoutineOrderFrames>,
 }
 
 /// The full R4-F snapshot projection document, in FIXED key order.
@@ -3914,7 +4022,7 @@ pub fn project_r4f_snapshot(resolved: &Model, fixture_name: &str) -> String {
             coverage: &snap.coverage,
             event_declarations: &snap.event_declarations,
             root_classifications: &snap.root_classifications,
-            routine_order_frames: &snap.routine_order_frames,
+            routine_order_frames: snap.routine_order_frames.as_deref(),
         },
     };
     let mut s = serde_json::to_string_pretty(&doc).expect("serialize R4-F snapshot projection");

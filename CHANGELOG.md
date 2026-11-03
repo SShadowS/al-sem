@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (context server: a view's tree splices over its revision's base; shared sections)
+
+- **A view's tree no longer re-derives what every view of the revision shares** (plan
+  `docs/superpowers/plans/2026-11-03-context-server-remaining.md`, item L4a). The tree base now
+  also holds the evidence candidates (`compute_routine_order` once per row, not three times per
+  view), every covered routine's direct facts interned and sorted per subject, and the pd
+  arena's edge and producer maps; a view adds only its subjects' raw rows and walks only their
+  state closure (`src/engine/l5/snapshot_view.rs`). Measured on CDO (release-fast probe,
+  mimalloc, uncounted): per-view tree (`snapshot.derive`) 1.32-1.48 s → 0.18-0.24 s; the tree
+  base 1.15-1.29 s → 1.28-1.46 s; the first heavy answer on a root (explain) 5.0-5.8 s →
+  4.1-4.6 s; explain over three roots 4.5-4.7 s → 3.4-3.7 s. Proof: the whole per-view derivation
+  was kept as a test-only oracle until 1,508 fixture views and six cross-app CDO views were equal
+  section by section, then deleted; a `--verify` run after cold, B, S and P gave every answer
+  equal to its cold run. Tests: `a_site_only_a_subjects_inherited_fact_names_is_in_its_view`
+  (hand-stated: no real view adds an evidence id beyond the base); discrimination: dropping a
+  subject's inherited call sites from the view's filter loses the call-site row and changes the
+  digest answer; restored, green. The equality test's breaks (no run shift: pd states differ in
+  54 comparisons; no re-sort of rebuilt runs: facts differ in 800) failed it before deletion.
+- **A view's tree shares its base's whole sections** (item L3). `CapabilitySnapshot`'s typed
+  edges, call-site resolutions, analysis gaps, event declarations, root classifications and
+  routine order frames are `Arc`s, as identities and coverage were; writers go through
+  `Arc::make_mut`. Memory on CDO (counted, four views per revision, `PROBE_TREE_BYTES=1`, a new
+  `census-probe` measure): the trees 1,607 → 992 MiB, the base 185 → 286 MiB (L4a's tables), so
+  1,792 → 1,278 MiB per revision; RSS 7.12-7.27 → 6.60-6.78 GB, peak 7.51-7.62 → 6.99-7.13 GB.
+  With one view per revision the RSS is unchanged (default peak 6.27 GB, `--low-mem` 5.89-5.90
+  GB). Test: `views_over_one_base_share_its_whole_sections`; discrimination: deep-cloning the
+  typed edges for a shared base fails it; restored, green.
+- **L4b is not recommended**: what a view still pays is mostly the pd projection (~0.15 s over
+  ~916,000 kept states), which per-key carry does not touch.
+
 ### Changed (context server: direct facts in parallel; the finalize split measured)
 
 - **The fold's direct facts are extracted in parallel** (plan

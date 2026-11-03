@@ -840,12 +840,14 @@ impl Revision {
                     else {
                         return Err("the tree base needs the fold, which is not published".into());
                     };
+                    let pd = fold.caps.pd.as_ref().ok_or("the fold kept no pd arena")?;
                     ArtifactValue::TreeBase(Arc::new(
                         crate::engine::l5::snapshot::derive_tree_base(
                             model,
                             self.rel.cone(),
                             self.dependency_calls(),
                             &fold.caps,
+                            pd,
                             &tree_apps(self.cross_base()),
                         ),
                     ))

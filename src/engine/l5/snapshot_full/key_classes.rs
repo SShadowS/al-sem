@@ -786,12 +786,15 @@ pub(crate) fn filter_by_class(
             (_, "coverage") => {
                 std::sync::Arc::make_mut(&mut core.coverage).retain(|c| is_primary(&c.subject))
             }
-            (_, "callsiteResolutions") => core.callsite_resolutions.retain(|r| is_primary(&r.from)),
-            (_, "typedEdges") => core.typed_edges.retain(|e| is_primary(e.edge_from())),
-            (_, "rootClassifications") => core
-                .root_classifications
+            // As `coverage` (plan item L3: every whole section is an `Arc`).
+            (_, "callsiteResolutions") => std::sync::Arc::make_mut(&mut core.callsite_resolutions)
+                .retain(|r| is_primary(&r.from)),
+            (_, "typedEdges") => std::sync::Arc::make_mut(&mut core.typed_edges)
+                .retain(|e| is_primary(e.edge_from())),
+            (_, "rootClassifications") => std::sync::Arc::make_mut(&mut core.root_classifications)
                 .retain(|r| is_primary(&r.routine_id)),
-            (_, "eventDeclarations") => core.event_declarations.retain(|e| is_primary(&e.routine)),
+            (_, "eventDeclarations") => std::sync::Arc::make_mut(&mut core.event_declarations)
+                .retain(|e| is_primary(&e.routine)),
             // Derived primary-only by the composer (`derive_*`), step (6)
             // (`project_apps`), and step (4) (frame tables).
             (_, "contractFacts" | "schemaFacts" | "permissionFacts" | "apps")
@@ -847,7 +850,8 @@ pub(crate) fn filter_by_class(
         .chain(core.callsite_index.iter().map(|c| c.routine.as_str()))
         .collect();
     if let Some(frames) = &mut core.routine_order_frames {
-        frames.retain(|routine| is_primary(routine) || evidence_routines.contains(routine));
+        std::sync::Arc::make_mut(frames)
+            .retain(|routine| is_primary(routine) || evidence_routines.contains(routine));
     }
 
     // (5) identities: every primary id plus every referenced one.

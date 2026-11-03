@@ -375,7 +375,7 @@ fn an_event_boundary_group_is_in_the_may_relations() {
             _ => None,
         })
         .expect("precondition: WriteThenRaise calls OnWsEvent");
-    tree.typed_edges.push(SnapshotGraphEdge::EventDispatch {
+    std::sync::Arc::make_mut(&mut tree.typed_edges).push(SnapshotGraphEdge::EventDispatch {
         kind: "event-dispatch",
         from: publisher,
         to: dep,
@@ -907,16 +907,18 @@ fn fingerprint_witness_boundary_trigger_and_event() {
                     .find(|o| o.routine == root)
                     .expect("precondition: WriteThenRaise's Ws Log insert")
                     .clone();
-                tree.typed_edges.push(SnapshotGraphEdge::ImplicitTrigger {
-                    kind: "implicit-trigger",
-                    from: root.clone(),
-                    to: dep.clone(),
-                    operation_id: op.operation_id.clone(),
-                    trigger_kind: "OnInsert".to_string(),
-                    fires: crate::engine::l4::combined_graph::TriggerFires::Always,
-                    anchor: None,
-                    edge_id: "t25-trigger".to_string(),
-                });
+                std::sync::Arc::make_mut(&mut tree.typed_edges).push(
+                    SnapshotGraphEdge::ImplicitTrigger {
+                        kind: "implicit-trigger",
+                        from: root.clone(),
+                        to: dep.clone(),
+                        operation_id: op.operation_id.clone(),
+                        trigger_kind: "OnInsert".to_string(),
+                        fires: crate::engine::l4::combined_graph::TriggerFires::Always,
+                        anchor: None,
+                        edge_id: "t25-trigger".to_string(),
+                    },
+                );
                 fact.witness_callsite_id = None;
                 fact.witness_first_hop_operation_id = Some(op.operation_id.clone());
                 (
@@ -943,15 +945,17 @@ fn fingerprint_witness_boundary_trigger_and_event() {
                     })
                     .expect("precondition: WriteThenRaise calls OnWsEvent");
                 let event_id = "test/Codeunit/50191/event/onwsevent".to_string();
-                tree.typed_edges.push(SnapshotGraphEdge::EventDispatch {
-                    kind: "event-dispatch",
-                    from: publisher.clone(),
-                    to: dep.clone(),
-                    event_id: event_id.clone(),
-                    publish_anchor: anchor.clone(),
-                    subscriber_anchor: anchor.clone(),
-                    edge_id: "t25-dispatch".to_string(),
-                });
+                std::sync::Arc::make_mut(&mut tree.typed_edges).push(
+                    SnapshotGraphEdge::EventDispatch {
+                        kind: "event-dispatch",
+                        from: publisher.clone(),
+                        to: dep.clone(),
+                        event_id: event_id.clone(),
+                        publish_anchor: anchor.clone(),
+                        subscriber_anchor: anchor.clone(),
+                        edge_id: "t25-dispatch".to_string(),
+                    },
+                );
                 fact.witness_callsite_id = Some(cs);
                 (
                     format!("ev:{event_id}"),
