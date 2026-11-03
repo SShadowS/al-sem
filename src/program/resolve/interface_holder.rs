@@ -45,7 +45,8 @@ use crate::program::resolve::closed_enum::{
 };
 use crate::program::resolve::edge::{Evidence, RouteTarget, SetCompleteness};
 use crate::program::resolve::full::{ClassifiedEdge, ObligationId, SiteFacts};
-use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
+use crate::program::resolve::index::ObjectRefResolution;
+use crate::program::resolve::reads::{GraphReads, IndexReads};
 use crate::program::resolve::receiver::{
     CallerScopeSymbol, ParsedType, caller_scope_symbol, classify_type_text, parse_object_kind_type,
 };
@@ -143,8 +144,8 @@ fn write_source(cx: &ClosedEnumCx, routine: &RoutineDecl, value: ExprId) -> Opti
 /// The codeunit X of the variable `name_lc` declared `Codeunit X` in scope at
 /// `routine` (X resolved from `from`, unique in the whole program), or `None`.
 fn codeunit_of(
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
     from: &ObjectNodeId,
     name_lc: &str,
     routine: &RoutineDecl,
@@ -173,8 +174,8 @@ fn codeunit_of(
 /// Empty when the target has no interface parameter.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn argument_codeunits(
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
     from: &ObjectNodeId,
     routine: &RoutineDecl,
     globals: &[VarDecl],
@@ -182,10 +183,10 @@ pub(crate) fn argument_codeunits(
     args: &[ExprId],
     target: &RoutineNodeId,
 ) -> Vec<Option<ObjectNodeId>> {
-    let Ok(i) = graph.routines.binary_search_by(|r| r.id.cmp(target)) else {
+    let Some(target_node) = graph.routine(target) else {
         return Vec::new();
     };
-    let has_interface_param = graph.routines[i]
+    let has_interface_param = target_node
         .param_sig_key
         .split('|')
         .any(|t| t.trim_start().starts_with("interface"));

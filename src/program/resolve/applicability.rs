@@ -19,10 +19,9 @@
 use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::ObjectKind;
 
-use crate::program::graph::ProgramGraph;
 use crate::program::node::{ObjectNodeId, RoutineNodeId};
-use crate::program::resolve::index::ResolveIndex;
 use crate::program::resolve::member_catalog::{MemberCatalogKind, member_builtin};
+use crate::program::resolve::reads::{GraphReads, IndexReads};
 use crate::program::resolve::receiver::FrameworkKind;
 
 // ---------------------------------------------------------------------------
@@ -104,8 +103,8 @@ pub fn interface_route_applicable(
     called_member_lc: &str,
     called_arity: usize,
     target: &RoutineNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> bool {
     // 1+2. Name + arity must match the call site.
     if target.name_lc != called_member_lc {
@@ -116,7 +115,7 @@ pub fn interface_route_applicable(
     }
 
     // 3. Target's object must implement the interface.
-    let Some(obj_node) = graph.objects.iter().find(|o| o.id == target.object) else {
+    let Some(obj_node) = graph.object_first(&target.object) else {
         return false;
     };
     let implements_iface = obj_node
@@ -238,8 +237,8 @@ impl TriggerSiteRule {
 pub fn implicit_trigger_route_applicable(
     ctx: &RecordOpCtx,
     target: &RoutineNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> bool {
     // run_trigger == False → never fires any trigger.
     if ctx.run_trigger == RunTrigger::False {
@@ -294,8 +293,8 @@ pub fn implicit_trigger_route_applicable(
 pub(crate) fn target_is_on_table_or_extension(
     target_object: &ObjectNodeId,
     table_id: &ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> bool {
     if target_object == table_id {
         return true;
@@ -357,6 +356,7 @@ pub fn instance_builtin_route_applicable(kind: ObjectKind, method_lc: &str) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::program::resolve::index::ResolveIndex;
 
     use crate::program::graph::{ObjectIndex, ProgramGraph};
     use crate::program::node::{AppRef, AppRegistry, ObjKey, ObjectNodeId, RoutineNodeId};

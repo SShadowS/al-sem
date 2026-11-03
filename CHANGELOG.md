@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (the resolution reads facade and its tripwire)
+
+- **Call-site resolution reads the whole-program state only through a facade** (plan
+  `docs/superpowers/plans/2026-11-03-context-server-remaining.md`, item S, step 1;
+  `src/program/resolve/reads.rs`). `resolve_file_obligations` and everything it reaches in
+  `resolver`, `receiver`, `arg_dispatch`, `closed_enum`, `interface_holder` and
+  `applicability` take `&dyn GraphReads`, `&dyn IndexReads` and `&dyn SurfaceReads` instead
+  of the concrete graph, index and surface, so they cannot name a graph field or an index map:
+  every read is a semantic query (29 kinds, `reads::Query`). A `Recorder` answers the same
+  queries and logs them per file. The six `graph.objects.iter().find(..)` scans and one
+  `graph.routines.iter().filter(..)` scan in that code became the equal run lookups. No output
+  changes (every golden and test unchanged). The tripwire: a counting hook (tests only) on the
+  raw state (node sets, index accessors, surface, topology) counts a raw read made inside a
+  recording scope but outside a recorder method; `reads::tests` resolves every file of every
+  r0-corpus workspace and two dependency fixtures through recorders and asserts zero such
+  reads and an unchanged resolution, and a CDO-gated test does the same over every CDO
+  dependency file. Passing the plain graph instead of the recorder fails it (13,313 bypassing
+  reads in 292 files), and so does one recorder method reading without its guard (8,364).
+
 ### Changed (context server: the producer solve's fresh producers in parallel)
 
 - **Fresh producers are solved in parallel** (plan

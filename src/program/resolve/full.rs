@@ -63,6 +63,7 @@ use crate::program::resolve::index::ResolveIndex;
 use crate::program::resolve::member_catalog::{
     DispatchingBuiltin, dispatching_builtin, is_entry_dispatch_builtin,
 };
+use crate::program::resolve::reads::{GraphReads, IndexReads, SurfaceReads};
 use crate::program::resolve::receiver::{
     FrameworkKind, ReceiverType, infer_receiver_type, is_atomic_receiver_token,
 };
@@ -590,9 +591,9 @@ fn resolve_call_site_obligation(
     // The app that owns the calling body (engine-switch S7.1): the primary app,
     // or a dependency for owning-app body resolution.
     caller_app: AppRef,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
     with_state: WithState,
     // Task 2 enabling primitive: the parsed `AlFile` this obligation's call
     // site was extracted from, so a `CalleeShape::Member.receiver` `ExprId`
@@ -773,7 +774,7 @@ fn resolve_call_site_obligation(
                         && !r.is_empty()
                         && r.iter().all(real)
                         && let Some(i) = index.unique_object(ObjectKind::Interface, name_lc)
-                        && graph.closed_internal_interfaces.contains(i)
+                        && graph.is_closed_internal_interface(i)
                     {
                         facts_out.interface_closed_over = vec![i.clone()];
                     }
@@ -848,7 +849,7 @@ fn resolve_call_site_obligation(
             let lookup = (okind_opt == Some(ObjectKind::Page) && target_ref.is_none())
                 .then(|| zero_page_table(call_args, file, routine, obj, obj_node_opt, graph, index))
                 .flatten()
-                .and_then(|t| graph.lookup_pages.get(&t).map(|pages| (t, pages)));
+                .and_then(|t| graph.lookup_pages(&t).map(|pages| (t, pages)));
             if let Some((table, pages)) = lookup {
                 let mut routes = Vec::new();
                 for v in pages {
@@ -948,7 +949,7 @@ fn resolve_call_site_obligation(
                 match recv {
                     ReceiverType::Record {
                         table: Some(ref tid),
-                    } => graph.objects.iter().find(|o| o.id == *tid),
+                    } => graph.object_first(tid),
                     _ => None,
                 }
             } else {
@@ -1059,9 +1060,9 @@ fn resolve_call_site_obligation(
 pub(crate) fn resolve_file_obligations(
     pf: &ParsedFile,
     caller_app: AppRef,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
     obj_node_map: &HashMap<ObjectNodeId, &ObjectNode>,
     file: Option<crate::program::site_key::FileIx>,
 ) -> FileResolution {
@@ -1276,8 +1277,8 @@ fn zero_page_table(
     routine: &al_syntax::ir::RoutineDecl,
     obj: &al_syntax::ir::ObjectDecl,
     obj_node: Option<&ObjectNode>,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<ObjectNodeId> {
     use al_syntax::ir::{ExprKind, Literal};
     let [first, second, ..] = args else {
@@ -1315,8 +1316,8 @@ fn receiver_fact(
     routine: &al_syntax::ir::RoutineDecl,
     object_globals: &[al_syntax::ir::VarDecl],
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> ReceiverFact {
     use crate::program::node_extract::ObjectRef;
     use crate::program::resolve::index::ObjectRefResolution;
@@ -1342,8 +1343,7 @@ fn receiver_fact(
                     _ => return None,
                 },
             };
-            let i = graph.objects.binary_search_by(|o| o.id.cmp(&id)).ok()?;
-            Some(graph.objects[i].name.to_string())
+            Some(graph.object(&id)?.name.to_string())
         };
     // AL spelling: quoted when the name is not a plain identifier.
     let al_name = |n: &str| {
@@ -2080,29 +2080,10 @@ impl ProgramContext {
     /// When the profile does not keep dependency bodies (`FULL`).
     #[must_use]
     pub fn resolve_dependency_bodies(&self) -> DependencyBodyResolution {
-        let bodies = self.dep_bodies().expect(
-            "resolving dependency bodies needs DependencyBodies::Keep \
-             (or OnDemand after ensure_dep_bodies)",
-        );
+        let files = self.dependency_files();
         let index = ResolveIndex::build(&self.graph);
         let surface = self.decl_surface();
-        let mut files: Vec<(AppRef, &ParsedFile)> = Vec::new();
-        for unit in bodies {
-            let Some(app) = self.graph.apps.find(&unit.app) else {
-                continue;
-            };
-            if app == self.primary_app_ref {
-                continue;
-            }
-            let start = files.len();
-            files.extend(unit.files.iter().map(|pf| (app, pf)));
-            files[start..].sort_by(|a, b| a.1.virtual_path.cmp(&b.1.virtual_path));
-        }
-        let mut maps: HashMap<AppRef, HashMap<ObjectNodeId, &ObjectNode>> = HashMap::new();
-        for (app, _) in &files {
-            maps.entry(*app)
-                .or_insert_with(|| app_object_map(&self.graph, *app));
-        }
+        let maps = self.dependency_object_maps(&files);
         let results: Vec<FileResolution> = crate::big_stack::big_stack_pool().install(|| {
             files
                 .par_iter()
@@ -2143,6 +2124,73 @@ impl ProgramContext {
             site_facts: Arc::new(site_facts),
             parenless_calls,
         }
+    }
+
+    /// Every source-bearing dependency file, in resolution order: units in
+    /// `snap.apps` order (the workspace's skipped), each unit's files sorted
+    /// by virtual path.
+    ///
+    /// # Panics
+    /// When the profile does not keep dependency bodies (`FULL`).
+    pub(crate) fn dependency_files(&self) -> Vec<(AppRef, &ParsedFile)> {
+        let bodies = self.dep_bodies().expect(
+            "resolving dependency bodies needs DependencyBodies::Keep \
+             (or OnDemand after ensure_dep_bodies)",
+        );
+        let mut files: Vec<(AppRef, &ParsedFile)> = Vec::new();
+        for unit in bodies {
+            let Some(app) = self.graph.apps.find(&unit.app) else {
+                continue;
+            };
+            if app == self.primary_app_ref {
+                continue;
+            }
+            let start = files.len();
+            files.extend(unit.files.iter().map(|pf| (app, pf)));
+            files[start..].sort_by(|a, b| a.1.virtual_path.cmp(&b.1.virtual_path));
+        }
+        files
+    }
+
+    /// Each dependency app's own objects by id (`resolve_file_obligations`'s
+    /// `obj_node_map`): the objects of a dependency app, which the workspace
+    /// never adds to (its own nodes carry the primary app).
+    pub(crate) fn dependency_object_maps(
+        &self,
+        files: &[(AppRef, &ParsedFile)],
+    ) -> HashMap<AppRef, HashMap<ObjectNodeId, &ObjectNode>> {
+        let mut maps: HashMap<AppRef, HashMap<ObjectNodeId, &ObjectNode>> = HashMap::new();
+        for (app, _) in files {
+            maps.entry(*app)
+                .or_insert_with(|| app_object_map(&self.graph, *app));
+        }
+        maps
+    }
+
+    /// One dependency file resolved through a [`Recorder`] (the reads
+    /// facade, `resolve::reads`): its resolution, every query it made of the
+    /// whole-program state, and what the tripwire's counting hook saw while
+    /// it ran (always zero outside tests).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn resolve_dependency_file_recorded(
+        &self,
+        app: AppRef,
+        pf: &ParsedFile,
+        index: &ResolveIndex,
+        surface: &DeclSurface,
+        obj_node_map: &HashMap<ObjectNodeId, &ObjectNode>,
+    ) -> (
+        FileResolution,
+        std::collections::HashSet<crate::program::resolve::reads::Query>,
+        crate::program::resolve::reads::HookCounts,
+    ) {
+        use crate::program::resolve::reads::{Recorder, scope};
+        let file = self.file_ix(app, &pf.virtual_path);
+        let rec = Recorder::new(&self.graph, index, surface);
+        let hook = scope();
+        let r = resolve_file_obligations(pf, app, &rec, &rec, &rec, obj_node_map, file);
+        let counts = hook.finish();
+        (r, rec.into_log(), counts)
     }
 }
 

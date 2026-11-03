@@ -342,6 +342,7 @@ impl DeclSurface {
     }
 
     pub fn get(&self, id: &RoutineNodeId) -> Option<&RoutineMeta> {
+        crate::program::resolve::reads::probe();
         self.local
             .get(id)
             .or_else(|| self.frozen.as_ref().and_then(|f| f.get(id)))

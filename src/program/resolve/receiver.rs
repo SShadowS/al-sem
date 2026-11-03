@@ -158,18 +158,17 @@ use al_syntax::ir::{
     AlFile, BinaryOp, ExprId, ExprKind, ObjectKind, RoutineDecl, UnaryOp, VarDecl,
 };
 
-use crate::program::graph::ProgramGraph;
 use crate::program::node::{ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::{
     FieldNode, ObjectNode, ObjectRef, PageControlKind, PageControlNode, RoutineNode,
 };
-use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::RouteTarget;
 use crate::program::resolve::extract::WithState;
 use crate::program::resolve::framework_returns::{
     enum_chain_return_kind, framework_return_kind, record_builtin_return_kind,
 };
-use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
+use crate::program::resolve::index::ObjectRefResolution;
+use crate::program::resolve::reads::{GraphReads, IndexReads, SurfaceReads};
 use crate::program::resolve::recordref_returns::{
     RecordRefFamilyKind, recordref_family_return_kind,
 };
@@ -714,10 +713,10 @@ pub fn infer_receiver_type(
     routine: &RoutineDecl,
     object_globals: &[VarDecl],
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
     receiver_expr: Option<(&AlFile, ExprId)>,
-    bare_ctx: Option<(&DeclSurface, WithState)>,
+    bare_ctx: Option<(&dyn SurfaceReads, WithState)>,
 ) -> ReceiverType {
     // -----------------------------------------------------------------------
     // Step 0 — `CurrPage.<part>.Page` subpage-instance receivers (Task 7).
@@ -748,7 +747,7 @@ pub fn infer_receiver_type(
             ObjectKind::Page,
             &control.target,
         )
-        && let Some(page_obj) = graph.objects.iter().find(|o| o.id == page_id)
+        && let Some(page_obj) = graph.object_first(&page_id)
     {
         return ReceiverType::Object {
             kind: ObjectKind::Page,
@@ -1303,8 +1302,8 @@ pub fn infer_receiver_type(
 fn object_scope_has_bare_routine_shadow(
     from_object: &ObjectNode,
     name_lc: &str,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> bool {
     match from_object.id.kind {
         ObjectKind::Table => {
@@ -1335,8 +1334,8 @@ fn object_scope_has_bare_routine_shadow(
 fn base_protected_var_type(
     name_lc: &str,
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<String> {
     extension_base_object(from_object, graph, index)??
         .protected_vars
@@ -1351,8 +1350,8 @@ fn base_protected_var_type(
 /// `Some(Some(base))` otherwise.
 pub(crate) fn extension_base_object<'g>(
     from_object: &ObjectNode,
-    graph: &'g ProgramGraph,
-    index: &ResolveIndex,
+    graph: &'g dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<Option<&'g ObjectNode>> {
     let base_kind = from_object.id.kind.extension_base_kind()?;
     let Some(extends) = from_object.extends_target.as_deref() else {
@@ -1460,9 +1459,9 @@ fn infer_receiver_type_for_expr(
     routine: &RoutineDecl,
     object_globals: &[VarDecl],
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    bare_ctx: Option<(&DeclSurface, WithState)>,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    bare_ctx: Option<(&dyn SurfaceReads, WithState)>,
 ) -> ReceiverType {
     match &file.ir.expr(expr_id).kind {
         ExprKind::Identifier(name) => {
@@ -1810,9 +1809,9 @@ fn infer_compound_member_receiver(
     routine: &RoutineDecl,
     object_globals: &[VarDecl],
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    bare_ctx: Option<(&DeclSurface, WithState)>,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    bare_ctx: Option<(&dyn SurfaceReads, WithState)>,
 ) -> ReceiverType {
     let surface = bare_ctx.map(|(s, _)| s);
     // `member` (from `ExprKind::Member`/`Call{function: Member{..}}`) may
@@ -2213,9 +2212,9 @@ fn infer_cross_object_chain_receiver(
     member_lc: &str,
     arity: usize,
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
 ) -> Option<ReceiverType> {
     let (shape, routes) = resolve_member(
         base_ty,
@@ -2273,8 +2272,8 @@ pub(crate) fn interface_own_routine_node<'g>(
     member_lc: &str,
     arity: usize,
     from_object: &ObjectNode,
-    graph: &'g ProgramGraph,
-    index: &ResolveIndex,
+    graph: &'g dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<&'g RoutineNode> {
     let iface = graph.resolve_object(from_object.id.app, ObjectKind::Interface, name_lc)?;
     let matched: Vec<&RoutineNodeId> = index
@@ -2284,11 +2283,7 @@ pub(crate) fn interface_own_routine_node<'g>(
     let [rid] = matched.as_slice() else {
         return None;
     };
-    graph
-        .routines
-        .binary_search_by(|probe| probe.id.cmp(rid))
-        .ok()
-        .map(|i| &graph.routines[i])
+    graph.routine(rid)
 }
 
 /// Convert a resolved prefix routine's declared return type into a
@@ -2315,8 +2310,8 @@ pub(crate) fn interface_own_routine_node<'g>(
 fn receiver_from_routine_node(
     node: &RoutineNode,
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<ReceiverType> {
     // Task 3 review fix: `routine_node_for_type_query` already applies this
     // same check to the `RouteTarget`-resolved node, but `interface_own_
@@ -2356,14 +2351,10 @@ fn receiver_from_routine_node(
 /// throughout `resolver.rs`, replacing an O(n) linear `.find` (Task 3 review
 /// finding 2).
 pub(crate) fn object_by_id<'g>(
-    graph: &'g ProgramGraph,
+    graph: &'g dyn GraphReads,
     oid: &ObjectNodeId,
 ) -> Option<&'g ObjectNode> {
-    graph
-        .objects
-        .binary_search_by(|probe| probe.id.cmp(oid))
-        .ok()
-        .map(|i| &graph.objects[i])
+    graph.object(oid)
 }
 
 /// `true` when `expr_id` derefs to a bare `this` identifier (case-insensitive
@@ -2407,8 +2398,8 @@ fn is_this_identifier(file: &AlFile, expr_id: ExprId) -> bool {
 fn enum_type_static_by_name(
     name: &str,
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> ReceiverType {
     let name_raw = unquote_identifier(name);
     let name_lc = name_raw.fold_identifier();
@@ -2460,9 +2451,9 @@ fn collection_type_text_of_expr(
     routine: &RoutineDecl,
     object_globals: &[VarDecl],
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    bare_ctx: Option<(&DeclSurface, WithState)>,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    bare_ctx: Option<(&dyn SurfaceReads, WithState)>,
 ) -> Option<String> {
     match &file.ir.expr(expr_id).kind {
         ExprKind::Identifier(name) | ExprKind::QuotedIdentifier(name) => {
@@ -2551,8 +2542,8 @@ fn infer_this_member(
     member_lc: &str,
     object_globals: &[VarDecl],
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> ReceiverType {
     let Some(ty) = object_globals
         .iter()
@@ -2615,9 +2606,9 @@ fn infer_call_result_receiver(
     routine: &RoutineDecl,
     object_globals: &[VarDecl],
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
     with_state: WithState,
 ) -> Option<ReceiverType> {
     // 0. Must be a structured Call whose function is a BARE identifier — a
@@ -2681,13 +2672,7 @@ fn infer_call_result_receiver(
     // `lookup_routine_access`/`make_routine_route` rely on) — an O(n) linear
     // `.find` here was a needless scan when a `binary_search_by` mirrors that
     // existing idiom exactly, for both consistency and scaling.
-    let return_type = graph
-        .routines
-        .binary_search_by(|probe| probe.id.cmp(rid))
-        .ok()
-        .map(|i| &graph.routines[i])?
-        .return_type
-        .as_deref()?;
+    let return_type = graph.routine(rid)?.return_type.as_deref()?;
     let parsed = classify_type_text(return_type);
     if matches!(parsed, ParsedType::Primitive) {
         return None;
@@ -2725,8 +2710,8 @@ pub(crate) fn name_shadows_bare_call(
 pub(crate) fn infer_implicit_rec(
     routine: &RoutineDecl,
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> ReceiverType {
     match from_object.id.kind {
         // A Table IS its own record.
@@ -2843,8 +2828,8 @@ pub(crate) fn infer_implicit_rec(
 pub(crate) fn resolve_report_implicit_rec_table(
     routine: &RoutineDecl,
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<ObjectNodeId> {
     if let Some(table_name) = routine.dataitem_source_table.as_deref() {
         let table_ref = ObjectRef::Name {
@@ -2888,8 +2873,8 @@ pub(crate) fn resolve_report_implicit_rec_table(
 fn resolve_dataitem_source_table(
     name_lc: &str,
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<ObjectNodeId> {
     if !matches!(
         from_object.id.kind,
@@ -2932,7 +2917,7 @@ fn resolve_dataitem_source_table(
         .collect();
 
     if let Some(base_id) = &base_id
-        && let Some(base_obj) = graph.objects.iter().find(|o| o.id == *base_id)
+        && let Some(base_obj) = graph.object_first(base_id)
     {
         matches.extend(
             base_obj
@@ -2966,8 +2951,8 @@ fn resolve_dataitem_source_table(
 /// `ObjectKind::Page`.
 fn resolve_reportext_base_report(
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<ObjectNodeId> {
     let extends = from_object.extends_target.as_deref()?;
     let base_ref = ObjectRef::Name {
@@ -2995,8 +2980,8 @@ fn resolve_reportext_base_report(
 pub(crate) fn resolve_source_table_ref(
     from: ObjectNodeId,
     source_table: &ObjectRef,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<ObjectNodeId> {
     match index.resolve_object_ref(graph, from, ObjectKind::Table, source_table) {
         ObjectRefResolution::Unique(id) => Some(id),
@@ -3022,8 +3007,8 @@ pub(crate) fn resolve_source_table_ref(
 /// specifies, via this existing helper rather than re-deriving it.
 pub(crate) fn resolve_tableext_base_table(
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<ObjectNodeId> {
     let extends = from_object.extends_target.as_deref()?;
     let base_ref = ObjectRef::Name {
@@ -3042,8 +3027,8 @@ pub(crate) fn resolve_tableext_base_table(
 /// lookup) and [`find_page_control`] (Task 7's PageExtension control merge).
 pub(crate) fn resolve_pageext_base_page(
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<ObjectNodeId> {
     let extends = from_object.extends_target.as_deref()?;
     let base_ref = ObjectRef::Name {
@@ -3072,11 +3057,11 @@ pub(crate) fn resolve_pageext_base_page(
 /// (beyond-1B.3b Task 3) for the PageExtension implicit-Rec table lookup.
 pub(crate) fn resolve_pageext_base_source_table(
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<ObjectNodeId> {
     let base_id = resolve_pageext_base_page(from_object, graph, index)?;
-    let base_page = graph.objects.iter().find(|o| o.id == base_id)?;
+    let base_page = graph.object_first(&base_id)?;
     resolve_source_table_ref(
         from_object.id.clone(),
         base_page.source_table.as_ref()?,
@@ -3100,8 +3085,8 @@ pub(crate) fn resolve_pageext_base_source_table(
 fn find_page_control(
     name_lc: &str,
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<PageControlNode> {
     if let Some(c) = from_object
         .page_controls
@@ -3114,7 +3099,7 @@ fn find_page_control(
         return None;
     }
     let base_id = resolve_pageext_base_page(from_object, graph, index)?;
-    let base_page = graph.objects.iter().find(|o| o.id == base_id)?;
+    let base_page = graph.object_first(&base_id)?;
     base_page
         .page_controls
         .iter()
@@ -3196,8 +3181,8 @@ fn parse_currpage_bare_control_segment(rest: &str) -> Option<String> {
 pub(crate) fn parsed_type_to_receiver(
     pt: ParsedType,
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> ReceiverType {
     match pt {
         ParsedType::Record { table_ref } => {
@@ -3312,8 +3297,8 @@ const TRUE_PLATFORM_CONTROL_ADDINS: &[&str] = &[
 fn resolve_control_addin_receiver(
     target: &ObjectRef,
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> ReceiverType {
     let name_lc = match target {
         ObjectRef::Name { normalized_lc, .. } => normalized_lc.clone(),
@@ -3326,7 +3311,7 @@ fn resolve_control_addin_receiver(
         target,
     ) {
         ObjectRefResolution::Unique(oid) => {
-            let Some(obj) = graph.objects.iter().find(|o| o.id == oid) else {
+            let Some(obj) = graph.object_first(&oid) else {
                 // Defensive — `resolve_object_ref` only ever returns an id it read
                 // out of `graph.objects` itself; structurally unreachable.
                 return ReceiverType::Unknown;
@@ -3334,10 +3319,10 @@ fn resolve_control_addin_receiver(
             if obj.parse_incomplete {
                 return ReceiverType::Unknown;
             }
+            // The object's routines are one run of the id-sorted list, in
+            // the order a filtered scan from the front yields them.
             let procedures: Vec<(String, usize)> = graph
-                .routines
-                .iter()
-                .filter(|r| r.id.object == oid)
+                .routines_of(&oid)
                 .map(|r| (r.id.name_lc.to_string(), r.id.params_count))
                 .collect();
             ReceiverType::ControlAddIn {
@@ -3380,15 +3365,13 @@ fn resolve_object_ref_lc(
     kind: ObjectKind,
     object_ref: &ObjectRef,
     from: ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> (Option<ObjectNodeId>, String) {
     match index.resolve_object_ref(graph, from, kind, object_ref) {
         ObjectRefResolution::Unique(id) => {
             let name_lc = graph
-                .objects
-                .iter()
-                .find(|o| o.id == id)
+                .object_first(&id)
                 .map(|o| o.name.fold_identifier())
                 .unwrap_or_else(|| object_ref_fallback_lc(object_ref));
             (Some(id), name_lc)
@@ -3735,6 +3718,7 @@ mod tests {
     use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId, SharedStr};
     use crate::program::node_extract::AbiParams;
     use crate::program::node_extract::{Access, DataitemNode, ObjectNode};
+    use crate::program::resolve::decl_surface::DeclSurface;
     use crate::program::resolve::index::ResolveIndex;
     use crate::program::topology::DependencyGraph;
     use crate::snapshot::{AppId, TrustTier};

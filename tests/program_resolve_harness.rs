@@ -8207,6 +8207,11 @@ fn resolve_module_pick_first_base_function_callers_are_a_known_allowlist() {
             .unwrap_or_default()
             .to_string();
         scanned_files += 1;
+        // The reads facade (plan item S) declares and forwards these calls
+        // one for one; its callers are the semantic call sites listed above.
+        if file_name == "reads.rs" {
+            continue;
+        }
 
         let content = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
