@@ -526,7 +526,7 @@ fn finalize<'g>(
 /// The transitive product-state solve over the typed graph's INCOMING edges,
 /// returned in canonical (rank) order ([`finalize`]): the result does not
 /// depend on the order of `producers`, of the graph's edges or of the model's
-/// routines. (Production composes through [`solve_seeded`].)
+/// routines. (Production composes through [`solve_seeded_fresh`].)
 #[cfg(test)]
 pub(crate) fn solve<'g>(
     producers: Vec<Producer>,
@@ -627,7 +627,9 @@ fn reusable(
 /// [`solve`], copying from `reuse` the states of every producer
 /// [`reusable`] leaves untouched and solving only the others; the finalized
 /// arena equals a full solve's (the same states, links and distances, then
-/// the same canonical order).
+/// the same canonical order). (Tests; production reads the fresh set too:
+/// [`solve_seeded_fresh`].)
+#[cfg(test)]
 pub(crate) fn solve_seeded<'g>(
     producers: Vec<Producer>,
     g: &'g TypedEdgeGraph,
@@ -635,6 +637,107 @@ pub(crate) fn solve_seeded<'g>(
     frames: &HashMap<String, FrameGuards>,
     reuse: Option<&PdReuse<'_>>,
 ) -> (ConeArena, ResolvedByRoutine<'g>, PdSolveReport) {
+    let (arena, resolved, report, _) =
+        solve_seeded_fresh(producers, g, routines_by_id, frames, reuse);
+    (arena, resolved, report)
+}
+
+/// The identity `(owner, operation id)` of a producer.
+pub(crate) type ProducerId = (Arc<str>, String);
+
+/// Design §6.10 Δ_pd_output, for a fold's per-routine rows: the routines
+/// whose own resolved entries may differ between the previous arena `old`
+/// and `new`. An entry is what the derived fold and the raw emission read
+/// of a non-seed state — its producer's fact with the state's temp state,
+/// its distance and its first hop — so a routine's projection is the list,
+/// in state order, of `(producer, fact, t, reqs, seed, dist, first-hop edge)`
+/// over its states. Only the states of `fresh` producers (solved afresh in
+/// `new`) and of `old` producers that `new` does not have can differ: every
+/// other producer's states were copied whole. So a routine is in Δ when it
+/// holds such a state in either arena and its projection over those
+/// producers differs. The state order is producer-major by identity (stage
+/// 1b), so equal projections over the affected producers, with the copied
+/// producers' entries equal by construction, give equal entry lists.
+pub(crate) fn pd_output_delta(
+    old: &ConeArena,
+    new: &ConeArena,
+    fresh: &HashSet<ProducerId>,
+) -> HashSet<Arc<str>> {
+    let id_of =
+        |p: &Producer| -> (Arc<str>, String) { (Arc::clone(&p.owner), p.operation_id.clone()) };
+    let new_ids: HashSet<ProducerId> = new.producers.iter().map(id_of).collect();
+    let affected_old: Vec<bool> = old
+        .producers
+        .iter()
+        .map(|p| {
+            let id = id_of(p);
+            fresh.contains(&id) || !new_ids.contains(&id)
+        })
+        .collect();
+    let affected_new: Vec<bool> = new
+        .producers
+        .iter()
+        .map(|p| fresh.contains(&id_of(p)))
+        .collect();
+    type Proj<'a> = (
+        &'a str,
+        &'a str,
+        &'a CapabilityFact,
+        &'a TempState,
+        &'a [Req],
+        bool,
+        usize,
+        Option<&'a str>,
+    );
+    fn project<'a>(a: &'a ConeArena, affected: &[bool]) -> HashMap<&'a str, Vec<Proj<'a>>> {
+        let mut out: HashMap<&'a str, Vec<Proj<'a>>> = HashMap::new();
+        for s in a.states.iter().filter(|s| affected[s.producer]) {
+            let p = &a.producers[s.producer];
+            let first_hop = (!s.seed)
+                .then(|| {
+                    a.links[s.links.clone()]
+                        .iter()
+                        .find(|l| a.states[l.callee_state].dist + 1 == s.dist)
+                        .map(|l| a.edges[l.edge].sort_key.as_str())
+                })
+                .flatten();
+            out.entry(&*s.routine).or_default().push((
+                &p.owner,
+                &p.operation_id,
+                &p.fact,
+                &s.t,
+                &s.reqs,
+                s.seed,
+                s.dist,
+                first_hop,
+            ));
+        }
+        out
+    }
+    let (po, pn) = (project(old, &affected_old), project(new, &affected_new));
+    po.keys()
+        .chain(pn.keys())
+        .filter(|r| po.get(*r) != pn.get(*r))
+        .map(|r| Arc::from(*r))
+        .collect()
+}
+
+/// [`solve_seeded`], also returning the identities of the producers it
+/// solved afresh (every producer when `reuse` is `None`): the cone store's
+/// Δ_pd_output reads the states of exactly these, and of the previous
+/// arena's producers that are gone (design §6.10).
+pub(crate) fn solve_seeded_fresh<'g>(
+    producers: Vec<Producer>,
+    g: &'g TypedEdgeGraph,
+    routines_by_id: &HashMap<&str, &ModelRoutine>,
+    frames: &HashMap<String, FrameGuards>,
+    reuse: Option<&PdReuse<'_>>,
+) -> (
+    ConeArena,
+    ResolvedByRoutine<'g>,
+    PdSolveReport,
+    HashSet<ProducerId>,
+) {
     crate::engine::perf_trace::counter_delta("build.pd_solve", 1);
     let mut report = PdSolveReport {
         producers: producers.len(),
@@ -646,7 +749,7 @@ pub(crate) fn solve_seeded<'g>(
     };
     // A workspace without producers pays nothing.
     if arena.producers.is_empty() {
-        return (arena, HashMap::new(), report);
+        return (arena, HashMap::new(), report, HashSet::new());
     }
     let delta_span = crate::engine::perf_trace::span("cone", "pd.delta");
     let mut copy_from: Vec<Option<usize>> = vec![None; arena.producers.len()];
@@ -810,6 +913,12 @@ pub(crate) fn solve_seeded<'g>(
         drop(copy_span);
     }
     let first_fresh = arena.states.len();
+    let fresh: HashSet<ProducerId> = copy_from
+        .iter()
+        .zip(&arena.producers)
+        .filter(|(from, _)| from.is_none())
+        .map(|(_, p)| (Arc::clone(&p.owner), p.operation_id.clone()))
+        .collect();
 
     for (p, from) in copy_from.iter().enumerate() {
         if from.is_some() {
@@ -886,7 +995,7 @@ pub(crate) fn solve_seeded<'g>(
     arena.by_routine.values_mut().for_each(Vec::shrink_to_fit);
     resolved.values_mut().for_each(Vec::shrink_to_fit);
     census(&arena, &resolved, &names, &reps);
-    (arena, resolved, report)
+    (arena, resolved, report, fresh)
 }
 
 /// D1.4: charge one solve to the `ALSEM_CONES_CENSUS` counters.

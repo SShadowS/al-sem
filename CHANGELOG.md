@@ -43,6 +43,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   edit) and `fold_reuses_untouched_producers_and_equals_cold` (the rule-B
   workspace through the resident session, every answer cold-equal).
 
+- **The per-SCC cone store: a resident fold re-folds only the SCCs an edit
+  reaches** (design §6.10). Each resident fold keeps, per SCC (keyed by its
+  member set), an input digest, a product fingerprint and its non-root fact
+  and coverage cones. The next revision's fold re-folds an SCC only when its
+  input digest differs: a member's raw direct facts, direct coverage input,
+  rows, guard frame, typed out-edges or scope mode; an out-edge's
+  **transfer digest** (the callee's parameters, read by the publisher ↔
+  subscriber guard mapping, and the callee's frame; never subject to
+  cut-off); its member order; or a successor's product fingerprint (every
+  cone entry's representative by full content hash, distance and guard,
+  plus the coverage cone). A re-folded SCC with an equal fingerprint leaves
+  its predecessors clean (cut-off). Every other SCC's cones are shared by
+  `Arc` and its members' rows copied: derived rows by window (the new
+  builder continues the previous interner), raw entries adopted with their
+  table set (`InheritedFacts` now has segments), coverage records cloned.
+  **Δ_pd_output**: a member whose own producer-solve entries changed (states
+  of re-solved or vanished producers, compared per routine) has its derived
+  row and raw entry re-folded even inside a reused SCC. CDO, body edit:
+  11 of 32,571 SCCs re-folded (all 11 cut off), 33,274 rows copied; the fold
+  is **12.0 s -> 2.2 s** and every answer equals its cold run (`census-probe
+  incr --verify`, B, B, S). The store holds 4.73 M cone entries: resident
+  RSS after a B edit 4.8 -> 5.4 GB, peak 5.6 -> 6.2 GB (default; `--low-mem`
+  4.3 / 5.1 GB). A cold or P fold pays about +0.4 s for the digests and
+  fingerprints. Tests in `resident::session::cone_tests` (hand-stated, each
+  cold-equal on every step, with discrimination proofs): the renamed
+  subscriber parameter behind an event guard (transfer digest), an equal
+  dedup key with a new representative, cut-off, a removed edge and an
+  alternate-path deletion, an SCC split and merge, a moved subscriber, the
+  A→C→P producer chain (Δ_pd_output) and an object-only table rename.
+- Fold timers: `cone.direct`, `cone.graph`, `cone.tarjan`, `cone.dedup`,
+  `cone.frames`, `cone.member_digests`, `pd.output_delta`, `cone.walk`,
+  `cone.finish`, `revision.fold`, `revision.seed_release`, and one
+  `tree.*` span per tree section under `snapshot.derive`. They account for
+  the whole fold: the "untimed remainder" was the SCC walk itself (10.1 s
+  of the 12.0 s fold after a body edit). `census-probe incr` prints the cone
+  report and the census per step.
+
 ### Changed (context server stage 5)
 
 - **The L4 solve's row digests are hashed in parallel.** Every resident `L4`

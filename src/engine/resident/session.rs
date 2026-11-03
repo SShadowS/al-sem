@@ -632,3 +632,7 @@ mod tests;
 #[cfg(test)]
 #[path = "incr_tests.rs"]
 mod incr_tests;
+
+#[cfg(test)]
+#[path = "cone_tests.rs"]
+mod cone_tests;

@@ -98,6 +98,11 @@ pub struct Fold {
     pub(crate) pd_digests: std::collections::HashMap<String, [u8; 32]>,
     /// What its producer solve reused.
     pub pd_report: crate::engine::l4::pd_solve::PdSolveReport,
+    /// Its per-SCC cone store (design §6.10): the next revision's fold
+    /// re-folds only the SCCs whose inputs changed and copies the rest.
+    pub(crate) cones: Option<crate::engine::l4::capability_cone::ConeStore>,
+    /// What its walk re-folded and copied.
+    pub cone_report: crate::engine::l4::capability_cone::ConeReport,
 }
 
 impl Fold {
@@ -117,6 +122,7 @@ impl Fold {
             ("fold.derived", Box::new(derived)),
             ("fold.pd", Box::new(pd)),
             ("fold.pd_digests", Box::new(self.pd_digests)),
+            ("fold.cones", Box::new(self.cones)),
         ]
     }
 }
@@ -307,6 +313,27 @@ impl Revision {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .clone(),
+        }
+    }
+
+    /// The published fold's cone-walk report, and its cone store's size
+    /// `(SCCs, SCCs with a fact cone, fact-cone entries)`.
+    #[must_use]
+    pub fn cone_report(
+        &self,
+    ) -> Option<(
+        crate::engine::l4::capability_cone::ConeReport,
+        (usize, usize, usize),
+    )> {
+        match self.store.load().get(&ArtifactKey::Fold).map(|a| &a.value) {
+            Some(ArtifactValue::Fold(f)) => Some((
+                f.cone_report,
+                f.cones.as_ref().map_or((0, 0, 0), |c| {
+                    let (n, with) = c.len();
+                    (n, with, c.cone_entries())
+                }),
+            )),
+            _ => None,
         }
     }
 
@@ -516,6 +543,7 @@ impl Revision {
                 ArtifactKey::Ordering => ArtifactValue::Ordering(dc::fill_ordering(model)),
                 ArtifactKey::Rules => ArtifactValue::Rules(dc::fill_rules(model)),
                 ArtifactKey::Fold => {
+                    let _s = crate::engine::perf_trace::span("revision", "revision.fold");
                     let primary = WitnessRequest::primary();
                     let scope = ConeScope {
                         derived: true,
@@ -528,19 +556,37 @@ impl Revision {
                         .lock()
                         .unwrap_or_else(|p| p.into_inner())
                         .clone();
-                    let pd_seed = seed.as_ref().and_then(|a| match &a.value {
-                        ArtifactValue::Fold(f) => f.caps.pd.as_ref().map(|pd| (pd, &f.pd_digests)),
+                    use crate::engine::l4::capability_cone::{ConeSeed, FoldSeed, PdRetain};
+                    let fold_seed = seed.as_ref().and_then(|a| match &a.value {
+                        ArtifactValue::Fold(f) => f.caps.pd.as_ref().map(|pd| FoldSeed {
+                            arena: pd,
+                            pd_digests: &f.pd_digests,
+                            // The previous fold's cones and rows (§6.10).
+                            cones: f.cones.as_ref().map(|store| ConeSeed {
+                                store,
+                                derived: &f.caps.derived,
+                                raw: &f.raw,
+                                coverage: &f.caps.coverage,
+                            }),
+                        }),
                         _ => None,
                     });
                     let (caps, raw, kept) = compose_cone_retained(
                         model,
                         &self.rel,
                         scope,
-                        crate::engine::l4::capability_cone::PdRetain::Yes { seed: pd_seed },
+                        PdRetain::Yes {
+                            seed: fold_seed,
+                            cones: true,
+                        },
                     );
                     crate::engine::perf_trace::counter_delta(
                         "revision.pd_producers_reused",
                         kept.report.reused as u64,
+                    );
+                    crate::engine::perf_trace::counter_delta(
+                        "revision.sccs_refolded",
+                        kept.cones.refolded as u64,
                     );
                     drop(seed);
                     ArtifactValue::Fold(Box::new(Fold {
@@ -548,6 +594,8 @@ impl Revision {
                         raw,
                         pd_digests: kept.digests,
                         pd_report: kept.report,
+                        cones: kept.store,
+                        cone_report: kept.cones,
                     }))
                 }
                 ArtifactKey::L4 => {
@@ -814,6 +862,9 @@ impl Revision {
     /// Once this revision's own solve is published, the seed it started
     /// from is released (the solve is the next revision's seed).
     fn release_used_seed(&self, snap: &ReadySnapshot) {
+        // Dropping a seed may free the last copy of the previous revision's
+        // fold (its arena, cones, raw): timed apart.
+        let _s = crate::engine::perf_trace::span("revision", "revision.seed_release");
         if snap.get(&ArtifactKey::L4).is_some() {
             self.seed.lock().unwrap_or_else(|p| p.into_inner()).take();
         }

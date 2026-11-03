@@ -138,28 +138,59 @@ impl InheritedTables {
 /// One entry per member the scope's `raw` contained, empty or not: `get` is
 /// `None` only for a subject the composition never walked, and `Some(empty)`
 /// for a composed subject with nothing. Owned keys; the tables are shared.
+///
+/// **Segments** (context-server design §6.10, stage 5): a resident fold
+/// re-emits only the subjects an edit reaches and ADOPTS every other
+/// subject's refs from the previous fold unchanged, together with the table
+/// set they index. So the refs of one subject index exactly one table set:
+/// [`InheritedFacts::tables`] (segment 0, the composition's own) or one of
+/// the adopted sets (segment `n` = `adopted[n - 1]`). A one-shot composition
+/// has segment 0 only. Readers go through [`InheritedSlice::tables`], never
+/// assume one table set for the map.
 #[derive(Debug, Clone, Default)]
 pub struct InheritedFacts {
     tables: Arc<InheritedTables>,
-    by_subject: HashMap<String, Vec<InheritedRef>>,
+    adopted: Vec<Arc<InheritedTables>>,
+    by_subject: HashMap<String, SubjectRefs>,
+}
+
+/// One subject's refs and the segment they index.
+#[derive(Debug, Clone)]
+struct SubjectRefs {
+    seg: u32,
+    refs: Vec<InheritedRef>,
 }
 
 impl InheritedFacts {
+    /// The table set of segment `seg`.
+    fn seg(&self, seg: u32) -> &Arc<InheritedTables> {
+        match seg {
+            0 => &self.tables,
+            n => &self.adopted[n as usize - 1],
+        }
+    }
+
     /// `id`'s facts: `None` when the composition never walked `id`.
     pub fn get(&self, id: &str) -> Option<InheritedSlice<'_>> {
-        let (key, refs) = self.by_subject.get_key_value(id)?;
+        let (key, s) = self.by_subject.get_key_value(id)?;
+        let tables = self.seg(s.seg);
         // The subject contract (design §4.1): every ref stored under `key` was
         // emitted for `key`, so its hop's subject is `key`.
         debug_assert!(
-            refs.iter().all(|r| self.tables.subjects
-                [self.tables.hops[r.hop as usize].subject as usize]
-                == *key),
+            s.refs
+                .iter()
+                .all(|r| tables.subjects[tables.hops[r.hop as usize].subject as usize] == *key),
             "inherited facts: a ref under {key:?} has another subject's hop"
         );
         Some(InheritedSlice {
-            refs,
-            tables: &self.tables,
+            refs: &s.refs,
+            tables,
         })
+    }
+
+    /// How many table sets the refs index (1 for a one-shot composition).
+    pub fn segments(&self) -> usize {
+        1 + self.adopted.len()
     }
 
     pub fn contains_key(&self, id: &str) -> bool {
@@ -181,12 +212,12 @@ impl InheritedFacts {
 
     /// Every subject with its facts, in map order.
     pub fn iter(&self) -> impl Iterator<Item = (&str, InheritedSlice<'_>)> {
-        self.by_subject.iter().map(|(k, refs)| {
+        self.by_subject.iter().map(|(k, s)| {
             (
                 k.as_str(),
                 InheritedSlice {
-                    refs,
-                    tables: &self.tables,
+                    refs: &s.refs,
+                    tables: self.seg(s.seg),
                 },
             )
         })
@@ -194,7 +225,7 @@ impl InheritedFacts {
 
     /// The facts of all subjects together.
     pub fn total_facts(&self) -> usize {
-        self.by_subject.values().map(Vec::len).sum()
+        self.by_subject.values().map(|s| s.refs.len()).sum()
     }
 
     /// Move the entries of `ids` (those present) into a new `InheritedFacts`
@@ -207,22 +238,29 @@ impl InheritedFacts {
             .collect();
         InheritedFacts {
             tables: Arc::clone(&self.tables),
+            adopted: self.adopted.clone(),
             by_subject,
         }
     }
 
+    /// Segment 0's tables: every subject's for a one-shot composition (a
+    /// resident fold's adopted subjects index their own segment; read a
+    /// subject's tables through [`InheritedSlice::tables`]).
     pub fn tables(&self) -> &Arc<InheritedTables> {
         &self.tables
     }
 
     /// Bytes of this map for the `witness.raw_bytes` census: key heap, each
-    /// ref vector at capacity, and the shared tables once.
+    /// ref vector at capacity, and each table set once.
     pub(crate) fn census_bytes(&self) -> u64 {
         self.by_subject
             .iter()
-            .map(|(k, v)| (k.len() + v.capacity() * std::mem::size_of::<InheritedRef>()) as u64)
+            .map(|(k, s)| {
+                (k.len() + s.refs.capacity() * std::mem::size_of::<InheritedRef>()) as u64
+            })
             .sum::<u64>()
             + self.tables.heap_bytes()
+            + self.adopted.iter().map(|t| t.heap_bytes()).sum::<u64>()
     }
 }
 
@@ -454,10 +492,38 @@ pub(crate) struct InheritedBuilder {
     /// edges live for the whole composition and never move. It only saves the
     /// content key's clones; `hop_ix` decides identity.
     edge_memo: HashMap<(SubjIx, *const TypedOutEdge), HopIx>,
-    by_subject: HashMap<String, Vec<InheritedRef>>,
+    /// The table sets of adopted subjects ([`InheritedFacts`]' segments
+    /// `1..`), one entry per distinct set.
+    adopted: Vec<Arc<InheritedTables>>,
+    by_subject: HashMap<String, SubjectRefs>,
 }
 
 impl InheritedBuilder {
+    /// Adopt `id`'s entry from `old` unchanged (its refs and the table set
+    /// they index): a resident fold's subject whose inputs did not change
+    /// (design §6.10). `false` when `old` has no entry for `id`.
+    pub(crate) fn adopt(&mut self, old: &InheritedFacts, id: &str) -> bool {
+        let Some(s) = old.by_subject.get(id) else {
+            return false;
+        };
+        let tables = old.seg(s.seg);
+        let seg = match self.adopted.iter().position(|t| Arc::ptr_eq(t, tables)) {
+            Some(i) => i + 1,
+            None => {
+                self.adopted.push(Arc::clone(tables));
+                self.adopted.len()
+            }
+        };
+        self.by_subject.insert(
+            id.to_string(),
+            SubjectRefs {
+                seg: u32::try_from(seg).expect("fewer than u32::MAX segments"),
+                refs: s.refs.clone(),
+            },
+        );
+        true
+    }
+
     /// The index of subject `id` (interned on first sight).
     pub(crate) fn subject(&mut self, id: &str) -> SubjIx {
         if let Some(&ix) = self.subject_ix.get(id) {
@@ -533,7 +599,7 @@ impl InheritedBuilder {
 
     /// Record `id`'s facts (an empty Vec included: "composed, nothing").
     pub(crate) fn insert(&mut self, id: String, refs: Vec<InheritedRef>) {
-        self.by_subject.insert(id, refs);
+        self.by_subject.insert(id, SubjectRefs { seg: 0, refs });
     }
 
     /// The tables so far (a test hook materializes through them).
@@ -549,6 +615,7 @@ impl InheritedBuilder {
         tables.hops.shrink_to_fit();
         InheritedFacts {
             tables: Arc::new(tables),
+            adopted: self.adopted,
             by_subject: self.by_subject,
         }
     }

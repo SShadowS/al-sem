@@ -1813,6 +1813,7 @@ pub(crate) fn compose_tree(
 ) -> CapabilitySnapshot {
     crate::engine::perf_trace::counter_delta("build.snapshot", 1);
     let _s = crate::engine::perf_trace::span("snapshot", "snapshot.derive");
+    let prelude = crate::engine::perf_trace::span("snapshot", "tree.prelude");
     let ws = &model.workspace;
     let boundary = boundary_rule(model, &apps.names);
     let bodyless: std::collections::HashSet<&str> = ws
@@ -1840,8 +1841,15 @@ pub(crate) fn compose_tree(
         bodyless_dependency: Some(&bodyless),
         source_less_apps: Some(&apps.source_less),
     };
+    drop(prelude);
+    // One span per section (design §6.11: the tree store's per-section cost).
+    let sec = |name: &'static str| crate::engine::perf_trace::span("snapshot", name);
+    let s = sec("tree.collided");
     let collided = CollidedRows::build(&ws.routines);
+    drop(s);
+    let s = sec("tree.identities");
     let identities = derive_identity_table(model);
+    drop(s);
     // The two evidence indexes read the raw facts, so they run first; in
     // drain mode the tree owns its subjects' entries and drops them after.
     let (subjects, operation_index, callsite_index, capability_facts) = match raw {
@@ -1849,17 +1857,29 @@ pub(crate) fn compose_tree(
             let subjects: std::collections::BTreeSet<String> =
                 map.keys().map(str::to_string).collect();
             let get = |id: &str| map.get(id);
+            let s = sec("tree.operation_index");
             let operation_index = derive_operation_evidence(&inp, get, &collided);
+            drop(s);
+            let s = sec("tree.callsite_index");
             let callsite_index = derive_callsite_evidence(&inp, get, &collided);
+            drop(s);
+            let s = sec("tree.capability_facts");
             let capability_facts = derive_capability_facts(&inp, get);
+            drop(s);
             drop(map);
             (subjects, operation_index, callsite_index, capability_facts)
         }
         TreeRaw::Borrow(acc) => {
             let get = |id: &str| acc.get(id);
+            let s = sec("tree.operation_index");
             let operation_index = derive_operation_evidence(&inp, get, &collided);
+            drop(s);
+            let s = sec("tree.callsite_index");
             let callsite_index = derive_callsite_evidence(&inp, get, &collided);
+            drop(s);
+            let s = sec("tree.capability_facts");
             let capability_facts = derive_capability_facts(&inp, get);
+            drop(s);
             (
                 acc.subjects,
                 operation_index,
@@ -1868,13 +1888,28 @@ pub(crate) fn compose_tree(
             )
         }
     };
+    let s = sec("tree.typed_edges");
     let (typed_edges, skipped) = derive_typed_edges(&inp.ledger());
+    drop(s);
+    let s = sec("tree.callsite_resolutions");
     let callsite_resolutions = derive_callsite_resolutions(&inp.ledger(), &typed_edges, &collided);
+    drop(s);
+    let s = sec("tree.analysis_gaps");
     let analysis_gaps = derive_analysis_gaps(model, &inp);
+    drop(s);
+    let s = sec("tree.coverage");
     let coverage = derive_coverage(&inp);
+    drop(s);
+    let s = sec("tree.event_declarations");
     let event_declarations = derive_event_declarations(&inp);
+    drop(s);
+    let s = sec("tree.root_classifications");
     let root_classifications = derive_root_classifications(model, &inp);
+    drop(s);
+    let s = sec("tree.routine_order_frames");
     let routine_order_frames = derive_routine_order_frames(&inp, &collided);
+    drop(s);
+    let s = sec("tree.pd_solution");
     let pd_solution = derive_pd_arena(
         &inp,
         &cone_pd,
@@ -1884,6 +1919,7 @@ pub(crate) fn compose_tree(
         &skipped,
     );
     drop(cone_pd);
+    drop(s);
 
     finish_snapshot(CapabilitySnapshot {
         identities: identities.into(),

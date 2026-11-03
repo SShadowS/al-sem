@@ -2133,6 +2133,12 @@ fn incr_mode(ws: PathBuf, routine: String, low_mem: bool, verify: bool, steps: V
                 p.producers, p.reused, p.reused_states, p.delta_routines
             );
         }
+        if let Some((c, (n, with, entries))) = rev.cone_report() {
+            println!(
+                "        cones: sccs {} refolded {} cut-off {} pd-rows {} (pd delta {}) copied rows {}; store {n} SCCs, {with} cones, {entries} entries",
+                c.sccs, c.refolded, c.cut_off, c.pd_rows, c.pd_delta, c.copied_rows
+            );
+        }
         if let Some((seeded, total, full)) = rev.l4_report() {
             println!(
                 "        l4 seeded {seeded} of {total} SCCs{}",
@@ -2172,12 +2178,13 @@ fn incr_mode(ws: PathBuf, routine: String, low_mem: bool, verify: bool, steps: V
             proc_status_kib("VmRSS:") as f64 / 1e6 * 1.024,
             proc_status_kib("VmHWM:") as f64 / 1e6 * 1.024,
         );
+        // `ALSEM_CONES_CENSUS=1`: the cumulative attribution after each step
+        // (a step's own share is the difference from the previous report).
+        eprintln!("[cones-census] ---- after step {i} ({name})");
+        al_sem::engine::l5::detector_context::report_cones_census();
     }
     std::fs::write(&target, &original).expect("restore the workspace copy");
     std::fs::write(&app_json, &app_original).expect("restore app.json");
-    // `ALSEM_CONES_CENSUS=1`: the composition's attribution, summed over the
-    // steps.
-    al_sem::engine::l5::detector_context::report_cones_census();
     assert!(!failed, "an answer differed from its cold run");
 }
 
