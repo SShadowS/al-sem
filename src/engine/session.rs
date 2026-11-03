@@ -856,13 +856,13 @@ pub(crate) fn compose_cone_retained(
     )
 }
 
-/// The raw-emission phase: the raw facts of `subjects` (internal ids) alone,
-/// for a reader whose subjects a retained composition did not emit (a
-/// dependency root over a primary-scoped composition; a resident revision's
-/// `Raw` artifact). Today it is a raw-only composition (no derived rows), r3
-/// §12's "scoped second composition"; the retained-cone emission is stage
-/// 5's cone store. Its entries equal the ones a composition over any scope
-/// containing them emits (`prove_scoped_equals_unscoped`).
+/// The raw facts of `subjects` (internal ids) alone, by a raw-only
+/// composition (no derived rows), r3 §12's "scoped second composition". Its
+/// entries equal the ones a composition over any scope containing them emits
+/// (`prove_scoped_equals_unscoped`). A test oracle since plan 2026-11-03 L6:
+/// a resident revision's `Raw` artifact is emitted from its fold's retained
+/// cones (`ConeStore::emit_raw`), and these entries are what it must equal.
+#[cfg(test)]
 pub(crate) fn emit_raw_ids(
     model: &Model,
     rel: &ExecRelation,

@@ -139,10 +139,11 @@ impl InheritedTables {
 /// `None` only for a subject the composition never walked, and `Some(empty)`
 /// for a composed subject with nothing. Owned keys; the tables are shared.
 ///
-/// **Segments** (context-server design §6.10, stage 5): a resident fold
-/// re-emits only the subjects an edit reaches and ADOPTS every other
-/// subject's refs from the previous fold unchanged, together with the table
-/// set they index. So the refs of one subject index exactly one table set:
+/// **Segments** (context-server design §6.10, stage 5; plan 2026-11-03 L6):
+/// a resident revision's `Raw` emission emits only the subjects it must and
+/// ADOPTS every other subject's refs (from another view's emission, or the
+/// previous revision's when its rows were not re-folded) unchanged, together
+/// with the table set they index. So the refs of one subject index exactly one table set:
 /// [`InheritedFacts::tables`] (segment 0, the composition's own) or one of
 /// the adopted sets (segment `n` = `adopted[n - 1]`). A one-shot composition
 /// has segment 0 only. Readers go through [`InheritedSlice::tables`], never

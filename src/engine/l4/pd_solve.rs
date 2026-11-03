@@ -176,6 +176,51 @@ pub struct ResolvedEntry<'g> {
 
 pub type ResolvedByRoutine<'g> = HashMap<Arc<str>, Vec<ResolvedEntry<'g>>>;
 
+/// The representatives [`resolved_entries_of`] builds, one `Arc` per
+/// `(producer, t)`, shared across the routines of one emission.
+pub(crate) type EntryReps = HashMap<(usize, TempState), Arc<CapabilityFact>>;
+
+/// `routine`'s own entries read back from a finalized `arena`: the list the
+/// solve that built it handed the composition for `routine`
+/// ([`ResolvedByRoutine`], [`finalize`]), with each first hop borrowed from
+/// the arena's edge table instead of the solved graph (equal edges). The
+/// same rule as `finalize`: every non-seed state of the routine, in state
+/// order, its first hop the edge of its lowest-ranked link to a state at
+/// `dist - 1`, its rep the producer's fact at the state's temp state. A
+/// resident fold's on-demand raw emission reads it (plan 2026-11-03 L6).
+pub(crate) fn resolved_entries_of<'a>(
+    arena: &'a ConeArena,
+    routine: &str,
+    reps: &mut EntryReps,
+) -> Vec<ResolvedEntry<'a>> {
+    let Some(states) = arena.by_routine.get(routine) else {
+        return Vec::new();
+    };
+    states
+        .iter()
+        .filter_map(|&ix| {
+            let s = &arena.states[ix];
+            if s.seed {
+                return None;
+            }
+            let hop = arena.links[s.links.clone()]
+                .iter()
+                .find(|l| arena.states[l.callee_state].dist + 1 == s.dist)
+                .expect("a non-seed state has a shortest link")
+                .edge;
+            let rep = reps
+                .entry((s.producer, s.t.clone()))
+                .or_insert_with(|| Arc::new(rep_for(&arena.producers[s.producer].fact, &s.t)));
+            Some(ResolvedEntry {
+                state: ix,
+                rep: Arc::clone(rep),
+                dist: s.dist,
+                first_hop: &arena.edges[hop],
+            })
+        })
+        .collect()
+}
+
 /// Publisher → subscriber: an event-dispatch edge whose both ends are known.
 /// The subscriber's parameters are the publisher's, by name (engine-switch S8).
 fn event_pair<'r>(
