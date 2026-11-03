@@ -45,8 +45,12 @@ pub const MIB: u64 = 1 << 20;
 /// The default `--memory-budget` of a cross-app child. The design's 4 GiB
 /// (§7, an open point of §13) is below what CDO retains after one build
 /// (3.7 GB RSS, stage 3 measurement), so it would refuse every first
-/// explain there; 6 GiB holds CDO's measured peak (5.4 GB) with margin.
-pub const DEFAULT_BUDGET_CROSS_APP: u64 = 6 * GIB;
+/// explain there. Stage 3 set 6 GiB for CDO's then peak (5.4 GB); stage 5b's
+/// cone and tree stores raised the resident default-mode figure to about
+/// 6.0 GB after a B edit (peak 6.34 GB), right at 6 GiB, so trees were
+/// evicted under normal use. 8 GiB (owner decision, 2026-11-03) keeps them
+/// with margin; `--low-mem` keeps its own 6 GiB.
+pub const DEFAULT_BUDGET_CROSS_APP: u64 = 8 * GIB;
 
 /// The default `--memory-budget` of a single-app child (CDO single-app
 /// one-shot peak 0.75-0.9 GB).

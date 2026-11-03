@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (the default cross-app memory budget is 8 GiB)
+
+- **`--memory-budget` now defaults to 8 GiB for a cross-app engine child (was 6 GiB).**
+  Stage 5b's cone and tree stores raised the default mode's resident set on CDO to about
+  6.0 GB after a body edit (peak 6.34 GB), right at the old 6 GiB, so a revision's trees
+  were evicted under normal use. `--low-mem` keeps its 6 GiB and single-app its 2 GiB
+  (`engine::resident::budget::DEFAULT_BUDGET_CROSS_APP`). Owner decision, 2026-11-03.
+
 ### Added (context server stage 5: incremental analysis)
 
 - **The resident revision's L4 solve is seeded from the previous
