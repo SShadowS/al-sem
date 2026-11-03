@@ -959,6 +959,37 @@ pd arena is per view by §6.11). L4b's other target, the tree base's per-row hal
 remaining per-view lever is the pd projection's representation (an owned routine string per
 state), not L4b.
 
+**As built (parallel fresh producers, plan item L2; branch `ctxsrv/l2-parallel-pd`).** The
+independence the plan relied on holds in the code: the state key includes the producer, a link
+joins two states of one producer, and the step (`cross_edge`) is a pure function of read-only
+inputs, so the serial walk's one interleaved FIFO queue, restricted to one producer, is that
+producer's own BFS (same states, links, distances). `solve_producer` runs each fresh producer
+(cold, P, and the re-solved ones of `solve_seeded`) on a rayon worker into local states, links
+and edges; the routine interner is built up front from every edge's `from` and every owner
+(read-only for the workers; trimmed to the states' routines by `Arc::strong_count` before
+`finalize`, so the census is unchanged), and the caller's name, row, frame and site guard are
+looked up once per incoming edge. The results are concatenated in producer order (indices
+shifted, edges deduplicated by address) and finalized; `finalize` debug-asserts that no
+address is in its edge table twice, since its identity merge would hide a dropped dedup (with
+the assertion off, dropping the dedup changes no arena: the plan's "the arena differs" does not
+hold). **Deviation:** after the parallel walk, `finalize` was two thirds of a cold solve
+(0.78 of 1.18 s), so its sorts (`par_sort_unstable`, every key total), link pass and first hops
+run on rayon too, and `by_routine` and the resolved entries are filed per routine rank, not by a
+string hash per state. Proof: a `cfg(test)` guard (`pd_solve::test_serial`) makes every solve
+also run the pre-L2 walk and finalize (kept as test oracles) and assert `==` (the arena types
+derive `PartialEq`): every r0 app and the eight dependency fixtures, in node order and with
+permuted producers, the seeded and hand-stated solves, and cross-app CDO; the CDO arena dump is
+byte-identical to master's; a `--verify` run after cold, B, S and P gave every answer equal to
+cold. Measured on CDO (release-fast probe, mimalloc, uncounted, three rounds, master beside it):
+`pd.solve` cold 3.31-3.42 s → 0.76-0.83 s (walk 0.23-0.25 s, concatenation 0.13-0.14 s,
+finalize 0.37-0.41 s, of which sort 0.05 s), P 3.51-3.78 s → 0.77-0.83 s, B 1.07-1.15 s →
+0.70-0.78 s, S 1.07-1.11 s → 0.72-0.74 s; fold cold 13.7-14.0 s → 11.1-11.7 s, P 15.0-15.6 s →
+12.6-12.7 s, B 1.81-1.92 s → 1.46-1.56 s, S 1.84-1.93 s → 1.51-1.53 s. Peak RSS unchanged within
+noise (counted: 6.24 → 6.30 GB over the run). Found on the way: a witness fill whose key a
+concurrent request published between the store's claim and its fill failed ("not a witness of
+the request's plan"); it now returns the published entry. What is left of a cold `pd.solve` is
+serial: the concatenation's moves and the build pass's placement (~0.45 s together).
+
 ### 6.12 Explain
 
 Landed: grouping by equal `tests`, repeatable `--routine` (sorted distinct roots,
