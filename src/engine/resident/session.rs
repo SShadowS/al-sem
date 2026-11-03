@@ -293,7 +293,7 @@ impl ResidentSession {
     }
 
     /// Evict until `estimate` fits (§7's order): the roots' witnesses,
-    /// dependency subjects' raw facts, the dependency rows the workspace session keeps (when no build
+    /// the views' raw facts, the dependency rows the workspace session keeps (when no build
     /// holds it), runs, the det, explain's indexes, the fold, ordering and rules; never the
     /// model, relation, tier or L4 seed. Returns how many entries went.
     pub fn reclaim(&self, budget: &Budget, estimate: u64) -> u64 {
@@ -303,7 +303,7 @@ impl ResidentSession {
         };
         let mut evicted = 0u64;
         // The design's order, with the session's dependency rows right after
-        // the dependency subjects' raw facts.
+        // the views' raw facts.
         for kind in Revision::EVICTION_ORDER
             .iter()
             .copied()

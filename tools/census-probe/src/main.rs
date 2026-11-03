@@ -2373,6 +2373,25 @@ fn incr_mode(
                 }
             ));
         }
+        // Plan 2026-11-03 L6: the views' raw facts, emitted on demand from
+        // the fold's cones or adopted (another view's, the previous step's).
+        let (emitted, adopted) = rev.raw_counts();
+        println!("        raw subjects: emitted {emitted} adopted {adopted}");
+        // `PROBE_RAW_BYTES=1` (counted runs only): the bytes the views' raw
+        // artifacts hold, freed by evicting them (so the next step adopts
+        // nothing: its timings are not the default's).
+        if std::env::var_os("PROBE_RAW_BYTES").is_some_and(|v| v == "1") {
+            let keys = rev.keys_where(|k| k.kind() == "raw");
+            let (b0, a0) = live();
+            rev.evict(&keys);
+            let (b1, a1) = live();
+            println!(
+                "        raw bytes: {} keys, {:.3} MiB, {} allocs",
+                keys.len(),
+                mib(b0 - b1),
+                a0 - a1
+            );
+        }
         if let Some(extra) = &witness {
             witness_measure(&rev, &routine, extra, verify, &mut failed);
         }
