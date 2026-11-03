@@ -6,6 +6,7 @@
 //! revision's inputs, into the next revision's model.
 
 pub mod classify;
+pub(crate) mod dep_record;
 pub mod workspace;
 
 pub use workspace::{MemoryMode, RefreshReport, WorkspaceSession};

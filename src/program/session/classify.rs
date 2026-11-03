@@ -57,11 +57,24 @@ impl ProjectionHasher {
         ProjectionHasher(h)
     }
 
-    fn tag(&mut self, t: u8) {
+    /// A sink for another digest over the same encoding (the S rule's answer
+    /// digests, `session::dep_record`): `domain` keeps the two apart.
+    pub(crate) fn with_domain(domain: &[u8]) -> Self {
+        let mut h = blake3::Hasher::new();
+        h.update(domain);
+        h.update(&DECL_PROJECTION_VERSION.to_le_bytes());
+        ProjectionHasher(h)
+    }
+
+    pub(crate) fn finish_bytes(self) -> [u8; 32] {
+        *self.0.finalize().as_bytes()
+    }
+
+    pub(crate) fn tag(&mut self, t: u8) {
         self.0.update(&[t]);
     }
 
-    fn u64(&mut self, v: u64) {
+    pub(crate) fn u64(&mut self, v: u64) {
         self.0.update(&v.to_le_bytes());
     }
 

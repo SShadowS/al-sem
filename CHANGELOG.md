@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (the finer dependency re-resolution rule for S)
+
+- **An S edit re-resolves only the dependency files whose recorded answers changed** (plan
+  `docs/superpowers/plans/2026-11-03-context-server-remaining.md`, item S, step 2;
+  `src/program/session/dep_record.rs`). The workspace session resolves every dependency file
+  through a reads-facade recorder and keeps, per file, its edge range and the queries it made,
+  and per query a digest of its answer (blake3 over the declaration projection's encoding of
+  everything handed out: ids by value, nodes and runs of nodes by their whole content, so a read
+  through a returned node is covered; a shared dependency-tier node by its position, pinned by
+  the tier's identity). Under S every kept query is asked again against the new revision; a file
+  with a changed answer is resolved again, the others keep their edges, site facts and parens-less
+  calls (sites re-stamped with the current `FileIx`, source witnesses re-materialized as under B).
+  When no file changes and none is renumbered, the old resolution is shared outright. The record
+  is not trusted, and everything is resolved, on another tier or facade version, a changed file
+  list, a kept witness with no declaration, or two files' site facts sharing an obligation id. P
+  and B are unchanged. On CDO (`aldump --session-refresh --verify`, every step equal to the cold
+  build): 10,881 dependency files, 499,011 recorded queries, record ~68 MB; adding a procedure, a
+  signature change and adding a file each re-resolve 0 files (no answer changed); a new
+  implementer of a dependency interface (`CTS-CDN ISenderProfileRetriever`) re-resolves 2. The
+  query check costs ~30 ms and the digests ~40 ms per S. New session tests (both memory modes):
+  a first workspace implementer of a dependency interface (a negative lookup), an implementer's
+  method arity and access changed under an unchanged `implements` list (a read through a returned
+  id), a procedure added above that method (witness moved, nothing re-resolved), a workspace
+  table extension of a dependency table added and removed, a name collision, a workspace closed
+  enum implementing the dependency interface. Discrimination: recording `implementers_of` only
+  when non-empty fails the first-implementer test; not recording `routines_named` fails the
+  implementer test; comparing by query alone fails 13 tests; skipping the fast path's witness
+  re-materialization fails the implementer test.
+
 ### Changed (the resolution reads facade and its tripwire)
 
 - **Call-site resolution reads the whole-program state only through a facade** (plan

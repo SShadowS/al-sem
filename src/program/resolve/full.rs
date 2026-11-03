@@ -2171,7 +2171,6 @@ impl ProgramContext {
     /// facade, `resolve::reads`): its resolution, every query it made of the
     /// whole-program state, and what the tripwire's counting hook saw while
     /// it ran (always zero outside tests).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn resolve_dependency_file_recorded(
         &self,
         app: AppRef,

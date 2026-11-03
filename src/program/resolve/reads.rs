@@ -19,7 +19,7 @@
 //! dependency-body resolution resolves each file through its own recorder,
 //! so the log is the complete list of what that file's resolution read of
 //! the whole-program state. A query's answer is a function of the query and
-//! the state ([`eval`]), so the S rule (`program::session`) can re-ask every
+//! the state (`session::dep_record::eval`), so the S rule (`program::session`) can re-ask every
 //! logged query against the next revision and keep a file whose answers all
 //! stayed the same.
 //!
@@ -34,7 +34,7 @@
 //!
 //! **Reads through returned values.** A query that hands out a node
 //! (`&ObjectNode`, `&RoutineNode`, `&RoutineMeta`, a run of routines) is
-//! answered, for [`eval`], by the whole node's content, so any field the
+//! answered, for `session::dep_record::eval`, by the whole node's content, so any field the
 //! resolution reads off the returned node afterwards is covered. A query that
 //! returns ids is answered by the ids; a read through such an id is a second
 //! query and is logged when it happens.
@@ -51,7 +51,7 @@ use crate::program::node_set::NodeSetIter;
 use crate::program::resolve::decl_surface::{DeclSurface, RoutineMeta};
 use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
 
-/// Bumped whenever a trait method, a [`Query`] variant or [`eval`]'s answer
+/// Bumped whenever a trait method, a [`Query`] variant or `session::dep_record::eval`'s answer
 /// changes meaning: a kept log of another version is never trusted.
 pub const FACADE_VERSION: u32 = 1;
 
@@ -408,7 +408,7 @@ impl SurfaceReads for DeclSurface {
 // Queries and the recorder
 // ---------------------------------------------------------------------------
 
-/// An [`ObjectRef`] as a query key (both spellings kept, so [`eval`] asks
+/// An [`ObjectRef`] as a query key (both spellings kept, so `session::dep_record::eval` asks
 /// with exactly the reference the resolution asked with).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum RefKey {
@@ -427,8 +427,9 @@ impl RefKey {
         }
     }
 
-    #[allow(dead_code)] // read by `eval` (the S rule)
-    fn to_ref(&self) -> ObjectRef {
+    /// The reference this key was made from.
+    #[must_use]
+    pub fn to_ref(&self) -> ObjectRef {
         match self {
             RefKey::Name { raw, normalized_lc } => ObjectRef::Name {
                 raw: raw.clone(),
@@ -442,7 +443,7 @@ impl RefKey {
 /// One read of the whole-program state, as its key: every trait method of
 /// the facade, one variant each. The index accessors that take a
 /// `from_object` read only its app (`from_object.id.app`), so that is the
-/// key. [`eval`] answers a query against a state.
+/// key. `session::dep_record::eval` answers a query against a state.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Query {
     Object(ObjectNodeId),
@@ -790,13 +791,11 @@ pub struct HookCounts {
 
 /// A recording scope on this thread: every [`probe`] until the scope ends is
 /// counted ([`ScopeGuard::finish`]). Always zero outside `cfg(test)`.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct ScopeGuard {
     start: HookCounts,
 }
 
 #[must_use]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn scope() -> ScopeGuard {
     SCOPE.with(|c| c.set(c.get() + 1));
     ScopeGuard {
@@ -809,7 +808,6 @@ pub(crate) fn scope() -> ScopeGuard {
 
 impl ScopeGuard {
     /// End the scope; the counts it saw.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn finish(self) -> HookCounts {
         HookCounts {
             bypass: BYPASS.with(Cell::get) - self.start.bypass,

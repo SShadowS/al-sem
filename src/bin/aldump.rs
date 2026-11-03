@@ -64,7 +64,7 @@ fn usage() -> ExitCode {
          \x20      aldump --dump-dependency-source <workspace> <out-dir>\n\
          \x20      aldump --switch-compare <dump-dir-A> <dump-dir-B> [--sample N] [--width N]\n\
          \x20      aldump --snapshot-memory <workspace> [--single-app] [--hash] [--pd-dump <file>]\n\
-         \x20      aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--verify] [--low-mem]"
+         \x20      aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--implements <interface>] [--verify] [--low-mem]"
     );
     ExitCode::FAILURE
 }
@@ -79,7 +79,10 @@ fn usage() -> ExitCode {
 /// build), `noop`, `body` (a comment line inside the first procedure body of
 /// the chosen file, B) and its restore, `newline` (two lines prepended to the
 /// file, B) and its restore, `decl` (a procedure added to the file, S) and its
-/// restore, `add` (a new file, F) and its removal, `appjson` (a trailing
+/// restore, `signature` (the file's first parameterless procedure gains a
+/// parameter, S) and its restore, `add` (a new file, F) and its removal,
+/// with `--implements <interface>` an `implementer` (a new codeunit
+/// implementing that interface, S) and its removal, `appjson` (a trailing
 /// newline on `app.json`, P) and its restore. Each line has the class, the
 /// files parsed and resolved, whether the dependency bodies were resolved
 /// again, `model.copied_bytes`, the program and whole-refresh wall times, and
@@ -99,8 +102,9 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
     use serde_json::json;
     use std::path::{Path, PathBuf};
 
-    const USAGE: &str = "usage: aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--verify] [--low-mem]";
+    const USAGE: &str = "usage: aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--implements <interface>] [--verify] [--low-mem]";
     let (mut ws, mut file, mut verify) = (None::<PathBuf>, None::<String>, false);
+    let mut implements = None::<String>;
     let mut mode = al_sem::program::session::MemoryMode::Default;
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -108,6 +112,7 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
             "--verify" => verify = true,
             "--low-mem" => mode = al_sem::program::session::MemoryMode::LowMem,
             "--file" => file = it.next().cloned(),
+            "--implements" => implements = it.next().cloned(),
             _ if ws.is_none() && !a.starts_with("--") => ws = Some(PathBuf::from(a)),
             _ => {
                 eprintln!("{USAGE}");
@@ -212,6 +217,9 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
             row["parsed"] = json!(r.parsed);
             row["resolved"] = json!(r.resolved);
             row["dependencyBodiesResolved"] = json!(r.dependency_bodies_resolved);
+            row["dependencyFiles"] = json!(r.dependency_files);
+            row["dependencyFilesResolved"] = json!(r.dependency_files_resolved);
+            row["dependencyRule"] = json!(r.dependency_rule);
             row["dependencyFilesParsed"] = json!(r.dependency_files_parsed);
             row["copiedBytes"] = json!(r.copied_bytes);
             row["programMs"] = json!(r.program_ms);
@@ -281,6 +289,28 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
     step("decl", &mut session);
     write(&target, &original);
     step("decl-restore", &mut session);
+    // A signature change: the first parameterless procedure of the file
+    // gains a parameter.
+    let signature = original
+        .lines()
+        .position(|l| l.trim_start().starts_with("procedure ") && l.contains("()"))
+        .map(|at| {
+            let mut out = String::new();
+            for (i, l) in original.split_inclusive('\n').enumerate() {
+                if i == at {
+                    out.push_str(&l.replacen("()", "(SessionProbeArg: Integer)", 1));
+                } else {
+                    out.push_str(l);
+                }
+            }
+            out
+        });
+    if let Some(signature) = signature {
+        write(&target, &signature);
+        step("signature", &mut session);
+        write(&target, &original);
+        step("signature-restore", &mut session);
+    }
     write(
         &probe,
         "codeunit 99977 \"Session Probe\"\n{\n    procedure Run()\n    begin\n    end;\n}\n",
@@ -288,6 +318,15 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
     step("add", &mut session);
     std::fs::remove_file(&probe).expect("remove the probe file");
     step("add-restore", &mut session);
+    if let Some(interface) = &implements {
+        write(
+            &probe,
+            &format!("codeunit 99978 \"Session Probe Impl\" implements \"{interface}\"\n{{\n}}\n"),
+        );
+        step("implementer", &mut session);
+        std::fs::remove_file(&probe).expect("remove the probe file");
+        step("implementer-restore", &mut session);
+    }
     let mut app = app_original.clone();
     app.push(b'\n');
     std::fs::write(&app_json, &app).expect("write app.json");
