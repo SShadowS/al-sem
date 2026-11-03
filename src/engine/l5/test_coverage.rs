@@ -534,7 +534,7 @@ impl CoverageGraph {
             }
         }
 
-        for e in &snap.typed_edges {
+        for e in snap.typed_edges.iter() {
             let from = e.edge_from();
             match e.edge_to() {
                 Some(to) => {
@@ -550,7 +550,7 @@ impl CoverageGraph {
             }
         }
 
-        for row in &snap.callsite_resolutions {
+        for row in snap.callsite_resolutions.iter() {
             if row.status == "polymorphic" {
                 let open = row.candidates.as_ref().is_none_or(Vec::is_empty)
                     || row
@@ -1307,7 +1307,7 @@ mod tests {
             // The closed shape: followed, no reason.
             polymorphic_row(&snap, &d, |_| {}),
         ];
-        snap.callsite_resolutions.extend(rows);
+        std::sync::Arc::make_mut(&mut snap.callsite_resolutions).extend(rows);
         let g = CoverageGraph::from_snapshot(&snap, &m);
         for id in [&a, &b, &c] {
             assert_eq!(
@@ -1324,7 +1324,7 @@ mod tests {
         let (mut m, mut snap) = selection_graph();
         let ping = row(&mut m, "Ping").stable_routine_id.clone();
         let amb = polymorphic_row(&snap, &ping, |r| r.status = "ambiguous".to_string());
-        snap.callsite_resolutions.push(amb);
+        std::sync::Arc::make_mut(&mut snap.callsite_resolutions).push(amb);
         let g = CoverageGraph::from_snapshot(&snap, &m);
         assert_eq!(reasons(&g.incomplete, &ping), vec!["ambiguous"]);
     }
@@ -1631,8 +1631,7 @@ codeunit 51025 "Tp Escaped Tests"
     #[test]
     fn open_interface_still_covers_its_known_candidates() {
         let (m, mut snap) = selection_graph();
-        let row = snap
-            .callsite_resolutions
+        let row = std::sync::Arc::make_mut(&mut snap.callsite_resolutions)
             .iter_mut()
             .find(|r| r.status == "polymorphic")
             .expect("the fixture's polymorphic row");

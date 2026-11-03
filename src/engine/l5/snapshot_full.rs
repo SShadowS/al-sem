@@ -212,7 +212,7 @@ pub(crate) fn assemble_full_snapshot(
     let mut referenced_apps = HashSet::new();
     if let SnapshotUniverse::CrossApp(u) = &opts.universe {
         let routine_to_stable = routine_to_stable_of(&resolved.workspace);
-        core.analysis_gaps = reachable_gaps(&core.analysis_gaps, u.base, &routine_to_stable);
+        core.analysis_gaps = reachable_gaps(&core.analysis_gaps, u.base, &routine_to_stable).into();
         // No primary app: every row is primary, nothing to filter.
         if let Some(p) = primary_app_guid(resolved) {
             referenced_apps = filter_by_class(&mut core, &permission_facts, p, &routine_to_stable);
@@ -2622,14 +2622,14 @@ page 50818 "T5 I-3 Wizard Alpha"
             }
             .into(),
             capability_facts: Vec::new(),
-            typed_edges: Vec::new(),
+            typed_edges: Default::default(),
             operation_index: Vec::new(),
             callsite_index: Vec::new(),
-            callsite_resolutions: Vec::new(),
-            analysis_gaps: Vec::new(),
+            callsite_resolutions: Default::default(),
+            analysis_gaps: Default::default(),
             coverage: Vec::new().into(),
-            event_declarations: Vec::new(),
-            root_classifications: Vec::new(),
+            event_declarations: Default::default(),
+            root_classifications: Default::default(),
             routine_order_frames: None,
             pd_solution: PdArena::default(),
             boundary: None,
@@ -2675,10 +2675,8 @@ page 50818 "T5 I-3 Wizard Alpha"
         core.capability_facts.push(f.into());
         core.operation_index.push(op_row(d_op, &dr));
         core.callsite_index.push(cs_row(d_cs, &dr));
-        core.routine_order_frames = Some(RoutineOrderFrames::from_entries(vec![(
-            dr.clone(),
-            frames(),
-        )]));
+        core.routine_order_frames =
+            Some(RoutineOrderFrames::from_entries(vec![(dr.clone(), frames())]).into());
         let perms = CborValue::Array(Vec::new());
         // Precondition: the dependency routine is named only by its two rows.
         assert_eq!(occurrences(&core, &perms, &dr), 2, "precondition");

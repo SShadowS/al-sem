@@ -1115,6 +1115,80 @@ pub(super) mod tests {
         crate::program::inputs::WorkspaceInputs::read(ws, &Default::default())
     }
 
+    /// Plan item L3: two views over one shared tree base hold its whole
+    /// sections, not copies — every one of them is the base's `Arc`.
+    #[test]
+    fn views_over_one_base_share_its_whole_sections() {
+        use std::sync::Arc;
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus/ws-callsite-resolutions");
+        let target = AnalysisTarget::build(&inputs(&dir), true, "digest").expect("a model");
+        let model = target.resolved();
+        let rel = ExecRelation::single_app(model);
+        let apps = tree_apps(None);
+        let primary = WitnessRequest::primary();
+        let (caps, raw) = compose_cone(
+            model,
+            &rel,
+            ConeScope {
+                derived: true,
+                raw: primary.scope(model),
+            },
+        );
+        let no_arena = Default::default();
+        let pd = caps.pd.as_ref().unwrap_or(&no_arena);
+        let base = derive_tree_base(model, rel.cone(), &[], &caps, pd, &apps);
+        let subjects: Vec<String> = primary.subjects(model).into_iter().take(2).collect();
+        assert_eq!(subjects.len(), 2, "precondition: two primary routines");
+        let views: Vec<CapabilitySnapshot> = subjects
+            .iter()
+            .map(|id| {
+                let scope = BTreeSet::from([id.clone()]);
+                compose_tree_over(
+                    Cow::Borrowed(&base),
+                    model,
+                    rel.cone(),
+                    &[],
+                    &caps,
+                    TreeRaw::Borrow(SubjectRaw::new(&raw, &scope)),
+                    Cow::Borrowed(pd),
+                    &apps,
+                )
+            })
+            .collect();
+        assert!(
+            !base.typed_edges.is_empty() && !base.callsite_resolutions.is_empty(),
+            "precondition: sections with rows"
+        );
+        let frames = |t: &CapabilitySnapshot| t.routine_order_frames.clone();
+        for v in &views {
+            assert!(
+                Arc::ptr_eq(&v.typed_edges, &base.typed_edges),
+                "typed edges"
+            );
+            assert!(
+                Arc::ptr_eq(&v.callsite_resolutions, &base.callsite_resolutions),
+                "call-site resolutions"
+            );
+            assert!(Arc::ptr_eq(&v.analysis_gaps, &base.analysis_gaps), "gaps");
+            assert!(
+                Arc::ptr_eq(&v.event_declarations, &base.event_declarations),
+                "event declarations"
+            );
+            assert!(
+                Arc::ptr_eq(&v.root_classifications, &base.root_classifications),
+                "root classifications"
+            );
+            match (frames(v), &base.routine_order_frames) {
+                (Some(a), Some(b)) => assert!(Arc::ptr_eq(&a, b), "order frames"),
+                (None, None) => {}
+                _ => panic!("order frames: one side absent"),
+            }
+            assert!(Arc::ptr_eq(&v.identities, &base.identities), "identities");
+            assert!(Arc::ptr_eq(&v.coverage, &base.coverage), "coverage");
+        }
+    }
+
     /// The view's own half of the referenced sets (plan item L4a): a call
     /// site and an operation that only a subject's inherited facts name are
     /// in the view's evidence, found through the base's `*_rest` lists.

@@ -187,14 +187,14 @@ impl<'s> OrderingIndex<'s> {
         }
         let mut resolutions_by_from: HashMap<&str, Vec<&SnapshotCallsiteResolution>> =
             HashMap::new();
-        for cr in &snap.callsite_resolutions {
+        for cr in snap.callsite_resolutions.iter() {
             resolutions_by_from
                 .entry(cr.from.as_str())
                 .or_default()
                 .push(cr);
         }
         let mut callees_by_callsite_id: HashMap<&str, Vec<&str>> = HashMap::new();
-        for edge in &snap.typed_edges {
+        for edge in snap.typed_edges.iter() {
             let (Some(cs), Some(to)) = (edge.edge_callsite_id(), edge.edge_to()) else {
                 continue;
             };
@@ -1626,8 +1626,8 @@ mod tests {
     fn is_trusted_commit_root_untrusted_kind() {
         use crate::engine::l5::snapshot::SnapshotRootClassificationSlot;
         let mut snap = empty_snap();
-        snap.root_classifications
-            .push(SnapshotRootClassificationSlot {
+        std::sync::Arc::make_mut(&mut snap.root_classifications).push(
+            SnapshotRootClassificationSlot {
                 routine_id: "r1".to_string(),
                 kinds: vec!["event-subscriber".to_string()],
                 externally_reachable: true,
@@ -1636,7 +1636,8 @@ mod tests {
                 source_anchor: None,
                 config_entry_id: None,
                 resolution_status: None,
-            });
+            },
+        );
         // event-subscriber is untrusted.
         assert!(!is_trusted_commit_root("r1", &snap));
         // unknown routine (no slot) → trusted.
@@ -1663,15 +1664,15 @@ mod tests {
             resolution_status: None,
         };
         let mut snap = empty_snap();
-        snap.root_classifications
+        std::sync::Arc::make_mut(&mut snap.root_classifications)
             .push(slot("r1", vec!["onrun-codeunit"]));
         // The job-queue path DOES enter an OnRun at top-of-transaction, but the
         // check is ANY-quantified, so the untrusted kind still decides. That is
         // the fail-closed direction and is asserted, not assumed.
-        snap.root_classifications
+        std::sync::Arc::make_mut(&mut snap.root_classifications)
             .push(slot("r2", vec!["job-queue-entrypoint", "onrun-codeunit"]));
         // A purely overlay-supplied job-queue root stays trusted.
-        snap.root_classifications
+        std::sync::Arc::make_mut(&mut snap.root_classifications)
             .push(slot("r3", vec!["job-queue-entrypoint"]));
 
         assert!(!is_trusted_commit_root("r1", &snap));
@@ -1727,14 +1728,14 @@ mod tests {
             }
             .into(),
             capability_facts: vec![],
-            typed_edges: vec![],
+            typed_edges: Default::default(),
             operation_index: vec![],
             callsite_index: vec![],
-            callsite_resolutions: vec![],
-            analysis_gaps: vec![],
+            callsite_resolutions: Default::default(),
+            analysis_gaps: Default::default(),
             coverage: vec![].into(),
-            event_declarations: vec![],
-            root_classifications: vec![],
+            event_declarations: Default::default(),
+            root_classifications: Default::default(),
             routine_order_frames: None,
             pd_solution: Default::default(),
             boundary: None,

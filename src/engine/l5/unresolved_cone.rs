@@ -112,7 +112,7 @@ pub fn unresolved_cone(snap: &CapabilitySnapshot, root: &str) -> UnresolvedConeR
     // --- outgoing edges (typed-edge → to) for BFS expansion ---
     // Only edges that have a `to` (i.e. all except object-run-unresolved).
     let mut outgoing: HashMap<&str, Vec<&str>> = HashMap::new();
-    for edge in &snap.typed_edges {
+    for edge in snap.typed_edges.iter() {
         let from = edge_from(edge);
         let to = edge_to(edge);
         if let Some(to) = to {
@@ -129,7 +129,7 @@ pub fn unresolved_cone(snap: &CapabilitySnapshot, root: &str) -> UnresolvedConeR
         &str,
         Vec<&crate::engine::l5::snapshot::SnapshotCallsiteResolution>,
     > = HashMap::new();
-    for row in &snap.callsite_resolutions {
+    for row in snap.callsite_resolutions.iter() {
         ledger_by_routine
             .entry(row.from.as_str())
             .or_default()
@@ -327,14 +327,14 @@ mod tests {
             }
             .into(),
             capability_facts: Vec::new(),
-            typed_edges: Vec::new(),
+            typed_edges: Default::default(),
             operation_index: Vec::new(),
             callsite_index: Vec::new(),
-            callsite_resolutions: Vec::new(),
-            analysis_gaps: Vec::new(),
+            callsite_resolutions: Default::default(),
+            analysis_gaps: Default::default(),
             coverage: Vec::new().into(),
-            event_declarations: Vec::new(),
-            root_classifications: Vec::new(),
+            event_declarations: Default::default(),
+            root_classifications: Default::default(),
             routine_order_frames: None,
             pd_solution: Default::default(),
             boundary: None,
@@ -392,7 +392,7 @@ mod tests {
         ids.display_names.push("Codeunit X::Root".into());
         snap.callsite_index
             .push(cs_ev("cs1", "app:Codeunit:1#root", "ws:src/X.al", 12));
-        snap.callsite_resolutions.push(resolution(
+        std::sync::Arc::make_mut(&mut snap.callsite_resolutions).push(resolution(
             "cs1",
             "app:Codeunit:1#root",
             "IFoo.Bar",
@@ -447,7 +447,7 @@ mod tests {
         for run in 0..32 {
             let mut snap = empty_snap();
             snap.callsite_index = vec![p.clone(), q.clone()];
-            snap.callsite_resolutions = rows.clone();
+            snap.callsite_resolutions = rows.clone().into();
             let got: Vec<String> = unresolved_cone(&snap, root)
                 .items
                 .into_iter()
@@ -470,7 +470,7 @@ mod tests {
         let mut s = cs_ev("csS", root, "ws:src/X.al", 12);
         s.start_column = 2;
         snap.callsite_index = vec![r, s];
-        snap.callsite_resolutions = vec![
+        *std::sync::Arc::make_mut(&mut snap.callsite_resolutions) = vec![
             resolution("csS", root, "B.Second", "unresolved", None, None),
             resolution("csR", root, "A.First", "unresolved", None, None),
         ];
@@ -488,10 +488,9 @@ mod tests {
         let ids = std::sync::Arc::make_mut(&mut snap.identities);
         ids.stable_ids.push("r#1".into());
         ids.display_names.push("R::One".into());
-        snap.callsite_resolutions
-            .push(resolution("csA", "r#1", "A", "resolved", None, None));
-        snap.callsite_resolutions
-            .push(resolution("csB", "r#1", "B", "builtin", None, None));
+        let rows = std::sync::Arc::make_mut(&mut snap.callsite_resolutions);
+        rows.push(resolution("csA", "r#1", "A", "resolved", None, None));
+        rows.push(resolution("csB", "r#1", "B", "builtin", None, None));
         let r = unresolved_cone(&snap, "r#1");
         assert!(r.items.is_empty(), "resolved + builtin are excluded");
     }
@@ -512,7 +511,7 @@ mod tests {
         }
         for i in 0..n {
             let cs = format!("cs{i}");
-            snap.typed_edges.push(SnapshotGraphEdge::DirectCall {
+            std::sync::Arc::make_mut(&mut snap.typed_edges).push(SnapshotGraphEdge::DirectCall {
                 kind: "direct-call",
                 callsite_id: cs.clone(),
                 from: format!("r#{i}"),
@@ -549,7 +548,7 @@ mod tests {
             ids.display_names.push(format!("R::{i}"));
         }
         for i in 0..2 {
-            snap.typed_edges.push(SnapshotGraphEdge::DirectCall {
+            std::sync::Arc::make_mut(&mut snap.typed_edges).push(SnapshotGraphEdge::DirectCall {
                 kind: "direct-call",
                 callsite_id: format!("cs{i}"),
                 from: format!("r#{i}"),

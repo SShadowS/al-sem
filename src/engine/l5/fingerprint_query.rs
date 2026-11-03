@@ -2030,14 +2030,14 @@ mod tests {
         CapabilitySnapshot {
             identities: ids.into(),
             capability_facts: Vec::new(),
-            typed_edges: Vec::new(),
+            typed_edges: Default::default(),
             operation_index: Vec::new(),
             callsite_index: Vec::new(),
-            callsite_resolutions: Vec::new(),
-            analysis_gaps: Vec::new(),
+            callsite_resolutions: Default::default(),
+            analysis_gaps: Default::default(),
             coverage: Vec::new().into(),
-            event_declarations: Vec::new(),
-            root_classifications: Vec::new(),
+            event_declarations: Default::default(),
+            root_classifications: Default::default(),
             routine_order_frames: None,
             pd_solution: Default::default(),
             boundary: None,
@@ -2199,7 +2199,7 @@ mod tests {
             fact(r, "insert", "inherited"),
             fact(r, "modify", "inherited"),
         ];
-        snap.typed_edges = vec![SnapshotGraphEdge::DirectCall {
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![SnapshotGraphEdge::DirectCall {
             kind: "direct-call",
             callsite_id: "cs1".to_string(),
             from: r.to_string(),
@@ -2217,16 +2217,17 @@ mod tests {
             },
             edge_id: "e-cs1".to_string(),
         }];
-        snap.root_classifications = vec![SnapshotRootClassificationSlot {
-            routine_id: r.to_string(),
-            kinds: vec!["api".to_string()],
-            externally_reachable: true,
-            source: "test".to_string(),
-            confidence: "static".to_string(),
-            source_anchor: None,
-            config_entry_id: None,
-            resolution_status: None,
-        }];
+        *std::sync::Arc::make_mut(&mut snap.root_classifications) =
+            vec![SnapshotRootClassificationSlot {
+                routine_id: r.to_string(),
+                kinds: vec!["api".to_string()],
+                externally_reachable: true,
+                source: "test".to_string(),
+                confidence: "static".to_string(),
+                source_anchor: None,
+                config_entry_id: None,
+                resolution_status: None,
+            }];
         snap
     }
 }

@@ -892,8 +892,9 @@ fn interface_site(m: &Model, object: &str, routine: &str) -> Site {
         .unwrap_or_else(|| panic!("{object}.{routine}: no DispatchMeta on {edges:#?}"));
     let rows: Vec<_> = compose_snapshot(m)
         .callsite_resolutions
-        .into_iter()
+        .iter()
         .filter(|r| r.from == stable && r.status == "polymorphic")
+        .cloned()
         .collect();
     assert_eq!(rows.len(), 1, "{object}.{routine}: one polymorphic row");
     let graph = build_combined_graph(&m.workspace, &m.calls, &m.events.graph);

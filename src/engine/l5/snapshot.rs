@@ -1181,19 +1181,28 @@ pub struct CapabilitySnapshot {
     /// the table itself (context-server design r3 §13 item 3).
     pub identities: std::sync::Arc<SnapshotIdentityTable>,
     pub capability_facts: Vec<SnapshotCapabilityFact>,
-    pub typed_edges: Vec<SnapshotGraphEdge>,
+    /// Whole-program and shared, as `identities` (plan
+    /// `2026-11-03-context-server-remaining.md` item L3: every view of a
+    /// revision shares its tree base's sections; a writer goes through
+    /// `Arc::make_mut`).
+    pub typed_edges: std::sync::Arc<Vec<SnapshotGraphEdge>>,
     pub operation_index: Vec<SnapshotOperationEvidence>,
     pub callsite_index: Vec<SnapshotCallsiteEvidence>,
-    pub callsite_resolutions: Vec<SnapshotCallsiteResolution>,
-    pub analysis_gaps: Vec<SnapshotAnalysisGap>,
+    /// Whole-program and shared, as `typed_edges`.
+    pub callsite_resolutions: std::sync::Arc<Vec<SnapshotCallsiteResolution>>,
+    /// Whole-program and shared, as `typed_edges`.
+    pub analysis_gaps: std::sync::Arc<Vec<SnapshotAnalysisGap>>,
     /// Whole-program and shared, as `identities`.
     pub coverage: std::sync::Arc<Vec<SnapshotCoverageRecord>>,
-    pub event_declarations: Vec<SnapshotEventDeclaration>,
-    pub root_classifications: Vec<SnapshotRootClassificationSlot>,
+    /// Whole-program and shared, as `typed_edges`.
+    pub event_declarations: std::sync::Arc<Vec<SnapshotEventDeclaration>>,
+    /// Whole-program and shared, as `typed_edges`.
+    pub root_classifications: std::sync::Arc<Vec<SnapshotRootClassificationSlot>>,
     /// Absent when no routine has scope frames (symbol-only). A sorted-key map
     /// (StableRoutineId → ScopeFrame[]); serialized in sorted-key order with
-    /// declaration-ordered frame fields via `RoutineOrderFrames`.
-    pub routine_order_frames: Option<RoutineOrderFrames>,
+    /// declaration-ordered frame fields via `RoutineOrderFrames`. Shared, as
+    /// `typed_edges`.
+    pub routine_order_frames: Option<std::sync::Arc<RoutineOrderFrames>>,
     /// #69 D2: the producer solve (`l4::pd_solve`) over `typed_edges`. Never
     /// serialized: the serialized snapshot moves only where fact values move.
     pub pd_solution: PdArena,
@@ -1657,15 +1666,15 @@ pub fn compose_snapshot_from_base(
     finish_snapshot(CapabilitySnapshot {
         identities: identities.into(),
         capability_facts,
-        typed_edges,
+        typed_edges: typed_edges.into(),
         operation_index,
         callsite_index,
-        callsite_resolutions,
-        analysis_gaps,
+        callsite_resolutions: callsite_resolutions.into(),
+        analysis_gaps: analysis_gaps.into(),
         coverage: coverage.into(),
-        event_declarations,
-        root_classifications,
-        routine_order_frames,
+        event_declarations: event_declarations.into(),
+        root_classifications: root_classifications.into(),
+        routine_order_frames: routine_order_frames.map(std::sync::Arc::new),
         pd_solution,
         boundary: None,
     })
@@ -1842,13 +1851,13 @@ pub(crate) fn compose_tree(
 #[derive(Clone)]
 pub struct TreeBase {
     identities: std::sync::Arc<SnapshotIdentityTable>,
-    typed_edges: Vec<SnapshotGraphEdge>,
-    callsite_resolutions: Vec<SnapshotCallsiteResolution>,
-    analysis_gaps: Vec<SnapshotAnalysisGap>,
+    typed_edges: std::sync::Arc<Vec<SnapshotGraphEdge>>,
+    callsite_resolutions: std::sync::Arc<Vec<SnapshotCallsiteResolution>>,
+    analysis_gaps: std::sync::Arc<Vec<SnapshotAnalysisGap>>,
     coverage: std::sync::Arc<Vec<SnapshotCoverageRecord>>,
-    event_declarations: Vec<SnapshotEventDeclaration>,
-    root_classifications: Vec<SnapshotRootClassificationSlot>,
-    routine_order_frames: Option<RoutineOrderFrames>,
+    event_declarations: std::sync::Arc<Vec<SnapshotEventDeclaration>>,
+    root_classifications: std::sync::Arc<Vec<SnapshotRootClassificationSlot>>,
+    routine_order_frames: Option<std::sync::Arc<RoutineOrderFrames>>,
     boundary: BoundaryRule,
     view: view::ViewBase,
 }
@@ -1957,13 +1966,13 @@ pub(crate) fn derive_tree_base(
     drop((inp, collided, skipped));
     TreeBase {
         identities: identities.into(),
-        typed_edges,
-        callsite_resolutions,
-        analysis_gaps,
+        typed_edges: typed_edges.into(),
+        callsite_resolutions: callsite_resolutions.into(),
+        analysis_gaps: analysis_gaps.into(),
         coverage: coverage.into(),
-        event_declarations,
-        root_classifications,
-        routine_order_frames,
+        event_declarations: event_declarations.into(),
+        root_classifications: root_classifications.into(),
+        routine_order_frames: routine_order_frames.map(std::sync::Arc::new),
         boundary,
         view: view::ViewBase {
             routine_to_stable: parts.routine_to_stable,
@@ -1974,8 +1983,8 @@ pub(crate) fn derive_tree_base(
     }
 }
 
-/// The tree of one view over `base` (the whole sections, moved when owned,
-/// cloned when shared): the per-view sections — the operation and call-site
+/// The tree of one view over `base` (the whole sections, `Arc`s moved when
+/// owned, shared when shared): the per-view sections — the operation and call-site
 /// evidence and the capability facts (direct rows for every covered routine,
 /// inherited rows for the subjects) and the pd arena scoped to the subjects'
 /// state closure — spliced from the base's view-independent half
@@ -2046,8 +2055,9 @@ pub(crate) fn compose_tree_over(
     drop(pd);
     drop(s);
     let s = sec("tree.base_sections");
-    // The whole sections, moved from an owned base, cloned from a shared one
-    // (never the view half: a view needs none of it).
+    // The whole sections (plan item L3: `Arc`s, moved from an owned base,
+    // shared with a shared one; never the view half, which a view's tree
+    // does not hold).
     let (
         identities,
         typed_edges,
@@ -2072,12 +2082,12 @@ pub(crate) fn compose_tree_over(
         ),
         std::borrow::Cow::Borrowed(b) => (
             std::sync::Arc::clone(&b.identities),
-            b.typed_edges.clone(),
-            b.callsite_resolutions.clone(),
-            b.analysis_gaps.clone(),
+            std::sync::Arc::clone(&b.typed_edges),
+            std::sync::Arc::clone(&b.callsite_resolutions),
+            std::sync::Arc::clone(&b.analysis_gaps),
             std::sync::Arc::clone(&b.coverage),
-            b.event_declarations.clone(),
-            b.root_classifications.clone(),
+            std::sync::Arc::clone(&b.event_declarations),
+            std::sync::Arc::clone(&b.root_classifications),
             b.routine_order_frames.clone(),
             b.boundary.clone(),
         ),
@@ -3946,7 +3956,7 @@ struct SnapshotEnvelope<'a> {
     #[serde(rename = "rootClassifications")]
     root_classifications: &'a [SnapshotRootClassificationSlot],
     #[serde(rename = "routineOrderFrames", skip_serializing_if = "Option::is_none")]
-    routine_order_frames: &'a Option<RoutineOrderFrames>,
+    routine_order_frames: Option<&'a RoutineOrderFrames>,
 }
 
 /// The full R4-F snapshot projection document, in FIXED key order.
@@ -4012,7 +4022,7 @@ pub fn project_r4f_snapshot(resolved: &Model, fixture_name: &str) -> String {
             coverage: &snap.coverage,
             event_declarations: &snap.event_declarations,
             root_classifications: &snap.root_classifications,
-            routine_order_frames: &snap.routine_order_frames,
+            routine_order_frames: snap.routine_order_frames.as_deref(),
         },
     };
     let mut s = serde_json::to_string_pretty(&doc).expect("serialize R4-F snapshot projection");
