@@ -436,8 +436,12 @@ fn finalize<'g>(
     );
     let p_rank = ranks(&p_order);
 
+    // Every sort key below is total, so a parallel sort orders as the serial
+    // one does (plan 2026-11-03 L2; of edges with one identity either may
+    // come first, as before).
+    use rayon::prelude::*;
     let mut e_order: Vec<usize> = (0..edges.len()).collect();
-    e_order.sort_unstable_by(|&a, &b| edge_cmp(edges[a], edges[b]));
+    e_order.par_sort_unstable_by(|&a, &b| edge_cmp(edges[a], edges[b]));
     let mut e_rank = vec![0; edges.len()];
     let mut canon_edges: Vec<&'g TypedOutEdge> = Vec::with_capacity(edges.len());
     for (i, &old) in e_order.iter().enumerate() {
@@ -449,6 +453,155 @@ fn finalize<'g>(
 
     // Routine rank: internal ids in string order, keyed by the interned `Arc`.
     let mut sorted_names: Vec<&Arc<str>> = names.iter().collect();
+    sorted_names.par_sort_unstable();
+    // By address (as an integer, so the workers below may share the map).
+    let r_rank: HashMap<usize, usize> = sorted_names
+        .iter()
+        .enumerate()
+        .map(|(rank, a)| (a.as_ptr() as usize, rank))
+        .collect();
+    // `(producer rank, dist, routine rank)` per state, then `(t, reqs)`.
+    let head: Vec<(usize, usize, usize)> = states
+        .par_iter()
+        .map(|s| {
+            let r = *r_rank
+                .get(&(s.routine.as_ptr() as usize))
+                .expect("a state's routine is interned");
+            (p_rank[s.producer], s.dist, r)
+        })
+        .collect();
+    drop(r_rank);
+    let mut s_order: Vec<StateIx> = (0..states.len()).collect();
+    s_order.par_sort_unstable_by(|&a, &b| {
+        let (x, y) = (&states[a], &states[b]);
+        head[a]
+            .cmp(&head[b])
+            .then_with(|| x.t.cmp(&y.t))
+            .then_with(|| x.reqs.cmp(&y.reqs))
+    });
+    // Each state's routine rank, in state rank order.
+    let r_of: Vec<usize> = s_order.iter().map(|&old| head[old].2).collect();
+    drop(head);
+    let s_rank = ranks(&s_order);
+    drop(sort_span);
+    let _build_span = crate::engine::perf_trace::span("cone", "pd.finalize.build");
+
+    // Each state's links remapped to ranks, sorted and deduplicated, in
+    // place and in parallel: a link list is a function of itself and the
+    // ranks alone.
+    let mut raw_links = raw_links;
+    raw_links.par_iter_mut().for_each(|links| {
+        for l in links.iter_mut() {
+            l.callee_state = s_rank[l.callee_state];
+            l.edge = e_rank[l.edge];
+        }
+        links.sort_unstable_by_key(|l| (l.edge, l.callee_state));
+        links.dedup_by_key(|l| (l.edge, l.callee_state));
+    });
+    let mut producers: Vec<Option<Producer>> = producers.into_iter().map(Some).collect();
+    let mut states: Vec<Option<ConeState>> = states.into_iter().map(Some).collect();
+    let mut arena = ConeArena {
+        producers: p_order
+            .iter()
+            .map(|&old| producers[old].take().expect("a permutation"))
+            .collect(),
+        states: Vec::with_capacity(states.len()),
+        links: Vec::with_capacity(raw_links.iter().map(Vec::len).sum()),
+        edges: canon_edges.iter().map(|&e| e.clone()).collect(),
+        by_routine: HashMap::new(),
+    };
+    // `by_routine` and the resolved entries per routine rank first (an index,
+    // not a string hash per state), keyed by the interned name at the end.
+    let mut by_rank: Vec<Vec<StateIx>> = vec![Vec::new(); sorted_names.len()];
+    for &old in &s_order {
+        let mut st = states[old].take().expect("a permutation");
+        st.producer = p_rank[st.producer];
+        let links = std::mem::take(&mut raw_links[old]);
+        let start = arena.links.len();
+        arena.links.extend(links);
+        st.links = start..arena.links.len();
+        by_rank[r_of[arena.states.len()]].push(arena.states.len());
+        arena.states.push(st);
+    }
+    drop(raw_links);
+
+    // Each non-seed state's first hop: its lowest-ranked link to a state at
+    // `dist - 1`, found in parallel (a read of the placed arena).
+    let first_hops: Vec<Option<usize>> = arena
+        .states
+        .par_iter()
+        .map(|s| {
+            (!s.seed).then(|| {
+                arena.links[s.links.clone()]
+                    .iter()
+                    .find(|l| arena.states[l.callee_state].dist + 1 == s.dist)
+                    .expect("a non-seed state has a shortest link")
+                    .edge
+            })
+        })
+        .collect();
+    let mut reps: Reps = HashMap::new();
+    let mut resolved_by_rank: Vec<Vec<ResolvedEntry<'g>>> = vec![Vec::new(); sorted_names.len()];
+    for (ix, (s, hop)) in arena.states.iter().zip(first_hops).enumerate() {
+        let Some(hop) = hop else { continue };
+        let rep = reps
+            .entry((s.producer, s.t.clone()))
+            .or_insert_with(|| Arc::new(rep_for(&arena.producers[s.producer].fact, &s.t)));
+        resolved_by_rank[r_of[ix]].push(ResolvedEntry {
+            state: ix,
+            rep: Arc::clone(rep),
+            dist: s.dist,
+            first_hop: canon_edges[hop],
+        });
+    }
+    fn keyed<T>(by: Vec<Vec<T>>, names: &[&Arc<str>]) -> HashMap<Arc<str>, Vec<T>> {
+        by.into_iter()
+            .zip(names)
+            .filter(|(v, _)| !v.is_empty())
+            .map(|(v, name)| (Arc::clone(*name), v))
+            .collect()
+    }
+    arena.by_routine = keyed(by_rank, &sorted_names);
+    let resolved: ResolvedByRoutine<'g> = keyed(resolved_by_rank, &sorted_names);
+    (arena, resolved, reps)
+}
+
+/// [`finalize`] as it was before plan 2026-11-03 L2 (serial sorts, one
+/// serial build pass, `by_routine` and the entries keyed per state), the
+/// oracle [`Walk::Serial`] finalizes with, so [`test_serial`] checks the
+/// whole pre-L2 solve against the parallel one.
+#[cfg(test)]
+fn finalize_serial<'g>(
+    producers: Vec<Producer>,
+    states: Vec<ConeState>,
+    raw_links: Vec<Vec<ConeLink>>,
+    edges: Vec<(&'g str, &'g TypedOutEdge)>,
+    names: &HashSet<Arc<str>>,
+) -> (ConeArena, ResolvedByRoutine<'g>, Reps) {
+    use std::cmp::Ordering;
+    fn ranks(order: &[usize]) -> Vec<usize> {
+        let mut rank = vec![0; order.len()];
+        for (new, &old) in order.iter().enumerate() {
+            rank[old] = new;
+        }
+        rank
+    }
+    let mut p_order: Vec<usize> = (0..producers.len()).collect();
+    p_order.sort_unstable_by(|&a, &b| producer_cmp(&producers[a], &producers[b]));
+    let p_rank = ranks(&p_order);
+
+    let mut e_order: Vec<usize> = (0..edges.len()).collect();
+    e_order.sort_unstable_by(|&a, &b| edge_cmp(edges[a], edges[b]));
+    let mut e_rank = vec![0; edges.len()];
+    let mut canon_edges: Vec<&'g TypedOutEdge> = Vec::with_capacity(edges.len());
+    for (i, &old) in e_order.iter().enumerate() {
+        if i == 0 || edge_cmp(edges[e_order[i - 1]], edges[old]) != Ordering::Equal {
+            canon_edges.push(edges[old].1);
+        }
+        e_rank[old] = canon_edges.len() - 1;
+    }
+
+    let mut sorted_names: Vec<&Arc<str>> = names.iter().collect();
     sorted_names.sort_unstable();
     let r_rank: HashMap<*const u8, usize> = sorted_names
         .iter()
@@ -456,7 +609,6 @@ fn finalize<'g>(
         .map(|(rank, a)| (a.as_ptr(), rank))
         .collect();
     drop(sorted_names);
-    // `(producer rank, dist, routine rank)` per state, then `(t, reqs)`.
     let head: Vec<(usize, usize, usize)> = states
         .iter()
         .map(|s| {
@@ -477,8 +629,6 @@ fn finalize<'g>(
     });
     drop(head);
     let s_rank = ranks(&s_order);
-    drop(sort_span);
-    let _build_span = crate::engine::perf_trace::span("cone", "pd.finalize.build");
 
     let mut producers: Vec<Option<Producer>> = producers.into_iter().map(Some).collect();
     let mut states: Vec<Option<ConeState>> = states.into_iter().map(Some).collect();
@@ -777,7 +927,8 @@ enum Walk {
     Parallel,
     /// The walk before plan 2026-11-03 L2, the oracle of the parallel one:
     /// one BFS queue over every fresh producer's states, interleaved, with
-    /// one state and edge numbering ([`solve_fresh_serial`]).
+    /// one state and edge numbering ([`solve_fresh_serial`]), finalized by
+    /// the serial [`finalize_serial`].
     #[cfg(test)]
     Serial,
 }
@@ -1315,8 +1466,11 @@ fn solve_core<'g>(
     names.retain(|n| Arc::strong_count(n) > 1);
 
     let finalize_span = crate::engine::perf_trace::span("cone", "pd.finalize");
-    let (mut arena, mut resolved, reps) =
-        finalize(arena.producers, arena.states, raw_links, edges, &names);
+    let (mut arena, mut resolved, reps) = match walk {
+        Walk::Parallel => finalize(arena.producers, arena.states, raw_links, edges, &names),
+        #[cfg(test)]
+        Walk::Serial => finalize_serial(arena.producers, arena.states, raw_links, edges, &names),
+    };
     drop(finalize_span);
     // Growth slack is up to half of each pushed `Vec`; the solve is read-only
     // from here on.
@@ -2639,7 +2793,15 @@ mod tests {
     /// graph edge is in the solve's edge table twice". With that assertion
     /// disabled too, (b) passes every test: `finalize` merges edges of one
     /// identity, so the duplicates cost only time and memory, never the
-    /// arena, and the assertion is the guard. Reverted, green.
+    /// arena, and the assertion is the guard. Reverted, green. Finalize's
+    /// parallel build (the oracle finalizes with [`super::finalize_serial`]):
+    /// (c) filing a state under the routine rank of its pre-rank index
+    /// (`r_of[old]`) fails here only since the fixtures also run with their
+    /// producers permuted (in node order their states arrive already in rank
+    /// order and it passed); (d) taking the highest-ranked shortest link as
+    /// the first hop passes here (no fixture state has two shortest links)
+    /// and fails the hand-stated `solve_keeps_all_links` and
+    /// `solve_keeps_a_link_per_trigger_op`. Reverted, green.
     #[test]
     fn parallel_solve_equals_the_serial_walk_on_every_fixture() {
         use crate::engine::l5::test_support as ts;
@@ -2666,19 +2828,32 @@ mod tests {
             ("dep_ambiguous", ts::write_fixture_dep_ambiguous),
         ];
         let (mut with_producers, mut multi, mut cross) = (0usize, 0usize, 0usize);
+        // The producers as the cone lists them (node order) and permuted
+        // ([`super::test_shuffle`]): in node order a small fixture's
+        // concatenated states are often already in rank order, which would
+        // leave `finalize`'s permutation untested.
+        use super::test_shuffle::{LOCK, SEED};
+        use std::sync::atomic::Ordering::SeqCst;
+        let _lock = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let checked = checked_against_serial(|| {
-            for dir in &dirs {
-                let n = compose_producers(dir, true).unwrap_or(0);
-                with_producers += usize::from(n > 0);
-                multi += usize::from(n > 1);
+            for seed in [0, 3] {
+                SEED.store(seed, SeqCst);
+                for dir in &dirs {
+                    let n = compose_producers(dir, true).unwrap_or(0);
+                    with_producers += usize::from(n > 0);
+                    multi += usize::from(n > 1);
+                }
+                for (_, write) in writers {
+                    let tmp = tempfile::tempdir().unwrap();
+                    write(tmp.path());
+                    let n = compose_producers(tmp.path(), false).unwrap_or(0);
+                    with_producers += usize::from(n > 0);
+                    cross += usize::from(n > 0);
+                }
             }
-            for (_, write) in writers {
-                let tmp = tempfile::tempdir().unwrap();
-                write(tmp.path());
-                let n = compose_producers(tmp.path(), false).unwrap_or(0);
-                with_producers += usize::from(n > 0);
-                cross += usize::from(n > 0);
-            }
+            SEED.store(0, SeqCst);
         });
         assert!(
             multi >= 4,
