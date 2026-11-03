@@ -67,6 +67,9 @@ pub struct View {
     /// `ordering`: once, before the runs.
     rules: Option<RulesIndex>,
     runs: BTreeMap<RunKey, Arc<RunOutput>>,
+    /// Explain's indexes: a served view's are its revision's (plan
+    /// 2026-11-03 W2); a one-shot view holds none.
+    explain_indexes: Option<Arc<crate::engine::l5::explain::ExplainIndexes>>,
 }
 
 /// A view's target: its own (a one-shot view, which `prepare` may take parts
@@ -128,6 +131,11 @@ pub struct Plan {
     /// The tree jobs (#277 D5.2), each composed over its own subjects and
     /// read inside `prepare`.
     trees: Vec<(JobId, TreeDemand)>,
+    /// The command reads explain's indexes (plan 2026-11-03 W2): a resident
+    /// revision serves them from its `ExplainIndexes` artifact
+    /// ([`View::explain_indexes`]); a one-shot view fills nothing for it
+    /// (explain builds them itself, as it always did).
+    explain_indexes: bool,
 }
 
 /// A job's index in its batch (#277).
@@ -376,6 +384,7 @@ pub fn analyze_plan(detectors: Vec<Detector>, scope_primary: bool) -> Plan {
         own: 0,
         witness: WitnessRequest::empty(),
         trees: vec![],
+        explain_indexes: false,
     }
 }
 
@@ -412,6 +421,7 @@ pub fn digest_plan(detectors: Vec<Detector>, roots: BTreeSet<String>, tests: boo
         own: 0,
         witness,
         trees,
+        explain_indexes: false,
     }
 }
 
@@ -450,6 +460,7 @@ fn run_only_plan(detectors: Vec<Detector>) -> Plan {
         own: 0,
         witness: WitnessRequest::empty(),
         trees: vec![],
+        explain_indexes: false,
     }
 }
 
@@ -523,6 +534,7 @@ pub fn events_plan(detectors: Vec<Detector>) -> Plan {
         own: 0,
         witness: WitnessRequest::empty(),
         trees: vec![],
+        explain_indexes: false,
     }
 }
 
@@ -545,6 +557,7 @@ pub fn policy_plan(detectors: Vec<Detector>, rules: bool, pins: bool) -> Plan {
             WitnessRequest::empty()
         },
         trees: vec![],
+        explain_indexes: false,
     }
 }
 
@@ -553,11 +566,15 @@ pub fn policy_plan(detectors: Vec<Detector>, rules: bool, pins: bool) -> Plan {
 /// card's `tests`), and nothing else. No detector run and no `l4`: the card
 /// reads the raw per-root effects (types, resources, conditionality, witness
 /// paths), not digest's L4-joined `tempState` or its transaction context, and
-/// no analyzer diagnostics. No routine: nothing at all (the job answers with
-/// exit 2 and no card).
+/// no analyzer diagnostics. No routine: no tree (the job answers with exit 2
+/// and no card, or a field with no writer). Either way the command reads its
+/// indexes (plan 2026-11-03 W2: a revision's `ExplainIndexes`).
 pub fn explain_plan(roots: BTreeSet<String>) -> Plan {
     if roots.is_empty() {
-        return Plan::merge(std::iter::empty());
+        return Plan {
+            explain_indexes: true,
+            ..Plan::merge(std::iter::empty())
+        };
     }
     let witness = WitnessRequest::roots(roots);
     Plan {
@@ -565,6 +582,7 @@ pub fn explain_plan(roots: BTreeSet<String>) -> Plan {
         need_l4: false,
         after_run: 0,
         own: 0,
+        explain_indexes: true,
         trees: vec![(
             JobId(0),
             TreeDemand {
@@ -588,6 +606,7 @@ pub fn query_plan() -> Plan {
         own: 0,
         witness: WitnessRequest::empty(),
         trees: vec![],
+        explain_indexes: false,
     }
 }
 
@@ -606,6 +625,7 @@ impl Plan {
             own: 0,
             witness: WitnessRequest::empty(),
             trees: vec![],
+            explain_indexes: false,
         }
     }
 
@@ -640,6 +660,7 @@ impl Plan {
             own: 0,
             witness: WitnessRequest::empty(),
             trees: vec![],
+            explain_indexes: false,
         };
         for (job, part) in parts {
             assert!(part.trees.len() <= 1, "a job asks at most one tree");
@@ -651,6 +672,7 @@ impl Plan {
             out.need_l4 |= part.need_l4;
             out.after_run |= part.after_run;
             out.own |= part.own;
+            out.explain_indexes |= part.explain_indexes;
             out.witness = out.witness.union(&part.witness);
             out.trees
                 .extend(part.trees.into_iter().map(|(_, tree)| (job, tree)));
@@ -690,6 +712,12 @@ impl Plan {
     /// ([`Plan::own`]).
     pub(crate) fn own_bits(&self) -> u32 {
         self.own
+    }
+
+    /// Whether a job of the plan reads explain's indexes
+    /// ([`Plan::explain_indexes`]).
+    pub(crate) fn reads_explain_indexes(&self) -> bool {
+        self.explain_indexes
     }
 
     /// Each run's detectors and scope, in plan order.
@@ -1032,6 +1060,7 @@ impl View {
             ordering: None,
             rules: None,
             runs: BTreeMap::new(),
+            explain_indexes: None,
         }
     }
 
@@ -1157,6 +1186,7 @@ impl View {
             ordering,
             rules,
             runs,
+            explain_indexes: _,
         } = self;
         // Final panel F1-C2: the dependency calls (cross-app) are read only by
         // a tree; they leave the base in the first prepare and die at the
@@ -1520,6 +1550,18 @@ impl View {
             .expect("rules cell not filled: declare substrate::RULES")
     }
 
+    /// Explain's indexes (plan 2026-11-03 W2): `Some` on a view served off
+    /// a resident revision whose plan reads them (the revision's artifact);
+    /// `None` on a one-shot view, whose explain builds its own.
+    pub fn explain_indexes(&self) -> Option<&crate::engine::l5::explain::ExplainIndexes> {
+        self.explain_indexes.as_deref()
+    }
+
+    /// Whether the view is served off a resident revision ([`View::served`]).
+    pub fn is_served(&self) -> bool {
+        matches!(self.target, HeldTarget::Shared(_))
+    }
+
     /// `job`'s effects (#160 step 6 D7 (5); #277 D5.4), read by its query at
     /// (8).
     pub fn effects(&self, job: JobId) -> &DigestEffects {
@@ -1627,6 +1669,7 @@ impl View {
         effects: BTreeMap<JobId, DigestEffects>,
         tree_reads: BTreeMap<JobId, TreeReadOut>,
         runs: BTreeMap<RunKey, Arc<RunOutput>>,
+        explain_indexes: Option<Arc<crate::engine::l5::explain::ExplainIndexes>>,
     ) -> View {
         View {
             rel: Some(rel),
@@ -1635,6 +1678,7 @@ impl View {
             effects,
             tree_reads,
             runs,
+            explain_indexes,
             // A served view composes nothing.
             released: Cell::Caps.bit() | Cell::Raw.bit() | Cell::Tree.bit(),
             ..View::with_target(HeldTarget::Shared(target))

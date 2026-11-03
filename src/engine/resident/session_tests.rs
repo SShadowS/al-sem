@@ -403,6 +403,7 @@ mod budget {
             Case::Fill("raw"),
             Case::Fill("rules"),
             Case::Fill("ordering"),
+            Case::Fill("explain_indexes"),
         ] {
             e.observe(case, est);
         }
@@ -502,6 +503,13 @@ mod budget {
         let kinds =
             |r: &Revision| -> Vec<&'static str> { r.snapshot().keys().map(|k| k.kind()).collect() };
         assert!(kinds(rev).contains(&"run") && kinds(rev).contains(&"l4"));
+        // Explain's indexes (plan 2026-11-03 W2) prepared up front, so the
+        // explain below reserves once (its trees), as the test states.
+        rev.prepare_keys(
+            &[crate::engine::resident::revision::ArtifactKey::ExplainIndexes],
+            &Control::unreserved(),
+        )
+        .unwrap();
         // Precondition by assignment: nothing more fits now.
         let rss = meter.rss();
         budget.set_budget(rss);

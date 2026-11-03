@@ -1698,7 +1698,15 @@ fn resident_mode(ws: PathBuf, routine: String, low_mem: bool) {
         }
     }
     for kind in [
-        "witness", "run", "det", "raw", "fold", "l4", "rules", "ordering",
+        "witness",
+        "explain_indexes",
+        "run",
+        "det",
+        "raw",
+        "fold",
+        "l4",
+        "rules",
+        "ordering",
     ] {
         let keys = rev.keys_where(|k| k.kind() == kind);
         let (b0, a0) = live();
@@ -2150,6 +2158,37 @@ fn witness_measure(
     }
     let (hit, miss, batches) = rev.witness_counts();
     println!("        witness counters: hit {hit} miss {miss} batches {batches}");
+    // Explain's indexes (plan 2026-11-03 W2): an explain with the revision's
+    // indexes evicted (it fills them: `miss`), then with them published
+    // (`hit`), the witness warm in both; then the fill alone: its time, its
+    // peak over the live heap before it, the bytes it left, and the bytes
+    // evicting it frees (only the store held them).
+    {
+        use al_sem::engine::resident::revision::ArtifactKey;
+        let job = resident_job("explain", &rev.inputs, routine);
+        rev.evict_kind("explain_indexes");
+        let miss = ask("explain miss", &*job);
+        let hit = ask("explain hit", &*job);
+        *failed |= miss.ends_with("DIFFERS") || hit.ends_with("DIFFERS");
+        rev.evict_kind("explain_indexes");
+        let (b0, a0) = live();
+        reset_peak();
+        let t = std::time::Instant::now();
+        rev.prepare_keys(&[ArtifactKey::ExplainIndexes], &Control::unreserved())
+            .unwrap_or_else(|e| panic!("explain indexes: {e:?}"));
+        let fill_ms = t.elapsed().as_millis();
+        let (b1, a1) = live();
+        let peak = PEAK.load(Relaxed);
+        rev.evict_kind("explain_indexes");
+        let (b2, _) = live();
+        println!(
+            "        explain indexes: {miss}, {hit}; fill {fill_ms} ms, +{:.1} MiB live ({} allocs), peak +{:.1} MiB, evict -{:.1} MiB",
+            mib(b1 - b0),
+            a1 - a0,
+            mib(peak - b0),
+            mib(b1 - b2)
+        );
+    }
 }
 
 fn incr_mode(
