@@ -38,7 +38,7 @@ pub type StateIx = usize;
 
 /// One solve state `(p, r, t, reqs)`: in routine `routine`'s frame, producer
 /// `producer`'s write has temp state `t` and happens only under `reqs`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConeState {
     /// Index into `ConeArena::producers`.
     pub producer: usize,
@@ -59,13 +59,13 @@ pub struct ConeState {
 /// A link: "this state is reached from `callee_state` across `edge`"
 /// (`edge` indexes `ConeArena::edges`; it is an out-edge of this state's
 /// routine, and its `to` is `callee_state`'s routine).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConeLink {
     pub callee_state: StateIx,
     pub edge: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Producer {
     /// The owner's raw direct fact (PD temp state, `provenance == "direct"`).
     pub fact: Arc<CapabilityFact>,
@@ -78,8 +78,9 @@ pub struct Producer {
 /// only the solve's own (internal-id) identities, and every index is a
 /// position in that order. The indices are storage, never identity: nothing
 /// serializes them, and a projection (`snapshot::derive_pd_arena`) walks the
-/// states in rank order.
-#[derive(Debug, Clone, Default)]
+/// states in rank order. Two solves of one input are equal (`==`), index for
+/// index: the canonical form leaves nothing to the order they were found in.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ConeArena {
     pub producers: Vec<Producer>,
     pub states: Vec<ConeState>,
@@ -156,7 +157,7 @@ impl ConeArena {
 
 /// D1.3: one non-seed state placed at its routine for uses (a) and (b). Its
 /// guard requirements are its state's (`ConeState::reqs`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedEntry<'g> {
     /// The spec's D1.3 tuple names it, and it is the entry's only way back to
     /// its state's `reqs` (the tuple's `reqs` live there, not in a copy). No
@@ -419,6 +420,174 @@ fn finalize<'g>(
             .all(|w| producer_cmp(&producers[w[0]], &producers[w[1]]) != Ordering::Equal),
         "two producers share an identity"
     );
+    // The solve hands each graph edge over once (plan 2026-11-03 L2: the
+    // concatenation of the per-producer solves dedups their edges by
+    // address). Two graph edges with one identity (two addresses) are
+    // allowed and become one below; one address twice is a dropped dedup,
+    // which the identity merge would hide.
+    debug_assert!(
+        {
+            let mut seen: HashSet<*const TypedOutEdge> = HashSet::with_capacity(edges.len());
+            edges
+                .iter()
+                .all(|&(_, e)| seen.insert(std::ptr::from_ref(e)))
+        },
+        "one graph edge is in the solve's edge table twice"
+    );
+    let p_rank = ranks(&p_order);
+
+    // Every sort key below is total, so a parallel sort orders as the serial
+    // one does (plan 2026-11-03 L2; of edges with one identity either may
+    // come first, as before).
+    use rayon::prelude::*;
+    let mut e_order: Vec<usize> = (0..edges.len()).collect();
+    e_order.par_sort_unstable_by(|&a, &b| edge_cmp(edges[a], edges[b]));
+    let mut e_rank = vec![0; edges.len()];
+    let mut canon_edges: Vec<&'g TypedOutEdge> = Vec::with_capacity(edges.len());
+    for (i, &old) in e_order.iter().enumerate() {
+        if i == 0 || edge_cmp(edges[e_order[i - 1]], edges[old]) != Ordering::Equal {
+            canon_edges.push(edges[old].1);
+        }
+        e_rank[old] = canon_edges.len() - 1;
+    }
+
+    // Routine rank: internal ids in string order, keyed by the interned `Arc`.
+    let mut sorted_names: Vec<&Arc<str>> = names.iter().collect();
+    sorted_names.par_sort_unstable();
+    // By address (as an integer, so the workers below may share the map).
+    let r_rank: HashMap<usize, usize> = sorted_names
+        .iter()
+        .enumerate()
+        .map(|(rank, a)| (a.as_ptr() as usize, rank))
+        .collect();
+    // `(producer rank, dist, routine rank)` per state, then `(t, reqs)`.
+    let head: Vec<(usize, usize, usize)> = states
+        .par_iter()
+        .map(|s| {
+            let r = *r_rank
+                .get(&(s.routine.as_ptr() as usize))
+                .expect("a state's routine is interned");
+            (p_rank[s.producer], s.dist, r)
+        })
+        .collect();
+    drop(r_rank);
+    let mut s_order: Vec<StateIx> = (0..states.len()).collect();
+    s_order.par_sort_unstable_by(|&a, &b| {
+        let (x, y) = (&states[a], &states[b]);
+        head[a]
+            .cmp(&head[b])
+            .then_with(|| x.t.cmp(&y.t))
+            .then_with(|| x.reqs.cmp(&y.reqs))
+    });
+    // Each state's routine rank, in state rank order.
+    let r_of: Vec<usize> = s_order.iter().map(|&old| head[old].2).collect();
+    drop(head);
+    let s_rank = ranks(&s_order);
+    drop(sort_span);
+    let _build_span = crate::engine::perf_trace::span("cone", "pd.finalize.build");
+
+    // Each state's links remapped to ranks, sorted and deduplicated, in
+    // place and in parallel: a link list is a function of itself and the
+    // ranks alone.
+    let mut raw_links = raw_links;
+    raw_links.par_iter_mut().for_each(|links| {
+        for l in links.iter_mut() {
+            l.callee_state = s_rank[l.callee_state];
+            l.edge = e_rank[l.edge];
+        }
+        links.sort_unstable_by_key(|l| (l.edge, l.callee_state));
+        links.dedup_by_key(|l| (l.edge, l.callee_state));
+    });
+    let mut producers: Vec<Option<Producer>> = producers.into_iter().map(Some).collect();
+    let mut states: Vec<Option<ConeState>> = states.into_iter().map(Some).collect();
+    let mut arena = ConeArena {
+        producers: p_order
+            .iter()
+            .map(|&old| producers[old].take().expect("a permutation"))
+            .collect(),
+        states: Vec::with_capacity(states.len()),
+        links: Vec::with_capacity(raw_links.iter().map(Vec::len).sum()),
+        edges: canon_edges.iter().map(|&e| e.clone()).collect(),
+        by_routine: HashMap::new(),
+    };
+    // `by_routine` and the resolved entries per routine rank first (an index,
+    // not a string hash per state), keyed by the interned name at the end.
+    let mut by_rank: Vec<Vec<StateIx>> = vec![Vec::new(); sorted_names.len()];
+    for &old in &s_order {
+        let mut st = states[old].take().expect("a permutation");
+        st.producer = p_rank[st.producer];
+        let links = std::mem::take(&mut raw_links[old]);
+        let start = arena.links.len();
+        arena.links.extend(links);
+        st.links = start..arena.links.len();
+        by_rank[r_of[arena.states.len()]].push(arena.states.len());
+        arena.states.push(st);
+    }
+    drop(raw_links);
+
+    // Each non-seed state's first hop: its lowest-ranked link to a state at
+    // `dist - 1`, found in parallel (a read of the placed arena).
+    let first_hops: Vec<Option<usize>> = arena
+        .states
+        .par_iter()
+        .map(|s| {
+            (!s.seed).then(|| {
+                arena.links[s.links.clone()]
+                    .iter()
+                    .find(|l| arena.states[l.callee_state].dist + 1 == s.dist)
+                    .expect("a non-seed state has a shortest link")
+                    .edge
+            })
+        })
+        .collect();
+    let mut reps: Reps = HashMap::new();
+    let mut resolved_by_rank: Vec<Vec<ResolvedEntry<'g>>> = vec![Vec::new(); sorted_names.len()];
+    for (ix, (s, hop)) in arena.states.iter().zip(first_hops).enumerate() {
+        let Some(hop) = hop else { continue };
+        let rep = reps
+            .entry((s.producer, s.t.clone()))
+            .or_insert_with(|| Arc::new(rep_for(&arena.producers[s.producer].fact, &s.t)));
+        resolved_by_rank[r_of[ix]].push(ResolvedEntry {
+            state: ix,
+            rep: Arc::clone(rep),
+            dist: s.dist,
+            first_hop: canon_edges[hop],
+        });
+    }
+    fn keyed<T>(by: Vec<Vec<T>>, names: &[&Arc<str>]) -> HashMap<Arc<str>, Vec<T>> {
+        by.into_iter()
+            .zip(names)
+            .filter(|(v, _)| !v.is_empty())
+            .map(|(v, name)| (Arc::clone(*name), v))
+            .collect()
+    }
+    arena.by_routine = keyed(by_rank, &sorted_names);
+    let resolved: ResolvedByRoutine<'g> = keyed(resolved_by_rank, &sorted_names);
+    (arena, resolved, reps)
+}
+
+/// [`finalize`] as it was before plan 2026-11-03 L2 (serial sorts, one
+/// serial build pass, `by_routine` and the entries keyed per state), the
+/// oracle [`Walk::Serial`] finalizes with, so [`test_serial`] checks the
+/// whole pre-L2 solve against the parallel one.
+#[cfg(test)]
+fn finalize_serial<'g>(
+    producers: Vec<Producer>,
+    states: Vec<ConeState>,
+    raw_links: Vec<Vec<ConeLink>>,
+    edges: Vec<(&'g str, &'g TypedOutEdge)>,
+    names: &HashSet<Arc<str>>,
+) -> (ConeArena, ResolvedByRoutine<'g>, Reps) {
+    use std::cmp::Ordering;
+    fn ranks(order: &[usize]) -> Vec<usize> {
+        let mut rank = vec![0; order.len()];
+        for (new, &old) in order.iter().enumerate() {
+            rank[old] = new;
+        }
+        rank
+    }
+    let mut p_order: Vec<usize> = (0..producers.len()).collect();
+    p_order.sort_unstable_by(|&a, &b| producer_cmp(&producers[a], &producers[b]));
     let p_rank = ranks(&p_order);
 
     let mut e_order: Vec<usize> = (0..edges.len()).collect();
@@ -432,7 +601,6 @@ fn finalize<'g>(
         e_rank[old] = canon_edges.len() - 1;
     }
 
-    // Routine rank: internal ids in string order, keyed by the interned `Arc`.
     let mut sorted_names: Vec<&Arc<str>> = names.iter().collect();
     sorted_names.sort_unstable();
     let r_rank: HashMap<*const u8, usize> = sorted_names
@@ -441,7 +609,6 @@ fn finalize<'g>(
         .map(|(rank, a)| (a.as_ptr(), rank))
         .collect();
     drop(sorted_names);
-    // `(producer rank, dist, routine rank)` per state, then `(t, reqs)`.
     let head: Vec<(usize, usize, usize)> = states
         .iter()
         .map(|s| {
@@ -462,8 +629,6 @@ fn finalize<'g>(
     });
     drop(head);
     let s_rank = ranks(&s_order);
-    drop(sort_span);
-    let _build_span = crate::engine::perf_trace::span("cone", "pd.finalize.build");
 
     let mut producers: Vec<Option<Producer>> = producers.into_iter().map(Some).collect();
     let mut states: Vec<Option<ConeState>> = states.into_iter().map(Some).collect();
@@ -727,10 +892,274 @@ pub(crate) fn pd_output_delta(
         .collect()
 }
 
+/// One incoming typed edge of a routine, with everything the walk reads of
+/// its caller looked up once, not once per crossing: the caller's interned
+/// name, row and guard frame, and the caller's own guard on the site it
+/// takes the edge at (a call site, or the record op that fires an
+/// `implicit-trigger` edge, CR3).
+struct InEdge<'g, 'a> {
+    from: &'g str,
+    e: &'g TypedOutEdge,
+    name: &'a Arc<str>,
+    caller: Option<&'a ModelRoutine>,
+    frame: Option<&'a FrameGuards>,
+    edge_reqs: &'a [Req],
+}
+
+/// Callee → its incoming edges, in `(sort_key, from)` order.
+type Incoming<'g, 'a> = HashMap<&'g str, Vec<InEdge<'g, 'a>>>;
+
+/// One fresh producer's solve in its own indices (plan 2026-11-03 L2): its
+/// states in BFS order, the seed first; each state's incoming links, with
+/// `callee_state` and `edge` local; and the graph edges those cross, each
+/// once by address, with its `from`.
+struct FreshSolve<'g> {
+    states: Vec<ConeState>,
+    raw_links: Vec<Vec<ConeLink>>,
+    edges: Vec<(&'g str, &'g TypedOutEdge)>,
+}
+
+/// How [`solve_core`] walks the fresh producers.
+#[derive(Clone, Copy)]
+enum Walk {
+    /// Each fresh producer on a rayon worker ([`solve_producer`]), the
+    /// results concatenated in producer order.
+    Parallel,
+    /// The walk before plan 2026-11-03 L2, the oracle of the parallel one:
+    /// one BFS queue over every fresh producer's states, interleaved, with
+    /// one state and edge numbering ([`solve_fresh_serial`]), finalized by
+    /// the serial [`finalize_serial`].
+    #[cfg(test)]
+    Serial,
+}
+
+/// A fresh producer's seed `(owner, PD(i0), site reqs of p)` (module doc),
+/// the owner by its interned name.
+fn seed_of<'a>(
+    prod: &Producer,
+    names: &'a HashSet<Arc<str>>,
+    frames: &HashMap<String, FrameGuards>,
+) -> (&'a Arc<str>, TempState, Vec<Req>) {
+    let i0 = fact_pd_index(&prod.fact).expect("a producer is parameter-dependent");
+    let reqs = frames
+        .get(&*prod.owner)
+        .and_then(|fg| site_reqs(fg, &prod.fact))
+        .cloned()
+        .unwrap_or_default();
+    let owner = names
+        .get(&*prod.owner)
+        .expect("every producer's owner is interned");
+    (owner, TempState::ParameterDependent(i0), reqs)
+}
+
+/// One fresh producer's BFS (plan 2026-11-03 L2), on any thread. It reads
+/// only shared, immutable inputs (the interned names, the incoming edges,
+/// the rows and frames; [`cross_edge`] is a pure function of them) and
+/// writes only its own [`FreshSolve`]. A state's key includes its producer
+/// and every link joins two states of one producer, so nothing one producer
+/// finds depends on another: the serial walk ([`Walk::Serial`]) interleaves
+/// the producers in one FIFO queue, and that queue restricted to one
+/// producer is this one, so each state, link and distance is the same.
+fn solve_producer<'g, 'a>(
+    p: usize,
+    prod: &Producer,
+    names: &'a HashSet<Arc<str>>,
+    incoming: &Incoming<'g, 'a>,
+    routines_by_id: &HashMap<&str, &ModelRoutine>,
+    frames: &HashMap<String, FrameGuards>,
+) -> FreshSolve<'g> {
+    let mut out = FreshSolve {
+        states: Vec::new(),
+        raw_links: Vec::new(),
+        edges: Vec::new(),
+    };
+    // The visited set, `(routine, t, reqs)` with the routine by its interned
+    // address (the producer is `p`).
+    type Key = (*const u8, TempState, Vec<Req>);
+    /// Appends the state `key` names at `name` (`key.0` is its address).
+    #[allow(clippy::too_many_arguments)]
+    fn push<'g, 'a>(
+        out: &mut FreshSolve<'g>,
+        ix_of: &mut HashMap<Key, StateIx>,
+        at: &mut Vec<&'a Arc<str>>,
+        p: usize,
+        name: &'a Arc<str>,
+        key: Key,
+        seed: bool,
+        dist: usize,
+    ) -> StateIx {
+        let ix = out.states.len();
+        out.states.push(ConeState {
+            producer: p,
+            routine: Arc::clone(name),
+            t: key.1.clone(),
+            reqs: key.2.clone(),
+            seed,
+            dist,
+            links: 0..0,
+        });
+        out.raw_links.push(Vec::new());
+        at.push(name);
+        ix_of.insert(key, ix);
+        ix
+    }
+    let addr = |name: &Arc<str>| Arc::as_ptr(name).cast::<u8>();
+    let mut ix_of: HashMap<Key, StateIx> = HashMap::new();
+    let mut edge_ix: HashMap<*const TypedOutEdge, usize> = HashMap::new();
+    // Each state's interned name, beside `out.states`.
+    let mut at: Vec<&'a Arc<str>> = Vec::new();
+    let (owner, t0, reqs0) = seed_of(prod, names, frames);
+    let key = (addr(owner), t0, reqs0);
+    push(&mut out, &mut ix_of, &mut at, p, owner, key, true, 0);
+    // States are appended in BFS order, so `out.states` is its own queue (so
+    // `dist` is the shortest distance).
+    let mut s: StateIx = 0;
+    while s < out.states.len() {
+        let c = at[s];
+        let st = &out.states[s];
+        let (t, reqs, dist) = (st.t.clone(), st.reqs.clone(), st.dist);
+        let callee = routines_by_id.get(&**c).copied();
+        for ie in incoming.get(&**c).map_or(&[][..], Vec::as_slice) {
+            let Some((t2, reqs2)) =
+                cross_edge(&t, &reqs, ie.e, ie.caller, callee, ie.frame, ie.edge_reqs)
+            else {
+                continue;
+            };
+            let key = (addr(ie.name), t2, reqs2);
+            let ix = match ix_of.get(&key) {
+                Some(&ix) => ix,
+                None => push(
+                    &mut out,
+                    &mut ix_of,
+                    &mut at,
+                    p,
+                    ie.name,
+                    key,
+                    false,
+                    dist + 1,
+                ),
+            };
+            let edge = *edge_ix.entry(std::ptr::from_ref(ie.e)).or_insert_with(|| {
+                out.edges.push((ie.from, ie.e));
+                out.edges.len() - 1
+            });
+            out.raw_links[ix].push(ConeLink {
+                callee_state: s,
+                edge,
+            });
+        }
+        s += 1;
+    }
+    out
+}
+
+/// [`Walk::Serial`]: the walk as it was before plan 2026-11-03 L2, kept as
+/// the oracle the parallel walk is checked against ([`test_serial`]). Every
+/// fresh producer's seed is appended to `states`, then ONE BFS queue
+/// (`states` itself, from the first seed) expands all their states,
+/// interleaved, with one visited set keyed by `(producer, routine, t, reqs)`
+/// and one edge table.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+fn solve_fresh_serial<'g>(
+    fresh_ps: &[usize],
+    producers: &[Producer],
+    names: &HashSet<Arc<str>>,
+    incoming: &Incoming<'g, '_>,
+    routines_by_id: &HashMap<&str, &ModelRoutine>,
+    frames: &HashMap<String, FrameGuards>,
+    states: &mut Vec<ConeState>,
+    raw_links: &mut Vec<Vec<ConeLink>>,
+    edges: &mut Vec<(&'g str, &'g TypedOutEdge)>,
+    edge_ix: &mut HashMap<*const TypedOutEdge, usize>,
+) {
+    type Key = (usize, Arc<str>, TempState, Vec<Req>);
+    fn push(
+        states: &mut Vec<ConeState>,
+        ix_of: &mut HashMap<Key, StateIx>,
+        raw_links: &mut Vec<Vec<ConeLink>>,
+        key: Key,
+        seed: bool,
+        dist: usize,
+    ) -> StateIx {
+        let ix = states.len();
+        let (producer, routine, t, reqs) = key.clone();
+        states.push(ConeState {
+            producer,
+            routine,
+            t,
+            reqs,
+            seed,
+            dist,
+            links: 0..0,
+        });
+        raw_links.push(Vec::new());
+        ix_of.insert(key, ix);
+        ix
+    }
+    let mut ix_of: HashMap<Key, StateIx> = HashMap::new();
+    let first = states.len();
+    for &p in fresh_ps {
+        let (owner, t0, reqs0) = seed_of(&producers[p], names, frames);
+        let key = (p, Arc::clone(owner), t0, reqs0);
+        push(states, &mut ix_of, raw_links, key, true, 0);
+    }
+    let mut s: StateIx = first;
+    while s < states.len() {
+        let st = &states[s];
+        let (p, c, t, reqs, dist) = (
+            st.producer,
+            Arc::clone(&st.routine),
+            st.t.clone(),
+            st.reqs.clone(),
+            st.dist,
+        );
+        let callee = routines_by_id.get(&*c).copied();
+        for ie in incoming.get(&*c).map_or(&[][..], Vec::as_slice) {
+            let Some((t2, reqs2)) =
+                cross_edge(&t, &reqs, ie.e, ie.caller, callee, ie.frame, ie.edge_reqs)
+            else {
+                continue;
+            };
+            let key = (p, Arc::clone(ie.name), t2, reqs2);
+            let ix = match ix_of.get(&key) {
+                Some(&ix) => ix,
+                None => push(states, &mut ix_of, raw_links, key, false, dist + 1),
+            };
+            let edge = *edge_ix.entry(std::ptr::from_ref(ie.e)).or_insert_with(|| {
+                edges.push((ie.from, ie.e));
+                edges.len() - 1
+            });
+            raw_links[ix].push(ConeLink {
+                callee_state: s,
+                edge,
+            });
+        }
+        s += 1;
+    }
+}
+
+/// What [`solve_core`] returns: the finalized arena and entries, the report,
+/// the fresh producers' identities, and the interner and reps the census
+/// charges.
+type Solved<'g> = (
+    ConeArena,
+    ResolvedByRoutine<'g>,
+    PdSolveReport,
+    HashSet<ProducerId>,
+    HashSet<Arc<str>>,
+    Reps,
+);
+
 /// [`solve_seeded`], also returning the identities of the producers it
 /// solved afresh (every producer when `reuse` is `None`): the cone store's
 /// Δ_pd_output reads the states of exactly these, and of the previous
 /// arena's producers that are gone (design §6.10).
+///
+/// The fresh producers are solved in parallel, one per rayon worker
+/// (plan 2026-11-03 L2, [`solve_producer`]); the finalized arena equals the
+/// serial walk's (`==`). Under `cfg(test)`, while a [`test_serial`] guard is
+/// alive, every solve also runs the serial walk and asserts exactly that.
 pub(crate) fn solve_seeded_fresh<'g>(
     producers: Vec<Producer>,
     g: &'g TypedEdgeGraph,
@@ -744,6 +1173,50 @@ pub(crate) fn solve_seeded_fresh<'g>(
     HashSet<ProducerId>,
 ) {
     crate::engine::perf_trace::counter_delta("build.pd_solve", 1);
+    // A workspace without producers pays nothing.
+    if producers.is_empty() {
+        return (
+            ConeArena::default(),
+            HashMap::new(),
+            PdSolveReport::default(),
+            HashSet::new(),
+        );
+    }
+    #[cfg(test)]
+    let oracle = test_serial::checking().then(|| producers.clone());
+    let (arena, resolved, report, fresh, names, reps) =
+        solve_core(producers, g, routines_by_id, frames, reuse, Walk::Parallel);
+    #[cfg(test)]
+    if let Some(producers) = oracle {
+        let (a, r, rep, f, _, _) =
+            solve_core(producers, g, routines_by_id, frames, reuse, Walk::Serial);
+        assert!(
+            a == arena,
+            "the parallel solve's arena differs from the serial walk's"
+        );
+        assert!(
+            r == resolved,
+            "the parallel solve's entries differ from the serial walk's"
+        );
+        assert_eq!(rep, report, "the reports differ");
+        assert_eq!(f, fresh, "the fresh producers differ");
+        test_serial::CHECKED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    census(&arena, &resolved, &names, &reps);
+    (arena, resolved, report, fresh)
+}
+
+/// The solve behind [`solve_seeded_fresh`], over a non-empty producer list:
+/// Δ and the copy of the reused producers (stage 5), the fresh producers
+/// walked as `walk` says, then [`finalize`].
+fn solve_core<'g>(
+    producers: Vec<Producer>,
+    g: &'g TypedEdgeGraph,
+    routines_by_id: &HashMap<&str, &ModelRoutine>,
+    frames: &HashMap<String, FrameGuards>,
+    reuse: Option<&PdReuse<'_>>,
+    walk: Walk,
+) -> Solved<'g> {
     let mut report = PdSolveReport {
         producers: producers.len(),
         ..Default::default()
@@ -752,10 +1225,6 @@ pub(crate) fn solve_seeded_fresh<'g>(
         producers,
         ..Default::default()
     };
-    // A workspace without producers pays nothing.
-    if arena.producers.is_empty() {
-        return (arena, HashMap::new(), report, HashSet::new());
-    }
     let delta_span = crate::engine::perf_trace::span("cone", "pd.delta");
     let mut copy_from: Vec<Option<usize>> = vec![None; arena.producers.len()];
     if let Some(reuse) = reuse {
@@ -764,60 +1233,49 @@ pub(crate) fn solve_seeded_fresh<'g>(
         report.delta_routines = d;
     }
     drop(delta_span);
-    let mut incoming: HashMap<&str, Vec<(&'g str, &'g TypedOutEdge)>> = HashMap::new();
-    for (from, list) in &g.outgoing {
-        for e in list {
-            incoming
-                .entry(e.to.as_str())
-                .or_default()
-                .push((from.as_str(), e));
+
+    // Every routine name a state can carry, interned up front and read-only
+    // from here on, so the workers below share it (plan 2026-11-03 L2): a
+    // state sits at its producer's owner (a seed) or at the `from` of the
+    // graph edge it was reached across. The names no state took are dropped
+    // before `finalize`, so the interner holds exactly the states' routines.
+    let mut names: HashSet<Arc<str>> =
+        HashSet::with_capacity(g.outgoing.len() + arena.producers.len());
+    for from in g.outgoing.keys() {
+        names.insert(Arc::from(from.as_str()));
+    }
+    for p in &arena.producers {
+        if !names.contains(&*p.owner) {
+            names.insert(Arc::from(&*p.owner));
         }
     }
-    for list in incoming.values_mut() {
-        list.sort_by(|a, b| a.1.sort_key.cmp(&b.1.sort_key).then(a.0.cmp(b.0)));
-    }
-
-    // key = (producer, routine, t, reqs): the visited set is the state tuple.
-    type Key = (usize, Arc<str>, TempState, Vec<Req>);
-    let mut ix_of: HashMap<Key, StateIx> = HashMap::new();
     let mut raw_links: Vec<Vec<ConeLink>> = Vec::new();
     // `ConeArena::edges` while solving: each distinct graph edge, by address,
     // with its `from` (the edge rank reads it, [`finalize`]).
     let mut edges: Vec<(&'g str, &'g TypedOutEdge)> = Vec::new();
     let mut edge_ix: HashMap<*const TypedOutEdge, usize> = HashMap::new();
-    let mut names: HashSet<Arc<str>> = HashSet::new();
-    let mut intern = |s: &str| -> Arc<str> {
-        if let Some(a) = names.get(s) {
-            return Arc::clone(a);
+    let mut incoming: Incoming<'g, '_> = HashMap::new();
+    for (from, list) in &g.outgoing {
+        let name = names.get(from.as_str()).expect("every `from` is interned");
+        let caller = routines_by_id.get(from.as_str()).copied();
+        let frame = frames.get(from.as_str());
+        for e in list {
+            let edge_reqs = match (frame, e.site()) {
+                (Some(fg), Some(site)) => fg.by_site.get(site).map_or(&[][..], Vec::as_slice),
+                _ => &[],
+            };
+            incoming.entry(e.to.as_str()).or_default().push(InEdge {
+                from: from.as_str(),
+                e,
+                name,
+                caller,
+                frame,
+                edge_reqs,
+            });
         }
-        let a: Arc<str> = Arc::from(s);
-        names.insert(Arc::clone(&a));
-        a
-    };
-    // States are appended in BFS order, so `arena.states` is its own queue
-    // (so `dist` is the shortest distance); [`finalize`] then renumbers.
-    fn push(
-        arena: &mut ConeArena,
-        ix_of: &mut HashMap<Key, StateIx>,
-        raw_links: &mut Vec<Vec<ConeLink>>,
-        key: Key,
-        seed: bool,
-        dist: usize,
-    ) -> StateIx {
-        let ix = arena.states.len();
-        let (producer, routine, t, reqs) = key.clone();
-        arena.states.push(ConeState {
-            producer,
-            routine,
-            t,
-            reqs,
-            seed,
-            dist,
-            links: 0..0,
-        });
-        raw_links.push(Vec::new());
-        ix_of.insert(key, ix);
-        ix
+    }
+    for list in incoming.values_mut() {
+        list.sort_by(|a, b| a.e.sort_key.cmp(&b.e.sort_key).then(a.from.cmp(b.from)));
     }
 
     // Stage 5: the reused producers' states, links and edges, copied from the
@@ -898,9 +1356,16 @@ pub(crate) fn solve_seeded_fresh<'g>(
                         edge: map_edge(&st.routine, l.edge),
                     })
                     .collect();
-                let routine = names_of
-                    .entry(st.routine.as_ptr())
-                    .or_insert_with(|| intern(&st.routine));
+                // Interned: a seed sits at its producer's owner, and any other
+                // state has a link whose edge was just re-found in the graph
+                // with `from` = this routine.
+                let routine = names_of.entry(st.routine.as_ptr()).or_insert_with(|| {
+                    Arc::clone(
+                        names
+                            .get(&*st.routine)
+                            .expect("a copied state's routine is interned"),
+                    )
+                });
                 arena.states.push(ConeState {
                     producer: p,
                     routine: Arc::clone(routine),
@@ -917,7 +1382,6 @@ pub(crate) fn solve_seeded_fresh<'g>(
         }
         drop(copy_span);
     }
-    let first_fresh = arena.states.len();
     let fresh: HashSet<ProducerId> = copy_from
         .iter()
         .zip(&arena.producers)
@@ -925,73 +1389,88 @@ pub(crate) fn solve_seeded_fresh<'g>(
         .map(|(_, p)| (Arc::clone(&p.owner), p.operation_id.clone()))
         .collect();
 
-    for (p, from) in copy_from.iter().enumerate() {
-        if from.is_some() {
-            continue;
+    // Only the fresh producers are walked: a copied state's links are copied.
+    let fresh_ps: Vec<usize> = (0..copy_from.len())
+        .filter(|&p| copy_from[p].is_none())
+        .collect();
+    let walk_span = crate::engine::perf_trace::span("cone", "pd.walk");
+    match walk {
+        Walk::Parallel => {
+            use rayon::prelude::*;
+            let solved: Vec<FreshSolve<'g>> = fresh_ps
+                .par_iter()
+                .map(|&p| {
+                    solve_producer(
+                        p,
+                        &arena.producers[p],
+                        &names,
+                        &incoming,
+                        routines_by_id,
+                        frames,
+                    )
+                })
+                .collect();
+            drop(walk_span);
+            // Concatenate in producer order: each producer's states and links
+            // move to the end, its local state indices shifted by where its
+            // states start and its local edges mapped to the solve's edge
+            // table, deduplicated by address (two producers crossing one
+            // edge share its entry).
+            let _concat = crate::engine::perf_trace::span("cone", "pd.concat");
+            let total: usize = solved.iter().map(|f| f.states.len()).sum();
+            arena.states.reserve_exact(total);
+            raw_links.reserve_exact(total);
+            for f in solved {
+                let base = arena.states.len();
+                let to_solve: Vec<usize> = f
+                    .edges
+                    .iter()
+                    .map(|&(from, e)| {
+                        *edge_ix.entry(std::ptr::from_ref(e)).or_insert_with(|| {
+                            edges.push((from, e));
+                            edges.len() - 1
+                        })
+                    })
+                    .collect();
+                arena.states.extend(f.states);
+                raw_links.extend(f.raw_links.into_iter().map(|mut links| {
+                    for l in &mut links {
+                        l.callee_state += base;
+                        l.edge = to_solve[l.edge];
+                    }
+                    links
+                }));
+            }
         }
-        let prod = &arena.producers[p];
-        let i0 = fact_pd_index(&prod.fact).expect("a producer is parameter-dependent");
-        let reqs = frames
-            .get(&*prod.owner)
-            .and_then(|fg| site_reqs(fg, &prod.fact))
-            .cloned()
-            .unwrap_or_default();
-        let key = (
-            p,
-            intern(&prod.owner),
-            TempState::ParameterDependent(i0),
-            reqs,
-        );
-        push(&mut arena, &mut ix_of, &mut raw_links, key, true, 0);
-    }
-
-    // Only the fresh states are expanded: a copied state's links are copied.
-    let mut s: StateIx = first_fresh;
-    while s < arena.states.len() {
-        let st = &arena.states[s];
-        let (p, c, t, reqs, dist) = (
-            st.producer,
-            Arc::clone(&st.routine),
-            st.t.clone(),
-            st.reqs.clone(),
-            st.dist,
-        );
-        let callee = routines_by_id.get(&*c).copied();
-        for &(r, e) in incoming.get(&*c).map_or(&[][..], Vec::as_slice) {
-            let frame = frames.get(r);
-            // The caller's own guard on the site it takes `e` at: a call site,
-            // or the record op that fires an `implicit-trigger` edge (CR3).
-            let edge_reqs = match (frame, e.site()) {
-                (Some(fg), Some(site)) => fg.by_site.get(site).map_or(&[][..], Vec::as_slice),
-                _ => &[],
-            };
-            let caller = routines_by_id.get(r).copied();
-            let Some((t2, reqs2)) = cross_edge(&t, &reqs, e, caller, callee, frame, edge_reqs)
-            else {
-                continue;
-            };
-            let key = (p, intern(r), t2, reqs2);
-            let ix = match ix_of.get(&key) {
-                Some(&ix) => ix,
-                None => push(&mut arena, &mut ix_of, &mut raw_links, key, false, dist + 1),
-            };
-            let edge = *edge_ix.entry(std::ptr::from_ref(e)).or_insert_with(|| {
-                edges.push((r, e));
-                edges.len() - 1
-            });
-            raw_links[ix].push(ConeLink {
-                callee_state: s,
-                edge,
-            });
+        #[cfg(test)]
+        Walk::Serial => {
+            solve_fresh_serial(
+                &fresh_ps,
+                &arena.producers,
+                &names,
+                &incoming,
+                routines_by_id,
+                frames,
+                &mut arena.states,
+                &mut raw_links,
+                &mut edges,
+                &mut edge_ix,
+            );
+            drop(walk_span);
         }
-        s += 1;
     }
-    drop(ix_of);
+    drop(incoming);
     drop(edge_ix);
+    // Exactly the states' routines (the incoming edges and the copy's names
+    // are gone, so a name's other holders are states).
+    names.retain(|n| Arc::strong_count(n) > 1);
 
     let finalize_span = crate::engine::perf_trace::span("cone", "pd.finalize");
-    let (mut arena, mut resolved, reps) =
-        finalize(arena.producers, arena.states, raw_links, edges, &names);
+    let (mut arena, mut resolved, reps) = match walk {
+        Walk::Parallel => finalize(arena.producers, arena.states, raw_links, edges, &names),
+        #[cfg(test)]
+        Walk::Serial => finalize_serial(arena.producers, arena.states, raw_links, edges, &names),
+    };
     drop(finalize_span);
     // Growth slack is up to half of each pushed `Vec`; the solve is read-only
     // from here on.
@@ -999,8 +1478,40 @@ pub(crate) fn solve_seeded_fresh<'g>(
     arena.links.shrink_to_fit();
     arena.by_routine.values_mut().for_each(Vec::shrink_to_fit);
     resolved.values_mut().for_each(Vec::shrink_to_fit);
-    census(&arena, &resolved, &names, &reps);
-    (arena, resolved, report, fresh)
+    (arena, resolved, report, fresh, names, reps)
+}
+
+/// Test hook (plan 2026-11-03 L2): while a guard from [`check_against_serial`]
+/// is alive, every [`solve_seeded_fresh`] also runs the serial walk
+/// ([`Walk::Serial`]) over the same inputs and asserts the two results are
+/// equal (`==`: arena, entries, report, fresh producers). Process-global, as
+/// [`test_shuffle`] is: the cone can run on rayon workers, and another test
+/// that solves while a guard is alive is only checked too.
+#[cfg(test)]
+pub(crate) mod test_serial {
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+
+    /// Guards alive.
+    static ON: AtomicUsize = AtomicUsize::new(0);
+    /// Solves checked against the serial walk, process-wide.
+    pub(crate) static CHECKED: AtomicUsize = AtomicUsize::new(0);
+
+    pub(crate) struct Guard;
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            ON.fetch_sub(1, SeqCst);
+        }
+    }
+
+    pub(crate) fn check_against_serial() -> Guard {
+        ON.fetch_add(1, SeqCst);
+        Guard
+    }
+
+    pub(crate) fn checking() -> bool {
+        ON.load(SeqCst) > 0
+    }
 }
 
 /// D1.4: charge one solve to the `ALSEM_CONES_CENSUS` counters.
@@ -2234,5 +2745,163 @@ mod tests {
         let (want, got, report, _) = r3.solve_both(Some(&prev));
         assert_eq!(got, want, "removed edge: equals full");
         assert_eq!(report.reused, 1, "removed edge: Q copied");
+    }
+
+    // ----- Plan 2026-11-03 L2: the parallel fresh-producer walk -----
+
+    /// Runs `f` with every solve checked against the serial walk
+    /// ([`super::test_serial`]) and returns how many solves were checked
+    /// (at least; a concurrent test's solves may count too).
+    fn checked_against_serial(f: impl FnOnce()) -> usize {
+        use std::sync::atomic::Ordering::SeqCst;
+        let _guard = super::test_serial::check_against_serial();
+        let before = super::test_serial::CHECKED.load(SeqCst);
+        f();
+        super::test_serial::CHECKED.load(SeqCst) - before
+    }
+
+    /// The cold composition over `ws` (the served fold's cone, the
+    /// cross-app one unless `single_app`): its producer count, or `None`
+    /// when the workspace does not build.
+    fn compose_producers(ws: &std::path::Path, single_app: bool) -> Option<usize> {
+        let inputs = crate::program::inputs::WorkspaceInputs::read(ws, &Default::default());
+        let target =
+            crate::engine::gate::run::AnalysisTarget::build(&inputs, single_app, "digest").ok()?;
+        let model = target.resolved();
+        let scope = crate::engine::l4::cone_derived::ConeScope {
+            derived: true,
+            raw: crate::engine::session::WitnessRequest::primary().scope(model),
+        };
+        let rel = crate::engine::session::relation_of(&target);
+        let (caps, _) = crate::engine::session::compose_cone(model, &rel, scope);
+        Some(caps.pd.as_ref().map_or(0, |a| a.producers.len()))
+    }
+
+    /// L2's contract on every fixture: with the fresh producers solved on
+    /// separate workers and concatenated, the finalized arena, the resolved
+    /// entries, the report and the fresh set equal (`==`) the serial walk's
+    /// (one interleaved queue, the solve before L2), on every
+    /// `tests/r0-corpus/` app (single-app) and on the eight dependency
+    /// fixtures (cross-app).
+    ///
+    /// DISCRIMINATION (2026-11-03, break with Edit, run, revert, run):
+    /// (a) shifting every producer's local indices by the first fresh state
+    /// instead of by where its own states start fails here with "the
+    /// parallel solve's arena differs from the serial walk's"; (b) dropping
+    /// the concatenation's edge dedup (one new edge-table entry per
+    /// producer per edge) fails here at `finalize`'s debug assertion "one
+    /// graph edge is in the solve's edge table twice". With that assertion
+    /// disabled too, (b) passes every test: `finalize` merges edges of one
+    /// identity, so the duplicates cost only time and memory, never the
+    /// arena, and the assertion is the guard. Reverted, green. Finalize's
+    /// parallel build (the oracle finalizes with [`super::finalize_serial`]):
+    /// (c) filing a state under the routine rank of its pre-rank index
+    /// (`r_of[old]`) fails here only since the fixtures also run with their
+    /// producers permuted (in node order their states arrive already in rank
+    /// order and it passed); (d) taking the highest-ranked shortest link as
+    /// the first hop passes here (no fixture state has two shortest links)
+    /// and fails the hand-stated `solve_keeps_all_links` and
+    /// `solve_keeps_a_link_per_trigger_op`. Reverted, green.
+    #[test]
+    fn parallel_solve_equals_the_serial_walk_on_every_fixture() {
+        use crate::engine::l5::test_support as ts;
+        let r0 = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
+        let mut dirs: Vec<_> = walkdir::WalkDir::new(&r0)
+            .into_iter()
+            .map(|e| e.unwrap().into_path())
+            .filter(|p| p.join("app.json").is_file())
+            .collect();
+        dirs.sort();
+        assert!(!dirs.is_empty(), "precondition: r0 dirs under {r0:?}");
+        type Writer = (&'static str, fn(&std::path::Path));
+        let writers: [Writer; 8] = [
+            ("step4", ts::write_fixture_step4),
+            ("dep_uncertainty", ts::write_fixture_dep_uncertainty),
+            (
+                "dep_uncertainty_both_halves",
+                ts::write_fixture_dep_uncertainty_both_halves,
+            ),
+            ("dep_ledger", ts::write_fixture_dep_ledger),
+            ("symbol_only_dep", ts::write_fixture_symbol_only_dep),
+            ("rule_b", ts::write_fixture_rule_b),
+            ("rule_b_event", ts::write_fixture_rule_b_event),
+            ("dep_ambiguous", ts::write_fixture_dep_ambiguous),
+        ];
+        let (mut with_producers, mut multi, mut cross) = (0usize, 0usize, 0usize);
+        // The producers as the cone lists them (node order) and permuted
+        // ([`super::test_shuffle`]): in node order a small fixture's
+        // concatenated states are often already in rank order, which would
+        // leave `finalize`'s permutation untested.
+        use super::test_shuffle::{LOCK, SEED};
+        use std::sync::atomic::Ordering::SeqCst;
+        let _lock = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let checked = checked_against_serial(|| {
+            for seed in [0, 3] {
+                SEED.store(seed, SeqCst);
+                for dir in &dirs {
+                    let n = compose_producers(dir, true).unwrap_or(0);
+                    with_producers += usize::from(n > 0);
+                    multi += usize::from(n > 1);
+                }
+                for (_, write) in writers {
+                    let tmp = tempfile::tempdir().unwrap();
+                    write(tmp.path());
+                    let n = compose_producers(tmp.path(), false).unwrap_or(0);
+                    with_producers += usize::from(n > 0);
+                    cross += usize::from(n > 0);
+                }
+            }
+            SEED.store(0, SeqCst);
+        });
+        assert!(
+            multi >= 4,
+            "precondition: fixtures with several producers ({multi})"
+        );
+        assert!(
+            cross >= 1,
+            "precondition: a cross-app fixture with producers ({cross})"
+        );
+        assert!(
+            checked >= with_producers,
+            "every solve with producers was checked ({checked} of {with_producers})"
+        );
+    }
+
+    /// L2 on the seeded solve: the fresh producers of `solve_seeded` (a
+    /// re-solved producer beside a copied one, a new caller, a removed edge)
+    /// and the hand-stated canonical-order case (four producers sharing
+    /// edges, one edge present twice in the graph, cycles) each equal the
+    /// serial walk.
+    #[test]
+    fn seeded_and_hand_stated_solves_equal_the_serial_walk() {
+        let checked = checked_against_serial(|| {
+            reused_producer_states_equal_a_full_solve();
+            solve_is_independent_of_input_order();
+        });
+        assert!(checked >= 13, "every solve was checked ({checked})");
+    }
+
+    /// L2's contract on the cross-app CDO model (skips without `CDO_WS`,
+    /// panics under `ENFORCE_CDO_WS=1`): the cold solve (every producer
+    /// fresh; a P change solves the same way, its fold has no seed) equals
+    /// the serial walk.
+    #[test]
+    fn parallel_solve_equals_the_serial_walk_on_cdo() {
+        let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
+            return;
+        };
+        crate::big_stack::run_with_big_stack(move || {
+            let mut producers = 0;
+            let checked = checked_against_serial(|| {
+                producers = compose_producers(&ws, false).expect("cross-app CDO builds");
+            });
+            assert!(
+                producers > 1000,
+                "precondition: CDO's producers ({producers})"
+            );
+            assert!(checked >= 1, "the CDO solve was checked");
+        });
     }
 }

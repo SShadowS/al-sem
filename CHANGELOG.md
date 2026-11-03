@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (context server: the producer solve's fresh producers in parallel)
+
+- **Fresh producers are solved in parallel** (plan
+  `docs/superpowers/plans/2026-11-03-context-server-remaining.md`, item L2;
+  `src/engine/l4/pd_solve.rs`). Each producer the producer-dependent solve has to solve (every
+  producer cold and after a P change; the re-solved ones after B or S) runs its BFS on a rayon
+  worker into its own states, links and edges; the results are concatenated in producer order
+  (state indices shifted, edges deduplicated by address) and finalized. A producer's states
+  never meet another's (the state key holds the producer, a link joins two states of one
+  producer, the step is a pure function of shared read-only inputs), so the result is the
+  serial walk's. `finalize` also runs its sorts, link pass and first hops on rayon and files
+  `by_routine` and the resolved entries per routine rank instead of hashing a routine string per
+  state. Measured on CDO (cross-app, release-fast probe, mimalloc, uncounted, three rounds each,
+  same machine and day): `pd.solve` cold 3.31-3.42 s → 0.76-0.83 s, after P 3.51-3.78 s →
+  0.77-0.83 s, after B 1.07-1.15 s → 0.70-0.78 s, after S 1.07-1.11 s → 0.72-0.74 s (the walk
+  alone 2.5-2.6 s → 0.23-0.25 s; the concatenation 0.13-0.14 s; `pd.finalize` 0.77-0.82 s →
+  0.37-0.41 s). The fold: cold 13.7-14.0 s → 11.1-11.7 s, after P 15.0-15.6 s → 12.6-12.7 s,
+  after B 1.81-1.92 s → 1.46-1.56 s, after S 1.84-1.93 s → 1.51-1.53 s. Peak RSS unchanged
+  (counted run: cold high-water 5.92 → 6.00 GB, whole run 6.24 → 6.30 GB). Proof: under
+  `cfg(test)` a `test_serial` guard makes every solve also run the pre-L2 walk and finalize and
+  assert `==` (the arena types now derive `PartialEq`), on every r0 app and the eight dependency
+  fixtures (each also with its producers permuted), the seeded and hand-stated solves, and the
+  cross-app CDO model (`parallel_solve_equals_the_serial_walk_on_cdo`); the CDO arena dump
+  (`aldump --snapshot-memory --pd-dump`, 2,851,161 lines) is byte-identical to master's; a
+  `--verify` run after cold, B, S and P gave every answer equal to its cold run. Discrimination:
+  mis-offsetting a producer's local indices fails the fixture test; dropping the edge dedup
+  fires `finalize`'s new debug assertion (without it the arena stays equal, since `finalize`
+  merges edges of one identity, so the plan's "the arena differs" does not hold); filing a state
+  under the wrong routine rank fails the permuted fixture run; a highest-ranked first hop fails
+  `solve_keeps_all_links`.
+
+### Fixed
+
+- **A witness fill no longer fails when its key was published meanwhile**
+  (`src/engine/resident/revision.rs`). A request that read the snapshot before a concurrent
+  request published a `Witness` key claims the key once that fill is over and fills off the
+  newer snapshot; the batch skipped every key the snapshot held, this one too, and the request
+  failed with "is not a witness of the request's plan". Exposed by L2's timing
+  (`concurrent_requests_and_evictions_answer_the_cold_bytes` failed 2 runs in 6, master 0 in 12;
+  0 in 20 after). Test: `a_witness_fill_returns_the_entry_its_snapshot_already_holds`
+  (hand-stated); without the check it fails with that error.
+
 ### Changed (context server: a view's tree splices over its revision's base; shared sections)
 
 - **A view's tree no longer re-derives what every view of the revision shares** (plan

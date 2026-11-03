@@ -844,6 +844,41 @@ fn a_witness_reads_the_requests_own_tree() {
     );
 }
 
+/// A witness fill handed a snapshot that already holds its key returns the
+/// published entry. The store does that when a request read the snapshot
+/// before a concurrent request published the key: it claims the key once
+/// that fill is over and fills off the newer snapshot.
+/// `concurrent_requests_and_evictions_answer_the_cold_bytes` hit it about
+/// one run in three once the producer solve ran on rayon (plan 2026-11-03
+/// L2 changed the timing, not the rule). The state is stated by hand: the
+/// key published, the request's scratch empty, and a plan with no witness
+/// group (so nothing but the snapshot can answer).
+///
+/// DISCRIMINATION (2026-11-03): without the snapshot check at the top of
+/// `fill_witness` this fails with "… is not a witness of the request's
+/// plan" (the batch skips keys the snapshot holds); restored, it passes.
+#[test]
+fn a_witness_fill_returns_the_entry_its_snapshot_already_holds() {
+    let f = witness_ws("DocBoth");
+    let rev = revision(&f);
+    let out = rev
+        .answer(&*job(Cmd::Digest, &f), &Control::unreserved())
+        .expect("the digest answers");
+    assert_eq!(out, cold(Cmd::Digest, &f));
+    let snap = rev.snapshot();
+    let (key, published) = snap
+        .keys()
+        .find_map(|k| match snap.get(k).map(|a| &a.value) {
+            Some(ArtifactValue::Witness(e)) => Some((k.clone(), Arc::clone(e))),
+            _ => None,
+        })
+        .expect("precondition: the digest published its witness");
+    let got = rev
+        .fill_witness(&Plan::merge([]), &key, &snap, &WitnessScratch::default())
+        .expect("the published entry");
+    assert!(Arc::ptr_eq(&got, &published), "the published entry itself");
+}
+
 // ---------------------------------------------------------------------------
 // Explain's indexes (plan 2026-11-03, item W2).
 // ---------------------------------------------------------------------------
