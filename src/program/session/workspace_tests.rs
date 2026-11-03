@@ -290,7 +290,9 @@ fn newline_before_a_callee_moves_every_witness(mode: MemoryMode) {
 }
 
 /// T-incr S: a declaration reorder, a signature change and a return-type
-/// change each re-resolve every workspace file and the dependency bodies.
+/// change each re-resolve every workspace file. No dependency file read the
+/// changed codeunit, so the finer rule re-resolves none of them (a
+/// declaration change that affects no dependency file).
 fn declaration_changes_reresolve_everything(mode: MemoryMode) {
     let ws = base_ws();
     let mut s = WorkspaceSession::with_mode(mode);
@@ -302,10 +304,13 @@ fn declaration_changes_reresolve_everything(mode: MemoryMode) {
     let r = refresh_and_compare(&mut s, &ws, "reorder");
     assert_eq!(r.class, ChangeClass::Declaration);
     assert_eq!(r.resolved, 4);
-    assert!(r.dependency_bodies_resolved);
+    assert!(r.dependency_rule);
+    assert_eq!((r.dependency_files, r.dependency_files_resolved), (3, 0));
+    assert!(!r.dependency_bodies_resolved);
     ws.edit("Callee.Codeunit.al", "P(X: Integer)", "P(X: Decimal)");
     let r = refresh_and_compare(&mut s, &ws, "signature");
     assert_eq!(r.class, ChangeClass::Declaration);
+    assert_eq!(r.dependency_files_resolved, 0);
     ws.edit("Callee.Codeunit.al", "): Integer", "): Text");
     let r = refresh_and_compare(&mut s, &ws, "return type");
     assert_eq!(r.class, ChangeClass::Declaration);
@@ -341,15 +346,255 @@ fn file_add_remove_rename(mode: MemoryMode) {
     assert_eq!(r.class, ChangeClass::Declaration);
     assert_eq!(r.changed, vec!["src/Renamed.Codeunit.al".to_string()]);
     // A second implementer of the DEPENDENCY's interface: the dependency
-    // caller's `X.M()` dispatch changes, so the dependency bodies must be
-    // resolved again (§6.6: never reused across S).
+    // caller's `X.M()` dispatch changes, so that file (and only it) must be
+    // resolved again: its recorded `implementers_of` answer changed.
     ws.write(
         "Impl2.Codeunit.al",
         "codeunit 50106 \"Impl2\" implements \"Dep I\"\n{\n    procedure M()\n    begin\n    end;\n}\n",
     );
     let r = refresh_and_compare(&mut s, &ws, "second implementer");
     assert_eq!(r.class, ChangeClass::Declaration);
-    assert!(r.dependency_bodies_resolved);
+    assert!(r.dependency_rule);
+    assert_eq!(r.dependency_files_resolved, 1);
+}
+
+/// The cold build's dependency-body edges, as text: what a whole
+/// re-resolution of the dependency bodies gives for the workspace on disk.
+fn dep_edges(ws: &Ws) -> String {
+    let p = ResolvedProgram::build(&ws.inputs(), ProgramScope::CrossApp).expect("cold program");
+    format!("{:?}", p.body().dependency_body_edges())
+}
+
+/// One S edit through the finer rule: the session equals cold (program and
+/// model), the rule ran, and `resolved` dependency files were re-resolved.
+/// With `moves`, the edit is first shown to change the dependency edges a
+/// whole re-resolution gives, so keeping every file would be wrong.
+fn s_edit(
+    s: &mut WorkspaceSession,
+    ws: &Ws,
+    what: &str,
+    edit: impl FnOnce(&Ws),
+    moves: bool,
+    resolved: usize,
+) -> RefreshReport {
+    let before = dep_edges(ws);
+    edit(ws);
+    if moves {
+        assert_ne!(
+            before,
+            dep_edges(ws),
+            "{what}: precondition, the dependency edges move"
+        );
+    }
+    let r = refresh_and_compare(s, ws, what);
+    assert_eq!(r.class, ChangeClass::Declaration, "{what}");
+    assert!(r.dependency_rule, "{what}: the finer rule ran");
+    assert_eq!(
+        r.dependency_files_resolved, resolved,
+        "{what}: files re-resolved"
+    );
+    r
+}
+
+/// A negative lookup turning positive: the dependency interface has no
+/// workspace implementer, then one, then none again. The dependency caller's
+/// dispatch recorded the empty `implementers_of` answer.
+fn first_implementer_seen_by_dependency_dispatch(mode: MemoryMode) {
+    let ws = Ws::new(&[
+        ("Callee.Codeunit.al", CALLEE),
+        ("Caller.Codeunit.al", CALLER),
+    ]);
+    let mut s = WorkspaceSession::with_mode(mode);
+    refresh_and_compare(&mut s, &ws, "cold, no implementer");
+    // A B edit first: the record carries over B with the reused edges.
+    ws.edit(
+        "Callee.Codeunit.al",
+        "        exit(X);",
+        "        X += 1;\n        exit(X);",
+    );
+    let r = refresh_and_compare(&mut s, &ws, "body edit");
+    assert_eq!(r.class, ChangeClass::BodyOnly);
+    s_edit(
+        &mut s,
+        &ws,
+        "implementer added",
+        |w| w.write("Impl.Codeunit.al", IMPL),
+        true,
+        1,
+    );
+    s_edit(
+        &mut s,
+        &ws,
+        "implementer removed",
+        |w| w.remove("Impl.Codeunit.al"),
+        true,
+        1,
+    );
+}
+
+/// A read through a returned id: the implementer's method changes (arity,
+/// then access) while its `implements` list, and so `implementers_of`'s
+/// answer, stays the same.
+fn implementer_method_changes_under_an_unchanged_implements_list(mode: MemoryMode) {
+    let ws = base_ws();
+    let mut s = WorkspaceSession::with_mode(mode);
+    refresh_and_compare(&mut s, &ws, "cold");
+    // A procedure added above `M`: no answer changes (positions are not part
+    // of an answer), but the dependency dispatch's source witness to `M`
+    // moves, so the kept edges' witnesses are re-materialized.
+    let before = dep_edges(&ws);
+    s_edit(
+        &mut s,
+        &ws,
+        "procedure added above the implementer's method",
+        |w| {
+            w.edit(
+                "Impl.Codeunit.al",
+                "    procedure M()",
+                "    procedure Other()\n    begin\n    end;\n\n    procedure M()",
+            );
+        },
+        false,
+        0,
+    );
+    assert_ne!(before, dep_edges(&ws), "precondition: the witness moved");
+    w_restore_impl(&ws);
+    refresh_and_compare(&mut s, &ws, "restored");
+    s_edit(
+        &mut s,
+        &ws,
+        "implementer method arity",
+        |w| {
+            w.edit(
+                "Impl.Codeunit.al",
+                "procedure M()",
+                "procedure M(Y: Integer)",
+            )
+        },
+        true,
+        1,
+    );
+    s_edit(
+        &mut s,
+        &ws,
+        "implementer method back, internal",
+        |w| {
+            w.edit(
+                "Impl.Codeunit.al",
+                "procedure M(Y: Integer)",
+                "internal procedure M()",
+            );
+        },
+        true,
+        1,
+    );
+}
+
+fn w_restore_impl(ws: &Ws) {
+    ws.write("Impl.Codeunit.al", IMPL);
+}
+
+const DEP_T: &str = "table 70010 \"Dep T\"\n{\n    fields\n    {\n        field(1; \"Code\"; Code[20]) { }\n    }\n\n    trigger OnInsert()\n    begin\n    end;\n}\n";
+const DEP_T_USER: &str = "codeunit 70011 \"Dep T User\"\n{\n    procedure Ins()\n    var\n        R: Record \"Dep T\";\n    begin\n        R.Insert(true);\n    end;\n}\n";
+const WS_T_EXT: &str = "tableextension 50150 \"WS T Ext\" extends \"Dep T\"\n{\n    trigger OnInsert()\n    begin\n    end;\n}\n";
+
+/// A workspace table extension of a dependency table, added and removed:
+/// the dependency's `Insert(true)` fires the extension's trigger too
+/// (reverse-dependent, whole-snapshot `table_extensions_of`).
+fn extension_added_and_removed(mode: MemoryMode) {
+    let ws = base_ws();
+    ws.write_dep(&[
+        ("src/DepLib.Codeunit.al", DEP_LIB),
+        ("src/DepT.Table.al", DEP_T),
+        ("src/DepTUser.Codeunit.al", DEP_T_USER),
+    ]);
+    let mut s = WorkspaceSession::with_mode(mode);
+    refresh_and_compare(&mut s, &ws, "cold");
+    s_edit(
+        &mut s,
+        &ws,
+        "extension added",
+        |w| w.write("TExt.TableExt.al", WS_T_EXT),
+        true,
+        1,
+    );
+    s_edit(
+        &mut s,
+        &ws,
+        "extension removed",
+        |w| w.remove("TExt.TableExt.al"),
+        true,
+        1,
+    );
+}
+
+/// A name collision introduced and removed: a workspace interface named like
+/// the dependency's. Whatever it changes in the dependency's dispatch, the
+/// session equals cold, and only files that read the name are re-resolved.
+fn name_collision_introduced_and_removed(mode: MemoryMode) {
+    let ws = base_ws();
+    let mut s = WorkspaceSession::with_mode(mode);
+    refresh_and_compare(&mut s, &ws, "cold");
+    let dup = "interface \"Dep I\"\n{\n    procedure M();\n}\n";
+    let r = s_edit(
+        &mut s,
+        &ws,
+        "collision",
+        |w| w.write("DupI.Interface.al", dup),
+        false,
+        1,
+    );
+    assert!(r.dependency_files_resolved < r.dependency_files);
+    s_edit(
+        &mut s,
+        &ws,
+        "collision removed",
+        |w| w.remove("DupI.Interface.al"),
+        false,
+        1,
+    );
+}
+
+/// A workspace closed enum implementing the dependency's interface: its
+/// extensibility and its implementation map change what the dependency
+/// caller's dispatch reads (`unmapped_enum_implementers`).
+fn dependency_dispatch_over_a_workspace_enum(mode: MemoryMode) {
+    let e = "enum 50140 \"WS Kind\" implements \"Dep I\"\n{\n    Extensible = false;\n    value(0; A) { Implementation = \"Dep I\" = \"Impl\"; }\n}\n";
+    let ws = base_ws();
+    ws.write("Kind.Enum.al", e);
+    let mut s = WorkspaceSession::with_mode(mode);
+    refresh_and_compare(&mut s, &ws, "cold");
+    // A mapped enum is never "unmapped", closed or not: the dispatch's
+    // answers are the same, so no dependency file is re-resolved.
+    s_edit(
+        &mut s,
+        &ws,
+        "extensible",
+        |w| w.edit("Kind.Enum.al", "Extensible = false;", "Extensible = true;"),
+        false,
+        0,
+    );
+    // Closed again with a value mapped to no codeunit: the dispatch site's
+    // `interface_unmapped_enums` fact now names it.
+    s_edit(
+        &mut s,
+        &ws,
+        "closed, unmapped",
+        |w| {
+            w.edit("Kind.Enum.al", "Extensible = true;", "Extensible = false;");
+            w.edit("Kind.Enum.al", "= \"Impl\"", "= \"Nowhere\"");
+        },
+        false,
+        1,
+    );
+    s_edit(
+        &mut s,
+        &ws,
+        "mapped again",
+        |w| w.edit("Kind.Enum.al", "= \"Nowhere\"", "= \"Impl\""),
+        false,
+        1,
+    );
 }
 
 /// T-demand-transitive: a body edit moves the workspace's dependency call from
@@ -1082,12 +1327,26 @@ fn low_mem_retains_no_dependency_tree(mode: MemoryMode) {
     );
     assert_eq!(alive, 0);
 
-    // S: every dependency body re-resolved, so every file parsed again; the
-    // rows, keyed by text, are reused.
+    // S that no dependency file read: no dependency body re-resolved, so no
+    // file parsed (the finer rule, `session::dep_record`).
     ws.edit("Callee.Codeunit.al", "P(X: Integer)", "P(X: Decimal)");
     let (r, alive) = refresh_holding_the_model(&mut s, &ws, "signature");
     assert_eq!(r.class, ChangeClass::Declaration);
-    assert!(r.dependency_bodies_resolved);
+    assert!(r.dependency_rule);
+    assert_eq!(r.dependency_files_resolved, 0);
+    assert_eq!(r.dependency_files_parsed, 0);
+    assert_eq!(alive, 0);
+
+    // S that the dependency caller's dispatch read (a second implementer of
+    // its interface): that file re-resolved, every file parsed to do it; the
+    // rows, keyed by text, are reused.
+    ws.write(
+        "Impl2.Codeunit.al",
+        "codeunit 50106 \"Impl2\" implements \"Dep I\"\n{\n    procedure M()\n    begin\n    end;\n}\n",
+    );
+    let (r, alive) = refresh_holding_the_model(&mut s, &ws, "second implementer");
+    assert_eq!(r.class, ChangeClass::Declaration);
+    assert_eq!(r.dependency_files_resolved, 1);
     assert_eq!(r.dependency_files_parsed, DEP_FILES);
     assert_eq!(rows(&r).dependency_parsed, 0, "the build holds the trees");
     assert_eq!(alive, 0);
@@ -1197,6 +1456,11 @@ in_both_modes!(
     newline_before_a_callee_moves_every_witness,
     declaration_changes_reresolve_everything,
     file_add_remove_rename,
+    first_implementer_seen_by_dependency_dispatch,
+    implementer_method_changes_under_an_unchanged_implements_list,
+    extension_added_and_removed,
+    name_collision_introduced_and_removed,
+    dependency_dispatch_over_a_workspace_enum,
     demand_expansion_and_contraction,
     dependency_raiser_and_subscriber_edits,
     event_flow_edge_of_an_unchanged_publisher_moves_under_b,

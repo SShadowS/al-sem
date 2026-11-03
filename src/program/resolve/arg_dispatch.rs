@@ -107,16 +107,15 @@ use al_syntax::ir::{
     AlFile, BinaryOp, Expr, ExprId, ExprKind, Literal, ObjectKind, RoutineDecl, VarDecl,
 };
 
-use crate::program::graph::ProgramGraph;
 use crate::program::node::{ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::{AbiParamRetained, AbiParams, ObjectRef, RoutineNode};
-use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{BuiltinId, RouteTarget};
 use crate::program::resolve::extract::WithState;
 use crate::program::resolve::framework_returns::{
     framework_return_kind, record_builtin_return_kind,
 };
-use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
+use crate::program::resolve::index::ObjectRefResolution;
+use crate::program::resolve::reads::{GraphReads, IndexReads, SurfaceReads};
 use crate::program::resolve::receiver::{
     CallerScopeSymbol, FrameworkKind, ParsedType, ReceiverType, caller_scope_symbol,
     classify_type_text, infer_implicit_rec, object_by_id, parsed_type_to_receiver,
@@ -319,8 +318,8 @@ const BUILTIN_OPTION_TYPES: &[&str] = &[
 fn framework_kind_arg(
     kind: Option<FrameworkKind>,
     from: &ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> ArgDispatchInfo {
     use FrameworkKind as F;
     match kind {
@@ -378,8 +377,8 @@ fn ref_member_arg(
     base: &str,
     member: &str,
     from: &ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> ArgDispatchInfo {
     let member_lc = unquote_identifier(member).fold_identifier();
     let ty = match (base, member_lc.as_str()) {
@@ -540,8 +539,8 @@ fn split_top_level_commas(inner: &str) -> Option<Vec<&str>> {
 fn parse_generic_arg(
     arg_text: &str,
     from: &ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<GenericArgType> {
     if arg_text.trim().is_empty() {
         return None;
@@ -604,8 +603,8 @@ fn parse_generic_arg(
 pub(crate) fn dispatch_canonical_type_text(
     ty_text: &str,
     from: &ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<CanonicalArgType> {
     if ty_text.trim().is_empty() {
         return None;
@@ -780,9 +779,9 @@ pub(crate) fn type_call_args(
     routine: &RoutineDecl,
     object_globals: &[VarDecl],
     from: &ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
     with_state: WithState,
 ) -> Vec<ArgDispatchInfo> {
     args.iter()
@@ -809,9 +808,9 @@ fn type_one_arg(
     routine: &RoutineDecl,
     object_globals: &[VarDecl],
     from: &ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
     with_state: WithState,
 ) -> ArgDispatchInfo {
     match &expr.kind {
@@ -1469,9 +1468,9 @@ fn type_call_result_arg_bare(
     routine: &RoutineDecl,
     object_globals: &[VarDecl],
     from: &ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
     with_state: WithState,
 ) -> ArgDispatchInfo {
     let fname_lc = fname.fold_identifier();
@@ -1553,9 +1552,9 @@ fn type_call_result_arg_member(
     routine: &RoutineDecl,
     object_globals: &[VarDecl],
     from: &ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
     with_state: WithState,
 ) -> ArgDispatchInfo {
     if with_state != WithState::NoWithProven {
@@ -1879,8 +1878,8 @@ fn type_call_result_arg_member(
 fn call_result_arg_from_routine_node(
     node: &RoutineNode,
     from: &ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> ArgDispatchInfo {
     if node.abi_overload_collapsed {
         return ArgDispatchInfo::untyped();
@@ -1994,8 +1993,8 @@ pub(crate) fn builtin_return_base_keyword(name_lc: &str) -> Option<&'static str>
 pub(crate) fn candidate_param_infos(
     meta: &crate::program::resolve::decl_surface::RoutineMeta,
     from: &ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<Vec<ParamDispatchInfo>> {
     if meta.parse_incomplete {
         return None;
@@ -2067,8 +2066,8 @@ pub(crate) fn candidate_param_infos(
 fn abi_param_canonical(
     p: &AbiParamRetained,
     from: &ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<CanonicalArgType> {
     if p.type_text.trim().is_empty() {
         return None;
@@ -2180,14 +2179,10 @@ fn abi_param_canonical(
 /// failing (an unresolvable/degraded Subtype).
 pub(crate) fn candidate_param_infos_abi(
     rid: &RoutineNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<Vec<ParamDispatchInfo>> {
-    let i = graph
-        .routines
-        .binary_search_by(|probe| probe.id.cmp(rid))
-        .ok()?;
-    let node = &graph.routines[i];
+    let node = graph.routine(rid)?;
     let AbiParams::Complete(params) = &node.abi_params else {
         return None;
     };
@@ -2763,7 +2758,10 @@ fn pick_sole_applicable(
 mod tests {
     use super::*;
     use crate::engine::deps::symbol_reference::SubtypeTag;
+    use crate::program::graph::ProgramGraph;
     use crate::program::node::{AppRef, ObjKey};
+    use crate::program::resolve::decl_surface::DeclSurface;
+    use crate::program::resolve::index::ResolveIndex;
 
     /// A minimal, arbitrary `ObjectNodeId` for tests that only need `from`'s
     /// identity as an opaque scope parameter (no object actually resolved

@@ -3043,6 +3043,7 @@ mod engine {
                         "parsed": r.parsed,
                         "resolved": r.resolved,
                         "dependencyBodiesResolved": r.dependency_bodies_resolved,
+                        "dependencyFilesResolved": r.dependency_files_resolved,
                         "wallMs": r.wall_ms,
                     });
                 }

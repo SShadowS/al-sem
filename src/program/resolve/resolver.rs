@@ -80,10 +80,11 @@ use crate::program::resolve::edge::{
     SetCompleteness, SiteId, SourcePos, UnknownReason, Witness, callee_fp,
 };
 use crate::program::resolve::extract::WithState;
-use crate::program::resolve::index::{ResolveIndex, SubscriberIndex};
+use crate::program::resolve::index::SubscriberIndex;
 use crate::program::resolve::member_catalog::{
     MemberCatalogKind, member_builtin, member_builtin_id,
 };
+use crate::program::resolve::reads::{GraphReads, IndexReads, SurfaceReads};
 use crate::program::resolve::receiver::{
     ControlAddInSurface, FrameworkKind, ReceiverType, resolve_pageext_base_source_table,
     resolve_source_table_ref, resolve_tableext_base_table,
@@ -134,8 +135,8 @@ fn extension_base_kind(kind: ObjectKind) -> Option<ObjectKind> {
 fn make_routine_route(
     rid: &RoutineNodeId,
     obj_tier: TrustTier,
-    surface: &DeclSurface,
-    graph: &ProgramGraph,
+    surface: &dyn SurfaceReads,
+    graph: &dyn GraphReads,
 ) -> Route {
     if let Some((meta, path)) = surface.get_with_path(rid) {
         Route {
@@ -162,11 +163,7 @@ fn make_routine_route(
         // `graph.routines` is sorted by RoutineNodeId (see build.rs), enabling
         // O(log n) lookup. Falls back to Procedure/None when the node is absent
         // (integration gap — should not happen for a valid SymbolOnly boundary).
-        let opt_node = graph
-            .routines
-            .binary_search_by(|probe| probe.id.cmp(rid))
-            .ok()
-            .map(|i| &graph.routines[i]);
+        let opt_node = graph.routine(rid);
         let routine_kind = opt_node
             .and_then(|n| n.abi_routine_kind.clone())
             .unwrap_or(AbiRoutineKind::Procedure);
@@ -241,12 +238,8 @@ fn unresolved_route_with_tier(reason: UnknownReason, tier: TrustTier) -> Route {
 /// route through any of them unguarded. Centralizing the lookup here means
 /// a future call site gets the same protection by construction rather than
 /// by remembering to copy the check.
-fn routine_is_collapse_marked(rid: &RoutineNodeId, graph: &ProgramGraph) -> bool {
-    graph
-        .routines
-        .binary_search_by(|probe| probe.id.cmp(rid))
-        .ok()
-        .is_some_and(|i| graph.routines[i].abi_overload_collapsed)
+fn routine_is_collapse_marked(rid: &RoutineNodeId, graph: &dyn GraphReads) -> bool {
+    graph.routine(rid).is_some_and(|r| r.abi_overload_collapsed)
 }
 
 /// Whether `rid` is currently marked [`RoutineNode::source_overload_aliased`]
@@ -264,12 +257,10 @@ fn routine_is_collapse_marked(rid: &RoutineNodeId, graph: &ProgramGraph) -> bool
 /// `DeclSurface` entry (`DeclSurface` is keyed by `RoutineNodeId`), and construct an
 /// `AmbiguousOverload` shape with two IDENTICAL-target concrete routes — the
 /// last laundering path out of `unknown` this prevalidation exists to close.
-fn routine_is_source_aliased(rid: &RoutineNodeId, graph: &ProgramGraph) -> bool {
+fn routine_is_source_aliased(rid: &RoutineNodeId, graph: &dyn GraphReads) -> bool {
     graph
-        .routines
-        .binary_search_by(|probe| probe.id.cmp(rid))
-        .ok()
-        .is_some_and(|i| graph.routines[i].source_overload_aliased)
+        .routine(rid)
+        .is_some_and(|r| r.source_overload_aliased)
 }
 
 /// The AL method id of routine `r` from its declared signature
@@ -279,9 +270,9 @@ fn routine_is_source_aliased(rid: &RoutineNodeId, graph: &ProgramGraph) -> bool 
 /// signature is not reproducible.
 pub(crate) fn routine_method_id(
     r: &crate::program::node_extract::RoutineNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
 ) -> Option<i32> {
     use crate::program::node_extract::AbiParams;
     use crate::program::resolve::index::ObjectRefResolution;
@@ -368,13 +359,12 @@ fn resolve_by_method_id(
     obj_id: &ObjectNodeId,
     obj_tier: TrustTier,
     n: i32,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
 ) -> (DispatchShape, Vec<Route>) {
     let matched: Vec<&RoutineNodeId> = graph
-        .routines
-        .run_by(|r| r.id.object.cmp(obj_id))
+        .routines_of(obj_id)
         .filter(|r| !r.is_trigger)
         .filter(|r| routine_method_id(r, graph, index, surface) == Some(n))
         .map(|r| &r.id)
@@ -467,9 +457,9 @@ fn resolve_in_object(
     name_lc: &str,
     arity: usize,
     from_object: &ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
     // Task 2 (argtype-dispatch-and-page-catalog plan): the call site's typed
     // arguments, consulted ONLY by the `_` arm's fail-closed pick (see
     // `arg_dispatch`'s module doc) — every other arm ignores this entirely.
@@ -494,12 +484,7 @@ fn resolve_in_object(
     // not overloads of each other (#63; triggers are reached by role, through
     // `dispatch_entry_trigger` and `resolve_implicit_trigger`).
     let candidates: Vec<&RoutineNodeId> = graph
-        .routines
-        .run_by(|r| {
-            r.id.object
-                .cmp(obj_id)
-                .then_with(|| r.id.name_lc.as_str().cmp(name_lc))
-        })
+        .routines_named(obj_id, name_lc)
         .filter(|r| !r.is_trigger)
         .map(|r| &r.id)
         .collect();
@@ -787,9 +772,9 @@ fn resolve_in_object(
 /// for `rid`.
 fn candidate_param_infos_either(
     rid: &RoutineNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
 ) -> Option<Vec<ParamDispatchInfo>> {
     if let Some(meta) = surface.get(rid) {
         return candidate_param_infos(meta, &rid.object, graph, index);
@@ -834,8 +819,8 @@ fn candidate_param_infos_either(
 fn routine_candidate_is_visible(
     rid: &RoutineNodeId,
     from_object: &ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> bool {
     object_access_visible_from(
         &rid.object,
@@ -860,12 +845,12 @@ fn routine_candidate_is_visible(
 /// `graph.friends` is populated (GUID-first, name+publisher-fallback
 /// resolution of each `<Module>` entry against the snapshot; entries whose
 /// app is outside the closure are silently skipped, open-world).
-fn internal_visible_across(exposing_app: AppRef, caller_app: AppRef, graph: &ProgramGraph) -> bool {
-    exposing_app == caller_app
-        || graph
-            .friends
-            .get(&exposing_app)
-            .is_some_and(|f| f.contains(&caller_app))
+fn internal_visible_across(
+    exposing_app: AppRef,
+    caller_app: AppRef,
+    graph: &dyn GraphReads,
+) -> bool {
+    exposing_app == caller_app || graph.is_friend(exposing_app, caller_app)
 }
 
 /// Whether `obj_id` (at trust tier `obj_tier`) carries a visible source/ABI
@@ -886,8 +871,8 @@ fn object_has_member_candidate(
     obj_tier: TrustTier,
     method_lc: &str,
     arity: usize,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> bool {
     let mut candidates = index.routines_in_object(graph, obj_id, method_lc);
     if candidates.len() == 0 {
@@ -901,11 +886,10 @@ fn object_has_member_candidate(
 
 /// Whether two of `candidates` exist in no common build: every node of one
 /// has build conditions that contradict every node of the other.
-fn has_build_alternatives(candidates: &[&RoutineNodeId], graph: &ProgramGraph) -> bool {
+fn has_build_alternatives(candidates: &[&RoutineNodeId], graph: &dyn GraphReads) -> bool {
     let contexts = |rid: &RoutineNodeId| -> Vec<&[(String, bool)]> {
         graph
-            .routines
-            .run_by(|p| p.id.cmp(rid))
+            .routines_with_id(rid)
             .map(|n| &*n.preproc_context)
             .collect()
     };
@@ -926,9 +910,9 @@ fn has_build_alternatives(candidates: &[&RoutineNodeId], graph: &ProgramGraph) -
 fn routine_outside_build(
     rid: &RoutineNodeId,
     build: &[(String, bool)],
-    graph: &ProgramGraph,
+    graph: &dyn GraphReads,
 ) -> bool {
-    let mut nodes = graph.routines.run_by(|p| p.id.cmp(rid)).peekable();
+    let mut nodes = graph.routines_with_id(rid).peekable();
     nodes.peek().is_some()
         && nodes.all(|n| al_syntax::ir::preproc_contradicts(&n.preproc_context, build))
 }
@@ -941,12 +925,8 @@ fn routine_outside_build(
 /// read straight from `graph.routines`), but if it ever does, the caller
 /// ([`object_has_visible_member_candidate`]) fails closed rather than
 /// assuming the routine is visible.
-fn lookup_routine_access(graph: &ProgramGraph, rid: &RoutineNodeId) -> Option<Access> {
-    graph
-        .routines
-        .binary_search_by(|probe| probe.id.cmp(rid))
-        .ok()
-        .map(|i| graph.routines[i].access)
+fn lookup_routine_access(graph: &dyn GraphReads, rid: &RoutineNodeId) -> Option<Access> {
+    graph.routine(rid).map(|r| r.access)
 }
 
 /// The shared per-`Access` visibility predicate: is a candidate DECLARED IN
@@ -996,8 +976,8 @@ fn object_access_visible_from(
     obj_id: &ObjectNodeId,
     access: Option<Access>,
     from_object: &ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> bool {
     match access {
         Some(Access::Public) => true,
@@ -1038,8 +1018,8 @@ fn object_has_visible_member_candidate(
     method_lc: &str,
     arity: usize,
     from_object: &ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> bool {
     if !object_has_member_candidate(obj_id, obj_tier, method_lc, arity, graph, index) {
         return false;
@@ -1094,8 +1074,8 @@ fn access_exclusion_reason(
     method_lc: &str,
     arity: usize,
     from_object: &ObjectNodeId,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<UnknownReason> {
     index
         .routines_in_object(graph, obj_id, method_lc)
@@ -1253,16 +1233,16 @@ fn resolve_in_extendable_scope(
     base_id: ObjectNodeId,
     name_lc: &str,
     arity: usize,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
     args: &[ArgDispatchInfo],
     build: &[(String, bool)],
-    extensions_of: for<'a> fn(&'a ResolveIndex, &str) -> &'a [ObjectNodeId],
+    extensions_of: for<'a> fn(&'a dyn IndexReads, &str) -> &'a [ObjectNodeId],
     zero_match: ZeroMatchStrategy,
     own_extension_wins: bool,
 ) -> TableScopeOutcome {
-    let closure = graph.topology.closure(from_object.id.app);
+    let closure = graph.closure(from_object.id.app);
 
     if !closure.contains(&base_id.app) {
         return TableScopeOutcome::NotVisible {
@@ -1270,9 +1250,7 @@ fn resolve_in_extendable_scope(
         };
     }
     let Some((base_tier, base_name_lc)) = graph
-        .objects
-        .iter()
-        .find(|o| o.id == base_id)
+        .object_first(&base_id)
         .map(|o| (o.tier, o.name.fold_identifier()))
     else {
         return TableScopeOutcome::NotVisible {
@@ -1289,12 +1267,7 @@ fn resolve_in_extendable_scope(
             // candidate (the Task 2 soundness fix).
             continue;
         }
-        let Some(ext_tier) = graph
-            .objects
-            .iter()
-            .find(|o| &o.id == ext_id)
-            .map(|o| o.tier)
-        else {
+        let Some(ext_tier) = graph.object_first(ext_id).map(|o| o.tier) else {
             continue;
         };
         scope.push((ext_id.clone(), ext_tier));
@@ -1308,7 +1281,7 @@ fn resolve_in_extendable_scope(
         let hits: Vec<&(ObjectNodeId, TrustTier)> = scope
             .iter()
             .filter(|(oid, _)| {
-                graph.routines.run_by(|r| r.id.object.cmp(oid)).any(|r| {
+                graph.routines_of(oid).any(|r| {
                     !r.is_trigger && routine_method_id(r, graph, index, surface) == Some(n)
                 })
             })
@@ -1465,9 +1438,9 @@ fn resolve_in_table_scope(
     table_id: ObjectNodeId,
     name_lc: &str,
     arity: usize,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
     args: &[ArgDispatchInfo],
     build: &[(String, bool)],
 ) -> TableScopeOutcome {
@@ -1481,7 +1454,7 @@ fn resolve_in_table_scope(
         surface,
         args,
         build,
-        ResolveIndex::table_extensions_of,
+        |i, n| i.table_extensions_of(n),
         ZeroMatchStrategy::AccessExcludedReason,
         true,
     )
@@ -1527,9 +1500,9 @@ fn resolve_in_page_scope(
     page_id: ObjectNodeId,
     name_lc: &str,
     arity: usize,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
     args: &[ArgDispatchInfo],
     build: &[(String, bool)],
 ) -> TableScopeOutcome {
@@ -1543,7 +1516,7 @@ fn resolve_in_page_scope(
         surface,
         args,
         build,
-        ResolveIndex::page_extensions_of,
+        |i, n| i.page_extensions_of(n),
         ZeroMatchStrategy::PreserveArityMismatch,
         false,
     )
@@ -1588,9 +1561,9 @@ fn resolve_in_report_scope(
     report_id: ObjectNodeId,
     name_lc: &str,
     arity: usize,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
     args: &[ArgDispatchInfo],
     build: &[(String, bool)],
 ) -> TableScopeOutcome {
@@ -1604,7 +1577,7 @@ fn resolve_in_report_scope(
         surface,
         args,
         build,
-        ResolveIndex::report_extensions_of,
+        |i, n| i.report_extensions_of(n),
         ZeroMatchStrategy::PreserveArityMismatch,
         false,
     )
@@ -1638,8 +1611,8 @@ fn resolve_in_report_scope(
 /// falling out of sync on a future kind addition.
 pub(crate) fn implicit_rec_table_id(
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<ObjectNodeId> {
     match from_object.id.kind {
         ObjectKind::Table => Some(from_object.id.clone()),
@@ -1757,8 +1730,8 @@ fn is_proven_never_bare_call(name_lc: &str) -> bool {
 /// nor its (resolved) base page declares one: no implicit Rec exists (S9.0e).
 fn page_has_no_source_table(
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> bool {
     match from_object.id.kind {
         ObjectKind::Page => from_object.source_table.is_none(),
@@ -1863,9 +1836,9 @@ pub fn resolve_bare(
     from_object: &ObjectNode,
     name_lc: &str,
     arity: usize,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
     with_state: WithState,
 ) -> (DispatchShape, Vec<Route>) {
     resolve_bare_with_args(
@@ -1908,9 +1881,9 @@ fn resolve_in_extension_base(
     from_object: &ObjectNode,
     name_lc: &str,
     arity: usize,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
     args: &[ArgDispatchInfo],
     build: &[(String, bool)],
 ) -> ExtensionBase {
@@ -1975,9 +1948,9 @@ pub(crate) fn resolve_bare_with_args(
     from_object: &ObjectNode,
     name_lc: &str,
     arity: usize,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
     with_state: WithState,
     args: &[ArgDispatchInfo],
     build: &[(String, bool)],
@@ -2322,9 +2295,9 @@ fn dispatch_entry_trigger(
     target_id: &ObjectNodeId,
     target_tier: TrustTier,
     object_kind: ObjectKind,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
 ) -> (DispatchShape, SetCompleteness, Vec<Route>) {
     let trigger_name = entry_trigger_name(object_kind);
     // Every trigger of `object` a run reaches ([`run_triggers`]); for a
@@ -2379,7 +2352,7 @@ fn dispatch_entry_trigger(
 
     let extensions: &[ObjectNodeId] = match object_kind {
         ObjectKind::Page | ObjectKind::Report => {
-            let Some(base) = graph.objects.iter().find(|o| &o.id == target_id) else {
+            let Some(base) = graph.object_first(target_id) else {
                 return (DispatchShape::Exact, SetCompleteness::Complete, routes);
             };
             let name_lc = base.name.fold_identifier();
@@ -2405,9 +2378,7 @@ fn dispatch_entry_trigger(
     };
     for ext_id in extensions {
         let ext_tier = graph
-            .objects
-            .iter()
-            .find(|o| &o.id == ext_id)
+            .object_first(ext_id)
             .map_or(TrustTier::Workspace, |o| o.tier);
         routes.extend(
             entries_of(ext_id)
@@ -2434,8 +2405,8 @@ pub(crate) fn object_run_target<'g>(
     object_kind: ObjectKind,
     target_ref: &str,
     target_is_name: bool,
-    graph: &'g ProgramGraph,
-    index: &ResolveIndex,
+    graph: &'g dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<&'g ObjectNode> {
     if target_is_name {
         graph.resolve_object(from, object_kind, target_ref)
@@ -2443,7 +2414,7 @@ pub(crate) fn object_run_target<'g>(
         match target_ref.parse::<i64>() {
             Ok(n) => index
                 .object_by_number(graph, from, object_kind, n)
-                .and_then(|oid| graph.objects.iter().find(|o| o.id == oid)),
+                .and_then(|oid| graph.object_first(&oid)),
             Err(_) => None,
         }
     }
@@ -2456,10 +2427,10 @@ pub(crate) fn object_receiver_target<'g>(
     name_lc: &str,
     id: Option<&ObjectNodeId>,
     from_object: &ObjectNode,
-    graph: &'g ProgramGraph,
+    graph: &'g dyn GraphReads,
 ) -> Option<&'g ObjectNode> {
     match id {
-        Some(id) => graph.objects.iter().find(|o| &o.id == id),
+        Some(id) => graph.object_first(id),
         None => graph.resolve_object(from_object.id.app, *kind, name_lc),
     }
 }
@@ -2488,19 +2459,10 @@ fn declares_entry_method_overload(
     target: &ObjectNode,
     method_lc: &str,
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> bool {
-    let declares = |oid: &ObjectNodeId| {
-        graph
-            .routines
-            .run_by(|r| {
-                r.id.object
-                    .cmp(oid)
-                    .then_with(|| r.id.name_lc.as_str().cmp(method_lc))
-            })
-            .any(|r| !r.is_trigger)
-    };
+    let declares = |oid: &ObjectNodeId| graph.routines_named(oid, method_lc).any(|r| !r.is_trigger);
     if declares(&target.id) {
         return true;
     }
@@ -2512,7 +2474,7 @@ fn declares_entry_method_overload(
     if extensions.is_empty() {
         return false;
     }
-    let closure = graph.topology.closure(from_object.id.app);
+    let closure = graph.closure(from_object.id.app);
     extensions
         .iter()
         .any(|ext| closure.contains(&ext.app) && declares(ext))
@@ -2565,9 +2527,9 @@ pub fn resolve_object_run(
     object_kind: ObjectKind,
     target_ref: Option<&str>,
     target_is_name: bool,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
 ) -> (DispatchShape, SetCompleteness, Vec<Route>) {
     let Some(target_ref) = target_ref else {
         // Dynamic target (a runtime variable) — known shape, open world.
@@ -2646,9 +2608,9 @@ pub fn resolve_object_run(
 pub fn resolve_implicit_trigger(
     op: &str,
     table_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
 ) -> (DispatchShape, SetCompleteness, Vec<Route>) {
     let trigger_name: &str = match op.fold_identifier().as_str() {
         "insert" => "oninsert",
@@ -2692,9 +2654,7 @@ pub fn resolve_implicit_trigger(
     let table_name_lc = table_object.name.fold_identifier();
     for ext_id in index.table_extensions_of(&table_name_lc) {
         let ext_tier = graph
-            .objects
-            .iter()
-            .find(|o| &o.id == ext_id)
+            .object_first(ext_id)
             .map(|o| o.tier)
             .unwrap_or(TrustTier::Workspace);
         for rid in index.routines_in_object(graph, ext_id, trigger_name) {
@@ -2969,9 +2929,9 @@ pub fn resolve_member(
     method_lc: &str,
     arity: usize,
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
 ) -> (DispatchShape, Vec<Route>) {
     resolve_member_with_args(
         receiver,
@@ -2995,9 +2955,9 @@ pub(crate) fn resolve_member_with_args(
     method_lc: &str,
     arity: usize,
     from_object: &ObjectNode,
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
-    surface: &DeclSurface,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
     args: &[ArgDispatchInfo],
     build: &[(String, bool)],
 ) -> (DispatchShape, Vec<Route>) {
@@ -3367,9 +3327,7 @@ pub(crate) fn resolve_member_with_args(
 
             for impl_id in implementers {
                 let impl_tier = graph
-                    .objects
-                    .iter()
-                    .find(|o| &o.id == impl_id)
+                    .object_first(impl_id)
                     .map(|o| o.tier)
                     .unwrap_or(TrustTier::Workspace);
 
@@ -3534,15 +3492,11 @@ pub(crate) fn routine_node_for_type_query<'g>(
     route: &Route,
     dispatch_arity: usize,
     from_object: &ObjectNode,
-    graph: &'g ProgramGraph,
-    index: &ResolveIndex,
+    graph: &'g dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<&'g RoutineNode> {
     let node = match &route.target {
-        RouteTarget::Routine(rid) => graph
-            .routines
-            .binary_search_by(|probe| probe.id.cmp(rid))
-            .ok()
-            .map(|i| &graph.routines[i]),
+        RouteTarget::Routine(rid) => graph.routine(rid),
         RouteTarget::AbiSymbol { key } => {
             resolve_abi_prefix_routine(key, dispatch_arity, from_object, graph, index)
         }
@@ -3565,8 +3519,8 @@ fn resolve_abi_prefix_routine<'g>(
     key: &AbiRoutineKey,
     dispatch_arity: usize,
     from_object: &ObjectNode,
-    graph: &'g ProgramGraph,
-    index: &ResolveIndex,
+    graph: &'g dyn GraphReads,
+    index: &dyn IndexReads,
 ) -> Option<&'g RoutineNode> {
     let kind = object_kind_from_abi_type(&key.object_type);
     let obj_id = ObjectNodeId {
@@ -3583,11 +3537,7 @@ fn resolve_abi_prefix_routine<'g>(
     let [rid] = visible.as_slice() else {
         return None;
     };
-    graph
-        .routines
-        .binary_search_by(|probe| probe.id.cmp(rid))
-        .ok()
-        .map(|i| &graph.routines[i])
+    graph.routine(rid)
 }
 
 // ---------------------------------------------------------------------------

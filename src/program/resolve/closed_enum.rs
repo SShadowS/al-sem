@@ -30,13 +30,12 @@ use al_syntax::ir::{
     RoutineDecl, StmtId, StmtKind,
 };
 
-use crate::program::graph::ProgramGraph;
 use crate::program::node::ObjectNodeId;
 use crate::program::node_extract::{ObjectNode, ObjectRef, fold_ref_name};
-use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{Evidence, Route, RouteTarget};
 use crate::program::resolve::extract::WithState;
-use crate::program::resolve::index::{ObjectRefResolution, ResolveIndex};
+use crate::program::resolve::index::ObjectRefResolution;
+use crate::program::resolve::reads::{GraphReads, IndexReads, SurfaceReads};
 use crate::program::resolve::receiver::{
     CallerScopeSymbol, ParsedType, ReceiverType, caller_scope_symbol, classify_type_text,
     extension_base_object, infer_receiver_type, name_shadows_bare_call, parse_object_kind_type,
@@ -50,9 +49,9 @@ pub(crate) struct ClosedEnumCx<'a> {
     pub routine: &'a RoutineDecl,
     pub obj: &'a ObjectDecl,
     pub from_object: &'a ObjectNode,
-    pub graph: &'a ProgramGraph,
-    pub index: &'a ResolveIndex,
-    pub surface: &'a DeclSurface,
+    pub graph: &'a dyn GraphReads,
+    pub index: &'a dyn IndexReads,
+    pub surface: &'a dyn SurfaceReads,
     pub with_state: WithState,
 }
 
@@ -416,6 +415,7 @@ fn field_enum(cx: &ClosedEnumCx, object: ExprId, member: &str) -> Option<ObjectN
     let untargeted_has_routine = cx
         .index
         .untargeted_table_extensions_in(cx.graph, cx.from_object)
+        .into_iter()
         .any(|ext| {
             cx.index
                 .routines_in_object(cx.graph, ext, &field_lc)
@@ -497,8 +497,7 @@ fn call_enum(cx: &ClosedEnumCx, f_lc: &str, arity: usize) -> Option<ObjectNodeId
     let RouteTarget::Routine(rid) = &route.target else {
         return None;
     };
-    let i = cx.graph.routines.binary_search_by(|r| r.id.cmp(rid)).ok()?;
-    let callee = &cx.graph.routines[i];
+    let callee = cx.graph.routine(rid)?;
     if !parsed_clean(cx, &rid.object) {
         return None;
     }
@@ -588,8 +587,8 @@ fn declared_type<'a>(cx: &ClosedEnumCx<'a>, name_lc: &str) -> Option<&'a str> {
 /// coverage whichever one the enum meant. Not vacuous (opus N3): the enum must
 /// be closed and hold at least one entry for EVERY interface it implements.
 pub(crate) fn enum_covered_by_routes(
-    graph: &ProgramGraph,
-    index: &ResolveIndex,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
     enum_node: &ObjectNode,
     interface_lc: &str,
     routes: &[Route],
@@ -1180,7 +1179,7 @@ enum 50106 "Other Kind" implements "Other Strategy"
         let dir = write(&ws);
         let ctx = crate::program::resolve::full::build_context_res(dir.path()).expect("context");
         let graph = ctx.graph();
-        let index = super::ResolveIndex::build(graph);
+        let index = crate::program::resolve::index::ResolveIndex::build(graph);
         let report = crate::program::resolve::full::resolve_full_program_with(
             &ctx,
             crate::program::resolve::abi_check::AbiIntegrity::Skip,

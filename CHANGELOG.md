@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (the finer dependency re-resolution rule for S)
+
+- **An S edit re-resolves only the dependency files whose recorded answers changed** (plan
+  `docs/superpowers/plans/2026-11-03-context-server-remaining.md`, item S, step 2;
+  `src/program/session/dep_record.rs`). The workspace session resolves every dependency file
+  through a reads-facade recorder and keeps, per file, its edge range and the queries it made,
+  and per query a digest of its answer (blake3 over the declaration projection's encoding of
+  everything handed out: ids by value, nodes and runs of nodes by their whole content, so a read
+  through a returned node is covered; a shared dependency-tier node by its position, pinned by
+  the tier's identity). Under S every kept query is asked again against the new revision; a file
+  with a changed answer is resolved again, the others keep their edges, site facts and parens-less
+  calls (sites re-stamped with the current `FileIx`, source witnesses re-materialized as under B).
+  When no file changes and none is renumbered, the old resolution is shared outright. The record
+  is not trusted, and everything is resolved, on another tier or facade version, a changed file
+  list, a kept witness with no declaration, or two files' site facts sharing an obligation id. P
+  and B are unchanged. On CDO (`aldump --session-refresh --verify`, every step equal to the cold
+  build): 10,881 dependency files, 499,011 recorded queries, record ~68 MB; adding a procedure, a
+  signature change and adding a file each re-resolve 0 files (no answer changed); a new
+  implementer of a dependency interface (`CTS-CDN ISenderProfileRetriever`) re-resolves 2. The
+  query check costs ~30 ms and the digests ~40 ms per S. Timed on CDO (release-fast, quiet
+  machine, two rounds each, master `7b97a134` beside it): the resident S refresh
+  (`census-probe incr`, uncounted, a procedure added) 7.2-8.0 s → 3.09-3.16 s; the model refresh
+  (`aldump --session-refresh`) for a procedure added 6.65-7.21 s → 2.43-2.70 s, a signature change
+  2.47-2.67 s, a file added 6.97-7.31 s → 3.50-3.81 s (every dependency file renumbered, so the
+  kept edges are copied to re-stamp them), the new implementer 3.67-3.85 s. The recording's cost
+  on a cold build: program 7.27-7.56 s → 7.80-8.20 s, resident cold refresh 11.5-12.0 s →
+  12.1-12.6 s, P unchanged within noise (12.9 s); peak RSS of the cold step 3.48 → 3.71 GB.
+  New session tests (both memory modes):
+  a first workspace implementer of a dependency interface (a negative lookup), an implementer's
+  method arity and access changed under an unchanged `implements` list (a read through a returned
+  id), a procedure added above that method (witness moved, nothing re-resolved), a workspace
+  table extension of a dependency table added and removed, a name collision, a workspace closed
+  enum implementing the dependency interface. Discrimination: recording `implementers_of` only
+  when non-empty fails the first-implementer test; not recording `routines_named` fails the
+  implementer test; comparing by query alone fails 13 tests; skipping the fast path's witness
+  re-materialization fails the implementer test.
+
+### Changed (the resolution reads facade and its tripwire)
+
+- **Call-site resolution reads the whole-program state only through a facade** (plan
+  `docs/superpowers/plans/2026-11-03-context-server-remaining.md`, item S, step 1;
+  `src/program/resolve/reads.rs`). `resolve_file_obligations` and everything it reaches in
+  `resolver`, `receiver`, `arg_dispatch`, `closed_enum`, `interface_holder` and
+  `applicability` take `&dyn GraphReads`, `&dyn IndexReads` and `&dyn SurfaceReads` instead
+  of the concrete graph, index and surface, so they cannot name a graph field or an index map:
+  every read is a semantic query (29 kinds, `reads::Query`). A `Recorder` answers the same
+  queries and logs them per file. The six `graph.objects.iter().find(..)` scans and one
+  `graph.routines.iter().filter(..)` scan in that code became the equal run lookups. No output
+  changes (every golden and test unchanged). The tripwire: a counting hook (tests only) on the
+  raw state (node sets, index accessors, surface, topology) counts a raw read made inside a
+  recording scope but outside a recorder method; `reads::tests` resolves every file of every
+  r0-corpus workspace and two dependency fixtures through recorders and asserts zero such
+  reads and an unchanged resolution, and a CDO-gated test does the same over every CDO
+  dependency file. Passing the plain graph instead of the recorder fails it (13,313 bypassing
+  reads in 292 files), and so does one recorder method reading without its guard (8,364).
+
 ### Changed (context server: raw facts emitted on demand for every view)
 
 - **The resident fold no longer emits raw inherited facts for every primary routine** (plan

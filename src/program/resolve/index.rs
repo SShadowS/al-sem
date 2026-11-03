@@ -771,6 +771,7 @@ impl ResolveIndex {
         kind: ObjectKind,
         declared_id: i64,
     ) -> Option<ObjectNodeId> {
+        crate::program::resolve::reads::probe();
         // Prefer `from` itself (avoids building the closure set in the common case).
         if let Some(oid) = self.objs_by_number.get(&(from, kind, declared_id)) {
             return Some(oid.clone());
@@ -843,6 +844,7 @@ impl ResolveIndex {
         kind: ObjectKind,
         r: &ObjectRef,
     ) -> ObjectRefResolution {
+        crate::program::resolve::reads::probe();
         let closure = graph.topology.closure(from.app);
         match r {
             ObjectRef::Id(n) => {
@@ -916,6 +918,7 @@ impl ResolveIndex {
         kind: ObjectKind,
         r: &ObjectRef,
     ) -> ObjectRefResolution {
+        crate::program::resolve::reads::probe();
         let ambiguous = match r {
             ObjectRef::Id(n) => self
                 .objects_by_id
@@ -935,6 +938,7 @@ impl ResolveIndex {
     /// Whether exactly one object of `kind` is named `name_lc` (folded) in the
     /// whole program.
     pub fn name_is_unique(&self, kind: ObjectKind, name_lc: &str) -> bool {
+        crate::program::resolve::reads::probe();
         self.objects_by_name
             .get(&(kind, name_lc.to_string()))
             .is_some_and(|c| c.len() == 1)
@@ -943,6 +947,7 @@ impl ResolveIndex {
     /// The one object of `kind` named `name_lc` (folded) in the whole program,
     /// or `None` when there is none or more than one.
     pub fn unique_object(&self, kind: ObjectKind, name_lc: &str) -> Option<&ObjectNodeId> {
+        crate::program::resolve::reads::probe();
         match self
             .objects_by_name
             .get(&(kind, name_lc.to_string()))?
@@ -958,6 +963,7 @@ impl ResolveIndex {
     /// view (extensions live in reverse-dependent apps, outside the base
     /// table's own closure).
     pub fn table_extensions_of(&self, base_table_name_lc: &str) -> &[ObjectNodeId] {
+        crate::program::resolve::reads::probe();
         self.table_extensions
             .get(base_table_name_lc)
             .map(Vec::as_slice)
@@ -972,6 +978,7 @@ impl ResolveIndex {
     /// `resolver::resolve_in_page_scope` for the closure- and access-filtered
     /// consumer.
     pub fn page_extensions_of(&self, base_page_name_lc: &str) -> &[ObjectNodeId] {
+        crate::program::resolve::reads::probe();
         self.page_extensions
             .get(base_page_name_lc)
             .map(Vec::as_slice)
@@ -987,6 +994,7 @@ impl ResolveIndex {
     /// `resolver::resolve_in_report_scope` for the closure- and
     /// access-filtered consumer.
     pub fn report_extensions_of(&self, base_report_name_lc: &str) -> &[ObjectNodeId] {
+        crate::program::resolve::reads::probe();
         self.report_extensions
             .get(base_report_name_lc)
             .map(Vec::as_slice)
@@ -997,6 +1005,7 @@ impl ResolveIndex {
     /// `interface_name_lc` — [`WorldMode::AnalyzedSnapshot`], whole-program
     /// view (implementers live in reverse-dependent apps).
     pub fn implementers_of(&self, interface_name_lc: &str) -> &[ObjectNodeId] {
+        crate::program::resolve::reads::probe();
         self.implementers
             .get(interface_name_lc)
             .map(Vec::as_slice)
@@ -1018,6 +1027,7 @@ impl ResolveIndex {
         graph: &ProgramGraph,
         interface_name_lc: &str,
     ) -> Vec<ObjectNodeId> {
+        crate::program::resolve::reads::probe();
         self.closed_enum_implementers
             .get(interface_name_lc)
             .map(Vec::as_slice)
@@ -1103,7 +1113,19 @@ impl ResolveIndex {
         base: &ObjectNodeId,
         field_lc: &str,
     ) -> Option<(FieldNode, ObjectNodeId)> {
-        let closure = graph.topology.closure(from_object.id.app);
+        self.field_with_owner_in_table_from(graph, from_object.id.app, base, field_lc)
+    }
+
+    /// [`Self::field_with_owner_in_table`] from an app: the only part of
+    /// `from_object` it reads (the reads facade keys its query by it).
+    pub fn field_with_owner_in_table_from(
+        &self,
+        graph: &ProgramGraph,
+        from_app: AppRef,
+        base: &ObjectNodeId,
+        field_lc: &str,
+    ) -> Option<(FieldNode, ObjectNodeId)> {
+        let closure = graph.topology.closure(from_app);
         if !closure.contains(&base.app) {
             return None;
         }
@@ -1211,7 +1233,19 @@ impl ResolveIndex {
         base: &ObjectNodeId,
         name_lc: &str,
     ) -> bool {
-        let closure = graph.topology.closure(from_object.id.app);
+        self.table_scope_has_routine_from(graph, from_object.id.app, base, name_lc)
+    }
+
+    /// [`Self::table_scope_has_routine`] from an app (all it reads of
+    /// `from_object`).
+    pub fn table_scope_has_routine_from(
+        &self,
+        graph: &ProgramGraph,
+        from_app: AppRef,
+        base: &ObjectNodeId,
+        name_lc: &str,
+    ) -> bool {
+        let closure = graph.topology.closure(from_app);
         if !closure.contains(&base.app) {
             return false;
         }
@@ -1260,7 +1294,19 @@ impl ResolveIndex {
         base: &ObjectNodeId,
         field_lc: &str,
     ) -> bool {
-        let closure = graph.topology.closure(from_object.id.app);
+        self.table_scope_may_have_field_from(graph, from_object.id.app, base, field_lc)
+    }
+
+    /// [`Self::table_scope_may_have_field`] from an app (all it reads of
+    /// `from_object`).
+    pub fn table_scope_may_have_field_from(
+        &self,
+        graph: &ProgramGraph,
+        from_app: AppRef,
+        base: &ObjectNodeId,
+        field_lc: &str,
+    ) -> bool {
+        let closure = graph.topology.closure(from_app);
         if !closure.contains(&base.app) {
             return true;
         }
@@ -1275,7 +1321,7 @@ impl ResolveIndex {
         self.table_extensions_of(&base_name_lc)
             .iter()
             .filter(|ext_id| closure.contains(&ext_id.app))
-            .chain(self.untargeted_table_extensions_in(graph, from_object))
+            .chain(self.untargeted_table_extensions_from(graph, from_app))
             .any(|ext_id| Self::find_object(graph, ext_id).is_none_or(declares))
     }
 
@@ -1288,7 +1334,18 @@ impl ResolveIndex {
         graph: &ProgramGraph,
         from_object: &ObjectNode,
     ) -> impl Iterator<Item = &'a ObjectNodeId> {
-        let closure = graph.topology.closure(from_object.id.app);
+        self.untargeted_table_extensions_from(graph, from_object.id.app)
+    }
+
+    /// [`Self::untargeted_table_extensions_in`] from an app (all it reads of
+    /// `from_object`).
+    pub fn untargeted_table_extensions_from<'a>(
+        &'a self,
+        graph: &ProgramGraph,
+        from_app: AppRef,
+    ) -> impl Iterator<Item = &'a ObjectNodeId> + use<'a> {
+        crate::program::resolve::reads::probe();
+        let closure = graph.topology.closure(from_app);
         self.untargeted_table_extensions
             .iter()
             .filter(move |ext_id| closure.contains(&ext_id.app))

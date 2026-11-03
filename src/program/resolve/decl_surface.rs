@@ -342,9 +342,23 @@ impl DeclSurface {
     }
 
     pub fn get(&self, id: &RoutineNodeId) -> Option<&RoutineMeta> {
+        crate::program::resolve::reads::probe();
         self.local
             .get(id)
             .or_else(|| self.frozen.as_ref().and_then(|f| f.get(id)))
+    }
+
+    /// `id`'s entry in the workspace part only (what [`Self::get`] answers
+    /// before it falls back to the frozen dependency tier).
+    pub(crate) fn get_local(&self, id: &RoutineNodeId) -> Option<&RoutineMeta> {
+        self.local.get(id)
+    }
+
+    /// The frozen dependency tier's identity (its `Arc`'s address; 0 when
+    /// none): two surfaces with the same one answer every dependency
+    /// routine alike.
+    pub(crate) fn frozen_identity(&self) -> usize {
+        self.frozen.as_ref().map_or(0, |f| Arc::as_ptr(f) as usize)
     }
 
     pub fn get_with_path(&self, id: &RoutineNodeId) -> Option<(&RoutineMeta, &str)> {

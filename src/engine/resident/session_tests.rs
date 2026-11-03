@@ -326,10 +326,11 @@ fn low_mem_answers_equal_cold_after_b_and_s() {
         );
         let r = check("declaration edit").expect("a refresh report");
         assert_eq!(r.class, ChangeClass::Declaration);
-        assert!(r.dependency_bodies_resolved);
-        // The default mode resolves from the tier's trees; low-mem parses
-        // the dependency's one file again.
-        assert_eq!(r.dependency_files_parsed, usize::from(low_mem));
+        // No dependency file read the workspace codeunit (the finer S rule,
+        // `program::session::dep_record`): none is resolved or parsed again.
+        assert!(r.dependency_rule);
+        assert_eq!(r.dependency_files_resolved, 0);
+        assert_eq!(r.dependency_files_parsed, 0);
     }
 }
 

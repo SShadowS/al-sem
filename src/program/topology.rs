@@ -22,6 +22,7 @@ impl DependencyGraph {
 
     /// `from` + all transitively reachable dependencies. Cycle-safe.
     pub fn closure(&self, from: AppRef) -> BTreeSet<AppRef> {
+        crate::program::resolve::reads::probe();
         let mut seen = BTreeSet::new();
         let mut stack = vec![from];
         while let Some(a) = stack.pop() {

@@ -60,6 +60,7 @@ use crate::program::profile::BuildProfile;
 use crate::program::resolve::full::{DependencyBodyResolution, FileResolution};
 use crate::program::resolved::{ProgramScope, ResolvedProgram};
 use crate::program::session::classify::{ChangeClass, DeclProjection, classify_files};
+use crate::program::session::dep_record::{self, DepRecord};
 use crate::snapshot::{AppSetSnapshot, DependencySource, SnapshotBuilder};
 
 /// One workspace file as the last revision left it.
@@ -79,6 +80,9 @@ struct Retained {
     identity: blake3::Hash,
     files: HashMap<String, RetainedFile>,
     dependency: Arc<DependencyBodyResolution>,
+    /// What each dependency file's resolution read (the S rule,
+    /// `session::dep_record`); `None` when no record could be kept.
+    dep_record: Option<Arc<DepRecord>>,
     /// Each source-bearing dependency's extracted file list (texts), as the
     /// snapshot held it, in both modes. Held so the next snapshot shares it
     /// through the session's `DepCache` (same `.app` stamp, content hash
@@ -121,8 +125,16 @@ pub struct RefreshReport {
     pub parsed: usize,
     /// Workspace files resolved in this revision (the others reused theirs).
     pub resolved: usize,
-    /// Whether the dependency bodies were resolved again.
+    /// Whether any dependency file was resolved again.
     pub dependency_bodies_resolved: bool,
+    /// Source-bearing dependency files, and how many of them were resolved
+    /// in this revision (all on P or a whole fallback; under S those whose
+    /// recorded answers changed, `session::dep_record`; none under B).
+    pub dependency_files: usize,
+    pub dependency_files_resolved: usize,
+    /// Under S: whether the finer rule ran (`false`: everything resolved,
+    /// for want of a trusted record).
+    pub dependency_rule: bool,
     /// Dependency files the program build parsed (every one on a tier miss;
     /// under `LowMem` also every one for an S re-resolution). The model
     /// assembly's own re-parses are in `rows.dependency_parsed`.
@@ -248,6 +260,7 @@ impl WorkspaceSession {
             parts.push(("retained.file_resolutions", Box::new(resolutions)));
             parts.push(("retained.file_trees", Box::new(trees)));
             parts.push(("retained.dependency_resolution", Box::new(r.dependency)));
+            parts.push(("retained.dependency_record", Box::new(r.dep_record)));
             parts.push((
                 "retained.dependency_sources",
                 Box::new(r._dependency_sources),
@@ -434,54 +447,88 @@ impl WorkspaceSession {
         let resolved_now = ws_files.len() - reuse_files.len() + kept.rematerialize_failures;
         let coverage = f::reduce_fresh_coverage(&ctx, &report, &load.unreadable, &inputs.workspace);
 
-        // The dependency bodies: reused across B, resolved whole otherwise.
+        // The dependency bodies: reused across B; under S each file is
+        // resolved again only when an answer it recorded changed
+        // (`session::dep_record`); resolved whole otherwise.
         let reuse_dependency = class == ChangeClass::BodyOnly;
         let mut dependency_edges_copied = false;
-        let (dependency, dependency_arc, dependency_resolved) = match (reuse_dependency, retained) {
-            (true, Some(r)) => {
-                // The edges and site facts are shared by `Arc`; only the
-                // parens-less calls are copied, and the edges only when a
-                // witness into a moved workspace declaration must change.
-                let mut d = (*r.dependency).clone();
-                tally_parenless(&mut copied, &d);
-                let surface = ctx.decl_surface();
-                let current = f::witnesses_current(&d.edges, &surface);
-                if current == Some(false) {
-                    dependency_edges_copied = true;
-                    let edges = Arc::make_mut(&mut d.edges);
-                    tally_edges(&mut copied, edges);
-                    let ok = f::rematerialize_witnesses(edges, &surface);
-                    debug_assert!(ok, "checked by witnesses_current");
-                }
-                if current.is_some() {
-                    let arc = Arc::new(d.clone());
-                    (d, arc, false)
-                } else {
-                    // §6.5: a cross-file reference with no current
-                    // declaration is an invariant failure; release redoes
-                    // the resolution against the current semantics.
-                    debug_assert!(false, "a reused dependency witness has no declaration");
-                    ctx.ensure_dep_bodies();
-                    let d = {
-                        let _s = pt::span("crossapp", "crossapp.resolve_dependency_bodies");
-                        ctx.resolve_dependency_bodies()
-                    };
-                    let arc = Arc::new(d.clone());
-                    (d, arc, true)
-                }
-            }
-            _ => {
-                // `LowMem` on a tier hit (S): every dependency body is
-                // re-resolved, so every dependency file is parsed again.
-                ctx.ensure_dep_bodies();
-                let d = {
-                    let _s = pt::span("crossapp", "crossapp.resolve_dependency_bodies");
-                    ctx.resolve_dependency_bodies()
-                };
-                let arc = Arc::new(d.clone());
-                (d, arc, true)
-            }
+        let mut dependency_rule = false;
+        let whole = |ctx: &f::ProgramContext| {
+            // `LowMem` on a tier hit: every dependency file is parsed again.
+            ctx.ensure_dep_bodies();
+            let _s = pt::span("crossapp", "crossapp.resolve_dependency_bodies");
+            let (d, rec) = dep_record::resolve_whole(ctx);
+            let n = rec
+                .as_ref()
+                .map_or_else(|| ctx.dependency_files().len(), |r| r.files.len());
+            (d, rec.map(Arc::new), n)
         };
+        let (dependency, dependency_arc, dep_rec, dependency_resolved) =
+            match (reuse_dependency, retained) {
+                (false, Some(r)) if class == ChangeClass::Declaration && r.dep_record.is_some() => {
+                    let rec = r.dep_record.as_deref().expect("checked");
+                    match dep_record::resolve_by_rule(&ctx, &r.dependency, rec) {
+                        Some((d, rec, outcome)) => {
+                            dependency_rule = true;
+                            pt::counter("deps.rule_queries", outcome.queries as u64);
+                            pt::counter("deps.rule_changed", outcome.changed as u64);
+                            pt::counter("deps.files_resolved", outcome.resolved as u64);
+                            let arc = Arc::new(d.clone());
+                            let rec = match rec {
+                                dep_record::RecordAfter::Unchanged => r.dep_record.clone(),
+                                dep_record::RecordAfter::New(rec) => rec.map(Arc::new),
+                            };
+                            (d, arc, rec, outcome.resolved)
+                        }
+                        None => {
+                            let (d, rec, n) = whole(&ctx);
+                            let arc = Arc::new(d.clone());
+                            (d, arc, rec, n)
+                        }
+                    }
+                }
+                (true, Some(r)) => {
+                    // The edges and site facts are shared by `Arc`; only the
+                    // parens-less calls are copied, and the edges only when a
+                    // witness into a moved workspace declaration must change.
+                    let mut d = (*r.dependency).clone();
+                    tally_parenless(&mut copied, &d);
+                    let surface = ctx.decl_surface();
+                    let current = f::witnesses_current(&d.edges, &surface);
+                    if current == Some(false) {
+                        dependency_edges_copied = true;
+                        let edges = Arc::make_mut(&mut d.edges);
+                        tally_edges(&mut copied, edges);
+                        let ok = f::rematerialize_witnesses(edges, &surface);
+                        debug_assert!(ok, "checked by witnesses_current");
+                    }
+                    if current.is_some() {
+                        // The edges' ranges and the answers they were resolved
+                        // against are unchanged: the record carries over.
+                        let arc = Arc::new(d.clone());
+                        (d, arc, r.dep_record.clone(), 0)
+                    } else {
+                        // §6.5: a cross-file reference with no current
+                        // declaration is an invariant failure; release redoes
+                        // the resolution against the current semantics.
+                        debug_assert!(false, "a reused dependency witness has no declaration");
+                        let (d, rec, n) = whole(&ctx);
+                        let arc = Arc::new(d.clone());
+                        (d, arc, rec, n)
+                    }
+                }
+                _ => {
+                    let (d, rec, n) = whole(&ctx);
+                    let arc = Arc::new(d.clone());
+                    (d, arc, rec, n)
+                }
+            };
+        let dependency_files = dep_rec
+            .as_ref()
+            .map_or(dependency_resolved, |r| r.files.len());
+        if let Some(r) = &dep_rec {
+            pt::counter("deps.record_bytes", r.approx_bytes() as u64);
+        }
 
         // What the next revision reuses.
         let tier = Arc::clone(&ctx.dep_layer.dep_nodes);
@@ -541,6 +588,7 @@ impl WorkspaceSession {
             identity,
             files,
             dependency: dependency_arc,
+            dep_record: dep_rec,
             _dependency_sources: dependency_sources,
         });
         self.last = Some(RefreshReport {
@@ -548,7 +596,10 @@ impl WorkspaceSession {
             changed,
             parsed,
             resolved: resolved_now,
-            dependency_bodies_resolved: dependency_resolved,
+            dependency_bodies_resolved: dependency_resolved > 0,
+            dependency_files,
+            dependency_files_resolved: dependency_resolved,
+            dependency_rule,
             dependency_files_parsed,
             dependency_edges_copied,
             copied_bytes: copied.bytes as u64,

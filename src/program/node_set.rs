@@ -93,6 +93,7 @@ impl<T: SortKey> NodeSet<T> {
     }
 
     pub fn len(&self) -> usize {
+        crate::program::resolve::reads::probe();
         self.shared.len() + self.own.len()
     }
 
@@ -101,6 +102,7 @@ impl<T: SortKey> NodeSet<T> {
     }
 
     pub fn get(&self, i: usize) -> Option<&T> {
+        crate::program::resolve::reads::probe();
         match self.own_pos.binary_search(&i) {
             Ok(j) => self.own.get(j),
             Err(j) => self.shared.get(i - j),
@@ -108,6 +110,7 @@ impl<T: SortKey> NodeSet<T> {
     }
 
     pub fn iter(&self) -> NodeSetIter<'_, T> {
+        crate::program::resolve::reads::probe();
         NodeSetIter {
             shared: &self.shared,
             own: &self.own,
@@ -150,6 +153,7 @@ impl<T: SortKey> NodeSet<T> {
     /// element before the run (in either part) is strictly smaller than every
     /// run element, and every element after it strictly larger.
     pub fn run_by<F: Fn(&T) -> Ordering>(&self, f: F) -> NodeSetIter<'_, T> {
+        crate::program::resolve::reads::probe();
         let run = |part: &[T]| {
             let lo = part.partition_point(|x| f(x) == Ordering::Less);
             let len = part[lo..].partition_point(|x| f(x) == Ordering::Equal);
@@ -183,10 +187,12 @@ impl<T: SortKey> NodeSet<T> {
     }
 
     pub fn shared(&self) -> &Arc<Vec<T>> {
+        crate::program::resolve::reads::probe();
         &self.shared
     }
 
     pub fn own(&self) -> &[T] {
+        crate::program::resolve::reads::probe();
         &self.own
     }
 }
