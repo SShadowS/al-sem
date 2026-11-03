@@ -849,7 +849,10 @@ instead is the first candidate if it does not fit.
 the accepted default target, replacing the 3 GB above. An opt-in **`--low-mem`** keeps no
 dependency syntax trees between revisions and parses dependency files again when a step
 needs them (below). The default budgets stay as stage 3 set them: **6 GiB cross-app,
-2 GiB single-app**, for both modes.
+2 GiB single-app**, for both modes. *Superseded 2026-11-03 (owner decision): after stage
+5b's cone and tree stores the default mode reached ~6.0 GB RSS after a B edit (peak 6.34
+GB), right at 6 GiB, so the default cross-app budget is now **8 GiB**; `--low-mem` keeps
+6 GiB and single-app 2 GiB.*
 
 **As built (stage 3, `engine::resident::budget`, master `a48f8e0e`).**
 
