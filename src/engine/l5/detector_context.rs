@@ -1381,18 +1381,28 @@ pub(crate) fn det_cone_inputs_over<'e>(
     let t_direct = cones_census::start();
     // #160 step 11b §4.6: per row, then the projection (R2a): a collided id's
     // direct facts are the full-value union, its coverage the least complete.
-    let mut facts_per_row = Vec::with_capacity(ws.routines.len());
-    let mut coverage_per_row = Vec::with_capacity(ws.routines.len());
     let uncertainty_reasons =
         callsite_local_coverage_reasons(uncertainty, &DeadSites::of(&ws.routines));
-    for r in &ws.routines {
-        let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
-        let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
-        let coverage =
-            fold_uncertainty_reasons(status, reasons, uncertainty_reasons.get(r.id.as_str()));
-        coverage_per_row.push(Some(coverage));
-        facts_per_row.push(Some(facts));
-    }
+    // Plan 2026-11-03 L5: each row's extraction is a pure function of the row,
+    // its publisher events and its uncertainty reasons (no shared mutable
+    // state), so the rows run in parallel; the indexed collect keeps row
+    // order, which `merge_per_id` reads by position.
+    let (facts_per_row, coverage_per_row): (Vec<_>, Vec<_>) = {
+        use rayon::prelude::*;
+        ws.routines
+            .par_iter()
+            .map(|r| {
+                let pubs = publisher_events_by_routine.get(&r.id).unwrap_or(&empty_pub);
+                let (facts, status, reasons) = direct_facts_for_routine(r, pubs);
+                let coverage = fold_uncertainty_reasons(
+                    status,
+                    reasons,
+                    uncertainty_reasons.get(r.id.as_str()),
+                );
+                (Some(facts), Some(coverage))
+            })
+            .unzip()
+    };
     let rows = projection::RowsOfId::build(&ws.routines);
     let coverage_in = projection::merge_per_id(&rows, coverage_per_row, projection::least_complete);
     let direct_full = projection::merge_per_id(&rows, facts_per_row, |v| {
@@ -3394,6 +3404,11 @@ mod tests_11b;
 #[cfg(test)]
 #[path = "detector_context_step5_tests.rs"]
 mod tests_step5;
+
+// Plan 2026-11-03 L5: the parallel direct facts against a serial oracle.
+#[cfg(test)]
+#[path = "detector_context_l5_tests.rs"]
+mod tests_l5;
 
 // #288 acceptance tests (dead sites): a child module, like the step 5 tests.
 #[cfg(test)]

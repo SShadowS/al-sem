@@ -49,8 +49,19 @@ static INNER: std::alloc::System = std::alloc::System;
 #[cfg(feature = "mimalloc")]
 static INNER: al_sem::release_alloc::ReleasingMiMalloc = al_sem::release_alloc::ReleasingMiMalloc;
 
+/// Whether the wrapper counts (`PROBE_NO_COUNT=1` turns it off at start-up):
+/// the three shared atomics per request serialize parallel, allocation-heavy
+/// passes (plan 2026-11-03 L5: a parallel `cone.direct` measured 0.55 s
+/// counted against 0.06 s uncounted on CDO, and 0.28-0.31 s serial
+/// uncounted), so time parallel code uncounted. Off, the byte figures
+/// (`live`, peaks) are meaningless.
+static COUNT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+        if !COUNT.load(Relaxed) {
+            return unsafe { INNER.alloc(l) };
+        }
         let n = BYTES.fetch_add(l.size() as isize, Relaxed) + l.size() as isize;
         PEAK.fetch_max(n, Relaxed);
         ALLOCS.fetch_add(1, Relaxed);
@@ -60,6 +71,9 @@ unsafe impl GlobalAlloc for Counting {
         unsafe { INNER.alloc(l) }
     }
     unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
+        if !COUNT.load(Relaxed) {
+            return unsafe { INNER.alloc_zeroed(l) };
+        }
         let n = BYTES.fetch_add(l.size() as isize, Relaxed) + l.size() as isize;
         PEAK.fetch_max(n, Relaxed);
         ALLOCS.fetch_add(1, Relaxed);
@@ -69,11 +83,17 @@ unsafe impl GlobalAlloc for Counting {
         unsafe { INNER.alloc_zeroed(l) }
     }
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+        if !COUNT.load(Relaxed) {
+            return unsafe { INNER.dealloc(p, l) };
+        }
         BYTES.fetch_sub(l.size() as isize, Relaxed);
         ALLOCS.fetch_sub(1, Relaxed);
         unsafe { INNER.dealloc(p, l) }
     }
     unsafe fn realloc(&self, p: *mut u8, l: Layout, new: usize) -> *mut u8 {
+        if !COUNT.load(Relaxed) {
+            return unsafe { INNER.realloc(p, l, new) };
+        }
         let n = BYTES.fetch_add(new as isize - l.size() as isize, Relaxed) + new as isize
             - l.size() as isize;
         PEAK.fetch_max(n, Relaxed);
@@ -2654,6 +2674,9 @@ fn front_seq_mode(
 }
 
 fn main() {
+    if std::env::var_os("PROBE_NO_COUNT").is_some_and(|v| v == "1") {
+        COUNT.store(false, Relaxed);
+    }
     let mut args = std::env::args().skip(1);
     let source = match args.next().as_deref() {
         Some("resident") => {
