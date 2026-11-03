@@ -218,6 +218,12 @@ impl WitnessRequest {
         self.ids.is_empty() && !self.primary
     }
 
+    /// The stable ids this request names (a resident revision's witness
+    /// keys, one per root of an effects read).
+    pub(crate) fn ids(&self) -> &BTreeSet<String> {
+        &self.ids
+    }
+
     /// Whether every subject `other` names is named here too.
     fn covers(&self, other: &Self) -> bool {
         other.ids.is_subset(&self.ids) && (self.primary || !other.primary)
@@ -905,12 +911,16 @@ pub(crate) fn read_tree(
         target,
         effects,
         tree_reads,
+        None,
     );
 }
 
 /// [`read_tree`] off a shared tree (a resident revision's tree store,
 /// design §6.11): the reads leave it in place; the inventory read, which
-/// consumes a tree, reads a copy.
+/// consumes a tree, reads a copy. `entries`: an effects group's root entries
+/// already in hand (a resident revision's memoized witnesses, owned copies
+/// sorted by routine id, `root_entries` of the group's roots); `None`
+/// computes them off the tree.
 pub(crate) fn read_tree_shared(
     tree: &CapabilitySnapshot,
     trees: &[(JobId, TreeDemand)],
@@ -918,6 +928,7 @@ pub(crate) fn read_tree_shared(
     target: &AnalysisTarget,
     effects: &mut BTreeMap<JobId, DigestEffects>,
     tree_reads: &mut BTreeMap<JobId, TreeReadOut>,
+    entries: Option<Vec<crate::engine::l5::digest::DigestEntryResult>>,
 ) {
     let model = target.resolved();
     // No tree read asks `primary`: digest, prove and the query ask their
@@ -935,15 +946,28 @@ pub(crate) fn read_tree_shared(
                 .map(|&m| trees[m].1.subjects.ids.iter().cloned().collect())
                 .collect();
             let readers: Vec<&[String]> = roots.iter().map(Vec::as_slice).collect();
-            let outs = crate::engine::l5::digest_cli::digest_effects_each(
-                t,
-                model,
-                &readers,
-                demand.tests,
-                demand.gaps_in_cone,
-                demand.include_reads,
-                crate::engine::l5::digest_cli::BoundaryMode::On,
-            );
+            use crate::engine::l5::digest_cli::{
+                BoundaryMode, digest_effects_each, finish_effects,
+            };
+            let outs = match entries {
+                Some(entries) => finish_effects(
+                    t,
+                    model,
+                    &readers,
+                    entries,
+                    demand.tests,
+                    demand.gaps_in_cone,
+                ),
+                None => digest_effects_each(
+                    t,
+                    model,
+                    &readers,
+                    demand.tests,
+                    demand.gaps_in_cone,
+                    demand.include_reads,
+                    BoundaryMode::On,
+                ),
+            };
             for (&m, out) in group.iter().zip(outs) {
                 effects.insert(trees[m].0, out);
             }

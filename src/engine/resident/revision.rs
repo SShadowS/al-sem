@@ -34,6 +34,7 @@ use crate::engine::l5::detector_context::{
     self as dc, CapabilityAnalysis, CapsInput, CoreInput, DetectorArtifacts, L4Input,
     OrderingFactsMap,
 };
+use crate::engine::l5::digest::DigestEntryResult;
 use crate::engine::l5::digest_cli::DigestEffects;
 use crate::engine::l5::registry::{RunOutput, substrate};
 use crate::engine::l5::rules_index::RulesIndex;
@@ -41,8 +42,8 @@ use crate::engine::resident::store::{
     Control, FillCx, PrepareError, Snapshot, Store, StoreKey, StoreStats, StoreValue,
 };
 use crate::engine::session::{
-    JobId, Plan, RunKey, TreeReadOut, View, WitnessRequest, compose_cone_retained, emit_raw_ids,
-    key, relation_of, run_once, tree_apps, tree_groups,
+    JobId, Plan, RunKey, TreeRead, TreeReadOut, View, WitnessRequest, compose_cone_retained,
+    emit_raw_ids, key, relation_of, run_once, tree_apps, tree_groups,
 };
 use crate::program::inputs::WorkspaceInputs;
 use crate::program::model::calls::CallEdge;
@@ -79,6 +80,16 @@ pub enum ArtifactKey {
         ordering: bool,
         rules: bool,
     },
+    /// One root's witnesses (plan 2026-11-03, item W): its
+    /// `DigestEntryResult` before any read's own passes
+    /// (`digest_cli::root_entries`), a function of the root (stable id) and
+    /// `include_reads` alone over any tree holding it, so explain, prove and
+    /// digest on the same root share it within the revision. Filled off the
+    /// request's own `Tree(scope)`; never carried to the next revision.
+    Witness {
+        root: String,
+        include_reads: bool,
+    },
 }
 
 impl StoreKey for ArtifactKey {
@@ -90,6 +101,7 @@ impl StoreKey for ArtifactKey {
             ArtifactKey::Ordering | ArtifactKey::Rules | ArtifactKey::Fold | ArtifactKey::L4 => 0,
             ArtifactKey::Raw(_) | ArtifactKey::Det | ArtifactKey::TreeBase => 1,
             ArtifactKey::Run { .. } | ArtifactKey::Tree(_) => 2,
+            ArtifactKey::Witness { .. } => 3,
         }
     }
 }
@@ -191,7 +203,18 @@ pub enum ArtifactValue {
     Tree(Arc<crate::engine::l5::snapshot::CapabilitySnapshot>),
     Det(Arc<DetectorArtifacts>),
     Run(Arc<RunOutput>),
+    /// `None`: the root yields no entry (not reportable), stored so it is
+    /// not asked again. A read finishes CLONES of it (prove's literal reach
+    /// mutates its entries), never the stored value.
+    Witness(Arc<Option<DigestEntryResult>>),
 }
+
+/// A request's batch of witness entries (plan 2026-11-03, W item 3): the
+/// store fills claimed keys one at a time, so the request's first `Witness`
+/// fill computes every absent root of the request in one pass over its tree
+/// (one index build, the roots in parallel) and leaves them here; the
+/// request's later `Witness` fills return from it.
+type WitnessScratch = std::sync::Mutex<BTreeMap<ArtifactKey, Arc<Option<DigestEntryResult>>>>;
 
 /// An artifact: its value and the job lines its fill printed.
 pub struct Artifact {
@@ -244,6 +267,18 @@ pub struct Revision {
     /// its producer states the seed of this revision's fold (§6.10), until
     /// that fold publishes. Same key rule as the L4 seed.
     fold_seed: std::sync::Mutex<Option<Arc<Artifact>>>,
+    /// The witness memo's counters ([`Revision::witness_counts`]).
+    witness: WitnessCounts,
+}
+
+/// The witness memo's counters (`status`): roots a request found published
+/// (`hit`), roots a request computed (`miss`), and the passes that computed
+/// them (`batches`: one tree index build per pass and rule-B mode).
+#[derive(Debug, Default)]
+struct WitnessCounts {
+    hit: std::sync::atomic::AtomicU64,
+    miss: std::sync::atomic::AtomicU64,
+    batches: std::sync::atomic::AtomicU64,
 }
 
 impl ArtifactKey {
@@ -260,6 +295,7 @@ impl ArtifactKey {
             ArtifactKey::Tree(_) => "tree",
             ArtifactKey::Det => "det",
             ArtifactKey::Run { .. } => "run",
+            ArtifactKey::Witness { .. } => "witness",
         }
     }
 }
@@ -310,6 +346,7 @@ impl Revision {
             seed: std::sync::Mutex::new(seed),
             l4_report: std::sync::Mutex::new(None),
             fold_seed: std::sync::Mutex::new(fold_seed),
+            witness: WitnessCounts::default(),
         }
     }
 
@@ -425,10 +462,12 @@ impl Revision {
     }
 
     /// The artifact kinds eviction may drop, in the design's order (§7):
-    /// dependency subjects' raw facts, then the views' trees, runs and the
-    /// det, then the tree store's whole sections and the fold (the cones),
-    /// then ordering and rules. Never the model, the relation or the L4 seed.
+    /// the roots' witnesses (small, plan 2026-11-03 W), dependency subjects'
+    /// raw facts, then the views' trees, runs and the det, then the tree
+    /// store's whole sections and the fold (the cones), then ordering and
+    /// rules. Never the model, the relation or the L4 seed.
     pub const EVICTION_ORDER: &'static [&'static str] = &[
+        "witness",
         "raw",
         "tree",
         "run",
@@ -525,6 +564,19 @@ impl Revision {
                 needs.push((tree, 0));
             }
         }
+        // One witness per root of every effects read (plan 2026-11-03, W),
+        // filled off that read's tree (an earlier phase).
+        for (_, include_reads, roots) in self.witness_groups(plan) {
+            for root in roots {
+                let k = ArtifactKey::Witness {
+                    root,
+                    include_reads,
+                };
+                if !needs.iter().any(|(n, _)| *n == k) {
+                    needs.push((k, 0));
+                }
+            }
+        }
         if det {
             needs.push((ArtifactKey::Det, union));
         }
@@ -557,9 +609,94 @@ impl Revision {
             .collect()
     }
 
+    /// Each effects read's tree group: its tree's subjects (the group's
+    /// [`Revision::tree_scopes`] entry), its `include_reads`, and the
+    /// distinct roots (stable ids) of its readers, sorted.
+    fn witness_groups(&self, plan: &Plan) -> Vec<(BTreeSet<String>, bool, Vec<String>)> {
+        let trees = plan.tree_demands();
+        tree_groups(trees)
+            .iter()
+            .zip(self.tree_scopes(plan))
+            .filter(|(g, _)| matches!(trees[g[0]].1.read, TreeRead::Effects))
+            .map(|(g, scope)| {
+                let roots: BTreeSet<String> = g
+                    .iter()
+                    .flat_map(|&m| trees[m].1.subjects.ids().iter().cloned())
+                    .collect();
+                // A group shares `include_reads` (`tree_groups`).
+                (
+                    scope,
+                    trees[g[0]].1.include_reads,
+                    roots.into_iter().collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// A `Witness` fill (plan 2026-11-03, W item 3): the key's entry from the
+    /// request's `scratch`, or, on the request's first witness fill, every
+    /// witness of the request absent from `snapshot` computed in one pass
+    /// per tree group over that group's published tree, left in `scratch`.
+    fn fill_witness(
+        &self,
+        plan: &Plan,
+        key: &ArtifactKey,
+        snapshot: &Snapshot<ArtifactKey, Artifact>,
+        scratch: &WitnessScratch,
+    ) -> Result<Arc<Option<DigestEntryResult>>, String> {
+        use crate::engine::l5::digest_cli::{BoundaryMode, root_entries};
+        let mut held = scratch.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(e) = held.get(key) {
+            return Ok(Arc::clone(e));
+        }
+        let model = self.target.resolved();
+        for (scope, include_reads, roots) in self.witness_groups(plan) {
+            let absent: Vec<String> = roots
+                .into_iter()
+                .filter(|root| {
+                    let k = ArtifactKey::Witness {
+                        root: root.clone(),
+                        include_reads,
+                    };
+                    snapshot.get(&k).is_none() && !held.contains_key(&k)
+                })
+                .collect();
+            if absent.is_empty() {
+                continue;
+            }
+            let Some(ArtifactValue::Tree(tree)) =
+                snapshot.get(&ArtifactKey::Tree(scope)).map(|a| &a.value)
+            else {
+                return Err("a witness needs its tree, which is not published".into());
+            };
+            self.witness
+                .batches
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let entries = root_entries(tree, model, &absent, include_reads, BoundaryMode::On);
+            for (root, entry) in absent.into_iter().zip(entries) {
+                held.insert(
+                    ArtifactKey::Witness {
+                        root,
+                        include_reads,
+                    },
+                    Arc::new(entry),
+                );
+            }
+        }
+        held.get(key)
+            .cloned()
+            .ok_or_else(|| format!("{key:?} is not a witness of the request's plan"))
+    }
+
     /// One artifact's fill, off the snapshot holding its prerequisites; a
-    /// run's detectors come from the request's `plan`.
-    fn fill(&self, plan: &Plan, cx: FillCx<'_, ArtifactKey, Artifact>) -> Result<Artifact, String> {
+    /// run's detectors come from the request's `plan`; a witness's batch is
+    /// the request's `scratch`.
+    fn fill(
+        &self,
+        plan: &Plan,
+        scratch: &WitnessScratch,
+        cx: FillCx<'_, ArtifactKey, Artifact>,
+    ) -> Result<Artifact, String> {
         let target = &*self.target;
         let model = target.resolved();
         *self
@@ -570,6 +707,9 @@ impl Revision {
             .or_default() += 1;
         let (value, lines) = capture(|| -> Result<ArtifactValue, String> {
             Ok(match cx.key {
+                ArtifactKey::Witness { .. } => {
+                    ArtifactValue::Witness(self.fill_witness(plan, cx.key, cx.snapshot, scratch)?)
+                }
                 ArtifactKey::Ordering => ArtifactValue::Ordering(dc::fill_ordering(model)),
                 ArtifactKey::Rules => ArtifactValue::Rules(dc::fill_rules(model)),
                 ArtifactKey::Fold => {
@@ -859,6 +999,37 @@ impl Revision {
             if let Some(stop) = (ctl.stop)() {
                 return Err(stop.into());
             }
+            // An effects read finishes its roots' memoized witnesses: owned
+            // CLONES, which its passes may mutate (prove's literal reach),
+            // never the stored values.
+            let entries = match trees[group[0]].1.read {
+                TreeRead::Effects => {
+                    let include_reads = trees[group[0]].1.include_reads;
+                    let roots: BTreeSet<&String> = group
+                        .iter()
+                        .flat_map(|&m| trees[m].1.subjects.ids().iter())
+                        .collect();
+                    let mut entries = Vec::new();
+                    for root in roots {
+                        let k = ArtifactKey::Witness {
+                            root: root.clone(),
+                            include_reads,
+                        };
+                        match snap.get(&k).map(|a| &a.value) {
+                            Some(ArtifactValue::Witness(e)) => {
+                                entries.extend(Option::clone(e));
+                            }
+                            _ => {
+                                return Err(PrepareError::Engine(format!(
+                                    "{k:?} is not published"
+                                )));
+                            }
+                        }
+                    }
+                    Some(entries)
+                }
+                _ => None,
+            };
             let Some(artifact) = snap.get(&ArtifactKey::Tree(scope)) else {
                 return Err(PrepareError::Engine("a tree is not published".into()));
             };
@@ -870,7 +1041,15 @@ impl Revision {
             lines.extend(base_lines.iter().cloned());
             lines.extend(artifact.lines.iter().cloned());
             let ((), read_lines) = capture(|| {
-                read_tree_shared(tree, trees, group, target, &mut effects, &mut tree_reads);
+                read_tree_shared(
+                    tree,
+                    trees,
+                    group,
+                    target,
+                    &mut effects,
+                    &mut tree_reads,
+                    entries,
+                );
             });
             lines.extend(read_lines);
         }
@@ -925,9 +1104,13 @@ impl Revision {
         let plan = Plan::merge([]);
         let needs: Vec<(ArtifactKey, u32)> = keys.iter().map(|k| (k.clone(), 0)).collect();
         let start = std::time::Instant::now();
-        let snap = self
-            .store
-            .ensure_prepared(&needs, &|_| 0, &|cx| self.fill(&plan, cx), ctl)?;
+        let scratch = WitnessScratch::default();
+        let snap = self.store.ensure_prepared(
+            &needs,
+            &|_| 0,
+            &|cx| self.fill(&plan, &scratch, cx),
+            ctl,
+        )?;
         self.release_used_seed(&snap);
         Ok(start.elapsed().as_millis() as u64)
     }
@@ -955,6 +1138,19 @@ impl Revision {
         self.answered.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// The witness memo's counters `(hit, miss, batches)`: roots requests
+    /// found published, roots they computed, and the passes that computed
+    /// them (each one tree index build per rule-B mode).
+    #[must_use]
+    pub fn witness_counts(&self) -> (u64, u64, u64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        (
+            self.witness.hit.load(Relaxed),
+            self.witness.miss.load(Relaxed),
+            self.witness.batches.load(Relaxed),
+        )
+    }
+
     /// How often each artifact kind was filled on this revision.
     #[must_use]
     pub fn fill_counts(&self) -> BTreeMap<&'static str, u64> {
@@ -972,12 +1168,35 @@ impl Revision {
     ) -> Result<(View, Vec<String>), PrepareError> {
         let needs = self.needs_of(plan);
         let start = std::time::Instant::now();
-        let snap = self
-            .store
-            .ensure_prepared(&needs, &|_| 0, &|cx| self.fill(plan, cx), ctl);
+        // The request's witness batch: dropped with the request (the store
+        // holds what it published).
+        let scratch = WitnessScratch::default();
+        let snap =
+            self.store
+                .ensure_prepared(&needs, &|_| 0, &|cx| self.fill(plan, &scratch, cx), ctl);
         *prepare_ms = start.elapsed().as_millis() as u64;
         let snap = snap?;
         self.release_used_seed(&snap);
+        {
+            // A needed witness this request computed is a miss; one it found
+            // published (by an earlier or a concurrent request) is a hit.
+            let computed = scratch.into_inner().unwrap_or_else(|p| p.into_inner());
+            let (mut hit, mut miss) = (0, 0);
+            for (k, _) in &needs {
+                if matches!(k, ArtifactKey::Witness { .. }) {
+                    if computed.contains_key(k) {
+                        miss += 1;
+                    } else {
+                        hit += 1;
+                    }
+                }
+            }
+            use std::sync::atomic::Ordering::Relaxed;
+            self.witness.hit.fetch_add(hit, Relaxed);
+            self.witness.miss.fetch_add(miss, Relaxed);
+            crate::engine::perf_trace::counter_delta("witness.hit", hit);
+            crate::engine::perf_trace::counter_delta("witness.miss", miss);
+        }
         if let Some(stop) = (ctl.stop)() {
             return Err(stop.into());
         }

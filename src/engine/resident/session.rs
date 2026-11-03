@@ -292,8 +292,8 @@ impl ResidentSession {
         r
     }
 
-    /// Evict until `estimate` fits (§7's order): dependency subjects' raw
-    /// facts, the dependency rows the workspace session keeps (when no build
+    /// Evict until `estimate` fits (§7's order): the roots' witnesses,
+    /// dependency subjects' raw facts, the dependency rows the workspace session keeps (when no build
     /// holds it), runs, the det, the fold, ordering and rules; never the
     /// model, relation, tier or L4 seed. Returns how many entries went.
     pub fn reclaim(&self, budget: &Budget, estimate: u64) -> u64 {
@@ -302,12 +302,13 @@ impl ResidentSession {
             _ => None,
         };
         let mut evicted = 0u64;
-        for kind in std::iter::once("raw").chain(std::iter::once("rows")).chain(
-            Revision::EVICTION_ORDER
-                .iter()
-                .copied()
-                .filter(|k| *k != "raw"),
-        ) {
+        // The design's order, with the session's dependency rows right after
+        // the dependency subjects' raw facts.
+        for kind in Revision::EVICTION_ORDER
+            .iter()
+            .copied()
+            .flat_map(|k| std::iter::once(k).chain((k == "raw").then_some("rows")))
+        {
             if budget.fits(estimate) {
                 break;
             }
@@ -509,6 +510,8 @@ impl ResidentSession {
             // ones no request holds before the build, not after it, so they
             // are not part of its peak.
             if let Some(Built::Revision(r)) = prev.as_ref().map(|p| &p.built) {
+                // Nor its witnesses (plan 2026-11-03 W: never carried).
+                r.reclaim_kind("witness");
                 r.reclaim_kind("tree");
                 r.reclaim_kind("tree_base");
             }

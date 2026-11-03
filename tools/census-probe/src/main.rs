@@ -1697,7 +1697,9 @@ fn resident_mode(ws: PathBuf, routine: String, low_mem: bool) {
             }
         }
     }
-    for kind in ["run", "det", "raw", "fold", "l4", "rules", "ordering"] {
+    for kind in [
+        "witness", "run", "det", "raw", "fold", "l4", "rules", "ordering",
+    ] {
         let keys = rev.keys_where(|k| k.kind() == kind);
         let (b0, a0) = live();
         rev.evict(&keys);
@@ -2051,7 +2053,113 @@ fn refresh_seq_mode(ws: PathBuf, routine: String, low_mem: bool, nb: usize, ns: 
 /// of the same job over the same read. The previous revision is released
 /// before each refresh, as the child releases it. `--steps B,S,P,B` picks
 /// the steps after `cold`.
-fn incr_mode(ws: PathBuf, routine: String, low_mem: bool, verify: bool, steps: Vec<String>) {
+/// The witness memo's measure (plan 2026-11-03, item W), after a step's
+/// asks: per heavy command, its answer with the root's witness evicted
+/// (`miss`: the root pass) and again (`hit`), the view's tree warm in both;
+/// the live bytes the root's witnesses hold (evicted last, so only the
+/// store held them); then, with `extra` roots, the cross-view case: an
+/// explain over the routine and `extra`, then a prove over the routine.
+/// `verify` compares each answer with its cold standalone run.
+fn witness_measure(
+    rev: &al_sem::engine::resident::revision::Revision,
+    routine: &str,
+    extra: &[String],
+    verify: bool,
+    failed: &mut bool,
+) {
+    use al_sem::engine::batch::job::Job;
+    use al_sem::engine::resident::store::Control;
+    let ask = |label: &str, job: &dyn Job| -> String {
+        let t = std::time::Instant::now();
+        let out = rev
+            .answer(job, &Control::unreserved())
+            .unwrap_or_else(|e| panic!("witness {label}: {e:?}"));
+        let ms = t.elapsed().as_millis();
+        let equal = verify.then(|| {
+            let cold = al_sem::engine::batch::standalone_output(job);
+            cold.exit == out.exit && cold.actions == out.actions
+        });
+        format!(
+            "{label} {ms} ms{}",
+            match equal {
+                Some(true) => " =cold",
+                Some(false) => " DIFFERS",
+                None => "",
+            }
+        )
+    };
+    let mut rows = Vec::new();
+    for kind in ["explain", "prove", "digest"] {
+        rev.evict_kind("witness");
+        let job = resident_job(kind, &rev.inputs, routine);
+        rows.push(ask(&format!("{kind} miss"), &*job));
+        rows.push(ask(&format!("{kind} hit"), &*job));
+    }
+    *failed |= rows.iter().any(|r| r.ends_with("DIFFERS"));
+    println!("        witness: {}", rows.join(", "));
+    let keys = rev.keys_where(|k| k.kind() == "witness");
+    let (b0, a0) = live();
+    rev.evict(&keys);
+    let (b1, a1) = live();
+    println!(
+        "        witness bytes: {} keys, {:.3} MiB, {} allocs ({routine})",
+        keys.len(),
+        mib(b0 - b1),
+        a0 - a1
+    );
+    if !extra.is_empty() {
+        use al_sem::engine::l5::explain::{ExplainJob, ExplainMode, ExplainRequest};
+        let mut all = vec![routine.to_string()];
+        all.extend(extra.iter().cloned());
+        let explain = ExplainJob::new(
+            ExplainRequest {
+                inputs: &rev.inputs,
+                mode: ExplainMode::Routines(all.clone()),
+                single_app: false,
+            },
+            true,
+            None,
+        );
+        let before = rev.witness_counts();
+        let a = ask(&format!("explain x{}", all.len()), &explain);
+        let prove = resident_job("prove", &rev.inputs, routine);
+        let b = ask("then prove", &*prove);
+        let after = rev.witness_counts();
+        println!(
+            "        cross-view: {a}, {b}; witness (hit, miss, batches) +({}, {}, {})",
+            after.0 - before.0,
+            after.1 - before.1,
+            after.2 - before.2
+        );
+        *failed |= a.ends_with("DIFFERS") || b.ends_with("DIFFERS");
+        for root in &all {
+            rev.evict_kind("witness");
+            let job = resident_job("digest", &rev.inputs, root);
+            let _ = rev.answer(&*job, &Control::unreserved());
+            let keys = rev.keys_where(|k| k.kind() == "witness");
+            let (b0, a0) = live();
+            rev.evict(&keys);
+            let (b1, a1) = live();
+            println!(
+                "        witness bytes: {} keys, {:.3} MiB, {} allocs ({root})",
+                keys.len(),
+                mib(b0 - b1),
+                a0 - a1
+            );
+        }
+    }
+    let (hit, miss, batches) = rev.witness_counts();
+    println!("        witness counters: hit {hit} miss {miss} batches {batches}");
+}
+
+fn incr_mode(
+    ws: PathBuf,
+    routine: String,
+    low_mem: bool,
+    verify: bool,
+    steps: Vec<String>,
+    witness: Option<Vec<String>>,
+) {
     use al_sem::engine::resident::revision::ArtifactKey;
     use al_sem::engine::resident::session::{Built, Freshness, ResidentSession};
     use al_sem::engine::resident::store::Control;
@@ -2172,6 +2280,9 @@ fn incr_mode(ws: PathBuf, routine: String, low_mem: bool, verify: bool, steps: V
                     None => "",
                 }
             ));
+        }
+        if let Some(extra) = &witness {
+            witness_measure(&rev, &routine, extra, verify, &mut failed);
         }
         drop(rev);
         settle();
@@ -2517,15 +2628,27 @@ fn main() {
             return;
         }
         Some("incr") => {
-            // `incr <ws-copy> [routine] [--low-mem] [--verify] [--steps B,S,P]`
+            // `incr <ws-copy> [routine] [--low-mem] [--verify] [--steps B,S,P]
+            //  [--witness R2,R3]`
             let mut rest = args.peekable();
             let mut plain: Vec<String> = Vec::new();
             let (mut low_mem, mut verify) = (false, false);
             let mut steps: Vec<String> = vec!["B".into(), "S".into(), "P".into()];
+            let mut witness: Option<Vec<String>> = None;
             while let Some(a) = rest.next() {
                 match a.as_str() {
                     "--low-mem" => low_mem = true,
                     "--verify" => verify = true,
+                    "--witness" => {
+                        witness = Some(
+                            rest.next()
+                                .expect("--witness R2,R3")
+                                .split(',')
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_string)
+                                .collect(),
+                        )
+                    }
                     "--steps" => {
                         steps = rest
                             .next()
@@ -2540,7 +2663,7 @@ fn main() {
             let mut plain = plain.into_iter();
             let ws = PathBuf::from(plain.next().expect("workspace"));
             let routine = plain.next().unwrap_or_else(|| "IssueReminder".into());
-            incr_mode(ws, routine, low_mem, verify, steps);
+            incr_mode(ws, routine, low_mem, verify, steps, witness);
             return;
         }
         Some(mode @ ("refresh-seq" | "front-seq")) => {

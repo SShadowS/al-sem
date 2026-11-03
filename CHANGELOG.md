@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (context server: a per-revision memo of root witnesses)
+
+- **Explain, prove and digest asked about the same routine in one resident revision now
+  share one computed root entry** (plan `docs/superpowers/plans/2026-11-03-context-server-remaining.md`,
+  item W). A root's `DigestEntryResult` (its witnesses, the `digest.roots` pass) depends only
+  on the root and `--include-reads`, so the revision's store keeps it as an
+  `ArtifactKey::Witness { root, include_reads }` artifact (kind `witness`, phase 3), filled off
+  the request's own `Tree(scope)` and never carried to the next revision. A request's first
+  witness fill computes every absent root of the request in one pass over its tree (one index
+  build, the roots in parallel); the read finishes owned clones, because prove's literal-reach
+  pass mutates its entries. `digest_effects_each` is split into the pure `root_entries` and the
+  per-read `finish_effects`; the one-shot path calls both, so no output moves. Witnesses are
+  evicted first under memory pressure and dropped at a refresh with the trees. `status` reports
+  `fills.witness` (`hit`, `miss`, `batches`); `census-probe incr … --witness R2,R3` measures a
+  command's answer with and without its root's witness, the witness bytes, and the cross-view
+  case. Tests: every order of explain/prove/digest on one root plus
+  `[digest, digest --include-reads, digest]` (five fixtures), digest after prove reads the
+  unpruned entry (G23's dead path), a three-root explain computes in one pass and a later prove
+  finds the witness, a witness without its tree fails loudly, and the concurrency test now runs
+  two heavy requests on one root while witnesses are evicted. Discrimination proofs (each seen
+  to fail, then pass): the key without `include_reads`; memoizing the post-prove entry; no
+  `Tree` prerequisite; no batch.
+
 ### Changed (the default cross-app memory budget is 8 GiB)
 
 - **`--memory-budget` now defaults to 8 GiB for a cross-app engine child (was 6 GiB).**

@@ -3024,8 +3024,10 @@ mod engine {
                 status.revision = published.as_ref().and_then(Built::revision_id);
                 if let Some(Built::Revision(r)) = &published {
                     let store = r.stats();
+                    let (hit, miss, batches) = r.witness_counts();
                     status.fills = Some(serde_json::json!({
                         "byKind": r.fill_counts(),
+                        "witness": { "hit": hit, "miss": miss, "batches": batches },
                         "answered": r.answered(),
                         "fills": store.fills,
                         "joins": store.joins,

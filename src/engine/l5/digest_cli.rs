@@ -1252,6 +1252,104 @@ pub(crate) fn digest_effects_each(
     include_reads: bool,
     boundary: BoundaryMode,
 ) -> Vec<DigestEffects> {
+    // One query over every reader's roots: the per-root work is independent
+    // (one worker per root), and the per-call work (the tree's indexes, the
+    // reportable roots) is whole-program, so a call per reader repeated it
+    // (G16: ~1 s per `prove` job over Base Application's source). Each reader
+    // then takes the entries of its own roots, in the query's sorted order.
+    let all: Vec<String> = readers
+        .iter()
+        .flat_map(|r| r.iter().cloned())
+        .collect::<BTreeSet<String>>()
+        .into_iter()
+        .collect();
+    let entries = root_entries(tree, model, &all, include_reads, boundary)
+        .into_iter()
+        .flatten()
+        .collect();
+    finish_effects(tree, model, readers, entries, tests, gaps_in_cone)
+}
+
+/// The pure half of [`digest_effects_each`]: each root's entry off `tree`, in
+/// the order of `roots` (sorted and distinct), `None` for a root that yields
+/// no entry (not reportable). A root's entry is a function of the root and
+/// `include_reads` alone over any tree whose subjects include it (Q1 of the
+/// context-server plan 2026-11-03, pinned by `prove_scoped_equals_unscoped`
+/// and `t3_digest_scoped_equals_unscoped`), so a resident revision memoizes
+/// it per `(root, include_reads)` (`ArtifactKey::Witness`). Every other
+/// input of the root pass is fixed here and is no parameter: no return
+/// summaries and `ordering_witness_only` off
+/// ([`compute_digest_effects_cli_in`]), the isolated event ids from the
+/// model, and rule B from `boundary` and the root (a root inside a
+/// dependency is read with it off, G31). The entries are the root pass's
+/// output BEFORE any read's own passes ([`finish_effects`] mutates them):
+/// a memo hands out clones.
+pub(crate) fn root_entries(
+    tree: &CapabilitySnapshot,
+    model: &Model,
+    roots: &[String],
+    include_reads: bool,
+    boundary: BoundaryMode,
+) -> Vec<Option<DigestEntryResult>> {
+    debug_assert!(
+        roots.windows(2).all(|w| w[0] < w[1]),
+        "the roots are sorted and distinct"
+    );
+    // G31: a root INSIDE a dependency. Rule B (spec 2026-10-23 §14.3.5) ends a
+    // witness on entering dependency code and groups what lies beyond, which
+    // is right for a workspace root (it bounds digest's cost) but leaves a
+    // dependency root nothing: it starts past its own boundary, so every fact
+    // ended at the root and none was an effect. Such a root is asked with rule
+    // B off, so its witness paths follow the code that reaches each effect,
+    // in every app.
+    let is_dependency_root = |r: &String| {
+        tree.boundary
+            .as_ref()
+            .is_some_and(|b| b.dependency_app.contains_key(r))
+    };
+    let (dependency_roots, workspace_roots): (Vec<String>, Vec<String>) = match boundary {
+        BoundaryMode::On => roots.iter().cloned().partition(is_dependency_root),
+        BoundaryMode::Off => (Vec::new(), roots.to_vec()),
+    };
+    let mut by_root: HashMap<String, DigestEntryResult> =
+        compute_digest_effects_cli_in(tree, model, Some(&workspace_roots), include_reads, boundary)
+            .into_iter()
+            .map(|e| (e.routine_id.clone(), e))
+            .collect();
+    if !dependency_roots.is_empty() {
+        by_root.extend(
+            compute_digest_effects_cli_in(
+                tree,
+                model,
+                Some(&dependency_roots),
+                include_reads,
+                BoundaryMode::Off,
+            )
+            .into_iter()
+            .map(|e| (e.routine_id.clone(), e)),
+        );
+    }
+    roots.iter().map(|r| by_root.remove(r)).collect()
+}
+
+/// The per-read half of [`digest_effects_each`]: `entries` (every reader's
+/// roots' [`root_entries`], owned, sorted by routine id) finished for each
+/// reader: prove's literal reach (`gaps_in_cone`), which MUTATES them, each
+/// reader's own entries and unresolved cones, and the tree's shared parts.
+pub(crate) fn finish_effects(
+    tree: &CapabilitySnapshot,
+    model: &Model,
+    readers: &[&[String]],
+    mut all_entries: Vec<DigestEntryResult>,
+    tests: bool,
+    gaps_in_cone: bool,
+) -> Vec<DigestEffects> {
+    debug_assert!(
+        all_entries
+            .windows(2)
+            .all(|w| w[0].routine_id < w[1].routine_id),
+        "the entries are sorted by routine id"
+    );
     let coverage_graph = tests.then(|| {
         let _s = crate::engine::perf_trace::span("digest", "digest.coverage_graph");
         crate::engine::perf_trace::counter_delta("build.coverage_graph", 1);
@@ -1289,92 +1387,8 @@ pub(crate) fn digest_effects_each(
     } else {
         Default::default()
     };
-    // One query over every reader's roots: the per-root work is independent
-    // (one worker per root), and the per-call work (the tree's indexes, the
-    // reportable roots) is whole-program, so a call per reader repeated it
-    // (G16: ~1 s per `prove` job over Base Application's source). Each reader
-    // then takes the entries of its own roots, in the query's sorted order.
-    let all: Vec<String> = readers
-        .iter()
-        .flat_map(|r| r.iter().cloned())
-        .collect::<BTreeSet<String>>()
-        .into_iter()
-        .collect();
-    // G31: a root INSIDE a dependency. Rule B (spec 2026-10-23 §14.3.5) ends a
-    // witness on entering dependency code and groups what lies beyond, which
-    // is right for a workspace root (it bounds digest's cost) but leaves a
-    // dependency root nothing: it starts past its own boundary, so every fact
-    // ended at the root and none was an effect. Such a root is asked with rule
-    // B off, so its witness paths follow the code that reaches each effect,
-    // in every app.
-    let is_dependency_root = |r: &String| {
-        tree.boundary
-            .as_ref()
-            .is_some_and(|b| b.dependency_app.contains_key(r))
-    };
-    let (dependency_roots, workspace_roots): (Vec<String>, Vec<String>) = match boundary {
-        BoundaryMode::On => all.iter().cloned().partition(is_dependency_root),
-        BoundaryMode::Off => (Vec::new(), all.clone()),
-    };
-    let mut all_entries =
-        compute_digest_effects_cli_in(tree, model, Some(&workspace_roots), include_reads, boundary);
-    if !dependency_roots.is_empty() {
-        all_entries.extend(compute_digest_effects_cli_in(
-            tree,
-            model,
-            Some(&dependency_roots),
-            include_reads,
-            BoundaryMode::Off,
-        ));
-        all_entries.sort_by(|a, b| a.routine_id.cmp(&b.routine_id));
-    }
-    // G23, prove's read only: effects a root cannot reach once literal Boolean
-    // arguments are followed through recursive SCCs, where the cone drops guards.
-    // Spans (context-server design r3 §13 item 6): prove's post-root work,
-    // untraced until now (0.94 s measured for one root on CDO).
     if gaps_in_cone {
-        let reach = {
-            let _s = crate::engine::perf_trace::span("digest", "prove.literal_reach");
-            crate::engine::l5::literal_reach::LiteralReach::new(
-                &tree.typed_edges,
-                &tree.capability_facts,
-                model,
-            )
-        };
-        // G35: how each group resource is reached inside the dependency.
-        let group_paths = {
-            let _s = crate::engine::perf_trace::span("digest", "prove.group_paths");
-            crate::engine::l5::group_path::GroupPaths::new(&tree.typed_edges, model)
-        };
-        let _s = crate::engine::perf_trace::span("digest", "prove.reach_effects");
-        for entry in &mut all_entries {
-            if entry.effects.iter().any(|e| e.boundary_group)
-                && let Some(tree) = reach.live_tree(&entry.routine_id)
-            {
-                for e in entry.effects.iter_mut().filter(|e| e.boundary_group) {
-                    e.group_resource_paths = group_paths.paths(&reach, &tree, e);
-                }
-            }
-            let (dead, dead_resources) =
-                reach.unreachable_effects(&entry.routine_id, &entry.effects);
-            for i in dead {
-                entry.effects[i].literal_unreachable = true;
-            }
-            // G33: a group's resources reached only through code that cannot run.
-            for (i, resources) in dead_resources {
-                entry.effects[i].dead_group_resources = resources;
-            }
-            // A listed witness path that cannot run is not evidence: drop it.
-            // When none is left for a still-reachable effect, a live path exists
-            // that was not listed.
-            for e in entry.effects.iter_mut().filter(|e| !e.literal_unreachable) {
-                let before = e.via_paths.len();
-                e.via_paths.retain(|p| reach.path_live(p));
-                if e.via_paths.len() < before && e.via_paths.is_empty() {
-                    e.via_paths_truncated = true;
-                }
-            }
-        }
+        literal_reach_pass(tree, model, &mut all_entries);
     }
     let unresolved_span = crate::engine::perf_trace::span("digest", "digest.unresolved_cones");
     let read: Vec<(Vec<DigestEntryResult>, BTreeMap<String, UnresolvedCone>)> = readers
@@ -1418,6 +1432,57 @@ pub(crate) fn digest_effects_each(
             coverage_graph: coverage_graph.clone(),
         })
         .collect()
+}
+
+/// G23, prove's read only: effects a root cannot reach once literal Boolean
+/// arguments are followed through recursive SCCs, where the cone drops
+/// guards. It MUTATES `entries` (sets `literal_unreachable`,
+/// `dead_group_resources` and `group_resource_paths`, prunes `via_paths`),
+/// so it runs on a read's own copies, never on memoized ones.
+/// Spans (context-server design r3 §13 item 6): prove's post-root work
+/// (0.94 s measured for one root on CDO).
+fn literal_reach_pass(tree: &CapabilitySnapshot, model: &Model, entries: &mut [DigestEntryResult]) {
+    let reach = {
+        let _s = crate::engine::perf_trace::span("digest", "prove.literal_reach");
+        crate::engine::l5::literal_reach::LiteralReach::new(
+            &tree.typed_edges,
+            &tree.capability_facts,
+            model,
+        )
+    };
+    // G35: how each group resource is reached inside the dependency.
+    let group_paths = {
+        let _s = crate::engine::perf_trace::span("digest", "prove.group_paths");
+        crate::engine::l5::group_path::GroupPaths::new(&tree.typed_edges, model)
+    };
+    let _s = crate::engine::perf_trace::span("digest", "prove.reach_effects");
+    for entry in entries {
+        if entry.effects.iter().any(|e| e.boundary_group)
+            && let Some(tree) = reach.live_tree(&entry.routine_id)
+        {
+            for e in entry.effects.iter_mut().filter(|e| e.boundary_group) {
+                e.group_resource_paths = group_paths.paths(&reach, &tree, e);
+            }
+        }
+        let (dead, dead_resources) = reach.unreachable_effects(&entry.routine_id, &entry.effects);
+        for i in dead {
+            entry.effects[i].literal_unreachable = true;
+        }
+        // G33: a group's resources reached only through code that cannot run.
+        for (i, resources) in dead_resources {
+            entry.effects[i].dead_group_resources = resources;
+        }
+        // A listed witness path that cannot run is not evidence: drop it.
+        // When none is left for a still-reachable effect, a live path exists
+        // that was not listed.
+        for e in entry.effects.iter_mut().filter(|e| !e.literal_unreachable) {
+            let before = e.via_paths.len();
+            e.via_paths.retain(|p| reach.path_live(p));
+            if e.via_paths.len() < before && e.via_paths.is_empty() {
+                e.via_paths_truncated = true;
+            }
+        }
+    }
 }
 
 /// The real entry point: given resolved workspace + a list of roots (their stableIds),
