@@ -28,7 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finds the witness, a witness without its tree fails loudly, and the concurrency test now runs
   two heavy requests on one root while witnesses are evicted. Discrimination proofs (each seen
   to fail, then pass): the key without `include_reads`; memoizing the post-prove entry; no
-  `Tree` prerequisite; no batch.
+  `Tree` prerequisite; no batch. Measured on CDO (release-fast, quiet machine): explain, then
+  prove and digest on the same root now take 5.8-6.1 s, 2.55-2.63 s and 0.15-0.16 s, against
+  5.9-6.1 s, 5.6-6.0 s and 3.2-3.6 s on master; with the view's tree warm, a hit against a miss
+  is explain 1.1-1.2 s against 4.3-4.5 s, prove 0.86-0.92 s against 3.8-4.2 s, digest 0.15 s
+  against 3.1-3.4 s. A witness holds 5.6-7.9 MiB; resident memory is unchanged (5.8-6.0 GB).
+  What an explain hit still pays is `explain.indexes` (0.87-1.14 s), above the 0.4 s bar for
+  the plan's W2. Design note: `docs/superpowers/specs/2026-11-01-context-server-design.md` §6.11.
 
 ### Changed (the default cross-app memory budget is 8 GiB)
 

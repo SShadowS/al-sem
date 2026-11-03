@@ -800,7 +800,44 @@ row including anchors**: any file in Δ_files marks every id with a row in it.
   of the global canonical re-sort (0.58-0.74 s); parallel fresh-producer
   solving for cold and P; incremental direct facts; a per-revision memo of
   root witnesses (not in this design; the largest remaining per-answer
-  cost).
+  cost; built since, below).
+
+**As built (the witness memo, plan `2026-11-03-context-server-remaining.md` item W; branch
+`ctxsrv/witness-memo`).** A root's `DigestEntryResult` is a function of the root and
+`include_reads` over any tree holding it (the plan's Q1), so a revision keeps it as
+`ArtifactKey::Witness { root, include_reads }` (kind `witness`, phase 3, value
+`Arc<Option<DigestEntryResult>>`; `None` = no entry, stored so it is not asked again).
+`digest_effects_each` is split into `root_entries` (the rule-B partition, the root passes) and
+`finish_effects` (prove's literal reach, which mutates entries; the per-reader entries and
+unresolved cones; the shared parts); the one-shot path calls both. `needs_of` adds one key per
+root of every effects read; the fill reads the request's own `Tree(scope)` and fails loudly
+without it. The store fills claimed keys one by one, so the fill closure carries a
+request-local batch: the first witness fill computes every absent root of the request in one
+pass (one index build, the roots in parallel). `trees()` hands `finish_effects` clones.
+`witness` is first in `EVICTION_ORDER` and in the reclaim, is reclaimed with the trees at a
+refresh, is never carried to the next revision, and `status` reports `fills.witness`
+(`hit`, `miss`, `batches`). Deviations: (1) the fill does not assert the fixed root-pass
+options at run time: they are not parameters of `root_entries` (it always passes no return
+summaries and `ordering_witness_only` off), so no caller can alias the key with others; (2) the
+plan's discrimination break "hand out the stored entry instead of a clone" cannot be written
+(the value is behind an `Arc`); the proof breaks the same rule by memoizing the post-prove
+entry; (3) `Case::Fill("witness")` keeps the default 60 MiB until the fill's peak is measured
+apart; (4) the fill counter counts published keys, so the batch shows in `batches`, not in
+`fill_counts()["witness"]`.
+
+Measured on CDO (release-fast probe, mimalloc, `census-probe incr --witness`, load 2-4, every
+answer equal to its cold run in a `--verify` run after cold, B, S and P): per command with its
+view's tree warm, the root's witness evicted (miss) against present (hit): explain 4.3-4.5 s →
+1.09-1.20 s, prove 3.8-4.2 s → 0.86-0.92 s, digest 3.1-3.4 s → 0.15 s (`digest.roots` 2.4-3.2
+s, `digest.fingerprint_indexes` 84-111 ms per pass). A step's round of explain, then prove and
+digest on the same root (cold, B, B; same machine, same hour, master `14a23675` beside it):
+explain 5.8-6.1 s, prove 2.55-2.63 s (with the revision's first det and run), digest 0.15-0.16 s,
+against 5.9-6.1 / 5.6-6.0 / 3.2-3.6 s on master; RSS 5.82-6.00 GB, peak 5.94-6.21 GB, against
+5.82-5.99 / 6.20-6.33 GB on master (the `--witness` runs show ~7.1 GB: their extra views). Cross view: explain over three roots 6.1-6.3 s
+(one pass), then prove on one of them 0.92 s (a hit). A witness holds 7.9 MiB (`IssueReminder`,
+`IssueFinanceChargeMemo`) or 5.6 MiB (`RunReportID`). What a hit still pays: explain's
+`explain.indexes` 0.87-1.14 s (cards 4-24 ms, reaching tests 3-4 ms), above W2's 0.4 s bar;
+prove's literal reach 0.29-0.31 s and `prove.reach_effects` 0.41-0.46 s.
 
 ### 6.12 Explain
 

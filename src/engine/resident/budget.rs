@@ -134,6 +134,12 @@ impl Case {
             // the `Trees` case's composition half; not measured apart.
             Case::Fill("tree") => 900,
             Case::Fill("tree_base") => 450,
+            // A root's witnesses (plan 2026-11-03 W): 5.6-7.9 MiB resident
+            // per root on CDO (`census-probe incr --witness`); a request's
+            // first witness fill computes all its roots and the tree's
+            // indexes (~0.1 s of work), so the default's 60 MiB stands until
+            // the fill's peak is measured apart.
+            Case::Fill("witness") => 60,
             Case::Fill(_) => 60,
             Case::Trees => 900,
         }
