@@ -43,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entry point has several); `--detail` prints every table's witness, or why it has none. Digest
   JSON 3.x: a COMMIT / HTTP / UI / ERROR group row carries its representative witness in `paths`
   (or `pathUnavailable`); explain JSON's resource-less group rows carry `paths` and `pathOutcome`.
+- **W2-7 (2g): readable dependency locations and `--show-source`.** Every human output of
+  explain, digest, prove and query prints a dependency location as `dep:<app name>:<path>:<line>`
+  (`dep:Base Application:src/Sales/Reminder/ReminderIssue.Codeunit.al:182`), the name followed by
+  ` (<first 8 of the guid>)` when two loaded apps share it, and `%20` as a space. JSON keeps
+  `dep:<guid>:` (the `aldump --dump-dependency-source` citation contract). `alsem explain` and
+  `alsem query effects` / `touches` take `--show-source` (MCP `showSource`): the cited line ±2,
+  marked `>`, under each location, from the same text the dump command writes.
 
 ### Fixed (#369: dependency writes with no witness path, and colliding `factId`s)
 

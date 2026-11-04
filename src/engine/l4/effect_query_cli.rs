@@ -237,6 +237,8 @@ pub struct QueryJob<'a> {
     /// `--format json`: the JSON text, else the human text.
     json: bool,
     out: Option<&'a str>,
+    /// `--show-source` (W2-7): the cited line ±2 under each human location.
+    show_source: bool,
 }
 
 impl<'a> QueryJob<'a> {
@@ -302,7 +304,15 @@ impl<'a> QueryJob<'a> {
             single_app,
             json: true,
             out: None,
+            show_source: false,
         }
+    }
+
+    /// `--show-source` (W2-7).
+    #[must_use]
+    pub fn show_source(mut self, show_source: bool) -> QueryJob<'a> {
+        self.show_source = show_source;
+        self
     }
 
     /// The text `--format` names (`json` or human), to `--out` or stdout.
@@ -335,14 +345,15 @@ impl Job for QueryJob<'_> {
     }
 
     fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
+        let workspace = cx.inputs().workspace.clone();
         let substrate = released_substrate(cx);
-        let result = match self.ask {
+        let body = match self.ask {
             QueryAsk::Touches {
                 table,
                 from,
                 direction,
                 all,
-            } => render_query_touches(
+            } => render_query_touches_body(
                 &substrate,
                 table,
                 from,
@@ -351,10 +362,17 @@ impl Job for QueryJob<'_> {
                 self.alsem_ver,
                 self.deterministic,
             ),
-            QueryAsk::Effects { routine, all } => {
-                render_query_effects(&substrate, routine, all, self.alsem_ver, self.deterministic)
-            }
+            QueryAsk::Effects { routine, all } => render_query_effects_body(
+                &substrate,
+                routine,
+                all,
+                self.alsem_ver,
+                self.deterministic,
+            ),
         };
+        let sources = (self.show_source && !self.json)
+            .then(|| crate::engine::source_excerpt::SourceTexts::read(&workspace));
+        let result = finish_human(body, &substrate.dependencies, sources.as_ref());
         Ok(SideDoc::new(Ok::<_, String>(result)))
     }
 
@@ -1066,10 +1084,25 @@ pub fn render_query_touches(
 /// there are some (a workspace with no dependency reads the same in both
 /// modes). An answer with a `scope:` line states them there instead (W2-2,
 /// design §4.5 Q6: `dependencies_clause`), so it gets no first line.
-fn with_dependencies_line(mut r: QueryRunResult, deps: &LoadedDependencies) -> QueryRunResult {
+fn with_dependencies_line(r: QueryRunResult, deps: &LoadedDependencies) -> QueryRunResult {
+    finish_human(r, deps, None)
+}
+
+/// [`with_dependencies_line`], then (W2-7, 2g) `--show-source` excerpts
+/// while the locations still name their app by guid, then readable
+/// dependency locations (the JSON keeps the guid).
+fn finish_human(
+    mut r: QueryRunResult,
+    deps: &LoadedDependencies,
+    sources: Option<&crate::engine::source_excerpt::SourceTexts>,
+) -> QueryRunResult {
     if !r.human_text.contains("\n  scope: ") {
         r.human_text = deps.prefix_human(r.human_text);
     }
+    if let Some(s) = sources {
+        r.human_text = crate::engine::source_excerpt::with_excerpts(&r.human_text, s);
+    }
+    r.human_text = deps.readable_locations(r.human_text);
     r
 }
 

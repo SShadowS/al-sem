@@ -36,6 +36,47 @@ pub(crate) fn dump_dependency_source(ws: &Path, out: &Path) {
         "aldump --dump-dependency-source: {}",
         String::from_utf8_lossy(&o.stderr)
     );
+    // W2-7 (T-W2-12): human anchors name the app (`dep:Base Application:…`),
+    // so keep `name<TAB>guid` per dumped app (stdout: `<guid>
+    // <publisher>/<name>@<version>: N files`) for `source_of`.
+    let mut names = String::new();
+    for l in String::from_utf8_lossy(&o.stdout).lines() {
+        let Some((guid, rest)) = l.split_once(' ') else {
+            continue;
+        };
+        let short = rest.rsplit_once(": ").map_or(rest, |(s, _)| s);
+        let name = short
+            .split_once('/')
+            .map_or(short, |(_, n)| n)
+            .rsplit_once('@')
+            .map_or(short, |(n, _)| n);
+        names.push_str(&format!("{name}\t{guid}\n"));
+    }
+    std::fs::write(out.join("names.tsv"), names).unwrap();
+}
+
+/// The guid a human `dep:` label names: a guid itself, an app name, or
+/// `<name> (<guid8>)` (two loaded apps with one name), by the dump's
+/// `names.tsv`.
+fn dep_guid(label: &str, dep_root: &Path) -> Option<String> {
+    if label.len() == 36 && label.chars().filter(|c| *c == '-').count() == 4 {
+        return Some(label.to_string());
+    }
+    let (name, prefix) = match label.strip_suffix(')').and_then(|l| l.rsplit_once(" (")) {
+        Some((n, g)) => (n, Some(g)),
+        None => (label, None),
+    };
+    let names = std::fs::read_to_string(dep_root.join("names.tsv")).ok()?;
+    let hits: Vec<&str> = names
+        .lines()
+        .filter_map(|l| l.split_once('\t'))
+        .filter(|(n, g)| *n == name && prefix.is_none_or(|p| g.starts_with(p)))
+        .map(|(_, g)| g)
+        .collect();
+    match hits.as_slice() {
+        [one] => Some(one.to_string()),
+        _ => None,
+    }
 }
 
 /// One `file:line` a human output printed, with the words the line at it must hold
@@ -107,9 +148,18 @@ pub(crate) fn human_anchors(text: &str) -> Vec<Anchor> {
             if at > 0 && s.as_bytes()[at - 1].is_ascii_alphanumeric() {
                 continue;
             }
-            let end = rest
-                .find(|c: char| c.is_whitespace() || c == ']' || c == '"' || c == ')')
-                .unwrap_or(rest.len());
+            // T-W2-12: a `dep:` label is an app name, which may hold spaces
+            // (`dep:Base Application:…`, `dep:X (1a2b3c4d):…`); the location
+            // proper starts after it.
+            let label = match rest.strip_prefix("dep:").map(|r| r.find(':')) {
+                Some(Some(j)) => 4 + j + 1,
+                Some(None) => continue,
+                None => 0,
+            };
+            let end = label
+                + rest[label..]
+                    .find(|c: char| c.is_whitespace() || c == ']' || c == '"' || c == ')')
+                    .unwrap_or(rest.len() - label);
             let tok = &rest[..end];
             // `file:line` or `file:line:col` (the fingerprint form).
             let parts: Vec<&str> = tok.rsplitn(3, ':').collect();
@@ -316,8 +366,8 @@ pub(crate) fn source_of(file: &str, ws: &Path, dep_root: &Path) -> Option<String
     let path: PathBuf = if let Some(rel) = file.strip_prefix("ws:") {
         ws.join(rel)
     } else if let Some(rest) = file.strip_prefix("dep:") {
-        let (guid, rel) = rest.split_once(':')?;
-        dep_root.join(guid).join(rel)
+        let (label, rel) = rest.split_once(':')?;
+        dep_root.join(dep_guid(label, dep_root)?).join(rel)
     } else {
         return None;
     };
@@ -1619,7 +1669,11 @@ fn a_commit_beyond_an_entry_point_has_its_own_terminal_witness() {
         .find(|l| l.trim_start().starts_with("path:"))
         .unwrap_or_else(|| panic!("no commit path:\n{human}"));
     assert!(
-        commit_path.ends_with(&format!("(COMMIT at {file}:{line})")),
+        commit_path.ends_with(&format!(
+            "(COMMIT at {}:{line})",
+            // W2-7: the human form names the app; the JSON keeps the guid.
+            file.replace(crate::output_fixture::DEP_GUID, "Out Base")
+        )),
         "{commit_path}"
     );
     // digest's COMMIT group row: the same terminal, labelled representative.
@@ -1660,5 +1714,62 @@ fn a_commit_beyond_an_entry_point_has_its_own_terminal_witness() {
             .count(),
         15,
         "{detail:#?}"
+    );
+}
+
+/// W2-7, T-W2-12 (design §3.8 rule 5): every human output prints a dependency
+/// location as `dep:<app name>:<path>:<line>` (`dep:Out Base:…`), never
+/// `dep:<guid>:`, with no `%20`; each still opens to its line (the parser and
+/// resolver read an app name with spaces); the JSON keeps the guid (the
+/// `aldump --dump-dependency-source` citation contract). `--show-source`
+/// prints the cited line, marked, under the location.
+///
+/// Discrimination (2026-11-04): explain's render skipping
+/// `readable_locations` fails at "no guid in a human anchor"; restored,
+/// passes.
+#[test]
+fn dependency_locations_print_the_app_name() {
+    use crate::output_fixture::DEP_GUID;
+    let dump = tempfile::tempdir().unwrap();
+    dump_dependency_source(&workspace(), dump.path());
+    let mut dep_anchors = 0;
+    for (label, out) in fixture_human_outputs() {
+        assert!(!out.contains("%20"), "{label}: %20\n{out}");
+        for a in human_anchors(&out) {
+            assert!(
+                !a.file.starts_with(&format!("dep:{DEP_GUID}")),
+                "{label}: no guid in a human anchor: {}",
+                a.printed
+            );
+            if a.file.starts_with("dep:Out Base:") {
+                dep_anchors += 1;
+                assert!(
+                    source_of(&a.file, &workspace(), dump.path()).is_some(),
+                    "{label}: {} resolves",
+                    a.file
+                );
+            }
+        }
+    }
+    assert!(dep_anchors >= 5, "{dep_anchors} dependency anchors");
+    let ws = workspace().to_string_lossy().into_owned();
+    let (json, _, _) = run_alsem(&["explain", &ws, "--routine", ISSUE_DOC, "--format", "json"]);
+    assert!(
+        json.contains(&format!("dep:{DEP_GUID}:")),
+        "the JSON keeps the guid"
+    );
+    let (shown, err, code) = run_alsem(&["explain", &ws, "--routine", ISSUE_DOC, "--show-source"]);
+    assert_eq!(code, 0, "{err}");
+    let lines: Vec<&str> = shown.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.contains("(COMMIT at dep:Out Base:src/BasePoster.Codeunit.al:46)"))
+        .unwrap_or_else(|| panic!("{shown}"));
+    assert!(
+        lines[at + 1..=at + 5]
+            .iter()
+            .any(|l| l.trim_start().starts_with(">") && l.ends_with(" Commit();")),
+        "{:#?}",
+        &lines[at..=at + 5]
     );
 }

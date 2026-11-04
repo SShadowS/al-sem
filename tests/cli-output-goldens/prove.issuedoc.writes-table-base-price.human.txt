@@ -3,5 +3,5 @@
   answer:   yes
   evidence: 1 effect
     [DB_MODIFY] beyond Codeunit Base Calc::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:16
-      path: IssueDoc → [run] Base Calc::OnRun → UpdatePrice (Modify at dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al:68)
+      path: IssueDoc → [run] Base Calc::OnRun → UpdatePrice (Modify at dep:Out Base:src/BasePoster.Codeunit.al:68)
   obligations: unresolved=2, openWorld=1, coverage=incomplete

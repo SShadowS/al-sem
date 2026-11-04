@@ -131,6 +131,8 @@ pub struct ExplainJob<'a> {
     out: Option<&'a str>,
     /// `--detail` and `--max-paths` (design §5).
     opts: RenderOpts,
+    /// `--show-source` (W2-7): the cited line ±2 under each human location.
+    show_source: bool,
 }
 
 /// The command's two renderings and its exit code.
@@ -152,7 +154,15 @@ impl<'a> ExplainJob<'a> {
             human,
             out,
             opts: RenderOpts::new(false, None),
+            show_source: false,
         }
+    }
+
+    /// `--show-source` (W2-7).
+    #[must_use]
+    pub fn with_show_source(mut self, show_source: bool) -> ExplainJob<'a> {
+        self.show_source = show_source;
+        self
     }
 
     /// `--detail` (no fold, every list) and `--max-paths N` (design §5).
@@ -291,6 +301,7 @@ impl Job for ExplainJob<'_> {
     }
 
     fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
+        let workspace = cx.inputs().workspace.clone();
         let resolved: Resolved = cx.take_carry();
         let has_tree = cx.has_tree();
         let mut effects = if has_tree {
@@ -331,6 +342,8 @@ impl Job for ExplainJob<'_> {
             Vec::new()
         };
         let apps = view.target().dependencies().apps;
+        let sources = (self.show_source && self.human)
+            .then(|| crate::engine::source_excerpt::SourceTexts::read(&workspace));
         let result = render(
             model,
             &self.req.mode,
@@ -340,6 +353,7 @@ impl Job for ExplainJob<'_> {
             &apps,
             prepared,
             self.opts,
+            sources.as_ref(),
         );
         drop(full);
         drop(effects);
@@ -997,6 +1011,7 @@ fn render(
     apps: &[Value],
     prepared: Option<&ExplainIndexes>,
     opts: RenderOpts,
+    sources: Option<&crate::engine::source_excerpt::SourceTexts>,
 ) -> ExplainRunResult {
     use crate::engine::perf_trace::span;
     let built;
@@ -1119,6 +1134,14 @@ fn render(
         human.push('\n');
     }
     let summary = explain_summary(&cards, resolved.diagnostics.len());
+    // W2-7 (2g): `--show-source` excerpts (read while the locations still
+    // name their app by guid), then readable dependency locations (the JSON
+    // keeps the guid).
+    let human = match sources {
+        Some(s) => crate::engine::source_excerpt::with_excerpts(&human, s),
+        None => human,
+    };
+    let human = crate::program::resolve::full::readable_locations(apps, human);
     ExplainRunResult {
         json_text,
         human_text: human,

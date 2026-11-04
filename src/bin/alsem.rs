@@ -382,6 +382,10 @@ struct QueryTouchesCli {
     /// (as `analyze` and `graph` do), so a dependency's tables are selectable.
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
+
+    /// Human output: the cited source line ±2 under each location.
+    #[arg(long = "show-source", default_value_t = false)]
+    show_source: bool,
 }
 
 /// `QueryEffectsCli` — arguments for `alsem query effects <ws> --routine R`.
@@ -416,6 +420,10 @@ struct QueryEffectsCli {
     /// every loaded dependency app; the JSON always holds every row.
     #[arg(long = "all", default_value_t = false)]
     all: bool,
+
+    /// Human output: the cited source line ±2 under each location.
+    #[arg(long = "show-source", default_value_t = false)]
+    show_source: bool,
 }
 
 /// `PolicyCli` — top-level `policy` subcommand group.
@@ -838,6 +846,11 @@ struct ExplainCli {
     /// Paths per item (default 1; 3 with --detail; at most 3; 0: none).
     #[arg(long = "max-paths")]
     max_paths: Option<usize>,
+
+    /// Human output: the cited source line ±2 under each location (the text
+    /// `aldump --dump-dependency-source` writes for a dependency).
+    #[arg(long = "show-source", default_value_t = false)]
+    show_source: bool,
 }
 
 /// `FingerprintCli` — arguments for `alsem fingerprint <ws>`.
@@ -1717,6 +1730,7 @@ fn plan_query_touches(t: QueryTouchesCli) -> Planned {
                     t.deterministic,
                     t.single_app,
                 )
+                .show_source(t.show_source)
                 .written(t.format == "json", t.out.as_deref()),
             )
         },
@@ -1743,6 +1757,7 @@ fn plan_query_effects(e: QueryEffectsCli) -> Planned {
             Box::new(
                 QueryJob::effects(inputs, &e.routine, version, e.deterministic, e.single_app)
                     .all_rows(e.all)
+                    .show_source(e.show_source)
                     .written(e.format == "json", e.out.as_deref()),
             )
         },
@@ -2418,7 +2433,8 @@ fn plan_explain(e: ExplainCli, cx: &PlanCx) -> Planned {
             };
             Box::new(
                 ExplainJob::new(req, e.format == "human", e.out.as_deref())
-                    .with_render(e.detail, e.max_paths),
+                    .with_render(e.detail, e.max_paths)
+                    .with_show_source(e.show_source),
             )
         },
     )

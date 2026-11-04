@@ -3,5 +3,5 @@
   answer:   yes
   evidence: 1 effect
     [DB_DELETE] beyond Codeunit Base Poster::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15
-      path: IssueDoc → [run] Base Poster::OnRun (DeleteAll at dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al:7)
+      path: IssueDoc → [run] Base Poster::OnRun (DeleteAll at dep:Out Base:src/BasePoster.Codeunit.al:7)
   obligations: unresolved=2, openWorld=1, coverage=incomplete

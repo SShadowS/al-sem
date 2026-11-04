@@ -33,4 +33,6 @@ pub mod root_classification;
 /// #160 step 2: `View`, `Plan`, `RunKey` (spec §4.4.3).
 pub mod session;
 pub mod snapshot;
+/// W2-7: `--show-source` excerpts.
+pub mod source_excerpt;
 pub mod switch_dump;

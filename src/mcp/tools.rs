@@ -230,6 +230,10 @@ pub fn tool_list() -> Vec<Value> {
                         "maxPaths",
                         json!({"type": "integer", "minimum": 0, "description": "Paths per item (default 1; 3 with detail; at most 3)."}),
                     ),
+                    (
+                        "showSource",
+                        json!({"type": "boolean", "description": "Human output: the cited source line ±2 under each location (`--show-source`)."}),
+                    ),
                 ],
                 &[],
                 true,
@@ -325,6 +329,10 @@ pub fn tool_list() -> Vec<Value> {
                         json!({"type": "boolean", "description": "Every operation in the human output, one line each (`--all`); JSON always holds every row."}),
                     ),
                     (
+                        "showSource",
+                        json!({"type": "boolean", "description": "Human output: the cited source line ±2 under each location (`--show-source`)."}),
+                    ),
+                    (
                         "format",
                         json!({"type": "string", "enum": ["human", "json"], "description": "Output format (default human)."}),
                     ),
@@ -354,6 +362,10 @@ pub fn tool_list() -> Vec<Value> {
                     (
                         "all",
                         json!({"type": "boolean", "description": "Every witness, the callers' included, and no folded list (`--all`). Large on a hub routine."}),
+                    ),
+                    (
+                        "showSource",
+                        json!({"type": "boolean", "description": "Human output: the cited source line ±2 under each location (`--show-source`)."}),
                     ),
                     (
                         "format",
@@ -677,6 +689,7 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             if let Some(n) = a.count("maxPaths")? {
                 v.opt("max-paths", &n.to_string());
             }
+            v.switch("show-source", a.flag("showSource")?);
             v
         }
         "alsem_prove" => {
@@ -742,6 +755,7 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             let mut v = Argv::new(&["query", "effects"], &workspace);
             v.opt("routine", a.required("routine")?);
             v.switch("all", a.flag("all")?);
+            v.switch("show-source", a.flag("showSource")?);
             v.opt(
                 "format",
                 &a.enumerated("format", &["human", "json"], "human")?,
@@ -760,6 +774,7 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
                 &a.enumerated("direction", &["down", "up", "both"], "both")?,
             );
             v.switch("all", a.flag("all")?);
+            v.switch("show-source", a.flag("showSource")?);
             v.opt(
                 "format",
                 &a.enumerated("format", &["human", "json"], "human")?,

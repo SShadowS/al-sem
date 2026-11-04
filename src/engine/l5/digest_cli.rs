@@ -3236,6 +3236,8 @@ fn digest_view(
         human_text.push_str(&t.human_line());
         human_text.push('\n');
     }
+    // W2-7 (2g): readable dependency locations (the JSON keeps the guid).
+    let human_text = dependencies.readable_locations(human_text);
     drop(rollup_cx);
     cx.release(Cell::L4);
     cx.release(Cell::Effects);

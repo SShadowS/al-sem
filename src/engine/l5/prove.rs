@@ -2018,6 +2018,8 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             root: root_id,
         }),
     );
+    // W2-7 (2g): readable dependency locations (the JSON keeps the guid).
+    let human_text = dependencies.readable_locations(human_text);
 
     let summary = serde_json::json!({
         "kind": "prove",

@@ -3,5 +3,5 @@
   answer:   yes
   evidence: 1 effect
     [DB_INSERT] beyond Codeunit Base Poster::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15
-      path: IssueDoc → [run] Base Poster::OnRun → PostDocument (Insert at dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al:40)
+      path: IssueDoc → [run] Base Poster::OnRun → PostDocument (Insert at dep:Out Base:src/BasePoster.Codeunit.al:40)
   obligations: unresolved=2, openWorld=1, coverage=incomplete
