@@ -1077,7 +1077,9 @@ fn descriptions_state_line_base_size_and_depth() {
 /// `--detail`, `--max-paths` or `--compact` exits 2; `--compact` is one line.
 ///
 /// Discrimination (2026-11-04): writing a hop's `to` as the stable id
-/// instead of its routine key fails at "is no routine key"; restored, it
+/// instead of its routine key fails at "is no routine key"; collecting the
+/// routines of every listed path rather than the shown ones fails at
+/// "names exactly the document's routines" (cap 0); each restored, it
 /// passes. Limit: the fixture keeps at most 3 paths per row, so the cap
 /// clamp at 3 is checked by `pathCap` only, not by an over-long list.
 #[test]
@@ -1127,6 +1129,43 @@ fn digest_path_caps_keys_and_flags_on_the_fixture() {
                 );
             }
         }
+        // T-W2-8: the table holds exactly the routines the document names
+        // (every `to` and target anywhere, and the root).
+        fn tos(v: &Value, out: &mut std::collections::BTreeSet<String>) {
+            match v {
+                Value::Object(m) => {
+                    for (k, x) in m {
+                        if (k == "to" || k == "targets") && k != "routines" {
+                            match x {
+                                Value::String(s) => {
+                                    out.insert(s.clone());
+                                }
+                                Value::Array(a) => out
+                                    .extend(a.iter().filter_map(|t| t.as_str().map(String::from))),
+                                _ => {}
+                            }
+                        } else {
+                            tos(x, out);
+                        }
+                    }
+                }
+                Value::Array(a) => a.iter().for_each(|x| tos(x, out)),
+                _ => {}
+            }
+        }
+        let mut named = std::collections::BTreeSet::new();
+        tos(&d["payload"]["entries"], &mut named);
+        let root = entry["routine"]["stableId"].as_str().unwrap();
+        named.extend(
+            keys.iter()
+                .filter(|(_, v)| v["stableId"] == root)
+                .map(|(k, _)| k.clone()),
+        );
+        let table: std::collections::BTreeSet<String> = keys.keys().cloned().collect();
+        assert_eq!(
+            named, table,
+            "--max-paths {arg}: the routine table names exactly the document's routines"
+        );
     }
     for extra in [&["--detail"][..], &["--max-paths", "1"], &["--compact"]] {
         let mut args = vec!["digest", &ws, "--routine", ISSUE_DOC, "--schema", "2"];

@@ -139,28 +139,67 @@ fn trivial(sg: &crate::engine::l5::ordering_engine::ScopedGuarantee) -> bool {
         && sg.commit_effectiveness.is_none()
 }
 
-/// Every stable routine id a document names: roots, hop targets, crossing
-/// targets and group witness steps (T-W2-8).
+/// How many of an own row's listed paths the document shows (§4.4.2).
+fn shown_paths(e: &DigestEffectFull, opts: RenderOpts) -> usize {
+    if opts.detail || decision(e) {
+        opts.path_cap.min(e.via_paths.len())
+    } else {
+        0
+    }
+}
+
+/// The group witnesses a row shows: every one with `--detail`, else the
+/// representative of a decision row.
+fn shown_witnesses(
+    e: &DigestEffectFull,
+    opts: RenderOpts,
+) -> Vec<(&String, &crate::engine::l5::group_path::GroupPath)> {
+    let all = e
+        .group_resource_paths
+        .iter()
+        .filter_map(|(r, w)| w.as_ref().ok().map(|w| (r, w)));
+    if opts.detail {
+        all.collect()
+    } else if decision(e) && opts.path_cap > 0 {
+        all.take(1).collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// Every stable routine id the document names, and no other (T-W2-8):
+/// roots, the hop targets of every shown path and prefix, crossing targets
+/// and the steps of every shown group witness.
 #[must_use]
-pub fn referenced_routines(entries: &[DigestEntryFull]) -> BTreeSet<String> {
+pub fn referenced_routines(
+    entries: &[DigestEntryFull],
+    rollups: &[RoutineRollup],
+    opts: RenderOpts,
+) -> BTreeSet<String> {
     let mut ids = BTreeSet::new();
-    for entry in entries {
+    let hops = |ids: &mut BTreeSet<String>, p: &[ProjectedHop]| {
+        ids.extend(p.iter().filter_map(|h| h.inner.to_routine_id.clone()));
+    };
+    for (entry, r) in entries.iter().zip(rollups) {
         ids.insert(entry.routine_id.clone());
         for e in &entry.effects {
-            for p in &e.via_paths {
-                for h in p {
-                    if let Some(t) = &h.inner.to_routine_id {
-                        ids.insert(t.clone());
-                    }
-                }
-            }
-            if let Some(c) = &e.crossing {
-                ids.extend(c.targets.iter().cloned());
-            }
-            for (_, w) in &e.group_resource_paths {
-                if let Ok(w) = w {
+            if is_group(e) {
+                for (_, w) in shown_witnesses(e, opts) {
                     ids.extend(w.steps.iter().map(|s| s.to.clone()));
                 }
+            } else {
+                for p in &e.via_paths[..shown_paths(e, opts)] {
+                    hops(&mut ids, p);
+                }
+            }
+        }
+        for c in &r.crossings {
+            ids.extend(c.target_ids.iter().cloned());
+            if let Some(p) = c
+                .prefix_row
+                .and_then(|i| entry.effects[i].via_paths.iter().min_by_key(|p| p.len()))
+            {
+                hops(&mut ids, p);
             }
         }
     }
@@ -177,8 +216,13 @@ pub struct RoutineTable {
 
 impl RoutineTable {
     #[must_use]
-    pub fn build(entries: &[DigestEntryFull], cx: &RollupCx<'_>) -> RoutineTable {
-        let ids = referenced_routines(entries);
+    pub fn build(
+        entries: &[DigestEntryFull],
+        rollups: &[RoutineRollup],
+        cx: &RollupCx<'_>,
+        opts: RenderOpts,
+    ) -> RoutineTable {
+        let ids = referenced_routines(entries, rollups, opts);
         let keys = hashed_keys("r:", &ids);
         let mut table = Map::new();
         let mut files = BTreeMap::new();
@@ -286,7 +330,6 @@ fn effect_v3(
         m.insert("class".into(), class.into());
         m.insert("classReason".into(), reason.into());
     }
-    let cap = opts.path_cap;
     if is_group(e) {
         let key = crossing_key(e);
         m.insert(
@@ -321,11 +364,8 @@ fn effect_v3(
         }
         // Fable N12: one representative terminal witness per may-persist
         // group row; every per-resource witness with --detail.
-        let witnesses: Vec<(&String, &crate::engine::l5::group_path::GroupPath)> = e
-            .group_resource_paths
-            .iter()
-            .filter_map(|(r, w)| w.as_ref().ok().map(|w| (r, w)))
-            .collect();
+        // The same selection the routine table reads (`shown_witnesses`).
+        let witnesses = shown_witnesses(e, opts);
         let step = |s: &crate::engine::l5::group_path::WitnessStep| {
             let mut v = json!({"edge": s.edge, "to": rt.key(&s.to)});
             if let Some(l) = s.line {
@@ -358,21 +398,14 @@ fn effect_v3(
                 "witnesses".into(),
                 Value::Array(witnesses.iter().map(|(r, w)| witness(r, w)).collect()),
             );
-        } else if decision(e)
-            && cap > 0
-            && let Some((r, w)) = witnesses.first()
-        {
+        } else if let Some((r, w)) = witnesses.first() {
             let mut v = witness(r, w);
             v["representative"] = json!(true);
             m.insert("paths".into(), Value::Array(vec![v]));
         }
     } else {
         m.insert("evidence".into(), anchor_to_value(&e.evidence));
-        let shown_paths = if opts.detail || decision(e) {
-            cap.min(e.via_paths.len())
-        } else {
-            0
-        };
+        let shown_paths = shown_paths(e, opts);
         let terminal = json!({
             "operationId": e.origin_operation_ids.first(),
             "file": e.evidence.file,

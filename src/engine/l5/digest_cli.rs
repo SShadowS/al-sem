@@ -2397,7 +2397,8 @@ pub fn project_digest_document(
     let mut routines_table = None;
     let entries_val: Vec<serde_json::Value> = match &v3 {
         Some(v) => {
-            let rt = crate::engine::l5::digest_v3::RoutineTable::build(entries, v.cx);
+            let rt =
+                crate::engine::l5::digest_v3::RoutineTable::build(entries, v.rollups, v.cx, v.opts);
             let out = entries
                 .iter()
                 .zip(v.rollups)

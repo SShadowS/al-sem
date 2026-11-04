@@ -749,11 +749,6 @@
         "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
         "stableId": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
       },
-      "r:374a1a84c080": {
-        "display": "Codeunit Out Issue Document::OnAfterIssueDoc",
-        "file": "ws:src/OutIssueDocument.Codeunit.al",
-        "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#3e6ee67c7e9b78e87db179c550114e4150846c3e2941012bee1ade1d659f2031"
-      },
       "r:4bb5b37bce93": {
         "display": "Codeunit Base Poster::PostDocument",
         "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
