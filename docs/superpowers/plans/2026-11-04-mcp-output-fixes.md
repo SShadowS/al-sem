@@ -408,8 +408,10 @@ feature off with a warning on 2.x. `lineBase` is in `payload.lineBase`.
   → 3.0.0; hand-built 0-based anchors in `tests/core/risk.test.ts:27-31` and
   `alsem-writes.test.ts:77-82`; re-record `tests/fixtures/alsem-risk/digest.json`,
   `alsem-order/*`, `alsem-prove/recorded/*`, `record-writes/recorded/*`; docs
-  `scripts/e2e.md:131,503`. **Keep** `src/core/hotspot-explain.ts:171-172`'s `+ 1`: it reads
-  `alsem analyze --with-evidence` evidence ranges, which are still 0-based (see below).
+  `scripts/e2e.md:131,503`. `src/core/hotspot-explain.ts:171-172` reads
+  `alsem analyze --with-evidence` evidence ranges and adds 1: since #368 they are 1-based
+  (evidence `schemaVersion` 2.0.0, `payload.lineBase: 1`), so that `+ 1` must go (better:
+  `line - (payload.lineBase ?? 0) + 1`) in the same pin move.
 - **ConTinAI** (local only, `/home/sshadows/Projects/CONtinAI`): no change needed.
   `work/scripts/verify.py:216-220` and `graphs.py:32,39,42` honor `lineBase`;
   `dep:<guid>:<path>` citations now open exactly at the cited statement (the old ones were
@@ -420,12 +422,18 @@ feature off with a warning on 2.x. `lineBase` is in `payload.lineBase`.
   `al-call-hierarchy/{explain,prove,digest,…}` engine requests yet.
 - **al-perf** (dormant): `src/semantic/contracts.ts:17` `EXPECTED_INVENTORY_SCHEMA_VERSION`
   "1.1.0" → "2.0.0", or its al-sem fusion turns off (`engine-runner.ts:353-360`,
-  `diff-runner.ts:296-303`). It reads no lines from the inventory.
-- **Gap in this plan:** `alsem analyze` findings are 1-based, but
-  `analyze --with-evidence` evidence `sourceAnchor.range.startLine` is still 0-based, while
-  the same-shaped `rootClassifications[].sourceAnchor` in the fingerprint inventory is now
-  1-based. Aligning it must land together with removing bc-dev-mcp's
-  `hotspot-explain.ts:172` `+ 1` (tracked as an issue).
+  `diff-runner.ts:296-303`). It reads no lines from the inventory. `engine-runner.ts:582`
+  passes the analyze-evidence `startLine` through raw, so its step lines
+  (`views.ts:558,568`) were one line early; #368 fixes them with no edit there.
+- **Closed by #368** (was the gap in this plan): `analyze --with-evidence` evidence
+  `sourceAnchor.range.startLine`/`endLine` was still 0-based while the same-shaped
+  `rootClassifications[].sourceAnchor` in the fingerprint inventory was 1-based. Now both are
+  1-based; the evidence document states `payload.lineBase: 1` and moves `schemaVersion`
+  1.1.0 → 2.0.0 (the default analyze document, 1.0.0, is unchanged). `alsem policy check`
+  had the same 0-based anchors (and 0-based SARIF regions, which SARIF forbids); its JSON now
+  states `lineBase: 1` and its SARIF line and column are 1-based. Outside readers: bc-dev-mcp
+  `hotspot-explain.ts:171-172` drops its `+ 1` when its pin moves (above); al-perf
+  `engine-runner.ts:582` is fixed as it stands (above).
 
 ## 5. Open questions, answered from the code
 

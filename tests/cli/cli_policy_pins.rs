@@ -265,15 +265,17 @@ fn fixing_the_bypass_keeps_the_pins() {
     assert_eq!(shape(&bypass), shape(&fixed));
 }
 
-/// `(file, line, column)` of each finding's primary location.
-fn anchors(findings: &[serde_json::Value]) -> BTreeSet<(String, u64, u64)> {
+/// `(file, 0-based line, column)` of each finding's primary location, from a
+/// document whose lines count from `line_base` (`policy check` states 1 since
+/// #368; the r4 projection keeps the model's 0-based rows).
+fn anchors(findings: &[serde_json::Value], line_base: u64) -> BTreeSet<(String, u64, u64)> {
     findings
         .iter()
         .map(|f| {
             let p = &f["primaryLocation"];
             (
                 p["sourceUnitId"].as_str().unwrap().to_string(),
-                p["range"]["startLine"].as_u64().unwrap(),
+                p["range"]["startLine"].as_u64().unwrap() - line_base,
                 p["range"]["startColumn"].as_u64().unwrap(),
             )
         })
@@ -301,7 +303,8 @@ fn pins_round_trip_flags_what_d65_flags() {
     ]);
     assert_eq!(code, 0, "{err}");
     let doc: serde_json::Value = serde_json::from_str(&out).expect("json");
-    let pins = anchors(doc["findings"].as_array().expect("findings"));
+    assert_eq!(doc["lineBase"], 1, "policy check states its line base");
+    let pins = anchors(doc["findings"].as_array().expect("findings"), 1);
 
     let d65: Vec<_> = al_sem::engine::l5::detectors::registered_detectors()
         .into_iter()
@@ -320,7 +323,7 @@ fn pins_round_trip_flags_what_d65_flags() {
         &["d65-guard-bypass".to_string()],
     );
     let found = serde_json::to_value(&projection.findings).expect("findings json");
-    let d65_anchors = anchors(found.as_array().expect("findings"));
+    let d65_anchors = anchors(found.as_array().expect("findings"), 0);
     assert_eq!(d65_anchors.len(), 5, "precondition: d65's 5 findings");
     assert_eq!(pins, d65_anchors);
 }

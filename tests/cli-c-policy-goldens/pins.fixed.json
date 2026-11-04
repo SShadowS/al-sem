@@ -6,6 +6,7 @@
     "apps": [],
     "mode": "crossApp"
   },
+  "lineBase": 1,
   "policySource": "explicit:emit.policy-pins.yaml",
   "policyVersion": 2,
   "ruleSummaries": [

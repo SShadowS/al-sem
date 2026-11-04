@@ -297,7 +297,8 @@ fn step5_t2_policy_coverage_gate_both_on_unknown_modes() {
     let helper_line = FIXTURE
         .lines()
         .position(|l| l.contains("procedure Helper()"))
-        .map(|i| i as u64);
+        // 1-based, as `policy check` prints lines since #368.
+        .map(|i| i as u64 + 1);
     assert_eq!(at, helper_line, "A's finding is on Helper");
 }
 

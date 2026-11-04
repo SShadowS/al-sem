@@ -432,14 +432,15 @@ fn workspace(order: Order) -> tempfile::TempDir {
     dir
 }
 
-/// The 0-based line of the one line of `file` (in `order`) that contains `needle`.
+/// The 1-based line of the one line of `file` (in `order`) that contains `needle`
+/// (the base `policy check` prints, #368).
 fn line_of(file: &str, order: Order, needle: &str) -> u64 {
     let text = split_text(file, order);
     let hits: Vec<usize> = text
         .lines()
         .enumerate()
         .filter(|(_, l)| l.contains(needle))
-        .map(|(i, _)| i)
+        .map(|(i, _)| i + 1)
         .collect();
     assert_eq!(hits.len(), 1, "precondition: one `{needle}` in {file}");
     hits[0] as u64

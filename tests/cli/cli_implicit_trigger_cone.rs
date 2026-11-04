@@ -1197,12 +1197,14 @@ fn a6_dependency_origin_trigger_reaches_the_workspace_cone() {
         lines.sort_unstable();
         lines
     };
+    // 1-based, as `policy check` prints lines since #368.
     let decl = |name: &str| -> u64 {
         let needle = format!("procedure {name}()");
         WS6_AL
             .lines()
             .position(|l| l.contains(&needle))
             .unwrap_or_else(|| panic!("{name}: not in WS6_AL")) as u64
+            + 1
     };
     let want = vec![
         decl("ValidateDep"),
