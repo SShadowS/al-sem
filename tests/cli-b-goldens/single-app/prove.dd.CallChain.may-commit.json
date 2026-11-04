@@ -30,7 +30,17 @@
         "coneTruncated": false,
         "coverageComplete": false,
         "openWorldRows": 0,
-        "unresolvedCallsites": 1
+        "topUnresolvedCallees": [
+          {
+            "callee": "Lib.Outer",
+            "count": 1
+          }
+        ],
+        "unresolvedCallsites": 1,
+        "unresolvedInWorkspace": {
+          "notResolved": 0,
+          "openWorld": 0
+        }
       }
     },
     "routine": {

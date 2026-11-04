@@ -4,4 +4,6 @@
   evidence: 1 effect
     [COMMIT] at ws:src/Codeunit.al:10
       conditionality: loop-body
-  obligations: all clear
+  coverage: complete
+  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  limits: none

@@ -1,4 +1,6 @@
 --- Codeunit Out Log Mgt::WriteLog ---
   question: may-commit
   answer:   no
-  obligations: all clear
+  coverage: complete
+  assumptions: loaded-subscribers
+  limits: none

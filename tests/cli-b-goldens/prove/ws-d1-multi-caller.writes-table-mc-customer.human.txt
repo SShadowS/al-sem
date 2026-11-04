@@ -5,4 +5,6 @@
     [DB_MODIFY] at ws:src/D1MultiCaller.al:19
       conditionality: loop-body
       path: CallerA → ModifyHelper
-  obligations: all clear
+  coverage: complete
+  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  limits: none

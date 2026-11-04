@@ -6,4 +6,6 @@
       conditionality: loop-body
   blockedBy: 1 blocker(s)
     [non-unconditional-effect-exists] COMMIT with conditionality "loop-body" @ ws:src/Codeunit.al:10
-  obligations: all clear
+  coverage: complete
+  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  limits: none

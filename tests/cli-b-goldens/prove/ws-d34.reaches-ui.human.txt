@@ -1,4 +1,6 @@
 --- Codeunit D34 Demo::DirectCommitInLoop ---
   question: reaches-ui
   answer:   no
-  obligations: all clear
+  coverage: complete
+  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  limits: none

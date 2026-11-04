@@ -40,7 +40,7 @@ use crate::engine::l5::digest_cli::{
 use crate::engine::l5::unresolved_cone::UnresolvedConeItem;
 use crate::engine::line_base::{shown, shown_opt};
 use crate::engine::session::{Cell, prove_plan};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // ProveQuestion
@@ -328,6 +328,62 @@ fn compute_obligations(
         coverage_closed_by_assumption,
         answer_relies_on_world: false,
         relies_on_loaded_subscribers: false,
+    }
+}
+
+/// W2-8 (2h, design §4.7 P4): where the obligations point. The unresolved
+/// call sites the answer's world still counts (not waived), split by where
+/// the call site is and by kind, and the most frequent callees.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ObligationPointers {
+    /// In workspace code: calls not resolved (dynamic targets and the like).
+    pub workspace_unresolved: usize,
+    /// In workspace code: interface calls counted open world.
+    pub workspace_open_world: usize,
+    /// The three most frequent callees, `(display, count)`.
+    pub top_callees: Vec<(String, usize)>,
+}
+
+impl ObligationPointers {
+    /// Over `entry`'s unresolved cone, in `world`.
+    #[must_use]
+    pub fn of(entry: &DigestEntryFull, world: World) -> ObligationPointers {
+        let mut p = ObligationPointers::default();
+        let mut callees: BTreeMap<&str, usize> = BTreeMap::new();
+        for item in entry.unresolved.iter().filter(|i| !world_waives(i, world)) {
+            if item
+                .callsite_file
+                .as_deref()
+                .is_some_and(|f| f.starts_with("ws:"))
+            {
+                if item.open_world == Some(true) {
+                    p.workspace_open_world += 1;
+                } else {
+                    p.workspace_unresolved += 1;
+                }
+            }
+            *callees.entry(item.callee_display.as_str()).or_default() += 1;
+        }
+        let mut top: Vec<(String, usize)> = callees
+            .into_iter()
+            .map(|(c, n)| (c.to_string(), n))
+            .collect();
+        top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        top.truncate(3);
+        p.top_callees = top;
+        p
+    }
+
+    fn to_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "unresolvedInWorkspace": {
+                "notResolved": self.workspace_unresolved,
+                "openWorld": self.workspace_open_world,
+            },
+            "topUnresolvedCallees": self.top_callees.iter()
+                .map(|(c, n)| serde_json::json!({"callee": c, "count": n}))
+                .collect::<Vec<_>>(),
+        })
     }
 }
 
@@ -1149,6 +1205,8 @@ pub struct ProveDocumentArgs<'a> {
     pub diagnostics_json: serde_json::Value,
     pub alsem_ver: &'a str,
     pub deterministic: bool,
+    /// W2-8: where the obligations point (`None` for the no-root document).
+    pub pointers: Option<&'a ObligationPointers>,
 }
 
 /// W2-0b: a group path's structured witness (`groupWitness`): per hop the
@@ -1199,6 +1257,7 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
         diagnostics_json,
         alsem_ver,
         deterministic,
+        pointers,
     } = args;
 
     // result sub-object
@@ -1297,10 +1356,15 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
         result_obj.insert("blockedBy".into(), serde_json::Value::Array(bv));
     }
 
-    result_obj.insert(
-        "obligations".into(),
-        obligations_to_value(&prove_result.obligations),
-    );
+    let mut obligations = obligations_to_value(&prove_result.obligations);
+    // W2-8 (2h, prove 2.3.0, additive): where the obligations point.
+    if let (Some(m), Some(serde_json::Value::Object(o))) = (
+        obligations.as_object_mut(),
+        pointers.map(ObligationPointers::to_value),
+    ) {
+        m.extend(o);
+    }
+    result_obj.insert("obligations".into(), obligations);
     // G24/G29: the label a KB needs for an answer that holds only in a world
     // beyond the open one.
     let o = &prove_result.obligations;
@@ -1370,6 +1434,8 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
 pub struct HumanPaths<'c, 'm> {
     pub cx: &'c crate::engine::l5::routine_rollup::RollupCx<'m>,
     pub root: &'c str,
+    /// W2-8: where the obligations point.
+    pub pointers: &'c ObligationPointers,
 }
 
 pub fn format_prove_human(
@@ -1387,7 +1453,18 @@ pub fn format_prove_human(
     let routine_header = owner_qualified(object_display, routine_display);
     lines.push(format!("--- {} ---", routine_header));
     lines.push(format!("  question: {}", question));
-    lines.push(format!("  answer:   {}", prove_result.answer.as_str()));
+    // W2-8 (R3e): prove's own answer is authoritative. An `unknown` with no
+    // evidence is an absence the obligations block: say so; `yes` and `no`
+    // print bare, `no` followed by its coverage and assumptions below.
+    let no_evidence = prove_result.evidence.as_ref().is_none_or(Vec::is_empty);
+    lines.push(match &prove_result.answer {
+        // (`paths` is `None` only for the no-root document: nothing was
+        // looked at there.)
+        ProveAnswer::Unknown if no_evidence && paths.is_some() => {
+            "  answer:   unknown — no matching effect observed; coverage incomplete".to_string()
+        }
+        a => format!("  answer:   {}", a.as_str()),
+    });
 
     let asked_table = match parse_question(question) {
         Some(ProveQuestion::WritesTable { table }) => Some(table),
@@ -1495,34 +1572,88 @@ pub fn format_prove_human(
         }
     }
 
-    // Obligations summary
-    let o = &prove_result.obligations;
-    let mut parts: Vec<String> = Vec::new();
-
-    if o.unresolved_callsites > 0 {
-        parts.push(format!("unresolved={}", o.unresolved_callsites));
-    }
-    if o.open_world_rows > 0 {
-        parts.push(format!("openWorld={}", o.open_world_rows));
-    }
-    if o.analysis_gaps > 0 {
-        parts.push(format!("gaps={}", o.analysis_gaps));
-    }
-    if !o.coverage_complete {
-        parts.push("coverage=incomplete".to_string());
-    }
-    if o.cone_truncated {
-        parts.push("cone=truncated".to_string());
-    }
-
-    if parts.is_empty() {
-        lines.push("  obligations: all clear".to_string());
-    } else {
-        lines.push(format!("  obligations: {}", parts.join(", ")));
-    }
+    // W2-8 (2h, design §3.7, §4.7): coverage, assumptions and limits, always
+    // visible; the answer above is prove's own and is never qualified here.
+    lines.extend(coverage_lines(
+        &prove_result.obligations,
+        paths.map(|p| p.pointers),
+    ));
 
     lines.push(String::new());
     lines.join("\n")
+}
+
+/// The always-visible `coverage:`, `assumptions:` and `limits:` lines of a
+/// prove answer (W2-8, design §3.7): the obligations with counts and where
+/// they point, the answer's world, the analysis incompleteness.
+fn coverage_lines(o: &ProveObligations, pointers: Option<&ObligationPointers>) -> Vec<String> {
+    use crate::engine::l5::routine_rollup::plural;
+    let ws = |n: usize| match pointers {
+        Some(_) => format!(" ({n} in this workspace)"),
+        None => String::new(),
+    };
+    let mut parts = Vec::new();
+    if o.unresolved_callsites > 0 {
+        parts.push(format!(
+            "{} not resolved{}",
+            plural(o.unresolved_callsites, "call", "calls"),
+            ws(pointers.map_or(0, |p| p.workspace_unresolved))
+        ));
+    }
+    if o.open_world_rows > 0 {
+        parts.push(format!(
+            "{} open world{}",
+            plural(o.open_world_rows, "interface call", "interface calls"),
+            ws(pointers.map_or(0, |p| p.workspace_open_world))
+        ));
+    }
+    let mut coverage = if o.coverage_complete {
+        "coverage: complete".to_string()
+    } else {
+        "coverage: incomplete".to_string()
+    };
+    if !parts.is_empty() {
+        coverage.push_str(&format!(" — {}", parts.join(", ")));
+    }
+    if let Some(p) = pointers.filter(|p| !p.top_callees.is_empty()) {
+        coverage.push_str(&format!(
+            "; top: {}",
+            p.top_callees
+                .iter()
+                .map(|(c, n)| format!("{c} ×{n}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        if p.workspace_unresolved + p.workspace_open_world > 0 {
+            coverage.push_str("; alsem explain lists the workspace ones under gaps");
+        }
+    }
+    let assumptions = match o.assumption() {
+        Some(label) => format!("assumptions: {label}"),
+        None if o.world != World::Closed => "assumptions: none (default world; --closed-world \
+             assumes the loaded interface implementations)"
+            .to_string(),
+        None => {
+            "assumptions: none (--closed-world asked; the answer does not rely on it)".to_string()
+        }
+    };
+    let mut limits = Vec::new();
+    if o.analysis_gaps > 0 {
+        limits.push(plural(o.analysis_gaps, "analysis gap", "analysis gaps"));
+    }
+    if o.cone_truncated {
+        limits.push("cone-truncated".to_string());
+    }
+    let limits = if limits.is_empty() {
+        "limits: none".to_string()
+    } else {
+        format!("limits: {}", limits.join("; "))
+    };
+    vec![
+        format!("  {coverage}"),
+        format!("  {assumptions}"),
+        format!("  {limits}"),
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -1857,6 +1988,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             diagnostics_json,
             alsem_ver,
             deterministic,
+            pointers: None,
         });
 
         let human_text = format_prove_human(
@@ -1985,6 +2117,9 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     prove_result.obligations.relies_on_loaded_subscribers =
         relies_on_loaded_subscribers(&prove_result, entry, fires_table_events);
 
+    // W2-8 (2h): where the obligations point, in the answer's world.
+    let pointers = ObligationPointers::of(entry, prove_result.obligations.world);
+
     // Project document
     cx.view().census_output();
     let json_text = project_prove_document(ProveDocumentArgs {
@@ -2000,6 +2135,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         diagnostics_json,
         alsem_ver,
         deterministic,
+        pointers: Some(&pointers),
     });
 
     // W2-6: the human answer's paths read the model's names (and, W2-7, the
@@ -2016,6 +2152,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         Some(&HumanPaths {
             cx: &rollup_cx,
             root: root_id,
+            pointers: &pointers,
         }),
     );
     // W2-7 (2g): readable dependency locations (the JSON keeps the guid).

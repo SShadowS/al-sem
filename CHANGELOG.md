@@ -50,6 +50,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dep:<guid>:` (the `aldump --dump-dependency-source` citation contract). `alsem explain` and
   `alsem query effects` / `touches` take `--show-source` (MCP `showSource`): the cited line ±2,
   marked `>`, under each location, from the same text the dump command writes.
+- **W2-8 (2h): prove states its coverage, assumptions and limits.** The human answer's
+  `obligations:` line is replaced by three always-visible lines: `coverage: complete` or
+  `incomplete — N calls not resolved (K in this workspace), M interface calls open world (L in
+  this workspace); top: <callee> ×n, …`; `assumptions:` with the answer's world label
+  (`loaded-subscribers`, `closed-world`) or `none (default world; …)`; `limits:` (analysis gaps,
+  cone truncation) or `none`. An absence the obligations block reads `answer: unknown — no
+  matching effect observed; coverage incomplete`; `yes` and `no` print bare (prove's answer is
+  authoritative; the JSON `answer` is unchanged). Prove JSON 2.3.0 (additive): `obligations`
+  gains `unresolvedInWorkspace {notResolved, openWorld}` and `topUnresolvedCallees` (3).
 
 ### Fixed (#369: dependency writes with no witness path, and colliding `factId`s)
 

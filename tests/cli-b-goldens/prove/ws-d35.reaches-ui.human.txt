@@ -4,4 +4,6 @@
   evidence: 1 effect
     [UI_MESSAGE] at ws:src/Codeunit.al:21
       conditionality: unconditional-on-success
-  obligations: all clear
+  coverage: complete
+  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  limits: none

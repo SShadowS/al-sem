@@ -1773,3 +1773,64 @@ fn dependency_locations_print_the_app_name() {
         &lines[at..=at + 5]
     );
 }
+
+/// W2-8, 2h (design §3.7, §4.7, R3e): prove's answer is its own, and its
+/// coverage, assumptions and limits always print. On the fixture (counted by
+/// hand from its AL): IssueDoc's obligations point at 1 unresolved call in
+/// workspace code (`Codeunit.Run(DynamicId)`, line 21) and 1 open-world
+/// interface call there (`Handler.Handle`, line 23), the dependency's own
+/// `Codeunit.Run` (BasePoster line 45) outside it; top callees
+/// `Codeunit.Run(<dynamic>)` ×2, `Handler.Handle` ×1. An absence the
+/// obligations block (`writes-table:Out Item`) is `unknown — no matching
+/// effect observed; coverage incomplete`; a `yes` prints bare; a `no` prints
+/// bare with its `assumptions: loaded-subscribers`. The JSON `answer` is
+/// unchanged.
+///
+/// Discrimination (2026-11-04): `ObligationPointers::of` counting every
+/// call site as workspace code (the `ws:` test dropped) fails at
+/// "unresolvedInWorkspace"; restored, passes.
+#[test]
+fn prove_states_coverage_assumptions_and_limits() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let run = |routine: &str, q: &str, format: &str| -> String {
+        let (out, err, code) = run_alsem(&["prove", &ws, routine, q, "--format", format]);
+        assert_eq!(code, 0, "{q}: {err}");
+        out
+    };
+    let j: Value = serde_json::from_str(&run(ISSUE_DOC, "may-commit", "json")).unwrap();
+    let o = &j["payload"]["result"]["obligations"];
+    assert_eq!(
+        o["unresolvedInWorkspace"],
+        serde_json::json!({"notResolved": 1, "openWorld": 1}),
+        "unresolvedInWorkspace: {o}"
+    );
+    assert_eq!(
+        o["topUnresolvedCallees"],
+        serde_json::json!([
+            {"callee": "Codeunit.Run(<dynamic>)", "count": 2},
+            {"callee": "Handler.Handle", "count": 1}
+        ])
+    );
+    let yes = run(ISSUE_DOC, "may-commit", "human");
+    assert!(yes.contains("\n  answer:   yes\n"), "{yes}");
+    for l in [
+        "  coverage: incomplete — ",
+        "  assumptions: ",
+        "  limits: none",
+    ] {
+        assert!(yes.contains(l), "{l}:\n{yes}");
+    }
+    let unknown = run(ISSUE_DOC, "writes-table:Out Item", "human");
+    assert!(
+        unknown
+            .contains("\n  answer:   unknown — no matching effect observed; coverage incomplete\n"),
+        "{unknown}"
+    );
+    let uj: Value = serde_json::from_str(&run(ISSUE_DOC, "writes-table:Out Item", "json")).unwrap();
+    assert_eq!(uj["payload"]["result"]["answer"], "unknown");
+    let no = run(FIELD_OPS, "may-commit", "human");
+    assert!(
+        no.contains("\n  answer:   no\n  coverage: complete\n  assumptions: loaded-subscribers\n  limits: none\n"),
+        "{no}"
+    );
+}

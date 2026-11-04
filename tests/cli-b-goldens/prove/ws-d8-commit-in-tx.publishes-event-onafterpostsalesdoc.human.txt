@@ -4,4 +4,6 @@
   evidence: 1 effect
     [EVENT_PUBLISH] at ws:src/posting.al:13
       path: PostSalesDoc → OnAfterPostSalesDoc
-  obligations: all clear
+  coverage: complete
+  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  limits: none

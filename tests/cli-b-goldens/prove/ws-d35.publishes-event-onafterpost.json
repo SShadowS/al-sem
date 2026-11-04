@@ -20,7 +20,12 @@
         "coneTruncated": false,
         "coverageComplete": true,
         "openWorldRows": 0,
-        "unresolvedCallsites": 0
+        "topUnresolvedCallees": [],
+        "unresolvedCallsites": 0,
+        "unresolvedInWorkspace": {
+          "notResolved": 0,
+          "openWorld": 0
+        }
       }
     },
     "routine": {
