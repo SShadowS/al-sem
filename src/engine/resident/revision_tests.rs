@@ -479,15 +479,34 @@ fn a_cancelled_request_stops_between_phases() {
 /// its cold run's bytes, no request sees a partial snapshot, and the
 /// artifacts are filled again after each eviction.
 ///
-/// DISCRIMINATION (2026-11-02): dropping the assembly pins in
-/// `ensure_prepared` (no `pins += 1`) fails it: an eviction lands between a
-/// request's phases, and the request ends "missing from the ready snapshot"
-/// (or a run without its det) instead of answering: 5 of 5 runs failed
-/// (6 rounds failed 1 run in 3, hence 40). Plan 2026-11-03 W2 (2026-11-03):
-/// the explain indexes' kind name drifting from the name eviction uses
-/// (`ArtifactKey::kind` returning `"explain-indexes"`) fails "explain_indexes
-/// refilled after eviction" (one fill: nothing ever evicted it); reverted,
-/// it passes.
+/// The refill is FORCED, not hoped for: between two rounds, with every
+/// request returned (nothing pinned), every evictable artifact is evicted
+/// (stated: none is left), so each round fills again what it reads. Before
+/// 2026-11-04 the test relied on the concurrent evictor alone, whose bursts
+/// skip every key a request in flight pins (`Store::evict`): under machine
+/// load a run could see no burst land in a gap, and "l4 refilled after
+/// eviction" failed with one l4 fill. The concurrent bursts stay, for the
+/// interleavings inside a request (an eviction between its phases), and
+/// now last exactly as long as the round's requests (they were 50 passes
+/// with a `yield_now` each, which could end before a request reached its
+/// later phases). Forcing every round to refill everything at once made a
+/// real store deadlock reachable (2 hangs in 300 loaded runs, both heavy
+/// requests in `Store::wait_for`, each waiting on a key the other held
+/// claimed): fixed in `ensure_prepared` and pinned by the store's
+/// `a_request_publishes_its_claims_before_it_waits_for_a_joined_key`. The
+/// pins themselves are pinned
+/// deterministically by the store's `eviction_skips_keys_pinned_for_assembly`
+/// and `a_reclaim_skips_values_a_ready_snapshot_holds`.
+///
+/// DISCRIMINATION (break with Edit, run, revert, run; 2026-11-04): (a) no
+/// between-rounds eviction (`if round > 0 && false`) fails "l4 refilled
+/// after eviction" (35 to 37 l4 fills of 40 rounds, 5 of 5 runs);
+/// (b) no pins at all (`pins += 0` in `ensure_prepared` and `Store::hold`)
+/// fails with "a tree needs the fold, which is not published" or "the tree
+/// base needs the fold" (5 of 5 runs); (c) the explain indexes' kind name
+/// drifting from the name eviction uses (`ArtifactKey::kind` returning
+/// `"explain-indexes"`) fails "explain_indexes refilled after eviction" (one
+/// fill, 3 of 3 runs). Reverted, it passes.
 #[test]
 fn concurrent_requests_and_evictions_answer_the_cold_bytes() {
     const ROUNDS: usize = 40;
@@ -498,11 +517,43 @@ fn concurrent_requests_and_evictions_answer_the_cold_bytes() {
     // Each round releases the four threads together: a rendezvous send per
     // thread (a thread that panicked has dropped its receiver, so the send
     // fails at once and nothing waits on it forever). The two heavy threads
-    // ask the same root at once (they share its witness key).
-    let (go_digest, digest_rx) = std::sync::mpsc::sync_channel::<()>(0);
-    let (go_heavy, heavy_rx) = std::sync::mpsc::sync_channel::<()>(0);
-    let (go_light, light_rx) = std::sync::mpsc::sync_channel::<()>(0);
-    let (go_evict, evict_rx) = std::sync::mpsc::sync_channel::<()>(0);
+    // ask the same root at once (they share its witness key). Each thread
+    // then reports the end of its round on its OWN channel, so the next
+    // round starts only once every request of this one has returned; a
+    // thread that panicked has dropped its only sender, so that wait ends at
+    // once too (one shared channel would wait forever on the others' clones).
+    use std::sync::mpsc::{Receiver, channel, sync_channel};
+    let (go_digest, digest_rx) = sync_channel::<()>(0);
+    let (go_heavy, heavy_rx) = sync_channel::<()>(0);
+    let (go_light, light_rx) = sync_channel::<()>(0);
+    let (go_evict, evict_rx) = sync_channel::<()>(0);
+    let (digest_done, digest_done_rx) = channel::<()>();
+    let (heavy_done, heavy_done_rx) = channel::<()>();
+    let (light_done, light_done_rx) = channel::<()>();
+    let (evict_done, evict_done_rx) = channel::<()>();
+    let dones: [&Receiver<()>; 4] = [
+        &evict_done_rx,
+        &heavy_done_rx,
+        &digest_done_rx,
+        &light_done_rx,
+    ];
+    // Keys of an evictable kind left after a between-rounds eviction (the
+    // precondition, asserted once the threads are joined).
+    let mut left = Vec::new();
+    let requests_done = std::sync::atomic::AtomicBool::new(false);
+    const KINDS: [&str; 11] = [
+        "witness",
+        "explain_indexes",
+        "raw",
+        "tree",
+        "tree_base",
+        "run",
+        "det",
+        "fold",
+        "l4",
+        "rules",
+        "ordering",
+    ];
     let (rev, f) = (&rev, &f);
     std::thread::scope(|s| {
         let heavy = s.spawn(move || {
@@ -513,6 +564,7 @@ fn concurrent_requests_and_evictions_answer_the_cold_bytes() {
                 }
                 let cmd = if i % 2 == 0 { Cmd::Prove } else { Cmd::Explain };
                 outs.push((cmd, answer(rev, cmd, f)));
+                let _ = heavy_done.send(());
             }
             outs
         });
@@ -520,6 +572,7 @@ fn concurrent_requests_and_evictions_answer_the_cold_bytes() {
             let mut outs = Vec::new();
             while digest_rx.recv().is_ok() {
                 outs.push(answer(rev, Cmd::Digest, f));
+                let _ = digest_done.send(());
             }
             outs
         });
@@ -527,39 +580,62 @@ fn concurrent_requests_and_evictions_answer_the_cold_bytes() {
             let mut outs = Vec::new();
             while light_rx.recv().is_ok() {
                 outs.push(answer(rev, Cmd::Query, f));
+                let _ = light_done.send(());
             }
             outs
         });
+        // The evictor's burst lasts exactly as long as the round's requests
+        // (main raises `requests_done` once all three returned): a burst of
+        // a fixed number of passes could end before the requests reach
+        // their later phases, and its `yield_now`s cost a full time slice
+        // each on a saturated machine (50 per round made a loaded run take
+        // minutes).
+        let requests_done = &requests_done;
         let evictor = s.spawn(move || {
-            let mut evicted = 0;
             while evict_rx.recv().is_ok() {
-                for _ in 0..50 {
-                    for k in [
-                        "witness",
-                        "explain_indexes",
-                        "raw",
-                        "tree",
-                        "tree_base",
-                        "run",
-                        "det",
-                        "fold",
-                        "l4",
-                        "rules",
-                        "ordering",
-                    ] {
-                        evicted += rev.evict_kind(k);
+                while !requests_done.load(std::sync::atomic::Ordering::SeqCst) {
+                    for k in KINDS {
+                        rev.evict_kind(k);
                     }
                     std::thread::yield_now();
                 }
+                let _ = evict_done.send(());
             }
-            evicted
         });
-        for _ in 0..ROUNDS {
-            let _ = go_evict.send(());
-            let _ = go_heavy.send(());
-            let _ = go_digest.send(());
-            let _ = go_light.send(());
+        'rounds: for round in 0..ROUNDS {
+            // The forced interleaving: from round 1 on, every artifact the
+            // last round published leaves the store before this round's
+            // requests start, so each request of this round fills again
+            // what it reads. (Whether the concurrent evictor's bursts land
+            // depends on the scheduler: a key pinned by a request in flight
+            // is skipped, and under load a burst can miss every gap.)
+            if round > 0 {
+                for k in KINDS {
+                    rev.evict_kind(k);
+                }
+                left = rev.keys_where(|k| KINDS.contains(&k.kind()));
+                if !left.is_empty() {
+                    break;
+                }
+            }
+            requests_done.store(false, std::sync::atomic::Ordering::SeqCst);
+            for go in [&go_evict, &go_heavy, &go_digest, &go_light] {
+                if go.send(()).is_err() {
+                    break 'rounds;
+                }
+            }
+            for done in &dones[1..] {
+                if done.recv().is_err() {
+                    break 'rounds;
+                }
+            }
+            requests_done.store(true, std::sync::atomic::Ordering::SeqCst);
+            if dones[0].recv().is_err() {
+                break;
+            }
         }
+        // An early exit leaves the evictor's burst free to end.
+        requests_done.store(true, std::sync::atomic::Ordering::SeqCst);
         drop((go_heavy, go_digest, go_light, go_evict));
         for out in digests.join().unwrap() {
             assert_eq!(out, cold_digest, "Digest");
@@ -575,11 +651,14 @@ fn concurrent_requests_and_evictions_answer_the_cold_bytes() {
         for out in light.join().unwrap() {
             assert_eq!(out, cold_query);
         }
-        assert!(
-            evictor.join().unwrap() > 0,
-            "precondition: evictions happened"
-        );
+        // How many keys the bursts met unpinned is the scheduler's: not
+        // asserted (the forced eviction above is).
+        evictor.join().unwrap();
     });
+    assert!(
+        left.is_empty(),
+        "precondition: a round starts with every evictable kind evicted: {left:?}"
+    );
     // The tree store's artifacts (stage 5b) churn like the others: a
     // request's tree is pinned through its reads, and an evicted tree or
     // base is filled again, never read half-built. So do the witnesses
@@ -587,18 +666,22 @@ fn concurrent_requests_and_evictions_answer_the_cold_bytes() {
     // publication is discarded (the generation moved) and filled again; and
     // explain's indexes (W2), read by the explains of the heavy thread; and
     // the view's raw facts (L6: every heavy request reads a `Raw` artifact).
-    for kind in [
-        "l4",
-        "raw",
-        "tree",
-        "tree_base",
-        "witness",
-        "explain_indexes",
+    // Every round's requests read l4, raw, a tree, the tree base and a
+    // witness, and every odd round's heavy request (an explain) reads the
+    // explain indexes; each round starts with none of them in the store, so
+    // each is filled at least once per round that reads it.
+    let fills = rev.fill_counts();
+    for (kind, rounds) in [
+        ("l4", ROUNDS),
+        ("raw", ROUNDS),
+        ("tree", ROUNDS),
+        ("tree_base", ROUNDS),
+        ("witness", ROUNDS),
+        ("explain_indexes", ROUNDS / 2),
     ] {
         assert!(
-            rev.fill_counts().get(kind).copied().unwrap_or(0) > 1,
-            "{kind} refilled after eviction: {:?}",
-            rev.fill_counts()
+            fills.get(kind).copied().unwrap_or(0) >= rounds as u64,
+            "{kind} refilled after eviction: {fills:?}"
         );
     }
 }
