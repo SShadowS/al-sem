@@ -871,6 +871,17 @@ fn bounded_summary(summary: Value) -> Value {
     }
 }
 
+/// The characters an inline stdout takes in what the client reads: the
+/// parsed JSON re-serialized as `output` when there is one, else the text
+/// escaped as `stdoutText`; in UTF-16 units, as a JavaScript client counts.
+fn client_chars(text: &str, parsed: Option<&Value>) -> usize {
+    let s = match parsed {
+        Some(v) => v.to_string(),
+        None => serde_json::to_string(text).unwrap_or_default(),
+    };
+    s.encode_utf16().count()
+}
+
 /// The extension of a file holding `argv`'s stdout.
 fn extension(argv: &[String]) -> &'static str {
     match flag_value(argv, "format") {
@@ -1018,6 +1029,38 @@ fn run_command(
                     if let (Stdout::Text(t), true) = (&stdout, json_format) {
                         parsed = serde_json::from_str::<Value>(t).ok();
                     }
+                    // Item T, T-W2-23: an inline answer the client would file
+                    // anyway (its escaped form over the client's budget) goes
+                    // to a file now, with its summary.
+                    let stdout = match (stdout, call.client_budget_chars) {
+                        (Stdout::Text(t), Some(budget))
+                            if client_chars(&t, parsed.as_ref())
+                                + tools::MCP_ENVELOPE_ROOM_CHARS
+                                > budget
+                                && shared.sink.writable() =>
+                        {
+                            let stem = call.tool.trim_start_matches("alsem_");
+                            match shared
+                                .sink
+                                .write_new(stem, extension(&call.argv), t.as_bytes())
+                            {
+                                Ok(path) => {
+                                    parsed = None;
+                                    Stdout::File(SpillFile::of(
+                                        path.to_string_lossy().into_owned(),
+                                        t.as_bytes(),
+                                    ))
+                                }
+                                Err(e) => {
+                                    log(&format!(
+                                        "an answer over the client budget stays inline: {e}"
+                                    ));
+                                    Stdout::Text(t)
+                                }
+                            }
+                        }
+                        (s, _) => s,
+                    };
                     // The renderer's summary (MCP output plan 1b): built from its
                     // own data before the frame is bounded, so `bound_frame`
                     // counts it; kept when the stdout is a file, the only case

@@ -695,8 +695,13 @@ impl WriteFields {
         let mut clauses: Vec<String> = Vec::new();
         for (&row, f) in &self.assigned {
             let names = fold(f.iter().cloned().collect(), caps::FIELDS, "fields", detail);
+            // T-W2-3: a folded list states its full count.
+            let count = match names.hidden {
+                0 => String::new(),
+                _ => format!("; {} fields", names.total()),
+            };
             clauses.push(format!(
-                "fields {} assigns on this table (not operation-specific): {}",
+                "fields {} assigns on this table (not operation-specific{count}): {}",
                 ix.row(row).name,
                 names.joined()
             ));

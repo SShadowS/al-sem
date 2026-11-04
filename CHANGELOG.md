@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (MCP output item T, the remaining output tests)
+
+- **The invariants of item T and spec §8.3 not pinned before**, in the new `cli` member
+  `output_invariants_w3` (fixture, every `cargo test`) and in `output_cdo` (CDO, `scripts/cdo-gate`):
+  human-output hygiene (no blank name, `(no anchor)` row, `%20` or two identical lines; B1, B5,
+  B6) and size budgets in lines AND bytes of the whole output with every line ≤ 2,000 characters
+  (T-W2-15; on CDO per-routine ratchets pinned to the input stamps); every effect kind digest
+  reports is on its line of explain's card (M2); every prove evidence row names its place or says
+  `unavailable` (T-W2-17); every crossing prints its target's qualified display (T-W2-18);
+  explain's groups list what they count and event groups carry only their count (T-W2-7); the
+  fields the ConTinAI pipeline reads (T-W2-21); page actions folded to at most 3 lines, the
+  grouped counts adding up to the listed actions (T-W2-14); every folded `… +N <unit>` line
+  states its full count (T-W2-3, CDO); two budgets per `tools/call` result, the client's
+  `structuredContent` and the whole wire (T-W2-23), with a hand-stated workspace whose card
+  escapes to more than 50,000 characters while under the 40 KiB byte cap; IssueReminder's and
+  RunReportID's default explain cards stay inline with at least 1 KiB of the cap to spare
+  (RunReportID 37,671 bytes, a 3,289-byte margin, on `bc3ccb18`).
+- **CDO rendering goldens** (`tests/cli-output-goldens/cdo/`, `output_cdo::cdo_rendering_goldens`):
+  the explain card, query effects, query touches, prove may-commit and writes-table (human) and the
+  digest summary of IssueReminder, RunReportID and UpdateLastUpload, byte-compared under
+  `scripts/cdo-gate`, with `STAMP.json` holding the workspace's git sha, dirty flag and dependency
+  closure (drift fails under `ENFORCE_CDO_WS=1`). Regenerate with `REGEN_TEMP_GOLDENS=1` and
+  `CDO_WS` set for that one command.
+
+### Fixed (MCP output item T)
+
+- **An inline MCP answer could exceed the client's limit once escaped.** The 40 KiB inline cap
+  counts raw bytes; a stdout of quotes and backslashes doubles in `structuredContent`, which Claude
+  Code files past 50,000 characters. When the call leaves `maxInlineBytes` to the server, the pool
+  now also sends an answer whose escaped form plus a 4 KiB envelope room exceeds 50,000 UTF-16
+  units to a file, with its summary (`tools::MCP_CLIENT_BUDGET_CHARS`). A call that sets its own
+  `maxInlineBytes` (the LSP front end does) keeps that cap exactly.
+- **Three folded lists did not state their full count** (T-W2-3): the fields an owner assigns on a
+  table (`(not operation-specific; N fields)`), events by publisher (`by publisher (N
+  publishers)`) and the top dependency callees (`top callees (N callees)`) now state it when
+  folded (`Folded::count_note`). Only CDO-sized outputs fold there; no fixture golden moves.
+- **Two entry points into overloads of one routine printed one name** (T-W2-18 with T-W2-24).
+  A crossing's name (explain's and query's `writes beyond dependency entry points` lines, the
+  `crossings` records of explain `/3` and digest 3.x) is now its targets' qualified displays, an
+  overload with its parameters, as the routine table prints it (`Codeunit CTS-CDN Network Doc.
+  Mgt.::SendNetworkDocument(RecordVariant, eDocVariant, XMLDoc)` and its five-parameter twin, on
+  CDO); a group row's raw `detail.boundary` is unchanged.
+
 ### Changed (MCP output wave 3b)
 
 - **The MCP tool descriptions and server instructions are written around an agent's decisions**

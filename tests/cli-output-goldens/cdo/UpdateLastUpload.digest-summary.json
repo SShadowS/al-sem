@@ -1,0 +1,60 @@
+{
+  "changedRootsDiagnostics": 0,
+  "kind": "digest",
+  "rootsRequested": 1,
+  "rootsResolved": 1,
+  "routines": [
+    {
+      "coverage": "complete",
+      "coverageReasons": [],
+      "effects": 1,
+      "effectsByType": {
+        "DB_MODIFY": 1
+      },
+      "names": {
+        "entryPoints": [],
+        "tablesOwnedByApp": [],
+        "tablesOwnedByDependencies": [],
+        "topCallees": []
+      },
+      "routine": "Codeunit CDO Telemetry::UpdateLastUpload",
+      "summary": {
+        "callerDependentTables": 1,
+        "commits": {
+          "answer": "none",
+          "entryPoints": 0,
+          "ownSites": 0
+        },
+        "entryPoints": {
+          "count": 0,
+          "sites": 0
+        },
+        "events": {
+          "distinct": 0,
+          "inWorkspaceCode": 0
+        },
+        "gaps": {
+          "dependency": 0,
+          "notPlaced": 0,
+          "workspace": 0
+        },
+        "kinds": {},
+        "literalDeadTables": 0,
+        "mayWriteTables": {
+          "byDependencies": 0,
+          "count": 0,
+          "ownedByApp": 0
+        },
+        "noPathKept": {
+          "operations": 0,
+          "tables": 0
+        },
+        "temporaryOnlyTables": 0,
+        "unresolvedTableWrites": 0
+      }
+    }
+  ],
+  "routinesListed": 1,
+  "totalEffects": 1,
+  "totalUnresolved": 0
+}

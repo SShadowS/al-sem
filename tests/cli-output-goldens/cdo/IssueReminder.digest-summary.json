@@ -1,0 +1,130 @@
+{
+  "changedRootsDiagnostics": 0,
+  "kind": "digest",
+  "rootsRequested": 1,
+  "rootsResolved": 1,
+  "routines": [
+    {
+      "coverage": "partial",
+      "coverageReasons": [
+        "interface-open-world",
+        "object-run-unresolved"
+      ],
+      "effects": 220,
+      "effectsByType": {
+        "BACKGROUND_TASK": 2,
+        "COMMIT": 1,
+        "DB_DELETE": 28,
+        "DB_INSERT": 50,
+        "DB_MODIFY": 29,
+        "ERROR_IMPLICIT": 1,
+        "ERROR_THROW": 1,
+        "EVENT_PUBLISH": 93,
+        "FILE": 2,
+        "HTTP": 2,
+        "ISOLATED_STORAGE": 2,
+        "TELEMETRY": 2,
+        "UI_CONFIRM": 1,
+        "UI_ERROR": 1,
+        "UI_FILE_DIALOG": 1,
+        "UI_HYPERLINK": 1,
+        "UI_MESSAGE": 1,
+        "UI_PROGRESS": 1,
+        "UI_WINDOW_OPEN": 1
+      },
+      "names": {
+        "entryPoints": [
+          "Codeunit Reminder-Issue::OnRun",
+          "Codeunit CTS-CDN Network Doc. Mgt.::CreateEDocument",
+          "Codeunit CSC Core::IsAppActiveOrAskToActivate",
+          "Codeunit Email::Send",
+          "Codeunit CSC Core::IsAppActiveOrAskToActivate"
+        ],
+        "tablesOwnedByApp": [
+          "CDO Azure Application Setup",
+          "CDO Document Template Line",
+          "CDO E-Mail Log",
+          "CDO E-Mail Template Header",
+          "CDO File",
+          "CDO File Download Document",
+          "CDO Html Color",
+          "CDO Log Attachment",
+          "CDO Print document",
+          "CDO Queue Entry"
+        ],
+        "tablesOwnedByDependencies": [
+          "Activity Log",
+          "Attachment",
+          "Avg. Cost Adjmt. Entry Point",
+          "CSC Access Token",
+          "CSC App To Migrate",
+          "CSC Client Credential",
+          "CSC Company Activation",
+          "CSC Company Activation Cache",
+          "CSC Company Setup",
+          "CSC Country/Region"
+        ],
+        "topCallees": [
+          {
+            "callee": "CurrLineWithPrice.SetLine",
+            "count": 21
+          },
+          {
+            "callee": "Codeunit.Run(<dynamic>)",
+            "count": 11
+          },
+          {
+            "callee": "CurrLineWithPrice.GetLine",
+            "count": 8
+          }
+        ]
+      },
+      "routine": "Codeunit CDO Issue Document::IssueReminder",
+      "summary": {
+        "callerDependentTables": 0,
+        "commits": {
+          "answer": "may",
+          "entryPoints": 1,
+          "ownSites": 0
+        },
+        "entryPoints": {
+          "count": 14,
+          "sites": 14
+        },
+        "events": {
+          "distinct": 524,
+          "inWorkspaceCode": 75
+        },
+        "gaps": {
+          "dependency": 265,
+          "notPlaced": 7,
+          "workspace": 16
+        },
+        "kinds": {
+          "backgroundTasks": 1,
+          "errors": 1,
+          "file": 1,
+          "http": 2,
+          "isolatedStorage": 1,
+          "telemetry": 1,
+          "ui": 2
+        },
+        "literalDeadTables": 328,
+        "mayWriteTables": {
+          "byDependencies": 132,
+          "count": 143,
+          "ownedByApp": 11
+        },
+        "noPathKept": {
+          "operations": 0,
+          "tables": 0
+        },
+        "temporaryOnlyTables": 51,
+        "unresolvedTableWrites": 2
+      }
+    }
+  ],
+  "routinesListed": 1,
+  "totalEffects": 220,
+  "totalUnresolved": 288
+}

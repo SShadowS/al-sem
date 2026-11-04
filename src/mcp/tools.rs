@@ -99,6 +99,10 @@ pub struct CommandCall {
     pub max_inline_bytes: Option<u64>,
     /// Digest: the stdout always goes to a file, with a summary inline.
     pub always_file: bool,
+    /// The most characters the client's view of an inline answer may take
+    /// (`structuredContent`, serialized), when the call left the inline cap
+    /// to the server (item T, T-W2-23); `None` when it set `maxInlineBytes`.
+    pub client_budget_chars: Option<usize>,
 }
 
 /// A call of `alsem_status` / `alsem_refresh`.
@@ -125,6 +129,23 @@ pub enum ToolCall {
 /// the envelope. 40 KiB leaves that room; the wire's own default (64 KiB)
 /// still serves the LSP front end.
 pub const MCP_DEFAULT_INLINE_BYTES: u64 = 40 * 1024;
+
+/// Claude Code's limit (measured 2026-11-04): a result whose serialized
+/// `structuredContent` is over 50,000 characters is filed, not shown. The
+/// raw byte cap above cannot keep an answer under it (a stdout of quotes and
+/// backslashes doubles when escaped), so the server also bounds the escaped
+/// answer (MCP output plan item T, T-W2-23).
+pub const MCP_CLIENT_BUDGET_CHARS: usize = 50_000;
+
+/// What the envelope around an inline answer may add to its
+/// `structuredContent`: an answer whose escaped text plus this exceeds
+/// [`MCP_CLIENT_BUDGET_CHARS`] goes to a file with its summary.
+pub const MCP_ENVELOPE_ROOM_CHARS: usize = 4_096;
+
+/// The whole serialized `tools/call` result's budget (T-W2-23's second
+/// budget): the stdout escaped twice (the text block and
+/// `structuredContent`) under the client budget, plus the envelope twice.
+pub const MCP_WIRE_BUDGET_CHARS: usize = 2 * MCP_CLIENT_BUDGET_CHARS + 2 * MCP_ENVELOPE_ROOM_CHARS;
 
 /// The tool names, in `tools/list` order.
 pub const TOOL_NAMES: &[&str] = &[
@@ -158,7 +179,7 @@ fn common_properties() -> Map<String, Value> {
     );
     m.insert(
         "maxInlineBytes".into(),
-        json!({"type": "integer", "minimum": 0, "description": "The largest output returned inline (default 40960, at most 4194304); a larger one is written to a file in the server's output folder."}),
+        json!({"type": "integer", "minimum": 0, "description": "The largest output returned inline (default 40960, at most 4194304); a larger one is written to a file in the server's output folder. Left unset, an answer over the client's 50,000 characters once escaped also goes to a file; set, the cap is exact."}),
     );
     m
 }
@@ -654,6 +675,12 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
                 .ok_or("'maxInlineBytes' must be a non-negative integer")?,
         ),
     };
+    // A caller that sets its own cap (the LSP front end does) asks for that
+    // cap exactly; the server's default also keeps the client's view small.
+    let client_budget_chars = match a.map.get("maxInlineBytes") {
+        None | Some(Value::Null) => Some(MCP_CLIENT_BUDGET_CHARS),
+        Some(_) => None,
+    };
     let out = a.string("out")?.map(str::to_string);
     if out.as_deref() == Some("") {
         return Err("'out' must name a file".into());
@@ -823,6 +850,7 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
         out,
         max_inline_bytes,
         always_file,
+        client_budget_chars,
     }))
 }
 
@@ -886,8 +914,16 @@ mod tests {
             json!({"routine": "P", "question": "may-commit", "deterministic": true}),
         )
         .unwrap();
-        // MCP output plan 1c: human by default for an agent; 40 KiB inline.
+        // MCP output plan 1c: human by default for an agent; 40 KiB inline,
+        // and (T-W2-23) the client's character budget.
         assert_eq!(c.max_inline_bytes, Some(MCP_DEFAULT_INLINE_BYTES));
+        assert_eq!(c.client_budget_chars, Some(MCP_CLIENT_BUDGET_CHARS));
+        let own = command(
+            "alsem_prove",
+            json!({"routine": "P", "question": "may-commit", "maxInlineBytes": 100}),
+        )
+        .unwrap();
+        assert_eq!(own.client_budget_chars, None, "a caller's own cap is exact");
         assert_eq!(
             c.argv,
             [

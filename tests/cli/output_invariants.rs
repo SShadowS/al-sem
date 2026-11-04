@@ -238,7 +238,13 @@ fn line_tokens(t: &str) -> Vec<String> {
     if let Some((head, _)) = t.split_once(", entered at ")
         && let Some((_, routine)) = head.rsplit_once("::")
     {
-        let r = routine.trim().to_lowercase();
+        // An overload prints its parameters (T-W2-24): `Send(A, B)` → `send`.
+        let r = routine
+            .split('(')
+            .next()
+            .unwrap_or(routine)
+            .trim()
+            .to_lowercase();
         if let Some(rest) = r.strip_prefix("on").filter(|s| !s.is_empty()) {
             v.push(rest.to_string());
         }
@@ -425,7 +431,7 @@ pub(crate) fn check_anchors(anchors: &[Anchor], ws: &Path, dep_root: &Path) -> C
 
 /// The human outputs the fixture invariants read: explain, prove, digest and query
 /// for `IssueDoc` and `WriteLog`.
-fn fixture_human_outputs() -> Vec<(String, String)> {
+pub(crate) fn fixture_human_outputs() -> Vec<(String, String)> {
     let ws = workspace().to_string_lossy().into_owned();
     let runs: Vec<Vec<&str>> = vec![
         vec!["explain", &ws, "--routine", ISSUE_DOC],

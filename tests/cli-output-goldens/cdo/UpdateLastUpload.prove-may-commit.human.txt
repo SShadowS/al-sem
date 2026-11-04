@@ -1,0 +1,6 @@
+--- Codeunit CDO Telemetry::UpdateLastUpload ---
+  question: may-commit
+  answer:   no
+  coverage: complete
+  assumptions: loaded-subscribers
+  limits: none

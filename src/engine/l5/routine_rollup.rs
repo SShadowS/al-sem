@@ -48,6 +48,18 @@ impl<T> Folded<T> {
     pub fn total(&self) -> usize {
         self.shown.len() + self.hidden
     }
+
+    /// ` (N <unit>)` when the fold hides something, else empty: the full
+    /// count with the fold's unit, for a line that states it nowhere else
+    /// (T-W2-3: every `… +N <unit>` line also carries its full count).
+    #[must_use]
+    pub fn count_note(&self) -> String {
+        if self.hidden > 0 {
+            format!(" ({} {})", thousands(self.total()), self.unit)
+        } else {
+            String::new()
+        }
+    }
 }
 
 impl Folded<String> {
@@ -982,9 +994,23 @@ impl RoutineRollup {
                                 .collect(),
                         ),
                     };
+                    // T-W2-18 with T-W2-24: the entry point prints as its
+                    // targets' qualified displays, an overload with its
+                    // parameters (two crossings into two overloads of one
+                    // routine printed one name on CDO); the row's raw
+                    // `boundary` only when no target is known.
+                    let name = if targets.is_empty() {
+                        detail(e, "boundary").unwrap_or("").to_string()
+                    } else {
+                        targets
+                            .iter()
+                            .map(|t| cx.qualified(t))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
                     crossings.push(CrossingView {
                         id: key.clone(),
-                        name: detail(e, "boundary").unwrap_or("").to_string(),
+                        name,
                         target_ids: targets,
                         sites,
                         ..CrossingView::default()
@@ -2271,7 +2297,7 @@ pub fn event_lines(r: &RoutineRollup, cx: &RollupCx<'_>, o: RenderOpts) -> Vec<S
         thousands(r.events_ws.len())
     );
     if !f.shown.is_empty() {
-        s.push_str(&format!(", by publisher: {}", f.joined()));
+        s.push_str(&format!(", by publisher{}: {}", f.count_note(), f.joined()));
     }
     s.push_str(&format!(
         "; {} more only beyond entry points",
@@ -2344,7 +2370,7 @@ pub fn dependency_gap_lines(r: &RoutineRollup, o: RenderOpts) -> Vec<String> {
         g.not_placed.len()
     );
     if !f.shown.is_empty() {
-        s.push_str(&format!("; top callees: {}", f.joined()));
+        s.push_str(&format!("; top callees{}: {}", f.count_note(), f.joined()));
     }
     vec![s]
 }
@@ -2410,8 +2436,10 @@ mod tests {
             assert_eq!(f.total(), n, "{n}");
             if shown < n {
                 assert!(f.joined().ends_with(&format!("… +{} tables", n - shown)));
+                assert_eq!(f.count_note(), format!(" ({n} tables)"), "{n}");
             } else {
                 assert!(!f.joined().contains('…'));
+                assert_eq!(f.count_note(), "", "{n}");
             }
         }
         assert_eq!(
