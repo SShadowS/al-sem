@@ -13,6 +13,7 @@
         {
           "conditionality": "unknown",
           "confidence": "static",
+          "crossing": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
           "detail": {
             "boundary": "Codeunit Base Poster::OnRun",
             "resourceCount": "1",
@@ -33,6 +34,23 @@
             ],
             "resource": "Base Doc Line"
           },
+          "groupWitness": {
+            "hops": [
+              {
+                "display": "Codeunit Base Poster::OnRun",
+                "edge": "object-run-resolved",
+                "edgeId": "51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
+                "file": "ws:src/OutIssueDocument.Codeunit.al",
+                "line": 15,
+                "to": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
+              }
+            ],
+            "terminal": {
+              "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
+              "line": 7,
+              "operationId": "9c6111a83a31bbff/810777ec24f485a082352742d1ed938ac54d03e97272675493521d2830e28aba/op0"
+            }
+          },
           "guarantees": [
             "COMMIT_REACHABLE"
           ],
@@ -51,6 +69,7 @@
               "validForRefutation": false
             }
           ],
+          "throughEntryPoint": true,
           "transactionContext": "unknown",
           "type": "DB_DELETE",
           "viaPaths": [
@@ -80,5 +99,5 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "2.1.0"
+  "schemaVersion": "2.2.0"
 }

@@ -2062,7 +2062,7 @@ fn entry_anchor_is_the_declaration() {
     )
     .expect("prove runs");
     let p: Value = serde_json::from_str(&prove.json_text).unwrap();
-    assert_eq!(p["schemaVersion"], "2.1.0");
+    assert_eq!(p["schemaVersion"], "2.2.0");
     let a = &p["payload"]["routine"]["anchor"];
     assert_eq!(
         (

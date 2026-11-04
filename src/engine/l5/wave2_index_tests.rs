@@ -221,7 +221,14 @@ fn write_w2(ws: &Path) {
 fn fixture() -> (tempfile::TempDir, R3a5CrossAppBase, CapabilitySnapshot) {
     let tmp = tempfile::tempdir().unwrap();
     write_w2(tmp.path());
-    let inputs = crate::program::inputs::WorkspaceInputs::read(tmp.path(), &Default::default());
+    let (base, tree) = tree_over(tmp.path(), WitnessScope::All);
+    (tmp, base, tree)
+}
+
+/// The cross-app base of `ws` and digest's tree over it, its raw witness
+/// facts kept for `scope`.
+fn tree_over(ws: &Path, scope: WitnessScope) -> (R3a5CrossAppBase, CapabilitySnapshot) {
+    let inputs = crate::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     let base = crate::engine::l4::capability_cone::build_cross_app_base(&inputs)
         .unwrap_or_else(|_| panic!("cross-app base"));
     let model = &base.resolved;
@@ -232,7 +239,7 @@ fn fixture() -> (tempfile::TempDir, R3a5CrossAppBase, CapabilitySnapshot) {
         det_cone_inputs(model, rel),
         ConeScope {
             derived: false,
-            raw: WitnessScope::All,
+            raw: scope,
         },
     );
     let pd = std::borrow::Cow::Owned(caps.pd.take().unwrap_or_default());
@@ -248,7 +255,7 @@ fn fixture() -> (tempfile::TempDir, R3a5CrossAppBase, CapabilitySnapshot) {
             source_less: source_less_apps(&base.dependency_apps),
         },
     );
-    (tmp, base, tree)
+    (base, tree)
 }
 
 /// The stable id of the routine `object::name` (`object` matched by name).
@@ -755,4 +762,418 @@ fn overloads_with_one_display_are_two_targets() {
     let mut want: Vec<Vec<String>> = logs.iter().map(|l| vec![(*l).to_string()]).collect();
     want.sort();
     assert_eq!(targets, want, "each crossing enters its own overload");
+}
+
+/// The G1 shape (design §1 item 11, §3.4.3 item 5), stated on the fixture:
+/// root `TwoCalls` writes `Dep Ledger` through the SHORTER workspace route
+/// (`WriteLedger`, one hop) and also calls `PostWith(true)` and
+/// `PostWith(false)`. A hand-stated re-entry edge (an implicit trigger that
+/// `PostWith`'s own `if Flag then L.Insert()` fires, into `WriteLedger`)
+/// makes `WriteLedger`'s insert reachable beyond the crossing too, but only
+/// when `Flag` is true. The group row is the `TwoCallsOnly` group's, given
+/// `TwoCalls`' crossing and that one operation (as CDO's RunReportID group
+/// holds a workspace operation reached by re-entry).
+struct G1 {
+    _tmp: tempfile::TempDir,
+    base: R3a5CrossAppBase,
+    tree: CapabilitySnapshot,
+    root: String,
+    post_with: String,
+    write_ledger: String,
+    /// `WriteLedger`'s insert (the operation the group lists).
+    ws_op: String,
+    /// `PostWith`'s own insert (behind `if Flag`).
+    dep_op: String,
+    true_site: String,
+    false_site: String,
+}
+
+fn g1() -> G1 {
+    let (tmp, base, mut tree) = fixture();
+    let model = &base.resolved;
+    let root = stable(model, "Ws W2", "TwoCalls");
+    let post_with = stable(model, "Dep Rec Lib", "PostWith");
+    let write_ledger = stable(model, "Ws W2", "WriteLedger");
+    let op_of = |stable: &str| {
+        let ops: Vec<String> = model
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| r.stable_routine_id == stable)
+            .flat_map(|r| r.record_operations.iter().map(|o| o.id.clone()))
+            .collect();
+        assert_eq!(
+            ops.len(),
+            1,
+            "precondition: one record operation in {stable}"
+        );
+        ops[0].clone()
+    };
+    let (ws_op, dep_op) = (op_of(&write_ledger), op_of(&post_with));
+    let site_with = |arg: &str| {
+        call_sites(&tree, &root, &post_with)
+            .into_iter()
+            .find(|s| {
+                model.workspace.routines.iter().any(|r| {
+                    r.call_sites.iter().any(|cs| {
+                        &cs.id == s && cs.argument_texts.first().is_some_and(|t| t.trim() == arg)
+                    })
+                })
+            })
+            .unwrap_or_else(|| panic!("precondition: a PostWith({arg}) call"))
+    };
+    let (true_site, false_site) = (site_with("true"), site_with("false"));
+    std::sync::Arc::make_mut(&mut tree.typed_edges).push(SnapshotGraphEdge::ImplicitTrigger {
+        kind: "implicit-trigger",
+        from: post_with.clone(),
+        to: write_ledger.clone(),
+        operation_id: dep_op.clone(),
+        trigger_kind: "OnInsert".to_string(),
+        fires: crate::engine::l4::combined_graph::TriggerFires::Always,
+        anchor: None,
+        edge_id: "w2-g1-reentry".to_string(),
+    });
+    G1 {
+        _tmp: tmp,
+        base,
+        tree,
+        root,
+        post_with,
+        write_ledger,
+        ws_op,
+        dep_op,
+        true_site,
+        false_site,
+    }
+}
+
+impl G1 {
+    /// A group row on `TwoCalls`' crossing at `site`, listing `Dep Ledger`
+    /// with the operation `op`.
+    fn group_row(&self, site: &str, op: &str) -> DigestEffectResult {
+        let model = &self.base.resolved;
+        let only = stable(model, "Ws W2", "TwoCallsOnly");
+        let mut row = effects_of(&self.tree, model, &only)
+            .into_iter()
+            .find(|e| e.boundary_group)
+            .expect("precondition: TwoCallsOnly has a group row");
+        let idx = build_fingerprint_indexes(&self.tree);
+        row.crossing = Some(Arc::clone(&idx.crossings[&format!("cs:{site}")]));
+        row.group_resource_ops = vec![(format!("{DEP_GUID}/table/19"), Some(vec![op.to_string()]))];
+        row
+    }
+
+    fn reach(&self) -> LiteralReach<'_> {
+        LiteralReach::new(
+            &self.tree.typed_edges,
+            &self.tree.capability_facts,
+            &self.base.resolved,
+        )
+    }
+}
+
+/// W2-0b (G1): a group's witness traverses ITS crossing, with the bindings
+/// the prefix established. Through the `true` crossing the path is
+/// `TwoCalls → PostWith → WriteLedger`, never the shorter workspace route
+/// `TwoCalls → WriteLedger` the old root-ordered search returned; through
+/// the `false` crossing there is none (the re-entry edge needs `Flag`).
+/// Breaks: dropping the crossing condition (first live state of the root
+/// search) gives the workspace route; restarting the suffix with empty
+/// bindings gives the `false` crossing a witness.
+#[test]
+fn g1_a_group_witness_traverses_its_crossing_with_its_bindings() {
+    let g = g1();
+    let model = &g.base.resolved;
+    let reach = g.reach();
+    let tree = reach.live_tree(&g.root).expect("the root's search");
+    let paths = crate::engine::l5::group_path::GroupPaths::new(&g.tree.typed_edges, model);
+    let mut cache = crate::engine::l5::literal_reach::SuffixCache::default();
+    let run = |site: &str, cache: &mut _| {
+        let row = g.group_row(site, &g.ws_op);
+        let c = row.crossing.clone().unwrap();
+        let entries = reach.crossing_entries(&tree, &c);
+        assert_eq!(entries.len(), 1, "precondition: one entry state per call");
+        paths.paths(&reach, &tree, &entries, &row, cache, &|| false)
+    };
+    let got = run(&g.true_site, &mut cache);
+    assert_eq!(got.len(), 1, "a witness through the true crossing: {got:?}");
+    let p = got[0].1.as_ref().expect("a path");
+    assert!(p.through_entry_point && p.reason.is_none());
+    assert_eq!(p.crossing, format!("cs:{}", g.true_site));
+    let to: Vec<&str> = p.steps.iter().map(|s| s.to.as_str()).collect();
+    assert_eq!(
+        to,
+        vec![g.post_with.as_str(), g.write_ledger.as_str()],
+        "{p:?}"
+    );
+    assert_eq!(
+        p.steps[0].edge_id.as_deref(),
+        Some(g.true_site.as_str()),
+        "the crossing's own edge"
+    );
+    assert_eq!(p.steps[1].edge, "implicit-trigger");
+    assert_eq!(p.steps[1].edge_id.as_deref(), Some(g.dep_op.as_str()));
+    assert!(
+        p.steps[0].line.is_some() && p.steps[0].file.is_some(),
+        "a call site's anchor"
+    );
+    assert_eq!(p.terminal.operation_id, g.ws_op);
+    assert!(p.terminal.line.is_some());
+    assert_eq!(
+        p.hops,
+        vec![
+            "Ws W2.TwoCalls".to_string(),
+            "variable-typed-call → Dep Rec Lib.PostWith".to_string(),
+            "implicit-trigger → Ws W2.WriteLedger".to_string(),
+        ],
+        "the string hops keep their shape"
+    );
+    assert_eq!(p.steps[0].display, "Codeunit Dep Rec Lib::PostWith");
+    // The false crossing: the re-entry needs Flag = true.
+    let none = run(&g.false_site, &mut cache);
+    assert_eq!(none.len(), 1);
+    assert_eq!(
+        none[0].1.as_ref().err().map(|n| n.reason),
+        Some("no-witness"),
+        "no witness through the false crossing: {none:?}"
+    );
+}
+
+/// W2-0b (§3.4.3 item 3): when a suffix search stops early, the root tree's
+/// own path is the fallback, CHECKED for crossing membership: the workspace
+/// route is `Outside` (labelled, never "through"); a root path that does
+/// traverse the crossing (to `PostWith`'s own insert) is an ordinary
+/// witness. A cancelled search is the same outcome, its reason `cancelled`.
+/// And an operation the root cannot reach at all has no path.
+/// Breaks: `throughEntryPoint: true` for every fallback; skipping the
+/// membership check.
+#[test]
+fn g1_a_capped_suffix_falls_back_to_a_checked_root_path() {
+    let g = g1();
+    let model = &g.base.resolved;
+    let reach = g.reach();
+    let tree = reach.live_tree(&g.root).expect("the root's search");
+    let paths = crate::engine::l5::group_path::GroupPaths::new(&g.tree.typed_edges, model);
+    let witness = |op: &str, per_tree: usize, cancel: &dyn Fn() -> bool| {
+        let row = g.group_row(&g.true_site, op);
+        let c = row.crossing.clone().unwrap();
+        let entries = reach.crossing_entries(&tree, &c);
+        let mut cache =
+            crate::engine::l5::literal_reach::SuffixCache::with_limits(per_tree, per_tree);
+        paths.paths(&reach, &tree, &entries, &row, &mut cache, cancel)
+    };
+    // Capped (a 0-state suffix budget): the workspace route, labelled.
+    let one = |got: Vec<(String, crate::engine::l5::group_path::GroupPathOutcome)>| {
+        assert_eq!(got.len(), 1, "{got:?}");
+        got.into_iter().next().unwrap().1
+    };
+    let p = one(witness(&g.ws_op, 0, &|| false)).expect("the fallback path");
+    assert!(!p.through_entry_point, "{p:?}");
+    assert_eq!(p.reason, Some("search-cap"));
+    let to: Vec<&str> = p.steps.iter().map(|s| s.to.as_str()).collect();
+    assert_eq!(to, vec![g.write_ledger.as_str()], "the root's own route");
+    // Capped, but the root path does traverse the crossing: a witness.
+    let p = one(witness(&g.dep_op, 0, &|| false)).expect("a path");
+    assert!(p.through_entry_point, "{p:?}");
+    assert_eq!(p.steps[0].edge_id.as_deref(), Some(g.true_site.as_str()));
+    // Cancelled: the same fallback, its own reason.
+    let cap = crate::engine::l5::literal_reach::STATE_CAP;
+    let p = one(witness(&g.ws_op, cap, &|| true)).expect("the fallback path");
+    assert_eq!(p.reason, Some("cancelled"));
+    // Uncapped, the true crossing's suffix completes: a real witness.
+    let p = one(witness(&g.ws_op, cap, &|| false)).expect("a path");
+    assert!(p.through_entry_point);
+    // An operation nothing reaches: no path, with the stop that left it open
+    // when a search was capped, and "no witness" when every search completed.
+    let unreachable = model
+        .workspace
+        .routines
+        .iter()
+        .find(|r| r.name == "Write" && r.app_guid == DEP_GUID)
+        .and_then(|r| r.record_operations.first())
+        .map(|o| o.id.clone())
+        .expect("precondition: Dep Writer's Modify");
+    let reason = |per_tree| {
+        one(witness(&unreachable, per_tree, &|| false))
+            .err()
+            .map(|n| n.reason)
+    };
+    assert_eq!(reason(0), Some("search-cap"));
+    assert_eq!(reason(cap), Some("no-witness"));
+}
+
+/// W2-0b (§3.4.3 item 3): the suffix cache keeps an aggregate budget by
+/// evicting the OLDEST tree first, rebuilds an evicted one with the same
+/// result, and the witnesses do not depend on the order crossings are asked
+/// in.
+/// Break: no eviction (`held` exceeds the budget, nothing evicted).
+#[test]
+fn g1_the_suffix_cache_evicts_oldest_first_and_is_order_free() {
+    let g = g1();
+    let model = &g.base.resolved;
+    let reach = g.reach();
+    let tree = reach.live_tree(&g.root).expect("the root's search");
+    let paths = crate::engine::l5::group_path::GroupPaths::new(&g.tree.typed_edges, model);
+    let ask = |site: &str, cache: &mut _| {
+        let row = g.group_row(site, &g.ws_op);
+        let c = row.crossing.clone().unwrap();
+        let entries = reach.crossing_entries(&tree, &c);
+        paths.paths(&reach, &tree, &entries, &row, cache, &|| false)
+    };
+    // Each suffix tree's size, alone.
+    let size = |site: &str| {
+        let mut c = crate::engine::l5::literal_reach::SuffixCache::default();
+        ask(site, &mut c);
+        c.held()
+    };
+    let (nt, nf) = (size(&g.true_site), size(&g.false_site));
+    assert!(
+        nt > 0 && nf > 0,
+        "precondition: two non-empty trees ({nt}, {nf})"
+    );
+    // Room for one tree: the second entry state evicts the first.
+    let room = nt.max(nf);
+    let mut small = crate::engine::l5::literal_reach::SuffixCache::with_limits(room, room);
+    let a1 = ask(&g.true_site, &mut small);
+    let b1 = ask(&g.false_site, &mut small);
+    assert!(
+        small.held() <= room,
+        "the budget holds: {} > {room}",
+        small.held()
+    );
+    assert_eq!(small.evicted, 1, "the older tree went");
+    assert_eq!(small.held(), nf, "the newer (false) tree is the one kept");
+    let a2 = ask(&g.true_site, &mut small);
+    assert_eq!(small.built, 3, "the evicted tree was rebuilt");
+    assert_eq!(a1, a2, "a rebuilt tree answers the same");
+    // Order-free.
+    let mut fresh = crate::engine::l5::literal_reach::SuffixCache::default();
+    let b2 = ask(&g.false_site, &mut fresh);
+    let a3 = ask(&g.true_site, &mut fresh);
+    assert_eq!((a1, b1), (a3, b2), "the asking order changes nothing");
+}
+
+/// W2-0b (§3.4.3 item 1, astra 2): the prefix phase enters a crossing only
+/// by its typed edges. The interface call's workspace implementer shares the
+/// call site, but its edge is no entry.
+/// Break: matching an edge by its site id alone (from/to dropped) makes the
+/// workspace edge a second entry.
+#[test]
+fn a_mixed_dispatch_is_entered_only_by_its_dependency_edge() {
+    let (_tmp, base, tree) = fixture();
+    let model = &base.resolved;
+    let root = stable(model, "Ws W2", "MixedDispatch");
+    let dep_write = stable(model, "Dep Writer", "Write");
+    let cs = call_sites(&tree, &root, &dep_write);
+    assert_eq!(cs.len(), 1, "precondition");
+    let idx = build_fingerprint_indexes(&tree);
+    let c = &idx.crossings[&format!("cs:{}", cs[0])];
+    let reach = LiteralReach::new(&tree.typed_edges, &tree.capability_facts, model);
+    let root_tree = reach.live_tree(&root).expect("the root's search");
+    assert_eq!(
+        reach.crossing_entries(&root_tree, c).len(),
+        1,
+        "one entry: the dependency edge"
+    );
+}
+
+/// W2-0b's census (design §11.4): how many crossings of each site kind the
+/// CDO baseline has, and how many group rows of IssueReminder (IR) and
+/// RunReportID (RR) sit on an `ev:` crossing. Decides whether event crossings
+/// are in W2-0b's scope. CDO-gated (`CDO_WS`); prints the counts and pins
+/// them.
+#[test]
+fn cdo_crossing_census() {
+    let Some(ws) = std::env::var_os("CDO_WS") else {
+        assert!(
+            std::env::var_os("ENFORCE_CDO_WS").is_none(),
+            "ENFORCE_CDO_WS=1 but CDO_WS is unset"
+        );
+        return;
+    };
+    let ws = std::path::PathBuf::from(ws);
+    let inputs = crate::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
+    let base = crate::engine::l4::capability_cone::build_cross_app_base(&inputs)
+        .unwrap_or_else(|_| panic!("cross-app base"));
+    let roots = [
+        stable(&base.resolved, "CDO Issue Document", "IssueReminder"),
+        stable(&base.resolved, "CDO E-Mail Handler", "RunReportID"),
+    ];
+    let subjects: BTreeSet<String> = base
+        .resolved
+        .workspace
+        .routines
+        .iter()
+        .filter(|r| roots.contains(&r.stable_routine_id))
+        .map(|r| r.id.clone())
+        .collect();
+    drop(base);
+    let (base, tree) = tree_over(&ws, WitnessScope::Subjects(subjects));
+    let model = &base.resolved;
+    let idx = build_fingerprint_indexes(&tree);
+    let mut by_kind: BTreeMap<&str, usize> = BTreeMap::new();
+    for c in idx.crossings.values() {
+        let k = match c.site {
+            CrossingSite::Callsite(_) => "callsite",
+            CrossingSite::Operation(_) => "operation",
+            CrossingSite::Event(_) => "event",
+        };
+        *by_kind.entry(k).or_default() += 1;
+    }
+    let mut rows: Vec<(usize, usize)> = Vec::new();
+    for root in &roots {
+        let effects = effects_of(&tree, model, root);
+        let groups = effects.iter().filter(|e| e.boundary_group).count();
+        let ev = effects
+            .iter()
+            .filter(|e| {
+                e.crossing
+                    .as_ref()
+                    .is_some_and(|c| matches!(c.site, CrossingSite::Event(_)))
+            })
+            .count();
+        rows.push((groups, ev));
+    }
+    // Measured 2026-11-04: 813 call-site and 15 operation crossings, no event
+    // crossing; IR 108 and RR 91 group rows, none on an `ev:` crossing. So
+    // W2-0b treats event crossings uniformly and fixtures them only by hand.
+    assert_eq!(by_kind.get("event"), None, "no event crossing on CDO");
+    assert!(rows.iter().all(|&(_, ev)| ev == 0), "{rows:?}");
+
+    // W2-0b's suffix cache on every group resource of both roots: its
+    // outcomes and cost.
+    let reach = LiteralReach::new(&tree.typed_edges, &tree.capability_facts, model);
+    let paths = crate::engine::l5::group_path::GroupPaths::new(&tree.typed_edges, model);
+    let mut cache = crate::engine::l5::literal_reach::SuffixCache::default();
+    let started = std::time::Instant::now();
+    let (mut through, mut outside) = (0usize, 0usize);
+    let mut none: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut resources = 0usize;
+    for root in &roots {
+        let effects = effects_of(&tree, model, root);
+        let root_tree = reach.live_tree(root).expect("the root's search completes");
+        for e in effects.iter().filter(|e| e.boundary_group) {
+            let c = e.crossing.as_ref().unwrap();
+            let entries = reach.crossing_entries(&root_tree, c);
+            resources += e.group_resource_ops.len();
+            for (_, p) in paths.paths(&reach, &root_tree, &entries, e, &mut cache, &|| false) {
+                match p {
+                    Ok(p) if p.through_entry_point => through += 1,
+                    Ok(_) => outside += 1,
+                    Err(n) => *none.entry(n.reason).or_default() += 1,
+                }
+            }
+        }
+    }
+    eprintln!(
+        "cdo_crossing_census: suffix cache over IR+RR: {resources} group resources: {through} through, {outside} outside, none {none:?}; {} trees built, {} evicted, peak {} states, {:?}",
+        cache.built,
+        cache.evicted,
+        cache.peak_held,
+        started.elapsed()
+    );
+    eprintln!(
+        "cdo_crossing_census: crossings by site kind {by_kind:?}; (group rows, ev rows) IR {:?} RR {:?}",
+        rows[0], rows[1]
+    );
 }

@@ -944,7 +944,7 @@ pub struct DigestEffectFull {
     pub group_resources: Vec<(String, String)>,
     /// G35: per group resource id, one example path inside the dependency
     /// ([`crate::engine::l5::group_path`]); `prove` shows the matched ones.
-    pub group_resource_paths: Vec<(String, Vec<String>)>,
+    pub group_resource_paths: Vec<(String, crate::engine::l5::group_path::GroupPathOutcome)>,
     /// The operations the effect originates from, and its class's "known
     /// temporary" flag: what [`DbTempStates`] joins on, so `prove` can ask the
     /// same write in a CALLER's frame (G25). Not serialized.
@@ -1457,12 +1457,30 @@ fn literal_reach_pass(tree: &CapabilitySnapshot, model: &Model, entries: &mut [D
         crate::engine::l5::group_path::GroupPaths::new(&tree.typed_edges, model)
     };
     let _s = crate::engine::perf_trace::span("digest", "prove.reach_effects");
+    // W2-0b (design §3.4.3): the suffix trees, shared by every root,
+    // crossing and resource of this read. A shared fill is never cancelled
+    // by a request (context-server design §4.6), so nothing here asks to
+    // stop; the check is wired for a reader that owns its search.
+    let mut suffixes = crate::engine::l5::literal_reach::SuffixCache::default();
+    let never = || false;
     for entry in entries {
         if entry.effects.iter().any(|e| e.boundary_group)
             && let Some(tree) = reach.live_tree(&entry.routine_id)
         {
+            // One crossing's entries serve each of its rows.
+            let mut by_crossing: HashMap<
+                String,
+                crate::engine::l5::literal_reach::CrossingEntries,
+            > = HashMap::new();
             for e in entry.effects.iter_mut().filter(|e| e.boundary_group) {
-                e.group_resource_paths = group_paths.paths(&reach, &tree, e);
+                let Some(c) = e.crossing.clone() else {
+                    continue;
+                };
+                let entries = by_crossing
+                    .entry(c.id.clone())
+                    .or_insert_with(|| reach.crossing_entries(&tree, &c));
+                e.group_resource_paths =
+                    group_paths.paths(&reach, &tree, entries, e, &mut suffixes, &never);
             }
         }
         let (dead, dead_resources) = reach.unreachable_effects(&entry.routine_id, &entry.effects);

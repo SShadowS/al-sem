@@ -1597,7 +1597,92 @@ byte-identical (7,339,040 and 4,952,155 B); prove and query identical except `ge
 - `ev:` crossings need a dependency subscriber to a workspace publisher's event, which compiled AL
   does not allow; the event test states its edges by hand, as `digest_rule_b_tests` does. Whether
   CDO has any `ev:` crossing is not measured yet (W2-0b should count them before building for
-  them).
+  them). (Measured in W2-0b: none, §11.5.)
+
+### 11.5 W2-0b as built (G1)
+
+**Event crossings, counted first** (`cdo_crossing_census`, CDO-gated, run by `scripts/cdo-gate`):
+the CDO tree read for IR and RR has 828 crossings, 813 by call site and 15 by firing operation,
+**no event crossing**; IR's 108 and RR's 91 group rows sit on none. So event crossings are **in
+scope by construction** (the search matches an event edge by its `event_id`, as any other typed
+edge) but are fixtured only by the hand-stated edges of W2-0a's test; no event-specific work
+was built. The census pins "no event crossing" so a change shows.
+
+**What runs** (`src/engine/l5/literal_reach.rs`, `src/engine/l5/group_path.rs`): prove's read
+(`literal_reach_pass`) keeps the root tree (`live_tree`, unchanged, the prefix phase); per crossing,
+`crossing_entries` collects every `(caller state, crossing edge, callee bindings)` at which one of
+the crossing's typed edges is taken (matched by from, to and site; event edges by event id), in
+root-tree visit order, distinct by callee state; per resource, `group_witness` takes each entry's
+suffix tree from the read's `SuffixCache` and keeps the shortest prefix + 1 + suffix, ties by entry
+order. The live tree now records each state's parent EDGE (site and kind) and, built on first use,
+each routine's states by position, so a resource's terminal is a lookup, not a scan. The cache:
+one tree per entry state `(target, bindings)`, at most 400,000 states per tree (`STATE_CAP`) and
+1,600,000 over all trees of the read, evicting the oldest insertion first; a capped tree is cached
+as capped; a cancelled search is not cached. Cancellation is checked every 4,096 states; the
+production read passes "never" (a shared fill is not cancelled by a request, context-server
+design §4.6). Outcomes: `Through` (an ordinary witness), `Outside` (a suffix search stopped early
+and the root tree's own path, CHECKED for crossing membership, does not traverse the crossing),
+`Unavailable(None)` (every search completed and none found: `no-witness`), `Unavailable(Some(stop))`
+(stopped early and the root has no path either: `search-cap` / `cancelled`), plus
+`no-operation-id` for a resource whose facts name no operation.
+
+**What prove prints** (2.2.0, additive): for a writes-table group match, `groupPath` (unchanged:
+`resource`, string `hops` in the old shape, now along the crossing-constrained witness),
+`crossing`, `throughEntryPoint`, `throughEntryPointReason` (only when false) and `groupWitness {hops:
+[{edge, edgeId, to, display, file, line}], terminal: {operationId, file, line}}` (1-based lines;
+JSON keeps the raw `dep:<guid>:` source unit, as §3.8 rule 5 says JSON does); when the match has no
+witness, `crossing` and `groupPathUnavailable: <reason>` instead (before, nothing was printed).
+Verdicts, evidence rows and the resources a group lists are unchanged (W2-0c owns those).
+
+**Goldens** (`scripts/check-goldens --regen`, every moved file read): the 16 `cli-b-goldens/prove/`
+files, the 9 `cli-output-goldens/prove.*` files and `gate-goldens/batch/one-job/prove.stdout.golden`
+move by `schemaVersion` 2.1.0 → 2.2.0 only, except the 5 writes-table answers of
+`cli-output-goldens` on dependency tables (`base-doc-line`, `base-ledger-01`, `base-ledger-12`,
+`base-price`, `base-register`) whose group evidence gains `crossing`, `throughEntryPoint: true` and
+`groupWitness`; no line was removed but the version line, so no `groupPath.hops` string, verdict
+or evidence row moved on any fixture (every fixture group path already traversed its crossing).
+Hand-edited, as their tests say they are: `tests/cli-b-goldens/single-app/prove.dd.CallChain.
+may-commit.json` (version) and the version assertion of
+`cli_digest_changed_spans::entry_anchor_is_the_declaration`. `tests/r4f-goldens/` and every
+non-prove family are unchanged.
+
+**Tests and discrimination proofs** (`wave2_index_tests.rs`; G1 fixture: `TwoCalls` with the
+shorter workspace route, its `true`/`false` crossings into `PostWith`, and a hand-stated re-entry
+edge, an implicit trigger fired by `PostWith`'s `if Flag then L.Insert()` into `WriteLedger`):
+
+| Test | Pins | Break → result |
+|---|---|---|
+| `g1_a_group_witness_traverses_its_crossing_with_its_bindings` | through the `true` crossing the path is `TwoCalls → PostWith → WriteLedger` (edge ids, kinds, anchors, the qualified display, the unchanged string hops); the `false` crossing has `no-witness` | crossing condition dropped (best ignored, root-ordered path) → fails (`throughEntryPoint` false via the workspace route); entry bindings reset to empty → fails (the `false` crossing gets a witness) |
+| `g1_a_capped_suffix_falls_back_to_a_checked_root_path` | capped suffix: the workspace route as `Outside`/`search-cap`; a root path that does traverse the crossing → an ordinary witness; cancelled → `cancelled`; unreachable op → `search-cap` capped, `no-witness` uncapped | membership check skipped → fails; `throughEntryPoint: true` for `Outside` → fails; cancellation never checked → fails |
+| `g1_the_suffix_cache_evicts_oldest_first_and_is_order_free` | a one-tree budget evicts the older tree and keeps the newer; a rebuilt tree answers the same; two asking orders give equal witnesses | no eviction → fails |
+| `a_mixed_dispatch_is_entered_only_by_its_dependency_edge` | the workspace implementer's edge sharing the call site is no entry | site-id-only match (from/to dropped) → fails (2 entries) |
+| `cdo_crossing_census` (CDO-gated) | no event crossing on CDO; prints the suffix cache's outcomes and cost | — |
+
+**CDO before/after** (`release-fast`, master `cc9365ae` → W2-0b; prove JSON, `--deterministic`):
+- RunReportID `writes-table:"CDO E-Mail Log"`: answer `yes` → `yes`, 3 evidence rows, every field
+  but the group-path ones identical. Evidence 3 (`DB_MODIFY` beyond `Codeunit Sales-Calc.
+  Discount::OnRun`): before, a 10-hop `groupPath` through workspace code only (`… →
+  CreateLogEntries → implicit-trigger → CDO E-Mail Log.OnInsert → MoveEMailToFile →
+  UpdateStoredAtBasedOnFilePath`, §1 item 11); after, `groupPathUnavailable: "no-witness"`: the
+  completed search finds no live route through that crossing to the operation. W2-0c's
+  crossing-local status (§3.3.1) is where the resource itself is judged; W2-0b lists it unchanged.
+- IssueReminder `writes-table:"Issued Reminder Header"`: answer `yes` → `yes`, 2 evidence rows;
+  both `groupPath`s identical (they already traversed `Codeunit Reminder-Issue::OnRun`), now with
+  `throughEntryPoint: true` and a `groupWitness` (e.g. `object-run-resolved` at
+  `ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19`, `direct-call` to
+  `InsertIssuedReminderHeader` at `…ReminderIssue.Codeunit.al:157`, terminal line 474).
+- IssueReminder `may-commit`: identical but `schemaVersion`.
+
+**Cost** (the machine carried heavy outside load during the runs, load average 100–400, so wall
+times are not comparable; in-process spans): `prove.reach_effects` RR 16.26 s → 3.45 s, IR header
+3.14 s → 0.17 s, IR may-commit 0.66 s → 0.65 s; `prove.literal_reach` (model-wide, unchanged
+code) 0.3–1.3 s either way; peak RSS 3,104,604–3,122,548 KB before, 3,102,616–3,125,416 KB after.
+The census over all 16,776 group resources of IR and RR (CDO-gated test, `cdo` profile): 30 suffix
+trees built, peak 48,840 states held, 0 evicted. The first version scanned each suffix tree per
+resource and cost far more; the per-tree routine index fixed it before landing.
+
+Not covered: the dual cap where the prefix (root) tree itself caps; `live_tree` returns `None`
+then and no group path is computed, exactly as before W2-0b (no fixture reaches 400,000 states).
 
 ---
 

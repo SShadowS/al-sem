@@ -1130,6 +1130,36 @@ pub struct ProveDocumentArgs<'a> {
     pub deterministic: bool,
 }
 
+/// W2-0b: a group path's structured witness (`groupWitness`): per hop the
+/// edge kind, its site id, the routine entered (stable id and qualified
+/// display) and where the edge leaves its calling routine (1-based line);
+/// then the terminal operation.
+fn group_witness_value(path: &crate::engine::l5::group_path::GroupPath) -> serde_json::Value {
+    let line = |l: Option<u32>| l.map(crate::engine::line_base::shown);
+    let hops: Vec<serde_json::Value> = path
+        .steps
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "edge": s.edge,
+                "edgeId": s.edge_id,
+                "to": s.to,
+                "display": s.display,
+                "file": s.file,
+                "line": line(s.line),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "hops": hops,
+        "terminal": {
+            "operationId": path.terminal.operation_id,
+            "file": path.terminal.file,
+            "line": line(path.terminal.line),
+        },
+    })
+}
+
 /// Build the DocumentEnvelope<"prove", ProvePayload> as a serde_json::Value,
 /// then serialize with serialize_document_value (sorted keys, null-drop, trailing \n).
 pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
@@ -1174,19 +1204,36 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
                     (parse_question(question), v.as_object_mut())
                 {
                     let eff = &effects[i];
-                    let hit = eff.group_resource_paths.iter().find_map(|(id, hops)| {
+                    let hit = eff.group_resource_paths.iter().find_map(|(id, path)| {
                         let display = eff
                             .group_resources
                             .iter()
                             .find(|(r, _)| r == id)
                             .map(|(_, d)| d.as_str());
-                        name_or_id_matches(display, Some(id), &table).then_some((display, hops))
+                        name_or_id_matches(display, Some(id), &table).then_some((display, path))
                     });
-                    if let Some((display, hops)) = hit {
-                        obj.insert(
-                            "groupPath".into(),
-                            serde_json::json!({"resource": display.unwrap_or_default(), "hops": hops}),
-                        );
+                    match hit {
+                        Some((display, Ok(path))) => {
+                            obj.insert(
+                                "groupPath".into(),
+                                serde_json::json!({"resource": display.unwrap_or_default(), "hops": path.hops}),
+                            );
+                            // W2-0b (prove 2.2.0, additive): the crossing,
+                            // whether the path traverses it, and the
+                            // structured witness beside the string hops.
+                            obj.insert("crossing".into(), path.crossing.clone().into());
+                            obj.insert("throughEntryPoint".into(), path.through_entry_point.into());
+                            if let Some(reason) = path.reason {
+                                obj.insert("throughEntryPointReason".into(), reason.into());
+                            }
+                            obj.insert("groupWitness".into(), group_witness_value(path));
+                        }
+                        // W2-0b: no path is invented; the reason is stated.
+                        Some((_, Err(none))) => {
+                            obj.insert("crossing".into(), none.crossing.clone().into());
+                            obj.insert("groupPathUnavailable".into(), none.reason.into());
+                        }
+                        None => {}
                     }
                 }
                 v
@@ -1257,7 +1304,10 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     // filtered join (#69 D4).
     // 2.0.0 (MCP output plan 1a): every `line` is 1-based (`lineBase: 1`).
     // 2.1.0 (plan 1d): evidence effects carry digest 2.1.0's group fields.
-    env.insert("schemaVersion".into(), "2.1.0".into());
+    // 2.2.0 (wave 2, W2-0b, additive): a writes-table group match's
+    // `groupPath` traverses its crossing, and carries `crossing`,
+    // `throughEntryPoint` and the structured `groupWitness` beside it.
+    env.insert("schemaVersion".into(), "2.2.0".into());
 
     serialize_document_value(serde_json::Value::Object(env))
 }

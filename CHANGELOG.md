@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (MCP output wave 2, W2-0b: G1, a group's path now passes its entry point)
+
+Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.4.3, §11.5.
+
+- **`prove writes-table:T`'s `groupPath` on a dependency group now traverses that group's
+  crossing.** Before, the path was the first state of the root's guarded search that owned one
+  of the resource's operations, so a shorter workspace route to the same operation won: on the
+  CDO baseline, `RunReportID`'s `CDO E-Mail Log` group "beyond `Codeunit Sales-Calc.
+  Discount::OnRun`" was shown a 10-hop path through workspace code only. Now the path is the
+  root's search up to one of the crossing's typed edges (matched by source, target and site),
+  then a search from that entry with the bindings the prefix established, so a literal argument
+  at the crossing still decides what runs beyond it. Verdicts, evidence rows and the resources a
+  group lists are unchanged. On CDO that group now has no path through `Sales-Calc.
+  Discount::OnRun` at all (`groupPathUnavailable: "no-witness"`): no live route through the
+  crossing reaches that `Modify`, which W2-0c's crossing-local resource status will decide on.
+  `IssueReminder`'s `Issued Reminder Header` paths were already through `Reminder-Issue::OnRun`
+  and are unchanged.
+- When a writes-table group match has no path, prove now says why instead of printing nothing:
+  `groupPathUnavailable` (`no-witness`, `search-cap`, `cancelled` or `no-operation-id`) and the
+  `crossing` searched.
+- **Prove JSON 2.2.0 (additive).** A writes-table group match keeps `groupPath` (`resource`, and
+  `hops` as the same strings) and gains beside it `crossing` (the boundary identity),
+  `throughEntryPoint`, `throughEntryPointReason` (only when false: `search-cap` or `cancelled`)
+  and `groupWitness`: `hops` (`edge`, `edgeId`, `to` stable id, qualified `display`, `file` and
+  1-based `line` of the edge in its calling routine) and `terminal` (`operationId`, `file`,
+  `line`). Every prove document's `schemaVersion` moves to 2.2.0.
+- The suffix searches are cached per entry state (target, bindings) for the whole read: at most
+  400,000 states per tree and 1,600,000 over all trees, the oldest tree evicted first. A suffix
+  search that stops early falls back to the root's own path, which is checked for crossing
+  membership: through the crossing it is an ordinary witness, otherwise it is labelled
+  `throughEntryPoint: false`. Cancellation is checked every 4,096 states (production reads pass
+  "never": a shared fill is not cancelled by a request).
+- Event crossings: the CDO baseline has none (813 call-site and 15 operation crossings;
+  `cdo_crossing_census`); they are handled by the same code, fixtured only by hand.
+- Cost on CDO (`release-fast`; the machine was under heavy outside load, load average 100–400, so
+  wall times are not comparable and the in-process spans are quoted): prove's group-path work
+  (`prove.reach_effects`) RunReportID `writes-table:CDO E-Mail Log` 16.26 s → 3.45 s,
+  IssueReminder `writes-table:Issued Reminder Header` 3.14 s → 0.17 s, IssueReminder `may-commit`
+  0.66 s → 0.65 s (the old search scanned the root tree per resource; the new one looks a
+  resource's owner up in an index per tree). Peak RSS 3.10–3.13 GB before and after. Over every
+  group resource of IR and RR (16,776) the cache built 30 suffix trees, peak 48,840 states,
+  nothing evicted.
+
 ### Fixed (the context-server store refilled a key that was already published)
 
 - **`Store::ensure_prepared` no longer fills a published key a second time.** A request read
