@@ -378,3 +378,39 @@ fn cdo_every_spilled_answer_carries_a_small_summary() {
     );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// T-W2-15, the digest size ratchet (owner decision 2026-11-04, spec §9 q1):
+/// the default 3.x digest JSON (pretty) of IssueReminder and RunReportID is at
+/// most 1,250,000 bytes whole and at most 720,000 bytes as its core (the
+/// document without `eventsByPublisher`, every event name kept by O2),
+/// pinned to the CDO baseline `bc3ccb18`. A change that grows either past its
+/// budget fails here; one that shrinks it far may lower the budget.
+#[test]
+fn cdo_digest_json_fits_its_size_budgets() {
+    let Some(a) = cdo_answers() else { return };
+    const WHOLE: usize = 1_250_000;
+    const CORE: usize = 720_000;
+    fn strip(v: &mut Value) {
+        match v {
+            Value::Object(m) => {
+                m.remove("eventsByPublisher");
+                m.values_mut().for_each(strip);
+            }
+            Value::Array(xs) => xs.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    for label in ["IssueReminder", "RunReportID"] {
+        let doc = &a.answers[&format!("{label} digest json")].stdout;
+        let mut v: Value = serde_json::from_str(doc).expect("digest JSON");
+        assert_eq!(v["schemaVersion"], "3.0.0", "{label}");
+        strip(&mut v);
+        let core = serde_json::to_string_pretty(&v).unwrap().len() + 1;
+        eprintln!(
+            "{label}: digest JSON {} bytes (budget {WHOLE}), core {core} bytes (budget {CORE})",
+            doc.len()
+        );
+        assert!(doc.len() <= WHOLE, "{label}: {} > {WHOLE}", doc.len());
+        assert!(core <= CORE, "{label}: core {core} > {CORE}");
+    }
+}

@@ -167,6 +167,12 @@ fn shown_witnesses(
         );
     if opts.detail {
         all.collect()
+    } else if e.group_resources.is_empty() && e.effect_type != "COMMIT" {
+        // The default carries a resource-less group's witness for a COMMIT
+        // only (§3.4.2: a may-persist row's representative, and a COMMIT's
+        // own); HTTP, UI, ERROR, … witnesses come with --detail (the size
+        // budget, §9 q1).
+        Vec::new()
     } else if decision(e) && opts.path_cap > 0 {
         all.take(1).collect()
     } else {

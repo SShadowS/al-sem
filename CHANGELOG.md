@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (MCP output wave 2, W2-4 … W2-8)
 
+- **Digest size budgets decided (owner, 2026-11-04):** the default digest JSON (pretty) of `CDO
+  Issue Document::IssueReminder` and `CDO E-Mail Handler::RunReportID` on the CDO baseline is at
+  most 1,250,000 bytes whole and 720,000 bytes without event names; a CDO-gated ratchet
+  (`output_cdo::cdo_digest_json_fits_its_size_budgets`, run by `scripts/cdo-gate`) pins both.
+
 - **W2-4 (2d): a write states fields by its original operation kind.** `alsem explain`'s table
   writes print `fields X assigns on this table (not operation-specific): …` only for `Insert` and
   `Modify` (one clause per owning routine), `ModifyAll sets: F (in …)` for a `ModifyAll` (the
