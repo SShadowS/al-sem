@@ -1,5 +1,5 @@
 ---
-description: The per-issue pipeline — worktree, classify, probes, spec, two-model spec panel, acceptance tests, plan, TDD implementation with discrimination proofs, repo gates, two-model final panel, PR, gated squash-merge. Called by /orchestrate; standalone use requires a claim first.
+description: The per-issue pipeline — worktree, classify, probes, spec, two-model spec panel, acceptance tests, plan, implementation with tests and discrimination proofs, repo gates, two-model final panel, PR, gated squash-merge. Called by /orchestrate; standalone use requires a claim first.
 ---
 
 Take GitHub issue `$ARGUMENTS` (a number) from claimed to merged, per
@@ -254,7 +254,7 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    scratch on every task. Two consecutive tasks the plan marks small may share
    one reviewer dispatch over both commits. **A bounded issue whose plan has
    at most two tasks dispatches no per-task reviewer:** the implementer's own
-   TDD and discrimination proofs plus the final panel (the code-review skill
+   tests and discrimination proofs plus the final panel (the code-review skill
    at high and both reviewers) are its review. Architectural issues, and
    plans with three or more tasks, keep the per-task reviewer. (On #111 and
    #190 it found only minors the final panel would also read; on #160 it
@@ -266,9 +266,11 @@ Return value (the last line you print): `merged <merge_sha>`, `blocked <reason>`
    clippy, gen-syntax, and the tests the changed paths can reach, from the map in
    `scripts/ci-steps`); the WHOLE suite runs in step 9 and step 11, as before, so
    every test still runs before the panel and before the merge. Every task prompt
-   includes: TDD red then green; `discrimination-proof` for every new or changed
-   test (record test, mutation patch, fail output, pass output, commit in the
-   ledger's proof table); `rustfmt <file>` only; SOLID and DRY as review
+   includes: tests with or after the code (red-first ordering is not required);
+   `discrimination-proof` for every new or changed guard that protects
+   correctness, one per guard, none for formatting or wording (CLAUDE.md,
+   "Scope of the proof"; record test, mutation patch, fail output, pass
+   output, commit in the ledger's proof table); `rustfmt <file>` only; SOLID and DRY as review
    criteria; the protected-path list (`.github/ scripts/ .claude/ CLAUDE.md
    .gitignore Cargo.toml version tree-sitter-al .agent/`). `charge subagents`
    per dispatch; `charge task_attempts --sub <task-id>` per red-to-green attempt.

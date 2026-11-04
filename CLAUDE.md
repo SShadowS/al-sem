@@ -463,6 +463,17 @@ metric-definition change is never stat-juked.
   `cargo test`, and every real catch came with a discrimination proof while every miss
   lacked one. Watch too for the over-claim that travels with it — docs asserting guards
   are "each pinned executably" when only some are.
+  **Scope of the proof (owner decision 2026-11-04):** one discrimination proof for every
+  guard that protects CORRECTNESS — a resolution, classification, verdict, identity, count,
+  ordering, concurrency or cache rule, an invariant over real output — and none for
+  formatting, wording, display-only fields or a version string. One proof per guard, not
+  one per test touching it. Run each break with the narrowest command that reaches the test
+  (`cargo test -p al-sem --lib <filter>`, `cargo test --test <umbrella> <member>::`), not a
+  whole suite. **Test-first ordering (red before green) is not required**: write the test
+  with or after the code, then prove it can fail. The order bought nothing here; the proofs,
+  invariants over real output and second-model review are what caught defects (2026-11-04:
+  the resident-store deadlock was found by a test rewritten to force its interleaving, the
+  0-based lines and the false prove group path by review, none by a red-first test).
   **A discrimination proof that PASSES is evidence about the TEST, not the code.** Three
   times in the 2026-07-31 substrate arc a break came back green: once because `rustfmt`
   had reflowed the target text so a scripted patch matched nothing at all, once because
