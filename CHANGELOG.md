@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (MCP output wave 2, W2-0c step 2: prove drops a group resource its crossing cannot reach)
+
+Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.3.1, §11.7.
+
+- **A dependency group no longer lists, for prove, a table its own crossing cannot write.** A
+  resource whose status is `Disproved` (step 1) leaves the group's refined list; the raw list is
+  kept, and the group prints `resourcesOriginalCount`. A resource not established is never
+  dropped. Before, the literal pass judged a resource at the root only: a write live through one
+  crossing (or any other route) kept it in every group that listed it.
+- **One CDO verdict moves**, checked by hand: `prove "CDO Issue Document::IssueReminder"
+  writes-table:"Email Connector Logo"` goes from `yes` to `unknown`. Its only evidence was the
+  `DB_INSERT` group beyond `Codeunit Email Account::IsAnyAccountRegistered` (called at
+  `ws:src/Features/Email/Sending/CDOEMail.Codeunit.al:254`); System Application's
+  `IsAnyAccountRegistered` calls `GetAllAccounts(false, …)`, which inserts the logo only `if
+  LoadLogos then`, so the write cannot run there. With no evidence left, prove's open-world
+  obligations (interface calls in that code) block an absence proof, so the answer is `unknown`,
+  not `no`. RunReportID `writes-table:"CDO E-Mail Log"`, IssueReminder `writes-table:"Issued
+  Reminder Header"` and `may-commit`, and both digests are byte-identical to step 1. No fixture
+  golden moved.
+
 ### Added (MCP output wave 2, W2-0c step 1: a group resource's status beyond its own crossing)
 
 Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.3.1, §11.6.

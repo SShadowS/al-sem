@@ -1548,6 +1548,16 @@ pub(crate) fn literal_reach_pass(
         for (i, resources) in dead_resources {
             entry.effects[i].dead_group_resources = resources;
         }
+        // W2-0c step 2 (design §3.3.1): and those this group's own crossing
+        // does not reach. Only a completed search disproves; anything not
+        // established keeps the resource. The raw list stays whole.
+        for e in entry.effects.iter_mut().filter(|e| e.boundary_group) {
+            for (r, s) in &e.group_resource_status {
+                if *s == ResourceStatus::Disproved && !e.dead_group_resources.contains(r) {
+                    e.dead_group_resources.push(r.clone());
+                }
+            }
+        }
         // A listed witness path that cannot run is not evidence: drop it.
         // When none is left for a still-reachable effect, a live path exists
         // that was not listed.

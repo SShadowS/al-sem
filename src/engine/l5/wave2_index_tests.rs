@@ -1153,11 +1153,12 @@ fn w2_0c_a_resource_is_judged_from_its_own_crossing() {
 /// lists `Dep Ledger` (hand-stated: the `TwoCallsOnly` group given its
 /// `false` crossing, the shape root-level liveness cannot judge) is judged
 /// `Disproved` by the pass, and the root-level check (G33) alone keeps it,
-/// because the `true` crossing keeps the kind live. The status is recorded
-/// and the resource stays in BOTH lists until the refinement commit drops it.
-/// Break: no status recorded.
+/// because the `true` crossing keeps the kind live. Step 2: the disproved
+/// resource leaves the refined list (`dead_group_resources`) and stays in the
+/// raw one (`group_resources`).
+/// Break: skipping the merge into `dead_group_resources`.
 #[test]
-fn w2_0c_prove_pass_judges_a_resource_beyond_its_crossing() {
+fn w2_0c_prove_pass_drops_a_disproved_resource_from_the_refined_list() {
     use crate::engine::l5::literal_reach::ResourceStatus as S;
     let (_tmp, base, tree) = fixture();
     let model = &base.resolved;
@@ -1213,8 +1214,8 @@ fn w2_0c_prove_pass_judges_a_resource_beyond_its_crossing() {
         Some(S::Disproved)
     );
     assert!(
-        !row.dead_group_resources.contains(&ledger),
-        "not dropped yet"
+        row.dead_group_resources.contains(&ledger),
+        "dropped from the refined list"
     );
     assert!(
         row.group_resources.iter().any(|(r, _)| *r == ledger),

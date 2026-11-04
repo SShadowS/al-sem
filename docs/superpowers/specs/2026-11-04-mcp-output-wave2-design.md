@@ -1726,6 +1726,25 @@ this crossing. No other row of IR writes the table, so dropping it moves prove's
 
 **Step 2 (the refinement):** §11.7.
 
+### 11.7 W2-0c step 2 (the refinement, its own commit)
+
+The literal pass merges each `Disproved` resource into `dead_group_resources` (beside G33's
+root-level ones); prove's refined list and counts follow (§11.6). `NotEstablished` never drops.
+
+**Verdicts.** Fixtures: no golden moved (`check-goldens`, no regen). CDO, step 1 → step 2 (one
+`alsem batch` per binary; prove IR `writes-table:"Email Connector Logo"`, RR `writes-table:"CDO
+E-Mail Log"`, IR `writes-table:"Issued Reminder Header"`, IR `may-commit`, digest IR and RR):
+everything byte-identical except IR / `Email Connector Logo`: `yes` → `unknown`. Its one evidence
+row was the group beyond `Codeunit Email Account::IsAnyAccountRegistered`, disproved by the source
+reading of §11.6; with no evidence left, prove's open-world obligations (the `Email Connector`
+interface calls in `ImportLogo`, `GetAllAccounts`, …) block an absence proof. That is the census's
+only disproved resource on IR and RR, and the only table it leaves without another live row, so
+no other writes-table answer of these roots can move. Both digests equal the wave-1 documents
+byte for byte (digest has no literal pass until W2-1).
+
+**Cost:** the same pass as step 1 (merging is a list union); batch of six jobs 29.95 s / 3.10 GB
+(step 1) vs 29.44 s / 3.10 GB (step 2).
+
 Not covered: the dual cap where the prefix (root) tree itself caps; `live_tree` returns `None`
 then and no group path is computed, exactly as before W2-0b (no fixture reaches 400,000 states).
 
