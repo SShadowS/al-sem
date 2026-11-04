@@ -116,7 +116,132 @@ fn calls(
             "alsem_query_touches",
             json!({"table": table, "from": qsel, "deterministic": true}),
         ),
+        // Wave 3a: the `CDO Log Attachment` case (design §1 item 9, §12).
+        (
+            "prove writes-table log-attachment json",
+            "alsem_prove",
+            json!({"routine": sel, "question": format!("writes-table:{LOG_ATTACHMENT}"), "format": "json", "deterministic": true}),
+        ),
     ]
+}
+
+/// The table of design §1 item 9: query lists `Modify` operations on it the
+/// capability cone rules out under literal arguments.
+const LOG_ATTACHMENT: &str = "CDO Log Attachment";
+
+/// IssueReminder's three `Modify` operations on [`LOG_ATTACHMENT`] (design §1
+/// item 9): `CDO E-Mail Log::DeleteLogAndAttachmentData`
+/// (`CDOEMailLog.Table.al:566`), `CDO Log Attachment::MoveToFilesystem` (`:110`)
+/// and `::MoveToAzureBlob` (`:132`). Every route from IssueReminder passes
+/// `OnInsert = true` into `MoveEMailToFile`, which exits before them; the
+/// cone drops them, query's per-operation rows (L4, no literal pass) list
+/// them.
+const LOG_ATTACHMENT_MODIFIES: &[&str] = &[
+    "98e44272062b13c6/a3c756ee42ea8c1596505540f26e96e75c254da4a710a10e874e7d8436202861/op2",
+    "98e44272062b13c6/ad4dd41f5631121196e1bf00583864d95520cfdfc2b166858cba1c696af4369b/op1",
+    "98e44272062b13c6/fe793a463cda533b7d5b791521249214b63f6696b25b1b5dd00cdf0b4519c6f3/op1",
+];
+
+/// MCP output wave 3a, the cross-tool agreement's query leg on CDO (design
+/// §7 as decided in §12): for each routine, every table the cone's physical
+/// class names (explain's own rows and its rows beyond an entry point) is in
+/// query effects' writes (its per-operation rows or the cone's entry
+/// points); query's writes beyond entry points are explain's, table for
+/// table; and today no table query's per-operation rows write may persist
+/// is outside the cone (measured 2026-11-04 on `bc3ccb18`: IR 15 own, 131
+/// beyond; RR 13 own, 396 beyond). A future extra must name its substrate
+/// difference here. The leg is per table; per operation kind query may
+/// list more, and the `CDO Log Attachment` case pins the one stated
+/// difference (literal-dead in the cone) by its exact operation ids:
+/// query's IR rows hold exactly [`LOG_ATTACHMENT_MODIFIES`] as its `Modify`
+/// rows on the table, explain names no `DB_MODIFY` on it (own or beyond),
+/// the table is still a physical write of both (its `DeleteAll` and
+/// `Insert`), and prove answers `yes` with no `DB_MODIFY` evidence.
+#[test]
+fn cdo_query_effects_writes_agree_with_the_cone() {
+    let Some(a) = cdo_answers() else {
+        return;
+    };
+    let doc = |label: &str, call: &str| -> Value {
+        serde_json::from_str(&a.answers[&format!("{label} {call}")].stdout).expect("JSON")
+    };
+    for (label, ..) in ROUTINES {
+        let explain = doc(label, "explain json");
+        let query = doc(label, "query effects json");
+        assert_eq!(
+            query["payload"]["summary"]["scope"],
+            "operations-one-routine-deep; writes-beyond-entry-points-full-cone",
+            "{label}: the cone was read"
+        );
+        let (e_own, e_beyond) =
+            crate::output_invariants::explain_physical_tables(&explain["cards"][0]);
+        let (q_own, q_beyond) = crate::output_invariants::query_write_tables(&query);
+        assert_eq!(q_beyond, e_beyond, "{label}: query's beyond is explain's");
+        let missing: Vec<&String> = e_own
+            .iter()
+            .chain(&e_beyond)
+            .filter(|t| !q_own.contains(*t) && !q_beyond.contains(*t))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{label}: cone tables query does not name: {missing:?}"
+        );
+        let extra: Vec<&String> = q_own
+            .iter()
+            .filter(|t| !e_own.contains(*t) && !e_beyond.contains(*t))
+            .collect();
+        assert!(
+            extra.is_empty(),
+            "{label}: query tables the cone does not name: {extra:?}"
+        );
+        // The human section is explain's own lines.
+        let block = crate::output_invariants::beyond_block(
+            &a.answers[&format!("{label} query effects human")].stdout,
+        );
+        let e_block = crate::output_invariants::beyond_block(
+            &a.answers[&format!("{label} explain human")].stdout,
+        );
+        assert_eq!(block, e_block, "{label}: the beyond section");
+    }
+    // The CDO Log Attachment case (IssueReminder).
+    let query = doc("IssueReminder", "query effects json");
+    let explain = doc("IssueReminder", "explain json");
+    let mut modifies: Vec<&str> = query["payload"]["effects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["tableName"] == LOG_ATTACHMENT && e["op"] == "Modify")
+        .filter_map(|e| e["operationId"].as_str())
+        .collect();
+    modifies.sort_unstable();
+    assert_eq!(modifies, LOG_ATTACHMENT_MODIFIES, "query's Modify rows");
+    let mut explain_types: Vec<&str> = Vec::new();
+    for w in explain["cards"][0]["effects"]["writes"].as_array().unwrap() {
+        let names_it = w["table"] == LOG_ATTACHMENT
+            || w["resources"]
+                .as_array()
+                .is_some_and(|rs| rs.iter().any(|r| r["display"] == LOG_ATTACHMENT));
+        if names_it && w["class"] != "temporary" && w["literalUnreachable"] != true {
+            explain_types.push(w["op"].as_str().unwrap());
+        }
+    }
+    explain_types.sort_unstable();
+    assert_eq!(
+        explain_types,
+        ["DB_DELETE", "DB_INSERT"],
+        "explain's rows on the table"
+    );
+    let prove = doc("IssueReminder", "prove writes-table log-attachment json");
+    let r = &prove["payload"]["result"];
+    assert_eq!(r["answer"], "yes", "{r}");
+    let mut types: Vec<&str> = r["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["type"].as_str())
+        .collect();
+    types.sort_unstable();
+    assert_eq!(types, ["DB_DELETE", "DB_INSERT"], "prove's evidence");
 }
 
 /// Every routine's answers off one server, once per process; `None` without CDO.

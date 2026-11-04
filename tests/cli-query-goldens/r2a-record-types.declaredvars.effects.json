@@ -130,6 +130,13 @@
       "selector": "DeclaredVars"
     },
     "summary": {
+      "beyondEntryPoints": [],
+      "beyondWrites": {
+        "entryPoints": 0,
+        "sites": 0,
+        "tables": 0,
+        "tablesOnlyBeyond": 0
+      },
       "byTable": [],
       "callerDependent": {
         "operations": 0,
@@ -143,7 +150,7 @@
         "operations": 2,
         "tables": 2
       },
-      "scope": "operations-one-routine-deep",
+      "scope": "operations-one-routine-deep; writes-beyond-entry-points-full-cone",
       "tableNotResolved": {
         "operations": 1,
         "recordRef": {

@@ -1,5 +1,5 @@
 --- Codeunit QT Touches::WriteItem vs QT Item (07070707-0000-4000-8000-000000000071/table/50700) ---
-  scope: per operation, one routine into dependency code; temporary-record touches persist nothing but use the table's schema and run its triggers; lines are 1-based
+  scope: dependency code: full cone for physical writes, grouped per entry point; per-operation detail one routine deep; temporary-record touches persist nothing but use the table's schema and run its triggers; lines are 1-based
   down: yes — 1 record touch: 0 known persistent, 1 possibly persistent (caller-dependent), 0 on temporary records
     [Insert] write at ws:src/QTTouches.al:33 in Codeunit QT Touches::WriteItem (caller-dependent: parameter 1)
   up: 5 transitive callers: 5 touch it, 0 do not, 0 unknown — through this routine; not a finding

@@ -55,7 +55,7 @@ use crate::engine::l4::effect_query::{
 };
 use crate::engine::l4::operation_index::OperationIndex;
 use crate::engine::line_base::{LINE_BASE, shown};
-use crate::engine::session::{Cell, View, query_plan};
+use crate::engine::session::{Cell, View, query_cone_plan, query_plan};
 use crate::program::body::features::RECEIVER_PARAM_INDEX;
 use crate::program::model::declaring::DeclaringObjects;
 use crate::program::model::workspace::{Model, ModelRoutine, table_by_id_preferring_real};
@@ -341,17 +341,37 @@ impl Job for QueryJob<'_> {
         ViewDemand::one(self.inputs, self.single_app, false, ViewNeeds::MODEL)
     }
 
-    fn resolve(&self, _: SideIx, _: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
+    fn resolve(&self, _: SideIx, cx: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
+        // Wave 3a: a question about one routine's cone (effects, or touches
+        // asked down from a routine) also reads the capability cone over
+        // that root, for the writes beyond each dependency entry point. A
+        // selector that does not resolve reads none (its answer is the
+        // failure document, as before).
+        let model = cx.model();
+        let root = cone_root(model, &self.ask);
+        let reads = if root.is_some() {
+            vec![Cell::Rel, Cell::L4, Cell::Effects]
+        } else {
+            vec![Cell::Rel, Cell::L4]
+        };
         Ok(PlanPart {
-            plan: query_plan(),
-            reads: vec![Cell::Rel, Cell::L4],
-            carry: None,
+            plan: query_cone_plan(root.clone()),
+            reads,
+            carry: Some(Box::new(root)),
         })
     }
 
     fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
         let workspace = cx.inputs().workspace.clone();
+        let root: Option<String> = cx.take_carry();
+        // The cone's entry first: the substrate below releases every cell
+        // but `l4`, the tree's effects included.
+        let cone = match root {
+            Some(root) if cx.has_tree() => cone_entry(cx, root),
+            _ => None,
+        };
         let substrate = released_substrate(cx);
+        let cone = cone.as_ref();
         let body = match self.ask {
             QueryAsk::Touches {
                 table,
@@ -366,6 +386,7 @@ impl Job for QueryJob<'_> {
                 all,
                 self.alsem_ver,
                 self.deterministic,
+                cone,
             ),
             QueryAsk::Effects { routine, all } => render_query_effects_body(
                 &substrate,
@@ -373,6 +394,7 @@ impl Job for QueryJob<'_> {
                 all,
                 self.alsem_ver,
                 self.deterministic,
+                cone,
             ),
         };
         let sources = (self.show_source && !self.json)
@@ -398,6 +420,135 @@ impl Job for QueryJob<'_> {
                 (text, r.exit_code, r.summary)
             }),
         )
+    }
+}
+
+/// The routine (stable id) whose capability cone a query reads (wave 3a):
+/// `effects`' routine, or `touches`' `--from` when the question goes down
+/// and its table resolves. `None` when the selector does not resolve to one
+/// routine, so no tree is built for a failure document.
+fn cone_root(model: &Model, ask: &QueryAsk<'_>) -> Option<String> {
+    let selector = match *ask {
+        QueryAsk::Effects { routine, .. } => routine,
+        QueryAsk::Touches {
+            table,
+            from: Some(from),
+            direction,
+            ..
+        } if direction.wants_down() => {
+            if !matches!(
+                resolve_table_selector(model, table),
+                Resolution::Resolved(_)
+            ) {
+                return None;
+            }
+            from
+        }
+        QueryAsk::Touches { .. } => return None,
+    };
+    let join = RoutineJoin::build(model);
+    match resolve_routine_selector(model, &join.declaring, selector) {
+        Resolution::Resolved(r) => Some(r.stable_routine_id.clone()),
+        _ => None,
+    }
+}
+
+/// The root's digest entry over the query's tree, after the L4 temp-state
+/// join and the literal pass, exactly as `alsem explain` reads it, so the
+/// writes beyond each entry point are explain's own.
+fn cone_entry(
+    cx: &mut ViewCx<'_>,
+    root: String,
+) -> Option<crate::engine::l5::digest_cli::DigestEntryFull> {
+    use crate::engine::l5::digest_cli::{
+        ChangedRootsResult, DbTempStates, run_digest_query_full_from_entries,
+    };
+    let _s = crate::engine::perf_trace::span("query", "query.cone_entry");
+    let mut effects = cx.take_effects();
+    let view = cx.view();
+    let model = view.model();
+    let temp_states = DbTempStates::new(model, &view.l4().bundle);
+    let roots = vec![root];
+    let changed = ChangedRootsResult {
+        roots: roots.clone(),
+        diagnostics: Vec::new(),
+        touched: HashMap::new(),
+        spans: Default::default(),
+    };
+    run_digest_query_full_from_entries(
+        &mut effects,
+        &roots,
+        &HashMap::new(),
+        &temp_states,
+        &changed,
+        &OwnerIndex::build(model),
+    )
+    .entries
+    .into_iter()
+    .next()
+}
+
+/// The cone's may-persist writes beyond each dependency entry point, as the
+/// renderers read them: the root's rollup and the context its lines need.
+struct Beyond<'c> {
+    entry: &'c crate::engine::l5::digest_cli::DigestEntryFull,
+    rollup: crate::engine::l5::routine_rollup::RoutineRollup,
+    rcx: crate::engine::l5::routine_rollup::RollupCx<'c>,
+}
+
+impl<'c> Beyond<'c> {
+    fn new(
+        entry: &'c crate::engine::l5::digest_cli::DigestEntryFull,
+        model: &'c Model,
+        deps: &LoadedDependencies,
+    ) -> Self {
+        let rcx = crate::engine::l5::routine_rollup::RollupCx::new(model, &deps.apps);
+        let rollup = crate::engine::l5::routine_rollup::RoutineRollup::build(entry, &rcx);
+        Beyond { entry, rollup, rcx }
+    }
+
+    fn writes(&self) -> Vec<crate::engine::l5::routine_rollup::BeyondWrites<'_>> {
+        crate::engine::l5::routine_rollup::beyond_writes(&self.rollup)
+    }
+
+    /// Explain's `writes beyond dependency entry points` section, verbatim.
+    fn lines(&self, all: bool) -> Vec<String> {
+        crate::engine::l5::routine_rollup::beyond_lines(
+            &self.rollup,
+            self.entry,
+            &self.rcx,
+            crate::engine::l5::routine_rollup::RenderOpts::new(all, None),
+        )
+    }
+}
+
+/// `beyond[]` of one table: each entry point beyond which it may persist,
+/// with the write kinds there.
+fn beyond_of_table(
+    writes: &[crate::engine::l5::routine_rollup::BeyondWrites<'_>],
+    table_id: &str,
+) -> Value {
+    Value::Array(
+        writes
+            .iter()
+            .filter(|w| w.tables.contains_key(table_id))
+            .map(|w| {
+                json!({
+                    "entryPoint": w.name,
+                    "sites": w.sites,
+                    "ops": w.types_of.get(table_id).cloned().unwrap_or_default(),
+                })
+            })
+            .collect(),
+    )
+}
+
+/// The summary scope, by whether the cone was read.
+fn scope_value(cone_read: bool) -> &'static str {
+    if cone_read {
+        "operations-one-routine-deep; writes-beyond-entry-points-full-cone"
+    } else {
+        "operations-one-routine-deep"
     }
 }
 
@@ -1101,6 +1252,7 @@ pub fn render_query_touches(
             all,
             alsem_ver,
             deterministic,
+            None,
         ),
         &substrate.dependencies,
     )
@@ -1145,6 +1297,7 @@ fn dependencies_clause(deps: &LoadedDependencies, all: bool) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_query_touches_body(
     substrate: &QuerySubstrate,
     table_selector: &str,
@@ -1153,6 +1306,7 @@ fn render_query_touches_body(
     all: bool,
     alsem_ver: &str,
     deterministic: bool,
+    cone: Option<&crate::engine::l5::digest_cli::DigestEntryFull>,
 ) -> QueryRunResult {
     let deps = &substrate.dependencies;
     if from.is_none() && direction == Direction::Down {
@@ -1328,9 +1482,15 @@ fn render_query_touches_body(
             };
 
             human.push_str(&format!("--- {} vs {table_label} ---\n", rr.qualified()));
+            let beyond = cone.map(|e| Beyond::new(e, substrate.resolved(), deps));
             human.push_str(&format!(
                 "{}{}\n",
-                TOUCHES_SCOPE_LINE.trim_end(),
+                if beyond.is_some() {
+                    TOUCHES_SCOPE_LINE_CONE
+                } else {
+                    TOUCHES_SCOPE_LINE
+                }
+                .trim_end(),
                 dependencies_clause(deps, all)
             ));
 
@@ -1342,7 +1502,15 @@ fn render_query_touches_body(
             };
             let touches_down = query.touches_table(rix, &table.id);
             if direction.wants_down() {
-                render_touches_down(&cx, rix, &table.id, all, &mut payload, &mut human);
+                render_touches_down(
+                    &cx,
+                    rix,
+                    &table.id,
+                    all,
+                    beyond.as_ref(),
+                    &mut payload,
+                    &mut human,
+                );
             }
             if direction.wants_up() {
                 render_touches_up(
@@ -1379,6 +1547,12 @@ fn render_query_touches_body(
 const TOUCHES_SCOPE_LINE: &str = "  scope: per operation, one routine into dependency code; \
      temporary-record touches persist nothing but use the table's schema and run its triggers; \
      lines are 1-based\n";
+
+/// [`TOUCHES_SCOPE_LINE`] when the capability cone was read (wave 3a): the
+/// writes beyond each dependency entry point follow the whole cone.
+const TOUCHES_SCOPE_LINE_CONE: &str = "  scope: dependency code: full cone for physical writes, \
+     grouped per entry point; per-operation detail one routine deep; temporary-record touches \
+     persist nothing but use the table's schema and run its triggers; lines are 1-based\n";
 
 /// The default human list cap for touches (spec §3.8 rule 4's shape: the cap,
 /// or every item when there are at most a quarter more). `--all` lists all.
@@ -1538,16 +1712,21 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 }
 
 /// `down`: every witness in JSON (each with its class), the class counts and
-/// the reserved wave-3 `beyond`; in human the persistent and possibly
-/// persistent witnesses (folded) and one line for the temporary-record ones.
+/// `beyond` (wave 3a: each dependency entry point beyond which the cone may
+/// persist a write to the table, empty when the cone was not read); in human
+/// the persistent and possibly persistent witnesses (folded), one line for
+/// the temporary-record ones and one for the entry points.
 fn render_touches_down(
     cx: &TouchCx<'_, '_>,
     rix: crate::engine::l4::routine_interner::SolveIx,
     table_id: &str,
     all: bool,
+    cone: Option<&Beyond<'_>>,
     payload: &mut Map<String, Value>,
     human: &mut String,
 ) {
+    let beyond_writes = cone.map(Beyond::writes).unwrap_or_default();
+    let beyond = beyond_of_table(&beyond_writes, table_id);
     let query = cx.query;
     let touches_down = query.touches_table(rix, table_id);
     let witnesses = query.touches(rix, table_id);
@@ -1592,12 +1771,15 @@ fn render_touches_down(
             "touches": touches_down,
             "witnessCount": witnesses.len(),
             "counts": counts_v,
-            "beyond": [],
+            "beyond": beyond,
             "witnesses": witnesses.iter().map(|t| cx.witness_json(t)).collect::<Vec<_>>(),
         }),
     );
+    let beyond_n = beyond.as_array().map_or(0, Vec::len);
 
-    if !touches_down {
+    if !touches_down && beyond_n > 0 {
+        human.push_str("  down: no operation one routine into dependency code touches the table\n");
+    } else if !touches_down {
         human.push_str("  down: no — this routine's cone does not touch the table\n");
     } else {
         human.push_str(&format!(
@@ -1663,6 +1845,35 @@ fn render_touches_down(
         human.push_str(&format!(
             "  table not resolved: {} in this cone{refs} (they may be this table) — --table unknown lists them\n",
             plural(not_resolved, "operation", "operations")
+        ));
+    }
+    if beyond_n > 0 {
+        let points: Vec<String> = beyond_writes
+            .iter()
+            .filter(|w| w.tables.contains_key(table_id))
+            .map(|w| {
+                let kinds: Vec<&str> = w
+                    .types_of
+                    .get(table_id)
+                    .into_iter()
+                    .flatten()
+                    .map(|t| crate::engine::l5::routine_rollup::type_kind(t))
+                    .collect();
+                format!("{} ({})", w.name, kinds.join(", "))
+            })
+            .collect();
+        let shown_n = fold_len(points.len(), TOUCHES_LIST_CAP, all);
+        let mut text = points[..shown_n].join("; ");
+        if shown_n < points.len() {
+            text.push_str(&format!(
+                "; … +{} — --all lists them",
+                plural(points.len() - shown_n, "entry point", "entry points")
+            ));
+        }
+        human.push_str(&format!(
+            "  beyond dependency entry points (the whole cone, literal arguments followed): may \
+             write it beyond {}: {text} — alsem prove <routine> writes-table:<table> gives the path\n",
+            plural(beyond_n, "entry point", "entry points")
         ));
     }
 }
@@ -1897,7 +2108,14 @@ pub fn render_query_effects(
     deterministic: bool,
 ) -> QueryRunResult {
     with_dependencies_line(
-        render_query_effects_body(substrate, routine_selector, all, alsem_ver, deterministic),
+        render_query_effects_body(
+            substrate,
+            routine_selector,
+            all,
+            alsem_ver,
+            deterministic,
+            None,
+        ),
         &substrate.dependencies,
     )
 }
@@ -1986,8 +2204,10 @@ fn render_query_effects_body(
     all: bool,
     alsem_ver: &str,
     deterministic: bool,
+    cone: Option<&crate::engine::l5::digest_cli::DigestEntryFull>,
 ) -> QueryRunResult {
     let deps = &substrate.dependencies;
+    let beyond = cone.map(|e| Beyond::new(e, substrate.resolved(), deps));
     let join = RoutineJoin::build(substrate.resolved());
     let routine =
         match resolve_routine_selector(substrate.resolved(), &join.declaring, routine_selector) {
@@ -2162,6 +2382,9 @@ fn render_query_effects_body(
             _ => unknown_temp += 1,
         }
     }
+    // Wave 3a: the cone's may-persist writes beyond each dependency entry
+    // point (empty when the cone was not read; `summary.scope` says which).
+    let beyond_writes = beyond.as_ref().map(Beyond::writes).unwrap_or_default();
     let write_tables: Vec<Value> = ["writes", "callerDependent"]
         .iter()
         .flat_map(|b| by_table(b).into_iter().map(move |t| (*b, t)))
@@ -2173,7 +2396,7 @@ fn render_query_effects_body(
                 "ops": op_counts(&rows),
                 "class": if b == "writes" { "physical" } else { "callerDependent" },
                 "first": {"operationId": first.operation_id},
-                "beyond": [],
+                "beyond": beyond_of_table(&beyond_writes, id),
             });
             if first.via != crate::engine::l4::effect_store::ViaRank::Direct
                 && let Ok(c) = hops.of(first)
@@ -2181,6 +2404,31 @@ fn render_query_effects_body(
                 v["first"]["firstHop"] = json!(hop_label(c));
             }
             v
+        })
+        .collect();
+    let own_write_tables: BTreeSet<&str> = ["writes", "callerDependent"]
+        .iter()
+        .filter_map(|k| buckets.get(*k))
+        .flat_map(|b| b.tables.iter().copied())
+        .collect();
+    let beyond_tables: BTreeSet<&str> = beyond_writes
+        .iter()
+        .flat_map(|w| w.tables.keys().copied())
+        .collect();
+    let beyond_entry_points: Vec<Value> = beyond_writes
+        .iter()
+        .map(|w| {
+            json!({
+                "entryPoint": w.name,
+                "targets": w.targets,
+                "sites": w.sites,
+                "tables": w.tables.iter().map(|(id, name)| json!({
+                    "table": name,
+                    "tableId": id,
+                    "ops": w.types_of.get(id).cloned().unwrap_or_default(),
+                })).collect::<Vec<_>>(),
+                "unresolvedWrites": w.unresolved,
+            })
         })
         .collect();
     let summary = json!({
@@ -2202,7 +2450,15 @@ fn render_query_effects_body(
                                  "routines": unresolved.get(&true).map_or(0, |b| b.owners.len()),
                              }},
         "byTable": write_tables,
-        "scope": "operations-one-routine-deep",
+        // Wave 3a (3.1.0): the writes beyond entry points, from the cone.
+        "beyondWrites": {
+            "tables": beyond_tables.len(),
+            "entryPoints": beyond_writes.len(),
+            "sites": beyond_writes.iter().map(|w| w.sites.len().max(1)).sum::<usize>(),
+            "tablesOnlyBeyond": beyond_tables.difference(&own_write_tables).count(),
+        },
+        "beyondEntryPoints": beyond_entry_points,
+        "scope": scope_value(beyond.is_some()),
     });
 
     let payload = json!({
@@ -2224,6 +2480,14 @@ fn render_query_effects_body(
         count("writes"),
         plural(ntables("writes"), "table", "tables")
     )];
+    if !beyond_writes.is_empty() {
+        parts.push(format!(
+            "writes beyond dependency entry points on {} through {} ({} only there)",
+            plural(beyond_tables.len(), "table", "tables"),
+            plural(beyond_writes.len(), "entry point", "entry points"),
+            beyond_tables.difference(&own_write_tables).count()
+        ));
+    }
     for (key, label) in [
         ("callerDependent", "caller-dependent writes"),
         ("locks", "locks"),
@@ -2265,15 +2529,31 @@ fn render_query_effects_body(
         plural(effects.len(), "operation", "operations"),
         parts.join("; ")
     ));
-    human.push_str(
-        "  coverage: one routine into dependency code; operations ruled out by literal \
-         arguments are listed (alsem explain and prove drop them); lines are 1-based\n",
-    );
-    human.push_str(&format!(
-        "  scope: per operation, one routine into dependency code (alsem explain and prove \
-         follow the whole cone); temporary records are not writes{}\n",
-        dependencies_clause(deps, all)
-    ));
+    if beyond.is_some() {
+        // Wave 3a: the writes beyond each entry point are the cone's, read
+        // as explain reads them; the per-operation rows keep L4's depth.
+        human.push_str(
+            "  coverage: per operation, one routine into dependency code, and operations ruled \
+             out by literal arguments are listed (alsem explain and prove drop them); writes \
+             beyond dependency entry points follow the whole cone with literal arguments, as \
+             alsem explain does; lines are 1-based\n",
+        );
+        human.push_str(&format!(
+            "  scope: dependency code: full cone for physical writes, grouped per entry point; \
+             per-operation detail one routine deep; temporary records are not writes{}\n",
+            dependencies_clause(deps, all)
+        ));
+    } else {
+        human.push_str(
+            "  coverage: one routine into dependency code; operations ruled out by literal \
+             arguments are listed (alsem explain and prove drop them); lines are 1-based\n",
+        );
+        human.push_str(&format!(
+            "  scope: per operation, one routine into dependency code (alsem explain and prove \
+             follow the whole cone); temporary records are not writes{}\n",
+            dependencies_clause(deps, all)
+        ));
+    }
     let ops_text = |m: &BTreeMap<&str, usize>| -> String {
         let mut v: Vec<(&&str, &usize)> = m.iter().collect();
         v.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
@@ -2346,6 +2626,14 @@ fn render_query_effects_body(
                 "    … +{} — --all lists them\n",
                 plural(list.len() - n, "table", "tables")
             ));
+        }
+    }
+    // Wave 3a: explain's own section, from the same rollup.
+    if let Some(b) = &beyond {
+        for l in b.lines(all) {
+            human.push_str("  ");
+            human.push_str(&l);
+            human.push('\n');
         }
     }
     // W2-5 (2e): LockTable is its own class, never a write. A table also
@@ -2485,7 +2773,16 @@ fn render_query_effects_body(
         ));
     }
 
-    let summary = effects_summary(&rr.qualified(), &effects, &tables);
+    let mut summary = effects_summary(&rr.qualified(), &effects, &tables);
+    // Wave 3a: the MCP summary states the cone's writes beyond entry points.
+    if beyond.is_some()
+        && let Value::Object(m) = &mut summary
+    {
+        m.insert(
+            "beyondWrites".into(),
+            json!({"tables": beyond_tables.len(), "entryPoints": beyond_writes.len()}),
+        );
+    }
     QueryRunResult {
         json_text: envelope("query.effects", payload, deps, alsem_ver, deterministic),
         human_text: human,

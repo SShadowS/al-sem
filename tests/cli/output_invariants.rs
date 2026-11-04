@@ -1461,6 +1461,149 @@ fn explain_digest_and_prove_agree_on_the_fixture() {
     }
 }
 
+/// The physical tables explain's card names for its root, by id: (own rows,
+/// rows beyond an entry point). Temporary and literal-dead rows name none.
+pub(crate) fn explain_physical_tables(
+    card: &Value,
+) -> (
+    std::collections::BTreeSet<String>,
+    std::collections::BTreeSet<String>,
+) {
+    let (mut own, mut beyond) = (
+        std::collections::BTreeSet::new(),
+        std::collections::BTreeSet::new(),
+    );
+    for w in card["effects"]["writes"].as_array().unwrap() {
+        if w["class"] == "temporary" || w["literalUnreachable"] == true {
+            continue;
+        }
+        if w["crossing"].is_string() {
+            beyond.extend(
+                w["resources"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|r| r["id"].as_str().map(String::from)),
+            );
+        } else if let Some(t) = w["tableId"].as_str().filter(|t| !t.is_empty()) {
+            own.insert(t.to_string());
+        }
+    }
+    (own, beyond)
+}
+
+/// The write tables query effects names, by id: (its per-operation rows'
+/// `byTable`, the cone's `beyondEntryPoints`).
+pub(crate) fn query_write_tables(
+    q: &Value,
+) -> (
+    std::collections::BTreeSet<String>,
+    std::collections::BTreeSet<String>,
+) {
+    let s = &q["payload"]["summary"];
+    let own = s["byTable"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["tableId"].as_str().map(String::from))
+        .collect();
+    let beyond = s["beyondEntryPoints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|p| p["tables"].as_array().unwrap().iter())
+        .filter_map(|t| t["tableId"].as_str().map(String::from))
+        .collect();
+    (own, beyond)
+}
+
+/// A human output's `writes beyond dependency entry points` block: its
+/// header line and every deeper-indented line after it.
+pub(crate) fn beyond_block(human: &str) -> Vec<&str> {
+    let mut lines = human
+        .lines()
+        .skip_while(|l| !l.starts_with("  writes beyond dependency entry points"));
+    let mut out: Vec<&str> = lines.next().into_iter().collect();
+    out.extend(lines.take_while(|l| l.starts_with("    ")));
+    out
+}
+
+/// MCP output wave 3a, the cross-tool agreement's query leg (design §7, as
+/// decided in §12): every table the cone's physical class names (explain's
+/// own rows and its rows beyond an entry point) is in query effects' writes
+/// (its per-operation rows or the cone's entry points), and every table
+/// query's per-operation rows write may persist is one the cone names (no
+/// extra on the fixture). Query's writes beyond entry points ARE explain's:
+/// the same tables, and its human section is explain's own lines. Expected
+/// by hand: `Out Log` and `Base Doc Line` per operation, 15 tables beyond
+/// two entry points (`Base Poster::OnRun` 14, `Base Calc::OnRun` 1).
+///
+/// Discrimination (2026-11-04): `cone_root` answering `None` for `effects`
+/// (no tree declared) fails at "the cone was read"; restored, passes.
+#[test]
+fn query_effects_writes_agree_with_the_cone_on_the_fixture() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let run = |args: &[&str]| -> String {
+        let (out, err, code) = run_alsem(args);
+        assert_eq!(code, 0, "{args:?}: {err}");
+        out
+    };
+    let json = |args: &[&str]| -> Value { serde_json::from_str(&run(args)).unwrap() };
+    let explain = json(&["explain", &ws, "--routine", ISSUE_DOC, "--format", "json"]);
+    let query = json(&[
+        "query",
+        "effects",
+        &ws,
+        "--routine",
+        "Out Issue Document.IssueDoc",
+        "--format",
+        "json",
+    ]);
+    let s = &query["payload"]["summary"];
+    assert_eq!(
+        s["scope"], "operations-one-routine-deep; writes-beyond-entry-points-full-cone",
+        "the cone was read: {s}"
+    );
+    let (e_own, e_beyond) = explain_physical_tables(&explain["cards"][0]);
+    let (q_own, q_beyond) = query_write_tables(&query);
+    assert_eq!(
+        q_beyond.len(),
+        15,
+        "precondition: writes beyond: {q_beyond:?}"
+    );
+    assert_eq!(q_beyond, e_beyond, "query's beyond is explain's");
+    let q_all: std::collections::BTreeSet<&String> = q_own.iter().chain(&q_beyond).collect();
+    let missing: Vec<&String> = e_own
+        .iter()
+        .chain(&e_beyond)
+        .filter(|t| !q_all.contains(t))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "cone tables query does not name: {missing:?}"
+    );
+    let extra: Vec<&String> = q_own
+        .iter()
+        .filter(|t| !e_own.contains(*t) && !e_beyond.contains(*t))
+        .collect();
+    assert!(
+        extra.is_empty(),
+        "query tables the cone does not name: {extra:?}"
+    );
+    // The human section is explain's own lines.
+    let e_human = run(&["explain", &ws, "--routine", ISSUE_DOC]);
+    let q_human = run(&[
+        "query",
+        "effects",
+        &ws,
+        "--routine",
+        "Out Issue Document.IssueDoc",
+    ]);
+    let block = beyond_block(&q_human);
+    assert!(block.len() > 2, "precondition: a beyond block: {q_human}");
+    assert_eq!(block, beyond_block(&e_human), "{q_human}\n---\n{e_human}");
+}
+
 /// The fixture root that writes `Out Item` with every operation kind the
 /// field rule tells apart (`Out Field Ops::RunAll`, W2-4).
 pub(crate) const FIELD_OPS: &str = "Out Field Ops::RunAll";

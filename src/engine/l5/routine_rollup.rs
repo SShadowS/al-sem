@@ -1906,6 +1906,58 @@ fn entry_points(r: &RoutineRollup) -> Vec<EntryPoint<'_>> {
     out
 }
 
+/// One entry point's may-persist writes beyond it (MCP output wave 3a):
+/// what `alsem query`'s `beyond` fields state, from the same entry points
+/// [`beyond_lines`] renders (refined groups, after the literal pass).
+#[derive(Debug, Clone)]
+pub struct BeyondWrites<'r> {
+    /// The boundary display (`Codeunit X::OnRun`).
+    pub name: &'r str,
+    /// The entered dependency routines (stable ids), sorted.
+    pub targets: Vec<&'r str>,
+    /// `file:line` of each site (1-based), sorted.
+    pub sites: Vec<&'r str>,
+    /// May-persist tables, id → display.
+    pub tables: BTreeMap<&'r str, &'r str>,
+    /// Per table id, the digest write types beyond (`DB_INSERT`, …).
+    pub types_of: BTreeMap<&'r str, BTreeSet<&'r str>>,
+    /// Writes on a table not resolved.
+    pub unresolved: usize,
+}
+
+/// Every entry point that carries a may-persist write, in [`beyond_lines`]'
+/// order (most tables first, then by name).
+#[must_use]
+pub fn beyond_writes(r: &RoutineRollup) -> Vec<BeyondWrites<'_>> {
+    entry_points(r)
+        .into_iter()
+        .filter(|p| !p.temp_only)
+        .map(|p| {
+            let mut targets: Vec<&str> = p
+                .crossings
+                .iter()
+                .flat_map(|&ci| r.crossings[ci].target_ids.iter().map(String::as_str))
+                .collect();
+            targets.sort_unstable();
+            targets.dedup();
+            let mut types_of: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+            for (ty, ids) in &p.by_type {
+                for id in ids {
+                    types_of.entry(id).or_default().insert(ty);
+                }
+            }
+            BeyondWrites {
+                name: p.name,
+                targets,
+                sites: p.sites,
+                tables: p.tables,
+                types_of,
+                unresolved: p.unresolved,
+            }
+        })
+        .collect()
+}
+
 /// `writes beyond dependency entry points` (design §4.1 section 12).
 #[must_use]
 pub fn beyond_lines(

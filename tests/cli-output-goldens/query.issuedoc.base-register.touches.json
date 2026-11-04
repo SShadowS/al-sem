@@ -19,7 +19,17 @@
     "direction": "both",
     "down": {
       "answerable": true,
-      "beyond": [],
+      "beyond": [
+        {
+          "entryPoint": "Codeunit Base Poster::OnRun",
+          "ops": [
+            "DB_MODIFY"
+          ],
+          "sites": [
+            "ws:src/OutIssueDocument.Codeunit.al:15"
+          ]
+        }
+      ],
       "counts": {
         "byOp": {},
         "knownPersistent": 0,

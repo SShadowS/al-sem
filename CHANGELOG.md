@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (MCP output wave 3a)
 
+- **3a: query reads the whole cone for writes beyond dependency entry points.** `alsem query
+  effects` (and `query touches --from` asked down) now declares a tree over its root
+  (`session::query_cone_plan`) and reads the root's digest entry after the L4 temp-state join and
+  the literal pass, exactly as `alsem explain` does. Its human output gains explain's own `writes
+  beyond dependency entry points` section (the same function, `routine_rollup::beyond_lines`), a
+  summary part `writes beyond dependency entry points on N tables through M entry points (K only
+  there)`, and coverage/scope lines that say `dependency code: full cone for physical writes,
+  grouped per entry point; per-operation detail one routine deep`. `query touches` lists the entry
+  points beyond which the cone may write the table, and says `down: no operation one routine into
+  dependency code touches the table` when only the cone does. Query JSON 3.1.0 (additive): the
+  reserved `summary.byTable[].beyond` and touches' `down.beyond` are filled (`{entryPoint, sites,
+  ops}`), `summary.beyondEntryPoints` and `summary.beyondWrites` are new, `summary.scope` reads
+  `operations-one-routine-deep; writes-beyond-entry-points-full-cone`, and the MCP summary counts
+  the writes beyond. Every per-operation row, `via` and L4 count is unchanged (ConTinAI reads
+  them). On CDO (`bc3ccb18`): IssueReminder 131 tables beyond 12 entry points (was invisible to
+  query), RunReportID 396. Cost: cold CLI `query effects` ~13 s → ~21 s at the same peak RSS
+  (~3.1 GB); on the resident engine the first query builds what the first explain did, and a
+  query and an explain on one root share the root's witness entry. The cross-tool agreement's
+  query leg is per table (design §12.2): every table the cone names is in query's writes, query's
+  beyond equals explain's, and the `CDO Log Attachment` `Modify` operations (literal-dead in the
+  cone) are pinned by id (`output_cdo::cdo_query_effects_writes_agree_with_the_cone`). Goldens:
+  `cli-query-goldens` and `cli-output-goldens` query files and `gate-goldens/batch/one-job` (the
+  new lines and fields); `cli_build_counters::query_effects_cross_app` now expects the cone row.
 - **Q4: "RecordRef" only where the receiver is one.** The body walk now records, per record
   operation, whether its receiver resolves lexically (parameters and locals before the object's
   globals) to a variable declared `RecordRef` (`PRecordOperation::receiver_is_record_ref`,

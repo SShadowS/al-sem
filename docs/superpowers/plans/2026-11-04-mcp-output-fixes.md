@@ -308,6 +308,9 @@ Structural cause (not a rendering bug):
   print `on <RecordRef> (table decided at run time)` as one counted line — check whether
   the record operation keeps "the receiver was a RecordRef"; if only `mayUseRecordRef`
   exists at routine level, add the per-operation bit (an engine fact addition, declared).
+  **Built** on `mcpout/w3a`: wave-2 design spec §12 (the cone read is explain's digest entry,
+  not `cone_derived`'s unrefined fold, and why; the agreement leg decided per table; Q4's bit;
+  the CDO cost).
 - **3b. Descriptions and server instructions rewritten around the agent's decisions**
   (E7, P6, D7, X10): which tool for which question, accepted selector forms (one grammar,
   both spellings accepted, stated once), line base, size expectations, what `partial`,

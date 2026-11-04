@@ -1,7 +1,7 @@
 --- effects of Codeunit D8PostingChain::OnAfterPostSalesDoc ---
   summary: 1 operation — writes that may persist 1 on 1 table (1 known persistent, 0 temp state unknown)
-  coverage: one routine into dependency code; operations ruled out by literal arguments are listed (alsem explain and prove drop them); lines are 1-based
-  scope: per operation, one routine into dependency code (alsem explain and prove follow the whole cone); temporary records are not writes
+  coverage: per operation, one routine into dependency code, and operations ruled out by literal arguments are listed (alsem explain and prove drop them); writes beyond dependency entry points follow the whole cone with literal arguments, as alsem explain does; lines are 1-based
+  scope: dependency code: full cone for physical writes, grouped per entry point; per-operation detail one routine deep; temporary records are not writes
   writes that may persist (1 table):
     Audit Entry: Insert 1 — first Insert at ws:src/subscriber.al:10 in Codeunit D8BadSubscriber::HandlePosted, through Codeunit D8BadSubscriber::HandlePosted (event subscriber)
   next: alsem prove <routine> writes-table:<table> follows the whole cone for one table
