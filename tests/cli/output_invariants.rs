@@ -204,9 +204,11 @@ fn line_tokens(t: &str) -> Vec<String> {
     }
     // W2-2, a workspace write's witness anchor: `<Kind> at <anchor>`; a commit
     // site: `COMMIT at <anchor>`.
-    if let Some((kind, _)) = t.split_once(" at ")
+    // (Not a kind family line, `UI at 2 places: …`, handled below.)
+    if let Some((kind, rest)) = t.split_once(" at ")
         && !kind.contains(' ')
         && kind.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        && !rest.contains(" place")
     {
         if kind == "COMMIT" || kind.contains('_') || kind == "HTTP" || kind == "FILE" {
             v.extend(type_verbs(kind).iter().map(|s| s.to_string()));
@@ -228,9 +230,9 @@ fn line_tokens(t: &str) -> Vec<String> {
     .iter()
     .any(|p| t.starts_with(p))
     {
-        for w in t.split(|c: char| !(c.is_ascii_uppercase() || c == '_')) {
-            v.extend(type_verbs(w).iter().map(|s| s.to_string()));
-        }
+        // Several places of different types on one line, and an implicit
+        // error (`Get`, `FindFirst`, `TestField`) has no verb of its own:
+        // the line's anchors are unverifiable here, as before W2-2.
         return v;
     }
     // W2-2, no path kept: `in <App> code (n tables): T (Kind in Owner at <anchor>), …`.
