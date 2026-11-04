@@ -48,7 +48,7 @@
 //! [`param_guard`]: crate::engine::l4::param_guard
 
 use crate::engine::l4::param_guard::{FrameGuards, Req, frame_guards_over};
-use crate::engine::l5::digest::DigestEffectResult;
+use crate::engine::l5::digest::{Crossing, CrossingSite, DigestEffectResult};
 use crate::engine::l5::recref_flow::{
     Atom, Atoms, RecRefFlow, RelevantGlobals, RelevantParams, TSet, eval,
 };
@@ -57,10 +57,159 @@ use crate::engine::l5::terminal_facts::TerminalFacts;
 use crate::program::body::features::{PCFNNode, TableCase};
 use crate::program::model::workspace::{Model, ModelRoutine};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// The most (routine, bindings) states one root's search visits.
-const STATE_CAP: usize = 400_000;
+pub(crate) const STATE_CAP: usize = 400_000;
+
+/// A search checks its cancellation closure once per this many states.
+const CANCEL_EVERY: usize = 4096;
+
+/// W2-0b: the most states all cached suffix trees of one read hold together
+/// (design §3.4.3 item 3); one tree holds at most [`STATE_CAP`].
+const SUFFIX_CACHE_STATES: usize = 4 * STATE_CAP;
+
+/// The routines a path of `steps` from `start` visits, `start` first.
+fn routines_of<'a>(start: &'a str, steps: &[Step<'a>]) -> Vec<&'a str> {
+    match steps.first() {
+        None => vec![start],
+        Some(first) => std::iter::once(first.from)
+            .chain(steps.iter().map(|s| s.to))
+            .collect(),
+    }
+}
+
+/// One crossing's entries into dependency code from one root
+/// ([`LiteralReach::crossing_entries`]): (caller state, the crossing edge,
+/// the callee's bindings).
+pub(crate) struct CrossingEntries<'a>(Vec<(State<'a>, Step<'a>, Bindings)>);
+
+impl CrossingEntries<'_> {
+    /// How many distinct entry states the crossing has. Tests only.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+/// What [`LiteralReach::group_witness`] found (design §3.4.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum GroupWitness<'a> {
+    /// A path that traverses the crossing: `steps[entry]` is the crossing's
+    /// edge; `terminal` is the live operation the last step's routine owns.
+    Through {
+        steps: Vec<Step<'a>>,
+        entry: usize,
+        terminal: String,
+    },
+    /// A suffix search stopped early and the root tree's own path does not
+    /// traverse the crossing: real, but never evidence of "beyond X".
+    Outside {
+        steps: Vec<Step<'a>>,
+        terminal: String,
+        reason: Stop,
+    },
+    /// No witness: the searches completed and found none (`None`), or one
+    /// stopped early and the root tree has no path either.
+    Unavailable(Option<Stop>),
+}
+
+impl<'a> GroupWitness<'a> {
+    /// The routines the witness visits, root first; empty when unavailable.
+    pub(crate) fn routines(&self) -> Vec<&'a str> {
+        match self {
+            GroupWitness::Through { steps, .. } | GroupWitness::Outside { steps, .. } => steps
+                .first()
+                .map_or(Vec::new(), |s| routines_of(s.from, steps)),
+            GroupWitness::Unavailable(_) => Vec::new(),
+        }
+    }
+}
+
+/// W2-0b: the suffix trees of one read, by entry state `(target,
+/// bindings)` (design §3.4.3 item 2). A suffix depends on nothing but its
+/// entry state, so one tree serves every root, crossing and resource that
+/// enters there. Bounded twice: [`STATE_CAP`] per tree (a larger search is
+/// `Stop::Capped`, and that outcome is cached too), and an aggregate state
+/// budget over all trees held, kept by evicting the OLDEST insertion first,
+/// so what is evicted depends only on the order of requests, never on
+/// timing. An evicted tree is rebuilt on its next request, with the same
+/// result.
+pub(crate) struct SuffixCache<'a> {
+    trees: HashMap<State<'a>, Result<Rc<LiveTree<'a>>, Stop>>,
+    order: VecDeque<State<'a>>,
+    held: usize,
+    per_tree: usize,
+    budget: usize,
+    /// Trees built and evicted (the cost the commit message measures).
+    pub(crate) built: usize,
+    pub(crate) evicted: usize,
+    pub(crate) peak_held: usize,
+}
+
+impl Default for SuffixCache<'_> {
+    fn default() -> Self {
+        SuffixCache::with_limits(STATE_CAP, SUFFIX_CACHE_STATES)
+    }
+}
+
+impl<'a> SuffixCache<'a> {
+    /// A cache whose trees hold at most `per_tree` states each and
+    /// `budget` together.
+    pub(crate) fn with_limits(per_tree: usize, budget: usize) -> Self {
+        SuffixCache {
+            trees: HashMap::new(),
+            order: VecDeque::new(),
+            held: 0,
+            per_tree,
+            budget: budget.max(per_tree),
+            built: 0,
+            evicted: 0,
+            peak_held: 0,
+        }
+    }
+
+    /// The states the held trees hold together. Tests only.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn held(&self) -> usize {
+        self.held
+    }
+
+    /// The suffix tree from `start`, built on first use.
+    fn get(
+        &mut self,
+        reach: &LiteralReach<'a>,
+        start: State<'a>,
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<Rc<LiveTree<'a>>, Stop> {
+        if let Some(t) = self.trees.get(&start) {
+            return t.clone();
+        }
+        let built = reach.tree_from(start.clone(), self.per_tree, cancel);
+        self.built += 1;
+        // A cancelled search is no property of the entry: not cached.
+        if matches!(built, Err(Stop::Cancelled)) {
+            return Err(Stop::Cancelled);
+        }
+        let n = built.as_ref().map_or(0, |t| t.len());
+        while self.held + n > self.budget {
+            let Some(old) = self.order.pop_front() else {
+                break;
+            };
+            if let Some(Ok(t)) = self.trees.remove(&old) {
+                self.held -= t.len();
+            }
+            self.evicted += 1;
+        }
+        let built = built.map(Rc::new);
+        self.trees.insert(start.clone(), built.clone());
+        self.order.push_back(start);
+        self.held += n;
+        self.peak_held = self.peak_held.max(self.held);
+        built
+    }
+}
 
 /// A table requirement in one routine's frame: (parameter index, whether its
 /// table must be IN the set (else NOT in it), the folded table names).
@@ -406,8 +555,34 @@ impl<'a> EdgeSite<'a> {
     }
 }
 
-/// An out-edge: (callee, the site it leaves from, whether it binds arguments).
-type OutEdge<'a> = (&'a str, Option<EdgeSite<'a>>, bool);
+/// An out-edge: (callee, the site it leaves from, whether it binds arguments,
+/// the snapshot edge kind).
+type OutEdge<'a> = (&'a str, Option<EdgeSite<'a>>, bool, &'a str);
+
+/// A search state: a routine and the known values of its parameters.
+type State<'a> = (&'a str, Bindings);
+
+/// The edge a tree state was first reached by: its site and edge kind.
+type Via<'a> = (Option<EdgeSite<'a>>, &'a str);
+
+/// One edge of a witness: from, to, the site it leaves from, its kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Step<'a> {
+    pub from: &'a str,
+    pub to: &'a str,
+    pub site: Option<EdgeSite<'a>>,
+    pub kind: &'a str,
+}
+
+/// Why a guarded search stopped before it was complete (MCP output wave 2
+/// design §3.4.3 item 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Stop {
+    /// It visited more than its state cap.
+    Capped,
+    /// The caller's cancellation check said stop.
+    Cancelled,
+}
 
 /// A search's result: the routines reached with guards ignored, and the
 /// binding states reached per routine with them.
@@ -416,8 +591,53 @@ type Reached<'a> = (HashSet<&'a str>, HashMap<&'a str, Vec<Bindings>>);
 /// G35: a guarded search's states with their parents, in visit order
 /// ([`LiteralReach::live_tree`]).
 pub(crate) struct LiveTree<'a> {
-    parent: HashMap<(&'a str, Bindings), Option<(&'a str, Bindings)>>,
-    order: Vec<(&'a str, Bindings)>,
+    /// Each state's parent and the edge from it (`None` at the start).
+    parent: HashMap<State<'a>, Option<(State<'a>, Via<'a>)>>,
+    order: Vec<State<'a>>,
+    /// W2-0b: routine → its states' positions in `order`, ascending; built
+    /// on first use, so a witness for one resource is a lookup, not a scan
+    /// of the whole tree.
+    by_routine: std::cell::OnceCell<HashMap<&'a str, Vec<u32>>>,
+}
+
+impl<'a> LiveTree<'a> {
+    /// The positions in visit order of `routine`'s states.
+    fn states_of(&self, routine: &str) -> &[u32] {
+        self.by_routine
+            .get_or_init(|| {
+                let mut m: HashMap<&'a str, Vec<u32>> = HashMap::new();
+                for (i, (f, _)) in self.order.iter().enumerate() {
+                    m.entry(*f)
+                        .or_default()
+                        .push(u32::try_from(i).expect("a tree position fits u32"));
+                }
+                m
+            })
+            .get(routine)
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// The states visited, in visit order.
+    pub(crate) fn len(&self) -> usize {
+        self.order.len()
+    }
+
+    /// The edges from the tree's start to `state`, in order.
+    fn steps_to(&self, state: &State<'a>) -> Vec<Step<'a>> {
+        let mut steps = Vec::new();
+        let mut cur = state.clone();
+        while let Some(Some((p, (site, kind)))) = self.parent.get(&cur) {
+            steps.push(Step {
+                from: p.0,
+                to: cur.0,
+                site: *site,
+                kind,
+            });
+            cur = p.clone();
+        }
+        steps.reverse();
+        steps
+    }
 }
 
 /// The search context over one snapshot and model, shared by every root.
@@ -497,7 +717,9 @@ impl<'a> LiteralReach<'a> {
         let mut out: HashMap<&str, Vec<OutEdge>> = HashMap::new();
         for e in edges {
             if let Some((from, to, site, binds)) = edge_parts(e) {
-                out.entry(from).or_default().push((to, site, binds));
+                out.entry(from)
+                    .or_default()
+                    .push((to, site, binds, e.edge_kind()));
             }
         }
         // G34: the exit guards, and what a search must carry to read them
@@ -561,7 +783,7 @@ impl<'a> LiteralReach<'a> {
             .get(from)
             .into_iter()
             .flatten()
-            .filter_map(|&(to, site, _)| match site {
+            .filter_map(|&(to, site, _, _)| match site {
                 Some(EdgeSite::Event(ev)) => Some((to, ev)),
                 _ => None,
             })
@@ -706,7 +928,7 @@ impl<'a> LiteralReach<'a> {
         let mut plain: HashSet<&str> = HashSet::from([root]);
         let mut q = VecDeque::from([root]);
         while let Some(f) = q.pop_front() {
-            for &(to, _, _) in self.out.get(f).into_iter().flatten() {
+            for &(to, _, _, _) in self.out.get(f).into_iter().flatten() {
                 if plain.insert(to) {
                     q.push_back(to);
                 }
@@ -717,7 +939,7 @@ impl<'a> LiteralReach<'a> {
             HashMap::from([(root, vec![Bindings::default()])]);
         let mut q = VecDeque::from([(root, Bindings::default())]);
         while let Some((f, b)) = q.pop_front() {
-            for &(to, site, binds) in self.out.get(f).into_iter().flatten() {
+            for &(to, site, binds, _) in self.out.get(f).into_iter().flatten() {
                 let site = site.and_then(EdgeSite::guarded);
                 if let Some(s) = site
                     && self.dead_at(f, s, &b)
@@ -741,18 +963,34 @@ impl<'a> LiteralReach<'a> {
     }
 
     /// G35: the guarded search from `root`, keeping each state's parent and
-    /// its order of visit, so [`Self::live_path`] can read a path that can
+    /// its order of visit, so [`Self::group_witness`] can read a path that can
     /// run off it. `None` when the search hit the cap.
     pub(crate) fn live_tree(&self, root: &'a str) -> Option<LiveTree<'a>> {
-        let start = (root, Bindings::default());
-        let mut parent: HashMap<(&'a str, Bindings), Option<(&'a str, Bindings)>> =
+        self.tree_from((root, Bindings::default()), STATE_CAP, &|| false)
+            .ok()
+    }
+
+    /// The guarded search from `start` (a routine entered with known
+    /// bindings), keeping each state's parent and the edge from it, in visit
+    /// order. Stops at `cap` states, or when `cancel` says so (checked every
+    /// [`CANCEL_EVERY`] states).
+    fn tree_from(
+        &self,
+        start: State<'a>,
+        cap: usize,
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<LiveTree<'a>, Stop> {
+        let mut parent: HashMap<State<'a>, Option<(State<'a>, Via<'a>)>> =
             HashMap::from([(start.clone(), None)]);
-        let mut order: Vec<(&'a str, Bindings)> = Vec::new();
+        let mut order: Vec<State<'a>> = Vec::new();
         let mut q = VecDeque::from([start]);
         while let Some((f, b)) = q.pop_front() {
+            if order.len().is_multiple_of(CANCEL_EVERY) && cancel() {
+                return Err(Stop::Cancelled);
+            }
             order.push((f, b.clone()));
-            for &(to, site, binds) in self.out.get(f).into_iter().flatten() {
-                let site = site.and_then(EdgeSite::guarded);
+            for &(to, edge_site, binds, kind) in self.out.get(f).into_iter().flatten() {
+                let site = edge_site.and_then(EdgeSite::guarded);
                 if let Some(s) = site
                     && self.dead_at(f, s, &b)
                 {
@@ -764,33 +1002,210 @@ impl<'a> LiteralReach<'a> {
                 };
                 let key = (to, nb);
                 if !parent.contains_key(&key) {
-                    if parent.len() > STATE_CAP {
-                        return None;
+                    if parent.len() > cap {
+                        return Err(Stop::Capped);
                     }
-                    parent.insert(key.clone(), Some((f, b.clone())));
+                    parent.insert(key.clone(), Some(((f, b.clone()), (edge_site, kind))));
                     q.push_back(key);
                 }
             }
         }
-        Some(LiveTree { parent, order })
+        Ok(LiveTree {
+            parent,
+            order,
+            by_routine: std::cell::OnceCell::new(),
+        })
     }
 
-    /// G35: over `tree`, the routines from its root to the first state (in
-    /// visit order) of a routine owning one of `ops` where that operation can
-    /// run; `None` when no such state was reached.
-    pub(crate) fn live_path(&self, tree: &LiveTree<'a>, ops: &[String]) -> Option<Vec<&'a str>> {
-        let (f, b) = tree.order.iter().find(|(f, b)| {
-            ops.iter()
-                .any(|o| self.op_owner.get(o.as_str()) == Some(f) && !self.dead_at(f, o, b))
-        })?;
-        let mut path = vec![*f];
-        let mut cur = (*f, b.clone());
-        while let Some(Some(p)) = tree.parent.get(&cur) {
-            path.push(p.0);
-            cur = p.clone();
+    /// Over `tree`, the first state (in visit order) of a routine owning one
+    /// of `ops` where that operation can run, with that operation.
+    fn first_live_owner<'t>(
+        &self,
+        tree: &'t LiveTree<'a>,
+        ops: &'t [String],
+    ) -> Option<(&'t State<'a>, &'t str)> {
+        // The earliest position over every op's owner states where the op can
+        // run; at one position the first op in `ops` order (as a scan of the
+        // tree in visit order would find).
+        let mut best: Option<(u32, &'t str)> = None;
+        for o in ops {
+            let Some(owner) = self.op_owner.get(o.as_str()) else {
+                continue;
+            };
+            for &i in tree.states_of(owner) {
+                if best.is_some_and(|(b, _)| b <= i) {
+                    break;
+                }
+                let (f, b) = &tree.order[i as usize];
+                if !self.dead_at(f, o, b) {
+                    best = Some((i, o.as_str()));
+                    break;
+                }
+            }
         }
-        path.reverse();
-        Some(path)
+        best.map(|(i, o)| (&tree.order[i as usize], o))
+    }
+
+    /// The ids of the routine owning operation `op` (stable id), if known.
+    pub(crate) fn op_owner(&self, op: &str) -> Option<&'a str> {
+        self.op_owner.get(op).copied()
+    }
+
+    /// The model routine of stable id `stable`.
+    pub(crate) fn routine(&self, stable: &str) -> Option<&'a ModelRoutine> {
+        self.by_stable.get(stable).copied()
+    }
+
+    /// Whether the edge `from → to` leaving at `site` is one of `crossing`'s
+    /// typed edges (design §3.3): matched by source, target AND site
+    /// identity, never by the site id alone; an event edge by its event id.
+    fn on_crossing(c: &Crossing, from: &str, to: &str, site: Option<EdgeSite<'_>>) -> bool {
+        c.edges.iter().any(|e| {
+            e.from == from
+                && e.to == to
+                && match (site, &e.site) {
+                    (
+                        Some(EdgeSite::Guarded(s)),
+                        CrossingSite::Callsite(x) | CrossingSite::Operation(x),
+                    ) => s == x,
+                    (Some(EdgeSite::Event(s)), CrossingSite::Event(x)) => s == x,
+                    _ => false,
+                }
+        })
+    }
+
+    /// MCP output wave 2, W2-0b (design §3.4.3; G1): one witness from the
+    /// root to a live operation of `ops` that TRAVERSES `crossing`.
+    ///
+    /// Two phases. The prefix is `root_tree` (the root's guarded search):
+    /// every `(caller state, callee bindings)` at which one of the crossing's
+    /// typed edges is taken is an entry, so the bindings the prefix
+    /// established survive. The suffix is one guarded search per distinct
+    /// entry `(target, bindings)`, from [`SuffixCache`]: it depends on
+    /// nothing else, so prefix + suffix is a witness, and the shortest total
+    /// wins (ties: the first entry in the root tree's visit order). When no
+    /// entry reaches an operation and some suffix search stopped early, the
+    /// root tree's own path is the fallback, CHECKED for crossing membership
+    /// (an ordinary witness when it does traverse the crossing).
+    pub(crate) fn group_witness(
+        &self,
+        root_tree: &LiveTree<'a>,
+        crossing: &Crossing,
+        entries: &CrossingEntries<'a>,
+        ops: &[String],
+        cache: &mut SuffixCache<'a>,
+        cancel: &dyn Fn() -> bool,
+    ) -> GroupWitness<'a> {
+        // Suffix phase.
+        let mut best: Option<(usize, Vec<Step<'a>>, usize, String)> = None;
+        let mut stopped: Option<Stop> = None;
+        for (caller, step, nb) in &entries.0 {
+            let prefix = root_tree.steps_to(caller);
+            if best.as_ref().is_some_and(|b| prefix.len() + 1 >= b.0) {
+                continue;
+            }
+            let tree = match cache.get(self, (step.to, nb.clone()), cancel) {
+                Ok(t) => t,
+                Err(s) => {
+                    stopped = stopped.or(Some(s));
+                    continue;
+                }
+            };
+            if let Some((state, op)) = self.first_live_owner(&tree, ops) {
+                let suffix = tree.steps_to(state);
+                let total = prefix.len() + 1 + suffix.len();
+                if best.as_ref().is_none_or(|b| total < b.0) {
+                    let entry = prefix.len();
+                    let mut steps = prefix;
+                    steps.push(*step);
+                    steps.extend(suffix);
+                    best = Some((total, steps, entry, op.to_string()));
+                }
+            }
+        }
+        if let Some((_, steps, entry, terminal)) = best {
+            return GroupWitness::Through {
+                steps,
+                entry,
+                terminal,
+            };
+        }
+        let Some(stop) = stopped else {
+            return GroupWitness::Unavailable(None);
+        };
+        // A suffix stopped early: the root tree's own path, checked.
+        let Some((state, op)) = self.first_live_owner(root_tree, ops) else {
+            return GroupWitness::Unavailable(Some(stop));
+        };
+        let steps = root_tree.steps_to(state);
+        let terminal = op.to_string();
+        match steps
+            .iter()
+            .position(|s| Self::on_crossing(crossing, s.from, s.to, s.site))
+        {
+            Some(entry) => GroupWitness::Through {
+                steps,
+                entry,
+                terminal,
+            },
+            None => GroupWitness::Outside {
+                steps,
+                terminal,
+                reason: stop,
+            },
+        }
+    }
+
+    /// The prefix phase (design §3.4.3 item 1): every `(caller state, edge,
+    /// callee bindings)` at which one of `crossing`'s typed edges is taken in
+    /// `root_tree`, distinct by callee state, in root-tree visit order (so
+    /// the first entry of a callee state has its shortest prefix). ALL
+    /// entries are kept: the shortest prefix need not witness every resource.
+    pub(crate) fn crossing_entries(
+        &self,
+        root_tree: &LiveTree<'a>,
+        crossing: &Crossing,
+    ) -> CrossingEntries<'a> {
+        let mut entries: Vec<(State<'a>, Step<'a>, Bindings)> = Vec::new();
+        let mut seen: HashSet<State<'a>> = HashSet::new();
+        // Only the states of the crossing edges' source routines, in visit
+        // order.
+        let mut at: Vec<u32> = crossing
+            .edges
+            .iter()
+            .map(|e| e.from.as_str())
+            .collect::<HashSet<&str>>()
+            .into_iter()
+            .flat_map(|f| root_tree.states_of(f).iter().copied())
+            .collect();
+        at.sort_unstable();
+        for (f, b) in at.iter().map(|&i| &root_tree.order[i as usize]) {
+            for &(to, edge_site, binds, kind) in self.out.get(f).into_iter().flatten() {
+                if !Self::on_crossing(crossing, f, to, edge_site) {
+                    continue;
+                }
+                let site = edge_site.and_then(EdgeSite::guarded);
+                if let Some(s) = site
+                    && self.dead_at(f, s, b)
+                {
+                    continue;
+                }
+                let nb = match (binds, site) {
+                    (true, Some(s)) => self.bind(f, s, to, b),
+                    _ => Bindings::default(),
+                };
+                if seen.insert((to, nb.clone())) {
+                    let step = Step {
+                        from: f,
+                        to,
+                        site: edge_site,
+                        kind,
+                    };
+                    entries.push(((f, b.clone()), step, nb));
+                }
+            }
+        }
+        CrossingEntries(entries)
     }
 
     /// Whether a listed witness path can run: replayed from the root with no

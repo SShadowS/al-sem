@@ -3485,7 +3485,7 @@ pub struct DigestEffectResult {
     /// G35: per group resource, one example path inside the dependency
     /// ([`crate::engine::l5::group_path`]). Set only for `prove`'s read; not
     /// serialized.
-    pub group_resource_paths: Vec<(String, Vec<String>)>,
+    pub group_resource_paths: Vec<(String, crate::engine::l5::group_path::GroupPathOutcome)>,
     /// G23: the root cannot reach the effect once literal Boolean arguments
     /// are followed ([`crate::engine::l5::literal_reach`]). Set only for
     /// `prove`'s read; not serialized.

@@ -614,7 +614,9 @@ fn single_app_flag_reaches_prove() {
         // Minted from the base binary, so never regenerated: regen mode
         // compares too. Edited by hand once since, for the 1-based lines of
         // MCP output plan 1a (schema 2.0.0, `lineBase: 1`, the anchor's line + 1),
-        // then 1d (schema 2.1.0, no other change on this fixture).
+        // then 1d (schema 2.1.0, no other change on this fixture), then wave 2
+        // W2-0b (schema 2.2.0, additive group-witness fields this may-commit
+        // answer does not carry: only the version moved).
         let path = t8_golden(file);
         let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
         assert_eq!(got, want, "{format}: --single-app != the base's default");
