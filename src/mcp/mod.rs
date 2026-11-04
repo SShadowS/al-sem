@@ -83,7 +83,7 @@ pub const WORKER_QUEUE_DEPTH: usize = 16;
 pub const DEFAULT_MAX_CHILDREN: usize = 2;
 
 /// The server's `instructions` in its `initialize` result.
-pub const INSTRUCTIONS: &str = "al-sem answers questions about Microsoft Dynamics 365 Business Central AL code by whole-program analysis. Use alsem_explain before editing a routine (its rules, writes, callers, tests), alsem_prove for yes/no safety questions, alsem_digest for the effects of a change, alsem_query_* for table effects. Answers are the exact output of the alsem CLI.";
+pub const INSTRUCTIONS: &str = "al-sem answers questions about Microsoft Dynamics 365 Business Central AL code by whole-program analysis. Use alsem_explain before editing a routine (its rules, writes, callers, tests), alsem_prove for yes/no safety questions, alsem_digest for the effects of a change, alsem_query_* for table effects. Answers are the exact output of the alsem CLI. Every line number is 1-based. Answers for a routine that calls into Base Application are often 50-200 KB: they go to a file with a summary, so read the summary first.";
 
 /// The JSON-RPC error codes the server answers.
 pub mod codes {

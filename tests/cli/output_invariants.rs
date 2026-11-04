@@ -760,3 +760,43 @@ fn every_spilled_answer_carries_a_summary() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     assert!(s.finish().success());
 }
+
+/// Item T, "descriptions" (plan 1f; catches S1, E5, E7): every command tool's
+/// description and the server instructions say the lines are 1-based and give
+/// a size; each command tool states its dependency depth; `alsem_refresh` no
+/// longer claims there is no built revision. (`alsem_status` reports no source
+/// lines and is exempt from the line-base sentence.)
+///
+/// Discrimination (2026-11-04): restoring `alsem_refresh`'s old sentence fails
+/// at "alsem_refresh: stale"; dropping "Lines are 1-based." from
+/// `alsem_query_touches` fails at "alsem_query_touches: line base"; both pass
+/// restored.
+#[test]
+fn descriptions_state_line_base_size_and_depth() {
+    let mut failures = Vec::new();
+    let has_size = |d: &str| d.contains(" KB") || d.contains("megabytes");
+    for t in al_sem::mcp::tools::tool_list() {
+        let name = t["name"].as_str().unwrap();
+        let d = t["description"].as_str().unwrap();
+        if matches!(name, "alsem_status" | "alsem_refresh") {
+            if d.contains("no built revision") {
+                failures.push(format!("{name}: stale"));
+            }
+            continue;
+        }
+        if !d.contains("1-based") {
+            failures.push(format!("{name}: line base"));
+        }
+        if !has_size(d) {
+            failures.push(format!("{name}: size"));
+        }
+        if !d.contains("Dependency code:") {
+            failures.push(format!("{name}: dependency depth"));
+        }
+    }
+    let i = al_sem::mcp::INSTRUCTIONS;
+    if !i.contains("1-based") || !has_size(i) {
+        failures.push(format!("INSTRUCTIONS: {i}"));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

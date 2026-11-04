@@ -198,7 +198,7 @@ pub fn tool_list() -> Vec<Value> {
     vec![
         tool(
             "alsem_explain",
-            "Explain AL routines: the evidence card of each (its own rules with their conditions and messages, inherited and caller rules, what it writes, commits and raises, the page actions and tests that reach it, and what the engine could not see). Exactly one mode: `routines` (one or more selectors: display name, `<owner>::<routine>` or stable id), `diff` (a unified diff's text; one card per routine it changes; `diffRoot` is the folder its paths are relative to, default the git top level), or `table` with `field` (every workspace routine that writes the field). Default format is the human card; `format: json` gives schema al-sem.explain/1. Returns the exact `alsem explain` stdout.",
+            "Explain AL routines: the evidence card of each (its own rules with their conditions and messages, inherited and caller rules, what it writes, commits and raises, the page actions and tests that reach it, and what the engine could not see). Exactly one mode: `routines` (one or more selectors: display name, `<owner>::<routine>` or stable id), `diff` (a unified diff's text; one card per routine it changes; `diffRoot` is the folder its paths are relative to, default the git top level), or `table` with `field` (every workspace routine that writes the field). Default format is the human card; `format: json` gives schema al-sem.explain/2 (larger; for tools that parse it). Lines are 1-based. Size: a few lines for a small routine; 100-200 KB for one that calls into Base Application, which then goes to a file with a summary (each card's header and counts) — read the summary first. Dependency code: summarized per entry point (one row per boundary and effect type), not listed table by table. Returns the exact `alsem explain` stdout.",
             schema(
                 vec![
                     ("routines", string_array("Routine selectors (mode 1).")),
@@ -229,7 +229,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_prove",
-            "Prove one absence-safety question about one AL routine: yes / no / unknown, with the reason. Questions: may-commit, commits-on-success-path, writes-table:<table>, publishes-event:<event>, reaches-ui, throws-error. Returns the exact `alsem prove` stdout (default format human here, a few lines; `format: json` gives the evidence and its paths in full).",
+            "Prove one absence-safety question about one AL routine: yes / no / unknown, with the reason. Questions: may-commit, commits-on-success-path, writes-table:<table>, publishes-event:<event>, reaches-ui, throws-error. Returns the exact `alsem prove` stdout (default format human here, a few lines; `format: json` gives the evidence and its paths in full, typically 5-60 KB). Lines are 1-based. `yes` is a may-answer under an open world; `unknown` means coverage was incomplete (see `obligations`); a temporary-record write is not a write for writes-table. Dependency code: the whole call cone is followed.",
             schema(
                 vec![
                     (
@@ -256,7 +256,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_digest",
-            "Digest changed AL code: the transitive effects (writes, commits, errors, events, UI) of the changed roots. Give at least one of `routines` (stable ids or display names), `files` (changed source files, relative to the workspace or the git top level) or `diff` (a unified diff's text). The output always goes to a file in the server's output folder; the answer carries its path, size, SHA-256 and a summary of at most 8 KiB (roots requested and resolved; per root: effects by type, physical tables written in the workspace and in dependencies, temporary tables, commits, dependency boundaries entered, coverage and its reasons, unresolved call sites as counts with the top callees).",
+            "Digest AL code: the transitive effects (writes, commits, errors, events, UI) of the given roots. Give at least one of `routines` (stable ids or display names: that routine's effects), `files` (changed source files, relative to the workspace or the git top level) or `diff` (a unified diff's text); `files` and `diff` are the change modes. Lines are 1-based. Dependency code: the whole cone, grouped per entry point. The file is often megabytes for a routine that calls Base Application (pass `format: human` for a shorter one); read the summary first. The output always goes to a file in the server's output folder; the answer carries its path, size, SHA-256 and a summary of at most 8 KiB (roots requested and resolved; per root: effects by type, physical tables written in the workspace and in dependencies, temporary tables, commits, dependency boundaries entered, coverage and its reasons, unresolved call sites as counts with the top callees).",
             schema(
                 vec![
                     ("routines", string_array("Changed routines.")),
@@ -289,7 +289,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_query_effects",
-            "A routine's complete transitive database-effect list, with `via` provenance. Returns the exact `alsem query effects` stdout (default format human); an output over the inline cap goes to a file.",
+            "A routine's transitive database-effect list (every record operation, reads and temporary records included, each with its temp state and `via` provenance). Dependency code: one routine deep (the operations of the first dependency routine entered; deeper writes are in alsem_explain / alsem_digest boundary groups and alsem_prove writes-table). Lines are 1-based. Size: up to ~130 KB human for a routine that reaches Base Application; over the inline cap it goes to a file with a summary (counts by operation and temp state). `format: json` is larger. Returns the exact `alsem query effects` stdout (default format human).",
             schema(
                 vec![
                     (
@@ -308,7 +308,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_query_touches",
-            "Is a table touched by any database action, transitively, up or down the call stack? Without `from`, every routine that touches it. Returns the exact `alsem query touches` stdout (default format human); an output over the inline cap goes to a file.",
+            "Is a table touched by any database action, transitively, up or down the call stack? Without `from`, every routine that touches it. Temporary-record operations count as touches (each witness states its temp state). Dependency code: one routine deep. Lines are 1-based. Size: a few lines to ~75 KB with `from`; without `from` it can be hundreds of KB. Over the inline cap it goes to a file with a summary (the down/up headlines). Returns the exact `alsem query touches` stdout (default format human).",
             schema(
                 vec![
                     (
@@ -353,7 +353,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_refresh",
-            "Refresh a workspace's engine: leave a failed state (after repeated engine deaths) so the next call starts a new engine. Today every call reads the workspace as it is now, so there is no built revision to update.",
+            "Refresh a workspace's engine: rebuild its kept revision now from the files as they are (what `freshness: fresh` does on demand), so later `latest-built` answers are current; and leave a failed state (after repeated engine deaths) so the next call starts a new engine. Answers no question itself; its output has no source lines.",
             schema(
                 vec![
                     (

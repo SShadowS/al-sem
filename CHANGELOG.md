@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (MCP output plan 1f: tool descriptions, first pass)
+
+- **The MCP tool descriptions and server instructions state what an agent needs before it
+  calls** (plan item 1f; review S1, E5, E7): every command tool says its lines are 1-based, its
+  typical size and when the answer goes to a file with a summary, when `format: json` is worth
+  it, and its dependency depth in one sentence (explain/digest: summarized per entry point;
+  prove: the whole cone; query: one routine deep, until the plan's item 3a). `query effects` no
+  longer claims a "complete" list; digest names `files`/`diff` as the change modes;
+  `alsem_refresh` no longer says there is no built revision to update. The full rewrite is the
+  plan's item 3b.
+
 ### Added (MCP output plan 1e: a summary on every spilled answer)
 
 - **An explain, query or prove answer that goes to a file carries a summary** (plan item 1e;
