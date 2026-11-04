@@ -66,6 +66,18 @@ where
 ///
 /// Its size is rayon's default, so `RAYON_NUM_THREADS` sets it (#277 F18);
 /// the `pool.threads` trace instant reads the built pool's own size.
+///
+/// **A fresh pool per call, on purpose.** Building one (22 workers) and
+/// running a small `par_iter` in it cost ~0.9 ms more than the same work on
+/// a pool built once (measured 2026-11-04, release, rayon 1.12). The
+/// costliest repeat caller, the context server's `TreeBase` fill
+/// (`snapshot_view::derive_evidence_base`), takes ~1.5 s on CDO (`tree.base`
+/// span of a CDO digest), so the pool is ~0.06% of it, and a whole CDO
+/// digest builds 7 pools. Dropping the pool ends its threads (the process
+/// went from 45 threads back to 23 within 50 ms), so a resident engine that
+/// is idle holds none of these 32 MiB-stack workers; a process-wide pool
+/// would keep them for the life of the process, for a saving below the
+/// noise of any fill that uses it.
 pub fn big_stack_pool() -> rayon::ThreadPool {
     let pool = rayon::ThreadPoolBuilder::new()
         .stack_size(BIG_STACK_SIZE)

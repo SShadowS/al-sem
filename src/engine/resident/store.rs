@@ -31,6 +31,12 @@
 //! waiter's claims.) A waiter holds nothing, so no wait is ever on a
 //! waiter, and no cycle of waits can form.
 //!
+//! **A request judges what it lacks against the snapshot read under the
+//! registry lock.** Every writer of the snapshot holds that lock, so there
+//! the snapshot and the keys' states agree: a key that is `Published` is in
+//! the snapshot read. (Read before the lock, the snapshot could predate a
+//! publication, and the request claimed and filled a published key again.)
+//!
 //! **Reservation** (§4.5, stage 3): each claimed key's fill reserves through
 //! [`Control::reserve`] just before it computes and holds the guard until
 //! its value is in hand; the guard's `finish` gives the bytes the fill left
@@ -91,7 +97,9 @@ pub type Guard<'a> = Box<dyn Held + 'a>;
 /// wide enough mask, for example).
 pub trait StoreValue: Send + Sync {
     type Req: Clone + Debug + Send + Sync;
-    /// Whether this published value satisfies `req`.
+    /// Whether this published value satisfies `req`. Called under the
+    /// store's registry lock (a request judges its claims there), so it
+    /// must be cheap and must not touch the store.
     fn satisfies(&self, req: &Self::Req) -> bool;
 }
 
@@ -276,6 +284,15 @@ pub struct Store<K: StoreKey, V: StoreValue> {
     changed: Condvar,
     stats: Mutex<StoreStats>,
     next_worker: AtomicU64,
+    /// Tests only: called at the top of every claim section, before the
+    /// registry lock is taken (and so before the snapshot the claims are
+    /// judged against is read). It lets a test hold a request exactly
+    /// there while another request publishes, the interleaving that made a
+    /// stale snapshot reclaim a published key (2026-11-04). No callback
+    /// runs at that point otherwise, so a test cannot reach it any other
+    /// way; the field does not exist outside `cfg(test)`.
+    #[cfg(test)]
+    before_claim: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl<K: StoreKey, V: StoreValue> Default for Store<K, V> {
@@ -340,6 +357,8 @@ impl<K: StoreKey, V: StoreValue> Store<K, V> {
             changed: Condvar::new(),
             stats: Mutex::new(StoreStats::default()),
             next_worker: AtomicU64::new(1),
+            #[cfg(test)]
+            before_claim: std::sync::OnceLock::new(),
         }
     }
 
@@ -511,15 +530,18 @@ impl<K: StoreKey, V: StoreValue> Store<K, V> {
                 if let Some(stop) = (ctl.stop)() {
                     return Err(stop.into());
                 }
-                // (a) What the current snapshot lacks: claim or join it.
-                let s = self.load();
-                let missing: Vec<&(K, V::Req)> = mine
-                    .iter()
-                    .copied()
-                    .filter(|(k, r)| !s.satisfies(k, r))
-                    .collect();
-                if missing.is_empty() {
-                    break;
+                // (a) What the current snapshot lacks: claim or join it. The
+                // snapshot is read UNDER the registry lock: every writer of
+                // the snapshot (publish, evict, tombstone) holds that lock,
+                // so the snapshot and the keys' states agree here. Read
+                // before the lock, a snapshot could predate a publication
+                // whose key is already `Published`, and the request claimed
+                // and filled that key again for nothing (a duplicate L4
+                // solve or fold; the same stale read made b41a3b01's
+                // witness fill fail).
+                #[cfg(test)]
+                if let Some(hook) = self.before_claim.get() {
+                    hook();
                 }
                 let mut claims = Claims {
                     store: self,
@@ -527,8 +549,18 @@ impl<K: StoreKey, V: StoreValue> Store<K, V> {
                     keys: Vec::new(),
                 };
                 let mut joined: Vec<K> = Vec::new();
+                let missing: Vec<&(K, V::Req)>;
                 {
                     let mut reg = self.registry();
+                    let s = self.load();
+                    missing = mine
+                        .iter()
+                        .copied()
+                        .filter(|(k, r)| !s.satisfies(k, r))
+                        .collect();
+                    if missing.is_empty() {
+                        break;
+                    }
                     for (k, _) in &missing {
                         let e = reg.entry(k.clone()).or_default();
                         match &e.state {
