@@ -724,6 +724,12 @@ fn run<W: Write + Send>(
                         PROGRESS_METHOD,
                         serde_json::json!({"id": id, "phase": phase}),
                     ));
+                    #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
+                    if let Some(super::test_hooks::Hook::SleepInPhase(p, ms)) = &shared.hook
+                        && p == phase
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(*ms));
+                    }
                 }
             };
             let cx = AskCx {

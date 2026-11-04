@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (MCP output wave 3c)
+
+- **`alsem_status` answers "is this current, and what is the engine doing?"** (plan 3c, S2).
+  Each engine gains a `freshness` block: the answering revision (`generation`, `inputsStamp`,
+  `engineInstanceId`, as every answer's envelope names it), the last build (`class`,
+  `startedAtUnixMs`, `durationMs`, `builds`, `discardedBuilds`), the freshness checks
+  (`freshHits`, `lastCheckUs`), `activity` (`idle`, `asking`, `pin`, `prepare`, `compute`,
+  `refresh`) with `activityMs`, `building` (true in the `pin` phase or a refresh; `null` after an
+  unwaited refresh until the next call), and the child's memory (`rssBytes`, `peakRssBytes`,
+  `rssSource`: `live` from `/proc/<pid>/status` on Linux, else the child's last report) with
+  `countersAgeMs`. The pool now asks every call's progress phases from the engine child (they
+  were sent only for a client's progress token) and reads the child's counters after a waited
+  `alsem_refresh`. The session stamps each build's start (`lastBuildStartedUnixMs`). A new
+  engine test hook, `sleep-in-phase:<phase>:<ms>`, lets a test watch a call mid-phase
+  (`mcp_server::faults::status_shows_a_build_in_progress`).
+
 ### Changed (MCP output wave 3a)
 
 - **3a: query reads the whole cone for writes beyond dependency entry points.** `alsem query

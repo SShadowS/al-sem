@@ -391,7 +391,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_status",
-            "The state of the server's engines: per workspace and universe, the engine child (pid, version, instance id), its counters, its last failure and its stderr tail; and the server's output folder. Starts nothing.",
+            "Is the engine's answer current, and what is it doing? Per workspace and universe, `freshness` gives the revision that answers (`generation`, which a rebuild raises, and `inputsStamp`, the hash of the inputs it was built from, the same `revision` every answer's envelope carries), the last build (`class`: cold, P package, S declaration, B body; `startedAtUnixMs`, `durationMs`), `building` (true while a call checks freshness or builds, or a refresh runs; null after an unwaited refresh until the next call), `activity` (idle, asking, pin, prepare, compute, refresh) and the engine child's memory (`rssBytes`, `peakRssBytes`, read live where the OS allows). Also the child (pid, version), its counters, its last failure and stderr tail, and the server's output folder. Starts nothing; answers at once, even while a call runs.",
             schema(
                 vec![
                     (

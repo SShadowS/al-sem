@@ -824,9 +824,121 @@ fn the_children_bound_ends_the_least_recently_used_idle_child() {
     assert!(s.finish().success());
 }
 
+/// MCP output plan 3c (S2): `alsem_status` answers the freshness questions
+/// per engine: the revision answering (its `generation` and `inputsStamp`,
+/// the same the last answer's envelope names), the last build (class, start,
+/// duration), whether a build runs now (idle here), and the child's memory,
+/// read live from `/proc` on Linux. After a waited `alsem_refresh` the
+/// status shows the refreshed counters, not the ones of the last call.
+///
+/// DISCRIMINATION (2026-11-05): dropping the `last_build_started_unix_ms`
+/// stamp in `build_locked` fails at "startedAtUnixMs"; publishing a waited
+/// refresh without reading the child's status (`publish(front, snapshot,
+/// false)`) fails at "builds after the refresh" (its fresh check is not
+/// counted); each restored, it passes.
+#[test]
+fn status_states_each_engines_freshness() {
+    let ws = ws_explain();
+    let mut s = Server::ready(&ws, None);
+    let before = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let st = s.call(1, "alsem_status", json!({}))["structuredContent"].clone();
+    assert_eq!(st["engines"], json!([]), "starts nothing: {st}");
+    let env = envelope(&s.call(
+        2,
+        "alsem_query_effects",
+        json!({"routine": "Archive", "deterministic": true}),
+    ));
+    let st = s.call(3, "alsem_status", json!({}))["structuredContent"].clone();
+    let f = &st["engines"][0]["freshness"];
+    assert_eq!(f["revision"]["generation"], 1, "{st}");
+    assert_eq!(
+        f["revision"]["inputsStamp"], env["revision"]["inputsStamp"],
+        "the revision the answer named: {st}"
+    );
+    assert!(
+        ["cold", "P", "S", "B"].contains(&f["lastBuild"]["class"].as_str().unwrap_or("")),
+        "{st}"
+    );
+    assert_eq!(f["lastBuild"]["builds"], 1, "{st}");
+    assert!(f["lastBuild"]["durationMs"].is_u64(), "{st}");
+    let started = f["lastBuild"]["startedAtUnixMs"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("startedAtUnixMs: {st}"));
+    assert!(started >= before, "started during this test: {st}");
+    assert_eq!(f["activity"], "idle", "{st}");
+    assert_eq!(f["building"], false, "{st}");
+    assert!(f["countersAgeMs"].is_u64(), "{st}");
+    if cfg!(target_os = "linux") {
+        assert_eq!(f["rssSource"], "live", "{st}");
+        assert!(f["rssBytes"].as_u64().unwrap() > 1 << 20, "{st}");
+        assert!(f["peakRssBytes"].as_u64() >= f["rssBytes"].as_u64(), "{st}");
+    }
+    // A waited refresh: the counters are read after it.
+    let r = s.call(4, "alsem_refresh", json!({"wait": true}));
+    assert_eq!(r["isError"], false, "{r}");
+    let st = s.call(5, "alsem_status", json!({}))["structuredContent"].clone();
+    let f = &st["engines"][0]["freshness"];
+    assert!(
+        f["countersAgeMs"].as_u64().is_some_and(|ms| ms < 60_000),
+        "{st}"
+    );
+    assert_eq!(f["revision"]["generation"], 1, "nothing changed: {st}");
+    assert_eq!(f["activity"], "idle", "{st}");
+    // A waited refresh with nothing changed checks freshness, builds nothing.
+    assert_eq!(
+        f["lastBuild"]["builds"], 1,
+        "builds after the refresh: {st}"
+    );
+    assert!(
+        f["checks"]["freshHits"].as_u64().is_some_and(|n| n >= 1),
+        "builds after the refresh: the refresh's freshness check is counted: {st}"
+    );
+    assert!(s.finish().success());
+}
+
 #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
 mod faults {
     use super::*;
+
+    /// MCP output plan 3c: while a call is in the engine's `pin` phase (its
+    /// freshness check and build) `alsem_status` says so (`activity: pin`,
+    /// `building: true`, the running tool named), and idle again after.
+    /// The child sleeps 3 s right after reporting `pin`.
+    ///
+    /// DISCRIMINATION (2026-11-05): not recording the child's phase in
+    /// `run_command` (the `on_phase` closure not storing it) fails at
+    /// "activity pin" (`asking`); restored, it passes.
+    #[test]
+    fn status_shows_a_build_in_progress() {
+        let ws = ws_explain();
+        let mut s = Server::ready(&ws, Some("sleep-in-phase:pin:3000"));
+        s.send(
+            json!(7),
+            "tools/call",
+            json!({"name": "alsem_query_effects", "arguments": {"routine": "Archive"}}),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        let st = s.call(8, "alsem_status", json!({}))["structuredContent"].clone();
+        let e = &st["engines"][0];
+        assert_eq!(e["running"], "alsem_query_effects", "{st}");
+        assert_eq!(e["freshness"]["activity"], "pin", "activity pin: {st}");
+        assert_eq!(e["freshness"]["building"], true, "{st}");
+        assert!(e["freshness"]["activityMs"].is_u64(), "{st}");
+        let r = s.response();
+        assert_eq!(r["id"], 7, "{r}");
+        let st = s.call(9, "alsem_status", json!({}))["structuredContent"].clone();
+        let f = &st["engines"][0]["freshness"];
+        assert_eq!(
+            (&f["activity"], &f["building"]),
+            (&json!("idle"), &json!(false)),
+            "{st}"
+        );
+        assert_eq!(f["revision"]["generation"], 1, "{st}");
+        assert!(s.finish().success());
+    }
 
     /// MCP cancellation (design §8, `notifications/cancelled`): a running
     /// call is sent `session/cancel` (the child stops it at its next phase)

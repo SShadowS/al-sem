@@ -105,6 +105,111 @@ struct Snapshot {
     stderr_tail: String,
     backoff_ms: u128,
     running_tool: Option<String>,
+    /// What the running call is doing (MCP output plan 3c): `asking` until
+    /// the child reports a phase, then the child's `pin` (freshness check
+    /// and, when the inputs changed, the build), `prepare`, `compute`; or
+    /// `refresh`. `None` when idle.
+    activity: Option<(&'static str, Instant)>,
+    /// When `child` (the child's `session/status`) was last read.
+    child_read_at: Option<Instant>,
+}
+
+/// A running command's bookkeeping: when it was queued, its cancel flag and
+/// the worker's published state (its `activity`).
+struct Running<'a> {
+    queued: Instant,
+    cancel: &'a AtomicBool,
+    snapshot: &'a Mutex<Snapshot>,
+}
+
+/// The child's phase name as [`Snapshot::activity`] keeps it.
+fn activity_name(phase: &str) -> &'static str {
+    match phase {
+        "pin" => "pin",
+        "prepare" => "prepare",
+        "compute" => "compute",
+        _ => "asking",
+    }
+}
+
+/// A process's resident set and its peak, in bytes, read now from
+/// `/proc/<pid>/status` (Linux); `None` elsewhere or when it is gone.
+fn live_rss(pid: u32) -> Option<(u64, u64)> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let s = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let kib = |key: &str| -> Option<u64> {
+        s.lines()
+            .find_map(|l| l.strip_prefix(key))
+            .and_then(|v| v.split_whitespace().next())
+            .and_then(|n| n.parse().ok())
+    };
+    Some((kib("VmRSS:")? * 1024, kib("VmHWM:")? * 1024))
+}
+
+/// `alsem_status`'s freshness block for one engine (MCP output plan 3c, S2):
+/// the revision that answers (`generation`, `inputsStamp`), the last build
+/// (class, start, duration), whether a build may be running now, and the
+/// child's memory (read live from the OS where it can be, else the child's
+/// own last report). `now` is passed in so a test can state it.
+fn freshness(s: &Snapshot, now: Instant) -> Value {
+    let child = s.child.as_ref();
+    let session = child.and_then(|c| c.session.as_ref());
+    let revision = child.and_then(|c| c.revision.as_ref()).map(|r| {
+        json!({
+            "generation": r.generation,
+            "inputsStamp": r.inputs_stamp,
+            "engineInstanceId": r.engine_instance_id,
+        })
+    });
+    let last_build = session.filter(|s| s["lastBuildMs"].is_u64()).map(|s| {
+        json!({
+            "class": s["lastBuildClass"],
+            "startedAtUnixMs": s["lastBuildStartedUnixMs"],
+            "durationMs": s["lastBuildMs"],
+            "builds": s["builds"],
+            "discardedBuilds": s["discardedBuilds"],
+        })
+    });
+    let (activity, since) = match s.activity {
+        Some((a, at)) => (
+            a,
+            Some(now.saturating_duration_since(at).as_millis() as u64),
+        ),
+        None => ("idle", None),
+    };
+    let pid = s.hello.as_ref().map(|h| h.pid);
+    let live = pid.and_then(live_rss);
+    let reported = child
+        .and_then(|c| c.memory.as_ref())
+        .and_then(|m| m["rssBytes"].as_u64());
+    // Freshness checks that found the revision current, and the last check's
+    // time: an ask or refresh with nothing changed builds nothing.
+    let checks = session.map(|s| {
+        json!({
+            "freshHits": s["freshHits"],
+            "lastCheckUs": s["lastCheckUs"],
+        })
+    });
+    json!({
+        "revision": revision,
+        "lastBuild": last_build,
+        "checks": checks,
+        "activity": activity,
+        "activityMs": since,
+        // `null`: an unwaited refresh started a build the child runs on its
+        // own; the next call (or a waited refresh) settles it.
+        "building": match activity {
+            "pin" | "refresh" => json!(true),
+            "refresh-started" => Value::Null,
+            _ => json!(false),
+        },
+        "rssBytes": live.map(|l| l.0).or(reported),
+        "peakRssBytes": live.map(|l| l.1),
+        "rssSource": if live.is_some() { "live" } else if reported.is_some() { "lastStatus" } else { "none" },
+        "countersAgeMs": s.child_read_at.map(|at| now.saturating_duration_since(at).as_millis() as u64),
+    })
 }
 
 /// A queued job.
@@ -437,6 +542,7 @@ impl Pool {
                     "queued": w.pending.load(Ordering::SeqCst),
                     "running": s.running_tool,
                     "started": s.started,
+                    "freshness": freshness(&s, Instant::now()),
                     "engine": s.hello.as_ref().map(|h| json!({
                         "pid": h.pid,
                         "engineInstanceId": h.engine_instance_id,
@@ -582,7 +688,11 @@ fn work(
                 queued,
                 cancel,
             } => {
-                snapshot.lock().expect("snapshot").running_tool = Some(call.tool.to_string());
+                {
+                    let mut s = snapshot.lock().expect("snapshot");
+                    s.running_tool = Some(call.tool.to_string());
+                    s.activity = Some(("asking", Instant::now()));
+                }
                 let frame = match front.as_mut() {
                     Some(front) => run_command(
                         shared,
@@ -590,8 +700,11 @@ fn work(
                         &id,
                         &call,
                         progress.as_ref(),
-                        queued,
-                        &cancel,
+                        Running {
+                            queued,
+                            cancel: &cancel,
+                            snapshot,
+                        },
                     ),
                     None => encode_or_log(&shared.transport.response(
                         &id,
@@ -607,6 +720,10 @@ fn work(
                 };
                 if let Some(front) = front.as_mut() {
                     publish(front, snapshot, true);
+                } else {
+                    let mut s = snapshot.lock().expect("snapshot");
+                    s.running_tool = None;
+                    s.activity = None;
                 }
                 pending.fetch_sub(1, Ordering::SeqCst);
                 if cancel.load(Ordering::SeqCst) {
@@ -620,21 +737,42 @@ fn work(
                 // `session/refresh {wait}` (design §8.2): a failed front end
                 // is reset first, then the child brings its revision up to
                 // date with the disk (with `wait`, before answering).
+                {
+                    let mut s = snapshot.lock().expect("snapshot");
+                    s.running_tool = Some("alsem_refresh".to_string());
+                    s.activity = Some(("refresh", Instant::now()));
+                }
                 let (outcome, is_error) = match front.as_mut() {
                     Some(front) => {
                         front.reset();
                         let r = front.refresh(call.wait);
-                        publish(front, snapshot, false);
+                        // After a waited refresh the child is idle, so its
+                        // counters (the new revision, the build's timing) are
+                        // read for `alsem_status`; an unwaited one is still
+                        // building, and its status would wait for the build.
+                        publish(front, snapshot, call.wait);
+                        if !call.wait && r.is_ok() {
+                            // The child builds after answering: until the next
+                            // call, nobody knows whether it still is.
+                            snapshot.lock().expect("snapshot").activity =
+                                Some(("refresh-started", Instant::now()));
+                        }
                         match r {
                             Ok(v) if v.get("error").is_none() => (v, false),
                             Ok(v) => (v, true),
                             Err(e) => (json!({"error": e}), true),
                         }
                     }
-                    None => (
-                        json!({"error": "the engine front end could not be created"}),
-                        true,
-                    ),
+                    None => {
+                        let mut s = snapshot.lock().expect("snapshot");
+                        s.running_tool = None;
+                        s.activity = None;
+                        drop(s);
+                        (
+                            json!({"error": "the engine front end could not be created"}),
+                            true,
+                        )
+                    }
                 };
                 let body = json!({
                     "kind": "refresh",
@@ -684,8 +822,10 @@ fn publish(front: &mut EngineFront, snapshot: &Mutex<Snapshot>, ask_status: bool
     s.started = true;
     s.hello = front.hello().cloned();
     if child.is_some() || s.hello.is_none() {
+        s.child_read_at = child.as_ref().map(|_| Instant::now());
         s.child = child;
     }
+    s.activity = None;
     s.spawns = stats.spawns;
     s.deaths = stats.deaths;
     s.retired = stats.retired;
@@ -804,9 +944,13 @@ fn run_command(
     id: &Value,
     call: &CommandCall,
     progress: Option<&Value>,
-    queued: Instant,
-    cancel: &AtomicBool,
+    job: Running<'_>,
 ) -> Vec<u8> {
+    let Running {
+        queued,
+        cancel,
+        snapshot,
+    } = job;
     let queued_ms = queued.elapsed().as_millis();
     let notify = |p: u32, message: &str| {
         if let Some(token) = progress {
@@ -816,10 +960,18 @@ fn run_command(
     notify(0, &format!("{}: asking the engine", call.tool));
     let decisions = shared.decide.decide(&call.argv, call.diff_text.as_deref());
     let started = Instant::now();
-    // A client cancellation becomes `session/cancel` for this ask.
+    // A client cancellation becomes `session/cancel` for this ask; each phase
+    // the child reports is what `alsem_status` says the engine is doing
+    // (MCP output plan 3c).
+    let mut on_phase = |p: &Value| {
+        if let Some(phase) = p.get("phase").and_then(Value::as_str) {
+            snapshot.lock().expect("snapshot").activity =
+                Some((activity_name(phase), Instant::now()));
+        }
+    };
     let mut watch = crate::engine::host::front::Watch {
         cancel: Some(cancel),
-        progress: None,
+        progress: Some(&mut on_phase),
     };
     let params = AskParams {
         argv: call.argv.clone(),
@@ -833,6 +985,7 @@ fn run_command(
             }
             tools::Freshness::Verify => crate::engine::resident::session::Freshness::Verify,
         },
+        progress: true,
         ..AskParams::default()
     };
     let answer = front.ask_with(params, &mut watch);
