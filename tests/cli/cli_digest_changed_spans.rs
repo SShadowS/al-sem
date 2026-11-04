@@ -1880,8 +1880,8 @@ fn declaration_only_procedures_are_roots() {
         "(a) {doc}"
     );
     assert!(diags(&doc).is_empty(), "(a) {doc}");
-    // (f) the additive keys shipped in digest 1.5.0 (current: 2.0.0, lines 1-based).
-    assert_eq!(doc["schemaVersion"], "2.0.0");
+    // (f) the additive keys shipped in digest 1.5.0 (current: 2.1.0).
+    assert_eq!(doc["schemaVersion"], "2.1.0");
 
     // (b) `--file` on IFoo: both methods.
     let (doc, code) = digest(ws, &["--file", "src/IFoo.Interface.al"], None);
@@ -2062,7 +2062,7 @@ fn entry_anchor_is_the_declaration() {
     )
     .expect("prove runs");
     let p: Value = serde_json::from_str(&prove.json_text).unwrap();
-    assert_eq!(p["schemaVersion"], "2.0.0");
+    assert_eq!(p["schemaVersion"], "2.1.0");
     let a = &p["payload"]["routine"]["anchor"];
     assert_eq!(
         (

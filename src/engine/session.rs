@@ -2171,7 +2171,7 @@ mod tests {
             sb.entries.iter().flat_map(|e| &e.effects).any(|e| {
                 e.detail
                     .iter()
-                    .any(|(k, v)| k == "boundary" && v == "XRec.Fill")
+                    .any(|(k, v)| k == "boundary" && v == "Codeunit Dep Rec Lib::Fill")
                     && crate::engine::l5::digest::is_known_temp_state(e.temp_state.as_ref())
             }),
             "precondition: FillAndPost's standalone effects carry the proof-witnessed Fill insert"

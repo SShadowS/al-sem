@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (MCP output plan 1d: boundary groups)
+
+- **A dependency boundary group names its boundary owner-qualified, lists every resource, and
+  claims no unresolved resource it cannot have** (plan item 1d; review B2, D4, P2). Digest and
+  prove printed `<App>.<Routine>` (`Base Application.OnRun` for both Reminder-Issue and
+  Sales-Calc. Discount); now `Codeunit Reminder-Issue::OnRun`, as `query` names a routine. The
+  JSON gains `resources[]` ({id, display}, every resource in resource-id order;
+  `detail.resourceCount` is its length) beside `detail.resources`, which still names the first
+  ten, so "Issued Reminder Header" is never lost by omission. `unresolvedResources` counts only
+  database writes (every COMMIT, UI, ERROR, HTTP, FILE or background group claimed one), and such
+  a resource-less group no longer states `resourceCount: "0"` / `resources: ""`. Digest schema
+  2.1.0, prove 2.1.0. Fact ids and canonical keys are unchanged.
+
 ### Changed (MCP output plan 1c: one copy of each answer)
 
 - **An MCP answer carries its stdout once in what the client reads** (plan item 1c; review P3,

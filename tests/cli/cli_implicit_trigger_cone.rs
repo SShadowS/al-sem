@@ -1043,7 +1043,7 @@ fn write_cross_app_workspace(dir: &Path) {
 /// "Dep Log") reports the `DB_INSERT` on "Dep Log". Since #160 step 6 rule B
 /// (spec §14.3.5) the trigger fires into dependency code, so the insert is
 /// the `DB_INSERT` group of that boundary: its identity is the firing
-/// Validate (evidence 6:8), it enters `Dep96.OnValidate`, lists "Dep Log",
+/// Validate (evidence 6:8), it enters `Table Dep Trig::OnValidate`, lists "Dep Log",
 /// has the empty via path (the root's own operation is the boundary) and is
 /// `unknown`. Precondition (true today): cross-app L4 `query effects` already
 /// has that insert via implicit-trigger, and the fixture line is where the
@@ -1101,7 +1101,7 @@ fn a6_dependency_trigger_reaches_the_workspace_caller() {
         })
         .collect();
     let want = vec![serde_json::json!({
-        "detail": {"boundary": "Dep96.OnValidate", "resourceCount": "1", "resources": "Dep Log"},
+        "detail": {"boundary": "Table Dep Trig::OnValidate", "resourceCount": "1", "resources": "Dep Log"},
         // Row 6, column 8 (the fixture check above): line 7 in the 1-based document.
         "evidence": [7, 8],
         "viaPaths": [[]],

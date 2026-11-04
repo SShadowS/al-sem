@@ -305,3 +305,44 @@ fn cdo_every_answer_fits_the_client_limit() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Item T, boundary groups on CDO (plan 1d; catches B2, D4, P2): in every
+/// routine's digest JSON and prove JSON, each group names its boundary
+/// owner-qualified, `resourceCount` equals `resources[]`'s length, and no
+/// resource-less group (a COMMIT, an error) claims resources or an unresolved
+/// one. The same checks as `output_invariants::group_failures`, whose
+/// fixture test carries the discrimination proofs.
+#[test]
+fn cdo_boundary_groups_name_their_owner_and_every_resource() {
+    let Some(a) = cdo_answers() else { return };
+    let mut failures = Vec::new();
+    let mut groups = 0;
+    for (key, ans) in &a.answers {
+        let doc: Value = match key.as_str() {
+            k if k.ends_with("digest json") || k.contains("prove") && k.ends_with(" json") => {
+                serde_json::from_str(&ans.stdout).unwrap()
+            }
+            _ => continue,
+        };
+        let effects: Vec<Value> = match doc["payload"]["entries"].as_array() {
+            Some(entries) => entries
+                .iter()
+                .flat_map(|e| e["effects"].as_array().cloned().unwrap_or_default())
+                .collect(),
+            None => doc["payload"]["result"]["evidence"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default(),
+        };
+        groups += effects
+            .iter()
+            .filter(|e| e["detail"]["boundary"].is_string())
+            .count();
+        failures.extend(crate::output_invariants::group_failures(key, &effects));
+    }
+    assert!(
+        groups >= 50,
+        "precondition: CDO's boundary groups ({groups})"
+    );
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

@@ -14,14 +14,11 @@
           "conditionality": "unknown",
           "confidence": "static",
           "detail": {
-            "boundary": "Out Base.OnRun",
-            "resourceCount": "0",
-            "resources": "",
-            "unresolvedResources": "1"
+            "boundary": "Codeunit Base Poster::OnRun"
           },
           "evidence": {
             "column": 8,
-            "excerpt": "enters Out Base.OnRun",
+            "excerpt": "enters Codeunit Base Poster::OnRun",
             "file": "ws:src/OutIssueDocument.Codeunit.al",
             "line": 15,
             "sourceKind": "source"
@@ -68,5 +65,5 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "2.0.0"
+  "schemaVersion": "2.1.0"
 }

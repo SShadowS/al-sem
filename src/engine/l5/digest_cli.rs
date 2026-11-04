@@ -1863,6 +1863,17 @@ pub fn effect_to_value(eff: &DigestEffectFull) -> serde_json::Value {
         detail_obj.insert(k.clone(), v.clone().into());
     }
     m.insert("detail".into(), serde_json::Value::Object(detail_obj));
+    // MCP output plan 1d (D4): a boundary group's EVERY resource, in resource-id
+    // order (`detail.resources` names the first ten); `detail.resourceCount`
+    // equals its length.
+    if !eff.group_resources.is_empty() {
+        let all: Vec<serde_json::Value> = eff
+            .group_resources
+            .iter()
+            .map(|(id, display)| serde_json::json!({"id": id, "display": display}))
+            .collect();
+        m.insert("resources".into(), serde_json::Value::Array(all));
+    }
 
     m.insert("provenance".into(), eff.provenance.into());
     m.insert("evidence".into(), anchor_to_value(&eff.evidence));
@@ -2297,7 +2308,14 @@ pub fn project_digest_document(
     // 2.0.0 (MCP output plan 1a): every `line` (evidence, routine anchors,
     // via-path hops, unresolved call sites, test coverage) is 1-based, and
     // `payload.lineBase: 1` says so. Major: a value's meaning changed.
-    env.insert("schemaVersion".into(), "2.0.0".into());
+    // 2.1.0 (MCP output plan 1d): a boundary group names its boundary
+    // owner-qualified (`Codeunit X::OnRun`, was `<App>.OnRun`) and lists every
+    // resource as `resources[]` ({id, display}; `detail.resourceCount` is its
+    // length, `detail.resources` still the first ten); `unresolvedResources`
+    // counts only DB writes, and a group of a type with no resources (COMMIT,
+    // UI, ERROR, HTTP, FILE, BACKGROUND, ...) states no `resourceCount` /
+    // `resources` (they were always "0" / "").
+    env.insert("schemaVersion".into(), "2.1.0".into());
 
     // The block goes in after the null drop, so its `ratio: null` survives; the
     // keep-nulls sort then orders it (and the payload key it lands in).

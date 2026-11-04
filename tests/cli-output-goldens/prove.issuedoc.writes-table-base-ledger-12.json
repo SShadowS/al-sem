@@ -14,13 +14,13 @@
           "conditionality": "unknown",
           "confidence": "static",
           "detail": {
-            "boundary": "Out Base.OnRun",
+            "boundary": "Codeunit Base Poster::OnRun",
             "resourceCount": "12",
             "resources": "Base Ledger 01, Base Ledger 02, Base Ledger 03, Base Ledger 04, Base Ledger 05, Base Ledger 06, Base Ledger 07, Base Ledger 08, Base Ledger 09, Base Ledger 10"
           },
           "evidence": {
             "column": 8,
-            "excerpt": "enters Out Base.OnRun",
+            "excerpt": "enters Codeunit Base Poster::OnRun",
             "file": "ws:src/OutIssueDocument.Codeunit.al",
             "line": 15,
             "sourceKind": "source"
@@ -38,6 +38,56 @@
             "COMMIT_REACHABLE"
           ],
           "provenance": "transitive",
+          "resources": [
+            {
+              "display": "Base Ledger 01",
+              "id": "d0d00001-0000-4000-8000-0000000000b1/table/70001"
+            },
+            {
+              "display": "Base Ledger 02",
+              "id": "d0d00001-0000-4000-8000-0000000000b1/table/70002"
+            },
+            {
+              "display": "Base Ledger 03",
+              "id": "d0d00001-0000-4000-8000-0000000000b1/table/70003"
+            },
+            {
+              "display": "Base Ledger 04",
+              "id": "d0d00001-0000-4000-8000-0000000000b1/table/70004"
+            },
+            {
+              "display": "Base Ledger 05",
+              "id": "d0d00001-0000-4000-8000-0000000000b1/table/70005"
+            },
+            {
+              "display": "Base Ledger 06",
+              "id": "d0d00001-0000-4000-8000-0000000000b1/table/70006"
+            },
+            {
+              "display": "Base Ledger 07",
+              "id": "d0d00001-0000-4000-8000-0000000000b1/table/70007"
+            },
+            {
+              "display": "Base Ledger 08",
+              "id": "d0d00001-0000-4000-8000-0000000000b1/table/70008"
+            },
+            {
+              "display": "Base Ledger 09",
+              "id": "d0d00001-0000-4000-8000-0000000000b1/table/70009"
+            },
+            {
+              "display": "Base Ledger 10",
+              "id": "d0d00001-0000-4000-8000-0000000000b1/table/70010"
+            },
+            {
+              "display": "Base Ledger 11",
+              "id": "d0d00001-0000-4000-8000-0000000000b1/table/70011"
+            },
+            {
+              "display": "Base Ledger 12",
+              "id": "d0d00001-0000-4000-8000-0000000000b1/table/70012"
+            }
+          ],
           "scopedGuarantees": [
             {
               "interveningBoundary": "none",
@@ -75,5 +125,5 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "2.0.0"
+  "schemaVersion": "2.1.0"
 }

@@ -106,7 +106,7 @@ fn b4_rule_b_is_off_on_the_cut() {
     let view = digest_view(tmp.path(), &["CallWrite"]);
     assert_eq!(
         shape(effects_of(&view, "CallWrite")),
-        vec!["DB_MODIFY XRec.Write Customer"],
+        vec!["DB_MODIFY Codeunit Dep Rec Lib::Write Customer"],
         "the tree groups"
     );
     let model = view.model();
@@ -208,7 +208,11 @@ fn b6_a_primary_carrier_behind_dependency_code_is_in_the_group() {
         .into_iter()
         .filter(|s| s.starts_with("DB_INSERT"))
         .collect();
-    assert_eq!(inserts, vec!["DB_INSERT XRec.Raise Ws Log"], "{effects:?}");
+    assert_eq!(
+        inserts,
+        vec!["DB_INSERT Codeunit Dep Rec Lib::Raise Ws Log"],
+        "{effects:?}"
+    );
 }
 
 /// B7: conservative ordering (A2-03). `WriteThenCommit` inserts into `Ws
@@ -224,7 +228,11 @@ fn b7_a_boundary_commit_carries_no_must_label() {
     let effects = effects_of(&view, "WriteThenCommit");
     assert_eq!(
         shape(effects),
-        vec!["COMMIT XRec.MaybeCommit ", "DB_INSERT - Ws Log"],
+        // A COMMIT group states no resources (MCP output plan 1d).
+        vec![
+            "COMMIT Codeunit Dep Rec Lib::MaybeCommit -",
+            "DB_INSERT - Ws Log"
+        ],
         "precondition: the own write and the commit group: {effects:?}"
     );
     let commit = effects
@@ -310,7 +318,10 @@ fn b8_proofs_are_cut_at_the_boundary_and_keep_their_class() {
     got.sort();
     assert_eq!(
         got,
-        vec![("XRec.Fill", true, 0), ("XRec.Post", false, 0)],
+        vec![
+            ("Codeunit Dep Rec Lib::Fill", true, 0),
+            ("Codeunit Dep Rec Lib::Post", false, 0),
+        ],
         "{effects:?}"
     );
     assert!(effects.iter().all(|e| e.boundary_group));
@@ -405,9 +416,9 @@ fn an_event_boundary_group_is_in_the_may_relations() {
     assert_eq!(http.len(), 1, "precondition: one HTTP effect: {effects:?}");
     let g = http[0];
     assert!(g.boundary_group, "precondition: a group: {g:?}");
-    // `tree_of` passes no app names, so the app shows as its id.
+    // Owner-qualified (MCP output plan 1d).
     assert!(
-        detail(g, "boundary").is_some_and(|b| b.ends_with(".DoHttp")),
+        detail(g, "boundary").is_some_and(|b| b.ends_with("::DoHttp")),
         "precondition: {g:?}"
     );
     assert!(

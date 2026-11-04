@@ -69,14 +69,16 @@ fn type_verbs(ty: &str) -> Vec<&'static str> {
 /// entered by a `Run`, `Insert`, ... call).
 fn last_segment(display: &str) -> String {
     let head = display.split('(').next().unwrap_or(display);
+    // `Obj.Routine` and the owner-qualified `Codeunit X::Routine` (plan 1d).
     let seg = head
-        .rsplit('.')
+        .rsplit(['.', ':'])
         .next()
         .unwrap_or(head)
         .trim()
         .to_lowercase();
+    let qualified = display.contains('.') || display.contains("::");
     match seg.strip_prefix("on") {
-        Some(rest) if !rest.is_empty() && display.contains('.') => rest.to_string(),
+        Some(rest) if !rest.is_empty() && qualified => rest.to_string(),
         _ => seg,
     }
 }
@@ -524,10 +526,8 @@ fn digest_summary_through_mcp_on_the_fixture() {
     assert_eq!(t["dependency"], 15, "{summary}");
     assert_eq!(r["temporaryTablesWritten"], 2, "{summary}");
     assert_eq!(r["commits"], 1, "{summary}");
-    assert!(
-        r["boundariesEntered"]["count"].as_u64() >= Some(1),
-        "{summary}"
-    );
+    // Two dependency `OnRun`s, told apart since plan 1d qualifies the name.
+    assert_eq!(r["boundariesEntered"]["count"], 2, "{summary}");
     let u = &r["unresolved"];
     assert_eq!(
         (u["total"].as_u64(), u["inWorkspace"].as_u64()),
@@ -594,4 +594,104 @@ fn one_copy_of_each_answer() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     assert!(s.finish().success());
+}
+
+/// Every boundary-group failure in one digest or prove JSON document (plan 1d's
+/// invariants, item T rows 1 and 3): the boundary is owner-qualified (`::`);
+/// `resourceCount` equals the length of `resources[]`, which a resource-less
+/// type (COMMIT, UI, ERROR, HTTP, FILE, BACKGROUND) does not state at all;
+/// `unresolvedResources` appears only on a `DB_*` group.
+pub(crate) fn group_failures(label: &str, effects: &[Value]) -> Vec<String> {
+    let mut f = Vec::new();
+    for e in effects {
+        let d = &e["detail"];
+        let Some(boundary) = d["boundary"].as_str() else {
+            continue;
+        };
+        let ty = e["type"].as_str().unwrap_or("");
+        if !boundary.contains("::") {
+            f.push(format!(
+                "{label}: {ty} boundary {boundary:?} names no owner"
+            ));
+        }
+        let has_resources = ty.starts_with("DB_") || ty == "EVENT_PUBLISH";
+        match (has_resources, d.get("resourceCount")) {
+            (true, Some(c)) => {
+                let n = e["resources"].as_array().map_or(0, Vec::len);
+                if c.as_str() != Some(n.to_string().as_str()) {
+                    f.push(format!(
+                        "{label}: {ty} resourceCount {c} != resources[] {n}"
+                    ));
+                }
+            }
+            (true, None) => f.push(format!("{label}: {ty} group states no resourceCount")),
+            (false, _) => {
+                if d.get("resourceCount").is_some() || d.get("resources").is_some() {
+                    f.push(format!("{label}: {ty} has no resources to state: {d}"));
+                }
+            }
+        }
+        if d.get("unresolvedResources").is_some() && !ty.starts_with("DB_") {
+            f.push(format!("{label}: unresolvedResources on {ty}"));
+        }
+    }
+    f
+}
+
+/// Item T, boundary groups (plan 1d; catches B2, D4, P2): in the fixture's digest
+/// and in prove's `writes-table` evidence, every group names its boundary
+/// owner-qualified, lists every resource (`Base Ledger 12`, the eleventh of a
+/// twelve-table group, is in `resources[]`), and claims no unresolved resource
+/// on a commit.
+///
+/// Discrimination (2026-11-04): restoring `<App>.<Routine>` in
+/// `boundary_terminal` fails at "names no owner"; cutting `resources[]` at ten in
+/// `effect_to_value` fails at "resourceCount 12 != resources[] 10"; counting
+/// resource-less facts again fails at "unresolvedResources on COMMIT"; each
+/// passes restored.
+#[test]
+fn boundary_groups_name_their_owner_and_every_resource() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let mut failures = Vec::new();
+    let (out, _, _) = run_alsem(&["digest", &ws, "--routine", ISSUE_DOC, "--format", "json"]);
+    let doc: Value = serde_json::from_str(&out).unwrap();
+    let effects = doc["payload"]["entries"][0]["effects"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(
+        effects
+            .iter()
+            .filter(|e| e["detail"]["boundary"].is_string())
+            .count()
+            >= 5,
+        "precondition: the fixture's groups: {doc}"
+    );
+    failures.extend(group_failures("digest", &effects));
+    let twelve = effects
+        .iter()
+        .find(|e| e["detail"]["resourceCount"] == "12")
+        .expect("precondition: the twelve-table group");
+    if !twelve["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|r| r["display"] == "Base Ledger 12")
+    {
+        failures.push(format!("Base Ledger 12 not listed: {twelve}"));
+    }
+    let (out, _, _) = run_alsem(&[
+        "prove",
+        &ws,
+        ISSUE_DOC,
+        "writes-table:Base Ledger 12",
+        "--format",
+        "json",
+    ]);
+    let p: Value = serde_json::from_str(&out).unwrap();
+    failures.extend(group_failures(
+        "prove",
+        p["payload"]["result"]["evidence"].as_array().unwrap(),
+    ));
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

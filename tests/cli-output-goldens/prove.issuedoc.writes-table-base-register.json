@@ -14,13 +14,13 @@
           "conditionality": "unknown",
           "confidence": "static",
           "detail": {
-            "boundary": "Out Base.OnRun",
+            "boundary": "Codeunit Base Poster::OnRun",
             "resourceCount": "1",
             "resources": "Base Register"
           },
           "evidence": {
             "column": 8,
-            "excerpt": "enters Out Base.OnRun",
+            "excerpt": "enters Codeunit Base Poster::OnRun",
             "file": "ws:src/OutIssueDocument.Codeunit.al",
             "line": 15,
             "sourceKind": "source"
@@ -38,6 +38,12 @@
             "COMMIT_REACHABLE"
           ],
           "provenance": "transitive",
+          "resources": [
+            {
+              "display": "Base Register",
+              "id": "d0d00001-0000-4000-8000-0000000000b1/table/70020"
+            }
+          ],
           "scopedGuarantees": [
             {
               "interveningBoundary": "none",
@@ -75,5 +81,5 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "2.0.0"
+  "schemaVersion": "2.1.0"
 }

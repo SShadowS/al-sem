@@ -6,7 +6,7 @@
           {
             "anchor": {
               "column": 8,
-              "excerpt": "enters Out Base.OnRun",
+              "excerpt": "enters Codeunit Base Poster::OnRun",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 15,
               "sourceKind": "source"
@@ -34,7 +34,7 @@
           {
             "anchor": {
               "column": 8,
-              "excerpt": "enters Out Base.OnRun",
+              "excerpt": "enters Codeunit Base Poster::OnRun",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 15,
               "sourceKind": "source"
@@ -50,7 +50,7 @@
           {
             "anchor": {
               "column": 8,
-              "excerpt": "enters Out Base.OnRun",
+              "excerpt": "enters Codeunit Base Poster::OnRun",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 15,
               "sourceKind": "source"
@@ -87,7 +87,7 @@
           {
             "anchor": {
               "column": 8,
-              "excerpt": "enters Out Base.OnRun",
+              "excerpt": "enters Codeunit Base Poster::OnRun",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 15,
               "sourceKind": "source"
@@ -103,7 +103,7 @@
           {
             "anchor": {
               "column": 8,
-              "excerpt": "enters Out Base.OnRun",
+              "excerpt": "enters Codeunit Base Poster::OnRun",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 15,
               "sourceKind": "source"
@@ -158,7 +158,7 @@
           {
             "anchor": {
               "column": 8,
-              "excerpt": "enters Out Base.OnRun",
+              "excerpt": "enters Codeunit Base Poster::OnRun",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 15,
               "sourceKind": "source"
@@ -174,7 +174,7 @@
           {
             "anchor": {
               "column": 8,
-              "excerpt": "enters Out Base.OnRun",
+              "excerpt": "enters Codeunit Base Calc::OnRun",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 16,
               "sourceKind": "source"
@@ -215,7 +215,7 @@
         {
           "anchor": {
             "column": 8,
-            "excerpt": "enters Out Base.OnRun",
+            "excerpt": "enters Codeunit Base Poster::OnRun",
             "file": "ws:src/OutIssueDocument.Codeunit.al",
             "line": 15,
             "sourceKind": "source"

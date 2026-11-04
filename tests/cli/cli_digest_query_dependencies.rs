@@ -172,7 +172,7 @@ fn symbol_only_dependency_table_resolves_and_is_selectable() {
     // digest, default (cross-app).
     let (doc, code) = json(&["digest", &ws, "--file", "src/Work.al"]);
     assert_eq!(code, 0, "{doc}");
-    assert_eq!(doc["schemaVersion"], "2.0.0");
+    assert_eq!(doc["schemaVersion"], "2.1.0");
     assert_eq!(doc["payload"]["dependencies"]["mode"], "crossApp");
     assert_eq!(
         app_sources(&doc),
@@ -611,7 +611,7 @@ fn effects_of(doc: &Value, routine: &str) -> Vec<GroupView> {
 /// T1 (#161, digest half; spec §14.3.5 item 7): on #161's fixture (`Inner`
 /// does `Cust.Modify()` and commits), cross-app `digest --routine CallChain`
 /// reports `DB_MODIFY` and `COMMIT` as two groups through the call into the
-/// dependency's `Outer` (`enters XBase.Outer`, the root's own call, so the via
+/// dependency's `Outer` (`enters Codeunit Dep Lib::Outer`, the root's own call, so the via
 /// path is empty), Customer (18) in the `DB_MODIFY` group's resources, both
 /// `conditionality: unknown`; the two groups have distinct fact ids.
 ///
@@ -634,7 +634,8 @@ fn t1_call_chain_reports_the_dependency_modify_and_commit_as_groups() {
     let group = |ty: &str, count: &str, resources: &str| -> GroupView {
         (
             ty.to_string(),
-            "XBase.Outer".to_string(),
+            // Owner-qualified since digest 2.1.0 (MCP output plan 1d).
+            "Codeunit Dep Lib::Outer".to_string(),
             count.to_string(),
             resources.to_string(),
             "unknown".to_string(),
@@ -645,7 +646,8 @@ fn t1_call_chain_reports_the_dependency_modify_and_commit_as_groups() {
     assert_eq!(
         effects_of(&doc, "CallChain"),
         vec![
-            group("COMMIT", "0", ""),
+            // A COMMIT has no resources: no resourceCount/resources (1d).
+            group("COMMIT", "", ""),
             group("DB_MODIFY", "1", "Customer"),
         ],
         "{doc}"

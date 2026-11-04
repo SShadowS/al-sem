@@ -1256,7 +1256,8 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     // 1.4.0: effects' `detail.tempState` is digest's per-operation, class-
     // filtered join (#69 D4).
     // 2.0.0 (MCP output plan 1a): every `line` is 1-based (`lineBase: 1`).
-    env.insert("schemaVersion".into(), "2.0.0".into());
+    // 2.1.0 (plan 1d): evidence effects carry digest 2.1.0's group fields.
+    env.insert("schemaVersion".into(), "2.1.0".into());
 
     serialize_document_value(serde_json::Value::Object(env))
 }
