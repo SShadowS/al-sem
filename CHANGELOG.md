@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (the context-server store refilled a key that was already published)
+
+- **`Store::ensure_prepared` no longer fills a published key a second time.** A request read
+  the published snapshot BEFORE it took the registry lock, then claimed every key that
+  snapshot lacked. A key another request published in between was `Published` in the
+  registry (so nothing to join) but missing from the stale snapshot, so the request claimed
+  it and filled it again: a duplicate L4 solve or fold for nothing, and the same stale read
+  behind b41a3b01's witness failure. Now the snapshot is read under the registry lock. Every
+  writer of the snapshot (publish, evict, tombstone) holds that lock, so there a `Published`
+  key is always in the snapshot read. Test:
+  `a_request_never_claims_a_key_published_after_it_read_the_snapshot`: a test-only hook
+  (`Store::before_claim`, absent outside `cfg(test)`) holds request 1 at the top of its claim
+  section while request 2 fills and publishes `X`; request 1 must fill nothing. The window is
+  between two of the store's own statements with no callback in it, so only a hook can hold a
+  request there. Discrimination: the snapshot read moved back above the hook fails it (2
+  fills of `X`); reverted, it passes. `a_request_publishes_its_claims_before_it_waits_for_a_joined_key`
+  now asserts `X` is filled once (it allowed two): under the break it fails 6 of 60 runs; with
+  the fix 0 of 200. Stress: 200 runs of the `engine::resident` tests with every core busy
+  (22 busy loops, machine load average ~150): 200 passed, none hung.
+- **Checked, not changed: the `TreeBase` fill builds a fresh `big_stack_pool()` each time.**
+  Building the 22-worker pool costs ~0.9 ms against a ~1.5 s `tree.base` on CDO (~0.06%),
+  and a dropped pool's threads end within 50 ms, so an idle engine holds none. A
+  process-wide pool would keep 22 big-stack threads for the process's life for a saving
+  below the noise. The reason is now written on `big_stack_pool`.
+
 ### Changed (#368: `analyze --with-evidence` and `policy check` lines are 1-based)
 
 The rest of the engine-query surface became 1-based with `lineBase: 1` in wave 1a; these two

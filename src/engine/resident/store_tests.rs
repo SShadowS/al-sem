@@ -371,10 +371,101 @@ fn a_request_publishes_its_claims_before_it_waits_for_a_joined_key() {
             "both requests read the published X"
         );
     });
-    // `X` may be filled twice: request 2 can read the snapshot just before
-    // request 1 publishes `X` and claim it again (a redundant refill, not
-    // this test's subject).
+    // Until 2026-11-04 `X` could be filled twice here (request 2 read the
+    // snapshot just before request 1 published `X`, then claimed it); a
+    // request now reads the snapshot under the registry lock, so it either
+    // joins request 1's fill or sees the published `X`.
     assert_eq!(y_fills.load(Ordering::SeqCst), 1, "Y filled once, by C");
+    assert_eq!(store.stats().fills, 2, "X filled once, Y once");
+}
+
+/// A request judges what it lacks against the snapshot it reads under the
+/// registry lock, so it never claims a key that is already published.
+/// Request 1 needs `X` and is held (the store's test hook) at the top of
+/// its claim section, before the registry lock; request 2 then fills and
+/// publishes `X`; request 1 goes on, finds `X` published and fills nothing.
+///
+/// Before 2026-11-04 request 1 read the snapshot BEFORE the hook's point
+/// (before the lock): the stale snapshot lacked `X`, the registry said
+/// `Published` (not `Filling`, so nothing to join), and request 1 claimed
+/// `X` and filled it a second time: a duplicate L4 solve or fold in the
+/// real store, and the stale read behind b41a3b01's witness failure. The
+/// interleaving is a window between two of the store's own statements with
+/// no callback in it, so only the hook can hold a request there.
+///
+/// DISCRIMINATION (break with Edit, run, revert, run; 2026-11-04): the
+/// snapshot read (`let s = self.load();` and `missing`) moved back above
+/// the hook, outside the registry lock, fails "X filled once" (2 fills);
+/// reverted, it passes.
+#[test]
+fn a_request_never_claims_a_key_published_after_it_read_the_snapshot() {
+    let store: Store<K, V> = Store::new();
+    let n = AtomicUsize::new(0);
+    let calls = Arc::new(AtomicUsize::new(0));
+    // Request 1's first claim section: it says it is held there, then waits
+    // until the test opens `published` (dropped on every path, so a failed
+    // assertion never leaves request 1 held and the scope joined on it).
+    let (held_tx, held_rx) = mpsc::channel::<()>();
+    let published = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    struct OpenOnDrop(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for OpenOnDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    {
+        let (calls, held_tx, published) = (calls.clone(), Mutex::new(held_tx), published.clone());
+        let hook: Box<dyn Fn() + Send + Sync> = Box::new(move || {
+            // Only the first call (request 1's, spawned first) is held.
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                let _ = held_tx.lock().unwrap().send(());
+                while !published.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        });
+        assert!(store.before_claim.set(hook).is_ok());
+    }
+    let (s1, s2) = std::thread::scope(|sc| {
+        let open = OpenOnDrop(published.clone());
+        let r1 = sc.spawn(|| {
+            store.ensure_prepared(
+                &needs(&[K::X]),
+                &no_estimate,
+                &numbered(&n),
+                &Control::unreserved(),
+            )
+        });
+        held_rx.recv().unwrap();
+        assert!(
+            store
+                .registry()
+                .get(&K::X)
+                .is_none_or(|e| e.state == State::Absent),
+            "precondition: request 1 has not claimed X"
+        );
+        let s2 = store
+            .ensure_prepared(
+                &needs(&[K::X]),
+                &no_estimate,
+                &numbered(&n),
+                &Control::unreserved(),
+            )
+            .unwrap();
+        assert_eq!(
+            store.registry().get(&K::X).map(|e| &e.state),
+            Some(&State::Published),
+            "precondition: X is published before request 1 goes on"
+        );
+        drop(open);
+        (r1.join().unwrap().unwrap(), s2)
+    });
+    assert_eq!(store.stats().fills, 1, "X filled once");
+    assert_eq!(store.stats().joins, 0, "nothing joined: X was published");
+    assert!(
+        Arc::ptr_eq(s1.get(&K::X).unwrap(), s2.get(&K::X).unwrap()),
+        "request 1 reads request 2's X"
+    );
 }
 
 /// A failed reservation with a waiter: request 1 claims `A` and its
