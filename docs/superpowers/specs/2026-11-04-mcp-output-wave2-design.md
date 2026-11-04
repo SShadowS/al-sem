@@ -517,13 +517,14 @@ pub struct TerminalRecord<'a> {
     pub owner: &'a str,                  // the fact's subject (stable routine id)
     pub terminal: Terminal<'a>,          // Operation(id) | Callsite(id) | None: the exact terminal
     pub op_kind: Option<&'a str>,        // the ORIGINAL operation kind: Insert, ModifyAll, Validate, …
-    pub temp: TerminalTemp,              // Known(true/false) | Unknown | ParameterDependent(i) | None
-    pub producer: bool,                  // a raw producer (parameter-dependent): its class at a
-                                         // caller comes from the producer solve, never the record
+    pub temp: TerminalTemp,              // Known(true/false) | Unknown | ParameterDependent(i) | Absent
 }
+// producer() == matches!(temp, ParameterDependent(_)): a raw producer, whose class at a caller
+// comes from the producer solve, never from the record
 ```
 
-Lookups: by `(effect type, resource)` (what `kind_dead` reads), by operation id, by owner. It
+Lookups (as built): by `(effect type, resource)` (what `kind_dead` reads) and by terminal id
+(operation or call-site id); an owner lookup is added when a reader needs it. It
 covers resource-less facts (COMMIT, UI_*, HTTP, FILE, …), which `group_resource_ops` cannot (it is
 filled only for facts with a resource, `digest.rs:4176-4190`; F16d, A3).
 
@@ -1504,8 +1505,99 @@ rows honestly (§4.1 section 13) and does not depend on the issue.
 
 ## 11. W2-0a as built
 
-Filled in by the W2-0a commit (what each index holds, its tests and discrimination proofs, the CDO
-cost measurement, and what is left for the owner, §11.4).
+Branch `mcpout/wave2`, the commit after this spec's first one. No output changes: every golden
+family is byte-identical without a regen, and the CDO digest/prove/query outputs are
+byte-identical (timestamps aside).
+
+### 11.1 What each index holds
+
+- **`Crossing`** (`src/engine/l5/digest.rs`), on every group row's `DigestEffectResult::crossing`
+  (an `Arc`, shared by the rows of one identity; `None` off a group): `id`, typed `site`
+  (`CrossingSite::{Callsite, Operation, Event}`; `guarded_id()` is `None` for an event), the
+  typed edge set `edges: Vec<CrossingEdge { from, to, kind, site }>` (sorted, deduplicated),
+  `targets` (distinct dependency stable ids, sorted) and `sites: Vec<SiteAnchor>` (distinct source
+  anchors in edge order; several for `ev:`). Built once per tree read in
+  `build_fingerprint_indexes` (`build_crossings`) from every edge of a primary routine into a
+  dependency routine, grouped by the boundary identity `boundary_terminal` gives it. Readers today:
+  the multi-target boundary display (`boundary_displays`, now derived from each crossing's targets
+  through `boundary_display`) and `LiteralReach::unreachable_effects`' "crossing cannot run" check
+  (it reads `crossing.site.guarded_id()`; a hand-built group with no record falls back to its
+  evidence ids). The public index twin (`FingerprintIndexesPub`) carries the map too.
+- **Event ids on `LiteralReach`'s adjacency** (`src/engine/l5/literal_reach.rs`): an out-edge's
+  site is `EdgeSite::{Guarded(id), Event(event_id)}`; the searches apply guards and bindings only
+  to `Guarded` sites, so results are unchanged; `event_edges_from(from)` reads the event edges.
+- **`TerminalFacts`** (`src/engine/l5/terminal_facts.rs`): one `TerminalRecord { fact,
+  effect_type, resource, owner, terminal: TerminalSite::{Operation, Callsite, None}, op_kind, temp:
+  TerminalTemp::{Known, Unknown, ParameterDependent, Absent} }` per direct fact with an effect type,
+  in fact order, looked up by kind (two `&str`-keyed levels, so a lookup borrows nothing) and by
+  terminal id. `LiteralReach::new` builds it (it replaced the private `direct_by_kind` map, the
+  same set) and `kind_dead` reads it; `LiteralReach::terminals()` exposes it. The root-frame class
+  join (§3.4.1) is W2-0b's: the record keeps the owner-frame state and the producer mark it needs.
+- **`OperationIndex`** (`src/engine/l4/operation_index.rs`): operation id → `OpClaim { row,
+  record_operation, operation_site, call_site }` per claiming row (a record operation's id is also
+  its operation site's, so one claim holds both), and call-site id → `(row, index)`. Scope
+  `RecordOperations` (what the two legacy joins read; they build no more than before) or `All`;
+  the all-ids readers (`claims`, `lookup`, `call_site_claims`) panic on a `RecordOperations` index
+  (declared-needs rule 5). Readers today: `query effects`' `OperationJoin` (LAST claiming row,
+  unchanged) and explain's `op_rows` (FIRST, unchanged). `original_kind` and `anchor` read a
+  claim's original operation kind and source anchor.
+
+Declared needs: nothing new is built for a command that did not build its predecessor. The
+crossings replace the per-read `boundary_displays` loop (same edges, rule B only); the terminal
+index replaces `LiteralReach`'s map (prove's read only); the operation index replaces the two
+joins' private maps at the same scope. No profile, view need, substrate bit or plan changed.
+
+### 11.2 Tests and discrimination proofs
+
+In-process workspaces (`src/engine/l5/wave2_index_tests.rs`, written to temp folders, so no golden
+family reads them) and the collided-row fixture (`detector_context_11b_tests.rs`). Every break was
+made with Edit, run, seen to fail, reverted with Edit, and seen to pass.
+
+| Test | What it pins | Break → result |
+|---|---|---|
+| `a_shorter_workspace_route_hides_both_crossings_today` | two calls of `PostWith` (literal `true` / `false`) after a shorter workspace route: two crossings, one typed edge each, disjoint; today's digest has no group row (the G1 shape W2-0b fixes) | crossing edges kept for any target (filter dropped) → the event and mixed tests fail; record dropped → see below |
+| `a_crossings_group_rows_carry_its_record` | without the workspace route, only the `true` crossing has a group row, and it carries its own record | `crossing: None` on rows → fails (also the mixed and terminal tests) |
+| `a_workspace_edge_sharing_a_crossings_site_is_not_in_it` | an interface call implemented in the workspace and in the dependency: one call site, two edges, only the dependency edge is the crossing's | "into a dependency routine" filter dropped → fails |
+| `an_event_crossing_is_one_per_event_with_every_publish_site` | two workspace publishers of one event with a dependency subscriber (edges stated by hand) and a workspace subscriber: one `ev:` crossing, two edges, two sites, no guard; the search's adjacency names the event | event edge with no site → fails; only the first anchor kept → fails |
+| `terminal_records_keep_class_producer_and_original_kind` | temporary vs persistent `Insert` on one table (temporary route shorter), dependency and workspace producers, the resource-less `Commit`, source-fact identity, `LiteralReach` holding the index; the digest's physical row ends at the persistent insert; `Fill` called with both arguments gives one temporary and one non-temporary group, each on its own crossing | temp state lost → fails; `op_kind` dropped → fails |
+| `overloads_with_one_display_are_two_targets` | two overloads share a display; each crossing's target is its own stable id | targets built from the display → fails |
+| `operation_index_keeps_every_claim_and_both_legacy_picks` | a collided id: both claims in row order, `Ambiguous`, original kinds per arm, `Missing`; explain's FIRST and query's LAST pick | explain pick reversed → fails; query pick reversed → fails (and the existing `operation_join_reads_the_last_owning_row` and `cli_11b_policy_collision::query_effects_origin_is_the_last_owning_rows_operation`); `lookup` returning the first claim → fails |
+| `a_record_operations_index_refuses_an_all_ids_read` | the scope guard panics | — (a `should_panic` test) |
+| existing `cli_prove_dead_paths::*`, `cli_prove_table_branches::*` | `kind_dead` reading the terminal index | records skipped in `kind_dead` → 4 of 5 fail |
+| existing `cli_prove_table_branches::a_boundary_group_behind_a_dead_crossing_is_dropped_whole` | the crossing-dead check reading `crossing.site` | `guarded_id()` forced `None` → fails |
+| existing `digest::tests::a_multi_target_boundary_names_every_entered_routine` | `boundary_displays` derived from crossing targets | "several displays" threshold raised → fails |
+
+Not covered in W2-0a (left to the commit that needs it): two objects with one name in two apps,
+and collided declarations sharing one stable id in **different source files** (the hop-file
+provenance of §4.4.2, W2-2's T-W2-24). The operation-index fixture's collided rows are two `#if`
+arms of one file.
+
+### 11.3 Cost on CDO
+
+`release-fast`, CDO baseline `bc3ccb18` passed as an argument, two runs each, `/usr/bin/time -v`
+(no probes, so `PROBE_NO_COUNT` did not apply):
+
+| Command | Before (master `367a664d`) | After (W2-0a) |
+|---|---|---|
+| `digest --routine "CDO Issue Document::IssueReminder" --format json --deterministic` | 20.25 / 20.82 s, 3,104,464 / 3,113,232 KB | 21.04 / 20.90 s, 3,131,076 / 3,116,436 KB |
+| `digest --routine "CDO E-Mail Handler::RunReportID" …` | 20.23 / 20.67 s, 3,165,740 / 3,137,896 KB | 20.82 / 20.64 s, 3,145,412 / 3,115,620 KB |
+| `prove … IssueReminder "writes-table:Issued Reminder Header" --format json` | 21.97 / 21.46 s, 3,134,444 / 3,107,952 KB | 21.62 / 21.37 s, 3,145,544 / 3,119,516 KB |
+| `query effects … --routine "CDO Issue Document.IssueReminder" --format json` | 11.14 / 11.38 s, 3,124,712 / 3,105,128 KB | 11.31 / 11.32 s, 3,113,516 / 3,127,192 KB |
+
+The differences are inside the run-to-run spread (about ±0.5 s and ±30 MB). Outputs: digest
+byte-identical (7,339,040 and 4,952,155 B); prove and query identical except `generatedAt`.
+
+### 11.4 For the owner
+
+- The G1 fixture shape behaves as §1 item 11 says, and more strongly: with a shorter workspace route
+  to the same table, the digest shows **no** group row for either crossing (the one row is
+  witnessed through the workspace route). Without that route only the `true` crossing has a row:
+  the witness walk already follows the literal argument at the crossing. W2-0b/W2-0c are measured
+  against these two pinned outcomes.
+- `ev:` crossings need a dependency subscriber to a workspace publisher's event, which compiled AL
+  does not allow; the event test states its edges by hand, as `digest_rule_b_tests` does. Whether
+  CDO has any `ev:` crossing is not measured yet (W2-0b should count them before building for
+  them).
 
 ---
 

@@ -2770,6 +2770,69 @@ fn operation_join_reads_the_last_owning_row() {
     assert_eq!(got, b, "the LAST owning row's (arm B's) operation");
 }
 
+/// MCP output wave 2, W2-0a (design §3.5): the operation index keeps EVERY
+/// claim on a collided id, so new presentation sees the ambiguity, while the
+/// two production joins built on it keep their own legacy pick: explain the
+/// FIRST owning row, query (`operation_join_reads_the_last_owning_row` above)
+/// the LAST. Precondition hand-checked: both arms of `Work` own `op0`.
+/// Breaks: `first_record_operation_row` taking the last claim fails the
+/// explain assertion; `lookup` returning the first claim as `Found` fails the
+/// ambiguity assertion.
+#[test]
+fn operation_index_keeps_every_claim_and_both_legacy_picks() {
+    use crate::engine::l4::operation_index::{IndexScope, OperationIndex, OwnerLookup};
+    let m = build(WORK_SRC, "22222222-0000-0000-0000-00000011b040");
+    let (id, rows) = collided(&m, "Work");
+    let op0 = format!("{id}/op0");
+    let all = OperationIndex::build(&m, IndexScope::All);
+    let claimed: Vec<usize> = all.claims(&op0).iter().map(|c| c.row as usize).collect();
+    assert_eq!(claimed, rows, "every owning row, in model row order");
+    assert!(
+        matches!(all.lookup(&op0), OwnerLookup::Ambiguous(c) if c.len() == 2),
+        "a collided id is ambiguous, never silently one owner"
+    );
+    let kinds: Vec<Option<&str>> = all
+        .claims(&op0)
+        .iter()
+        .map(|c| all.original_kind(c))
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![Some("Insert"), Some("Modify")],
+        "original op kinds per arm"
+    );
+    assert_eq!(
+        all.lookup(&format!("{id}/op999")),
+        OwnerLookup::Missing,
+        "an id no body holds"
+    );
+    // The production pick of explain (its per-revision indexes' `op_row`).
+    let explain = crate::engine::l5::explain::op_rows(&m);
+    assert_eq!(
+        explain.get(&op0),
+        Some(&rows[0]),
+        "explain: the FIRST owning row"
+    );
+    let narrow = OperationIndex::build(&m, IndexScope::RecordOperations);
+    assert_eq!(
+        narrow
+            .last_record_operation(&op0)
+            .map(|(r, _)| r as *const _),
+        Some(&m.workspace.routines[rows[1]] as *const _),
+        "query: the LAST owning row"
+    );
+}
+
+/// W2-0a: a record-operations index read as if it held every id kind fails
+/// loudly (declared-needs rule 5), never "missing".
+#[test]
+#[should_panic(expected = "needs IndexScope::All")]
+fn a_record_operations_index_refuses_an_all_ids_read() {
+    use crate::engine::l4::operation_index::{IndexScope, OperationIndex};
+    let m = build(WORK_SRC, "22222222-0000-0000-0000-00000011b041");
+    let _ = OperationIndex::build(&m, IndexScope::RecordOperations).lookup("x/op0");
+}
+
 /// FP-14 (d37, a row's own sites): a row's `Validate` is compared only with
 /// the call sites that row declares. Arm A validates `L` and calls nothing;
 /// arm B (the last row, later in the file) hands `L` to `WriteIt`, which

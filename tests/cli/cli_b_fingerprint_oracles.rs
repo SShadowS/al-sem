@@ -62,6 +62,7 @@ fn empty_idx() -> FingerprintIndexesPub<'static> {
         capability_facts: &[],
         boundary: None,
         boundary_displays: HashMap::new(),
+        crossings: HashMap::new(),
     }
 }
 

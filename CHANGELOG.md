@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (MCP output wave 2, W2-0a: read-side indexes; no output change)
+
+Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3), §3.3,
+§3.4.1, §3.5, §11. Every golden is byte-identical; nothing serialized reads the new records yet.
+
+- **Crossing records.** Every rule-B boundary group (`DigestEffectResult`) now carries its
+  `Crossing`: the boundary identity, its typed site (`Callsite`, `Operation` or `Event`), its typed
+  edge set (each edge's source, dependency target, edge kind and site), its distinct targets by
+  stable id, and its distinct source anchors (several for an `ev:` crossing, one per publish
+  site). Membership is `(from, to, site)`, so a workspace edge that shares a crossing's call site
+  (an interface call with a workspace and a dependency implementer) is not in it. The crossings
+  are built once per tree read; the multi-target boundary display and the literal pass's
+  "crossing cannot run" check now read them.
+- **Event ids on the literal search's event edges.** `LiteralReach`'s adjacency carries an event
+  edge's `event_id` as a typed site that is never guarded, so a later crossing-constrained search
+  can match an event crossing by identity. Search results are unchanged.
+- **Terminal-fact index** (`engine::l5::terminal_facts`). One lossless record per direct
+  capability fact with an effect type, resource-less ones (COMMIT, UI, HTTP, …) included: the
+  source fact's index, effect type, resource, owner, exact terminal (operation or call site),
+  original operation kind (`opSubtype`: `Insert`, `ModifyAll`, …) and temp state in the owner's
+  frame, with raw producers (parameter-dependent) marked. `LiteralReach` holds it and its
+  "is this kind dead in the root's reach" test reads it, in place of its private map.
+- **Operation index** (`engine::l4::operation_index`). Operation id and call-site id → every
+  routine row that claims it, in row order; `lookup` reports `Found`, `Ambiguous` or `Missing`,
+  so a collided id is never silently one owner. `query effects`' `origin` keeps its LAST-row pick
+  and explain its FIRST-row pick, now read through the index (built over record operations only
+  for those two, so they build no more than before).
+- Tests (in-process workspaces, so no golden moves): two calls of one entry point with different
+  literal arguments, with and without a shorter workspace route (today the shorter route hides
+  both crossings from the digest rows: the G1 shape W2-0b fixes); the mixed workspace/dependency
+  interface dispatch sharing one call site; an event crossing with two publishers and a
+  workspace subscriber; a temporary and a persistent insert on one table with the temporary route
+  shorter; one parameterized writer called with a temporary and a persistent record; two overloads
+  with one display; collided rows for the operation index. Each has a recorded discrimination
+  proof (spec §11).
+- Cost on the CDO baseline (`release-fast`, two runs each, before → after): digest IR 20.3–20.8 s
+  / 3.10–3.11 GB → 20.9–21.0 s / 3.12–3.13 GB; digest RR 20.2–20.7 s / 3.14–3.17 GB → 20.6–20.8 s /
+  3.12–3.15 GB; prove IR `writes-table` 21.5–22.0 s → 21.4–21.6 s; query effects IR 11.1–11.4 s →
+  11.3 s. Within run-to-run noise; outputs byte-identical (timestamps aside).
+
 ### Fixed (a context-server store deadlock, and the flaky test that hid it)
 
 - **Two requests could wait on each other forever in `Store::ensure_prepared`.** A request

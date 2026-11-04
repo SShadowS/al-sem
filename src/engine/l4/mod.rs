@@ -42,6 +42,8 @@ pub mod exec_relation;
 // Cone-memory step 1: the cone's inherited facts as 8-byte refs into shared
 // tables, read through borrowed views (`InheritedFacts`, `FactRef`).
 pub mod inherited_facts;
+// MCP output wave 2 (W2-0a): operation id → every claiming routine row.
+pub mod operation_index;
 pub(crate) mod param_guard;
 // #69 D1 — the transitive producer solve: parameter-dependent writes resolved
 // in every routine's own frame, outside the shared capability cone.

@@ -144,6 +144,8 @@ pub mod field_guard;
 pub mod group_path;
 pub mod literal_reach;
 pub mod recref_flow;
+// MCP output wave 2 (W2-0a): one lossless record per direct capability fact.
+pub mod terminal_facts;
 // Shared deterministic routine-selector resolution (5-form resolveSelector
 // cascade). Consumed by BOTH digest_cli (changed-roots selectors) and
 // fingerprint_query (routine selectors) — kept as ONE implementation so the two

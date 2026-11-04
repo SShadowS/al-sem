@@ -36,6 +36,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use serde::Serialize;
 
@@ -217,6 +218,9 @@ struct FingerprintIndexes<'a> {
     /// operation firing several triggers) → every `<App>.<Routine>` it
     /// enters, sorted and `, `-joined. An identity with one target is absent.
     boundary_displays: HashMap<String, String>,
+    /// Rule B: every crossing by boundary identity (MCP output wave 2,
+    /// W2-0a); empty off rule B.
+    crossings: HashMap<String, Arc<Crossing>>,
 }
 
 impl FingerprintIndexes<'_> {
@@ -377,21 +381,25 @@ fn build_fingerprint_indexes_in(
         capability_facts: &snap.capability_facts,
         boundary: boundary.rule(snap),
         boundary_displays: HashMap::new(),
+        crossings: HashMap::new(),
     };
     if idx.boundary.is_some() {
-        let mut entered: HashMap<String, BTreeSet<String>> = HashMap::new();
-        for e in idx.typed_edges {
-            if !idx.is_dependency(edge_from(e)) && edge_to(e).is_some_and(|t| idx.is_dependency(t))
-            {
-                let b = boundary_terminal(e, &idx).0;
-                entered.entry(b.id).or_default().insert(b.display);
-            }
-        }
-        idx.boundary_displays = entered
-            .into_iter()
-            .filter(|(_, d)| d.len() > 1)
-            .map(|(id, d)| (id, d.into_iter().collect::<Vec<_>>().join(", ")))
+        // MCP output wave 2 (W2-0a): the crossings, and from their targets
+        // the displays of a boundary identity that enters several dependency
+        // routines.
+        let crossings = build_crossings(&idx);
+        idx.boundary_displays = crossings
+            .iter()
+            .filter_map(|(id, c)| {
+                let d: BTreeSet<String> = c
+                    .targets
+                    .iter()
+                    .map(|t| boundary_display(t, &idx))
+                    .collect();
+                (d.len() > 1).then(|| (id.clone(), d.into_iter().collect::<Vec<_>>().join(", ")))
+            })
             .collect();
+        idx.crossings = crossings;
     }
     idx
 }
@@ -645,6 +653,166 @@ struct WitnessOutcomeExt {
 struct BoundaryEnd {
     id: String,
     display: String,
+}
+
+/// A crossing's identity, typed (MCP output wave 2 design §3.3): the call
+/// site of a call, object run or dispatch, the firing operation of an
+/// implicit trigger, or the event of an event dispatch.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CrossingSite {
+    Callsite(String),
+    Operation(String),
+    Event(String),
+}
+
+impl CrossingSite {
+    /// The site of edge `e` (a boundary edge has one).
+    fn of(e: &SnapshotGraphEdge) -> CrossingSite {
+        match e {
+            SnapshotGraphEdge::ImplicitTrigger { operation_id, .. } => {
+                CrossingSite::Operation(operation_id.clone())
+            }
+            SnapshotGraphEdge::EventDispatch { event_id, .. } => {
+                CrossingSite::Event(event_id.clone())
+            }
+            _ => CrossingSite::Callsite(
+                edge_callsite_id(e)
+                    .expect("a call-family edge has a call site")
+                    .to_string(),
+            ),
+        }
+    }
+
+    /// The site whose guards the literal pass reads: a call site or a firing
+    /// operation; `None` for an event (an event edge has no guard).
+    #[must_use]
+    pub fn guarded_id(&self) -> Option<&str> {
+        match self {
+            CrossingSite::Callsite(s) | CrossingSite::Operation(s) => Some(s),
+            CrossingSite::Event(_) => None,
+        }
+    }
+}
+
+/// One edge of a crossing's typed edge set.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CrossingEdge {
+    /// The primary routine the edge leaves (stable id).
+    pub from: String,
+    /// The dependency routine it enters (stable id).
+    pub to: String,
+    /// The snapshot edge kind (`direct-call`, `event-dispatch`, …).
+    pub kind: String,
+    pub site: CrossingSite,
+}
+
+/// Where a crossing's edges leave from in source (`source_unit_id`, line,
+/// column; 0-based as the snapshot keeps them).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SiteAnchor {
+    pub file: Option<String>,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+}
+
+/// A rule-B crossing (MCP output wave 2 design §3.3, W2-0a): every edge from
+/// a primary routine into a dependency routine that shares one boundary
+/// identity. Membership is `(from, to, site)` in [`Self::edges`], never the
+/// bare site id: an interface dispatch, object run or event can have several
+/// targets sharing one site id, and a target that is a workspace routine is no
+/// crossing at all. Read-side only: nothing serialized reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Crossing {
+    /// The boundary identity: `cs:<call site>`, `op:<operation>`, `ev:<event>`.
+    pub id: String,
+    pub site: CrossingSite,
+    /// The typed edge set, sorted.
+    pub edges: Vec<CrossingEdge>,
+    /// The distinct dependency targets of `edges`, sorted.
+    pub targets: Vec<String>,
+    /// The distinct source anchors of `edges`, in edge order: one for a call
+    /// or a trigger; one per publish site of an `ev:` crossing.
+    pub sites: Vec<SiteAnchor>,
+}
+
+impl Crossing {
+    /// Whether the edge `from → to` at `site` is one of this crossing's.
+    #[must_use]
+    pub fn contains(&self, from: &str, to: &str, site: &CrossingSite) -> bool {
+        self.edges
+            .iter()
+            .any(|e| e.from == from && e.to == to && &e.site == site)
+    }
+
+    /// The crossing `id` made of `edges` (its boundary edges, in edge order).
+    fn build(id: String, edges: &[&SnapshotGraphEdge], idx: &FingerprintIndexes) -> Crossing {
+        let site = CrossingSite::of(edges[0]);
+        let mut typed: Vec<CrossingEdge> = edges
+            .iter()
+            .map(|&e| CrossingEdge {
+                from: edge_from(e).to_string(),
+                to: edge_to(e)
+                    .expect("a boundary edge has a target")
+                    .to_string(),
+                kind: edge_kind(e).to_string(),
+                site: CrossingSite::of(e),
+            })
+            .collect();
+        typed.sort();
+        typed.dedup();
+        let mut targets: Vec<String> = typed.iter().map(|e| e.to.clone()).collect();
+        targets.sort();
+        targets.dedup();
+        let mut sites: Vec<SiteAnchor> = Vec::new();
+        for &e in edges {
+            let WitnessHop::Terminal {
+                source_file,
+                line,
+                column,
+                ..
+            } = boundary_terminal(e, idx).1
+            else {
+                unreachable!("a boundary terminal is a terminal hop")
+            };
+            let a = SiteAnchor {
+                file: source_file,
+                line,
+                column,
+            };
+            if !sites.contains(&a) {
+                sites.push(a);
+            }
+        }
+        Crossing {
+            id,
+            site,
+            edges: typed,
+            targets,
+            sites,
+        }
+    }
+}
+
+/// Every rule-B crossing of `idx`'s edges, by boundary identity (design
+/// §3.3): the edges from a primary routine into a dependency routine, grouped
+/// by the identity [`boundary_terminal`] gives them.
+fn build_crossings(idx: &FingerprintIndexes) -> HashMap<String, Arc<Crossing>> {
+    let mut by_id: HashMap<String, Vec<&SnapshotGraphEdge>> = HashMap::new();
+    for e in idx.typed_edges {
+        if !idx.is_dependency(edge_from(e)) && edge_to(e).is_some_and(|t| idx.is_dependency(t)) {
+            by_id
+                .entry(boundary_terminal(e, idx).0.id)
+                .or_default()
+                .push(e);
+        }
+    }
+    by_id
+        .into_iter()
+        .map(|(id, edges)| {
+            let c = Crossing::build(id.clone(), &edges, idx);
+            (id, Arc::new(c))
+        })
+        .collect()
 }
 
 /// `buildDirectTerminal` (witness.ts).
@@ -1592,30 +1760,35 @@ enum EndKey {
     Opaque,
 }
 
+/// The display of dependency routine `to` as a boundary names it.
+/// MCP output plan 1d (B2): the owner-qualified name (`Codeunit
+/// Reminder-Issue::OnRun`, as `query` prints a routine), so two `OnRun`s of
+/// one app no longer read alike; `<App>.<Routine>` only when the owner's
+/// identity is not in the snapshot.
+fn boundary_display(to: &str, idx: &FingerprintIndexes) -> String {
+    let app = idx
+        .boundary
+        .and_then(|b| b.dependency_app.get(to))
+        .map_or("", |a| &**a);
+    let routine = idx.routine_display_by_id.get(to).map_or(to, String::as_str);
+    let owner = to.split_once(ROUTINE_ID_SEPARATOR).and_then(|(object, _)| {
+        let kind = object.split(':').nth(1)?;
+        let name = idx.stable_id_to_display.get(object)?;
+        (!name.is_empty()).then(|| format!("{kind} {name}"))
+    });
+    match owner {
+        Some(owner) => format!("{owner}::{routine}"),
+        None => format!("{app}.{routine}"),
+    }
+}
+
 /// Rule B's boundary of edge `e` (spec §14.3.5 item 2), from a primary
 /// routine into the dependency routine `to`: its identity and its terminal
 /// hop, `enters <App>.<Routine>` at the call site (a call), else the firing
 /// operation (an implicit trigger), else the publish site (an event dispatch).
 fn boundary_terminal(e: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> (BoundaryEnd, WitnessHop) {
     let to = edge_to(e).expect("a boundary edge has a hop, so a target");
-    let app = idx
-        .boundary
-        .and_then(|b| b.dependency_app.get(to))
-        .map_or("", |a| &**a);
-    let routine = idx.routine_display_by_id.get(to).map_or(to, String::as_str);
-    // MCP output plan 1d (B2): the owner-qualified name (`Codeunit
-    // Reminder-Issue::OnRun`, as `query` prints a routine), so two `OnRun`s of
-    // one app no longer read alike; `<App>.<Routine>` only when the owner's
-    // identity is not in the snapshot.
-    let owner = to.split_once(ROUTINE_ID_SEPARATOR).and_then(|(object, _)| {
-        let kind = object.split(':').nth(1)?;
-        let name = idx.stable_id_to_display.get(object)?;
-        (!name.is_empty()).then(|| format!("{kind} {name}"))
-    });
-    let mut display = match owner {
-        Some(owner) => format!("{owner}::{routine}"),
-        None => format!("{app}.{routine}"),
-    };
+    let mut display = boundary_display(to, idx);
     let at = |a: &crate::engine::l5::snapshot::SnapshotSourceAnchor| {
         (
             Some(a.source_unit_id.clone()),
@@ -3317,6 +3490,10 @@ pub struct DigestEffectResult {
     /// are followed ([`crate::engine::l5::literal_reach`]). Set only for
     /// `prove`'s read; not serialized.
     pub literal_unreachable: bool,
+    /// MCP output wave 2 (W2-0a, design §3.3): a boundary group's crossing,
+    /// its typed edge set, targets and sites. `None` off a group. Read-side
+    /// only: not serialized, and no R4-F projection reads it.
+    pub crossing: Option<Arc<Crossing>>,
 }
 
 #[derive(Debug, Clone)]
@@ -4357,6 +4534,18 @@ fn digest_one_root<'i>(
             let conditionality = acc.via.conditionality();
 
             let boundary_group = acc.group.is_some();
+            // W2-0a: the group's crossing record. Every group's identity is
+            // a boundary edge's, so the record exists whenever rule B made
+            // the group.
+            let crossing = acc.group.as_ref().and_then(|(b, _)| {
+                let c = idx.crossings.get(&b.id).cloned();
+                debug_assert!(
+                    c.is_some(),
+                    "a boundary group's identity is a crossing's: {}",
+                    b.id
+                );
+                c
+            });
             // The group's whole resource set, moved (not copied): prove reads it.
             let group_resources: Vec<(String, String)> = acc
                 .group
@@ -4400,6 +4589,7 @@ fn digest_one_root<'i>(
                 literal_unreachable: false,
                 dead_group_resources: Vec::new(),
                 group_resource_paths: Vec::new(),
+                crossing,
             });
         }
 
@@ -5456,6 +5646,8 @@ pub struct FingerprintIndexesPub<'a> {
     /// on the cut, and the identities that enter several dependency routines.
     pub boundary: Option<&'a crate::engine::l5::snapshot::BoundaryRule>,
     pub boundary_displays: HashMap<String, String>,
+    /// Rule B's crossings by boundary identity (MCP output wave 2, W2-0a).
+    pub crossings: HashMap<String, Arc<Crossing>>,
 }
 
 /// Build the public fingerprint indexes from a `CapabilitySnapshot`.
@@ -5501,6 +5693,7 @@ pub fn build_fingerprint_indexes_pub(snap: &CapabilitySnapshot) -> FingerprintIn
         capability_facts: &snap.capability_facts,
         boundary: private.boundary,
         boundary_displays: private.boundary_displays,
+        crossings: private.crossings,
     }
 }
 
@@ -5573,6 +5766,7 @@ fn pub_idx_as_private<'i>(idx: &'i FingerprintIndexesPub<'_>) -> FingerprintInde
         capability_facts: idx.capability_facts,
         boundary: idx.boundary,
         boundary_displays: idx.boundary_displays.clone(),
+        crossings: idx.crossings.clone(),
     }
 }
 
@@ -9190,3 +9384,8 @@ codeunit 50102 "W10 Merge"
         assert_eq!(hashes, 2, "{hashes} key hashes for {} pops", out.popped);
     }
 }
+
+// MCP output wave 2, W2-0a: the read-side indexes on adversarial workspaces.
+#[cfg(test)]
+#[path = "wave2_index_tests.rs"]
+mod wave2_index_tests;
