@@ -390,6 +390,43 @@ query path: measure memory, and keep the per-operation depth unchanged so no L4 
 moves; (5) digest's major schema bump in 2f: any script reading `viaPaths` hop shape
 breaks — search `docs/Handoff/` and bc-dev-mcp for readers first.
 
+### 4.1 Outside consumers after waves 0 and 1 (checked 2026-11-04, merged as `769d481a`)
+
+A read-only check of every repo on the owner's GitHub account (24 cloned; GitHub code
+search missed bc-dev-mcp, so the clones were grepped) and the local ConTinAI copy. Nothing
+breaks silently: the readers that care check `schemaVersion` major == 1 and switch the
+feature off with a warning on 2.x. `lineBase` is in `payload.lineBase`.
+
+- **bc-dev-mcp** (`SShadowS/bc-dev-mcp`, main `bd6543b`): pinned to al-sem 1.7.1
+  (`src/core/alsem-pin.ts:9`; `satisfiesPin` in `src/core/tool-binary.ts:63` refuses another
+  major), so it is not exposed until the pin moves. When it moves:
+  `src/core/risk.ts:22` major 1 → 2, `:110` drop the `+ 1` (better:
+  `line - (payload.lineBase ?? 0) + 1`), `:14` doc; `src/core/alsem-writes.ts:25` major → 2,
+  `:167-168` drop `anchorLine + 1`, `:67` doc; `src/core/break-effects.ts:21` and
+  `src/core/test-order-static.ts:22` majors → 2 (no lines read); tests use "2.0.0" as the
+  unsupported example (`tests/core/{risk,break-effects,test-order-static,alsem-writes}.test.ts`)
+  → 3.0.0; hand-built 0-based anchors in `tests/core/risk.test.ts:27-31` and
+  `alsem-writes.test.ts:77-82`; re-record `tests/fixtures/alsem-risk/digest.json`,
+  `alsem-order/*`, `alsem-prove/recorded/*`, `record-writes/recorded/*`; docs
+  `scripts/e2e.md:131,503`. **Keep** `src/core/hotspot-explain.ts:171-172`'s `+ 1`: it reads
+  `alsem analyze --with-evidence` evidence ranges, which are still 0-based (see below).
+- **ConTinAI** (local only, `/home/sshadows/Projects/CONtinAI`): no change needed.
+  `work/scripts/verify.py:216-220` and `graphs.py:32,39,42` honor `lineBase`;
+  `dep:<guid>:<path>` citations now open exactly at the cited statement (the old ones were
+  one line early). Suggested: `effects.py:71-72` should record `payload.lineBase` beside the
+  copied `origin.anchor.line` (nothing reads that field today). Stale doc: `kb/gaps.md:35`.
+- **al-lsp-for-agents** (the editor extension, the Go wrapper, the LSP packages): unaffected;
+  it uses only the call-hierarchy and property requests. No repo uses the
+  `al-call-hierarchy/{explain,prove,digest,…}` engine requests yet.
+- **al-perf** (dormant): `src/semantic/contracts.ts:17` `EXPECTED_INVENTORY_SCHEMA_VERSION`
+  "1.1.0" → "2.0.0", or its al-sem fusion turns off (`engine-runner.ts:353-360`,
+  `diff-runner.ts:296-303`). It reads no lines from the inventory.
+- **Gap in this plan:** `alsem analyze` findings are 1-based, but
+  `analyze --with-evidence` evidence `sourceAnchor.range.startLine` is still 0-based, while
+  the same-shaped `rootClassifications[].sourceAnchor` in the fingerprint inventory is now
+  1-based. Aligning it must land together with removing bc-dev-mcp's
+  `hotspot-explain.ts:172` `+ 1` (tracked as an issue).
+
 ## 5. Open questions, answered from the code
 
 1. **JSON line base.** Who reads engine-query JSON lines today: the G13 contract test
