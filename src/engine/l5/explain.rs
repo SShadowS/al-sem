@@ -67,10 +67,10 @@ use crate::engine::l5::digest_cli::{
 use crate::engine::l5::field_writers::{WriteKind, field_writes};
 use crate::engine::l5::rollup::classify_detail;
 use crate::engine::l5::routine_rollup::{
-    FAMILIES, RenderOpts, RollupCx, RollupTotals, RoutineRollup, TableWrites, beyond_lines,
-    caller_dependent_lines, caps, class_json, commit_lines, crossing_key, dependency_gap_lines,
-    event_lines, family_of, fold, header_lines, is_group, kind_lines, literal_dead_lines,
-    no_path_lines, plural as rf_plural, temporary_lines, workspace_write_lines,
+    FAMILIES, OTHER_KINDS, RenderOpts, RollupCx, RollupTotals, RoutineRollup, TableWrites,
+    beyond_lines, caller_dependent_lines, caps, class_json, commit_lines, crossing_key,
+    dependency_gap_lines, event_lines, family_of, fold, header_lines, is_group, kind_lines,
+    literal_dead_lines, no_path_lines, plural as rf_plural, temporary_lines, workspace_write_lines,
 };
 use crate::engine::l5::rules_index::{FieldWriters, RulesIndex, WriteSite, Writer as IndexWriter};
 use crate::engine::session::{Cell, explain_plan};
@@ -2318,7 +2318,12 @@ impl Card {
             "crossings": self.crossings,
         });
         for (key, _) in FAMILIES {
-            effects[*key] = json!(self.families.get(key).cloned().unwrap_or_default());
+            let rows = self.families.get(key).cloned().unwrap_or_default();
+            // The explicit other-kinds bucket (W2-5) is present only when used.
+            if *key == OTHER_KINDS && rows.is_empty() {
+                continue;
+            }
+            effects[*key] = json!(rows);
         }
         // `via` and `tooltip` of a page action only with `--detail` (§4.2).
         let reached_from: Vec<Value> = self

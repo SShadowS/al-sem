@@ -2244,14 +2244,68 @@ fn render_query_effects_body(
             ));
         }
     }
-    if let Some(b) = buckets.get("locks") {
-        let mut names: Vec<String> = b.tables.iter().map(|t| table_name(t)).collect();
-        names.sort();
-        human.push_str(&format!(
-            "  locks ({}): {}\n",
-            plural(b.tables.len(), "table", "tables"),
-            names.join(", ")
-        ));
+    // W2-5 (2e): LockTable is its own class, never a write. A table also
+    // written says so (its write line carries `+ LockTable n`); a lock-only
+    // table prints its first lock's own anchor and owner; locks on a table not
+    // resolved are counted apart (they are in that bucket).
+    let unresolved_locks = buckets.get("tableNotResolved").map_or(0, |b| {
+        b.rows
+            .iter()
+            .filter(|&&i| op_family(effects[i].op) == "lock")
+            .count()
+    });
+    if buckets.contains_key("locks") || unresolved_locks > 0 {
+        let written: BTreeSet<&str> = ["writes", "callerDependent"]
+            .iter()
+            .filter_map(|k| buckets.get(*k))
+            .flat_map(|b| b.tables.iter().copied())
+            .collect();
+        let mut items: Vec<(String, String)> = Vec::new();
+        if let Some(b) = buckets.get("locks") {
+            for &t in &b.tables {
+                let name = table_name(t);
+                let text = if written.contains(t) {
+                    format!("{name} (also written)")
+                } else {
+                    let first = b
+                        .rows
+                        .iter()
+                        .map(|&i| &effects[i])
+                        .find(|e| e.table_id == t)
+                        .expect("a locked table has a row");
+                    match ops.get(first.operation_id, &join) {
+                        Some(o) => format!(
+                            "{name} at {}:{} in {}",
+                            o.file,
+                            shown(o.line),
+                            o.owner.qualified()
+                        ),
+                        None => format!("{name} (outside the workspace: {})", first.operation_id),
+                    }
+                };
+                items.push((name, text));
+            }
+        }
+        items.sort();
+        let n = buckets.get("locks").map_or(0, |b| b.tables.len());
+        let mut line = format!(
+            "  locks ({}; not writes): {}",
+            plural(n, "table", "tables"),
+            items
+                .into_iter()
+                .map(|(_, t)| t)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        if unresolved_locks > 0 {
+            line.push_str(&format!(
+                "{}table not resolved: {}",
+                if n > 0 { "; " } else { "" },
+                plural(unresolved_locks, "lock", "locks")
+            ));
+        }
+        human.push_str(&line);
+        human.push('\n');
     }
     for (key, label) in [
         ("validate", "validate (runs the field's trigger; may write)"),
@@ -2294,7 +2348,9 @@ fn render_query_effects_body(
     }
     for e in effects.iter().filter(|_| all) {
         let table = if is_unknown_table(e.table_id) {
-            format!("{UNKNOWN_TABLE_ID} (target table unresolved — not a table)")
+            format!(
+                "{UNKNOWN_TABLE_ID} (table not resolved: determined at run time or not resolved)"
+            )
         } else {
             match tables.get(e.table_id) {
                 Some(name) => name.to_string(),

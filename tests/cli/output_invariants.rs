@@ -1532,3 +1532,44 @@ fn fields_follow_the_original_operation_kind() {
         }
     }
 }
+
+/// W2-5, 2e (design §3.6, §4.5): `LockTable` is its own class, never a write.
+/// On `Out Field Ops::RunAll` (hand-counted from its AL): writes that may
+/// persist 5 on 2 tables (Insert 2, ModifyAll, Rename on `Out Item`;
+/// DeleteAll on `Out Bin`); locks 2 on 2 tables, `Out Item` also written and
+/// `Out Log` lock-only with its own lock's anchor and owner; the RecordRef
+/// lock on a table decided at run time in the table-not-resolved bucket and
+/// counted on the locks line. `Validate` is no L4 operation (a trigger-class
+/// op), so the fixture's `Validate` adds no row.
+///
+/// Discrimination (2026-11-04): `op_family` putting `LockTable` in the write
+/// family fails at the summary (writes 7 on 3 tables); restored, passes.
+#[test]
+fn locks_are_their_own_class_in_query_effects() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let (human, err, code) =
+        run_alsem(&["query", "effects", &ws, "--routine", "Out Field Ops.RunAll"]);
+    assert_eq!(code, 0, "{err}");
+    let summary = human.lines().nth(1).unwrap();
+    assert!(
+        summary.contains("summary: 9 operations — writes that may persist 5 on 2 tables")
+            && summary.contains("locks 2 on 2 tables")
+            && summary.contains("table not resolved 1 in 1 routine"),
+        "{human}"
+    );
+    let writes: Vec<&str> = human
+        .lines()
+        .skip_while(|l| !l.starts_with("  writes that may persist"))
+        .skip(1)
+        .take_while(|l| l.starts_with("    "))
+        .collect();
+    assert!(!writes.iter().any(|l| l.contains("Out Log")), "{human}");
+    assert!(
+        human.contains(
+            "  locks (2 tables; not writes): Out Item (also written), Out Log at \
+             ws:src/OutFieldOps.Codeunit.al:21 in Codeunit Out Field Ops::LockLog; table not \
+             resolved: 1 lock\n"
+        ),
+        "{human}"
+    );
+}

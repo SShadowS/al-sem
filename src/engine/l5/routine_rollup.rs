@@ -374,9 +374,18 @@ pub fn family_of(ty: &str) -> Option<&'static str> {
         "ISOLATED_STORAGE" => "isolatedStorage",
         "TELEMETRY" => "telemetry",
         "ERROR_THROW" | "ERROR_IMPLICIT" => "errors",
-        _ => return None,
+        // Not a kind family: the DB types, COMMIT and events have their own
+        // sections, and the routine's own `UI_ERROR` is a check (rules).
+        t if t.starts_with("DB_") => return None,
+        "COMMIT" | "EVENT_PUBLISH" | "UI_ERROR" => return None,
+        // W2-5 (2e): any other effect type is never dropped silently; it is
+        // its own explicit bucket, printed by its type name.
+        _ => OTHER_KINDS,
     })
 }
+
+/// The explicit bucket of an effect type no family names (W2-5).
+pub const OTHER_KINDS: &str = "otherKinds";
 
 /// The kind families in summary order, with their human labels.
 pub const FAMILIES: &[(&str, &str)] = &[
@@ -387,6 +396,7 @@ pub const FAMILIES: &[(&str, &str)] = &[
     ("isolatedStorage", "isolated storage"),
     ("telemetry", "telemetry"),
     ("errors", "errors"),
+    (OTHER_KINDS, "other effect kinds"),
 ];
 
 /// One table's writes in one section (one record per table: T-W2-2).

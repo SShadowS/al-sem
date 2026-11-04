@@ -3774,6 +3774,50 @@ mod tests {
         assert!(!r.may_write.contains_key("ws/table/5"), "{t:?}");
     }
 
+    /// W2-5 (2e): an effect type no kind family names is never dropped; it is
+    /// the explicit other-kinds bucket, counted per place (an own site and a
+    /// crossing) and printed by its type name. The type is stated by
+    /// assignment: every type the digest maps today has a family, so no AL
+    /// source makes one.
+    ///
+    /// Discrimination (2026-11-04): `family_of` returning `None` for an
+    /// unknown type (the old drop) fails at "the own site is counted";
+    /// restored, passes.
+    #[test]
+    fn an_effect_type_with_no_family_is_its_own_bucket() {
+        use crate::engine::l5::routine_rollup::{OTHER_KINDS, kind_lines};
+        let mut own = effect("FUTURE_KIND", &[], &[]);
+        own.evidence.source_kind = "source";
+        own.evidence.file = Some("ws:src/A.al".to_string());
+        own.evidence.line = Some(4);
+        let group = effect(
+            "FUTURE_KIND",
+            &[("boundary", "Codeunit Base Poster::OnRun")],
+            &[],
+        );
+        let mut e = entry_with(vec![]);
+        e.effects = vec![own, group];
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+        assert_eq!(
+            r.kind_sites.get(OTHER_KINDS).map(Vec::len),
+            Some(1),
+            "the own site is counted: {:?}",
+            r.kind_sites
+        );
+        assert_eq!(r.totals.kinds.get(OTHER_KINDS), Some(&2), "{:?}", r.totals);
+        let lines = kind_lines(&r, &e);
+        assert_eq!(
+            lines,
+            vec![
+                "other effect kinds at 2 places: FUTURE_KIND at ws:src/A.al:5 (unknown); \
+                 FUTURE_KIND beyond Codeunit Base Poster::OnRun"
+                    .to_string()
+            ]
+        );
+    }
+
     /// A model whose primary app is `ws`.
     fn ws_model() -> Model {
         let mut m = crate::engine::l5::test_support::empty_resolved();

@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   table, a `DeleteAll` too). Explain JSON (`/3`, no outside reader): `fields` is now an object keyed
   by the owning routine's qualified display, beside `fieldOps` (`{op, field, in}`) and `renames`.
   A `Validate` is no digest write type; its field stays in its routine's assignments.
+- **W2-5 (2e): every effect kind has its own bucket.** `alsem query effects`' locks line says
+  `not writes`, marks a locked table that is also written `(also written)`, prints a lock-only
+  table's first `LockTable` at its own anchor with its owner, and counts the locks on a table not
+  resolved. The `--all` row of such an operation reads `table not resolved: determined at run time
+  or not resolved` (was `target table unresolved — not a table`). Explain and digest put an effect
+  type no kind family names into an explicit `other effect kinds` bucket (JSON `otherKinds`, only
+  when used) instead of dropping it; today every digest effect type has a family. `Validate` is
+  no operation of either substrate (a trigger-class op: its effects are its `OnValidate`'s), so
+  query's `validate` bucket stays empty on real code.
 
 ### Fixed (#369: dependency writes with no witness path, and colliding `factId`s)
 
