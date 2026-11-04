@@ -67,7 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field-guarded matches, caller resolution, the obligation rules, the loaded-subscribers label).
   Such a run counts the cones' analysis gaps, as prove's plan does. Not with `digest --schema 2`.
 - **Routines that share a display print apart** (T-W2-24): an overload in the same app prints its
-  parameters (`Note(Msg: Text; Level: Integer)`), a routine of another app with the same
+  parameter names (`Note(Msg, Level)`; the typed list when two overloads share the names), a
+  routine of another app with the same
   qualified display gets ` [<app name>]`, in path lines and every qualified display (digest's
   `payload.routines[].display` included).
 - **Workspace-code write lines count operations**: `Out Item: Insert 1, ModifyAll 1, Rename 1`,

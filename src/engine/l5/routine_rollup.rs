@@ -31,7 +31,7 @@ use crate::engine::l5::rollup::{CallerReason, PhysicalReason, WriteClass, classi
 use crate::engine::line_base::shown;
 use crate::program::model::declaring::DeclaringRows;
 use crate::program::model::role::Role;
-use crate::program::model::workspace::Model;
+use crate::program::model::workspace::{Model, ModelRoutine};
 
 /// A folded list (design §3.8 rule 4): the items shown, how many are hidden,
 /// and the unit the full count is stated in.
@@ -214,19 +214,41 @@ impl<'m> RollupCx<'m> {
             .iter()
             .any(|s| *s != stable_id && app_of(s) == Some(r.app_guid.as_str()))
         {
-            out.push_str(&format!(
-                "({})",
+            // The parameter names (`Note(Msg, Level)`, design §3.8 rule 6's
+            // short form); the typed list only when a same-app overload has
+            // the same names.
+            let names = |r: &ModelRoutine| -> String {
                 r.parameters
                     .iter()
-                    .map(|p| format!(
-                        "{}{}: {}",
-                        if p.is_var { "var " } else { "" },
-                        p.name,
-                        p.type_text
-                    ))
+                    .map(|p| p.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let mine = names(r);
+            let clash = ids.iter().any(|s| {
+                *s != stable_id
+                    && self.rows.get(s).is_some_and(|&j| {
+                        let o = &self.model.workspace.routines[j];
+                        o.app_guid == r.app_guid && names(o) == mine
+                    })
+            });
+            let sig = if clash {
+                r.parameters
+                    .iter()
+                    .map(|p| {
+                        format!(
+                            "{}{}: {}",
+                            if p.is_var { "var " } else { "" },
+                            p.name,
+                            p.type_text
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join("; ")
-            ));
+            } else {
+                mine
+            };
+            out.push_str(&format!("({sig})"));
         }
         if ids
             .iter()
@@ -2378,7 +2400,14 @@ mod tests {
         c.app_guid = "dep".into();
         let mut d = routine("Alone", "procedure");
         d.stable_routine_id = "ws:Alone".into();
-        m.workspace.routines = vec![a, b, c, d];
+        // Same parameter names, other types: the typed form.
+        let mut e = routine("Pick", "procedure");
+        e.stable_routine_id = "ws:Pick#1".into();
+        e.parameters = vec![param(0, "X", "Integer")];
+        let mut f = routine("Pick", "procedure");
+        f.stable_routine_id = "ws:Pick#2".into();
+        f.parameters = vec![param(0, "X", "Text")];
+        m.workspace.routines = vec![a, b, c, d, e, f];
         let apps = vec![serde_json::json!({"appId": "dep", "name": "Base App"})];
         let cx = RollupCx::new(&m, &apps);
         let (qa, qb, qc) = (
@@ -2387,13 +2416,12 @@ mod tests {
             cx.qualified("dep:Note#1"),
         );
         assert_ne!(qa, qb, "overloads differ");
-        assert!(qa.ends_with("Note(Msg: Text) [app]"), "{qa}");
-        assert!(
-            qb.ends_with("Note(Msg: Text; Level: Integer) [app]"),
-            "{qb}"
-        );
+        assert!(qa.ends_with("Note(Msg) [app]"), "{qa}");
+        assert!(qb.ends_with("Note(Msg, Level) [app]"), "{qb}");
         assert!(qc.ends_with("Note [Base App]"), "{qc}");
         assert!(cx.qualified("ws:Alone").ends_with("::Alone"));
+        assert!(cx.qualified("ws:Pick#1").ends_with("Pick(X: Integer)"));
+        assert!(cx.qualified("ws:Pick#2").ends_with("Pick(X: Text)"));
     }
 
     #[test]

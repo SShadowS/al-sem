@@ -1956,8 +1956,8 @@ fn overloads_print_with_their_signatures() {
     let (human, err, code) = run_alsem(&["explain", &ws, "--routine", "Out Overloads::RunBoth"]);
     assert_eq!(code, 0, "{err}");
     for want in [
-        "path: RunBoth → Note(Msg: Text)\n",
-        "path: RunBoth → Note(Msg: Text; Level: Integer)\n",
+        "path: RunBoth → Note(Msg)\n",
+        "path: RunBoth → Note(Msg, Level)\n",
     ] {
         assert!(human.contains(want), "{want}\n{human}");
     }
