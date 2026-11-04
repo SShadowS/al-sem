@@ -1,0 +1,76 @@
+dependencies: Out Base (embedded)
+--- Codeunit Out Issue Document::IssueDoc ---
+  coverage: partial
+  reasons: interface-open-world, object-run-unresolved
+  [BACKGROUND_TASK] direct
+    evidence: ws:src/OutIssueDocument.Codeunit.al:18 "TaskScheduler.CreateTask"
+    via: 1 path(s)
+  [COMMIT] transitive
+    evidence: ws:src/OutIssueDocument.Codeunit.al:14 "enters Out Base.OnRun"
+    detail: boundary=Out Base.OnRun, resourceCount=0, resources=, unresolvedResources=1
+    via: 1 path(s)
+  [DB_DELETE] transitive
+    evidence: ws:src/OutIssueDocument.Codeunit.al:14 "enters Out Base.OnRun"
+    detail: boundary=Out Base.OnRun, resourceCount=1, resources=Base Doc Line
+    via: 1 path(s)
+  [DB_DELETE] transitive
+    evidence: ws:src/OutIssueDocument.Codeunit.al:57 "TempLog.DeleteAll"
+    detail: resourceId=a0a00001-0000-4000-8000-0000000000a1/table/50101, resourceDisplay=Out Log, tempState=known(true)
+    via: 1 path(s)
+  [DB_INSERT] transitive
+    evidence: ws:src/OutIssueDocument.Codeunit.al:14 "enters Out Base.OnRun"
+    detail: boundary=Out Base.OnRun, resourceCount=1, resources=Base Ledger 01, tempState=known(true)
+    via: 1 path(s)
+  [DB_INSERT] transitive
+    evidence: ws:src/OutIssueDocument.Codeunit.al:14 "enters Out Base.OnRun"
+    detail: boundary=Out Base.OnRun, resourceCount=12, resources=Base Ledger 01, Base Ledger 02, Base Ledger 03, Base Ledger 04, Base Ledger 05, Base Ledger 06, Base Ledger 07, Base Ledger 08, Base Ledger 09, Base Ledger 10
+    via: 1 path(s)
+  [DB_INSERT] transitive
+    evidence: ws:src/OutIssueDocument.Codeunit.al:60 "Log.Insert"
+    detail: resourceId=a0a00001-0000-4000-8000-0000000000a1/table/50101, resourceDisplay=Out Log, tempState=known(false)
+    via: 1 path(s)
+  [DB_MODIFY] direct
+    evidence: ws:src/OutIssueDocument.Codeunit.al:13 "Doc.Modify"
+    detail: resourceId=a0a00001-0000-4000-8000-0000000000a1/table/50100, resourceDisplay=Out Doc, tempState=parameter-dependent(0)
+    via: 1 path(s)
+  [DB_MODIFY] transitive
+    evidence: ws:src/OutIssueDocument.Codeunit.al:14 "enters Out Base.OnRun"
+    detail: boundary=Out Base.OnRun, resourceCount=1, resources=Base Register
+    via: 1 path(s)
+  [DB_MODIFY] transitive
+    evidence: ws:src/OutIssueDocument.Codeunit.al:15 "enters Out Base.OnRun"
+    detail: boundary=Out Base.OnRun, resourceCount=1, resources=Base Price
+    via: 1 path(s)
+  [DB_READ] transitive
+    evidence: ws:src/OutIssueDocument.Codeunit.al:14 "enters Out Base.OnRun"
+    detail: boundary=Out Base.OnRun, resourceCount=1, resources=Base Register
+    via: 1 path(s)
+  [DB_READ] transitive
+    evidence: ws:src/OutIssueDocument.Codeunit.al:15 "enters Out Base.OnRun"
+    detail: boundary=Out Base.OnRun, resourceCount=1, resources=Base Price
+    via: 1 path(s)
+  [DB_READ] transitive
+    evidence: ws:src/OutIssueDocument.Codeunit.al:39 "RecRef.FindSet"
+    detail: tempState=unknown
+    via: 1 path(s)
+  [ERROR_IMPLICIT] direct
+    evidence: ws:src/OutIssueDocument.Codeunit.al:11 "Doc.TestField"
+    via: 1 path(s)
+  [ERROR_IMPLICIT] transitive
+    evidence: ws:src/OutIssueDocument.Codeunit.al:14 "enters Out Base.OnRun"
+    detail: boundary=Out Base.OnRun, resourceCount=0, resources=, unresolvedResources=1
+    via: 1 path(s)
+  [EVENT_PUBLISH] transitive
+    evidence: ws:src/OutIssueDocument.Codeunit.al:24 "OnAfterIssueDoc"
+    detail: resourceId=a0a00001-0000-4000-8000-0000000000a1/Codeunit/50110/event/onafterissuedoc, resourceDisplay=onafterissuedoc, eventClass=Integration
+    via: 1 path(s)
+  [EVENT_PUBLISH] transitive
+    evidence: ws:src/OutIssueDocument.Codeunit.al:14 "enters Out Base.OnRun"
+    detail: boundary=Out Base.OnRun, resourceCount=1, resources=onafterpostdocument
+    via: 1 path(s)
+  [HTTP] transitive
+    evidence: ws:src/OutIssueDocument.Codeunit.al:71 "Client.Get"
+    detail: method=Get
+    via: 1 path(s)
+  unresolved: 3 callsite(s)
+test coverage: 0 of 1 changed routines reached; 1 [Test] procedures considered (complete)

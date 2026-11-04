@@ -1,0 +1,57 @@
+{
+  "alsemVersion": "cli-output-v1",
+  "deterministic": true,
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "query.touches",
+  "payload": {
+    "dependencies": {
+      "apps": [
+        {
+          "appId": "d0d00001-0000-4000-8000-0000000000b1",
+          "name": "Out Base",
+          "publisher": "probe",
+          "source": "embedded",
+          "version": "1.0.0.0"
+        }
+      ],
+      "mode": "crossApp"
+    },
+    "direction": "both",
+    "down": {
+      "answerable": true,
+      "touches": false,
+      "witnessCount": 0,
+      "witnesses": []
+    },
+    "from": {
+      "resolution": "resolved",
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 2
+        },
+        "display": "IssueDoc",
+        "objectDisplay": "Codeunit Out Issue Document",
+        "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"
+      },
+      "selector": "Out Issue Document.IssueDoc"
+    },
+    "table": {
+      "id": "d0d00001-0000-4000-8000-0000000000b1/table/70020",
+      "isUnknownBucket": false,
+      "name": "Base Register",
+      "resolution": "resolved",
+      "selector": "Base Register"
+    },
+    "up": {
+      "callersTouching": 0,
+      "informative": true,
+      "note": "this routine does NOT touch the table; these callers reach it through other branches",
+      "scoped": true,
+      "transitiveCallers": 1,
+      "witnesses": []
+    }
+  },
+  "schemaVersion": "1.1.0"
+}

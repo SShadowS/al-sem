@@ -1,0 +1,6 @@
+--- Codeunit Out Issue Document::IssueDoc ---
+  question: writes-table:Base Doc Line
+  answer:   yes
+  evidence: 1 effect(s)
+    [DB_DELETE] transitive — ws:src/OutIssueDocument.Codeunit.al:14
+  obligations: unresolved=2, openWorld=1, coverage=incomplete

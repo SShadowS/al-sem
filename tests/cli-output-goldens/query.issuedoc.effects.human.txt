@@ -1,0 +1,9 @@
+dependencies: Out Base (embedded)
+--- effects of Codeunit Out Issue Document::IssueDoc ---
+  6 effect(s)
+    [DeleteAll] on Out Log via inherited, temp known(true) — Codeunit Out Log Mgt::WriteLog at ws:src/OutIssueDocument.Codeunit.al:57
+    [DeleteAll] on Base Doc Line via inherited, temp known(false) — Codeunit Base Poster::OnRun at dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al:6
+    [FindSet] on unknown (target table unresolved — not a table) via inherited, temp unknown — Codeunit Out Issue Document::ScanFields at ws:src/OutIssueDocument.Codeunit.al:39
+    [Insert] on Out Log via inherited, temp known(false) — Codeunit Out Log Mgt::WriteLog at ws:src/OutIssueDocument.Codeunit.al:60
+    [Modify] on Out Doc via direct, temp parameter-dependent(0) — Codeunit Out Issue Document::IssueDoc at ws:src/OutIssueDocument.Codeunit.al:13
+    [Next] on unknown (target table unresolved — not a table) via inherited, temp unknown — Codeunit Out Issue Document::ScanFields at ws:src/OutIssueDocument.Codeunit.al:41

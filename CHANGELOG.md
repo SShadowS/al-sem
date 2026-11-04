@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (MCP output plan, wave 0: the cross-app output fixture)
+
+- **A cross-app fixture whose dependency ships bodies, and its golden family** (plan
+  `docs/superpowers/plans/2026-11-04-mcp-output-fixes.md`, item 0b). Every explain/query golden
+  before it was single-app, so the shapes an agent meets on a real workspace never reached a
+  golden. `tests/fixtures/mcp-output/` (the workspace `ws/` and the dependency's sources `dep/`,
+  packed into `ws/.alpackages/` by `write_source_app`; `output_fixture::fixture_app_matches_its_sources`
+  keeps the two equal) has: a workspace routine that runs a dependency codeunit whose callee
+  writes twelve tables, modifies a thirteenth, raises a dependency event, runs a dynamic codeunit
+  and commits (boundary groups with a commit, more than ten resources, an event group and a
+  dependency gap), a second dependency `OnRun` (two boundaries with one routine name), temporary
+  and physical writes on one table in the workspace and in the dependency, a `RecordRef.Next()`
+  loop, a dynamic `Codeunit.Run`, an interface call, an HTTP call, a background task, an own
+  event with a subscriber, a page action caller and one `[Test]` procedure. The new `cli` member
+  `output_fixture` pins explain, prove (`may-commit` and `writes-table` for seven tables), digest
+  (default and `--include-reads --tests`) and query (`effects`, `touches`) on it, JSON and human,
+  in `tests/cli-output-goldens/` (a new golden directory, declared in `scripts/check-goldens`).
+  The goldens show today's defects on purpose (blank boundary names, `Out Base.OnRun` for two
+  codeunits, resources cut at ten, `unresolvedResources=1` on a commit, 0-based lines); each later
+  item of the plan moves them.
+
 ### Changed (the finer dependency re-resolution rule for S)
 
 - **An S edit re-resolves only the dependency files whose recorded answers changed** (plan

@@ -1,0 +1,7 @@
+--- Codeunit Out Issue Document::IssueDoc ---
+  question: writes-table:Out Doc
+  answer:   yes
+  evidence: 1 effect(s)
+    [DB_MODIFY] direct — ws:src/OutIssueDocument.Codeunit.al:13
+      conditionality: unconditional-on-success
+  obligations: unresolved=2, openWorld=1, coverage=incomplete

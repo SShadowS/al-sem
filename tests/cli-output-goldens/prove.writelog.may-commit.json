@@ -1,0 +1,37 @@
+{
+  "alsemVersion": "cli-output-v1",
+  "deterministic": true,
+  "diagnostics": [],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "prove",
+  "payload": {
+    "lineBase": 0,
+    "question": "may-commit",
+    "result": {
+      "answer": "no",
+      "assumptions": [
+        "loaded-subscribers"
+      ],
+      "obligations": {
+        "analysisGaps": 0,
+        "coneTruncated": false,
+        "coverageComplete": true,
+        "openWorldRows": 0,
+        "unresolvedCallsites": 0
+      }
+    },
+    "routine": {
+      "anchor": {
+        "column": 4,
+        "file": "ws:src/OutIssueDocument.Codeunit.al",
+        "line": 52,
+        "sourceKind": "source"
+      },
+      "display": "WriteLog",
+      "objectDisplay": "Codeunit Out Log Mgt",
+      "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
+    },
+    "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
+  },
+  "schemaVersion": "1.4.0"
+}

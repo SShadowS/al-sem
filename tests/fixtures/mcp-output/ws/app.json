@@ -1,0 +1,11 @@
+{
+  "id": "a0a00001-0000-4000-8000-0000000000a1",
+  "name": "Out Ws",
+  "publisher": "probe",
+  "version": "1.0.0.0",
+  "runtime": "13.0",
+  "idRanges": [{ "from": 50100, "to": 50199 }],
+  "dependencies": [
+    { "id": "d0d00001-0000-4000-8000-0000000000b1", "name": "Out Base", "publisher": "probe", "version": "1.0.0.0" }
+  ]
+}

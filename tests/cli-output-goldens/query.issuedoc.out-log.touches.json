@@ -1,0 +1,173 @@
+{
+  "alsemVersion": "cli-output-v1",
+  "deterministic": true,
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "query.touches",
+  "payload": {
+    "dependencies": {
+      "apps": [
+        {
+          "appId": "d0d00001-0000-4000-8000-0000000000b1",
+          "name": "Out Base",
+          "publisher": "probe",
+          "source": "embedded",
+          "version": "1.0.0.0"
+        }
+      ],
+      "mode": "crossApp"
+    },
+    "direction": "both",
+    "down": {
+      "answerable": true,
+      "touches": true,
+      "witnessCount": 2,
+      "witnesses": [
+        {
+          "op": "DeleteAll",
+          "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op0",
+          "origin": {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 57
+            },
+            "routine": {
+              "anchor": {
+                "column": 4,
+                "file": "ws:src/OutIssueDocument.Codeunit.al",
+                "line": 52
+              },
+              "display": "WriteLog",
+              "objectDisplay": "Codeunit Out Log Mgt",
+              "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
+            }
+          },
+          "tempState": "known(true)",
+          "via": "inherited"
+        },
+        {
+          "op": "Insert",
+          "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op1",
+          "origin": {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 60
+            },
+            "routine": {
+              "anchor": {
+                "column": 4,
+                "file": "ws:src/OutIssueDocument.Codeunit.al",
+                "line": 52
+              },
+              "display": "WriteLog",
+              "objectDisplay": "Codeunit Out Log Mgt",
+              "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
+            }
+          },
+          "tempState": "known(false)",
+          "via": "inherited"
+        }
+      ]
+    },
+    "from": {
+      "resolution": "resolved",
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 2
+        },
+        "display": "IssueDoc",
+        "objectDisplay": "Codeunit Out Issue Document",
+        "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"
+      },
+      "selector": "Out Issue Document.IssueDoc"
+    },
+    "table": {
+      "id": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
+      "isUnknownBucket": false,
+      "name": "Out Log",
+      "resolution": "resolved",
+      "selector": "Out Log"
+    },
+    "up": {
+      "callersTouching": 1,
+      "informative": false,
+      "note": "this routine itself touches the table, so every transitive caller does too (summaries are transitive-down) — the ancestor list is not a finding here",
+      "scoped": true,
+      "transitiveCallers": 1,
+      "witnesses": [
+        {
+          "depth": 1,
+          "op": "DeleteAll",
+          "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op0",
+          "origin": {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 57
+            },
+            "routine": {
+              "anchor": {
+                "column": 4,
+                "file": "ws:src/OutIssueDocument.Codeunit.al",
+                "line": 52
+              },
+              "display": "WriteLog",
+              "objectDisplay": "Codeunit Out Log Mgt",
+              "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
+            }
+          },
+          "routine": {
+            "anchor": {
+              "column": 16,
+              "file": "ws:src/Pages.al",
+              "line": 21
+            },
+            "display": "OnAction",
+            "objectDisplay": "Page Out Doc Card",
+            "stableId": "a0a00001-0000-4000-8000-0000000000a1:Page:50120#152372040a7fe5cc2cfb65eca0ffaa30e8b16e933e9f83fbfbbf3a7bd1455001"
+          },
+          "tempState": "known(true)",
+          "via": "inherited"
+        },
+        {
+          "depth": 1,
+          "op": "Insert",
+          "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op1",
+          "origin": {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 60
+            },
+            "routine": {
+              "anchor": {
+                "column": 4,
+                "file": "ws:src/OutIssueDocument.Codeunit.al",
+                "line": 52
+              },
+              "display": "WriteLog",
+              "objectDisplay": "Codeunit Out Log Mgt",
+              "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
+            }
+          },
+          "routine": {
+            "anchor": {
+              "column": 16,
+              "file": "ws:src/Pages.al",
+              "line": 21
+            },
+            "display": "OnAction",
+            "objectDisplay": "Page Out Doc Card",
+            "stableId": "a0a00001-0000-4000-8000-0000000000a1:Page:50120#152372040a7fe5cc2cfb65eca0ffaa30e8b16e933e9f83fbfbbf3a7bd1455001"
+          },
+          "tempState": "known(false)",
+          "via": "inherited"
+        }
+      ]
+    }
+  },
+  "schemaVersion": "1.1.0"
+}

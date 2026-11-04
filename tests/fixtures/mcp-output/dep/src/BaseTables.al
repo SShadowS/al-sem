@@ -1,0 +1,15 @@
+table 70001 "Base Ledger 01" { fields { field(1; "Entry No."; Integer) { } } keys { key(PK; "Entry No.") { Clustered = true; } } }
+table 70002 "Base Ledger 02" { fields { field(1; "Entry No."; Integer) { } } keys { key(PK; "Entry No.") { Clustered = true; } } }
+table 70003 "Base Ledger 03" { fields { field(1; "Entry No."; Integer) { } } keys { key(PK; "Entry No.") { Clustered = true; } } }
+table 70004 "Base Ledger 04" { fields { field(1; "Entry No."; Integer) { } } keys { key(PK; "Entry No.") { Clustered = true; } } }
+table 70005 "Base Ledger 05" { fields { field(1; "Entry No."; Integer) { } } keys { key(PK; "Entry No.") { Clustered = true; } } }
+table 70006 "Base Ledger 06" { fields { field(1; "Entry No."; Integer) { } } keys { key(PK; "Entry No.") { Clustered = true; } } }
+table 70007 "Base Ledger 07" { fields { field(1; "Entry No."; Integer) { } } keys { key(PK; "Entry No.") { Clustered = true; } } }
+table 70008 "Base Ledger 08" { fields { field(1; "Entry No."; Integer) { } } keys { key(PK; "Entry No.") { Clustered = true; } } }
+table 70009 "Base Ledger 09" { fields { field(1; "Entry No."; Integer) { } } keys { key(PK; "Entry No.") { Clustered = true; } } }
+table 70010 "Base Ledger 10" { fields { field(1; "Entry No."; Integer) { } } keys { key(PK; "Entry No.") { Clustered = true; } } }
+table 70011 "Base Ledger 11" { fields { field(1; "Entry No."; Integer) { } } keys { key(PK; "Entry No.") { Clustered = true; } } }
+table 70012 "Base Ledger 12" { fields { field(1; "Entry No."; Integer) { } } keys { key(PK; "Entry No.") { Clustered = true; } } }
+table 70020 "Base Register" { fields { field(1; "No."; Integer) { } field(2; "Last Entry No."; Integer) { } } keys { key(PK; "No.") { Clustered = true; } } }
+table 70021 "Base Doc Line" { fields { field(1; "Doc No."; Code[20]) { } field(2; "Line No."; Integer) { } } keys { key(PK; "Doc No.", "Line No.") { Clustered = true; } } }
+table 70022 "Base Price" { fields { field(1; "Item No."; Code[20]) { } field(2; "Unit Price"; Decimal) { } } keys { key(PK; "Item No.") { Clustered = true; } } }

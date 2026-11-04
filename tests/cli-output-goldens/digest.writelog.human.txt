@@ -1,0 +1,11 @@
+dependencies: Out Base (embedded)
+--- Codeunit Out Log Mgt::WriteLog ---
+  coverage: complete
+  [DB_DELETE] direct
+    evidence: ws:src/OutIssueDocument.Codeunit.al:57 "TempLog.DeleteAll"
+    detail: resourceId=a0a00001-0000-4000-8000-0000000000a1/table/50101, resourceDisplay=Out Log, tempState=known(true)
+    via: 1 path(s)
+  [DB_INSERT] direct
+    evidence: ws:src/OutIssueDocument.Codeunit.al:60 "Log.Insert"
+    detail: resourceId=a0a00001-0000-4000-8000-0000000000a1/table/50101, resourceDisplay=Out Log, tempState=known(false)
+    via: 1 path(s)
