@@ -1681,6 +1681,51 @@ The census over all 16,776 group resources of IR and RR (CDO-gated test, `cdo` p
 trees built, peak 48,840 states held, 0 evicted. The first version scanned each suffix tree per
 resource and cost far more; the per-tree routine index fixed it before landing.
 
+### 11.6 W2-0c as built (crossing-local resource status)
+
+Two commits, so the one that can move a verdict is reviewed on its own.
+
+**Step 1 (status recorded, nothing dropped).** `LiteralReach::resource_status(entries, ops)`, over
+the W2-0b machinery: for each of the crossing's entry states (its incoming binding states), the
+cached suffix tree; `Reachable` at the first live state of a candidate's owner; else `Disproved`
+when every suffix search completed AND some candidate's owner is reached from an entry target with
+guards ignored (the module's existing rule: a graph or id mismatch never drops anything); else
+`NotEstablished(reason)`: `NoEntry` (the root's search never takes the crossing's edges, e.g. a
+crossing G48 already judges dead), `NoOperation`, `SearchStopped` (cap or cancellation; a capped
+search never deletes), `OwnerNotReached`, `KindNotJudged` (events: only table writes are judged).
+Candidates (`LiteralReach::candidate_ops`): every terminal record of `(effect type, table)` whose
+class can be the group's (`kt` group: known-temporary records; `nt` group: every other record;
+a parameter-dependent producer in both), with the group's representatives; a candidate with no
+operation id makes the status `NoOperation`. The group path (W2-0b) reads the same candidates,
+so a path and a status never disagree. Raw versus refined (§3.1): a prove group whose refined list
+is shorter than its raw one prints `resourceCount` of the refined list, `resources` of its first
+ten, and `resourcesOriginalCount`. Digest has no literal pass until W2-1, so its output is
+unchanged.
+
+CDO census (`cdo_crossing_census`, prove's pass on IR and RR):
+
+| Root | Kind | Reachable | Disproved | Not established |
+|---|---|---|---|---|
+| IR | DB_INSERT | 157 | 1 | 325 (NoEntry) |
+| IR | DB_MODIFY | 58 | 0 | 192 (NoEntry) |
+| IR | DB_DELETE | 82 | 0 | 229 (NoEntry) |
+| IR | EVENT_PUBLISH | — | — | 7,366 (KindNotJudged) |
+| RR | DB_INSERT / MODIFY / DELETE | 482 / 266 / 293 | 0 | 0 |
+| RR | EVENT_PUBLISH | — | — | 7,325 (KindNotJudged) |
+
+IR's `NoEntry` resources sit on crossings the root's search never takes (G48 drops those rows
+whole already, e.g. `Sales-Calc. Discount::OnRun` behind `if RecRef.Number <> Database::"Sales
+Header" then exit;`). The pass costs 0.58 s for IR and 3.28 s for RR (`cdo` profile, census).
+The one disproved resource: IR's `DB_INSERT` `Email Connector Logo` beyond `Codeunit Email
+Account::IsAnyAccountRegistered` (call site `ws:src/Features/Email/Sending/CDOEMail.Codeunit.al:
+254`); the only candidate is `Email Account Impl.::ImportLogo`. Checked in System Application's
+source: `IsAnyAccountRegistered` calls `GetAllAccounts(false, EmailAccount)`, and
+`GetAllAccounts` calls `ImportLogo` only `if LoadLogos then`; so that insert cannot run beyond
+this crossing. No other row of IR writes the table, so dropping it moves prove's
+`writes-table:"Email Connector Logo"` answer (step 2).
+
+**Step 2 (the refinement):** §11.7.
+
 Not covered: the dual cap where the prefix (root) tree itself caps; `live_tree` returns `None`
 then and no group path is computed, exactly as before W2-0b (no fixture reaches 400,000 states).
 

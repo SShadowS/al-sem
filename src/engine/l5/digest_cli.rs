@@ -36,6 +36,7 @@ pub use crate::engine::l5::digest::BoundaryMode;
 use crate::engine::l5::digest::{
     DigestEntryResult, compute_digest_effects_cli_in, is_known_temp_state,
 };
+use crate::engine::l5::literal_reach::ResourceStatus;
 use crate::engine::l5::snapshot::{
     CapabilitySnapshot, SnapshotCoverageRecord, SnapshotIdentityTable,
 };
@@ -1442,7 +1443,11 @@ pub(crate) fn finish_effects(
 /// so it runs on a read's own copies, never on memoized ones.
 /// Spans (context-server design r3 §13 item 6): prove's post-root work
 /// (0.94 s measured for one root on CDO).
-fn literal_reach_pass(tree: &CapabilitySnapshot, model: &Model, entries: &mut [DigestEntryResult]) {
+pub(crate) fn literal_reach_pass(
+    tree: &CapabilitySnapshot,
+    model: &Model,
+    entries: &mut [DigestEntryResult],
+) {
     let reach = {
         let _s = crate::engine::perf_trace::span("digest", "prove.literal_reach");
         crate::engine::l5::literal_reach::LiteralReach::new(
@@ -1479,8 +1484,60 @@ fn literal_reach_pass(tree: &CapabilitySnapshot, model: &Model, entries: &mut [D
                 let entries = by_crossing
                     .entry(c.id.clone())
                     .or_insert_with(|| reach.crossing_entries(&tree, &c));
-                e.group_resource_paths =
-                    group_paths.paths(&reach, &tree, entries, e, &mut suffixes, &never);
+                // W2-0c (design §3.3.1): per resource, the operations that
+                // could write it: every direct fact of its kind in the group's
+                // class, with the group's representatives. The path (G35,
+                // W2-0b) and the status read the same set.
+                // Only table writes are judged; an event group's resources
+                // keep W2-0b's representatives (none: no path, as before).
+                let kt = is_known_temp_state(e.temp_state.as_ref());
+                let judged = e.effect_type.starts_with("DB_");
+                let candidates: Vec<(String, Option<Vec<String>>)> = e
+                    .group_resources
+                    .iter()
+                    .map(|(r, _)| {
+                        let reps = e
+                            .group_resource_ops
+                            .iter()
+                            .find(|(id, _)| id == r)
+                            .and_then(|(_, ops)| ops.clone());
+                        let ops = if judged {
+                            reach.candidate_ops(
+                                &e.effect_type,
+                                r,
+                                kt,
+                                reps.as_deref().unwrap_or_default(),
+                            )
+                        } else {
+                            reps
+                        };
+                        (r.clone(), ops)
+                    })
+                    .collect();
+                e.group_resource_paths = group_paths.paths(
+                    &reach,
+                    &tree,
+                    entries,
+                    e,
+                    &candidates,
+                    &mut suffixes,
+                    &never,
+                );
+                // Each resource judged from THIS crossing's entry states.
+                e.group_resource_status = candidates
+                    .iter()
+                    .map(|(r, ops)| {
+                        use crate::engine::l5::literal_reach::Undecided;
+                        let status = match ops {
+                            _ if !judged => {
+                                ResourceStatus::NotEstablished(Undecided::KindNotJudged)
+                            }
+                            Some(ops) => reach.resource_status(entries, ops, &mut suffixes, &never),
+                            None => ResourceStatus::NotEstablished(Undecided::NoOperation),
+                        };
+                        (r.clone(), status)
+                    })
+                    .collect();
             }
         }
         let (dead, dead_resources) = reach.unreachable_effects(&entry.routine_id, &entry.effects);
@@ -1718,6 +1775,41 @@ pub fn run_digest_query_full_from_entries(
                 // operation in the effect's class (its cone fact's class, frame-
                 // correct after D1); every failed join is a diagnostic.
                 let mut detail = eff.detail.clone();
+                // W2-0c, raw versus refined (design §3.1): a group whose
+                // refined membership is shorter than its raw one (resources
+                // the root, or this group's crossing, cannot reach: G33,
+                // W2-0c) describes the REFINED list: `resourceCount` counts it
+                // and `resources` names its first ten; the raw count stays as
+                // `resourcesOriginalCount`. Prove's read only: no other read
+                // refines.
+                if !eff.dead_group_resources.is_empty() {
+                    let refined: Vec<&str> = eff
+                        .group_resources
+                        .iter()
+                        .filter(|(id, _)| !eff.dead_group_resources.contains(id))
+                        .map(|(_, d)| d.as_str())
+                        .collect();
+                    if refined.len() < eff.group_resources.len() {
+                        for (k, v) in detail.iter_mut() {
+                            match k.as_str() {
+                                "resourceCount" => *v = refined.len().to_string(),
+                                "resources" => {
+                                    *v = refined
+                                        .iter()
+                                        .take(10)
+                                        .copied()
+                                        .collect::<Vec<_>>()
+                                        .join(", ");
+                                }
+                                _ => {}
+                            }
+                        }
+                        detail.push((
+                            "resourcesOriginalCount".to_string(),
+                            eff.group_resources.len().to_string(),
+                        ));
+                    }
+                }
                 if matches!(
                     eff.effect_type.as_str(),
                     "DB_INSERT" | "DB_MODIFY" | "DB_DELETE" | "DB_READ"

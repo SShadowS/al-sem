@@ -137,10 +137,14 @@ impl<'a> GroupPaths<'a> {
 
     /// Per group resource of `eff`, one path from the root that traverses
     /// the group's crossing (`entries`, from [`LiteralReach::crossing_entries`])
-    /// to a routine where one of the resource's operations can run (module
-    /// doc). Empty off a group; a resource with an operation not known, or no
-    /// witness, has none. A path that does not traverse the crossing comes
-    /// only from a search that stopped early, and says so.
+    /// to a routine where one of the resource's operations (`candidates`:
+    /// per resource, the operations that could write it, `None` when one
+    /// cannot be judged; W2-0c: [`LiteralReach::candidate_ops`], every direct
+    /// fact of the kind in the group's class, so the path and the resource's
+    /// status read one set) can run (module doc). Empty off a group; a
+    /// resource with an operation not known, or no witness, has none. A path
+    /// that does not traverse the crossing comes only from a search that
+    /// stopped early, and says so.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn paths(
         &self,
@@ -148,6 +152,7 @@ impl<'a> GroupPaths<'a> {
         tree: &LiveTree<'a>,
         entries: &CrossingEntries<'a>,
         eff: &DigestEffectResult,
+        candidates: &[(String, Option<Vec<String>>)],
         cache: &mut SuffixCache<'a>,
         cancel: &dyn Fn() -> bool,
     ) -> Vec<(String, GroupPathOutcome)> {
@@ -155,7 +160,7 @@ impl<'a> GroupPaths<'a> {
             return Vec::new();
         };
         let mut out = Vec::new();
-        for (resource, ops) in &eff.group_resource_ops {
+        for (resource, ops) in candidates {
             let none = |reason| NoGroupPath {
                 reason,
                 crossing: crossing.id.clone(),

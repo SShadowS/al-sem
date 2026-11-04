@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (MCP output wave 2, W2-0c step 1: a group resource's status beyond its own crossing)
+
+Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.3.1, §11.6.
+
+- **Prove's read now judges every table resource of a dependency group from that group's own
+  crossing** (`LiteralReach::resource_status`): from each entry state of the crossing (the W2-0b
+  prefix phase), the suffix search either reaches a live state of an operation that could write
+  the table (`Reachable`), or completes having reached a candidate's owner with guards ignored
+  and no state where it can run (`Disproved`), or concludes nothing (`NotEstablished`, with its
+  reason: no entry, no operation, a search stopped early, an owner not reached even with guards
+  ignored, or not a table write). The candidates are every direct fact of the table and kind in
+  the group's class (the terminal-fact index), parameter-dependent producers always included, not
+  only the group's representative operations. Recorded on `DigestEffectResult::
+  group_resource_status`; this step drops nothing.
+- **The group path reads the same candidates** (W2-0b used the representatives only). On CDO,
+  RunReportID's `CDO E-Mail Log` group beyond `Codeunit Sales-Calc. Discount::OnRun` had
+  `groupPathUnavailable: "no-witness"`; it now has a 27-hop path that passes the crossing: `…
+  Sales-Calc. Discount.CalculateInvoiceDiscount → Sales Line.OnDelete → … Workflow Response
+  Handling.PostDocument → Sales-Post.OnRun → … event-dispatch → CDO Subscribers.
+  OnRunOnBeforeFinalizePostingSalesPost → MoveLogsForSalesDocs → MoveEmailLog` (checked in the
+  CDO source: the subscriber of `Sales-Post`'s `OnRunOnBeforeFinalizePosting` moves the log
+  entries). Verdicts and evidence rows are unchanged.
+- **Raw versus refined (design §3.1).** A prove group whose refined membership is shorter than its
+  raw one (today: G33's literal-dead resources) now describes the list it prints:
+  `detail.resourceCount` counts it, `detail.resources` names its first ten, and
+  `detail.resourcesOriginalCount` keeps the raw count. Before, the count was the raw one beside a
+  shorter list.
+
 ### Fixed (MCP output wave 2, W2-0b: G1, a group's path now passes its entry point)
 
 Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.4.3, §11.5.
