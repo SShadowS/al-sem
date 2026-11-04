@@ -1,0 +1,5 @@
+--- Codeunit QT Touches::Mixed vs QT Item (07070707-0000-4000-8000-000000000071/table/50700) ---
+  scope: per operation, one routine into dependency code; temporary-record touches persist nothing but use the table's schema and run its triggers; lines are 1-based
+  down: yes — 4 record touches: 1 known persistent, 0 possibly persistent, 3 on temporary records
+    [Get] read at ws:src/QTTouches.al:62 in Codeunit QT Touches::Mixed
+    temporary records: 3 touches in 2 routines (Codeunit QT Touches::TempOnly 2, Codeunit QT Touches::WriteItem 1) — --all lists them

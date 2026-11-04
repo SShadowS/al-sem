@@ -308,7 +308,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_query_touches",
-            "Is a table touched by any database action, transitively, up or down the call stack? Without `from`, every routine that touches it. Temporary-record operations count as touches (each witness states its temp state). Dependency code: one routine deep. Lines are 1-based. Size: a few lines to ~75 KB with `from`; without `from` it can be hundreds of KB. Over the inline cap it goes to a file with a summary (the down/up headlines). Returns the exact `alsem query touches` stdout (default format human).",
+            "Is a table touched by any database action, transitively, up or down the call stack? Without `from`, every routine that touches it. Touches are counted as known persistent, possibly persistent and on temporary records (a temporary-record touch persists nothing but uses the table's schema and runs its triggers). `up` counts the transitive callers that touch it, do not, or are unknown (no summary row); when the routine touches the table itself the callers are counted, not listed. Dependency code: one routine deep. Lines are 1-based. Size: human a few lines to ~10 KB by default (lists folded); `all: true` lists every witness, callers' included, and can reach tens of megabytes on a hub routine; `format: json` keeps every down witness (~200 KB on a hub routine). Over the inline cap it goes to a file with a summary (the down/up headlines). Returns the exact `alsem query touches` stdout (default format human).",
             schema(
                 vec![
                     (
@@ -322,6 +322,10 @@ pub fn tool_list() -> Vec<Value> {
                     (
                         "direction",
                         json!({"type": "string", "enum": ["down", "up", "both"], "description": "down | up | both (default both); up requires from."}),
+                    ),
+                    (
+                        "all",
+                        json!({"type": "boolean", "description": "Every witness, the callers' included, and no folded list (`--all`). Large on a hub routine."}),
                     ),
                     (
                         "format",
@@ -700,6 +704,7 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
                 "direction",
                 &a.enumerated("direction", &["down", "up", "both"], "both")?,
             );
+            v.switch("all", a.flag("all")?);
             v.opt(
                 "format",
                 &a.enumerated("format", &["human", "json"], "human")?,

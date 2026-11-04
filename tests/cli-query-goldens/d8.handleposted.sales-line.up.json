@@ -32,32 +32,40 @@
       "selector": "Sales Line"
     },
     "up": {
-      "callersTouching": 1,
-      "informative": true,
-      "note": "this routine does NOT touch the table; these callers reach it through other branches",
-      "scoped": true,
-      "transitiveCallers": 2,
-      "witnesses": [
+      "callers": [
         {
-          "depth": 2,
-          "op": "ModifyAll",
-          "operationId": "469fd5cc0952e4c7/825ec967c74345fb0413f0bb078ac538bb70100a89e09849a93faf10f875e96a/op3",
-          "origin": {
-            "anchor": {
-              "column": 8,
-              "file": "ws:src/posting.al",
-              "line": 12
+          "counts": {
+            "knownPersistent": 1,
+            "possiblyPersistent": {
+              "callerDependent": 0,
+              "tempStateUnknown": 0
             },
-            "routine": {
+            "temporary": 0
+          },
+          "depth": 2,
+          "firstWitness": {
+            "op": "ModifyAll",
+            "operationId": "469fd5cc0952e4c7/825ec967c74345fb0413f0bb078ac538bb70100a89e09849a93faf10f875e96a/op3",
+            "origin": {
               "anchor": {
-                "column": 4,
+                "column": 8,
                 "file": "ws:src/posting.al",
-                "line": 3
+                "line": 12
               },
-              "display": "PostSalesDoc",
-              "objectDisplay": "Codeunit D8PostingChain",
-              "stableId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#2e5621326f8bababbcb4016a11968674e37ac0be41cdb950e2e16bf34125f1b1"
-            }
+              "routine": {
+                "anchor": {
+                  "column": 4,
+                  "file": "ws:src/posting.al",
+                  "line": 3
+                },
+                "display": "PostSalesDoc",
+                "objectDisplay": "Codeunit D8PostingChain",
+                "stableId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#2e5621326f8bababbcb4016a11968674e37ac0be41cdb950e2e16bf34125f1b1"
+              }
+            },
+            "tempState": "known(false)",
+            "touchClass": "knownPersistent",
+            "via": "direct"
           },
           "routine": {
             "anchor": {
@@ -69,11 +77,33 @@
             "objectDisplay": "Codeunit D8PostingChain",
             "stableId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#2e5621326f8bababbcb4016a11968674e37ac0be41cdb950e2e16bf34125f1b1"
           },
-          "tempState": "known(false)",
-          "via": "direct"
+          "witnessCount": 1
         }
-      ]
+      ],
+      "callersNotTouching": 1,
+      "callersTouching": 1,
+      "callersUnknown": 0,
+      "informative": true,
+      "notTouching": [
+        {
+          "depth": 1,
+          "routine": {
+            "anchor": {
+              "column": 4,
+              "file": "ws:src/posting.al",
+              "line": 19
+            },
+            "display": "OnAfterPostSalesDoc",
+            "objectDisplay": "Codeunit D8PostingChain",
+            "stableId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec"
+          }
+        }
+      ],
+      "note": "this routine does NOT touch the table; the touching callers reach it through other branches",
+      "scoped": true,
+      "transitiveCallers": 2,
+      "unknown": []
     }
   },
-  "schemaVersion": "2.0.0"
+  "schemaVersion": "3.0.0"
 }

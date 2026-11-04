@@ -19,6 +19,17 @@
     "direction": "both",
     "down": {
       "answerable": true,
+      "beyond": [],
+      "counts": {
+        "byOp": {},
+        "knownPersistent": 0,
+        "possiblyPersistent": {
+          "callerDependent": 0,
+          "tempStateUnknown": 0
+        },
+        "tableNotResolved": 2,
+        "temporary": 0
+      },
       "touches": false,
       "witnessCount": 0,
       "witnesses": []
@@ -46,13 +57,31 @@
       "selector": "Base Register"
     },
     "up": {
+      "callers": [],
+      "callersNotTouching": 1,
       "callersTouching": 0,
+      "callersUnknown": 0,
       "informative": true,
-      "note": "this routine does NOT touch the table; these callers reach it through other branches",
+      "notTouching": [
+        {
+          "depth": 1,
+          "routine": {
+            "anchor": {
+              "column": 16,
+              "file": "ws:src/Pages.al",
+              "line": 22
+            },
+            "display": "OnAction",
+            "objectDisplay": "Page Out Doc Card",
+            "stableId": "a0a00001-0000-4000-8000-0000000000a1:Page:50120#152372040a7fe5cc2cfb65eca0ffaa30e8b16e933e9f83fbfbbf3a7bd1455001"
+          }
+        }
+      ],
+      "note": "this routine does NOT touch the table; the touching callers reach it through other branches",
       "scoped": true,
       "transitiveCallers": 1,
-      "witnesses": []
+      "unknown": []
     }
   },
-  "schemaVersion": "2.0.0"
+  "schemaVersion": "3.0.0"
 }

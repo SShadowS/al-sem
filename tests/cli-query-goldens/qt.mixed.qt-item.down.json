@@ -1,0 +1,154 @@
+{
+  "alsemVersion": "cli-query-v1",
+  "deterministic": true,
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "query.touches",
+  "payload": {
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "direction": "down",
+    "down": {
+      "answerable": true,
+      "beyond": [],
+      "counts": {
+        "byOp": {
+          "FindFirst": 1,
+          "Get": 1,
+          "Insert": 2
+        },
+        "knownPersistent": 1,
+        "possiblyPersistent": {
+          "callerDependent": 0,
+          "tempStateUnknown": 0
+        },
+        "tableNotResolved": 0,
+        "temporary": 3
+      },
+      "touches": true,
+      "witnessCount": 4,
+      "witnesses": [
+        {
+          "op": "FindFirst",
+          "operationId": "46598e8ae640a0a8/5ab6bc4aaac8091515f37b87ac829267644e77ee8ce41aad1483cafe08cd7419/op1",
+          "origin": {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/QTTouches.al",
+              "line": 41
+            },
+            "routine": {
+              "anchor": {
+                "column": 4,
+                "file": "ws:src/QTTouches.al",
+                "line": 36
+              },
+              "display": "TempOnly",
+              "objectDisplay": "Codeunit QT Touches",
+              "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
+            }
+          },
+          "tempState": "known(true)",
+          "touchClass": "temporary",
+          "via": "inherited"
+        },
+        {
+          "op": "Get",
+          "operationId": "46598e8ae640a0a8/6219052bb63a8a1a447ccf709d6f7fb781b0902be0e607cfc56404d6cdf6326f/op0",
+          "origin": {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/QTTouches.al",
+              "line": 62
+            },
+            "routine": {
+              "anchor": {
+                "column": 4,
+                "file": "ws:src/QTTouches.al",
+                "line": 58
+              },
+              "display": "Mixed",
+              "objectDisplay": "Codeunit QT Touches",
+              "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#88ade733a8ffcb3c10db6fdf91fd8d568c04ca56427eb041e2ebd16d74b0430e"
+            }
+          },
+          "tempState": "known(false)",
+          "touchClass": "knownPersistent",
+          "via": "direct"
+        },
+        {
+          "op": "Insert",
+          "operationId": "46598e8ae640a0a8/5ab6bc4aaac8091515f37b87ac829267644e77ee8ce41aad1483cafe08cd7419/op0",
+          "origin": {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/QTTouches.al",
+              "line": 40
+            },
+            "routine": {
+              "anchor": {
+                "column": 4,
+                "file": "ws:src/QTTouches.al",
+                "line": 36
+              },
+              "display": "TempOnly",
+              "objectDisplay": "Codeunit QT Touches",
+              "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
+            }
+          },
+          "tempState": "known(true)",
+          "touchClass": "temporary",
+          "via": "inherited"
+        },
+        {
+          "op": "Insert",
+          "operationId": "46598e8ae640a0a8/df980d5b2960e89e21f2452e4999035332235f104bbebfa4faac1c33412033e1/op0",
+          "origin": {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/QTTouches.al",
+              "line": 33
+            },
+            "routine": {
+              "anchor": {
+                "column": 4,
+                "file": "ws:src/QTTouches.al",
+                "line": 31
+              },
+              "display": "WriteItem",
+              "objectDisplay": "Codeunit QT Touches",
+              "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#6a863bfb0eb86b6e845ad40acc2308a3480e63e10299e4a629604c6a43c90d72"
+            }
+          },
+          "tempState": "known(true)",
+          "touchClass": "temporary",
+          "via": "inherited"
+        }
+      ]
+    },
+    "from": {
+      "resolution": "resolved",
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/QTTouches.al",
+          "line": 58
+        },
+        "display": "Mixed",
+        "objectDisplay": "Codeunit QT Touches",
+        "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#88ade733a8ffcb3c10db6fdf91fd8d568c04ca56427eb041e2ebd16d74b0430e"
+      },
+      "selector": "Mixed"
+    },
+    "lineBase": 1,
+    "table": {
+      "id": "07070707-0000-4000-8000-000000000071/table/50700",
+      "isUnknownBucket": false,
+      "name": "QT Item",
+      "resolution": "resolved",
+      "selector": "QT Item"
+    }
+  },
+  "schemaVersion": "3.0.0"
+}
