@@ -40,7 +40,7 @@ use crate::engine::l5::digest_cli::{
 use crate::engine::l5::unresolved_cone::UnresolvedConeItem;
 use crate::engine::line_base::{shown, shown_opt};
 use crate::engine::session::{Cell, prove_plan};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // ProveQuestion
@@ -328,6 +328,62 @@ fn compute_obligations(
         coverage_closed_by_assumption,
         answer_relies_on_world: false,
         relies_on_loaded_subscribers: false,
+    }
+}
+
+/// W2-8 (2h, design §4.7 P4): where the obligations point. The unresolved
+/// call sites the answer's world still counts (not waived), split by where
+/// the call site is and by kind, and the most frequent callees.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ObligationPointers {
+    /// In workspace code: calls not resolved (dynamic targets and the like).
+    pub workspace_unresolved: usize,
+    /// In workspace code: interface calls counted open world.
+    pub workspace_open_world: usize,
+    /// The three most frequent callees, `(display, count)`.
+    pub top_callees: Vec<(String, usize)>,
+}
+
+impl ObligationPointers {
+    /// Over `entry`'s unresolved cone, in `world`.
+    #[must_use]
+    pub fn of(entry: &DigestEntryFull, world: World) -> ObligationPointers {
+        let mut p = ObligationPointers::default();
+        let mut callees: BTreeMap<&str, usize> = BTreeMap::new();
+        for item in entry.unresolved.iter().filter(|i| !world_waives(i, world)) {
+            if item
+                .callsite_file
+                .as_deref()
+                .is_some_and(|f| f.starts_with("ws:"))
+            {
+                if item.open_world == Some(true) {
+                    p.workspace_open_world += 1;
+                } else {
+                    p.workspace_unresolved += 1;
+                }
+            }
+            *callees.entry(item.callee_display.as_str()).or_default() += 1;
+        }
+        let mut top: Vec<(String, usize)> = callees
+            .into_iter()
+            .map(|(c, n)| (c.to_string(), n))
+            .collect();
+        top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        top.truncate(3);
+        p.top_callees = top;
+        p
+    }
+
+    fn to_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "unresolvedInWorkspace": {
+                "notResolved": self.workspace_unresolved,
+                "openWorld": self.workspace_open_world,
+            },
+            "topUnresolvedCallees": self.top_callees.iter()
+                .map(|(c, n)| serde_json::json!({"callee": c, "count": n}))
+                .collect::<Vec<_>>(),
+        })
     }
 }
 
@@ -1060,6 +1116,178 @@ pub(crate) fn evaluate_writes_table(
     evaluate_may_question(entry, oblg, &question, false, via_callers, field_guarded)
 }
 
+/// Everything "does the root write table T" reads (design §3.2.1, R3a; the
+/// W2-2 gap (a)): the root's passed and joined entry, the L4 temp states for
+/// the caller-frame question, the cone's gap count and table-event bit, the
+/// world. Prove's `writes-table`, explain's and digest's `--writes-table` all
+/// answer through [`TableQuestions::answer`], so the three tools give ONE
+/// answer by construction (T-W2-16 leg 2).
+pub(crate) struct TableQuestions<'a> {
+    pub model: &'a crate::program::model::workspace::Model,
+    pub temp_states: &'a crate::engine::l5::digest_cli::DbTempStates<'a>,
+    pub root: &'a str,
+    pub entry: &'a DigestEntryFull,
+    pub gaps_in_cone_count: usize,
+    pub fires_table_events: bool,
+    pub world: World,
+}
+
+/// One table's answer and the caller-resolved writes its evidence cites.
+pub(crate) struct TableAnswer {
+    pub result: ProveResult,
+    pub via_callers: HashMap<usize, CallerRef>,
+}
+
+impl TableQuestions<'_> {
+    /// `writes-table:<table>`: `Err` for a table the program does not know
+    /// (G40: matching no write would read as a proven `no`).
+    pub(crate) fn answer(&self, table: &str) -> Result<TableAnswer, String> {
+        if !names_a_known_table(self.model, table) {
+            return Err(format!(
+                "unknown table '{table}': no table of the program has that name or number"
+            ));
+        }
+        let question = ProveQuestion::WritesTable {
+            table: table.to_string(),
+        };
+        // G25: caller-dependent writes asked in the callers' frames.
+        let via_callers = resolve_caller_dependent_writes(
+            self.model,
+            self.temp_states,
+            self.root,
+            self.entry,
+            &question,
+        );
+        // G36: field-guarded RecordRef writes, judged against the table.
+        let field_guarded = crate::engine::l5::field_guard::resolve_field_guarded_writes(
+            self.model,
+            crate::engine::l5::digest_cli::primary_guid_of(self.model).unwrap_or(""),
+            self.entry,
+            table,
+        );
+        let mut result = prove_with_callers(
+            self.entry,
+            self.gaps_in_cone_count,
+            &question,
+            &via_callers,
+            &field_guarded,
+            self.world,
+        );
+        result.obligations.relies_on_loaded_subscribers =
+            relies_on_loaded_subscribers(&result, self.entry, self.fires_table_events);
+        Ok(TableAnswer {
+            result,
+            via_callers,
+        })
+    }
+}
+
+/// A table answer as explain and digest print it in JSON: the table, prove's
+/// `answer`, `blockedBy` and `assumptions` in prove's own serialization, and
+/// how many evidence rows it cites.
+pub(crate) fn table_answer_value(table: &str, a: &TableAnswer) -> serde_json::Value {
+    let r = &a.result;
+    let mut v = serde_json::json!({
+        "table": table,
+        "answer": r.answer.as_str(),
+        "evidence": r.evidence.as_ref().map_or(0, Vec::len),
+        "blockedBy": r.blocked_by.as_ref().map_or_else(Vec::new, |b| b.iter().map(blocker_to_value).collect()),
+    });
+    if let Some(label) = r.obligations.assumption() {
+        v["assumptions"] = serde_json::json!([label]);
+    }
+    v
+}
+
+/// Per root stable id: the JSON values and human lines of its
+/// `--writes-table` answers (explain and digest, W2-2 gap (a)).
+pub(crate) type TableAnswers = HashMap<String, (Vec<serde_json::Value>, Vec<String>)>;
+
+/// Every `tables` answer for every root of `entries`, in the default world,
+/// through [`TableQuestions::answer`]. `cones`: per root, its cone's gap
+/// count and table-event bit ([`cone_facts`], read before the entries are
+/// joined, which takes the cones).
+pub(crate) fn cone_facts(
+    cones: &BTreeMap<String, crate::engine::l5::digest_cli::UnresolvedCone>,
+) -> HashMap<String, (usize, bool)> {
+    cones
+        .iter()
+        .map(|(r, c)| {
+            (
+                r.clone(),
+                (
+                    c.gaps_in_cone
+                        .expect("a --writes-table plan counts the gaps in the cone"),
+                    c.fires_table_events
+                        .expect("a --writes-table plan reads the cone's table events"),
+                ),
+            )
+        })
+        .collect()
+}
+
+/// [`table_answers`] needs [`cone_facts`] of a plan through
+/// `session::counting_cone_gaps`.
+pub(crate) fn table_answers(
+    model: &crate::program::model::workspace::Model,
+    temp_states: &crate::engine::l5::digest_cli::DbTempStates<'_>,
+    entries: &[DigestEntryFull],
+    cones: &HashMap<String, (usize, bool)>,
+    tables: &[String],
+) -> TableAnswers {
+    let mut out = TableAnswers::new();
+    if tables.is_empty() {
+        return out;
+    }
+    for entry in entries {
+        let &(gaps_in_cone_count, fires_table_events) = cones
+            .get(&entry.routine_id)
+            .expect("a --writes-table plan counts each root's cone");
+        let q = TableQuestions {
+            model,
+            temp_states,
+            root: &entry.routine_id,
+            entry,
+            gaps_in_cone_count,
+            fires_table_events,
+            world: World::of_flags(false),
+        };
+        let (mut values, mut lines) = (Vec::new(), Vec::new());
+        for t in tables {
+            match q.answer(t) {
+                Ok(a) => {
+                    values.push(table_answer_value(t, &a));
+                    lines.push(table_answer_human(t, &a));
+                }
+                Err(e) => {
+                    values.push(serde_json::json!({"table": t, "error": e}));
+                    lines.push(format!("writes-table:{t}: {e}"));
+                }
+            }
+        }
+        out.insert(entry.routine_id.clone(), (values, lines));
+    }
+    out
+}
+
+/// The human line of a table answer.
+pub(crate) fn table_answer_human(table: &str, a: &TableAnswer) -> String {
+    let r = &a.result;
+    let mut s = format!("writes-table:{table}: {}", r.answer.as_str());
+    let n = r.evidence.as_ref().map_or(0, Vec::len);
+    if n > 0 {
+        s.push_str(&format!(" ({n} evidence)"));
+    }
+    if let Some(b) = r.blocked_by.as_ref().filter(|b| !b.is_empty()) {
+        s.push_str(&format!(" (blocked by {})", b.len()));
+    }
+    if let Some(label) = r.obligations.assumption() {
+        s.push_str(&format!("; assumes {label}"));
+    }
+    s.push_str(" — the answer alsem prove gives");
+    s
+}
+
 // ---------------------------------------------------------------------------
 // JSON anchor helper
 // ---------------------------------------------------------------------------
@@ -1149,13 +1377,17 @@ pub struct ProveDocumentArgs<'a> {
     pub diagnostics_json: serde_json::Value,
     pub alsem_ver: &'a str,
     pub deterministic: bool,
+    /// W2-8: where the obligations point (`None` for the no-root document).
+    pub pointers: Option<&'a ObligationPointers>,
 }
 
 /// W2-0b: a group path's structured witness (`groupWitness`): per hop the
 /// edge kind, its site id, the routine entered (stable id and qualified
 /// display) and where the edge leaves its calling routine (1-based line);
 /// then the terminal operation.
-fn group_witness_value(path: &crate::engine::l5::group_path::GroupPath) -> serde_json::Value {
+pub(crate) fn group_witness_value(
+    path: &crate::engine::l5::group_path::GroupPath,
+) -> serde_json::Value {
     let line = |l: Option<u32>| l.map(crate::engine::line_base::shown);
     let hops: Vec<serde_json::Value> = path
         .steps
@@ -1197,6 +1429,7 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
         diagnostics_json,
         alsem_ver,
         deterministic,
+        pointers,
     } = args;
 
     // result sub-object
@@ -1258,6 +1491,29 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
                         None => {}
                     }
                 }
+                // W2-6 (2f, prove 2.3.0): a resource-less group's terminal
+                // witness, for any question that cites it.
+                if let (Some(w), Some(obj)) = (&effects[i].group_terminal_path, v.as_object_mut())
+                {
+                    match w {
+                        Ok(path) => {
+                            obj.insert(
+                                "groupPath".into(),
+                                serde_json::json!({"hops": path.hops}),
+                            );
+                            obj.insert("crossing".into(), path.crossing.clone().into());
+                            obj.insert("throughEntryPoint".into(), path.through_entry_point.into());
+                            if let Some(reason) = path.reason {
+                                obj.insert("throughEntryPointReason".into(), reason.into());
+                            }
+                            obj.insert("groupWitness".into(), group_witness_value(path));
+                        }
+                        Err(none) => {
+                            obj.insert("crossing".into(), none.crossing.clone().into());
+                            obj.insert("groupPathUnavailable".into(), none.reason.into());
+                        }
+                    }
+                }
                 v
             })
             .collect();
@@ -1272,10 +1528,15 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
         result_obj.insert("blockedBy".into(), serde_json::Value::Array(bv));
     }
 
-    result_obj.insert(
-        "obligations".into(),
-        obligations_to_value(&prove_result.obligations),
-    );
+    let mut obligations = obligations_to_value(&prove_result.obligations);
+    // W2-8 (2h, prove 2.3.0, additive): where the obligations point.
+    if let (Some(m), Some(serde_json::Value::Object(o))) = (
+        obligations.as_object_mut(),
+        pointers.map(ObligationPointers::to_value),
+    ) {
+        m.extend(o);
+    }
+    result_obj.insert("obligations".into(), obligations);
     // G24/G29: the label a KB needs for an answer that holds only in a world
     // beyond the open one.
     let o = &prove_result.obligations;
@@ -1329,7 +1590,9 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     // 2.2.0 (wave 2, W2-0b, additive): a writes-table group match's
     // `groupPath` traverses its crossing, and carries `crossing`,
     // `throughEntryPoint` and the structured `groupWitness` beside it.
-    env.insert("schemaVersion".into(), "2.2.0".into());
+    // 2.3.0 (W2-6, additive): a resource-less group's evidence (COMMIT,
+    // HTTP, UI, …) carries the same fields for its own terminal witness.
+    env.insert("schemaVersion".into(), "2.3.0".into());
 
     serialize_document_value(serde_json::Value::Object(env))
 }
@@ -1338,42 +1601,121 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
 // Human formatter (formatProveHuman)
 // ---------------------------------------------------------------------------
 
+/// What the human answer needs to print paths (W2-6): the model joins and
+/// the root's stable id. `None` for the no-root document.
+pub struct HumanPaths<'c, 'm> {
+    pub cx: &'c crate::engine::l5::routine_rollup::RollupCx<'m>,
+    pub root: &'c str,
+    /// W2-8: where the obligations point.
+    pub pointers: &'c ObligationPointers,
+}
+
 pub fn format_prove_human(
     routine_display: &str,
     object_display: &str,
     question: &str,
     prove_result: &ProveResult,
     effects: &[DigestEffectFull],
+    paths: Option<&HumanPaths<'_, '_>>,
 ) -> String {
+    use crate::engine::l5::routine_rollup::{is_group, no_path_reason, plural};
     let mut lines: Vec<String> = Vec::new();
 
     // Routine header
     let routine_header = owner_qualified(object_display, routine_display);
     lines.push(format!("--- {} ---", routine_header));
     lines.push(format!("  question: {}", question));
-    lines.push(format!("  answer:   {}", prove_result.answer.as_str()));
+    // W2-8 (R3e): prove's own answer is authoritative. An `unknown` with no
+    // evidence is an absence the obligations block: say so; `yes` and `no`
+    // print bare, `no` followed by its coverage and assumptions below.
+    let no_evidence = prove_result.evidence.as_ref().is_none_or(Vec::is_empty);
+    lines.push(match &prove_result.answer {
+        // (`paths` is `None` only for the no-root document: nothing was
+        // looked at there.)
+        ProveAnswer::Unknown if no_evidence && paths.is_some() => {
+            "  answer:   unknown — no matching effect observed; coverage incomplete".to_string()
+        }
+        a => format!("  answer:   {}", a.as_str()),
+    });
 
-    // Evidence
+    let asked_table = match parse_question(question) {
+        Some(ProveQuestion::WritesTable { table }) => Some(table),
+        _ => None,
+    };
+    // Evidence (W2-6, design §4.7): where each effect sits, and the path to it
+    // (prefix and terminal of one witness, never invented).
     if let Some(ref indices) = prove_result.evidence
         && !indices.is_empty()
     {
-        lines.push(format!("  evidence: {} effect(s)", indices.len()));
+        lines.push(format!(
+            "  evidence: {}",
+            plural(indices.len(), "effect", "effects")
+        ));
         for &i in indices {
             let eff = &effects[i];
-            let ev_file = eff.evidence.file.as_deref().unwrap_or("(unavailable)");
-            let ev_line = eff
-                .evidence
-                .line
-                .map(|l| format!(":{}", shown(l)))
-                .unwrap_or_default();
-            // Mirror TS: `[${eff.type}] ${eff.provenance} — ${evFile}${evLine}`
-            // The em-dash is U+2014. `conditionality` is already a &'static str.
-            lines.push(format!(
-                "    [{}] {} \u{2014} {}{}",
-                eff.effect_type, eff.provenance, ev_file, ev_line
-            ));
+            let at = match (&eff.evidence.file, eff.evidence.line) {
+                (Some(f), Some(l)) => match paths {
+                    Some(p) => p.cx.location(f, l),
+                    None => format!("{f}:{}", shown(l)),
+                },
+                (Some(f), None) => f.clone(),
+                _ => "no position kept".to_string(),
+            };
+            let group = is_group(eff);
+            let boundary = eff
+                .detail
+                .iter()
+                .find(|(k, _)| k == "boundary")
+                .map(|(_, v)| v.as_str());
+            lines.push(match (group, boundary) {
+                (true, Some(b)) => format!("    [{}] beyond {b}, entered at {at}", eff.effect_type),
+                _ => format!("    [{}] at {at}", eff.effect_type),
+            });
             if eff.conditionality != "unknown" {
                 lines.push(format!("      conditionality: {}", eff.conditionality));
+            }
+            let Some(p) = paths else {
+                continue;
+            };
+            let witness = if group {
+                match &asked_table {
+                    Some(table) => eff.group_resource_paths.iter().find_map(|(id, w)| {
+                        let display = eff
+                            .group_resources
+                            .iter()
+                            .find(|(r, _)| r == id)
+                            .map(|(_, d)| d.as_str());
+                        name_or_id_matches(display, Some(id), table).then_some(w)
+                    }),
+                    None => eff.group_terminal_path.as_ref(),
+                }
+            } else {
+                None
+            };
+            match witness {
+                Some(Ok(w)) => lines.push(format!(
+                    "      path: {}",
+                    p.cx.witness_line(
+                        p.root,
+                        w,
+                        None,
+                        p.cx.terminal_kind(&w.terminal.operation_id, &eff.effect_type)
+                    )
+                )),
+                Some(Err(n)) => {
+                    lines.push(format!("      no path kept: {}", no_path_reason(n.reason)))
+                }
+                None if !group => {
+                    if let Some(v) = eff
+                        .via_paths
+                        .iter()
+                        .filter(|v| !v.is_empty())
+                        .min_by_key(|v| v.len())
+                    {
+                        lines.push(format!("      path: {}", p.cx.path_line(p.root, v)));
+                    }
+                }
+                None => {}
             }
         }
     }
@@ -1402,34 +1744,88 @@ pub fn format_prove_human(
         }
     }
 
-    // Obligations summary
-    let o = &prove_result.obligations;
-    let mut parts: Vec<String> = Vec::new();
-
-    if o.unresolved_callsites > 0 {
-        parts.push(format!("unresolved={}", o.unresolved_callsites));
-    }
-    if o.open_world_rows > 0 {
-        parts.push(format!("openWorld={}", o.open_world_rows));
-    }
-    if o.analysis_gaps > 0 {
-        parts.push(format!("gaps={}", o.analysis_gaps));
-    }
-    if !o.coverage_complete {
-        parts.push("coverage=incomplete".to_string());
-    }
-    if o.cone_truncated {
-        parts.push("cone=truncated".to_string());
-    }
-
-    if parts.is_empty() {
-        lines.push("  obligations: all clear".to_string());
-    } else {
-        lines.push(format!("  obligations: {}", parts.join(", ")));
-    }
+    // W2-8 (2h, design §3.7, §4.7): coverage, assumptions and limits, always
+    // visible; the answer above is prove's own and is never qualified here.
+    lines.extend(coverage_lines(
+        &prove_result.obligations,
+        paths.map(|p| p.pointers),
+    ));
 
     lines.push(String::new());
     lines.join("\n")
+}
+
+/// The always-visible `coverage:`, `assumptions:` and `limits:` lines of a
+/// prove answer (W2-8, design §3.7): the obligations with counts and where
+/// they point, the answer's world, the analysis incompleteness.
+fn coverage_lines(o: &ProveObligations, pointers: Option<&ObligationPointers>) -> Vec<String> {
+    use crate::engine::l5::routine_rollup::plural;
+    let ws = |n: usize| match pointers {
+        Some(_) => format!(" ({n} in this workspace)"),
+        None => String::new(),
+    };
+    let mut parts = Vec::new();
+    if o.unresolved_callsites > 0 {
+        parts.push(format!(
+            "{} not resolved{}",
+            plural(o.unresolved_callsites, "call", "calls"),
+            ws(pointers.map_or(0, |p| p.workspace_unresolved))
+        ));
+    }
+    if o.open_world_rows > 0 {
+        parts.push(format!(
+            "{} open world{}",
+            plural(o.open_world_rows, "interface call", "interface calls"),
+            ws(pointers.map_or(0, |p| p.workspace_open_world))
+        ));
+    }
+    let mut coverage = if o.coverage_complete {
+        "coverage: complete".to_string()
+    } else {
+        "coverage: incomplete".to_string()
+    };
+    if !parts.is_empty() {
+        coverage.push_str(&format!(" — {}", parts.join(", ")));
+    }
+    if let Some(p) = pointers.filter(|p| !p.top_callees.is_empty()) {
+        coverage.push_str(&format!(
+            "; top: {}",
+            p.top_callees
+                .iter()
+                .map(|(c, n)| format!("{c} ×{n}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        if p.workspace_unresolved + p.workspace_open_world > 0 {
+            coverage.push_str("; alsem explain lists the workspace ones under gaps");
+        }
+    }
+    let assumptions = match o.assumption() {
+        Some(label) => format!("assumptions: {label}"),
+        None if o.world != World::Closed => "assumptions: none (default world; --closed-world \
+             assumes the loaded interface implementations)"
+            .to_string(),
+        None => {
+            "assumptions: none (--closed-world asked; the answer does not rely on it)".to_string()
+        }
+    };
+    let mut limits = Vec::new();
+    if o.analysis_gaps > 0 {
+        limits.push(plural(o.analysis_gaps, "analysis gap", "analysis gaps"));
+    }
+    if o.cone_truncated {
+        limits.push("cone-truncated".to_string());
+    }
+    let limits = if limits.is_empty() {
+        "limits: none".to_string()
+    } else {
+        format!("limits: {}", limits.join("; "))
+    };
+    vec![
+        format!("  {coverage}"),
+        format!("  {assumptions}"),
+        format!("  {limits}"),
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -1764,10 +2160,17 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             diagnostics_json,
             alsem_ver,
             deterministic,
+            pointers: None,
         });
 
-        let human_text =
-            format_prove_human(routine_selector, "", question_text, &dummy_result, &[]);
+        let human_text = format_prove_human(
+            routine_selector,
+            "",
+            question_text,
+            &dummy_result,
+            &[],
+            None,
+        );
 
         return Ok(ProveRunResult {
             json_text,
@@ -1835,30 +2238,34 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
              declares an event of that name"
         ));
     }
-    // G25: caller-dependent writes asked in the callers' frames, while the
-    // bundle is alive.
-    let via_callers = query_full
-        .entries
-        .first()
-        .map_or_else(HashMap::new, |entry| {
-            resolve_caller_dependent_writes(
-                resolved,
-                &temp_states,
-                root_id,
+    // `writes-table`: THE shared table answer (design §3.2.1), while the
+    // bundle is alive; explain and digest `--writes-table` call the same.
+    let table_answer = match (&parsed_question, query_full.entries.first()) {
+        (ProveQuestion::WritesTable { table }, Some(entry)) => Some(
+            TableQuestions {
+                model: resolved,
+                temp_states: &temp_states,
+                root: root_id,
                 entry,
-                &parsed_question,
-            )
-        });
-    // G36: field-guarded RecordRef writes, judged against the asked table.
-    let field_guarded = match (&parsed_question, query_full.entries.first()) {
-        (ProveQuestion::WritesTable { table }, Some(entry)) => {
-            crate::engine::l5::field_guard::resolve_field_guarded_writes(
-                resolved,
-                crate::engine::l5::digest_cli::primary_guid_of(resolved).unwrap_or(""),
-                entry,
-                table,
-            )
-        }
+                gaps_in_cone_count,
+                fires_table_events,
+                world: World::of_flags(closed_world),
+            }
+            .answer(table)
+            .map_err(|e| format!("prove: internal error — {e}"))?,
+        ),
+        _ => None,
+    };
+    // G25: caller-dependent writes asked in the callers' frames (a question
+    // other than writes-table resolves none).
+    let other_via_callers = match (&table_answer, query_full.entries.first()) {
+        (None, Some(entry)) => resolve_caller_dependent_writes(
+            resolved,
+            &temp_states,
+            root_id,
+            entry,
+            &parsed_question,
+        ),
         _ => HashMap::new(),
     };
     // The bundle's only borrower is dead: release `l4`.
@@ -1875,16 +2282,25 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     let entry = &query_full.entries[0];
 
     // Run tristate evaluation
-    let mut prove_result = prove_with_callers(
-        entry,
-        gaps_in_cone_count,
-        &parsed_question,
-        &via_callers,
-        &field_guarded,
-        World::of_flags(closed_world),
-    );
-    prove_result.obligations.relies_on_loaded_subscribers =
-        relies_on_loaded_subscribers(&prove_result, entry, fires_table_events);
+    let (prove_result, via_callers) = match table_answer {
+        Some(a) => (a.result, a.via_callers),
+        None => {
+            let mut r = prove_with_callers(
+                entry,
+                gaps_in_cone_count,
+                &parsed_question,
+                &other_via_callers,
+                &HashMap::new(),
+                World::of_flags(closed_world),
+            );
+            r.obligations.relies_on_loaded_subscribers =
+                relies_on_loaded_subscribers(&r, entry, fires_table_events);
+            (r, other_via_callers)
+        }
+    };
+
+    // W2-8 (2h): where the obligations point, in the answer's world.
+    let pointers = ObligationPointers::of(entry, prove_result.obligations.world);
 
     // Project document
     cx.view().census_output();
@@ -1901,15 +2317,28 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         diagnostics_json,
         alsem_ver,
         deterministic,
+        pointers: Some(&pointers),
     });
 
+    // W2-6: the human answer's paths read the model's names (and, W2-7, the
+    // loaded apps' names).
+    let dependencies = cx.view().target().dependencies();
+    let rollup_cx =
+        crate::engine::l5::routine_rollup::RollupCx::new(cx.view().model(), &dependencies.apps);
     let human_text = format_prove_human(
         &entry.routine_display,
         &entry.object_display,
         question_text,
         &prove_result,
         &entry.effects,
+        Some(&HumanPaths {
+            cx: &rollup_cx,
+            root: root_id,
+            pointers: &pointers,
+        }),
     );
+    // W2-7 (2g): readable dependency locations (the JSON keeps the guid).
+    let human_text = dependencies.readable_locations(human_text);
 
     let summary = serde_json::json!({
         "kind": "prove",
@@ -2382,6 +2811,7 @@ mod tests {
             scoped_guarantees: vec![],
             group_resources: vec![],
             group_resource_paths: vec![],
+            group_terminal_path: None,
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
@@ -2417,6 +2847,7 @@ mod tests {
             scoped_guarantees: vec![],
             group_resources: vec![],
             group_resource_paths: vec![],
+            group_terminal_path: None,
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
@@ -2552,6 +2983,7 @@ mod tests {
             scoped_guarantees: vec![],
             group_resources: vec![],
             group_resource_paths: vec![],
+            group_terminal_path: None,
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
@@ -2604,6 +3036,7 @@ mod tests {
             scoped_guarantees: vec![],
             group_resources: vec![],
             group_resource_paths: vec![],
+            group_terminal_path: None,
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,

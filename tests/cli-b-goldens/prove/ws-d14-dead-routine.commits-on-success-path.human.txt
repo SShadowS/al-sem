@@ -1,4 +1,6 @@
 --- Codeunit D14EntryPoints::OnRun ---
   question: commits-on-success-path
   answer:   no
-  obligations: all clear
+  coverage: complete
+  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  limits: none

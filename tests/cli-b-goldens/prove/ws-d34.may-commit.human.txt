@@ -1,7 +1,9 @@
 --- Codeunit D34 Demo::DirectCommitInLoop ---
   question: may-commit
   answer:   yes
-  evidence: 1 effect(s)
-    [COMMIT] direct — ws:src/Codeunit.al:10
+  evidence: 1 effect
+    [COMMIT] at ws:src/Codeunit.al:10
       conditionality: loop-body
-  obligations: all clear
+  coverage: complete
+  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  limits: none

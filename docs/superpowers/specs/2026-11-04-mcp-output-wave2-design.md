@@ -1469,6 +1469,10 @@ labelled and membership-checked.
 1. **Digest size budget.** Provisional: whole ≤ 1,000,000 bytes and core ≤ 480,000 bytes pretty per
    routine (IR, RR), remeasured after the real indexes, witnesses and summaries exist (W2-2), plus
    opt-in `--compact`. Every event name kept, grouped losslessly by publisher (§4.4.3).
+   **Decided (owner, 2026-11-04, after W2-2's measurement):** whole ≤ 1,250,000 bytes and core
+   (without event names) ≤ 720,000 bytes, pretty JSON, for IssueReminder and RunReportID on the
+   CDO baseline `bc3ccb18`; pinned as CDO-gated ratchets in `tests/cli/output_cdo.rs`
+   (`cdo_digest_json_fits_its_size_budgets`, T-W2-15).
 2. **Paths beyond entry points.** Approved: per crossing its prefix once and one representative
    terminal witness by default, labelled as representative, never implying that every site reaches
    every resource; a COMMIT gets its own terminal witness; full per-resource witnesses under

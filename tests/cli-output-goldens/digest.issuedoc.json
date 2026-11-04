@@ -120,6 +120,31 @@
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "edge": "object-run-resolved",
+                    "file": "ws:src/OutIssueDocument.Codeunit.al",
+                    "line": 15,
+                    "to": "r:06ab280a2dc1"
+                  },
+                  {
+                    "edge": "direct-call",
+                    "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
+                    "line": 8,
+                    "to": "r:4bb5b37bce93"
+                  }
+                ],
+                "representative": true,
+                "terminal": {
+                  "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
+                  "line": 46,
+                  "operationId": "9c6111a83a31bbff/4e7d6ef0e2bb3e3936c2d85040e9cbc4494c8f3eda89b147641f3655b38b5f59/op15"
+                },
+                "throughEntryPoint": true
+              }
+            ],
             "provenance": "transitive",
             "status": "live",
             "transactionContext": "unknown",

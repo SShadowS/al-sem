@@ -2849,6 +2849,16 @@ impl LoadedDependencies {
         Some(format!("dependencies: {}", names.join(", ")))
     }
 
+    /// W2-7 (2g, design §3.8 rule 5): `text` (a HUMAN output) with every
+    /// `dep:<app guid>:<path>` location printed `dep:<app name>:<path>`, the
+    /// name followed by ` (<first 8 of the guid>)` when two loaded apps share
+    /// it, and `%20` in the location's path printed as a space. JSON keeps the
+    /// guid (the `aldump --dump-dependency-source` citation contract).
+    #[must_use]
+    pub fn readable_locations(&self, text: String) -> String {
+        readable_locations(&self.apps, text)
+    }
+
     /// `text` with [`Self::human_line`] as its first line, when there is one.
     #[must_use]
     pub fn prefix_human(&self, text: String) -> String {
@@ -2856,6 +2866,66 @@ impl LoadedDependencies {
             Some(line) => format!("{line}\n{text}"),
             None => text,
         }
+    }
+}
+
+/// [`LoadedDependencies::readable_locations`] over the loaded apps' rows
+/// (`appId`, `name`).
+#[must_use]
+pub fn readable_locations(apps: &[serde_json::Value], text: String) -> String {
+    {
+        let mut by_guid: std::collections::HashMap<String, &str> = Default::default();
+        let mut uses: std::collections::HashMap<&str, usize> = Default::default();
+        for a in apps {
+            if let (Some(g), Some(n)) = (a["appId"].as_str(), a["name"].as_str()) {
+                by_guid.insert(g.to_ascii_lowercase(), n);
+                *uses.entry(n).or_default() += 1;
+            }
+        }
+        if by_guid.is_empty() || !text.contains("dep:") {
+            return text;
+        }
+        let is_guid = |s: &str| {
+            s.len() == 36
+                && s.char_indices().all(|(i, c)| {
+                    if matches!(i, 8 | 13 | 18 | 23) {
+                        c == '-'
+                    } else {
+                        c.is_ascii_hexdigit()
+                    }
+                })
+        };
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text.as_str();
+        while let Some(at) = rest.find("dep:") {
+            out.push_str(&rest[..at]);
+            let after = &rest[at + 4..];
+            let guid = after.get(..36).filter(|g| is_guid(g));
+            let name = guid
+                .filter(|_| after.as_bytes().get(36) == Some(&b':'))
+                .and_then(|g| by_guid.get(&g.to_ascii_lowercase()).map(|n| (g, *n)));
+            let Some((g, n)) = name else {
+                out.push_str("dep:");
+                rest = after;
+                continue;
+            };
+            out.push_str("dep:");
+            out.push_str(n);
+            if uses.get(n).copied().unwrap_or(0) > 1 {
+                out.push_str(&format!(" ({})", &g[..8]));
+            }
+            out.push(':');
+            // The location's path: up to the first character that ends a
+            // location in the human outputs.
+            let path = &after[37..];
+            let end = path
+                .find(|c: char| c.is_whitespace() || matches!(c, ')' | ']' | '"' | ',' | ';'))
+                .unwrap_or(path.len());
+            out.push_str(&path[..end].replace("%20", " "));
+            rest = &path[end..];
+        }
+        out.push_str(rest);
+        out
     }
 }
 
@@ -3058,6 +3128,33 @@ mod tests {
     use crate::program::node::ObjKey;
     use crate::program::resolve::edge::{Condition, SourcePos};
     use crate::snapshot::parse_snapshot;
+
+    /// W2-7 (T-W2-12): a dependency location prints its app's name; two loaded
+    /// apps with one name are told apart by the first 8 of the guid; `%20`
+    /// prints as a space; an unknown guid and a non-location are left alone.
+    /// The apps are stated by assignment (no fixture loads two apps of one
+    /// name).
+    ///
+    /// Discrimination (2026-11-04): dropping the duplicate-name suffix fails
+    /// at the twin apps' line; restored, passes.
+    #[test]
+    fn readable_locations_name_the_app_and_tell_twins_apart() {
+        let apps = vec![
+            serde_json::json!({"appId": "437DBF0E-84FF-417A-965D-ED2BB9650972", "name": "Base Application"}),
+            serde_json::json!({"appId": "aaaaaaaa-0000-0000-0000-000000000001", "name": "Twin"}),
+            serde_json::json!({"appId": "bbbbbbbb-0000-0000-0000-000000000002", "name": "Twin"}),
+        ];
+        let text = "at dep:437dbf0e-84ff-417a-965d-ed2bb9650972:src/Sales/My%20File.al:12 in X\n\
+                    (Insert at dep:aaaaaaaa-0000-0000-0000-000000000001:src/A.al:3); \
+                    dep:bbbbbbbb-0000-0000-0000-000000000002:src/B.al:4\n\
+                    dep:cccccccc-0000-0000-0000-000000000003:src/C.al:5 and dep:notaguid:x\n";
+        assert_eq!(
+            readable_locations(&apps, text.to_string()),
+            "at dep:Base Application:src/Sales/My File.al:12 in X\n\
+             (Insert at dep:Twin (aaaaaaaa):src/A.al:3); dep:Twin (bbbbbbbb):src/B.al:4\n\
+             dep:cccccccc-0000-0000-0000-000000000003:src/C.al:5 and dep:notaguid:x\n"
+        );
+    }
 
     fn rid(name: &str) -> RoutineNodeId {
         RoutineNodeId {

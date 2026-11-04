@@ -10,8 +10,9 @@ Codeunit Out Issue Document::IssueDoc  ws:src/OutIssueDocument.Codeunit.al:3
     reached from page action Issue on Page Out Doc Card (caption "Issue") at ws:src/Pages.al:18
   commits: may — none in workspace code; 1 commit-bearing entry point:
     Codeunit Base Poster::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15
-  writes in workspace code (1 table):
-    Out Log: Insert — known persistent
+      path: IssueDoc → [run] Base Poster::OnRun → PostDocument (COMMIT at dep:Out Base:src/BasePoster.Codeunit.al:46)
+  writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
+    Out Log: Insert 1 — known persistent
       Insert at ws:src/OutIssueDocument.Codeunit.al:61
       path: IssueDoc → Out Log Mgt::WriteLog
       fields WriteLog assigns on this table (not operation-specific): Entry No., Message
@@ -19,7 +20,9 @@ Codeunit Out Issue Document::IssueDoc  ws:src/OutIssueDocument.Codeunit.al:3
     Out Doc: Modify — depends on the caller's record argument at ws:src/OutIssueDocument.Codeunit.al:14
   writes beyond dependency entry points (15 tables through 2 entry points at 2 sites):
     Codeunit Base Poster::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15 — 14 tables (Delete on 1, Insert on 12, Modify on 1): Base Doc Line, Base Ledger 01, Base Ledger 02, Base Ledger 03, Base Ledger 04, Base Ledger 05, Base Ledger 06, Base Ledger 07, Base Ledger 08, Base Ledger 09, Base Ledger 10, Base Ledger 11, Base Ledger 12, Base Register; also COMMIT, ERROR_IMPLICIT; 1 event
+      representative path (Base Doc Line, the nearest of 14 tables): IssueDoc → [run] Base Poster::OnRun (DeleteAll at dep:Out Base:src/BasePoster.Codeunit.al:7)
     Codeunit Base Calc::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:16 — 1 table (Modify on 1): Base Price
+      representative path (Base Price): IssueDoc → [run] Base Calc::OnRun → UpdatePrice (Modify at dep:Out Base:src/BasePoster.Codeunit.al:68)
   temporary records (not writes): 1 table in workspace code (1 effect row): Out Log; 1 table only beyond entry points; only temporary: 0 tables
   events: 1 raised in workspace code, by publisher: Codeunit Out Issue Document 1; 1 more only beyond entry points
   extension point OnAfterIssueDoc: 1 subscriber(s)

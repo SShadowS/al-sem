@@ -57,10 +57,10 @@ Codeunit Explain Post::ReopenAll  ws:src/post.al:31
   rules: none of its own; inherited: none
   callers: none
   commits: none
-  writes in workspace code (1 table):
-    Explain Order: ModifyAll — known persistent
+  writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
+    Explain Order: ModifyAll 1 — known persistent
       ModifyAll at ws:src/post.al:35
-      fields ReopenAll assigns on this table (not operation-specific): Status
+      ModifyAll sets: Status (in Codeunit Explain Post::ReopenAll)
   events: 0 raised in workspace code; 0 more only beyond entry points
   extension points: none (the routine publishes no event itself)
   tests: none reach it

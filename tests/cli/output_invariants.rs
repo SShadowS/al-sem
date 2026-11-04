@@ -36,6 +36,47 @@ pub(crate) fn dump_dependency_source(ws: &Path, out: &Path) {
         "aldump --dump-dependency-source: {}",
         String::from_utf8_lossy(&o.stderr)
     );
+    // W2-7 (T-W2-12): human anchors name the app (`dep:Base Application:…`),
+    // so keep `name<TAB>guid` per dumped app (stdout: `<guid>
+    // <publisher>/<name>@<version>: N files`) for `source_of`.
+    let mut names = String::new();
+    for l in String::from_utf8_lossy(&o.stdout).lines() {
+        let Some((guid, rest)) = l.split_once(' ') else {
+            continue;
+        };
+        let short = rest.rsplit_once(": ").map_or(rest, |(s, _)| s);
+        let name = short
+            .split_once('/')
+            .map_or(short, |(_, n)| n)
+            .rsplit_once('@')
+            .map_or(short, |(n, _)| n);
+        names.push_str(&format!("{name}\t{guid}\n"));
+    }
+    std::fs::write(out.join("names.tsv"), names).unwrap();
+}
+
+/// The guid a human `dep:` label names: a guid itself, an app name, or
+/// `<name> (<guid8>)` (two loaded apps with one name), by the dump's
+/// `names.tsv`.
+fn dep_guid(label: &str, dep_root: &Path) -> Option<String> {
+    if label.len() == 36 && label.chars().filter(|c| *c == '-').count() == 4 {
+        return Some(label.to_string());
+    }
+    let (name, prefix) = match label.strip_suffix(')').and_then(|l| l.rsplit_once(" (")) {
+        Some((n, g)) => (n, Some(g)),
+        None => (label, None),
+    };
+    let names = std::fs::read_to_string(dep_root.join("names.tsv")).ok()?;
+    let hits: Vec<&str> = names
+        .lines()
+        .filter_map(|l| l.split_once('\t'))
+        .filter(|(n, g)| *n == name && prefix.is_none_or(|p| g.starts_with(p)))
+        .map(|(_, g)| g)
+        .collect();
+    match hits.as_slice() {
+        [one] => Some(one.to_string()),
+        _ => None,
+    }
 }
 
 /// One `file:line` a human output printed, with the words the line at it must hold
@@ -107,9 +148,18 @@ pub(crate) fn human_anchors(text: &str) -> Vec<Anchor> {
             if at > 0 && s.as_bytes()[at - 1].is_ascii_alphanumeric() {
                 continue;
             }
-            let end = rest
-                .find(|c: char| c.is_whitespace() || c == ']' || c == '"' || c == ')')
-                .unwrap_or(rest.len());
+            // T-W2-12: a `dep:` label is an app name, which may hold spaces
+            // (`dep:Base Application:…`, `dep:X (1a2b3c4d):…`); the location
+            // proper starts after it.
+            let label = match rest.strip_prefix("dep:").map(|r| r.find(':')) {
+                Some(Some(j)) => 4 + j + 1,
+                Some(None) => continue,
+                None => 0,
+            };
+            let end = label
+                + rest[label..]
+                    .find(|c: char| c.is_whitespace() || c == ']' || c == '"' || c == ')')
+                    .unwrap_or(rest.len() - label);
             let tok = &rest[..end];
             // `file:line` or `file:line:col` (the fingerprint form).
             let parts: Vec<&str> = tok.rsplitn(3, ':').collect();
@@ -316,8 +366,8 @@ pub(crate) fn source_of(file: &str, ws: &Path, dep_root: &Path) -> Option<String
     let path: PathBuf = if let Some(rel) = file.strip_prefix("ws:") {
         ws.join(rel)
     } else if let Some(rest) = file.strip_prefix("dep:") {
-        let (guid, rel) = rest.split_once(':')?;
-        dep_root.join(guid).join(rel)
+        let (label, rel) = rest.split_once(':')?;
+        dep_root.join(dep_guid(label, dep_root)?).join(rel)
     } else {
         return None;
     };
@@ -1409,4 +1459,517 @@ fn explain_digest_and_prove_agree_on_the_fixture() {
             "prove writes-table:{t}"
         );
     }
+}
+
+/// The fixture root that writes `Out Item` with every operation kind the
+/// field rule tells apart (`Out Field Ops::RunAll`, W2-4).
+pub(crate) const FIELD_OPS: &str = "Out Field Ops::RunAll";
+
+/// W2-4, T-W2-4 (design §4.1 rule 2d): a write states fields by its ORIGINAL
+/// operation kind. `Insert` / `Modify`: the fields its owning routine assigns
+/// on the table (assignments and `Validate` alike), named per owner and worded
+/// "not operation-specific"; `ModifyAll`: its own field argument; `Rename`:
+/// the primary key; `Delete` / `DeleteAll` / `LockTable`: nothing, even when
+/// the routine assigns fields on that table (`Purge` sets `Bin.Code` before its
+/// `DeleteAll`). `Validate` is no digest write type, so it never names a write
+/// kind; its field is in its routine's assignments (`Create`'s `Status`).
+/// Expected by hand from `OutFieldOps.Codeunit.al`. Two routines write `Out
+/// Item` (`Create`, `CloseAll`, `Relabel`): one clause each.
+///
+/// Discrimination (2026-11-04): `write_fields` attaching the owner's assigned
+/// fields to every operation kind (the old rule) fails at "Out Bin's DeleteAll
+/// states no field"; restored, passes.
+#[test]
+fn fields_follow_the_original_operation_kind() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let (human, err, code) = run_alsem(&["explain", &ws, "--routine", FIELD_OPS]);
+    assert_eq!(code, 0, "{err}");
+    let (out, err, code) = run_alsem(&["explain", &ws, "--routine", FIELD_OPS, "--format", "json"]);
+    assert_eq!(code, 0, "{err}");
+    let doc: Value = serde_json::from_str(&out).unwrap();
+    let writes = doc["cards"][0]["effects"]["writes"].as_array().unwrap();
+    let row = |table: &str, kind: &str| -> &Value {
+        writes
+            .iter()
+            .find(|w| {
+                w["table"] == table && w["opKinds"].as_array().unwrap().iter().any(|k| k == kind)
+            })
+            .unwrap_or_else(|| panic!("no {kind} row on {table}: {writes:?}"))
+    };
+    let empty = |v: &Value| match v {
+        Value::Object(m) => m.is_empty(),
+        Value::Array(a) => a.is_empty(),
+        _ => false,
+    };
+    let bin = row("Out Bin", "DeleteAll");
+    assert!(
+        empty(&bin["fields"]) && empty(&bin["fieldOps"]) && empty(&bin["renames"]),
+        "Out Bin's DeleteAll states no field: {bin}"
+    );
+    let insert = row("Out Item", "Insert");
+    assert_eq!(
+        insert["fields"],
+        serde_json::json!({"Codeunit Out Field Ops::Create": ["No.", "Qty", "Status"]}),
+        "{insert}"
+    );
+    let modify_all = row("Out Item", "ModifyAll");
+    assert!(empty(&modify_all["fields"]), "{modify_all}");
+    assert_eq!(
+        modify_all["fieldOps"],
+        serde_json::json!([{"op": "ModifyAll", "field": "Status", "in": "Codeunit Out Field Ops::CloseAll"}])
+    );
+    let rename = row("Out Item", "Rename");
+    assert!(
+        empty(&rename["fields"]) && empty(&rename["fieldOps"]),
+        "{rename}"
+    );
+    assert_eq!(
+        rename["renames"],
+        serde_json::json!(["Codeunit Out Field Ops::Relabel"])
+    );
+    assert!(
+        !writes.iter().any(|w| w["opKinds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|k| k == "Validate")),
+        "Validate is no write kind"
+    );
+    // The human block: Out Bin has no fields line; Out Item one clause per
+    // owner, in the stated wording.
+    let block = |table: &str| -> Vec<&str> {
+        let lines: Vec<&str> = human.lines().collect();
+        let start = lines
+            .iter()
+            .position(|l| l.trim_start().starts_with(&format!("{table}: ")))
+            .unwrap_or_else(|| panic!("no {table} block:\n{human}"));
+        lines[start + 1..]
+            .iter()
+            .take_while(|l| l.starts_with("      "))
+            .copied()
+            .collect()
+    };
+    assert!(
+        !block("Out Bin").iter().any(|l| l.contains("field")),
+        "Out Bin's DeleteAll states no field:\n{human}"
+    );
+    let item = block("Out Item").join("\n");
+    for want in [
+        "fields Create assigns on this table (not operation-specific): No., Qty, Status",
+        "ModifyAll sets: Status (in Codeunit Out Field Ops::CloseAll)",
+        "renames (primary key) in Codeunit Out Field Ops::Relabel",
+    ] {
+        assert!(item.contains(want), "{want}:\n{human}");
+    }
+    // The rule on every fixture card: no field on a delete-only write.
+    for routine in [ISSUE_DOC, WRITE_LOG, FIELD_OPS] {
+        let (out, _, _) = run_alsem(&["explain", &ws, "--routine", routine, "--format", "json"]);
+        let doc: Value = serde_json::from_str(&out).unwrap();
+        for w in doc["cards"][0]["effects"]["writes"].as_array().unwrap() {
+            let Some(kinds) = w["opKinds"].as_array() else {
+                continue;
+            };
+            if !kinds.is_empty()
+                && kinds
+                    .iter()
+                    .all(|k| matches!(k.as_str(), Some("Delete" | "DeleteAll" | "LockTable")))
+            {
+                assert!(
+                    empty(&w["fields"]) && empty(&w["fieldOps"]),
+                    "{routine}: {w}"
+                );
+            }
+        }
+    }
+}
+
+/// W2-5, 2e (design §3.6, §4.5): `LockTable` is its own class, never a write.
+/// On `Out Field Ops::RunAll` (hand-counted from its AL): writes that may
+/// persist 5 on 2 tables (Insert 2, ModifyAll, Rename on `Out Item`;
+/// DeleteAll on `Out Bin`); locks 2 on 2 tables, `Out Item` also written and
+/// `Out Log` lock-only with its own lock's anchor and owner; the RecordRef
+/// lock on a table decided at run time in the table-not-resolved bucket and
+/// counted on the locks line. `Validate` is no L4 operation (a trigger-class
+/// op), so the fixture's `Validate` adds no row.
+///
+/// Discrimination (2026-11-04): `op_family` putting `LockTable` in the write
+/// family fails at the summary (writes 7 on 3 tables); restored, passes.
+#[test]
+fn locks_are_their_own_class_in_query_effects() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let (human, err, code) =
+        run_alsem(&["query", "effects", &ws, "--routine", "Out Field Ops.RunAll"]);
+    assert_eq!(code, 0, "{err}");
+    let summary = human.lines().nth(1).unwrap();
+    assert!(
+        summary.contains("summary: 9 operations — writes that may persist 5 on 2 tables")
+            && summary.contains("locks 2 on 2 tables")
+            && summary.contains("table not resolved 1 in 1 routine"),
+        "{human}"
+    );
+    let writes: Vec<&str> = human
+        .lines()
+        .skip_while(|l| !l.starts_with("  writes that may persist"))
+        .skip(1)
+        .take_while(|l| l.starts_with("    "))
+        .collect();
+    assert!(!writes.iter().any(|l| l.contains("Out Log")), "{human}");
+    assert!(
+        human.contains(
+            "  locks (2 tables; not writes): Out Item (also written), Out Log at \
+             ws:src/OutFieldOps.Codeunit.al:21 in Codeunit Out Field Ops::LockLog; table not \
+             resolved: 1 lock\n"
+        ),
+        "{human}"
+    );
+}
+
+/// W2-6, 2f (design §3.4.2, T-W2-5's commit leg, §9 q2): a commit-bearing
+/// entry point gets a REAL terminal witness: through its crossing (the first
+/// hop leaves the root at the `Base Poster.Run()` site, line 15) to a live
+/// state owning the `Commit()` (the terminal opens to that line). prove
+/// `may-commit`, explain's commit line and digest's COMMIT group row cite the
+/// same terminal. Beyond an entry point the default prints exactly one
+/// witness, labelled representative, and `--detail` one per listed table.
+///
+/// Discrimination (2026-11-04): the literal pass not computing
+/// `group_terminal_path` (left `None`) fails at "prove's COMMIT evidence has a
+/// witness"; restored, passes.
+#[test]
+fn a_commit_beyond_an_entry_point_has_its_own_terminal_witness() {
+    let ws = workspace();
+    let wss = ws.to_string_lossy().into_owned();
+    let dump = tempfile::tempdir().unwrap();
+    dump_dependency_source(&ws, dump.path());
+    let json = |args: &[&str]| -> Value {
+        let (out, err, code) = run_alsem(args);
+        assert_eq!(code, 0, "{args:?}: {err}");
+        serde_json::from_str(&out).unwrap()
+    };
+    let p = json(&["prove", &wss, ISSUE_DOC, "may-commit", "--format", "json"]);
+    let ev = &p["payload"]["result"]["evidence"][0];
+    let w = &ev["groupWitness"];
+    assert!(w.is_object(), "prove's COMMIT evidence has a witness: {ev}");
+    assert_eq!(ev["throughEntryPoint"], true, "{ev}");
+    assert_eq!(w["hops"][0]["line"], 15, "the crossing's site: {w}");
+    assert_eq!(w["hops"][0]["edge"], "object-run-resolved", "{w}");
+    let t = &w["terminal"];
+    let file = t["file"].as_str().unwrap();
+    let line = t["line"].as_u64().unwrap() as usize;
+    let text = source_of(file, &ws, dump.path()).expect("the terminal's file");
+    assert!(
+        text.lines().nth(line - 1).unwrap().contains("Commit()"),
+        "the terminal opens to the Commit: {file}:{line}"
+    );
+    // explain cites the same terminal.
+    let (human, _, _) = run_alsem(&["explain", &wss, "--routine", ISSUE_DOC]);
+    let commit_path = human
+        .lines()
+        .skip_while(|l| !l.starts_with("  commits:"))
+        .find(|l| l.trim_start().starts_with("path:"))
+        .unwrap_or_else(|| panic!("no commit path:\n{human}"));
+    assert!(
+        commit_path.ends_with(&format!(
+            "(COMMIT at {}:{line})",
+            // W2-7: the human form names the app; the JSON keeps the guid.
+            file.replace(crate::output_fixture::DEP_GUID, "Out Base")
+        )),
+        "{commit_path}"
+    );
+    // digest's COMMIT group row: the same terminal, labelled representative.
+    let d = json(&["digest", &wss, "--routine", ISSUE_DOC, "--format", "json"]);
+    let row = d["payload"]["entries"][0]["effects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["type"] == "COMMIT")
+        .expect("a COMMIT row");
+    assert_eq!(row["paths"][0]["representative"], true, "{row}");
+    assert_eq!(row["paths"][0]["terminal"], *t, "{row}");
+    // One representative per entry point by default; one per table with
+    // --detail (Base Poster lists 14).
+    let beyond = |text: &str| -> Vec<String> {
+        text.lines()
+            .skip_while(|l| !l.starts_with("  writes beyond"))
+            .skip(1)
+            .take_while(|l| l.starts_with("    "))
+            .map(String::from)
+            .collect()
+    };
+    let default = beyond(&human);
+    assert_eq!(
+        default
+            .iter()
+            .filter(|l| l.trim_start().starts_with("representative path ("))
+            .count(),
+        2,
+        "{default:#?}"
+    );
+    let (detail, _, _) = run_alsem(&["explain", &wss, "--routine", ISSUE_DOC, "--detail"]);
+    let detail = beyond(&detail);
+    assert_eq!(
+        detail
+            .iter()
+            .filter(|l| l.starts_with("      Base ") && l.contains(" at dep:"))
+            .count(),
+        15,
+        "{detail:#?}"
+    );
+}
+
+/// W2-7, T-W2-12 (design §3.8 rule 5): every human output prints a dependency
+/// location as `dep:<app name>:<path>:<line>` (`dep:Out Base:…`), never
+/// `dep:<guid>:`, with no `%20`; each still opens to its line (the parser and
+/// resolver read an app name with spaces); the JSON keeps the guid (the
+/// `aldump --dump-dependency-source` citation contract). `--show-source`
+/// prints the cited line, marked, under the location.
+///
+/// Discrimination (2026-11-04): explain's render skipping
+/// `readable_locations` fails at "no guid in a human anchor"; restored,
+/// passes.
+#[test]
+fn dependency_locations_print_the_app_name() {
+    use crate::output_fixture::DEP_GUID;
+    let dump = tempfile::tempdir().unwrap();
+    dump_dependency_source(&workspace(), dump.path());
+    let mut dep_anchors = 0;
+    for (label, out) in fixture_human_outputs() {
+        assert!(!out.contains("%20"), "{label}: %20\n{out}");
+        for a in human_anchors(&out) {
+            assert!(
+                !a.file.starts_with(&format!("dep:{DEP_GUID}")),
+                "{label}: no guid in a human anchor: {}",
+                a.printed
+            );
+            if a.file.starts_with("dep:Out Base:") {
+                dep_anchors += 1;
+                assert!(
+                    source_of(&a.file, &workspace(), dump.path()).is_some(),
+                    "{label}: {} resolves",
+                    a.file
+                );
+            }
+        }
+    }
+    assert!(dep_anchors >= 5, "{dep_anchors} dependency anchors");
+    let ws = workspace().to_string_lossy().into_owned();
+    let (json, _, _) = run_alsem(&["explain", &ws, "--routine", ISSUE_DOC, "--format", "json"]);
+    assert!(
+        json.contains(&format!("dep:{DEP_GUID}:")),
+        "the JSON keeps the guid"
+    );
+    let (shown, err, code) = run_alsem(&["explain", &ws, "--routine", ISSUE_DOC, "--show-source"]);
+    assert_eq!(code, 0, "{err}");
+    let lines: Vec<&str> = shown.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.contains("(COMMIT at dep:Out Base:src/BasePoster.Codeunit.al:46)"))
+        .unwrap_or_else(|| panic!("{shown}"));
+    assert!(
+        lines[at + 1..=at + 5]
+            .iter()
+            .any(|l| l.trim_start().starts_with(">") && l.ends_with(" Commit();")),
+        "{:#?}",
+        &lines[at..=at + 5]
+    );
+}
+
+/// W2-8, 2h (design §3.7, §4.7, R3e): prove's answer is its own, and its
+/// coverage, assumptions and limits always print. On the fixture (counted by
+/// hand from its AL): IssueDoc's obligations point at 1 unresolved call in
+/// workspace code (`Codeunit.Run(DynamicId)`, line 21) and 1 open-world
+/// interface call there (`Handler.Handle`, line 23), the dependency's own
+/// `Codeunit.Run` (BasePoster line 45) outside it; top callees
+/// `Codeunit.Run(<dynamic>)` ×2, `Handler.Handle` ×1. An absence the
+/// obligations block (`writes-table:Out Item`) is `unknown — no matching
+/// effect observed; coverage incomplete`; a `yes` prints bare; a `no` prints
+/// bare with its `assumptions: loaded-subscribers`. The JSON `answer` is
+/// unchanged.
+///
+/// Discrimination (2026-11-04): `ObligationPointers::of` counting every
+/// call site as workspace code (the `ws:` test dropped) fails at
+/// "unresolvedInWorkspace"; restored, passes.
+#[test]
+fn prove_states_coverage_assumptions_and_limits() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let run = |routine: &str, q: &str, format: &str| -> String {
+        let (out, err, code) = run_alsem(&["prove", &ws, routine, q, "--format", format]);
+        assert_eq!(code, 0, "{q}: {err}");
+        out
+    };
+    let j: Value = serde_json::from_str(&run(ISSUE_DOC, "may-commit", "json")).unwrap();
+    let o = &j["payload"]["result"]["obligations"];
+    assert_eq!(
+        o["unresolvedInWorkspace"],
+        serde_json::json!({"notResolved": 1, "openWorld": 1}),
+        "unresolvedInWorkspace: {o}"
+    );
+    assert_eq!(
+        o["topUnresolvedCallees"],
+        serde_json::json!([
+            {"callee": "Codeunit.Run(<dynamic>)", "count": 2},
+            {"callee": "Handler.Handle", "count": 1}
+        ])
+    );
+    let yes = run(ISSUE_DOC, "may-commit", "human");
+    assert!(yes.contains("\n  answer:   yes\n"), "{yes}");
+    for l in [
+        "  coverage: incomplete — ",
+        "  assumptions: ",
+        "  limits: none",
+    ] {
+        assert!(yes.contains(l), "{l}:\n{yes}");
+    }
+    let unknown = run(ISSUE_DOC, "writes-table:Out Item", "human");
+    assert!(
+        unknown
+            .contains("\n  answer:   unknown — no matching effect observed; coverage incomplete\n"),
+        "{unknown}"
+    );
+    let uj: Value = serde_json::from_str(&run(ISSUE_DOC, "writes-table:Out Item", "json")).unwrap();
+    assert_eq!(uj["payload"]["result"]["answer"], "unknown");
+    let no = run(FIELD_OPS, "may-commit", "human");
+    assert!(
+        no.contains("\n  answer:   no\n  coverage: complete\n  assumptions: loaded-subscribers\n  limits: none\n"),
+        "{no}"
+    );
+}
+
+/// Every table both fixture apps declare (`table <n> "<name>"`), read from
+/// the AL: listed tables and tables no output names alike.
+fn fixture_tables() -> Vec<String> {
+    let mut out = Vec::new();
+    for dir in ["ws/src", "dep/src"] {
+        let d = crate::output_fixture::fixture_root().join(dir);
+        let mut files: Vec<_> = std::fs::read_dir(&d)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        files.sort();
+        for f in files {
+            for l in std::fs::read_to_string(&f).unwrap().lines() {
+                if let Some(rest) = l.strip_prefix("table ")
+                    && let Some(name) = rest.split('"').nth(1)
+                {
+                    out.push(name.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// W2-2 gap (a), T-W2-16 leg 2 (design §3.2.1, R3a): explain's and digest's
+/// `--writes-table T` answer through prove's own evaluation
+/// (`prove::TableQuestions::answer`), so for EVERY table of both fixture
+/// apps — the ones some output lists and the ones none names — and three
+/// roots, their `answer`, `blockedBy` and `assumptions` equal `prove
+/// writes-table:T`'s exactly. Precondition: the set holds `yes`, `unknown`
+/// answers and tables no explain card lists.
+///
+/// Discrimination (2026-11-04): explain's and digest's `table_answers`
+/// handing the evaluation a wrong cone fact (`fires_table_events: false`
+/// instead of the cone's) fails at "WriteLog explain vs prove: Out Doc"
+/// (`no` without its `loaded-subscribers` assumption); restored, passes. A
+/// break inside the shared `TableQuestions::answer` moves both sides alike,
+/// which is the point: there is one evaluation.
+#[test]
+fn explain_digest_and_prove_give_one_table_answer() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let tables = fixture_tables();
+    assert!(tables.len() >= 15, "{tables:?}");
+    let json = |args: Vec<String>| -> Value {
+        let a: Vec<&str> = args.iter().map(String::as_str).collect();
+        let (out, err, code) = run_alsem(&a);
+        assert_eq!(code, 0, "{args:?}: {err}");
+        serde_json::from_str(&out).unwrap()
+    };
+    let key = |v: &Value| {
+        (
+            v["answer"].clone(),
+            v.get("blockedBy").cloned().unwrap_or(serde_json::json!([])),
+            v.get("assumptions").cloned().unwrap_or(Value::Null),
+        )
+    };
+    let mut answers = std::collections::BTreeSet::new();
+    let mut unlisted = 0;
+    for routine in [ISSUE_DOC, WRITE_LOG, FIELD_OPS] {
+        let mut ex = vec![
+            "explain".to_string(),
+            ws.clone(),
+            "--routine".into(),
+            routine.into(),
+        ];
+        let mut dg = vec![
+            "digest".to_string(),
+            ws.clone(),
+            "--routine".into(),
+            routine.into(),
+        ];
+        for t in &tables {
+            for v in [&mut ex, &mut dg] {
+                v.push("--writes-table".into());
+                v.push(t.clone());
+            }
+        }
+        ex.extend(["--format".into(), "json".into()]);
+        let e = json(ex);
+        let d = json(dg);
+        let card = &e["cards"][0];
+        let listed = card["effects"].to_string();
+        let ea = card["tableAnswers"].as_array().unwrap();
+        let da = d["payload"]["entries"][0]["tableAnswers"]
+            .as_array()
+            .unwrap();
+        assert_eq!(ea.len(), tables.len());
+        for (i, t) in tables.iter().enumerate() {
+            let p = json(vec![
+                "prove".into(),
+                ws.clone(),
+                routine.into(),
+                format!("writes-table:{t}"),
+                "--format".into(),
+                "json".into(),
+            ]);
+            let pr = &p["payload"]["result"];
+            assert_eq!(key(&ea[i]), key(pr), "{routine} explain vs prove: {t}");
+            assert_eq!(key(&da[i]), key(pr), "{routine} digest vs prove: {t}");
+            answers.insert(pr["answer"].as_str().unwrap().to_string());
+            if !listed.contains(&format!("\"{t}\"")) {
+                unlisted += 1;
+            }
+        }
+    }
+    assert!(
+        answers.contains("yes") && answers.contains("unknown"),
+        "{answers:?}"
+    );
+    assert!(unlisted > 10, "tables no card lists: {unlisted}");
+}
+
+/// T-W2-24 on the fixture: `Out Overloads::RunBoth` calls two overloads of
+/// `Note`. The human paths print each with its parameters, and digest's
+/// routine table keys them apart with distinct displays.
+#[test]
+fn overloads_print_with_their_signatures() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let (human, err, code) = run_alsem(&["explain", &ws, "--routine", "Out Overloads::RunBoth"]);
+    assert_eq!(code, 0, "{err}");
+    for want in [
+        "path: RunBoth → Note(Msg)\n",
+        "path: RunBoth → Note(Msg, Level)\n",
+    ] {
+        assert!(human.contains(want), "{want}\n{human}");
+    }
+    let (out, _, _) = run_alsem(&["digest", &ws, "--routine", "Out Overloads::RunBoth"]);
+    let d: Value = serde_json::from_str(&out).unwrap();
+    let displays: Vec<&str> = d["payload"]["routines"]
+        .as_object()
+        .unwrap()
+        .values()
+        .filter_map(|r| r["display"].as_str())
+        .filter(|s| s.contains("::Note"))
+        .collect();
+    assert_eq!(displays.len(), 2, "{displays:?}");
+    assert_ne!(displays[0], displays[1]);
 }

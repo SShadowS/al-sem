@@ -74,6 +74,9 @@ pub struct FieldWrite<'m> {
     pub field: &'m str,
     pub kind: WriteKind,
     pub anchor: &'m PAnchor,
+    /// The record operation's id for a `Validate` / `ModifyAll` write
+    /// (`None` for an assignment): explain's per-operation field (W2-4).
+    pub op_id: Option<&'m str>,
 }
 
 /// A field name as the body walk records it, compared the AL way: surrounding
@@ -136,6 +139,7 @@ pub fn field_writes(model: &Model) -> Vec<FieldWrite<'_>> {
                     field,
                     kind: WriteKind::Assign,
                     anchor: &fa.source_anchor,
+                    op_id: None,
                 });
             }
         }
@@ -166,6 +170,7 @@ pub fn field_writes(model: &Model) -> Vec<FieldWrite<'_>> {
                     field,
                     kind,
                     anchor: &op.source_anchor,
+                    op_id: Some(op.id.as_str()),
                 });
             }
         }

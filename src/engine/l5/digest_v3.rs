@@ -153,13 +153,26 @@ fn shown_paths(e: &DigestEffectFull, opts: RenderOpts) -> usize {
 fn shown_witnesses(
     e: &DigestEffectFull,
     opts: RenderOpts,
-) -> Vec<(&String, &crate::engine::l5::group_path::GroupPath)> {
+) -> Vec<(Option<&String>, &crate::engine::l5::group_path::GroupPath)> {
+    // W2-6 (2f): a resource-less group's (COMMIT, HTTP, …) own terminal
+    // witness, beside the per-resource ones of a table group.
     let all = e
         .group_resource_paths
         .iter()
-        .filter_map(|(r, w)| w.as_ref().ok().map(|w| (r, w)));
+        .filter_map(|(r, w)| w.as_ref().ok().map(|w| (Some(r), w)))
+        .chain(
+            e.group_terminal_path
+                .iter()
+                .filter_map(|w| w.as_ref().ok().map(|w| (None, w))),
+        );
     if opts.detail {
         all.collect()
+    } else if e.group_resources.is_empty() && e.effect_type != "COMMIT" {
+        // The default carries a resource-less group's witness for a COMMIT
+        // only (§3.4.2: a may-persist row's representative, and a COMMIT's
+        // own); HTTP, UI, ERROR, … witnesses come with --detail (the size
+        // budget, §9 q1).
+        Vec::new()
     } else if decision(e) && opts.path_cap > 0 {
         all.take(1).collect()
     } else {
@@ -381,9 +394,8 @@ fn effect_v3(
             }
             v
         };
-        let witness = |r: &String, w: &crate::engine::l5::group_path::GroupPath| {
-            json!({
-                "resource": r,
+        let witness = |r: Option<&String>, w: &crate::engine::l5::group_path::GroupPath| {
+            let mut v = json!({
                 "hops": w.steps.iter().map(step).collect::<Vec<_>>(),
                 "terminal": {
                     "operationId": w.terminal.operation_id,
@@ -391,14 +403,23 @@ fn effect_v3(
                     "line": w.terminal.line.map(shown),
                 },
                 "throughEntryPoint": w.through_entry_point,
-            })
+            });
+            if let Some(r) = r {
+                v["resource"] = json!(r);
+            }
+            v
         };
+        // W2-6: no witness is invented; a resource-less group says why it
+        // has none.
+        if let Some(Err(n)) = &e.group_terminal_path {
+            m.insert("pathUnavailable".into(), n.reason.into());
+        }
         if opts.detail {
             m.insert(
                 "witnesses".into(),
-                Value::Array(witnesses.iter().map(|(r, w)| witness(r, w)).collect()),
+                Value::Array(witnesses.iter().map(|&(r, w)| witness(r, w)).collect()),
             );
-        } else if let Some((r, w)) = witnesses.first() {
+        } else if let Some(&(r, w)) = witnesses.first() {
             let mut v = witness(r, w);
             v["representative"] = json!(true);
             m.insert("paths".into(), Value::Array(vec![v]));

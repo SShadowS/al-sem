@@ -1,7 +1,10 @@
 --- Codeunit D1 Multi Caller::CallerA ---
   question: writes-table:MC Customer
   answer:   yes
-  evidence: 1 effect(s)
-    [DB_MODIFY] transitive — ws:src/D1MultiCaller.al:19
+  evidence: 1 effect
+    [DB_MODIFY] at ws:src/D1MultiCaller.al:19
       conditionality: loop-body
-  obligations: all clear
+      path: CallerA → ModifyHelper
+  coverage: complete
+  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  limits: none

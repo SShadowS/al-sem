@@ -443,7 +443,14 @@ pub fn digest_reads_plan(
 /// `alsem prove` (#160 step 9 D2): digest's plan over its one root, or none,
 /// whose unresolved cone also counts the analysis gaps it visits (C1).
 pub fn prove_plan(detectors: Vec<Detector>, root: Option<String>) -> Plan {
-    let mut plan = digest_plan(detectors, root.into_iter().collect(), false);
+    counting_cone_gaps(digest_plan(detectors, root.into_iter().collect(), false))
+}
+
+/// `plan` with every tree counting its cones' analysis gaps and table
+/// events: what a table answer reads (prove; explain's and digest's
+/// `--writes-table`, W2-2 gap (a)).
+#[must_use]
+pub fn counting_cone_gaps(mut plan: Plan) -> Plan {
     for (_, tree) in &mut plan.trees {
         tree.gaps_in_cone = true;
     }

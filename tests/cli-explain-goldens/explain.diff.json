@@ -91,14 +91,18 @@
             "fieldCaptions": {
               "Status": "Order Status"
             },
-            "fields": [
-              "Posted",
-              "Status"
-            ],
+            "fieldOps": [],
+            "fields": {
+              "Codeunit Explain Post::PostOrder": [
+                "Posted",
+                "Status"
+              ]
+            },
             "op": "DB_MODIFY",
             "opKinds": [
               "Modify"
             ],
+            "renames": [],
             "table": "Explain Order",
             "tableId": "44444444-e491-0000-0000-0000000e4a11/table/50400",
             "tempState": "parameter-dependent(0)",
@@ -370,13 +374,17 @@
             "fieldCaptions": {
               "Status": "Order Status"
             },
-            "fields": [
-              "Status"
-            ],
+            "fieldOps": [],
+            "fields": {
+              "Codeunit Explain Post::Archive": [
+                "Status"
+              ]
+            },
             "op": "DB_MODIFY",
             "opKinds": [
               "Modify"
             ],
+            "renames": [],
             "table": "Explain Order",
             "tableId": "44444444-e491-0000-0000-0000000e4a11/table/50400",
             "tempState": "parameter-dependent(0)",

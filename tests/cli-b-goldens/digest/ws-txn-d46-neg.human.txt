@@ -6,8 +6,8 @@
   scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   commits: yes — 1 site in workspace code; 0 commit-bearing entry points:
     COMMIT at ws:src/NormalCU.al:36 (unconditional-on-success)
-  writes in workspace code (1 table):
-    My Setup: Insert — known persistent
+  writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
+    My Setup: Insert 1 — known persistent
       Insert at ws:src/NormalCU.al:34
   events: 0 raised in workspace code; 0 more only beyond entry points
 
@@ -20,8 +20,8 @@
   commits: yes — 1 site in workspace code; 0 commit-bearing entry points:
     COMMIT at ws:src/NormalCU.al:36 (unconditional-on-success)
       path: RunSetup → DoSetup
-  writes in workspace code (1 table):
-    My Setup: Insert — known persistent
+  writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
+    My Setup: Insert 1 — known persistent
       Insert at ws:src/NormalCU.al:34
       path: RunSetup → DoSetup
   events: 0 raised in workspace code; 0 more only beyond entry points

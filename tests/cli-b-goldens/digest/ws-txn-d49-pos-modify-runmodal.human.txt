@@ -5,8 +5,8 @@
   limits: none
   scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   commits: no observed COMMIT
-  writes in workspace code (1 table):
-    D49 Rec: Modify — known persistent
+  writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
+    D49 Rec: Modify 1 — known persistent
       Modify at ws:src/Sender.Codeunit.al:14
   events: 0 raised in workspace code; 0 more only beyond entry points
   UI at 1 place: UI_WINDOW_OPEN at ws:src/Sender.Codeunit.al:15 (unconditional-on-success)

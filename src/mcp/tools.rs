@@ -203,6 +203,12 @@ pub fn tool_list() -> Vec<Value> {
                 vec![
                     ("routines", string_array("Routine selectors (mode 1).")),
                     (
+                        "writesTables",
+                        string_array(
+                            "Mode 1: answer 'does it write table T?' per card, as alsem_prove writes-table:T answers.",
+                        ),
+                    ),
+                    (
                         "diff",
                         json!({"type": "string", "description": "A unified diff's text (mode 2)."}),
                     ),
@@ -229,6 +235,10 @@ pub fn tool_list() -> Vec<Value> {
                     (
                         "maxPaths",
                         json!({"type": "integer", "minimum": 0, "description": "Paths per item (default 1; 3 with detail; at most 3)."}),
+                    ),
+                    (
+                        "showSource",
+                        json!({"type": "boolean", "description": "Human output: the cited source line ±2 under each location (`--show-source`)."}),
                     ),
                 ],
                 &[],
@@ -268,6 +278,12 @@ pub fn tool_list() -> Vec<Value> {
             schema(
                 vec![
                     ("routines", string_array("Changed routines.")),
+                    (
+                        "writesTables",
+                        string_array(
+                            "Answer 'does it write table T?' per root (entries[].tableAnswers), as alsem_prove writes-table:T answers.",
+                        ),
+                    ),
                     ("files", string_array("Changed source files.")),
                     (
                         "diff",
@@ -325,6 +341,10 @@ pub fn tool_list() -> Vec<Value> {
                         json!({"type": "boolean", "description": "Every operation in the human output, one line each (`--all`); JSON always holds every row."}),
                     ),
                     (
+                        "showSource",
+                        json!({"type": "boolean", "description": "Human output: the cited source line ±2 under each location (`--show-source`)."}),
+                    ),
+                    (
                         "format",
                         json!({"type": "string", "enum": ["human", "json"], "description": "Output format (default human)."}),
                     ),
@@ -354,6 +374,10 @@ pub fn tool_list() -> Vec<Value> {
                     (
                         "all",
                         json!({"type": "boolean", "description": "Every witness, the callers' included, and no folded list (`--all`). Large on a hub routine."}),
+                    ),
+                    (
+                        "showSource",
+                        json!({"type": "boolean", "description": "Human output: the cited source line ±2 under each location (`--show-source`)."}),
                     ),
                     (
                         "format",
@@ -677,6 +701,10 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             if let Some(n) = a.count("maxPaths")? {
                 v.opt("max-paths", &n.to_string());
             }
+            v.switch("show-source", a.flag("showSource")?);
+            for t in a.strings("writesTables")?.unwrap_or_default() {
+                v.opt("writes-table", t);
+            }
             v
         }
         "alsem_prove" => {
@@ -735,6 +763,9 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             if let Some(n) = a.count("schema")? {
                 v.opt("schema", &n.to_string());
             }
+            for t in a.strings("writesTables")?.unwrap_or_default() {
+                v.opt("writes-table", t);
+            }
             always_file = true;
             v
         }
@@ -742,6 +773,7 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             let mut v = Argv::new(&["query", "effects"], &workspace);
             v.opt("routine", a.required("routine")?);
             v.switch("all", a.flag("all")?);
+            v.switch("show-source", a.flag("showSource")?);
             v.opt(
                 "format",
                 &a.enumerated("format", &["human", "json"], "human")?,
@@ -760,6 +792,7 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
                 &a.enumerated("direction", &["down", "up", "both"], "both")?,
             );
             v.switch("all", a.flag("all")?);
+            v.switch("show-source", a.flag("showSource")?);
             v.opt(
                 "format",
                 &a.enumerated("format", &["human", "json"], "human")?,

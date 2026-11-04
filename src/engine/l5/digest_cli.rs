@@ -946,6 +946,9 @@ pub struct DigestEffectFull {
     /// G35: per group resource id, one example path inside the dependency
     /// ([`crate::engine::l5::group_path`]); `prove` shows the matched ones.
     pub group_resource_paths: Vec<(String, crate::engine::l5::group_path::GroupPathOutcome)>,
+    /// W2-6: a resource-less group's terminal witness (`DigestEffectResult`'s
+    /// field of the same name).
+    pub group_terminal_path: Option<crate::engine::l5::group_path::GroupPathOutcome>,
     /// The operations the effect originates from, and its class's "known
     /// temporary" flag: what [`DbTempStates`] joins on, so `prove` can ask the
     /// same write in a CALLER's frame (G25). Not serialized.
@@ -1558,6 +1561,19 @@ pub(crate) fn literal_reach_pass(
                     &mut suffixes,
                     &never,
                 );
+                // W2-6 (2f): a resource-less group (COMMIT, HTTP, UI, …) gets
+                // its own terminal witness: through the crossing to a live
+                // state owning a direct fact of its type.
+                if e.group_resources.is_empty()
+                    && !e.effect_type.starts_with("DB_")
+                    && e.effect_type != "EVENT_PUBLISH"
+                {
+                    let ops = vec![(String::new(), reach.terminal_ops(&e.effect_type))];
+                    e.group_terminal_path = group_paths
+                        .paths(&reach, &tree, entries, e, &ops, &mut suffixes, &never)
+                        .pop()
+                        .map(|(_, o)| o);
+                }
                 // Each resource judged from THIS crossing's entry states.
                 e.group_resource_status = candidates
                     .iter()
@@ -1902,6 +1918,7 @@ pub fn run_digest_query_full_from_entries(
                         .into_iter()
                         .filter(|(id, _)| !eff.dead_group_resources.contains(id))
                         .collect(),
+                    group_terminal_path: eff.group_terminal_path.take(),
                     origin_operation_ids: eff.origin_operation_ids.clone(),
                     effect_is_kt: is_known_temp_state(eff.temp_state.as_ref()),
                     literal_unreachable: eff.literal_unreachable,
@@ -2514,6 +2531,7 @@ pub fn project_digest_document(
     // 3.0.0 (MCP output wave 2, W2-2, design §4.4): the rendering
     // redesign (`digest_v3`'s module doc); `--schema 2` keeps 2.2.0.
     let compact = v3.as_ref().is_some_and(|v| v.compact);
+    let table_answers = v3.as_ref().map(|v| v.table_answers);
     env.insert(
         "schemaVersion".into(),
         if v3.is_some() { "3.0.0" } else { "2.2.0" }.into(),
@@ -2524,6 +2542,18 @@ pub fn project_digest_document(
     let mut doc = sort_and_drop_nulls(serde_json::Value::Object(env));
     if let Some(block) = test_coverage {
         doc["payload"]["testCoverage"] = block;
+        doc = sort_keys_keep_nulls(doc);
+    }
+    // W2-2 gap (a): `--writes-table`, prove's own answer per entry.
+    if let Some(answers) = table_answers.filter(|a| !a.is_empty()) {
+        if let Some(es) = doc["payload"]["entries"].as_array_mut() {
+            for e in es {
+                let id = e["routine"]["stableId"].as_str().unwrap_or("").to_string();
+                if let Some((values, _)) = answers.get(&id) {
+                    e["tableAnswers"] = serde_json::json!(values);
+                }
+            }
+        }
         doc = sort_keys_keep_nulls(doc);
     }
     if compact {
@@ -2540,6 +2570,8 @@ pub struct V3Inputs<'a> {
     pub cx: &'a crate::engine::l5::routine_rollup::RollupCx<'a>,
     pub opts: crate::engine::l5::routine_rollup::RenderOpts,
     pub compact: bool,
+    /// `--writes-table` (W2-2 gap (a)): `entries[].tableAnswers`.
+    pub table_answers: &'a crate::engine::l5::prove::TableAnswers,
 }
 
 pub struct ChangedInputContract {
@@ -2939,6 +2971,7 @@ pub fn digest_pipeline_rendered(
         human: false,
         out: None,
         render,
+        writes_tables: Vec::new(),
     };
     crate::engine::batch::run_doc(&job)
         .one::<Result<DigestRunResult, String>>()
@@ -2956,6 +2989,8 @@ pub struct DigestJob<'a> {
     out: Option<&'a str>,
     /// `--schema 2`, `--detail`, `--compact`, `--max-paths` (design §5).
     render: crate::engine::l5::digest_v3::DigestRender,
+    /// `--writes-table T` (W2-2 gap (a)): prove's answer per root and table.
+    writes_tables: Vec<String>,
 }
 
 impl<'a> DigestJob<'a> {
@@ -2967,7 +3002,15 @@ impl<'a> DigestJob<'a> {
             human,
             out,
             render: Default::default(),
+            writes_tables: Vec::new(),
         }
+    }
+
+    /// `--writes-table T`, repeated (W2-2 gap (a)).
+    #[must_use]
+    pub fn with_writes_tables(mut self, tables: Vec<String>) -> Self {
+        self.writes_tables = tables;
+        self
     }
 
     /// The document's rendering (design §5).
@@ -3048,6 +3091,13 @@ impl Job for DigestJob<'_> {
             self.req.tests,
             self.req.include_reads,
         );
+        // `--writes-table` reads the cones' gap counts (declared needs: only
+        // then are they counted).
+        let plan = if self.writes_tables.is_empty() {
+            plan
+        } else {
+            crate::engine::session::counting_cone_gaps(plan)
+        };
         Ok(PlanPart {
             plan,
             reads: vec![Cell::Det, Cell::L4, Cell::Effects],
@@ -3060,6 +3110,7 @@ impl Job for DigestJob<'_> {
             cx,
             &self.req,
             self.render,
+            &self.writes_tables,
         ))))
     }
 
@@ -3097,6 +3148,7 @@ fn digest_view(
     cx: &mut ViewCx<'_>,
     req: &DigestRequest<'_>,
     render: crate::engine::l5::digest_v3::DigestRender,
+    writes_tables: &[String],
 ) -> DigestRunResult {
     let DigestRequest {
         changed_files,
@@ -3129,6 +3181,13 @@ fn digest_view(
     // the view mutably. It is small (one entry per primary routine).
     let owners = OwnerIndex::build(resolved);
 
+    // The cones' facts a `--writes-table` answer reads, before the join
+    // takes the cones.
+    let cones = if writes_tables.is_empty() {
+        HashMap::new()
+    } else {
+        crate::engine::l5::prove::cone_facts(&effects.unresolved)
+    };
     // Run full digest query for the resolved roots
     let query_full = run_digest_query_full_from_entries(
         &mut effects,
@@ -3139,6 +3198,14 @@ fn digest_view(
         &owners,
     );
     let entries = query_full.entries;
+    // W2-2 gap (a): `--writes-table`, prove's own answer per root.
+    let table_answers = crate::engine::l5::prove::table_answers(
+        resolved,
+        &temp_states,
+        &entries,
+        &cones,
+        writes_tables,
+    );
     let query_diagnostics = query_full.query_diagnostics;
     // W2-2: one rollup per root, read by the summary and the renderers.
     let rollup_cx = crate::engine::l5::routine_rollup::RollupCx::new(resolved, &dependencies.apps);
@@ -3201,6 +3268,7 @@ fn digest_view(
             cx: &rollup_cx,
             opts: render.opts(),
             compact: render.compact,
+            table_answers: &table_answers,
         }),
     );
 
@@ -3219,6 +3287,20 @@ fn digest_view(
         human_text.push_str(&t.human_line());
         human_text.push('\n');
     }
+    // W2-2 gap (a): `--writes-table`, per root in entry order.
+    for e in &entries {
+        if let Some((_, lines)) = table_answers.get(&e.routine_id) {
+            human_text.push_str(&format!(
+                "table answers for {}:\n",
+                owner_qualified(&e.object_display, &e.routine_display)
+            ));
+            for l in lines {
+                human_text.push_str(&format!("  {l}\n"));
+            }
+        }
+    }
+    // W2-7 (2g): readable dependency locations (the JSON keeps the guid).
+    let human_text = dependencies.readable_locations(human_text);
     drop(rollup_cx);
     cx.release(Cell::L4);
     cx.release(Cell::Effects);
@@ -3549,6 +3631,7 @@ mod tests {
                 .map(|(i, d)| (i.to_string(), d.to_string()))
                 .collect(),
             group_resource_paths: vec![],
+            group_terminal_path: None,
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
@@ -3772,6 +3855,50 @@ mod tests {
         assert_eq!(t.caller_dependent_tables, 1, "{t:?}");
         assert_eq!(r.caller_dependent.len(), 1);
         assert!(!r.may_write.contains_key("ws/table/5"), "{t:?}");
+    }
+
+    /// W2-5 (2e): an effect type no kind family names is never dropped; it is
+    /// the explicit other-kinds bucket, counted per place (an own site and a
+    /// crossing) and printed by its type name. The type is stated by
+    /// assignment: every type the digest maps today has a family, so no AL
+    /// source makes one.
+    ///
+    /// Discrimination (2026-11-04): `family_of` returning `None` for an
+    /// unknown type (the old drop) fails at "the own site is counted";
+    /// restored, passes.
+    #[test]
+    fn an_effect_type_with_no_family_is_its_own_bucket() {
+        use crate::engine::l5::routine_rollup::{OTHER_KINDS, kind_lines};
+        let mut own = effect("FUTURE_KIND", &[], &[]);
+        own.evidence.source_kind = "source";
+        own.evidence.file = Some("ws:src/A.al".to_string());
+        own.evidence.line = Some(4);
+        let group = effect(
+            "FUTURE_KIND",
+            &[("boundary", "Codeunit Base Poster::OnRun")],
+            &[],
+        );
+        let mut e = entry_with(vec![]);
+        e.effects = vec![own, group];
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+        assert_eq!(
+            r.kind_sites.get(OTHER_KINDS).map(Vec::len),
+            Some(1),
+            "the own site is counted: {:?}",
+            r.kind_sites
+        );
+        assert_eq!(r.totals.kinds.get(OTHER_KINDS), Some(&2), "{:?}", r.totals);
+        let lines = kind_lines(&r, &e);
+        assert_eq!(
+            lines,
+            vec![
+                "other effect kinds at 2 places: FUTURE_KIND at ws:src/A.al:5 (unknown); \
+                 FUTURE_KIND beyond Codeunit Base Poster::OnRun"
+                    .to_string()
+            ]
+        );
     }
 
     /// A model whose primary app is `ws`.

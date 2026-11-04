@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (MCP output wave 2, W2-4 … W2-8)
+
+- **Digest size budgets decided (owner, 2026-11-04):** the default digest JSON (pretty) of `CDO
+  Issue Document::IssueReminder` and `CDO E-Mail Handler::RunReportID` on the CDO baseline is at
+  most 1,250,000 bytes whole and 720,000 bytes without event names; a CDO-gated ratchet
+  (`output_cdo::cdo_digest_json_fits_its_size_budgets`, run by `scripts/cdo-gate`) pins both.
+
+- **W2-4 (2d): a write states fields by its original operation kind.** `alsem explain`'s table
+  writes print `fields X assigns on this table (not operation-specific): …` only for `Insert` and
+  `Modify` (one clause per owning routine), `ModifyAll sets: F (in …)` for a `ModifyAll` (the
+  operation's own field), `renames (primary key) in …` for a `Rename`, and nothing for `Delete`,
+  `DeleteAll` and `LockTable` (before, every write listed every field its routine assigned on the
+  table, a `DeleteAll` too). Explain JSON (`/3`, no outside reader): `fields` is now an object keyed
+  by the owning routine's qualified display, beside `fieldOps` (`{op, field, in}`) and `renames`.
+  A `Validate` is no digest write type; its field stays in its routine's assignments.
+- **W2-5 (2e): every effect kind has its own bucket.** `alsem query effects`' locks line says
+  `not writes`, marks a locked table that is also written `(also written)`, prints a lock-only
+  table's first `LockTable` at its own anchor with its owner, and counts the locks on a table not
+  resolved. The `--all` row of such an operation reads `table not resolved: determined at run time
+  or not resolved` (was `target table unresolved — not a table`). Explain and digest put an effect
+  type no kind family names into an explicit `other effect kinds` bucket (JSON `otherKinds`, only
+  when used) instead of dropping it; today every digest effect type has a family. `Validate` is
+  no operation of either substrate (a trigger-class op: its effects are its `OnValidate`'s), so
+  query's `validate` bucket stays empty on real code.
+- **W2-6 (2f): every group gets a real witness, COMMIT and resource-less groups included.** The
+  literal pass gives a resource-less group (COMMIT, HTTP, UI, …) its own terminal witness through
+  its crossing to a live state owning a direct fact of its type (W2-0b's suffix search), or the
+  reason it has none. Prove JSON **2.3.0** (additive): such evidence carries `groupPath`,
+  `crossing`, `throughEntryPoint` and `groupWitness` (or `groupPathUnavailable`). Prove human
+  prints where each effect sits (`[COMMIT] beyond Codeunit X::OnRun, entered at …`, `[DB_INSERT]
+  at …`) and its path, ending `(<Kind> at <terminal anchor>)`; `evidence: N effects`. Explain and
+  digest human print a commit-bearing entry point's own COMMIT path, and per entry point one
+  `representative path (<table>, the nearest of N tables)` (it names the site it passes when the
+  entry point has several); `--detail` prints every table's witness, or why it has none. Digest
+  JSON 3.x: a COMMIT / HTTP / UI / ERROR group row carries its representative witness in `paths`
+  (or `pathUnavailable`); explain JSON's resource-less group rows carry `paths` and `pathOutcome`.
+- **W2-7 (2g): readable dependency locations and `--show-source`.** Every human output of
+  explain, digest, prove and query prints a dependency location as `dep:<app name>:<path>:<line>`
+  (`dep:Base Application:src/Sales/Reminder/ReminderIssue.Codeunit.al:182`), the name followed by
+  ` (<first 8 of the guid>)` when two loaded apps share it, and `%20` as a space. JSON keeps
+  `dep:<guid>:` (the `aldump --dump-dependency-source` citation contract). `alsem explain` and
+  `alsem query effects` / `touches` take `--show-source` (MCP `showSource`): the cited line ±2,
+  marked `>`, under each location, from the same text the dump command writes.
+- **W2-8 (2h): prove states its coverage, assumptions and limits.** The human answer's
+  `obligations:` line is replaced by three always-visible lines: `coverage: complete` or
+  `incomplete — N calls not resolved (K in this workspace), M interface calls open world (L in
+  this workspace); top: <callee> ×n, …`; `assumptions:` with the answer's world label
+  (`loaded-subscribers`, `closed-world`) or `none (default world; …)`; `limits:` (analysis gaps,
+  cone truncation) or `none`. An absence the obligations block reads `answer: unknown — no
+  matching effect observed; coverage incomplete`; `yes` and `no` print bare (prove's answer is
+  authoritative; the JSON `answer` is unchanged). Prove JSON 2.3.0 (additive): `obligations`
+  gains `unresolvedInWorkspace {notResolved, openWorld}` and `topUnresolvedCallees` (3).
+- **One answer to "does R write T" across explain, digest and prove, by construction.** `alsem
+  explain --routine R --writes-table T` and `alsem digest … --writes-table T` (repeatable; MCP
+  `writesTables`) print prove's own answer per table (`cards[].tableAnswers`,
+  `entries[].tableAnswers`: `answer`, `evidence`, `blockedBy`, `assumptions`; a human line per
+  table): all three call one evaluation, `prove::TableQuestions::answer` (classification,
+  field-guarded matches, caller resolution, the obligation rules, the loaded-subscribers label).
+  Such a run counts the cones' analysis gaps, as prove's plan does. Not with `digest --schema 2`.
+- **Routines that share a display print apart** (T-W2-24): an overload in the same app prints its
+  parameter names (`Note(Msg, Level)`; the typed list when two overloads share the names), a
+  routine of another app with the same
+  qualified display gets ` [<app name>]`, in path lines and every qualified display (digest's
+  `payload.routines[].display` included).
+- **Workspace-code write lines count operations**: `Out Item: Insert 1, ModifyAll 1, Rename 1`,
+  the section header saying these are the cone's retained representative operations (at least
+  that many). Exact counts need the per-root reach of the terminal-fact index, which the passed
+  entry does not keep (left open).
+- **Entry-point table names are nearest first**: by each table's witness length through the
+  entry point, then by name (was alphabetical).
+
 ### Fixed (#369: dependency writes with no witness path, and colliding `factId`s)
 
 - **A write deep in dependency code through a `var` record parameter now gets its witness.** Such

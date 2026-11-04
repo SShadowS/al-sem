@@ -1,6 +1,9 @@
 --- Codeunit D8PostingChain::PostSalesDoc ---
   question: publishes-event:onafterpostsalesdoc
   answer:   yes
-  evidence: 1 effect(s)
-    [EVENT_PUBLISH] transitive — ws:src/posting.al:13
-  obligations: all clear
+  evidence: 1 effect
+    [EVENT_PUBLISH] at ws:src/posting.al:13
+      path: PostSalesDoc → OnAfterPostSalesDoc
+  coverage: complete
+  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  limits: none

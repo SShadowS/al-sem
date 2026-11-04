@@ -1,6 +1,9 @@
 --- Codeunit Out Issue Document::IssueDoc ---
   question: writes-table:Base Doc Line
   answer:   yes
-  evidence: 1 effect(s)
-    [DB_DELETE] transitive — ws:src/OutIssueDocument.Codeunit.al:15
-  obligations: unresolved=2, openWorld=1, coverage=incomplete
+  evidence: 1 effect
+    [DB_DELETE] beyond Codeunit Base Poster::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15
+      path: IssueDoc → [run] Base Poster::OnRun (DeleteAll at dep:Out Base:src/BasePoster.Codeunit.al:7)
+  coverage: incomplete — 2 calls not resolved (1 in this workspace), 1 interface call open world (1 in this workspace); top: Codeunit.Run(<dynamic>) ×2, Handler.Handle ×1; alsem explain lists the workspace ones under gaps
+  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  limits: none

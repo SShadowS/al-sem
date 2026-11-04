@@ -3,7 +3,7 @@
   coverage: one routine into dependency code; operations ruled out by literal arguments are listed (alsem explain and prove drop them); lines are 1-based
   scope: per operation, one routine into dependency code (alsem explain and prove follow the whole cone); temporary records are not writes; dependencies: 1 app (--all lists them)
   writes that may persist (2 tables):
-    Base Doc Line: DeleteAll 1 — first DeleteAll at dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al:7 in Codeunit Base Poster::OnRun, through Codeunit Base Poster::OnRun
+    Base Doc Line: DeleteAll 1 — first DeleteAll at dep:Out Base:src/BasePoster.Codeunit.al:7 in Codeunit Base Poster::OnRun, through Codeunit Base Poster::OnRun
     Out Log: Insert 1 — first Insert at ws:src/OutIssueDocument.Codeunit.al:61 in Codeunit Out Log Mgt::WriteLog, through Codeunit Out Log Mgt::WriteLog
   caller-dependent writes (1 table; written only if the caller passes a record that is not temporary):
     Out Doc: Modify 1 (caller-dependent: parameter 1) — first Modify at ws:src/OutIssueDocument.Codeunit.al:14 in Codeunit Out Issue Document::IssueDoc

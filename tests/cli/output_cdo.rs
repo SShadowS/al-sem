@@ -378,3 +378,145 @@ fn cdo_every_spilled_answer_carries_a_small_summary() {
     );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// T-W2-15, the digest size ratchet (owner decision 2026-11-04, spec §9 q1):
+/// the default 3.x digest JSON (pretty) of IssueReminder and RunReportID is at
+/// most 1,250,000 bytes whole and at most 720,000 bytes as its core (the
+/// document without `eventsByPublisher`, every event name kept by O2),
+/// pinned to the CDO baseline `bc3ccb18`. A change that grows either past its
+/// budget fails here; one that shrinks it far may lower the budget.
+#[test]
+fn cdo_digest_json_fits_its_size_budgets() {
+    let Some(a) = cdo_answers() else { return };
+    const WHOLE: usize = 1_250_000;
+    const CORE: usize = 720_000;
+    fn strip(v: &mut Value) {
+        match v {
+            Value::Object(m) => {
+                m.remove("eventsByPublisher");
+                m.values_mut().for_each(strip);
+            }
+            Value::Array(xs) => xs.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    for label in ["IssueReminder", "RunReportID"] {
+        let doc = &a.answers[&format!("{label} digest json")].stdout;
+        let mut v: Value = serde_json::from_str(doc).expect("digest JSON");
+        assert_eq!(v["schemaVersion"], "3.0.0", "{label}");
+        strip(&mut v);
+        let core = serde_json::to_string_pretty(&v).unwrap().len() + 1;
+        eprintln!(
+            "{label}: digest JSON {} bytes (budget {WHOLE}), core {core} bytes (budget {CORE})",
+            doc.len()
+        );
+        assert!(doc.len() <= WHOLE, "{label}: {} > {WHOLE}", doc.len());
+        assert!(core <= CORE, "{label}: core {core} > {CORE}");
+    }
+}
+
+/// W2-2 gap (a), T-W2-16 leg 2 on CDO: explain's and digest's
+/// `--writes-table` give prove's own answer (`answer`, `blockedBy`,
+/// `assumptions`) for IssueReminder and RunReportID, over the first 12
+/// tables explain's card lists and 12 tables of the program no output of the
+/// routine names (a fixed list of Base Application master tables, kept only
+/// where neither the explain nor the digest document mentions them).
+#[test]
+fn cdo_explain_digest_and_prove_give_one_table_answer() {
+    let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
+        return;
+    };
+    const ABSENT: &[&str] = &[
+        "Country/Region",
+        "Currency",
+        "Payment Terms",
+        "Salesperson/Purchaser",
+        "Unit of Measure",
+        "Shipment Method",
+        "Language",
+        "Post Code",
+        "Bank Account",
+        "Location",
+        "Vendor",
+        "Item",
+        "Fixed Asset",
+        "Employee",
+        "Resource",
+        "Territory",
+    ];
+    let mut server = Server::ready(&ws, None);
+    let mut id = 5000;
+    let mut ask = |tool: &str, args: Value| -> Value {
+        id += 1;
+        let result = server.call(id, tool, args);
+        let (stdout, stderr, exit) = cli_bytes(&envelope(&result));
+        assert_eq!(exit, 0, "{tool}: {}", String::from_utf8_lossy(&stderr));
+        serde_json::from_slice(&stdout).expect("JSON")
+    };
+    let key = |v: &Value| {
+        (
+            v["answer"].clone(),
+            v.get("blockedBy").cloned().unwrap_or(json!([])),
+            v.get("assumptions").cloned().unwrap_or(Value::Null),
+        )
+    };
+    for (label, sel, ..) in &ROUTINES[..2] {
+        let e = ask(
+            "alsem_explain",
+            json!({"routines": [sel], "format": "json"}),
+        );
+        let card = &e["cards"][0];
+        let mut named: Vec<String> = Vec::new();
+        for w in card["effects"]["writes"].as_array().unwrap() {
+            let names: Vec<String> = match w["resources"].as_array() {
+                Some(rs) => rs
+                    .iter()
+                    .filter_map(|r| r["display"].as_str().map(String::from))
+                    .collect(),
+                None => w["table"].as_str().map(String::from).into_iter().collect(),
+            };
+            for n in names {
+                if !n.is_empty() && !named.contains(&n) && named.len() < 12 {
+                    named.push(n);
+                }
+            }
+        }
+        let d = ask(
+            "alsem_digest",
+            json!({"routines": [sel], "deterministic": true}),
+        );
+        let (et, dt) = (card.to_string(), d.to_string());
+        let absent: Vec<String> = ABSENT
+            .iter()
+            .filter(|t| !et.contains(&format!("\"{t}\"")) && !dt.contains(&format!("\"{t}\"")))
+            .take(12)
+            .map(|t| (*t).to_string())
+            .collect();
+        assert_eq!(named.len(), 12, "{label}: {named:?}");
+        assert!(absent.len() >= 8, "{label}: {absent:?}");
+        let tables: Vec<String> = named.into_iter().chain(absent).collect();
+        let ea = ask(
+            "alsem_explain",
+            json!({"routines": [sel], "format": "json", "writesTables": tables}),
+        );
+        let da = ask(
+            "alsem_digest",
+            json!({"routines": [sel], "deterministic": true, "writesTables": tables}),
+        );
+        let ea = ea["cards"][0]["tableAnswers"].as_array().unwrap().clone();
+        let da = da["payload"]["entries"][0]["tableAnswers"]
+            .as_array()
+            .unwrap()
+            .clone();
+        for (i, t) in tables.iter().enumerate() {
+            let p = ask(
+                "alsem_prove",
+                json!({"routine": sel, "question": format!("writes-table:{t}"), "format": "json", "deterministic": true}),
+            );
+            let pr = &p["payload"]["result"];
+            assert_eq!(key(&ea[i]), key(pr), "{label} explain vs prove: {t}");
+            assert_eq!(key(&da[i]), key(pr), "{label} digest vs prove: {t}");
+        }
+    }
+    assert!(server.finish().success());
+}

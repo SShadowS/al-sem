@@ -237,6 +237,8 @@ pub struct QueryJob<'a> {
     /// `--format json`: the JSON text, else the human text.
     json: bool,
     out: Option<&'a str>,
+    /// `--show-source` (W2-7): the cited line ±2 under each human location.
+    show_source: bool,
 }
 
 impl<'a> QueryJob<'a> {
@@ -302,7 +304,15 @@ impl<'a> QueryJob<'a> {
             single_app,
             json: true,
             out: None,
+            show_source: false,
         }
+    }
+
+    /// `--show-source` (W2-7).
+    #[must_use]
+    pub fn show_source(mut self, show_source: bool) -> QueryJob<'a> {
+        self.show_source = show_source;
+        self
     }
 
     /// The text `--format` names (`json` or human), to `--out` or stdout.
@@ -335,14 +345,15 @@ impl Job for QueryJob<'_> {
     }
 
     fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
+        let workspace = cx.inputs().workspace.clone();
         let substrate = released_substrate(cx);
-        let result = match self.ask {
+        let body = match self.ask {
             QueryAsk::Touches {
                 table,
                 from,
                 direction,
                 all,
-            } => render_query_touches(
+            } => render_query_touches_body(
                 &substrate,
                 table,
                 from,
@@ -351,10 +362,17 @@ impl Job for QueryJob<'_> {
                 self.alsem_ver,
                 self.deterministic,
             ),
-            QueryAsk::Effects { routine, all } => {
-                render_query_effects(&substrate, routine, all, self.alsem_ver, self.deterministic)
-            }
+            QueryAsk::Effects { routine, all } => render_query_effects_body(
+                &substrate,
+                routine,
+                all,
+                self.alsem_ver,
+                self.deterministic,
+            ),
         };
+        let sources = (self.show_source && !self.json)
+            .then(|| crate::engine::source_excerpt::SourceTexts::read(&workspace));
+        let result = finish_human(body, &substrate.dependencies, sources.as_ref());
         Ok(SideDoc::new(Ok::<_, String>(result)))
     }
 
@@ -1066,10 +1084,25 @@ pub fn render_query_touches(
 /// there are some (a workspace with no dependency reads the same in both
 /// modes). An answer with a `scope:` line states them there instead (W2-2,
 /// design §4.5 Q6: `dependencies_clause`), so it gets no first line.
-fn with_dependencies_line(mut r: QueryRunResult, deps: &LoadedDependencies) -> QueryRunResult {
+fn with_dependencies_line(r: QueryRunResult, deps: &LoadedDependencies) -> QueryRunResult {
+    finish_human(r, deps, None)
+}
+
+/// [`with_dependencies_line`], then (W2-7, 2g) `--show-source` excerpts
+/// while the locations still name their app by guid, then readable
+/// dependency locations (the JSON keeps the guid).
+fn finish_human(
+    mut r: QueryRunResult,
+    deps: &LoadedDependencies,
+    sources: Option<&crate::engine::source_excerpt::SourceTexts>,
+) -> QueryRunResult {
     if !r.human_text.contains("\n  scope: ") {
         r.human_text = deps.prefix_human(r.human_text);
     }
+    if let Some(s) = sources {
+        r.human_text = crate::engine::source_excerpt::with_excerpts(&r.human_text, s);
+    }
+    r.human_text = deps.readable_locations(r.human_text);
     r
 }
 
@@ -2244,14 +2277,68 @@ fn render_query_effects_body(
             ));
         }
     }
-    if let Some(b) = buckets.get("locks") {
-        let mut names: Vec<String> = b.tables.iter().map(|t| table_name(t)).collect();
-        names.sort();
-        human.push_str(&format!(
-            "  locks ({}): {}\n",
-            plural(b.tables.len(), "table", "tables"),
-            names.join(", ")
-        ));
+    // W2-5 (2e): LockTable is its own class, never a write. A table also
+    // written says so (its write line carries `+ LockTable n`); a lock-only
+    // table prints its first lock's own anchor and owner; locks on a table not
+    // resolved are counted apart (they are in that bucket).
+    let unresolved_locks = buckets.get("tableNotResolved").map_or(0, |b| {
+        b.rows
+            .iter()
+            .filter(|&&i| op_family(effects[i].op) == "lock")
+            .count()
+    });
+    if buckets.contains_key("locks") || unresolved_locks > 0 {
+        let written: BTreeSet<&str> = ["writes", "callerDependent"]
+            .iter()
+            .filter_map(|k| buckets.get(*k))
+            .flat_map(|b| b.tables.iter().copied())
+            .collect();
+        let mut items: Vec<(String, String)> = Vec::new();
+        if let Some(b) = buckets.get("locks") {
+            for &t in &b.tables {
+                let name = table_name(t);
+                let text = if written.contains(t) {
+                    format!("{name} (also written)")
+                } else {
+                    let first = b
+                        .rows
+                        .iter()
+                        .map(|&i| &effects[i])
+                        .find(|e| e.table_id == t)
+                        .expect("a locked table has a row");
+                    match ops.get(first.operation_id, &join) {
+                        Some(o) => format!(
+                            "{name} at {}:{} in {}",
+                            o.file,
+                            shown(o.line),
+                            o.owner.qualified()
+                        ),
+                        None => format!("{name} (outside the workspace: {})", first.operation_id),
+                    }
+                };
+                items.push((name, text));
+            }
+        }
+        items.sort();
+        let n = buckets.get("locks").map_or(0, |b| b.tables.len());
+        let mut line = format!(
+            "  locks ({}; not writes): {}",
+            plural(n, "table", "tables"),
+            items
+                .into_iter()
+                .map(|(_, t)| t)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        if unresolved_locks > 0 {
+            line.push_str(&format!(
+                "{}table not resolved: {}",
+                if n > 0 { "; " } else { "" },
+                plural(unresolved_locks, "lock", "locks")
+            ));
+        }
+        human.push_str(&line);
+        human.push('\n');
     }
     for (key, label) in [
         ("validate", "validate (runs the field's trigger; may write)"),
@@ -2294,7 +2381,9 @@ fn render_query_effects_body(
     }
     for e in effects.iter().filter(|_| all) {
         let table = if is_unknown_table(e.table_id) {
-            format!("{UNKNOWN_TABLE_ID} (target table unresolved — not a table)")
+            format!(
+                "{UNKNOWN_TABLE_ID} (table not resolved: determined at run time or not resolved)"
+            )
         } else {
             match tables.get(e.table_id) {
                 Some(name) => name.to_string(),

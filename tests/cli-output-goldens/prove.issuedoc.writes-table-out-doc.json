@@ -55,7 +55,21 @@
         "coneTruncated": false,
         "coverageComplete": false,
         "openWorldRows": 1,
-        "unresolvedCallsites": 2
+        "topUnresolvedCallees": [
+          {
+            "callee": "Codeunit.Run(<dynamic>)",
+            "count": 2
+          },
+          {
+            "callee": "Handler.Handle",
+            "count": 1
+          }
+        ],
+        "unresolvedCallsites": 2,
+        "unresolvedInWorkspace": {
+          "notResolved": 1,
+          "openWorld": 1
+        }
       }
     },
     "routine": {
@@ -71,5 +85,5 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "2.2.0"
+  "schemaVersion": "2.3.0"
 }

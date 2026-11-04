@@ -17,7 +17,12 @@
         "coneTruncated": false,
         "coverageComplete": true,
         "openWorldRows": 0,
-        "unresolvedCallsites": 0
+        "topUnresolvedCallees": [],
+        "unresolvedCallsites": 0,
+        "unresolvedInWorkspace": {
+          "notResolved": 0,
+          "openWorld": 0
+        }
       }
     },
     "routine": {
@@ -33,5 +38,5 @@
     },
     "workspaceFingerprint": "450419199dc399835e4930b0b2b8568717dbc88066e20fa77134485d64043dee"
   },
-  "schemaVersion": "2.2.0"
+  "schemaVersion": "2.3.0"
 }
