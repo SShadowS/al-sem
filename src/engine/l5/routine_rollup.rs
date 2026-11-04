@@ -1,0 +1,1080 @@
+//! The per-routine rollup every effects renderer reads (MCP output wave 2,
+//! W2-2; design `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md`
+//! §3.1, §3.6, §3.8).
+//!
+//! One root's [`DigestEntryFull`] (after the L4 temp-state join and the
+//! literal pass) is sorted ONCE into sections by where the operation runs and
+//! by write class ([`crate::engine::l5::rollup::classify_detail`]):
+//!
+//! - writes in workspace code: own rows with a source anchor, physical class,
+//!   one record per table;
+//! - caller-dependent writes: own rows in class `callerDependent`;
+//! - crossings: every boundary group row, by its crossing (§3.3), with the
+//!   refined resource lists;
+//! - writes with no path kept: own rows whose evidence is unavailable, with the
+//!   owner the operation index recovers (§3.5);
+//! - temporary records, literal-dead rows, commits, events, the other kind
+//!   families and the gaps.
+//!
+//! [`RollupTotals`] is the one summary: explain's `cards[].summary`, digest's
+//! `entries[].summary` and both MCP summaries serialize it, and the human
+//! `summary:` line prints it. Every total is a union by identity, never a sum
+//! of section counts (T-W2-1).
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+use serde_json::{Value, json};
+
+use crate::engine::l4::operation_index::{IndexScope, OperationIndex, OwnerLookup};
+use crate::engine::l5::digest_cli::{DigestEffectFull, DigestEntryFull};
+use crate::engine::l5::rollup::{CallerReason, PhysicalReason, WriteClass, classify_detail};
+use crate::engine::line_base::shown;
+use crate::program::model::declaring::DeclaringRows;
+use crate::program::model::role::Role;
+use crate::program::model::workspace::Model;
+
+/// A folded list (design §3.8 rule 4): the items shown, how many are hidden,
+/// and the unit the full count is stated in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Folded<T> {
+    pub shown: Vec<T>,
+    pub hidden: usize,
+    pub unit: &'static str,
+}
+
+impl<T> Folded<T> {
+    /// The full count.
+    #[must_use]
+    pub fn total(&self) -> usize {
+        self.shown.len() + self.hidden
+    }
+}
+
+impl Folded<String> {
+    /// `a, b, … +N <unit>` (or just the items when nothing is hidden).
+    #[must_use]
+    pub fn joined(&self) -> String {
+        let mut s = self.shown.join(", ");
+        if self.hidden > 0 {
+            if !s.is_empty() {
+                s.push_str(", ");
+            }
+            s.push_str(&format!("… +{} {}", self.hidden, self.unit));
+        }
+        s
+    }
+}
+
+/// The one truncation helper (design §3.8 rule 4): the first `cap` items,
+/// or every item when there are at most a quarter more than `cap` (tables:
+/// 12, all when 15 or fewer). `all` (`--detail`, `--all`) shows everything.
+#[must_use]
+pub fn fold<T>(items: Vec<T>, cap: usize, unit: &'static str, all: bool) -> Folded<T> {
+    let n = fold_len(items.len(), cap, all);
+    let hidden = items.len() - n;
+    let mut shown = items;
+    shown.truncate(n);
+    Folded {
+        shown,
+        hidden,
+        unit,
+    }
+}
+
+/// How many of `len` items [`fold`] shows.
+#[must_use]
+pub fn fold_len(len: usize, cap: usize, all: bool) -> usize {
+    if all || len <= cap + cap / 4 {
+        len
+    } else {
+        cap
+    }
+}
+
+/// The caps of §3.8 rule 4.
+pub mod caps {
+    pub const TABLES: usize = 12;
+    pub const FIELDS: usize = 6;
+    pub const PUBLISHERS: usize = 6;
+    pub const CAPTIONS: usize = 8;
+    pub const PAGE_OBJECTS: usize = 6;
+    pub const TOP_CALLEES: usize = 5;
+    pub const ENTRY_POINTS: usize = 12;
+    pub const TEMP_NAMES: usize = 7;
+    pub const WORKSPACE_GAPS: usize = 40;
+}
+
+/// The model joins the rollup reads: names of routines and objects, the
+/// operation index (owner, anchor, original kind of an operation id), app
+/// names and the primary app.
+pub struct RollupCx<'m> {
+    pub model: &'m Model,
+    ops: OperationIndex<'m>,
+    declaring: DeclaringRows,
+    primary: Option<String>,
+    objects: HashMap<&'m str, usize>,
+    app_names: HashMap<String, String>,
+}
+
+/// Who owns an operation (design §3.5): the qualified owner routine, its
+/// anchor, its app and whether that app is a dependency.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpOwner {
+    pub display: String,
+    pub stable_id: String,
+    pub anchor: Option<String>,
+    pub app: String,
+    pub dependency: bool,
+    /// `found`, `ambiguous` or `missing`.
+    pub outcome: &'static str,
+}
+
+impl<'m> RollupCx<'m> {
+    /// Over `model`; `apps` are the loaded dependencies' rows
+    /// (`LoadedDependencies::apps`: `appId`, `name`).
+    #[must_use]
+    pub fn new(model: &'m Model, apps: &[Value]) -> RollupCx<'m> {
+        let mut app_names: HashMap<String, String> = apps
+            .iter()
+            .filter_map(|a| {
+                Some((
+                    a["appId"].as_str()?.to_ascii_lowercase(),
+                    a["name"].as_str()?.to_string(),
+                ))
+            })
+            .collect();
+        if let Some(p) = &model.primary_app {
+            app_names.insert(p.app_guid.to_ascii_lowercase(), p.name.clone());
+        }
+        RollupCx {
+            model,
+            // Every id kind: a no-path row's owner and an operation's original
+            // kind are read by `lookup` / `claims` (design §3.5).
+            ops: OperationIndex::build(model, IndexScope::All),
+            declaring: DeclaringRows::new(&model.workspace.objects),
+            primary: model
+                .primary_app
+                .as_ref()
+                .map(|p| p.app_guid.to_ascii_lowercase()),
+            objects: model
+                .workspace
+                .objects
+                .iter()
+                .enumerate()
+                .map(|(i, o)| (o.id.as_str(), i))
+                .collect(),
+            app_names,
+        }
+    }
+
+    /// The qualified `<Type> <Object>::<Routine>` of model row `i`.
+    #[must_use]
+    pub fn qualified_row(&self, i: usize) -> String {
+        let r = &self.model.workspace.routines[i];
+        let object = self
+            .declaring
+            .of(&self.model.workspace.objects, r)
+            .map_or("", |o| o.name.as_str());
+        crate::engine::l4::effect_query_cli::owner_qualified(
+            &crate::engine::l4::effect_query_cli::object_display(&r.object_type, object),
+            &r.name,
+        )
+    }
+
+    /// Is a table id (`<app>/table/<n>`) owned by the primary app?
+    #[must_use]
+    pub fn table_is_own(&self, table_id: &str) -> bool {
+        let app = table_id.split('/').next().unwrap_or("");
+        self.primary
+            .as_deref()
+            .is_some_and(|p| p.eq_ignore_ascii_case(app))
+    }
+
+    /// An app's name, else its guid.
+    #[must_use]
+    pub fn app_label(&self, guid: &str) -> String {
+        self.app_names
+            .get(&guid.to_ascii_lowercase())
+            .cloned()
+            .unwrap_or_else(|| guid.to_string())
+    }
+
+    /// An object id's display (`Codeunit Foo`), else the id.
+    #[must_use]
+    pub fn object_display(&self, object_id: &str) -> String {
+        self.objects.get(object_id).map_or_else(
+            || object_id.to_string(),
+            |&i| {
+                let o = &self.model.workspace.objects[i];
+                crate::engine::l4::effect_query_cli::object_display(&o.object_type, &o.name)
+            },
+        )
+    }
+
+    /// The original record-operation kind of `op` (`Insert`, `DeleteAll`,
+    /// …), from the first claiming row (explain's pick).
+    #[must_use]
+    pub fn op_kind(&self, op: &str) -> Option<&'m str> {
+        let c = self.ops.claims(op).first()?;
+        self.ops.original_kind(c)
+    }
+
+    /// Who owns `op` (design §3.5).
+    #[must_use]
+    pub fn op_owner(&self, op: &str) -> Option<OpOwner> {
+        let (claim, outcome) = match self.ops.lookup(op) {
+            OwnerLookup::Found(c) => (c, "found"),
+            OwnerLookup::Ambiguous(cs) => (*cs.first()?, "ambiguous"),
+            OwnerLookup::Missing => return None,
+        };
+        let r = self.ops.routine(&claim);
+        let anchor = self
+            .ops
+            .anchor(&claim)
+            .map(|a| format!("{}:{}", a.source_unit_id, shown(a.start_line)));
+        Some(OpOwner {
+            display: self.qualified_row(claim.row as usize),
+            stable_id: r.stable_routine_id.clone(),
+            anchor,
+            app: r.app_guid.clone(),
+            dependency: self.model.role_of_app(&r.app_guid) == Role::Dependency,
+            outcome,
+        })
+    }
+}
+
+/// The digest's write types.
+fn is_write(ty: &str) -> bool {
+    matches!(ty, "DB_INSERT" | "DB_MODIFY" | "DB_DELETE")
+}
+
+fn detail<'e>(e: &'e DigestEffectFull, key: &str) -> Option<&'e str> {
+    e.detail
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
+}
+
+/// A row is a boundary group: it names the routine it enters.
+#[must_use]
+pub fn is_group(e: &DigestEffectFull) -> bool {
+    e.crossing.is_some() || detail(e, "boundary").is_some()
+}
+
+/// The kind family of a non-DB effect type (design §4.1 rule 2e).
+#[must_use]
+pub fn family_of(ty: &str) -> Option<&'static str> {
+    Some(match ty {
+        "UI_CONFIRM" | "UI_MESSAGE" | "UI_WINDOW_OPEN" | "UI_FILE_DIALOG" | "UI_HYPERLINK"
+        | "UI_PROGRESS" => "ui",
+        "HTTP" => "http",
+        "FILE" => "file",
+        "BACKGROUND_TASK" => "backgroundTasks",
+        "ISOLATED_STORAGE" => "isolatedStorage",
+        "TELEMETRY" => "telemetry",
+        "ERROR_THROW" | "ERROR_IMPLICIT" => "errors",
+        _ => return None,
+    })
+}
+
+/// The kind families in summary order, with their human labels.
+pub const FAMILIES: &[(&str, &str)] = &[
+    ("ui", "UI"),
+    ("http", "HTTP"),
+    ("file", "file"),
+    ("backgroundTasks", "background tasks"),
+    ("isolatedStorage", "isolated storage"),
+    ("telemetry", "telemetry"),
+    ("errors", "errors"),
+];
+
+/// One table's writes in one section (one record per table: T-W2-2).
+#[derive(Debug, Clone)]
+pub struct TableWrites {
+    pub table_id: String,
+    pub table: String,
+    /// The original operation kinds of its rows' operations (`Insert`,
+    /// `DeleteAll`, …; the digest type when no op row is known).
+    pub kinds: BTreeSet<String>,
+    /// The digest write types of its rows.
+    pub types: BTreeSet<String>,
+    /// Each row's class, by its digest type.
+    pub classes: Vec<(String, WriteClass)>,
+    /// The rows (indices into the entry's effects).
+    pub rows: Vec<usize>,
+    /// The representative row: shortest witness, then earliest anchor.
+    pub rep: usize,
+}
+
+/// One crossing's group rows (design §3.3): a presentation key, the boundary
+/// display, its targets and sites, and what the refined groups list.
+#[derive(Debug, Clone, Default)]
+pub struct CrossingView {
+    /// The crossing's boundary identity (`cs:…`, `op:…`, `ev:…`), else the
+    /// boundary display and site.
+    pub id: String,
+    /// The boundary display (`Codeunit X::OnRun`; the multi-target form names
+    /// every target).
+    pub name: String,
+    pub target_ids: Vec<String>,
+    /// `file:line` of each site (1-based).
+    pub sites: Vec<String>,
+    /// May-persist tables the refined `nt` groups list, id → display.
+    pub tables: BTreeMap<String, String>,
+    /// Per write type, the tables of [`Self::tables`].
+    pub by_type: BTreeMap<String, BTreeSet<String>>,
+    /// Tables only `kt` groups list.
+    pub temp_tables: BTreeMap<String, String>,
+    /// Writes on a table not resolved (`unresolvedResources`).
+    pub unresolved_writes: usize,
+    pub events: BTreeSet<String>,
+    /// Non-DB effect types the crossing carries.
+    pub kinds: BTreeSet<String>,
+    pub commit: bool,
+    /// Literal-dead group rows.
+    pub dead_rows: usize,
+    /// The row whose shortest path is the crossing's prefix.
+    pub prefix_row: Option<usize>,
+    pub rows: Vec<usize>,
+}
+
+impl CrossingView {
+    /// Carries a may-persist write.
+    #[must_use]
+    pub fn writes(&self) -> bool {
+        !self.tables.is_empty() || self.unresolved_writes > 0
+    }
+}
+
+/// An own write with no witness (design §4.1 section 13).
+#[derive(Debug, Clone)]
+pub struct NoPathWrite {
+    pub row: usize,
+    pub table_id: String,
+    pub table: String,
+    pub kind: String,
+    pub owner: Option<OpOwner>,
+    pub class: WriteClass,
+}
+
+/// The gaps by where the call site is (design §3.6).
+#[derive(Debug, Clone, Default)]
+pub struct GapCounts {
+    /// Indices into the entry's `unresolved`, call site in workspace code.
+    pub workspace: Vec<usize>,
+    pub dependency: usize,
+    pub dependency_polymorphic: usize,
+    pub dependency_dynamic: usize,
+    pub not_placed: Vec<usize>,
+    /// Dependency gaps' callees, most frequent first.
+    pub top_callees: Vec<(String, usize)>,
+}
+
+/// The one summary (design §3.1, F15).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RollupTotals {
+    pub may_write_tables: usize,
+    pub owned_by_app: usize,
+    pub by_dependencies: usize,
+    pub unresolved_table_writes: usize,
+    pub caller_dependent_tables: usize,
+    /// `yes`, `may` or `no observed`.
+    pub commits: &'static str,
+    pub commit_sites: usize,
+    pub commit_entry_points: usize,
+    pub events: usize,
+    pub events_in_workspace: usize,
+    /// Per kind family ([`FAMILIES`]): places (own sites + crossings).
+    pub kinds: BTreeMap<&'static str, usize>,
+    pub gaps_workspace: usize,
+    pub gaps_dependency: usize,
+    pub gaps_not_placed: usize,
+    pub temporary_only_tables: usize,
+    pub literal_dead_tables: usize,
+    pub no_path_operations: usize,
+    pub no_path_tables: usize,
+    pub entry_points: usize,
+    pub crossing_sites: usize,
+    /// Explain only: known routine callers, page actions, tests.
+    pub callers: Option<usize>,
+    pub page_actions: Option<usize>,
+    pub tests: Option<usize>,
+}
+
+impl RollupTotals {
+    /// The one serialization (T-W2-13).
+    #[must_use]
+    pub fn to_json(&self) -> Value {
+        let mut v = json!({
+            "mayWriteTables": {
+                "count": self.may_write_tables,
+                "ownedByApp": self.owned_by_app,
+                "byDependencies": self.by_dependencies,
+            },
+            "unresolvedTableWrites": self.unresolved_table_writes,
+            "callerDependentTables": self.caller_dependent_tables,
+            "commits": {
+                "answer": self.commits,
+                "ownSites": self.commit_sites,
+                "entryPoints": self.commit_entry_points,
+            },
+            "events": {"distinct": self.events, "inWorkspaceCode": self.events_in_workspace},
+            "kinds": self.kinds,
+            "gaps": {
+                "workspace": self.gaps_workspace,
+                "dependency": self.gaps_dependency,
+                "notPlaced": self.gaps_not_placed,
+            },
+            "temporaryOnlyTables": self.temporary_only_tables,
+            "literalDeadTables": self.literal_dead_tables,
+            "noPathKept": {"operations": self.no_path_operations, "tables": self.no_path_tables},
+            "entryPoints": {"count": self.entry_points, "sites": self.crossing_sites},
+        });
+        if let Some(c) = self.callers {
+            v["callers"] = json!(c);
+        }
+        if let Some(a) = self.page_actions {
+            v["pageActions"] = json!(a);
+        }
+        if let Some(t) = self.tests {
+            v["tests"] = json!(t);
+        }
+        v
+    }
+
+    /// The human `summary:` line (design §3.8 rule 2).
+    #[must_use]
+    pub fn human(&self) -> String {
+        let mut parts = Vec::new();
+        let writes = if self.may_write_tables == 0 && self.unresolved_table_writes == 0 {
+            "no observed write that may persist".to_string()
+        } else {
+            let mut w = format!(
+                "may write {} ({} owned by this app, {} by dependencies)",
+                plural(self.may_write_tables, "table", "tables"),
+                self.owned_by_app,
+                self.by_dependencies
+            );
+            if self.unresolved_table_writes > 0 {
+                w.push_str(&format!(
+                    " and {} on a table not resolved",
+                    plural(self.unresolved_table_writes, "write", "writes")
+                ));
+            }
+            w
+        };
+        parts.push(writes);
+        parts.push(format!(
+            "caller-dependent: {}",
+            if self.caller_dependent_tables == 0 {
+                "none".to_string()
+            } else {
+                plural(self.caller_dependent_tables, "table", "tables")
+            }
+        ));
+        let commits = match self.commits {
+            "no observed" => "commits: no observed COMMIT".to_string(),
+            answer => {
+                let mut where_ = Vec::new();
+                if self.commit_sites > 0 {
+                    where_.push(plural(self.commit_sites, "site", "sites"));
+                }
+                if self.commit_entry_points > 0 {
+                    where_.push(plural(
+                        self.commit_entry_points,
+                        "commit-bearing entry point",
+                        "commit-bearing entry points",
+                    ));
+                }
+                format!("commits: {answer} ({})", where_.join(", "))
+            }
+        };
+        parts.push(commits);
+        parts.push(format!(
+            "events: {} ({} raised in workspace code)",
+            thousands(self.events),
+            thousands(self.events_in_workspace)
+        ));
+        for (key, label) in FAMILIES {
+            if let Some(&n) = self.kinds.get(key).filter(|n| **n > 0) {
+                parts.push(format!("{label} at {}", plural(n, "place", "places")));
+            }
+        }
+        if let Some(c) = self.callers {
+            let actions = self.page_actions.unwrap_or(0);
+            parts.push(match (c, actions) {
+                (0, 0) => "callers: none".to_string(),
+                (0, a) => format!(
+                    "callers: none, reached from {}",
+                    plural(a, "page action", "page actions")
+                ),
+                (c, 0) => format!("callers: {c}"),
+                (c, a) => format!(
+                    "callers: {c}, reached from {}",
+                    plural(a, "page action", "page actions")
+                ),
+            });
+        }
+        if let Some(t) = self.tests {
+            parts.push(if t == 0 {
+                "tests: none".to_string()
+            } else {
+                format!("tests: {t}")
+            });
+        }
+        parts.push(format!(
+            "gaps: {} in workspace code, {} in dependency code, {} not placed",
+            self.gaps_workspace, self.gaps_dependency, self.gaps_not_placed
+        ));
+        format!("summary: {}", parts.join("; "))
+    }
+}
+
+/// `n unit` with the plural unit when `n != 1`.
+#[must_use]
+pub fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{} {}", thousands(n), if n == 1 { one } else { many })
+}
+
+/// `n` with a thousands comma from 1,000 (design §3.8 rule 2).
+#[must_use]
+pub fn thousands(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// One root's rollup (module doc).
+#[derive(Debug, Clone, Default)]
+pub struct RoutineRollup {
+    /// Every may-persist table (the union of workspace code, every crossing's
+    /// non-temporary set and the no-path rows), id → display.
+    pub may_write: BTreeMap<String, String>,
+    pub workspace_code: Vec<TableWrites>,
+    /// Own physical writes on a table not resolved (rows).
+    pub unresolved_own: Vec<usize>,
+    pub caller_dependent: Vec<TableWrites>,
+    pub crossings: Vec<CrossingView>,
+    pub no_path: Vec<NoPathWrite>,
+    /// Tables with temporary own contributions, id → display.
+    pub temporary_ws: BTreeMap<String, String>,
+    /// Temporary own rows.
+    pub temporary_rows: Vec<usize>,
+    /// Tables only `kt` groups list beyond a crossing.
+    pub temporary_beyond: BTreeMap<String, String>,
+    /// Tables with temporary contributions and no physical or caller-dependent
+    /// one (computed from the temporary rows, T-W2-19).
+    pub temporary_only: BTreeMap<String, String>,
+    /// Tables listed only by literal-dead rows or refined out, id → display.
+    pub literal_dead: BTreeMap<String, String>,
+    pub literal_dead_rows: Vec<usize>,
+    /// Own COMMIT rows (live).
+    pub commit_sites: Vec<usize>,
+    pub commit_unconditional: bool,
+    /// Own EVENT_PUBLISH rows' event ids (live), with the row.
+    pub events_ws: BTreeMap<String, usize>,
+    /// Event ids only groups raise.
+    pub events_beyond: BTreeSet<String>,
+    /// Per kind family: own rows.
+    pub kind_sites: BTreeMap<&'static str, Vec<usize>>,
+    /// Per kind family: crossing indices.
+    pub kind_crossings: BTreeMap<&'static str, Vec<usize>>,
+    pub gaps: GapCounts,
+    pub totals: RollupTotals,
+}
+
+/// The length of a row's shortest listed path (`usize::MAX` without one).
+fn shortest(e: &DigestEffectFull) -> usize {
+    e.via_paths.iter().map(Vec::len).min().unwrap_or(usize::MAX)
+}
+
+/// An anchor's `(file, line)` sort key.
+fn anchor_key(e: &DigestEffectFull) -> (String, u32) {
+    (
+        e.evidence.file.clone().unwrap_or_default(),
+        e.evidence.line.unwrap_or(u32::MAX),
+    )
+}
+
+impl RoutineRollup {
+    /// The may-persist tables' names, owned by this app and by dependencies,
+    /// each sorted.
+    #[must_use]
+    pub fn may_write_names(&self, cx: &RollupCx<'_>) -> (Vec<String>, Vec<String>) {
+        let (mut own, mut dep) = (Vec::new(), Vec::new());
+        for (id, d) in &self.may_write {
+            if cx.table_is_own(id) {
+                own.push(d.clone());
+            } else {
+                dep.push(d.clone());
+            }
+        }
+        own.sort();
+        dep.sort();
+        (own, dep)
+    }
+
+    /// The rollup of `entry` over `cx` (module doc).
+    #[must_use]
+    pub fn build(entry: &DigestEntryFull, cx: &RollupCx<'_>) -> RoutineRollup {
+        let mut r = RoutineRollup::default();
+        let mut ws: BTreeMap<String, TableWrites> = BTreeMap::new();
+        let mut caller: BTreeMap<String, TableWrites> = BTreeMap::new();
+        let mut crossings: Vec<CrossingView> = Vec::new();
+        let mut crossing_ix: HashMap<String, usize> = HashMap::new();
+        let mut caller_own: BTreeSet<String> = BTreeSet::new();
+        let mut live_tables: BTreeMap<String, String> = BTreeMap::new();
+        let mut dead_tables: BTreeMap<String, String> = BTreeMap::new();
+
+        let add = |map: &mut BTreeMap<String, TableWrites>,
+                   i: usize,
+                   e: &DigestEffectFull,
+                   id: &str,
+                   name: &str,
+                   class: WriteClass| {
+            let kinds: BTreeSet<String> = e
+                .origin_operation_ids
+                .iter()
+                .filter_map(|op| cx.op_kind(op).map(str::to_string))
+                .collect();
+            let t = map.entry(id.to_string()).or_insert_with(|| TableWrites {
+                table_id: id.to_string(),
+                table: name.to_string(),
+                kinds: BTreeSet::new(),
+                types: BTreeSet::new(),
+                classes: Vec::new(),
+                rows: Vec::new(),
+                rep: i,
+            });
+            if kinds.is_empty() {
+                t.kinds.insert(type_kind(&e.effect_type).to_string());
+            } else {
+                t.kinds.extend(kinds);
+            }
+            t.types.insert(e.effect_type.clone());
+            t.classes.push((e.effect_type.clone(), class));
+            t.rows.push(i);
+        };
+
+        for (i, e) in entry.effects.iter().enumerate() {
+            let ty = e.effect_type.as_str();
+            if is_group(e) {
+                let key = e.crossing.as_ref().map_or_else(
+                    || {
+                        format!(
+                            "{}@{}",
+                            detail(e, "boundary").unwrap_or(""),
+                            anchor_key(e).0
+                        )
+                    },
+                    |c| c.id.clone(),
+                );
+                let ci = *crossing_ix.entry(key.clone()).or_insert_with(|| {
+                    let (targets, sites) = match &e.crossing {
+                        Some(c) => (
+                            c.targets.clone(),
+                            c.sites
+                                .iter()
+                                .filter_map(|s| {
+                                    Some(format!("{}:{}", s.file.clone()?, shown(s.line?)))
+                                })
+                                .collect(),
+                        ),
+                        None => (
+                            Vec::new(),
+                            e.evidence
+                                .file
+                                .iter()
+                                .map(|f| format!("{f}:{}", e.evidence.line.map_or(0, shown)))
+                                .collect(),
+                        ),
+                    };
+                    crossings.push(CrossingView {
+                        id: key.clone(),
+                        name: detail(e, "boundary").unwrap_or("").to_string(),
+                        target_ids: targets,
+                        sites,
+                        ..CrossingView::default()
+                    });
+                    crossings.len() - 1
+                });
+                let c = &mut crossings[ci];
+                c.rows.push(i);
+                if c.prefix_row
+                    .is_none_or(|p| shortest(e) < shortest(&entry.effects[p]))
+                {
+                    c.prefix_row = (!e.via_paths.is_empty()).then_some(i).or(c.prefix_row);
+                }
+                if e.literal_unreachable {
+                    c.dead_rows += 1;
+                    if is_write(ty) {
+                        for (id, d) in &e.group_resources {
+                            dead_tables.insert(id.clone(), d.clone());
+                        }
+                    }
+                    r.literal_dead_rows.push(i);
+                    continue;
+                }
+                match ty {
+                    t if is_write(t) => {
+                        let class = classify_detail(&e.detail);
+                        if let Some(u) =
+                            detail(e, "unresolvedResources").and_then(|v| v.parse::<usize>().ok())
+                        {
+                            c.unresolved_writes += u;
+                        }
+                        for (id, d) in &e.group_resources {
+                            if class == WriteClass::Temporary {
+                                c.temp_tables.insert(id.clone(), d.clone());
+                            } else {
+                                c.tables.insert(id.clone(), d.clone());
+                                c.by_type
+                                    .entry(t.to_string())
+                                    .or_default()
+                                    .insert(id.clone());
+                                live_tables.insert(id.clone(), d.clone());
+                            }
+                        }
+                    }
+                    "COMMIT" => c.commit = true,
+                    "EVENT_PUBLISH" => {
+                        c.events
+                            .extend(e.group_resources.iter().map(|(id, _)| id.clone()));
+                    }
+                    "DB_READ" => {}
+                    other => {
+                        c.kinds.insert(other.to_string());
+                    }
+                }
+                continue;
+            }
+            // Own rows.
+            if e.literal_unreachable {
+                if is_write(ty)
+                    && let Some(id) = detail(e, "resourceId")
+                {
+                    dead_tables.insert(
+                        id.to_string(),
+                        detail(e, "resourceDisplay").unwrap_or(id).to_string(),
+                    );
+                }
+                r.literal_dead_rows.push(i);
+                continue;
+            }
+            match ty {
+                t if is_write(t) => {
+                    let class = classify_detail(&e.detail);
+                    let id = detail(e, "resourceId");
+                    let name = detail(e, "resourceDisplay").or(id).unwrap_or("");
+                    // 2b: a temporary contribution is in the temporary section
+                    // only, with or without a witness.
+                    if class == WriteClass::Temporary {
+                        if let Some(id) = id {
+                            r.temporary_ws.insert(id.to_string(), name.to_string());
+                        }
+                        r.temporary_rows.push(i);
+                        continue;
+                    }
+                    if e.evidence.source_kind == "unavailable"
+                        && matches!(class, WriteClass::Physical(_))
+                    {
+                        let kind = e
+                            .origin_operation_ids
+                            .iter()
+                            .find_map(|op| cx.op_kind(op))
+                            .unwrap_or(type_kind(t))
+                            .to_string();
+                        let owner = e.origin_operation_ids.iter().find_map(|op| cx.op_owner(op));
+                        if let Some(id) = id {
+                            live_tables.insert(id.to_string(), name.to_string());
+                        }
+                        r.no_path.push(NoPathWrite {
+                            row: i,
+                            table_id: id.unwrap_or("").to_string(),
+                            table: name.to_string(),
+                            kind,
+                            owner,
+                            class,
+                        });
+                        continue;
+                    }
+                    match (class, id) {
+                        (WriteClass::Temporary, _) => unreachable!("handled above"),
+                        (WriteClass::CallerDependent(_), Some(id)) => {
+                            caller_own.insert(id.to_string());
+                            add(&mut caller, i, e, id, name, class);
+                        }
+                        (_, None) => r.unresolved_own.push(i),
+                        (WriteClass::Physical(_), Some(id)) => {
+                            live_tables.insert(id.to_string(), name.to_string());
+                            add(&mut ws, i, e, id, name, class);
+                        }
+                    }
+                }
+                "COMMIT" => {
+                    r.commit_unconditional |=
+                        e.conditionality == crate::engine::l5::conditionality::UNCONDITIONAL;
+                    r.commit_sites.push(i);
+                }
+                "EVENT_PUBLISH" => {
+                    if let Some(id) = detail(e, "resourceId") {
+                        r.events_ws.entry(id.to_string()).or_insert(i);
+                    }
+                }
+                "DB_READ" => {}
+                other => {
+                    if let Some(f) = family_of(other) {
+                        r.kind_sites.entry(f).or_default().push(i);
+                    }
+                }
+            }
+        }
+
+        // Representatives: shortest witness, then earliest anchor (§3.4.2).
+        let pick = |t: &mut TableWrites| {
+            t.rep = *t
+                .rows
+                .iter()
+                .min_by_key(|&&i| (shortest(&entry.effects[i]), anchor_key(&entry.effects[i])))
+                .expect("a table record has a row");
+        };
+        r.workspace_code = ws.into_values().collect();
+        r.caller_dependent = caller.into_values().collect();
+        r.workspace_code.iter_mut().for_each(pick);
+        r.caller_dependent.iter_mut().for_each(pick);
+        // Order: by table name.
+        r.workspace_code
+            .sort_by(|a, b| a.table.cmp(&b.table).then(a.table_id.cmp(&b.table_id)));
+        r.caller_dependent
+            .sort_by(|a, b| a.table.cmp(&b.table).then(a.table_id.cmp(&b.table_id)));
+
+        // Beyond sets.
+        for c in &crossings {
+            for (id, d) in &c.temp_tables {
+                r.temporary_beyond.insert(id.clone(), d.clone());
+            }
+            for ev in &c.events {
+                if !r.events_ws.contains_key(ev) {
+                    r.events_beyond.insert(ev.clone());
+                }
+            }
+        }
+        // Order: crossings with may-persist writes first, then by table count,
+        // then by name.
+        crossings.sort_by(|a, b| {
+            b.writes()
+                .cmp(&a.writes())
+                .then(b.tables.len().cmp(&a.tables.len()))
+                .then(a.name.cmp(&b.name))
+                .then(a.id.cmp(&b.id))
+        });
+        // The kind indices point into the sorted list.
+        r.kind_crossings.clear();
+        for (ci, c) in crossings.iter().enumerate() {
+            for k in &c.kinds {
+                let f = family_of(k).or((k == "UI_ERROR").then_some("errors"));
+                if let Some(f) = f {
+                    let v = r.kind_crossings.entry(f).or_default();
+                    if v.last() != Some(&ci) {
+                        v.push(ci);
+                    }
+                }
+            }
+        }
+        r.crossings = crossings;
+
+        // Temporary-only: temporary contributions, no physical or
+        // caller-dependent one anywhere (T-W2-19).
+        for (id, d) in r.temporary_ws.iter().chain(r.temporary_beyond.iter()) {
+            if !live_tables.contains_key(id) && !caller_own.contains(id) {
+                r.temporary_only.insert(id.clone(), d.clone());
+            }
+        }
+        // Literal-dead: tables only dead rows name.
+        r.literal_dead = dead_tables
+            .into_iter()
+            .filter(|(id, _)| !live_tables.contains_key(id))
+            .collect();
+
+        r.gaps = gaps_of(entry);
+        r.may_write = live_tables;
+        r.totals = r.totals_of(cx, &caller_own);
+        r
+    }
+
+    fn totals_of(&self, cx: &RollupCx<'_>, caller_own: &BTreeSet<String>) -> RollupTotals {
+        let live = &self.may_write;
+        let owned = live.keys().filter(|id| cx.table_is_own(id)).count();
+        let commit_entry_points = self.crossings.iter().filter(|c| c.commit).count();
+        let commits = if self.commit_unconditional {
+            "yes"
+        } else if self.commit_sites.is_empty() && commit_entry_points == 0 {
+            "no observed"
+        } else {
+            "may"
+        };
+        let mut kinds = BTreeMap::new();
+        for (key, _) in FAMILIES {
+            let n = self.kind_sites.get(key).map_or(0, Vec::len)
+                + self.kind_crossings.get(key).map_or(0, Vec::len);
+            if n > 0 {
+                kinds.insert(*key, n);
+            }
+        }
+        let no_path_tables: BTreeSet<&str> = self
+            .no_path
+            .iter()
+            .map(|n| n.table_id.as_str())
+            .filter(|t| !t.is_empty())
+            .collect();
+        let writing: Vec<&CrossingView> = self.crossings.iter().filter(|c| c.writes()).collect();
+        RollupTotals {
+            may_write_tables: live.len(),
+            owned_by_app: owned,
+            by_dependencies: live.len() - owned,
+            unresolved_table_writes: self.unresolved_own.len()
+                + self
+                    .no_path
+                    .iter()
+                    .filter(|n| n.table_id.is_empty())
+                    .count()
+                + self
+                    .crossings
+                    .iter()
+                    .map(|c| c.unresolved_writes)
+                    .sum::<usize>(),
+            caller_dependent_tables: caller_own.len(),
+            commits,
+            commit_sites: self.commit_sites.len(),
+            commit_entry_points,
+            events: self.events_ws.len() + self.events_beyond.len(),
+            events_in_workspace: self.events_ws.len(),
+            kinds,
+            gaps_workspace: self.gaps.workspace.len(),
+            gaps_dependency: self.gaps.dependency,
+            gaps_not_placed: self.gaps.not_placed.len(),
+            temporary_only_tables: self.temporary_only.len(),
+            literal_dead_tables: self.literal_dead.len(),
+            no_path_operations: self.no_path.len(),
+            no_path_tables: no_path_tables.len(),
+            entry_points: writing.len(),
+            crossing_sites: writing.iter().map(|c| c.sites.len().max(1)).sum(),
+            callers: None,
+            page_actions: None,
+            tests: None,
+        }
+    }
+}
+
+/// The digest type's spelling when no op row is known (§3.5).
+#[must_use]
+pub fn type_kind(ty: &str) -> &'static str {
+    match ty {
+        "DB_INSERT" => "Insert",
+        "DB_MODIFY" => "Modify",
+        "DB_DELETE" => "Delete",
+        _ => "Write",
+    }
+}
+
+/// The class note of a table line (design §4.1 section 10).
+#[must_use]
+pub fn class_note(classes: &[(String, WriteClass)]) -> String {
+    let reasons: BTreeSet<&'static str> = classes
+        .iter()
+        .map(|(_, c)| match c {
+            WriteClass::Physical(PhysicalReason::KnownPersistent) => "known persistent",
+            WriteClass::Physical(PhysicalReason::TempStateUnknown) => "temp state unknown",
+            WriteClass::Physical(PhysicalReason::NotJoined) => "temp state not joined",
+            WriteClass::CallerDependent(CallerReason::ImplicitRec) => "depends on the caller's Rec",
+            WriteClass::CallerDependent(CallerReason::Parameter(_)) => {
+                "depends on the caller's record argument"
+            }
+            WriteClass::Temporary => "temporary",
+        })
+        .collect();
+    reasons.into_iter().collect::<Vec<_>>().join(", ")
+}
+
+/// The JSON class name and reason of a write class (design §4.2).
+#[must_use]
+pub fn class_json(c: WriteClass) -> (&'static str, &'static str) {
+    match c {
+        WriteClass::Physical(PhysicalReason::KnownPersistent) => ("physical", "known-persistent"),
+        WriteClass::Physical(PhysicalReason::TempStateUnknown) => {
+            ("physical", "temp-state-unknown")
+        }
+        WriteClass::Physical(PhysicalReason::NotJoined) => ("physical", "not-joined"),
+        WriteClass::CallerDependent(CallerReason::ImplicitRec) => ("callerDependent", "rec"),
+        WriteClass::CallerDependent(CallerReason::Parameter(_)) => ("callerDependent", "parameter"),
+        WriteClass::Temporary => ("temporary", "known-temporary"),
+    }
+}
+
+/// The gaps of `entry` by where the call site is.
+fn gaps_of(entry: &DigestEntryFull) -> GapCounts {
+    let mut g = GapCounts::default();
+    let mut callees: BTreeMap<&str, usize> = BTreeMap::new();
+    for (i, u) in entry.unresolved.iter().enumerate() {
+        match u.callsite_file.as_deref() {
+            Some(f) if f.starts_with("ws:") => g.workspace.push(i),
+            Some(_) => {
+                g.dependency += 1;
+                match u.status.as_str() {
+                    "polymorphic" => g.dependency_polymorphic += 1,
+                    "dynamic-target" => g.dependency_dynamic += 1,
+                    _ => {}
+                }
+                *callees.entry(u.callee_display.as_str()).or_default() += 1;
+            }
+            None => g.not_placed.push(i),
+        }
+    }
+    let mut top: Vec<(String, usize)> = callees
+        .into_iter()
+        .map(|(c, n)| (c.to_string(), n))
+        .collect();
+    top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    g.top_callees = top;
+    g
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// §3.8 rule 4: the cap, or all when at most a quarter more; the full
+    /// count and its unit survive the fold (T-W2-3).
+    #[test]
+    fn fold_shows_the_cap_or_all_and_keeps_the_count() {
+        let items = |n: usize| (0..n).map(|i| i.to_string()).collect::<Vec<_>>();
+        for (n, shown) in [(11, 11), (12, 12), (13, 13), (15, 15), (16, 12), (40, 12)] {
+            let f = fold(items(n), caps::TABLES, "tables", false);
+            assert_eq!(f.shown.len(), shown, "{n}");
+            assert_eq!(f.total(), n, "{n}");
+            if shown < n {
+                assert!(f.joined().ends_with(&format!("… +{} tables", n - shown)));
+            } else {
+                assert!(!f.joined().contains('…'));
+            }
+        }
+        assert_eq!(
+            fold(items(40), caps::TABLES, "tables", true).shown.len(),
+            40
+        );
+    }
+
+    #[test]
+    fn thousands_commas() {
+        assert_eq!(thousands(7), "7");
+        assert_eq!(thousands(999), "999");
+        assert_eq!(thousands(7435), "7,435");
+        assert_eq!(thousands(1_234_567), "1,234,567");
+    }
+}

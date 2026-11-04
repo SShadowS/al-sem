@@ -955,6 +955,10 @@ pub struct DigestEffectFull {
     /// followed ([`crate::engine::l5::literal_reach`]); a MAY question does not
     /// count it. Not serialized.
     pub literal_unreachable: bool,
+    /// W2-2: a boundary group's crossing (design §3.3); `None` off a group.
+    /// The rollup groups rows by it; the 3.x digest serializes it once per
+    /// entry (`entries[].crossings`).
+    pub crossing: Option<Arc<crate::engine::l5::digest::Crossing>>,
 }
 
 pub struct FullAnchor {
@@ -1901,6 +1905,7 @@ pub fn run_digest_query_full_from_entries(
                     origin_operation_ids: eff.origin_operation_ids.clone(),
                     effect_is_kt: is_known_temp_state(eff.temp_state.as_ref()),
                     literal_unreachable: eff.literal_unreachable,
+                    crossing: eff.crossing.clone(),
                 });
             }
         }
@@ -2668,135 +2673,23 @@ use crate::engine::batch::output::SUMMARY_CAP_BYTES;
 const SUMMARY_ROUTINES: usize = 20;
 const SUMMARY_NAMES: usize = 10;
 
-/// The tables a digest effect writes, `(resource id, display)`: a direct
-/// effect's resource, a dependency boundary group's whole set.
-fn written_tables(e: &DigestEffectFull) -> Vec<(&str, &str)> {
-    if !e.group_resources.is_empty() {
-        return e
-            .group_resources
-            .iter()
-            .map(|(id, d)| (id.as_str(), d.as_str()))
-            .collect();
-    }
-    let get = |k: &str| {
-        e.detail
-            .iter()
-            .find(|(key, _)| key == k)
-            .map(|(_, v)| v.as_str())
-    };
-    match get("resourceId") {
-        Some(id) => vec![(id, get("resourceDisplay").unwrap_or(id))],
-        None => vec![],
-    }
-}
-
-/// One root's summary: effects by type, physical tables written (workspace
-/// and dependency), temporary tables, commits, boundaries entered, coverage
-/// and the unresolved call sites as counts. `counts_only` drops every name.
+/// One root's summary (W2-2, design §3.1): the root, its coverage, its
+/// effects by type and the ONE [`RollupTotals`] serialization every reader
+/// prints (`summary`), plus, unless `counts_only`, the first names of each
+/// list (may-persist tables in this app and in dependencies, entry points,
+/// top callees of the dependency gaps).
+///
+/// [`RollupTotals`]: crate::engine::l5::routine_rollup::RollupTotals
 fn digest_entry_summary(
     e: &DigestEntryFull,
-    primary: Option<&str>,
+    r: &crate::engine::l5::routine_rollup::RoutineRollup,
+    cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
     counts_only: bool,
 ) -> serde_json::Value {
     use serde_json::json;
     let mut by_type: BTreeMap<&str, u64> = BTreeMap::new();
-    let (mut ws_tables, mut dep_tables, mut temp_tables, mut caller_tables) = (
-        BTreeSet::new(),
-        BTreeSet::new(),
-        BTreeSet::new(),
-        BTreeSet::new(),
-    );
-    let mut unnamed_writes = 0u64;
-    let mut boundaries: BTreeMap<&str, u64> = BTreeMap::new();
     for f in &e.effects {
         *by_type.entry(f.effect_type.as_str()).or_default() += 1;
-        let detail = |k: &str| {
-            f.detail
-                .iter()
-                .find(|(key, _)| key == k)
-                .map(|(_, v)| v.as_str())
-        };
-        if let Some(b) = detail("boundary") {
-            *boundaries.entry(b).or_default() += 1;
-        }
-        // W2-1: a write the root cannot reach under literal arguments is no
-        // write here (its row stays in the document, marked).
-        if !matches!(
-            f.effect_type.as_str(),
-            "DB_INSERT" | "DB_MODIFY" | "DB_DELETE"
-        ) || f.literal_unreachable
-        {
-            continue;
-        }
-        let tables = written_tables(f);
-        if tables.is_empty() {
-            unnamed_writes += 1;
-        }
-        // W2-1 (design §3.2): the shared three-class classifier.
-        let class = crate::engine::l5::rollup::classify_detail(&f.detail);
-        for (id, display) in tables {
-            match class {
-                crate::engine::l5::rollup::WriteClass::Temporary => {
-                    temp_tables.insert(display);
-                }
-                crate::engine::l5::rollup::WriteClass::CallerDependent(_) => {
-                    caller_tables.insert(display);
-                }
-                crate::engine::l5::rollup::WriteClass::Physical(_) => {
-                    if primary.is_some_and(|p| id.split('/').next() == Some(p)) {
-                        ws_tables.insert(display);
-                    } else {
-                        dep_tables.insert(display);
-                    }
-                }
-            }
-        }
-    }
-    let mut callees: BTreeMap<&str, u64> = BTreeMap::new();
-    let (mut polymorphic, mut dynamic, mut in_ws) = (0u64, 0u64, 0u64);
-    for u in &e.unresolved {
-        *callees.entry(u.callee_display.as_str()).or_default() += 1;
-        match u.status.as_str() {
-            "polymorphic" => polymorphic += 1,
-            "dynamic-target" => dynamic += 1,
-            _ => {}
-        }
-        if u.callsite_file
-            .as_deref()
-            .is_some_and(|f| f.starts_with("ws:"))
-        {
-            in_ws += 1;
-        }
-    }
-    let mut top: Vec<(&str, u64)> = callees.into_iter().collect();
-    top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
-    fn names<'a>(s: &BTreeSet<&'a str>) -> Vec<&'a str> {
-        s.iter().take(SUMMARY_NAMES).copied().collect()
-    }
-    let mut tables = json!({
-        "count": ws_tables.len() + dep_tables.len(),
-        "workspace": ws_tables.len(),
-        "dependency": dep_tables.len(),
-    });
-    let mut boundary = json!({"count": boundaries.len()});
-    let mut unresolved = json!({
-        "total": e.unresolved.len(),
-        "polymorphic": polymorphic,
-        "dynamicTarget": dynamic,
-        "inWorkspace": in_ws,
-    });
-    if !counts_only {
-        tables["workspaceNames"] = json!(names(&ws_tables));
-        tables["dependencyNames"] = json!(names(&dep_tables));
-        let mut b: Vec<(&str, u64)> = boundaries.into_iter().collect();
-        b.sort_by(|x, y| y.1.cmp(&x.1).then(x.0.cmp(y.0)));
-        boundary["names"] = json!(b.iter().take(5).map(|(n, _)| *n).collect::<Vec<_>>());
-        unresolved["topCallees"] = json!(
-            top.iter()
-                .take(3)
-                .map(|(c, n)| json!({"callee": c, "count": n}))
-                .collect::<Vec<_>>()
-        );
     }
     let mut v = json!({
         "routine": owner_qualified(&e.object_display, &e.routine_display),
@@ -2804,18 +2697,29 @@ fn digest_entry_summary(
         "coverageReasons": e.coverage_reasons,
         "effects": e.effects.len(),
         "effectsByType": by_type,
-        "physicalTablesWritten": tables,
-        "temporaryTablesWritten": temp_tables.len(),
-        "commits": by_type.get("COMMIT").copied().unwrap_or(0),
-        "boundariesEntered": boundary,
-        "unresolved": unresolved,
+        "summary": r.totals.to_json(),
     });
-    if unnamed_writes > 0 {
-        v["writesWithoutTable"] = json!(unnamed_writes);
-    }
-    // W2-1: tables written only if the caller passes a persistent record.
-    if !caller_tables.is_empty() {
-        v["callerDependentTablesWritten"] = json!(caller_tables.len());
+    if !counts_only {
+        let (own, dep) = r.may_write_names(cx);
+        let take = |s: Vec<String>| s.into_iter().take(SUMMARY_NAMES).collect::<Vec<_>>();
+        v["names"] = json!({
+            "tablesOwnedByApp": take(own),
+            "tablesOwnedByDependencies": take(dep),
+            "entryPoints": r
+                .crossings
+                .iter()
+                .filter(|c| c.writes())
+                .take(5)
+                .map(|c| c.name.clone())
+                .collect::<Vec<_>>(),
+            "topCallees": r
+                .gaps
+                .top_callees
+                .iter()
+                .take(3)
+                .map(|(c, n)| json!({"callee": c, "count": n}))
+                .collect::<Vec<_>>(),
+        });
     }
     v
 }
@@ -2827,17 +2731,19 @@ fn digest_entry_summary(
 /// routines are dropped from the end; never a spill.
 pub fn digest_summary(
     entries: &[DigestEntryFull],
+    rollups: &[crate::engine::l5::routine_rollup::RoutineRollup],
+    cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
     roots_requested: usize,
     changed_roots_diagnostics: usize,
-    primary: Option<&str>,
 ) -> serde_json::Value {
     use serde_json::json;
     let total_unresolved: usize = entries.iter().map(|e| e.unresolved.len()).sum();
     let build = |counts_only: bool, routines: usize| {
         let listed: Vec<serde_json::Value> = entries
             .iter()
+            .zip(rollups)
             .take(routines)
-            .map(|e| digest_entry_summary(e, primary, counts_only))
+            .map(|(e, r)| digest_entry_summary(e, r, cx, counts_only))
             .collect();
         let mut v = json!({
             "kind": "digest",
@@ -3103,7 +3009,6 @@ fn digest_view(cx: &mut ViewCx<'_>, req: &DigestRequest<'_>) -> DigestRunResult 
         DigestEffects::default()
     };
     let resolved = cx.view().model();
-    let primary_guid = primary_guid_of(resolved).map(str::to_string);
     let workspace_fp =
         crate::engine::l5::snapshot_full::workspace_fingerprint_of(cx.inputs(), alsem_ver);
 
@@ -3125,6 +3030,21 @@ fn digest_view(cx: &mut ViewCx<'_>, req: &DigestRequest<'_>) -> DigestRunResult 
     );
     let entries = query_full.entries;
     let query_diagnostics = query_full.query_diagnostics;
+    // W2-2: one rollup per root, read by the summary and the renderers.
+    let rollup_cx = crate::engine::l5::routine_rollup::RollupCx::new(resolved, &dependencies.apps);
+    let rollups: Vec<crate::engine::l5::routine_rollup::RoutineRollup> = entries
+        .iter()
+        .map(|e| crate::engine::l5::routine_rollup::RoutineRollup::build(e, &rollup_cx))
+        .collect();
+    // rootsRequested as `payload.summary` counts it (roots + query diagnostics).
+    let summary = digest_summary(
+        &entries,
+        &rollups,
+        &rollup_cx,
+        changed_roots.roots.len() + query_diagnostics.len(),
+        changed_roots.diagnostics.len(),
+    );
+    drop(rollup_cx);
     // #254: the coverage block reads the graph the effects step built off the
     // tree (#160 step 6: the tree itself is released inside `prepare`). A
     // `--tests` plan always builds the tree, roots or not (`digest_plan`).
@@ -3178,13 +3098,6 @@ fn digest_view(cx: &mut ViewCx<'_>, req: &DigestRequest<'_>) -> DigestRunResult 
         human_text.push_str(&t.human_line());
         human_text.push('\n');
     }
-    // rootsRequested as `payload.summary` counts it (roots + query diagnostics).
-    let summary = digest_summary(
-        &entries,
-        changed_roots.roots.len() + query_diagnostics.len(),
-        changed_roots.diagnostics.len(),
-        primary_guid.as_deref(),
-    );
 
     DigestRunResult {
         json_text,
@@ -3515,6 +3428,7 @@ mod tests {
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
+            crossing: None,
         }
     }
 
@@ -3600,7 +3514,10 @@ mod tests {
                 "dep:g:src/B.al",
             ),
         ];
-        let s = digest_summary(&[e], 1, 0, Some("ws"));
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+        let s = digest_summary(&[e], &[r], &cx, 1, 0);
         let text = s.to_string();
         assert!(text.len() <= SUMMARY_CAP_BYTES, "{text}");
         assert!(
@@ -3610,37 +3527,121 @@ mod tests {
         let r = &s["routines"][0];
         assert_eq!(r["routine"], "Codeunit Out Issue Document::IssueDoc");
         assert_eq!(r["effectsByType"]["DB_INSERT"], 2, "{s}");
-        assert_eq!(r["commits"], 1, "{s}");
-        let t = &r["physicalTablesWritten"];
+        // W2-2: the one RollupTotals serialization.
+        let t = &r["summary"];
+        assert_eq!(t["commits"]["answer"], "may", "{s}");
+        assert_eq!(t["commits"]["entryPoints"], 1, "{s}");
+        let w = &t["mayWriteTables"];
         assert_eq!(
-            (t["workspace"].as_u64(), t["dependency"].as_u64()),
+            (w["ownedByApp"].as_u64(), w["byDependencies"].as_u64()),
             (Some(1), Some(12)),
             "{s}"
         );
-        assert_eq!(t["count"], 13);
-        assert_eq!(t["workspaceNames"], serde_json::json!(["Out Log"]));
+        assert_eq!(w["count"], 13);
         assert_eq!(
-            t["dependencyNames"].as_array().map(Vec::len),
+            r["names"]["tablesOwnedByApp"],
+            serde_json::json!(["Out Log"])
+        );
+        assert_eq!(
+            r["names"]["tablesOwnedByDependencies"]
+                .as_array()
+                .map(Vec::len),
             Some(SUMMARY_NAMES)
         );
-        assert_eq!(r["temporaryTablesWritten"], 1);
-        assert_eq!(r["boundariesEntered"]["count"], 1);
-        let u = &r["unresolved"];
+        // Out Log's temporary delete: Out Log is also written persistently.
+        assert_eq!(t["temporaryOnlyTables"], 0);
+        assert_eq!(t["entryPoints"]["count"], 1);
+        let g = &t["gaps"];
         assert_eq!(
             (
-                u["total"].as_u64(),
-                u["polymorphic"].as_u64(),
-                u["dynamicTarget"].as_u64(),
-                u["inWorkspace"].as_u64()
+                g["workspace"].as_u64(),
+                g["dependency"].as_u64(),
+                g["notPlaced"].as_u64()
             ),
-            (Some(3), Some(1), Some(2), Some(2)),
+            (Some(2), Some(1), Some(0)),
             "{s}"
         );
         assert_eq!(
-            u["topCallees"][0],
-            serde_json::json!({"callee": "Codeunit.Run(<dynamic>)", "count": 2})
+            r["names"]["topCallees"][0],
+            serde_json::json!({"callee": "Codeunit.Run(<dynamic>)", "count": 1})
         );
         assert!(s.get("countsOnly").is_none(), "{s}");
+    }
+
+    /// W2-2, T-W2-1: a rollup total is a union by identity, never a sum of
+    /// section counts. Hand-stated: `Shared` written in workspace code AND
+    /// listed by a group beyond `Codeunit Base Poster::OnRun`, `Other` listed by
+    /// two groups (Insert and Modify) of that one crossing, and a temporary
+    /// `Scratch` insert. Expected by hand: 2 may-persist tables (both owned by
+    /// dependencies), 1 entry point, `Scratch` temporary-only.
+    ///
+    /// Discrimination (2026-11-04): computing `may_write_tables` as the sum of
+    /// the workspace-code records and every crossing's table count fails (3,
+    /// not 2); restored, it passes.
+    #[test]
+    fn rollup_totals_are_unions_by_identity() {
+        let mut own = effect(
+            "DB_INSERT",
+            &[
+                ("resourceId", "dep/table/1"),
+                ("resourceDisplay", "Shared"),
+                ("tempState", "known(false)"),
+            ],
+            &[],
+        );
+        own.evidence.source_kind = "source";
+        own.evidence.file = Some("ws:src/A.al".to_string());
+        own.evidence.line = Some(4);
+        let mut temp = effect(
+            "DB_INSERT",
+            &[
+                ("resourceId", "ws/table/9"),
+                ("resourceDisplay", "Scratch"),
+                ("tempState", "known(true)"),
+            ],
+            &[],
+        );
+        temp.evidence.source_kind = "source";
+        let group = |ty: &str, res: &[(&str, &str)]| {
+            effect(ty, &[("boundary", "Codeunit Base Poster::OnRun")], res)
+        };
+        let mut e = entry_with(vec![]);
+        e.effects = vec![
+            own,
+            temp,
+            group(
+                "DB_INSERT",
+                &[("dep/table/1", "Shared"), ("dep/table/2", "Other")],
+            ),
+            group("DB_MODIFY", &[("dep/table/2", "Other")]),
+        ];
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+        assert_eq!(r.workspace_code.len(), 1, "one workspace-code record");
+        assert_eq!(r.crossings.len(), 1, "one crossing, two group rows");
+        let t = &r.totals;
+        assert_eq!(t.may_write_tables, 2, "{t:?}");
+        assert_eq!((t.owned_by_app, t.by_dependencies), (0, 2), "{t:?}");
+        assert_eq!(t.entry_points, 1, "{t:?}");
+        assert_eq!(t.temporary_only_tables, 1, "{t:?}");
+        assert_eq!(
+            r.crossings[0].by_type["DB_INSERT"].len(),
+            2,
+            "tables per kind"
+        );
+    }
+
+    /// A model whose primary app is `ws`.
+    fn ws_model() -> Model {
+        let mut m = crate::engine::l5::test_support::empty_resolved();
+        m.primary_app = Some(crate::engine::gate::app_attribution::App {
+            app_guid: "ws".to_string(),
+            publisher: String::new(),
+            name: String::new(),
+            version: String::new(),
+        });
+        m
     }
 
     /// MCP output plan 1b: past [`SUMMARY_CAP_BYTES`] the summary degrades to
@@ -3674,7 +3675,13 @@ mod tests {
                 e
             })
             .collect();
-        let s = digest_summary(&entries, 40, 0, Some("ws"));
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let rollups: Vec<_> = entries
+            .iter()
+            .map(|e| crate::engine::l5::routine_rollup::RoutineRollup::build(e, &cx))
+            .collect();
+        let s = digest_summary(&entries, &rollups, &cx, 40, 0);
         let text = s.to_string();
         assert!(text.len() <= SUMMARY_CAP_BYTES, "{} bytes", text.len());
         assert_eq!(s["countsOnly"], true, "{text}");

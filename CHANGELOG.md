@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (MCP output wave 2, W2-2 part 1: one rollup and one summary for every effects output)
+
+Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.1, §3.6,
+§3.8 rule 4.
+
+- **New `engine::l5::routine_rollup`.** One root's digest entry (after the L4 temp-state join and
+  the literal pass) is sorted once into sections: writes in workspace code (one record per table),
+  caller-dependent writes, crossings into dependency code (by the crossing's identity, with the
+  refined resource lists), writes with no path kept (with the owner the operation index
+  recovers), temporary records, literal-dead tables, commits, events, the other kind families and
+  the gaps by where the call site is. `RollupTotals` is the one summary every output prints;
+  every total is a union by identity, never a sum of section counts.
+- **The digest MCP summary (1b) prints `RollupTotals`.** Per root: `summary` (`mayWriteTables
+  {count, ownedByApp, byDependencies}`, `unresolvedTableWrites`, `callerDependentTables`,
+  `commits {answer, ownSites, entryPoints}`, `events`, `kinds`, `gaps {workspace, dependency,
+  notPlaced}`, `temporaryOnlyTables`, `literalDeadTables`, `noPathKept`, `entryPoints`) and
+  `names` (first tables owned by the app and by dependencies, entry points, top callees). The
+  old `physicalTablesWritten`, `temporaryTablesWritten`, `commits`, `boundariesEntered`,
+  `unresolved`, `writesWithoutTable` and `callerDependentTablesWritten` fields are gone.
+  Literal-dead resources count nowhere; temporary contributions never count as writes.
+- **One fold helper.** `routine_rollup::fold` (the cap, or every item when at most a quarter
+  more; tables 12, all when 15 or fewer) replaces `query touches`' local `fold_len`.
+
 ### Changed (MCP output wave 2, W2-1b: the literal pass memoized per revision; schema bumps)
 
 Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.1, §11.10.

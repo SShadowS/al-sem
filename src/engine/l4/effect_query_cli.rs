@@ -1291,14 +1291,8 @@ const GLOBAL_LIST_CAP: usize = 12;
 /// How many owner routines the temporary-records line names.
 const TEMP_OWNERS_SHOWN: usize = 4;
 
-/// How many of `len` items a folded list shows.
-fn fold_len(len: usize, cap: usize, all: bool) -> usize {
-    if all || len <= cap + cap / 4 {
-        len
-    } else {
-        cap
-    }
-}
+/// The shared fold rule (design §3.8 rule 4): one helper for every output.
+use crate::engine::l5::routine_rollup::fold_len;
 
 /// The record-operation family of an op kind (spec §4.5's buckets): lock,
 /// write, validate (it runs the field's trigger and may write: never a read),

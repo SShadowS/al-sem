@@ -2329,6 +2329,7 @@ mod tests {
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
+            crossing: None,
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::MayCommit);
@@ -2363,6 +2364,7 @@ mod tests {
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
+            crossing: None,
         };
         let entry = minimal_entry("complete", vec![], vec![commit], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::CommitsOnSuccessPath);
@@ -2497,6 +2499,7 @@ mod tests {
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
+            crossing: None,
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::CommitsOnSuccessPath);
@@ -2548,6 +2551,7 @@ mod tests {
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
+            crossing: None,
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::CommitsOnSuccessPath);

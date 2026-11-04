@@ -709,27 +709,28 @@ fn digest_summary_through_mcp_on_the_fixture() {
         r["routine"], "Codeunit Out Issue Document::IssueDoc",
         "{summary}"
     );
-    let t = &r["physicalTablesWritten"];
+    // W2-2 (design §3.1, T-W2-13): the summary is the rollup's one
+    // `RollupTotals` serialization, here against numbers counted by hand from
+    // the fixture's AL.
+    let t = &r["summary"];
     // W2-1 (design §3.2): the three classes. `Out Doc`'s `Modify` is on
     // IssueDoc's `var` record parameter, so it is caller-dependent, not a
     // table the routine may persist itself.
     assert_eq!(
-        t["workspaceNames"],
+        r["names"]["tablesOwnedByApp"],
         serde_json::json!(["Out Log"]),
         "{summary}"
     );
-    assert_eq!(r["callerDependentTablesWritten"], 1, "{summary}");
+    assert_eq!(t["callerDependentTables"], 1, "{summary}");
     // Base Doc Line, twelve ledgers, Base Register, Base Price: the group's
     // whole set, not the ten its `detail` names.
-    assert_eq!(t["dependency"], 15, "{summary}");
-    assert_eq!(r["temporaryTablesWritten"], 2, "{summary}");
-    assert_eq!(r["commits"], 1, "{summary}");
-    // Two dependency `OnRun`s, told apart since plan 1d qualifies the name.
-    assert_eq!(r["boundariesEntered"]["count"], 2, "{summary}");
-    let u = &r["unresolved"];
+    assert_eq!(t["mayWriteTables"]["byDependencies"], 15, "{summary}");
+    assert_eq!(t["mayWriteTables"]["count"], 16, "{summary}");
+    assert_eq!(t["commits"]["answer"], "may", "{summary}");
+    let g = &t["gaps"];
     assert_eq!(
-        (u["total"].as_u64(), u["inWorkspace"].as_u64()),
-        (Some(3), Some(2)),
+        (g["workspace"].as_u64(), g["dependency"].as_u64()),
+        (Some(2), Some(1)),
         "{summary}"
     );
     assert!(!summary.to_string().contains("callsiteAnchor"), "{summary}");
