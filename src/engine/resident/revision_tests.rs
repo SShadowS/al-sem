@@ -856,17 +856,20 @@ fn every_order_of_the_heavy_commands_shares_one_witness() {
     }
 }
 
-/// The clone rule (plan 2026-11-03 W, §6 "aliasing"): prove's literal reach
-/// prunes `DocBoth`'s dead witness path off ITS copy of the entry; a digest
-/// after it on the same revision reads the unpruned memoized entry, as a
-/// cold digest does.
+/// The clone rule (plan 2026-11-03 W, §6 "aliasing"): the literal pass
+/// prunes `DocBoth`'s dead witness path off each read's OWN copy of the
+/// entry, never the memoized one; a digest after a prove on the same
+/// revision answers as a cold digest does.
 ///
-/// DISCRIMINATION (2026-11-03): (b) memoizing the entry AFTER prove's pass
-/// (the witness fill running `literal_reach_pass` over its batch when the
-/// request's plan has `gaps_in_cone`) fails `digest after prove` (bytes
-/// differ: the dead path is pruned); reverted, it passes. The literal break
-/// "hand the read the stored entry instead of a clone" does not compile:
-/// the value is behind an `Arc`, so a read can only clone it.
+/// Since MCP output wave 2 W2-1 every effects reader (digest, explain,
+/// prove) runs the pass, and the pass is idempotent, so a reader that got
+/// the already-pruned memoized entry would print the same bytes: the 2026-11-03
+/// discrimination (memoizing the entry AFTER prove's pass failed `digest
+/// after prove`) no longer has an observable effect through these outputs.
+/// The test now pins that the digest is pruned too and that the two answers
+/// equal their cold runs in this order. The literal break "hand the read the
+/// stored entry instead of a clone" still does not compile: the value is
+/// behind an `Arc`, so a read can only clone it.
 #[test]
 fn a_digest_after_a_prove_reads_the_unpruned_witness() {
     let f = witness_ws("DocBoth");
@@ -876,9 +879,13 @@ fn a_digest_after_a_prove_reads_the_unpruned_witness() {
         other => panic!("precondition: digest writes stdout first: {other:?}"),
     })
     .into_owned();
-    assert!(
-        text.matches("RunReportRec").count() >= 2,
-        "precondition: DocBoth's digest lists the dead path too: {text}"
+    // W2-1: the digest is pruned as prove is: every listed path ran through
+    // the dead `RunReportRec(false, …)` call, so none is left (the effect
+    // stays, its paths marked truncated).
+    assert_eq!(
+        text.matches("RunReportRec").count(),
+        0,
+        "precondition: DocBoth's digest lists no dead path: {text}"
     );
     let rev = revision(&f);
     assert_eq!(answer(&rev, Cmd::Prove, &f), cold(Cmd::Prove, &f), "prove");

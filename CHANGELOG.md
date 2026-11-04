@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (MCP output wave 2, W2-1: one classifier and one literal pass for every reader)
+
+Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.1, §3.2,
+§3.2.1, §11.8.
+
+- **One write classifier** (`engine::l5::rollup::classify`): `Physical` (known persistent, temp
+  state unknown, or not joined), `CallerDependent` (a record parameter, or the implicit `Rec`) or
+  `Temporary`, from a row's joined `tempState`. Prove's G17/G17b tests call it; every prove
+  verdict is byte-stable.
+- **`evaluate_writes_table`** (`engine::l5::prove`) is the one implementation of "does the root
+  write table T": the classification plus field-guarded matches, caller resolution and the
+  obligation rules. Prove's `writes-table` calls it; explain and digest are to call it when they
+  state a table answer (W2-2).
+- **Digest and explain read their effects after prove's literal pass** (literal reach, G33 and
+  W2-0c's crossing-local status), so the three tools judge the same facts. Raw versus refined: a
+  row the root cannot reach under literal arguments stays, marked — digest JSON
+  `literalUnreachable: true`, digest human `(ruled out by literal arguments)`, explain JSON
+  `literalUnreachable: true` and explain human `, ruled out by literal arguments`; a literal-dead
+  COMMIT no longer makes explain's commit unconditional; a group's refined list and counts follow
+  W2-0c's rules; a listed path that cannot run is dropped, as prove already did. Only table
+  writes are judged beyond a crossing (`DB_READ` and event groups are never pruned).
+- **The digest MCP summary (1b) uses the three classes**: a caller-dependent table is no longer a
+  `physicalTablesWritten` table and is counted as `callerDependentTablesWritten` (present only
+  when non-zero); a literal-dead write counts nowhere. On the MCP fixture `Out Doc` (a `Modify`
+  on `IssueDoc`'s `var` record parameter) moves out of `physicalTablesWritten.workspaceNames`.
+- No golden file moved: no fixture has a literal-dead row, a dead path or a disproved resource.
+  One test expectation moved (`output_invariants::digest_summary_through_mcp_on_the_fixture`, the
+  1b change above).
+
 ### Fixed (MCP output wave 2, W2-0c step 2: prove drops a group resource its crossing cannot reach)
 
 Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.3.1, §11.7.

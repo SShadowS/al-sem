@@ -1389,9 +1389,10 @@ pub(crate) fn finish_effects(
     } else {
         Default::default()
     };
-    if gaps_in_cone {
-        literal_reach_pass(tree, model, &mut all_entries);
-    }
+    // W2-1 (design §3.1): every reader of the effects (digest, explain,
+    // prove) reads them after the literal pass, so "does R write T" has one
+    // answer. It runs on this read's own copies, never on memoized entries.
+    literal_reach_pass(tree, model, &mut all_entries);
     let unresolved_span = crate::engine::perf_trace::span("digest", "digest.unresolved_cones");
     let read: Vec<(Vec<DigestEntryResult>, BTreeMap<String, UnresolvedCone>)> = readers
         .iter()
@@ -1491,7 +1492,12 @@ pub(crate) fn literal_reach_pass(
                 // Only table writes are judged; an event group's resources
                 // keep W2-0b's representatives (none: no path, as before).
                 let kt = is_known_temp_state(e.temp_state.as_ref());
-                let judged = e.effect_type.starts_with("DB_");
+                // W2-1: table WRITES only; a `DB_READ` group (digest
+                // `--include-reads`) is never pruned.
+                let judged = matches!(
+                    e.effect_type.as_str(),
+                    "DB_INSERT" | "DB_MODIFY" | "DB_DELETE"
+                );
                 let candidates: Vec<(String, Option<Vec<String>>)> = e
                     .group_resources
                     .iter()
@@ -2009,6 +2015,12 @@ pub fn effect_to_value(eff: &DigestEffectFull) -> serde_json::Value {
         .collect();
     m.insert("viaPaths".into(), serde_json::Value::Array(via));
     m.insert("viaPathsTruncated".into(), eff.via_paths_truncated.into());
+    // W2-1, raw versus refined (design §3.1): a row the root cannot reach
+    // under literal arguments stays (raw), with its status beside it, so a
+    // literal-dead write never reads like a live one. Present only then.
+    if eff.literal_unreachable {
+        m.insert("literalUnreachable".into(), true.into());
+    }
     m.insert("confidence".into(), "static".into());
     m.insert("conditionality".into(), eff.conditionality.into());
     m.insert("transactionContext".into(), eff.transaction_context.into());
@@ -2504,7 +2516,14 @@ fn format_entries_human(entries: &[DigestEntryFull]) -> String {
                 .as_deref()
                 .map(|e| format!(" \"{}\"", e))
                 .unwrap_or_default();
-            lines.push(format!("  [{}] {}", eff.effect_type, prov_tag));
+            // W2-1: a literal-dead row says so (its JSON twin carries
+            // `literalUnreachable`).
+            let dead = if eff.literal_unreachable {
+                " (ruled out by literal arguments)"
+            } else {
+                ""
+            };
+            lines.push(format!("  [{}] {}{dead}", eff.effect_type, prov_tag));
             lines.push(format!("    evidence: {}{}{}", ev_file, ev_line, excerpt));
             let detail_entries: Vec<String> = eff
                 .detail
@@ -2652,8 +2671,12 @@ fn digest_entry_summary(
 ) -> serde_json::Value {
     use serde_json::json;
     let mut by_type: BTreeMap<&str, u64> = BTreeMap::new();
-    let (mut ws_tables, mut dep_tables, mut temp_tables) =
-        (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+    let (mut ws_tables, mut dep_tables, mut temp_tables, mut caller_tables) = (
+        BTreeSet::new(),
+        BTreeSet::new(),
+        BTreeSet::new(),
+        BTreeSet::new(),
+    );
     let mut unnamed_writes = 0u64;
     let mut boundaries: BTreeMap<&str, u64> = BTreeMap::new();
     for f in &e.effects {
@@ -2667,24 +2690,36 @@ fn digest_entry_summary(
         if let Some(b) = detail("boundary") {
             *boundaries.entry(b).or_default() += 1;
         }
+        // W2-1: a write the root cannot reach under literal arguments is no
+        // write here (its row stays in the document, marked).
         if !matches!(
             f.effect_type.as_str(),
             "DB_INSERT" | "DB_MODIFY" | "DB_DELETE"
-        ) {
+        ) || f.literal_unreachable
+        {
             continue;
         }
         let tables = written_tables(f);
         if tables.is_empty() {
             unnamed_writes += 1;
         }
-        let temporary = detail("tempState") == Some("known(true)");
+        // W2-1 (design §3.2): the shared three-class classifier.
+        let class = crate::engine::l5::rollup::classify_detail(&f.detail);
         for (id, display) in tables {
-            if temporary {
-                temp_tables.insert(display);
-            } else if primary.is_some_and(|p| id.split('/').next() == Some(p)) {
-                ws_tables.insert(display);
-            } else {
-                dep_tables.insert(display);
+            match class {
+                crate::engine::l5::rollup::WriteClass::Temporary => {
+                    temp_tables.insert(display);
+                }
+                crate::engine::l5::rollup::WriteClass::CallerDependent(_) => {
+                    caller_tables.insert(display);
+                }
+                crate::engine::l5::rollup::WriteClass::Physical(_) => {
+                    if primary.is_some_and(|p| id.split('/').next() == Some(p)) {
+                        ws_tables.insert(display);
+                    } else {
+                        dep_tables.insert(display);
+                    }
+                }
             }
         }
     }
@@ -2748,6 +2783,10 @@ fn digest_entry_summary(
     });
     if unnamed_writes > 0 {
         v["writesWithoutTable"] = json!(unnamed_writes);
+    }
+    // W2-1: tables written only if the caller passes a persistent record.
+    if !caller_tables.is_empty() {
+        v["callerDependentTablesWritten"] = json!(caller_tables.len());
     }
     v
 }

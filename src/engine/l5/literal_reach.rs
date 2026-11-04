@@ -257,8 +257,8 @@ pub enum Undecided {
     /// No candidate's owner is reached even with guards ignored: the cone
     /// followed a graph this search does not, so nothing is concluded.
     OwnerNotReached,
-    /// Not a table write: W2-0c judges table resources only (an event's
-    /// resources are never dropped).
+    /// Not a table write: W2-0c judges table writes only (an event's or a
+    /// read's resources are never dropped).
     KindNotJudged,
 }
 
