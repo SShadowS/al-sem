@@ -170,8 +170,10 @@ fn case(slug: &'static str, argv: &[&str], exit_code: i32) -> Case {
     }
 }
 
-/// `explain`, `prove` and `digest` take `<owner>::<routine>`; `query` takes
-/// `Object.Routine` (one selector grammar is wave 3's item 3b).
+/// The fixture's goldens keep the spellings they were minted with:
+/// `<owner>::<routine>` for `explain`, `prove` and `digest`, `Object.Routine`
+/// for `query`. Since wave 3's item 3b every tool takes both
+/// (`output_invariants_w3::one_selector_grammar_for_every_tool`).
 pub(crate) const ISSUE_DOC: &str = "Out Issue Document::IssueDoc";
 pub(crate) const WRITE_LOG: &str = "Out Log Mgt::WriteLog";
 pub(crate) const ISSUE_DOC_Q: &str = "Out Issue Document.IssueDoc";

@@ -197,4 +197,5 @@ mod mcp_server;
 mod output_cdo;
 mod output_fixture;
 mod output_invariants;
+mod output_invariants_w3;
 mod temp_storage_failure;

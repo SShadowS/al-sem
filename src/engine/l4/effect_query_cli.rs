@@ -686,8 +686,18 @@ pub fn resolve_routine_selector<'a>(
     }
 
     let want = selector.to_lowercase();
+    // `Object.Routine` as written, or (MCP output plan 3b: one selector
+    // grammar for every tool) `Owner::Routine` / `Owner.Routine` with the
+    // owner's type word and AL quotes optional, as explain, prove and digest
+    // read it.
+    let split = crate::engine::l5::selector_index::split_qualified(selector);
     let qualified: Vec<&ModelRoutine> = routines()
-        .filter(|r| format!("{}.{}", object_name(r), r.name).to_lowercase() == want)
+        .filter(|r| {
+            format!("{}.{}", object_name(r), r.name).to_lowercase() == want
+                || split
+                    .as_ref()
+                    .is_some_and(|q| q.selects(&r.object_type, object_name(r), &r.name))
+        })
         .collect();
     let bare: Vec<&ModelRoutine> = routines()
         .filter(|r| r.name.to_lowercase() == want)

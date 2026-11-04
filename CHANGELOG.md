@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (MCP output wave 3b)
+
+- **The MCP tool descriptions and server instructions are written around an agent's decisions**
+  (plan 3b; E7, P6, D7, X10). The instructions say which tool answers which question, the one
+  selector grammar, the line base and location forms (`ws:`, `dep:<app name>:`), the inline cap
+  and the summary beside a file, each tool's dependency depth, the common inputs, and what `yes`,
+  `no`, `unknown`, "no matching effect observed", `coverage`, `assumptions`, `limits`, temporary
+  records and caller-dependent writes mean. Each command tool's description says what its default
+  prints, how to ask for more (every input it takes, in backticks), the line base, typical sizes
+  (measured on CDO: explain human 30-40 KB, query effects human 20-25 KB, digest JSON up to
+  ~1 MB), its dependency depth and one next step; digest names `files`/`diff` as the change modes.
+  `alsem_refresh` says when to use it. A test pins that every input a description names is in the
+  tool's schema and every schema input is named
+  (`output_invariants_w3::descriptions_name_exactly_the_inputs_the_schemas_take`).
+- **One routine selector grammar for every tool.** `explain`, `prove` and `digest` now also take
+  `Object.Routine` (read as `Object::Routine` at the last unquoted dot, only when no other form
+  matched: `selector_index` form 6); `query effects --routine` and `query touches --from` now
+  also take `Owner::Routine` and the owner's type word or AL quotes in either spelling
+  (`selector_index::split_qualified`). No selector that resolved before resolves differently.
+  Pinned by `output_invariants_w3::one_selector_grammar_for_every_tool` (seven spellings, five
+  tools, byte-identical answers).
+
 ### Added (MCP output wave 3c)
 
 - **`alsem_status` answers "is this current, and what is the engine doing?"** (plan 3c, S2).
