@@ -22,6 +22,15 @@
 //! keys never lose each other's entries. Only after the swap are the keys
 //! marked `Published` and the waiters woken.
 //!
+//! **A request never waits while it holds a claim.** Each iteration of a
+//! phase claims what nobody fills, joins what another request fills,
+//! computes and publishes its claims, and only then waits for the joined
+//! keys. (Waiting first let two requests each wait on a key the other held
+//! claimed: a joined key's fill ended and a request that read the snapshot
+//! before it was published claimed it again, then joined one of the
+//! waiter's claims.) A waiter holds nothing, so no wait is ever on a
+//! waiter, and no cycle of waits can form.
+//!
 //! **Reservation** (§4.5, stage 3): each claimed key's fill reserves through
 //! [`Control::reserve`] just before it computes and holds the guard until
 //! its value is in hand; the guard's `finish` gives the bytes the fill left
@@ -534,65 +543,74 @@ impl<K: StoreKey, V: StoreValue> Store<K, V> {
                 if !joined.is_empty() {
                     self.count(|s| s.joins += joined.len() as u64);
                 }
-                // (b) Wait for every joined key (the fill goes on for others
-                // whatever this request does).
-                self.wait_for(&joined, worker, ctl)?;
-                // (c) Reserve, then compute every claimed key off the current
-                // snapshot (its prerequisites were published by earlier phases).
-                if claims.keys.is_empty() {
-                    continue;
-                }
-                let s = self.load();
-                let mut values: Vec<(K, u64, V, u64)> = Vec::new();
-                for (k, generation) in claims.keys.clone() {
-                    let (k, generation) = (&k, &generation);
-                    // Each fill holds its reservation while it computes (a
-                    // fill worker), released once its value is in hand.
-                    let guard = match (ctl.reserve)(k.kind(), estimate(k)) {
-                        Ok(g) => g,
-                        // `claims` drops: released, waiters woken.
-                        Err(why) => return Err(PrepareError::Budget(why)),
-                    };
-                    let req = &missing
-                        .iter()
-                        .find(|(m, _)| m == k)
-                        .expect("a claimed key is missing")
-                        .1;
-                    let cx = FillCx {
-                        key: k,
-                        req,
-                        existing: s.get(k),
-                        snapshot: &s,
-                    };
-                    let filled =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fill(cx)))
-                            .unwrap_or_else(|p| Err(panic_text(&p)));
-                    match filled {
-                        Ok(v) => values.push((k.clone(), *generation, v, guard.finish())),
-                        Err(why) => {
-                            self.fail(k, worker, &why);
-                            claims.keys.retain(|(c, _)| c != k);
-                            return Err(PrepareError::Engine(format!(
-                                "filling {k:?} failed: {why}"
-                            )));
+                // (b) Reserve, then compute every claimed key off the current
+                // snapshot (its prerequisites were published by earlier
+                // phases; a joined key is of this phase, so no claimed key
+                // reads one), and (c) publish them, BEFORE waiting for any
+                // joined key: a request never waits while it holds a claim.
+                // Waiting first deadlocked: this request waits on a joined
+                // key, holding its claims; the key's fill ends and a request
+                // that read the snapshot before it was published claims it
+                // again (or widens it, a det), then joins one of this
+                // request's claims; each waits on the other forever.
+                if !claims.keys.is_empty() {
+                    let s = self.load();
+                    let mut values: Vec<(K, u64, V, u64)> = Vec::new();
+                    for (k, generation) in claims.keys.clone() {
+                        let (k, generation) = (&k, &generation);
+                        // Each fill holds its reservation while it computes (a
+                        // fill worker), released once its value is in hand.
+                        let guard = match (ctl.reserve)(k.kind(), estimate(k)) {
+                            Ok(g) => g,
+                            // `claims` drops: released, waiters woken.
+                            Err(why) => return Err(PrepareError::Budget(why)),
+                        };
+                        let req = &missing
+                            .iter()
+                            .find(|(m, _)| m == k)
+                            .expect("a claimed key is missing")
+                            .1;
+                        let cx = FillCx {
+                            key: k,
+                            req,
+                            existing: s.get(k),
+                            snapshot: &s,
+                        };
+                        let filled =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fill(cx)))
+                                .unwrap_or_else(|p| Err(panic_text(&p)));
+                        match filled {
+                            Ok(v) => values.push((k.clone(), *generation, v, guard.finish())),
+                            Err(why) => {
+                                self.fail(k, worker, &why);
+                                claims.keys.retain(|(c, _)| c != k);
+                                return Err(PrepareError::Engine(format!(
+                                    "filling {k:?} failed: {why}"
+                                )));
+                            }
+                        }
+                        if let Some(stop) = (ctl.stop)() {
+                            // A computed value is still published below only
+                            // if the request goes on; a stopped request
+                            // releases.
+                            return Err(stop.into());
                         }
                     }
-                    if let Some(stop) = (ctl.stop)() {
-                        // A computed value is still published below only if
-                        // the request goes on; a stopped request releases.
-                        return Err(stop.into());
+                    drop(s);
+                    self.count(|st| st.fills += values.len() as u64);
+                    // Publish as one transaction.
+                    let churned = self.publish(values, worker, &mut discards);
+                    claims.keys.clear();
+                    if let Some(k) = churned {
+                        return Err(PrepareError::Engine(format!(
+                            "artifact churn: {k:?} was evicted {MAX_DISCARDS} times while filled"
+                        )));
                     }
                 }
-                drop(s);
-                self.count(|st| st.fills += values.len() as u64);
-                // (d) Publish as one transaction.
-                let churned = self.publish(values, worker, &mut discards);
-                claims.keys.clear();
-                if let Some(k) = churned {
-                    return Err(PrepareError::Engine(format!(
-                        "artifact churn: {k:?} was evicted {MAX_DISCARDS} times while filled"
-                    )));
-                }
+                // (d) Wait for every joined key, holding no claim (the fill
+                // goes on for others whatever this request does).
+                drop(claims);
+                self.wait_for(&joined, worker, ctl)?;
                 // (e) Reload and repeat until the phase is satisfied.
             }
         }

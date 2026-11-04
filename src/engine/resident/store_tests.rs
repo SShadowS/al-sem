@@ -291,6 +291,92 @@ fn a_joined_prerequisite_is_published_before_the_dependent_is_computed() {
     assert_eq!(store.stats().fills, 2, "A once, B once");
 }
 
+/// A request never waits while it holds a claim (the module doc): it
+/// publishes what it claimed before it waits for what it joined. Request C
+/// fills `Y` and is held at a gate for the whole test; request 1 needs `X`
+/// and `Y`, so it claims `X` and joins `Y`; request 2 needs only `X`.
+/// Request 2 answers while `Y` is still being filled, with request 1's `X`.
+///
+/// Before 2026-11-04 request 1 waited first, holding `X`, so request 2
+/// waited on request 1 until `Y` was published. With a third request that
+/// claimed the joined key again (it read the snapshot before the key was
+/// published) and joined one of the waiter's claims, that was a deadlock:
+/// `concurrent_requests_and_evictions_answer_the_cold_bytes` hung in 2 of
+/// 300 runs on a loaded machine, its two heavy requests both in `wait_for`.
+///
+/// DISCRIMINATION (break with Edit, run, revert, run; 2026-11-04): waiting
+/// for the joined keys before computing the claims (`self.wait_for(&joined,
+/// worker, ctl)?;` moved back above the claimed keys' fills) fails "request
+/// 2 answered while Y was filled" with `Deadline` (its watchdog: request 2
+/// waits on request 1, which waits on the gate); reverted, it passes.
+#[test]
+fn a_request_publishes_its_claims_before_it_waits_for_a_joined_key() {
+    let store: Store<K, V> = Store::new();
+    let n = AtomicUsize::new(0);
+    let (started_tx, started_rx) = mpsc::channel::<()>();
+    let gate = Gate::default();
+    let y_fills = AtomicUsize::new(0);
+    let fill = |cx: FillCx<'_, K, V>| {
+        if *cx.key == K::Y {
+            y_fills.fetch_add(1, Ordering::SeqCst);
+            let _ = started_tx.send(());
+            gate.wait();
+        }
+        numbered(&n)(cx)
+    };
+    // Request 2's watchdog: a wait that never ends gives up with `deadline`.
+    let start = std::time::Instant::now();
+    let watchdog = || (start.elapsed() > Duration::from_secs(10)).then_some(Stop::Deadline);
+    let waiter = Control {
+        stop: &watchdog,
+        reserve: &unreserved_guard,
+    };
+    std::thread::scope(|sc| {
+        let open = gate.opener();
+        let c = sc.spawn(|| {
+            store.ensure_prepared(&needs(&[K::Y]), &no_estimate, &fill, &Control::unreserved())
+        });
+        started_rx.recv().unwrap();
+        let r1 = sc.spawn(|| {
+            store.ensure_prepared(
+                &needs(&[K::X, K::Y]),
+                &no_estimate,
+                &fill,
+                &Control::unreserved(),
+            )
+        });
+        // Request 1 claimed `X` and joined `Y` in one registry section.
+        while store.stats().joins == 0 {
+            std::thread::yield_now();
+        }
+        assert!(
+            store
+                .registry()
+                .get(&K::X)
+                .is_some_and(|e| e.state != State::Absent),
+            "precondition: request 1 claimed X"
+        );
+        let r2 = store.ensure_prepared(&needs(&[K::X]), &no_estimate, &fill, &waiter);
+        let y_filling = matches!(
+            store.registry().get(&K::Y).map(|e| &e.state),
+            Some(State::Filling { .. })
+        );
+        drop(open);
+        let s2 = r2.expect("request 2 answered while Y was filled");
+        assert!(y_filling, "precondition: Y was still being filled");
+        let s1 = r1.join().unwrap().unwrap();
+        c.join().unwrap().unwrap();
+        assert!(
+            Arc::ptr_eq(s2.get(&K::X).unwrap(), s1.get(&K::X).unwrap()),
+            "both requests read the published X"
+        );
+    });
+    // `X` may be filled twice: request 2 can read the snapshot just before
+    // request 1 publishes `X` and claim it again (a redundant refill, not
+    // this test's subject).
+    assert_eq!(y_fills.load(Ordering::SeqCst), 1, "Y filled once, by C");
+}
+
 /// A failed reservation with a waiter: request 1 claims `A` and its
 /// reservation fails (after request 2 joined); request 1 answers `budget`,
 /// its claim is released, and request 2 is woken, claims `A` itself and

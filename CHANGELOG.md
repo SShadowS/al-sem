@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (a context-server store deadlock, and the flaky test that hid it)
+
+- **Two requests could wait on each other forever in `Store::ensure_prepared`.** A request
+  claimed the keys nobody was filling, joined the keys another request was filling, and then
+  WAITED for the joined keys while still holding its claims. When a joined key's fill ended, a
+  third request that had read the snapshot just before that key was published could claim the
+  key again, and then join one of the waiter's claims: each waited on the other. Now a request
+  computes and publishes its claims first and waits for the joined keys holding nothing, so a
+  wait is never on a waiter and no cycle can form. Found by stress: the reworked test below hung
+  in 2 of 300 runs under heavy CPU load, both heavy requests stuck in `wait_for` (gdb stack
+  dumps). Test: `a_request_publishes_its_claims_before_it_waits_for_a_joined_key` (one request
+  holds `Y` at a gate; another claims `X` and joins `Y`; a third that needs only `X` must answer
+  while `Y` is still filled). Discrimination: waiting before the fills fails it with its
+  watchdog's `Deadline`; restored, it passes.
+- **`concurrent_requests_and_evictions_answer_the_cold_bytes` forces the refill it asserts.**
+  Under machine load it failed "l4 refilled after eviction" (one l4 fill), and once ran for
+  over 200 s. Its only evictions came from a concurrent thread, and `Store::evict` rightly skips
+  every key a request in flight pins, so a run whose eviction bursts never met a gap between
+  requests refilled nothing. Now each round starts only once the last round's requests
+  returned, every evictable artifact is evicted then (nothing is pinned, and the test states
+  that none is left), and the concurrent bursts last exactly as long as the round's requests.
+  The test asserts at least one fill per round that reads a kind. A thread that panics ends
+  every wait at once (one result channel per thread). Discrimination: no between-rounds
+  eviction fails it (35 to 37 l4 fills of 40); no pins fails it; the explain indexes' kind name
+  drifting fails it.
+
 ### Changed (MCP output plan 1f: tool descriptions, first pass)
 
 - **The MCP tool descriptions and server instructions state what an agent needs before it
