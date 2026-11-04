@@ -508,6 +508,17 @@ impl ExplainIndexes {
     }
 }
 
+/// Record-operation id → the row a card joins it to: a collided id's FIRST
+/// owning row (MCP output wave 2, W2-0a: the shared operation index's
+/// explain selection). [`IndexData::new`]'s `op_row`.
+pub(crate) fn op_rows(model: &Model) -> HashMap<String, usize> {
+    crate::engine::l4::operation_index::OperationIndex::build(
+        model,
+        crate::engine::l4::operation_index::IndexScope::RecordOperations,
+    )
+    .first_record_operation_rows()
+}
+
 /// The model indexes every card reads, owned ([`ExplainIndexes`]).
 struct IndexData {
     rows_of: HashMap<String, Vec<usize>>,
@@ -627,17 +638,14 @@ impl IndexData {
         let ws = &model.workspace;
         let mut rows_of: HashMap<String, Vec<usize>> = HashMap::new();
         let mut ix_of: HashMap<&str, usize> = HashMap::new();
-        let mut op_row: HashMap<String, usize> = HashMap::new();
         for (i, r) in ws.routines.iter().enumerate() {
             rows_of
                 .entry(r.stable_routine_id.clone())
                 .or_default()
                 .push(i);
             ix_of.entry(r.id.as_str()).or_insert(i);
-            for op in &r.record_operations {
-                op_row.entry(op.id.clone()).or_insert(i);
-            }
         }
+        let op_row = op_rows(model);
         let mut callees: HashMap<usize, Vec<usize>> = HashMap::new();
         let mut callers: HashMap<usize, Vec<usize>> = HashMap::new();
         for e in &model.calls.edges {

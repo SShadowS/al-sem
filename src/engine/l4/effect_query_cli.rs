@@ -50,13 +50,12 @@ use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l4::effect_query::{
     AncestorTouch, DbEffectQuery, TableTouch, UNKNOWN_TABLE_ID, is_unknown_table,
 };
+use crate::engine::l4::operation_index::OperationIndex;
 use crate::engine::line_base::{LINE_BASE, shown};
 use crate::engine::session::{Cell, View, query_plan};
 use crate::program::body::features::RECEIVER_PARAM_INDEX;
 use crate::program::model::declaring::DeclaringObjects;
-use crate::program::model::workspace::{
-    Model, ModelRecordOperation, ModelRoutine, table_by_id_preferring_real,
-};
+use crate::program::model::workspace::{Model, ModelRoutine, table_by_id_preferring_real};
 use crate::program::resolve::full::LoadedDependencies;
 
 /// The JSON envelope's `schemaVersion` for both `query` subcommands. 1.1.0 (#66):
@@ -681,30 +680,30 @@ pub struct OperationRef {
     pub column: u32,
 }
 
-/// `operation_id` -> the routine + record operation that produced it.
+/// `operation_id` -> the routine + record operation that produced it, read
+/// off the shared [`OperationIndex`] (MCP output wave 2, W2-0a).
 pub struct OperationJoin<'a> {
-    by_id: HashMap<&'a str, (&'a ModelRoutine, &'a ModelRecordOperation)>,
+    index: OperationIndex<'a>,
 }
 
 impl<'a> OperationJoin<'a> {
     pub fn build(resolved: &'a Model) -> Self {
-        let mut by_id: HashMap<&'a str, (&'a ModelRoutine, &'a ModelRecordOperation)> =
-            HashMap::new();
-        for r in &resolved.workspace.routines {
-            for op in &r.record_operations {
-                // Operation ids embed the owning routine's id, so only the rows
-                // of a collided id share one; then the LAST owning row's
-                // operation is the anchor (#160 step 11b §4.6, class P).
-                by_id.insert(op.id.as_str(), (r, op));
-            }
+        OperationJoin {
+            index: OperationIndex::build(
+                resolved,
+                crate::engine::l4::operation_index::IndexScope::RecordOperations,
+            ),
         }
-        OperationJoin { by_id }
     }
 
     /// `None` when the operation lives outside the workspace routine set (a
     /// retained dependency leaf's own effect) — render the id, invent nothing.
+    /// Operation ids embed the owning routine's id, so only the rows of a
+    /// collided id share one; then the LAST owning row's operation is the
+    /// anchor (#160 step 11b §4.6, class P), never an ambiguity: ConTinAI
+    /// reads `origin` directly.
     pub fn get(&self, operation_id: &str, routines: &RoutineJoin<'_>) -> Option<OperationRef> {
-        let (r, op) = self.by_id.get(operation_id)?;
+        let (r, op) = self.index.last_record_operation(operation_id)?;
         Some(OperationRef {
             owner: routines.of(r),
             file: op.source_anchor.source_unit_id.clone(),

@@ -53,6 +53,7 @@ use crate::engine::l5::recref_flow::{
     Atom, Atoms, RecRefFlow, RelevantGlobals, RelevantParams, TSet, eval,
 };
 use crate::engine::l5::snapshot::SnapshotGraphEdge;
+use crate::engine::l5::terminal_facts::TerminalFacts;
 use crate::program::body::features::{PCFNNode, TableCase};
 use crate::program::model::workspace::{Model, ModelRoutine};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -334,20 +335,23 @@ fn walk_tables(
 }
 
 /// The edge's (from, to, site, binds-arguments) view.
-fn edge_parts(e: &SnapshotGraphEdge) -> Option<(&str, &str, Option<&str>, bool)> {
+fn edge_parts(e: &SnapshotGraphEdge) -> Option<(&str, &str, Option<EdgeSite<'_>>, bool)> {
+    fn cs(s: &str) -> Option<EdgeSite<'_>> {
+        Some(EdgeSite::Guarded(s))
+    }
     Some(match e {
         SnapshotGraphEdge::DirectCall {
             from,
             to,
             callsite_id,
             ..
-        } => (from, to, Some(callsite_id.as_str()), true),
+        } => (from, to, cs(callsite_id), true),
         SnapshotGraphEdge::VariableTypedCall {
             from,
             to,
             callsite_id,
             ..
-        } => (from, to, Some(callsite_id.as_str()), true),
+        } => (from, to, cs(callsite_id), true),
         // G34: an implementer takes the call's arguments by position, as a
         // direct callee does.
         SnapshotGraphEdge::InterfaceDispatch {
@@ -355,27 +359,55 @@ fn edge_parts(e: &SnapshotGraphEdge) -> Option<(&str, &str, Option<&str>, bool)>
             to,
             callsite_id,
             ..
-        } => (from, to, Some(callsite_id.as_str()), true),
+        } => (from, to, cs(callsite_id), true),
         SnapshotGraphEdge::ObjectRunResolved {
             from,
             to,
             callsite_id,
             ..
-        } => (from, to, Some(callsite_id.as_str()), false),
-        SnapshotGraphEdge::EventDispatch { from, to, .. } => (from, to, None, false),
+        } => (from, to, cs(callsite_id), false),
+        // MCP output wave 2 (W2-0a, design §3.4.3 item 1): an event edge
+        // carries its event id, so a crossing's event edge can be matched by
+        // identity. It is never a guarded site (an event edge has no guard).
+        SnapshotGraphEdge::EventDispatch {
+            from, to, event_id, ..
+        } => (from, to, Some(EdgeSite::Event(event_id.as_str())), false),
         SnapshotGraphEdge::ImplicitTrigger {
             from,
             to,
             operation_id,
             ..
-        } => (from, to, Some(operation_id.as_str()), false),
+        } => (
+            from,
+            to,
+            Some(EdgeSite::Guarded(operation_id.as_str())),
+            false,
+        ),
         SnapshotGraphEdge::ObjectRunUnresolved { .. } => return None,
     })
     .map(|(f, t, s, b)| (f.as_str(), t.as_str(), s, b))
 }
 
+/// The identity an out-edge leaves from: a call site or firing operation (a
+/// site whose guards the search applies), or an event (no guard).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EdgeSite<'a> {
+    Guarded(&'a str),
+    Event(&'a str),
+}
+
+impl<'a> EdgeSite<'a> {
+    /// The site whose guards apply; `None` for an event edge.
+    fn guarded(self) -> Option<&'a str> {
+        match self {
+            EdgeSite::Guarded(s) => Some(s),
+            EdgeSite::Event(_) => None,
+        }
+    }
+}
+
 /// An out-edge: (callee, the site it leaves from, whether it binds arguments).
-type OutEdge<'a> = (&'a str, Option<&'a str>, bool);
+type OutEdge<'a> = (&'a str, Option<EdgeSite<'a>>, bool);
 
 /// A search's result: the routines reached with guards ignored, and the
 /// binding states reached per routine with them.
@@ -406,16 +438,11 @@ pub(crate) struct LiteralReach<'a> {
     /// globals, whose tables a search state carries.
     rel_params: RelevantParams,
     rel_globals: RelevantGlobals<'a>,
-    /// The cone's DIRECT facts by kind, (effect type, resource id), each as
-    /// (routine stable id, the operation or call site it sits at; `""` none).
-    direct_by_kind: DirectByKind<'a>,
+    /// The cone's DIRECT facts, one lossless record each (MCP output wave 2,
+    /// W2-0a: [`TerminalFacts`]); [`Self::kind_dead`] reads them by kind,
+    /// (effect type, resource id).
+    terminals: TerminalFacts<'a>,
 }
-
-/// An effect kind: (effect type, resource id).
-type Kind<'a> = (&'static str, Option<&'a str>);
-
-/// Per kind, its direct facts as (routine stable id, site).
-type DirectByKind<'a> = HashMap<Kind<'a>, Vec<(&'a str, &'a str)>>;
 
 impl<'a> LiteralReach<'a> {
     pub(crate) fn new(
@@ -423,22 +450,9 @@ impl<'a> LiteralReach<'a> {
         facts: &'a [crate::engine::l5::snapshot::SnapshotCapabilityFact],
         model: &'a Model,
     ) -> Self {
-        let mut direct_by_kind: DirectByKind = HashMap::new();
         // The strings are borrowed from the rows' tables, which the rows of
         // `facts` keep alive for `'a`.
-        for f in facts.iter().filter(|f| f.provenance() == "direct") {
-            let Some(kind) = crate::engine::l5::digest::effect_type_of(f) else {
-                continue;
-            };
-            let site = f
-                .witness_operation_id()
-                .or(f.witness_callsite_id())
-                .unwrap_or("");
-            direct_by_kind
-                .entry((kind, f.resource_id()))
-                .or_default()
-                .push((f.subject(), site));
-        }
+        let terminals = TerminalFacts::new(facts);
         let routines = &model.workspace.routines;
         let by_id: HashMap<&str, &ModelRoutine> =
             routines.iter().map(|r| (r.id.as_str(), r)).collect();
@@ -527,8 +541,31 @@ impl<'a> LiteralReach<'a> {
             guards,
             rel_params,
             rel_globals,
-            direct_by_kind,
+            terminals,
         }
+    }
+
+    /// The tree's terminal records (design §3.4.1). Read by W2-0b's
+    /// crossing-constrained witnesses; until then by the tests.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn terminals(&self) -> &TerminalFacts<'a> {
+        &self.terminals
+    }
+
+    /// The out-edges of `from` that are event dispatches, as (subscriber,
+    /// event id): an event edge's identity on the search's own adjacency.
+    /// Read by W2-0b's prefix phase; until then by the tests.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn event_edges_from(&self, from: &str) -> Vec<(&'a str, &'a str)> {
+        self.out
+            .get(from)
+            .into_iter()
+            .flatten()
+            .filter_map(|&(to, site, _)| match site {
+                Some(EdgeSite::Event(ev)) => Some((to, ev)),
+                _ => None,
+            })
+            .collect()
     }
 
     fn reqs_at(&self, routine: &str, site: &str) -> &[Req] {
@@ -681,6 +718,7 @@ impl<'a> LiteralReach<'a> {
         let mut q = VecDeque::from([(root, Bindings::default())]);
         while let Some((f, b)) = q.pop_front() {
             for &(to, site, binds) in self.out.get(f).into_iter().flatten() {
+                let site = site.and_then(EdgeSite::guarded);
                 if let Some(s) = site
                     && self.dead_at(f, s, &b)
                 {
@@ -714,6 +752,7 @@ impl<'a> LiteralReach<'a> {
         while let Some((f, b)) = q.pop_front() {
             order.push((f, b.clone()));
             for &(to, site, binds) in self.out.get(f).into_iter().flatten() {
+                let site = site.and_then(EdgeSite::guarded);
                 if let Some(s) = site
                     && self.dead_at(f, s, &b)
                 {
@@ -822,11 +861,17 @@ impl<'a> LiteralReach<'a> {
             // it: the cone keeps one representative fact per kind per root, so
             // a dead representative says nothing of the kind's other origins.
             if e.boundary_group {
-                let crossing_dead = e
-                    .evidence_callsite_id
-                    .as_deref()
-                    .or(e.evidence_operation_id.as_deref())
-                    .is_some_and(|site| self.op_dead(&reached, site));
+                // W2-0a: the crossing's own typed site (an event crossing has
+                // no guard, so it is never dead here); a hand-built group with
+                // no record falls back to its evidence ids.
+                let site = match &e.crossing {
+                    Some(c) => c.site.guarded_id(),
+                    None => e
+                        .evidence_callsite_id
+                        .as_deref()
+                        .or(e.evidence_operation_id.as_deref()),
+                };
+                let crossing_dead = site.is_some_and(|site| self.op_dead(&reached, site));
                 if crossing_dead {
                     out.insert(i);
                     continue;
@@ -868,11 +913,9 @@ impl<'a> LiteralReach<'a> {
     /// site can run. A routine reached only through code that cannot run has
     /// no state, so its facts count as dead.
     fn kind_dead(&self, reached: &Reached<'a>, kind: (&str, Option<&str>)) -> bool {
-        let Some(facts) = self.direct_by_kind.get(&kind) else {
-            return false;
-        };
         let mut any_reached = false;
-        for &(subject, site) in facts {
+        for r in self.terminals.of_kind(kind) {
+            let (subject, site) = (r.owner, r.terminal.id());
             if !reached.0.contains(subject) {
                 continue;
             }
