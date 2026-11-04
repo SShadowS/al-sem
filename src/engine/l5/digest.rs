@@ -1112,13 +1112,16 @@ fn is_bfs_carrier(d: &Fact, f: &Fact) -> bool {
     !is_pd_snap(d)
         && is_known_temp_snap(d) == is_known_temp_snap(f)
         && fact_equivalent(d, f)
-        // An ORDINARY fact with no resource stays one at every caller (only the
-        // producer solve binds one, and a producer is no carrier), so it never
-        // carries a fact that names a resource. `fact_equivalent`'s one-sided
-        // leniency made one the witness of every same-op fact: Continia DO's
-        // temporary `RecRef.Insert` was shown writing 156 tables that a
-        // dependency boundary below it writes.
-        && !(f.resource_id().is_some() && d.resource_id().is_none())
+        // An ORDINARY fact keeps its resource, or its lack of one, at every
+        // caller (only the producer solve binds one, and a producer is no
+        // carrier), so a carrier names a resource exactly when the fact does.
+        // `fact_equivalent`'s one-sided leniency made a resource-less fact the
+        // witness of every same-op fact: Continia DO's temporary
+        // `RecRef.Insert` was shown writing 156 tables that a dependency
+        // boundary below it writes. #369, the other way round: a typed insert
+        // was shown as the witness of an unresolved insert in dependency code
+        // below it, and the two rows shared one path, terminal and `factId`.
+        && f.resource_id().is_some() == d.resource_id().is_some()
 }
 
 /// What [`enumerate_proofs`] found.
@@ -1176,6 +1179,92 @@ mod proof_key {
 use proof_key::PROOF_KEY_HASHES;
 use proof_key::ProofKey;
 
+/// What [`seed_reach`] found from one state.
+#[derive(Clone)]
+struct SeedReach {
+    /// The links to the nearest seed (first in link order at that distance),
+    /// and the seed state.
+    seed: Option<(Vec<EdgeIx>, StateIx)>,
+    /// No seed within the bound, and a state at the bound has a callee left
+    /// unvisited: a seed may lie beyond `MAX_DEPTH`.
+    beyond: bool,
+    /// The states visited (they count toward `MAX_STATES`).
+    visited: usize,
+    /// A state of a routine an uncrossed prefix can hold (the root's, or a
+    /// primary routine's) was visited: a search that forbids a prefix's
+    /// states may answer differently.
+    touched_prefix_kind: bool,
+}
+
+/// #369: the nearest seed below arena state `start`, at most `max_d` links
+/// away, never through a state in `forbidden`: breadth-first over STATES,
+/// each visited once. A shortest link path is simple, so it is one the
+/// partial-path walk of [`enumerate_proofs`] would also find (it forbids only
+/// revisiting a state of its own path); a seed is reachable within the bound
+/// exactly when such a path exists.
+fn seed_reach(
+    idx: &FingerprintIndexes,
+    root: &str,
+    start: StateIx,
+    max_d: usize,
+    forbidden: &std::collections::HashSet<StateIx>,
+) -> SeedReach {
+    let states = &idx.pd.states;
+    let mut parent: HashMap<StateIx, Option<(StateIx, EdgeIx)>> = HashMap::new();
+    parent.insert(start, None);
+    let mut frontier = vec![start];
+    let mut out = SeedReach {
+        seed: None,
+        beyond: false,
+        visited: 0,
+        touched_prefix_kind: false,
+    };
+    let mut d = 0usize;
+    loop {
+        for &s in &frontier {
+            out.visited += 1;
+            let st = &states[s];
+            out.touched_prefix_kind |= st.routine == root || !idx.is_dependency(&st.routine);
+            if st.seed {
+                let mut edges = Vec::with_capacity(d);
+                let mut cur = s;
+                while let Some(Some((p, e))) = parent.get(&cur) {
+                    edges.push(*e);
+                    cur = *p;
+                }
+                edges.reverse();
+                out.seed = Some((edges, s));
+                return out;
+            }
+        }
+        let unseen = |c: &StateIx, parent: &HashMap<StateIx, _>| {
+            !parent.contains_key(c) && !forbidden.contains(c)
+        };
+        if d == max_d {
+            out.beyond = frontier.iter().any(|&s| {
+                idx.pd.links[states[s].links.clone()]
+                    .iter()
+                    .any(|(c, _)| unseen(c, &parent))
+            });
+            return out;
+        }
+        let mut next = Vec::new();
+        for &s in &frontier {
+            for &(c, e) in &idx.pd.links[states[s].links.clone()] {
+                if unseen(&c, &parent) {
+                    parent.insert(c, Some((s, e)));
+                    next.push(c);
+                }
+            }
+        }
+        if next.is_empty() {
+            return out;
+        }
+        frontier = next;
+        d += 1;
+    }
+}
+
 /// Depth-0 proofs (#69 D3) for inherited fact `f` at `root`: for every NON-seed
 /// arena state of `root` whose producer fact is `fact_equivalent` to `f` and
 /// whose class is `f`'s, every link path from that state down to the seed whose
@@ -1189,15 +1278,20 @@ use proof_key::ProofKey;
 /// The cap counts distinct CANDIDATES (spec §14.3.1 item 4 (c)): a proof's key
 /// is the caller's, its projected path and end, and under rule B the path is
 /// cut at its first edge into dependency code (§14.3.5 item 5), so many proofs
-/// behind one boundary are one candidate. A partial path that has crossed the
-/// boundary at length `i` has its key fixed with projected length `i`; it is
-/// walked before any longer uncrossed path (its "level" is `i`), and dropped
-/// once its key is found. Once `cap` keys are found, the rest of that level is
-/// still enumerated: every candidate left out is longer than all of those, so
-/// the capped result is a prefix of the uncapped one in key order. Every
-/// distinct (edges, producer) proof found is returned (equal keys are the
-/// caller's twins). Partial paths are parent-linked nodes, so a push costs one
-/// node, never a copy of the path.
+/// behind one boundary are one candidate. A partial path that crosses the
+/// boundary at length `i` has its key fixed with projected length `i`, so all
+/// that is left to ask is whether a seed lies below it: one breadth-first
+/// search over states ([`seed_reach`]), answered at the crossing, before any
+/// longer uncrossed path is walked (its "level" is `i`). #369: this was a walk
+/// of every simple path below the crossing until one reached a seed, which is
+/// exponential in the dependency code's depth; on CDO it spent `MAX_STATES`
+/// before any proof, and 77 rows of two roots lost their witness. Once `cap`
+/// keys are found, the rest of that level is still enumerated: every candidate
+/// left out is longer than all of those, so the capped result is a prefix of
+/// the uncapped one in key order. Every distinct (edges, producer) proof found
+/// is returned (equal keys are the caller's twins; a crossed key gives one,
+/// through its nearest seed). Partial paths are parent-linked nodes, so a push
+/// costs one node, never a copy of the path.
 fn enumerate_proofs<'i>(
     root: &str,
     f: &Fact,
@@ -1205,14 +1299,12 @@ fn enumerate_proofs<'i>(
     cap: usize,
     hop_cache: &mut HopCache<'i>,
 ) -> ProofOutcome {
-    /// A partial path's last state, its parent node plus the edge between them
-    /// (`None` at the root state), and, once it has crossed into dependency
-    /// code, its candidate key's id and the level it crossed at (key id, level).
+    /// An UNCROSSED partial path's last state and its parent node plus the
+    /// edge between them (`None` at the root state).
     struct Node {
         state: StateIx,
         parent: Option<(usize, EdgeIx)>,
         len: usize,
-        crossed: Option<(usize, usize)>,
     }
     let key_of =
         |n: &[Node], mut cur: usize, boundary: Option<BoundaryEnd>, hc: &mut HopCache<'i>| {
@@ -1256,13 +1348,13 @@ fn enumerate_proofs<'i>(
             state: s,
             parent: None,
             len: 0,
-            crossed: None,
         })
         .collect();
     let mut queue: std::collections::VecDeque<usize> = (0..nodes.len()).collect();
-    // Crossed partial paths: their level is at most the current one, so they
-    // are walked first.
-    let mut crossed_q: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    // `seed_reach` with nothing forbidden, by (state, bound): valid for every
+    // prefix whose search touched no state a prefix can hold.
+    let mut reach_memo: HashMap<(StateIx, usize), SeedReach> = HashMap::new();
+    let no_states = std::collections::HashSet::new();
     let mut seen: std::collections::HashSet<(Vec<EdgeIx>, usize)> =
         std::collections::HashSet::new();
     // Each distinct key once, as a dense id (its index in `key_ids`): a pop
@@ -1283,20 +1375,11 @@ fn enumerate_proofs<'i>(
     let mut cut_len: Option<usize> = None;
     let mut popped = 0usize;
     let mut depth_exceeded = false;
-    loop {
-        let ni = if let Some(ni) = crossed_q.pop_front() {
-            if nodes[ni].crossed.is_some_and(|(k, _)| found[k]) {
-                continue;
-            }
-            ni
-        } else {
-            let Some(&ni) = queue.front() else { break };
-            if cut_len.is_some_and(|cut| nodes[ni].len > cut) {
-                break;
-            }
-            queue.pop_front();
-            ni
-        };
+    'walk: while let Some(&ni) = queue.front() {
+        if cut_len.is_some_and(|cut| nodes[ni].len > cut) {
+            break;
+        }
+        queue.pop_front();
         let len = nodes[ni].len;
         popped += 1;
         if popped > MAX_STATES {
@@ -1322,14 +1405,11 @@ fn enumerate_proofs<'i>(
             edges.reverse();
             if seen.insert((edges.clone(), st.producer_fact)) {
                 out.paths.push((edges, st.producer_fact));
-                let (key, level) = match nodes[ni].crossed {
-                    Some(kl) => kl,
-                    None => (intern(key_of(&nodes, ni, None, hop_cache), &mut found), len),
-                };
+                let key = intern(key_of(&nodes, ni, None, hop_cache), &mut found);
                 if !std::mem::replace(&mut found[key], true) {
                     found_count += 1;
                     if found_count >= cap {
-                        cut_len.get_or_insert(level);
+                        cut_len.get_or_insert(len);
                     }
                 }
             }
@@ -1352,33 +1432,77 @@ fn enumerate_proofs<'i>(
             if revisits {
                 continue;
             }
-            let crossed = match nodes[ni].crossed {
-                Some(kl) => Some(kl),
-                None if edge_to(edge).is_some_and(|to| idx.is_dependency(to)) => {
-                    let b = boundary_terminal(edge, idx).0;
-                    let key = intern(key_of(&nodes, ni, Some(b), hop_cache), &mut found);
-                    if found[key] {
-                        continue;
-                    }
-                    Some((key, len))
+            if edge_to(edge).is_some_and(|to| idx.is_dependency(to)) {
+                // The crossing fixes the key: is there a seed below it?
+                let b = boundary_terminal(edge, idx).0;
+                let key = intern(key_of(&nodes, ni, Some(b), hop_cache), &mut found);
+                if found[key] {
+                    continue;
                 }
-                None => None,
-            };
-            let is_crossed = crossed.is_some();
+                // The callee sits at length `len + 1`; a path is kept up to
+                // `MAX_DEPTH` links.
+                let Some(max_d) = MAX_DEPTH.checked_sub(len + 1) else {
+                    depth_exceeded = true;
+                    continue;
+                };
+                let mut reach = reach_memo
+                    .entry((callee, max_d))
+                    .or_insert_with(|| seed_reach(idx, root, callee, max_d, &no_states))
+                    .clone();
+                if reach.touched_prefix_kind {
+                    // The search may run through this prefix's own states,
+                    // which a proof never revisits: search again without them.
+                    let mut prefix = std::collections::HashSet::new();
+                    let mut cur = Some(ni);
+                    while let Some(c) = cur {
+                        prefix.insert(nodes[c].state);
+                        cur = nodes[c].parent.map(|(parent, _)| parent);
+                    }
+                    reach = seed_reach(idx, root, callee, max_d, &prefix);
+                }
+                popped += reach.visited;
+                if popped > MAX_STATES {
+                    out.diagnostics.push((
+                        "state-limit-exceeded".to_string(),
+                        Some(format!("maxExpandedStates={MAX_STATES}")),
+                    ));
+                    out.incomplete = true;
+                    break 'walk;
+                }
+                match reach.seed {
+                    Some((suffix, seed)) => {
+                        let mut edges = Vec::with_capacity(len + 1 + suffix.len());
+                        let mut cur = ni;
+                        while let Some((parent, pe)) = nodes[cur].parent {
+                            edges.push(pe);
+                            cur = parent;
+                        }
+                        edges.reverse();
+                        edges.push(e);
+                        edges.extend(suffix);
+                        let producer = idx.pd.states[seed].producer_fact;
+                        if seen.insert((edges.clone(), producer)) {
+                            out.paths.push((edges, producer));
+                        }
+                        found[key] = true;
+                        found_count += 1;
+                        if found_count >= cap {
+                            cut_len.get_or_insert(len);
+                        }
+                    }
+                    None => depth_exceeded |= reach.beyond,
+                }
+                continue;
+            }
             nodes.push(Node {
                 state: callee,
                 parent: Some((ni, e)),
                 len: len + 1,
-                crossed,
             });
-            if is_crossed {
-                crossed_q.push_back(nodes.len() - 1);
-            } else {
-                queue.push_back(nodes.len() - 1);
-            }
+            queue.push_back(nodes.len() - 1);
         }
     }
-    if cut_len.is_some() && !(queue.is_empty() && crossed_q.is_empty()) {
+    if cut_len.is_some() && !queue.is_empty() {
         out.truncated = true;
     }
     if depth_exceeded {
@@ -4461,11 +4585,25 @@ fn digest_one_root<'i>(
             let via_paths = acc.via.printed();
             // Occurrence-build (canonical key + factId). A group's terminal is
             // its boundary, so two groups of one fact never share an id.
+            // #369: a row with no terminal (no path kept) has no anchor id, so
+            // every such row of one type and class shared one key; it is keyed
+            // by its own first originating operation instead (below, with its
+            // table).
+            let no_terminal = acc.group.is_none()
+                && acc.evidence_operation_id.is_none()
+                && acc.evidence_callsite_id.is_none();
             let (terminal_evidence_kind, terminal_evidence_id) = match &acc.group {
                 Some((b, _)) => ("boundary", b.id.clone()),
                 None if acc.evidence_operation_id.is_some() => (
                     "operation",
                     acc.evidence_operation_id.clone().unwrap_or_default(),
+                ),
+                None if no_terminal && !acc.origin_operation_ids.is_empty() => (
+                    "operation",
+                    acc.origin_operation_ids
+                        .first()
+                        .cloned()
+                        .unwrap_or_default(),
                 ),
                 None => (
                     "callsite",
@@ -4520,7 +4658,9 @@ fn digest_one_root<'i>(
             // tables witnessed at one operation keep distinct ids. (The case
             // that showed it, a resource-less RecordRef carrier, is no witness
             // any more: `is_bfs_carrier`.) Write keys stay as they are.
-            if acc.effect_type == "DB_READ"
+            // #369: so does a row keyed by its originating operation (one
+            // operation can write several tables, a RecordRef's).
+            if (acc.effect_type == "DB_READ" || no_terminal)
                 && let Some((_, r)) = detail.iter().find(|(k, _)| k == "resourceId")
             {
                 key_effect_type = format!("{key_effect_type}|{r}");
@@ -9383,12 +9523,50 @@ codeunit 50102 "W10 Merge"
         let hashes = PROOF_KEY_HASHES.with(|n| n.get()) - before;
         assert_eq!(out.paths, vec![(vec![e_root, e_a, e_h1], 0)]);
         assert!(!out.truncated && !out.incomplete, "{:?}", out.diagnostics);
-        // R, P, DepA, DepW, H1, then the lattice; X1 is dropped unexpanded.
-        assert_eq!(out.popped, 5 + 1092);
+        // R and P, then one state search per crossing (#369): DepA and H1
+        // (the nearest seed; X1 is never visited), DepW and its 18 lattice
+        // states, each once — not its 1092 partial paths.
+        assert_eq!(out.popped, 2 + 2 + (1 + 18));
         // Two crossings (cs-P-DepA, cs-P-DepW), each key hashed once on insert;
         // the seed reuses its crossed id. Design fallback F3 allows loosening
         // this only to `2 * (crossings + seeds)`, never to a per-pop number.
         assert_eq!(hashes, 2, "{hashes} key hashes for {} pops", out.popped);
+    }
+
+    /// #369: an own row with no witness has no terminal id, so its fact id
+    /// is keyed by its first originating operation and its table. Hand-stated
+    /// precondition: three inherited modifies at `R`, first hop `cs1` into
+    /// `M`, with no carrier anywhere (no direct fact), so each witness is
+    /// empty; two share operation `opA` (a RecordRef writing two tables), the
+    /// third is `opB`. Before, all three rows had one key, `R||callsite||…`.
+    #[test]
+    fn no_path_rows_have_distinct_fact_ids() {
+        let mut snap = rb_snapshot(&["R", "M"], &[], &[(18, "Customer"), (36, "Sales Header")]);
+        *std::sync::Arc::make_mut(&mut snap.typed_edges) = vec![rb_call("R", "M", "cs1")];
+        snap.capability_facts = vec![
+            rb_fact("R", "modify", 18, Some("opA"), Some("cs1")),
+            rb_fact("R", "modify", 36, Some("opA"), Some("cs1")),
+            rb_fact("R", "modify", 37, Some("opB"), Some("cs1")),
+        ];
+        let effects = rb_effects(&snap);
+        assert_eq!(effects.len(), 3, "{effects:?}");
+        assert!(
+            effects.iter().all(|e| !e.boundary_group
+                && e.via_paths.is_empty()
+                && e.evidence.source_kind == "unavailable"),
+            "precondition: three no-path rows: {effects:?}"
+        );
+        let ids: BTreeSet<&str> = effects.iter().map(|e| e.fact_id.as_str()).collect();
+        assert_eq!(ids.len(), 3, "{effects:?}");
+        let keys: BTreeSet<&str> = effects.iter().map(|e| e.canonical_key.as_str()).collect();
+        assert_eq!(
+            keys,
+            BTreeSet::from([
+                "R#||operation|opA|DB_MODIFY|x/table/18",
+                "R#||operation|opA|DB_MODIFY|x/table/36",
+                "R#||operation|opB|DB_MODIFY|x/table/37",
+            ])
+        );
     }
 }
 
@@ -9396,3 +9574,8 @@ codeunit 50102 "W10 Merge"
 #[cfg(test)]
 #[path = "wave2_index_tests.rs"]
 mod wave2_index_tests;
+
+// #369: own rows with no witness path, and their fact ids.
+#[cfg(test)]
+#[path = "no_path_tests.rs"]
+mod no_path_tests;

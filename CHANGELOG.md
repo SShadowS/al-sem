@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (#369: dependency writes with no witness path, and colliding `factId`s)
+
+- **A write deep in dependency code through a `var` record parameter now gets its witness.** Such
+  a write takes its temp class from the caller, so only the proof walk (`enumerate_proofs`) can
+  witness it. Past the crossing into dependency code the walk listed every simple path until one
+  reached the write, which grows exponentially with depth; on the CDO baseline every one of the 78
+  facts behind the 77 no-path rows of `CDO Issue Document::IssueReminder` (57) and `CDO E-Mail
+  Handler::RunReportID` (20) spent the 25 000-state limit first (the writes sat 13–35 calls deep).
+  The crossing already fixes the candidate's key, so the walk now asks only whether the write is
+  reachable below it: one breadth-first search over states, each visited once (`seed_reach`). The
+  rows become members of the group of their crossing. None of the issue's hypotheses H1–H4 held.
+- **An unresolved write is never witnessed by a typed one.** The witness's carrier test let a
+  typed insert carry an insert whose table is not known (`fact_equivalent` compares tables only
+  when both name one), so an unresolved RecordRef insert in Continia Delivery Network was shown at
+  a workspace `CDO Queue Entry` / `CDO E-Mail Log` insert, with that row's path and `factId`. A
+  carrier now names a table exactly when the fact does (as the proof walk already required); the
+  write is counted in its crossing's group as unresolved.
+- **A digest row with no terminal id is keyed by its first originating operation and its
+  resource** (`build_canonical_key`'s terminal id, and the resource beside the effect type as
+  `DB_READ` already had), so no-path rows no longer share one `factId` per effect type. A row
+  with no originating operation either (an `EVENT_PUBLISH`, which has no operation id) is keyed by
+  its resource alone, so two such publishes of different events on one path cannot share an id.
+  Goldens moved for this alone, each an `EVENT_PUBLISH` row's `factId` (and `canonicalKey`):
+  `tests/cli-b-goldens/digest/ws-d8-commit-in-tx{.json,.v3.json,.diff.json}`,
+  `tests/cli-b-goldens/prove/ws-d8-commit-in-tx.publishes-event-onafterpostsalesdoc.json`,
+  `tests/cli-output-goldens/digest.issuedoc{,.detail}.json`,
+  `tests/r4f-goldens/ws-txn-d47-event-pos.digest.golden.json`. No consumer keyed on the old collision: `ordering_facts` and the ordering engine key by
+  `factId` within one entry (a collision merged two rows' data there), and `alsem diff` keys its
+  capabilities `op|resourceKind|resourceId`.
+- CDO baseline `bc3ccb18`, before → after: IssueReminder 275 rows (222 distinct `factId`s, 57
+  no-path rows over 5 ids) → 220 rows, all distinct, 0 no-path; RunReportID 227 (210, 20 over 4) →
+  206, all distinct, 0 no-path. Pinned by `cdo_i369_no_path_rows_and_fact_ids`.
+- **One prove verdict moves:** IssueReminder `writes-table:Data Exch.` goes from `yes` to
+  `unknown`. The `yes` rested only on a no-path row. Its write is now in five groups (one
+  DB_DELETE, two DB_INSERT, two DB_MODIFY) on two crossings, both `literal-dead`, checked by hand
+  in the source: `Incoming Document Attachment.Insert(true)` at
+  `CDOElectronicDocumentMgt.Codeunit.al:182` (into `Table Incoming Document Attachment::OnInsert`)
+  runs only after `if not (RecordFilter.Number in [Database::"Sales Invoice Header",
+  Database::"Sales Cr.Memo Header"]) then exit;` (line 170), and `Codeunit.Run(Codeunit::"Sales-Calc.
+  Discount", SalesLine)` at `CDOFile.Table.al:125` only after `if RecRef.Number <> Database::"Sales
+  Header" then exit;` (line 115). IssueReminder passes an `Issued Reminder Header` (table 297), and
+  its kept paths enter through `RunReportID`'s `OutputAction::CreateElectronicDoc` and `::SaveAsPDF`
+  branches while `DocHandle` passes `OutputAction::Handle`. The other 72 prove questions checked on
+  both roots keep their verdict.
+
 ### Changed (MCP output wave 2, W2-2 part 4: `query effects` summary first; first hops)
 
 Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §4.5, §4.6.
