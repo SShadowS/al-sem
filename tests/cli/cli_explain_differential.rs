@@ -623,7 +623,7 @@ fn every_card_lists_are_present_and_cross_call_rules_are_computed() {
     all.extend(CALLS_ROUTINES.iter().map(|(_, r)| calls_case(r)));
     for c in all {
         let doc = json_of(&c);
-        assert_eq!(doc["schema"], "al-sem.explain/2", "{}", c.slug);
+        assert_eq!(doc["schema"], "al-sem.explain/2.1", "{}", c.slug);
         assert_eq!(doc["lineBase"], 1, "{}: lines are 1-based", c.slug);
         assert!(doc["diagnostics"].is_array(), "{}: diagnostics", c.slug);
         let cards = doc["cards"].as_array().expect("cards");

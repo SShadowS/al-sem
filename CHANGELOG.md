@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (MCP output wave 2, W2-1b: the literal pass memoized per revision; schema bumps)
+
+Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.1, §11.10.
+
+- **The context server memoizes each root's effects AFTER the literal pass.** The pass now runs
+  where a root's entry is made (`digest_cli::passed_root_entries`, one `LiteralReach` per batch of
+  roots), and the revision's `Witness` artifact keeps that passed entry, so a second ask on the
+  same root and revision (digest, explain or prove) pays nothing for the pass. The CLI builds it
+  per read as before. Answers are unchanged: the pass was already run by every effects reader on
+  its own copy, and it is idempotent.
+- **Digest JSON 2.1.0 → 2.2.0** for W2-1's additive `literalUnreachable` and W2-0c's
+  `resourcesOriginalCount`. **Explain JSON `al-sem.explain/2` → `al-sem.explain/2.1`** for its
+  additive `literalUnreachable` (`/3` stays the redesign's). Goldens: the version line only.
+
 ### Changed (MCP output wave 2, W2-1: one classifier and one literal pass for every reader)
 
 Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.1, §3.2,

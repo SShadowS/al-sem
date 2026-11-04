@@ -1265,11 +1265,36 @@ pub(crate) fn digest_effects_each(
         .collect::<BTreeSet<String>>()
         .into_iter()
         .collect();
-    let entries = root_entries(tree, model, &all, include_reads, boundary)
+    let entries = passed_root_entries(tree, model, &all, include_reads, boundary)
         .into_iter()
         .flatten()
         .collect();
     finish_effects(tree, model, readers, entries, tests, gaps_in_cone)
+}
+
+/// [`root_entries`] after the literal pass (W2-1: every effects reader reads
+/// them after it; W2-1b: done HERE, once per batch of roots, so a resident
+/// revision memoizes the passed entries and a warm ask pays nothing for the
+/// pass). The pass is a function of the root over any tree holding it, as
+/// the entry is: it reads the tree's edges and direct facts, the
+/// whole-program sections every tree carries. One `LiteralReach` per call.
+pub(crate) fn passed_root_entries(
+    tree: &CapabilitySnapshot,
+    model: &Model,
+    roots: &[String],
+    include_reads: bool,
+    boundary: BoundaryMode,
+) -> Vec<Option<DigestEntryResult>> {
+    let mut entries = root_entries(tree, model, roots, include_reads, boundary);
+    let present: Vec<usize> = (0..entries.len())
+        .filter(|&i| entries[i].is_some())
+        .collect();
+    let mut passed: Vec<DigestEntryResult> = entries.iter_mut().filter_map(Option::take).collect();
+    literal_reach_pass(tree, model, &mut passed);
+    for (i, e) in present.into_iter().zip(passed) {
+        entries[i] = Some(e);
+    }
+    entries
 }
 
 /// The pure half of [`digest_effects_each`]: each root's entry off `tree`, in
@@ -1342,7 +1367,7 @@ pub(crate) fn finish_effects(
     tree: &CapabilitySnapshot,
     model: &Model,
     readers: &[&[String]],
-    mut all_entries: Vec<DigestEntryResult>,
+    all_entries: Vec<DigestEntryResult>,
     tests: bool,
     gaps_in_cone: bool,
 ) -> Vec<DigestEffects> {
@@ -1391,8 +1416,8 @@ pub(crate) fn finish_effects(
     };
     // W2-1 (design §3.1): every reader of the effects (digest, explain,
     // prove) reads them after the literal pass, so "does R write T" has one
-    // answer. It runs on this read's own copies, never on memoized entries.
-    literal_reach_pass(tree, model, &mut all_entries);
+    // answer. W2-1b: the entries arrive passed ([`passed_root_entries`]), so a
+    // resident revision memoizes them passed.
     let unresolved_span = crate::engine::perf_trace::span("digest", "digest.unresolved_cones");
     let read: Vec<(Vec<DigestEntryResult>, BTreeMap<String, UnresolvedCone>)> = readers
         .iter()
@@ -2447,7 +2472,11 @@ pub fn project_digest_document(
     // counts only DB writes, and a group of a type with no resources (COMMIT,
     // UI, ERROR, HTTP, FILE, BACKGROUND, ...) states no `resourceCount` /
     // `resources` (they were always "0" / "").
-    env.insert("schemaVersion".into(), "2.1.0".into());
+    // 2.2.0 (MCP output wave 2, W2-1, additive): a row the root cannot reach
+    // under literal arguments carries `literalUnreachable: true`; a group
+    // whose refined list is shorter than its raw one counts the refined list
+    // and keeps `detail.resourcesOriginalCount`.
+    env.insert("schemaVersion".into(), "2.2.0".into());
 
     // The block goes in after the null drop, so its `ratio: null` survives; the
     // keep-nulls sort then orders it (and the payload key it lands in).

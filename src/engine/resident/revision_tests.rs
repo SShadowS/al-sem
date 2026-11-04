@@ -856,22 +856,17 @@ fn every_order_of_the_heavy_commands_shares_one_witness() {
     }
 }
 
-/// The clone rule (plan 2026-11-03 W, §6 "aliasing"): the literal pass
-/// prunes `DocBoth`'s dead witness path off each read's OWN copy of the
-/// entry, never the memoized one; a digest after a prove on the same
-/// revision answers as a cold digest does.
-///
-/// Since MCP output wave 2 W2-1 every effects reader (digest, explain,
-/// prove) runs the pass, and the pass is idempotent, so a reader that got
-/// the already-pruned memoized entry would print the same bytes: the 2026-11-03
-/// discrimination (memoizing the entry AFTER prove's pass failed `digest
-/// after prove`) no longer has an observable effect through these outputs.
-/// The test now pins that the digest is pruned too and that the two answers
-/// equal their cold runs in this order. The literal break "hand the read the
-/// stored entry instead of a clone" still does not compile: the value is
-/// behind an `Arc`, so a read can only clone it.
+/// A digest after a prove on the same revision answers as a cold digest
+/// does. Until W2-1 only prove ran the literal pass, so the revision kept the
+/// UNPRUNED entry and each read pruned its own clone (plan 2026-11-03 W, §6
+/// "aliasing"). Since W2-1 every effects reader runs the pass, and since
+/// W2-1b the revision memoizes the entry AFTER it
+/// (`digest_cli::passed_root_entries`), once per root, so a warm ask pays
+/// nothing for it. The test pins that the digest is pruned as prove is (the
+/// dead `RunReportRec(false, …)` path is gone) and that both answers equal
+/// their cold runs in this order, with one witness fill.
 #[test]
-fn a_digest_after_a_prove_reads_the_unpruned_witness() {
+fn a_digest_after_a_prove_answers_as_a_cold_digest() {
     let f = witness_ws("DocBoth");
     let digest = cold(Cmd::Digest, &f);
     let text = String::from_utf8_lossy(match &digest.actions[..] {

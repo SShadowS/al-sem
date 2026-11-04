@@ -226,6 +226,6 @@
   "diagnostics": [],
   "lineBase": 1,
   "mode": "routine",
-  "schema": "al-sem.explain/2",
+  "schema": "al-sem.explain/2.1",
   "selector": "ForwardPost"
 }

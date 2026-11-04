@@ -1807,6 +1807,43 @@ outputs, because every reader runs the idempotent pass on its own copy; the clon
 - Digest JSON gained `literalUnreachable` (and W2-0c's `resourcesOriginalCount`) without a schema
   bump: both appear only on refined rows; W2-2's 3.0.0 formalizes `status`.
 
+### 11.10 W2-1b as built (the pass per revision; schema bumps)
+
+**What was asked:** keep `LiteralReach` and the suffix cache per revision on the resident
+engine, so a warm second ask pays ~0 for the pass. **What was built:** the passed entry is
+memoized instead. `LiteralReach<'a>` borrows the tree and the model, so a store artifact holding
+it would hold a self-referential borrow (or require turning every `&'a str` of the search into
+owned data). The pass's output, though, is a function of the root over any tree holding it, as
+the entry is (it reads the tree's edges and direct facts, the whole-program sections), and every
+reader now runs it. So the pass moved to where a root's entry is made
+(`digest_cli::passed_root_entries`, one `LiteralReach` and one suffix cache per batch of roots),
+and the existing per-revision, per-root `Witness` artifact keeps the PASSED entry: no new artifact
+kind, the same pinning and eviction, dropped with the revision (every change type makes a new
+revision). The CLI builds it per read as before. What this does not give: a FIRST ask on another
+root of the same revision pays its own `LiteralReach::new` (~0.3 s) and suffix trees again; the
+owned-data refactor would remove that and is left for when it is measured to matter.
+
+**Equal answers:** the resident and context-server session tests (`engine::resident::*`,
+`program::session::*`, both `default_mode` and `low_mem`) pass unchanged; the clone-rule test is
+renamed `a_digest_after_a_prove_answers_as_a_cold_digest` and pins the pruned digest.
+
+**Measured on CDO** (release-fast; one long-lived `alsem mcp` session per binary over stdio,
+asks in order; machine under outside load, so first asks vary):
+
+| Ask | W2-1 | W2-1b |
+|---|---|---|
+| digest RR, 1st (cold engine) | 25.8 s / 30.5 s | 26.0 s / 76.3 s (load) |
+| digest RR, 2nd (same revision) | 3.34 s / 4.02 s | 0.16 s / 0.46 s |
+| explain IR, 1st | 4.74 s / 10.2 s | 4.74 s / 7.96 s |
+| explain IR, 2nd | 0.70 s / 0.91 s | 0.25 s / 0.23 s |
+| engine child peak RSS (VmHWM) | 6,150,516 KB | 6,168,452 KB |
+
+The passed entries cost ~+18 MB of engine RSS (within the 8 GiB cross-app budget); a per-root
+entry was already kept, now with its pruned paths and statuses.
+
+**Schemas:** digest JSON 2.1.0 → 2.2.0 and explain JSON `al-sem.explain/2` → `/2.1` for the
+additive fields (`/3` stays the redesign's); goldens moved by the version line only.
+
 Not covered: the dual cap where the prefix (root) tree itself caps; `live_tree` returns `None`
 then and no group path is computed, exactly as before W2-0b (no fixture reaches 400,000 states).
 

@@ -9,7 +9,7 @@
   ],
   "lineBase": 1,
   "mode": "field",
-  "schema": "al-sem.explain/2",
+  "schema": "al-sem.explain/2.1",
   "selector": {
     "field": "NoSuchField",
     "table": "Explain Order"
