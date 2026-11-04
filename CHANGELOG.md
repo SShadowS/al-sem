@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (MCP output plan 1b: the digest summary)
+
+- **`alsem_digest`'s summary no longer embeds every unresolved call site, says what decides
+  whether to open the file, and is bounded** (plan item 1b; review D1, D2, E3). The server built
+  it by parsing the stdout and copied each root's whole `unresolved` array into it: 270,781
+  characters for `IssueReminder`, which Claude Code moved out of the conversation, and it was
+  added after the frame bound. Now the renderer builds it from its own data
+  (`digest_cli::digest_summary`, carried as `WriteAction::Summary` → the wire's
+  `Outcome::Cli.summary` → the envelope) before the frame is bounded: per root the effects by
+  type, the physical tables written (workspace and dependency, a boundary group's whole set, up
+  to ten names each), temporary tables, commits, the boundaries entered, coverage and its
+  reasons, and the unresolved call sites as `{total, polymorphic, dynamicTarget, inWorkspace,
+  topCallees[3]}`. Capped at 8 KiB (`SUMMARY_CAP_BYTES`): past it the names go, then routines
+  from the end; never a spill. The server keeps a summary only beside a file (an inline answer
+  holds the answer itself), and replaces one over the cap by its size. The server no longer
+  parses any stdout for it.
+
 ### Changed (MCP output plan 1a: every line 1-based)
 
 - **explain, prove, digest, query, fingerprint and the snapshots print and serialize 1-based

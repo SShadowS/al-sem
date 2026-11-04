@@ -47,8 +47,10 @@ pub(crate) const ROUTINES: &[(&str, &str, &str, &str, &str)] = &[
     ),
 ];
 
-/// One tool call's answer: its envelope and the CLI stdout it carries.
+/// One tool call's answer: the serialized `tools/call` result (as the client
+/// receives it), its envelope and the CLI stdout it carries.
 pub(crate) struct Answer {
+    pub result_text: String,
     pub envelope: Value,
     pub stdout: String,
 }
@@ -143,6 +145,7 @@ pub(crate) fn cdo_answers() -> Option<&'static CdoAnswers> {
                     answers.insert(
                         format!("{label} {call}"),
                         Answer {
+                            result_text: result.to_string(),
                             envelope: env,
                             stdout: String::from_utf8(stdout).expect("UTF-8 stdout"),
                         },
@@ -225,6 +228,45 @@ fn cdo_documents_and_envelopes_state_line_base_1() {
             };
             if base != 1 {
                 failures.push(format!("{key}: document lineBase {base}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Item T, size budgets for the digest summary on CDO (catches D1, D3, E3; plan
+/// 1b): each routine's digest answer (JSON and human) carries the renderer's
+/// summary, at most 8 KiB, listing its one routine in full (not degraded to
+/// counts), and the whole serialized `tools/call` result stays under 40,000
+/// characters, however large the digest file is (5.6 MB for `IssueReminder`).
+///
+/// Discrimination: re-embedding the unresolved call sites in the entry summary
+/// (the D1 defect) makes `IssueReminder`'s summary exceed the cap, which drops
+/// its routine (`routinesListed` 0): see `digest_cli`'s
+/// `digest_summary_counts_and_names_without_the_unresolved_items` for the unit
+/// proof of the same break.
+#[test]
+fn cdo_digest_summary_is_small_and_lists_the_routine() {
+    let Some(a) = cdo_answers() else { return };
+    let mut failures = Vec::new();
+    for (label, ..) in ROUTINES {
+        for format in ["json", "human"] {
+            let key = format!("{label} digest {format}");
+            let ans = &a.answers[&key];
+            let s = &ans.envelope["summary"];
+            let bytes = s.to_string().len();
+            if s.is_null() || bytes > al_sem::engine::batch::output::SUMMARY_CAP_BYTES {
+                failures.push(format!("{key}: summary of {bytes} bytes: {s}"));
+            }
+            if s["routinesListed"] != 1 || s["rootsResolved"] != 1 || s.get("countsOnly").is_some()
+            {
+                failures.push(format!("{key}: the one routine is not listed in full: {s}"));
+            }
+            if ans.result_text.len() > 40_000 {
+                failures.push(format!(
+                    "{key}: tools/call result of {} characters",
+                    ans.result_text.len()
+                ));
             }
         }
     }

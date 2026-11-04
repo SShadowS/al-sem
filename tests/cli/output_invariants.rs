@@ -478,3 +478,62 @@ fn every_document_states_line_base_1() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Item T, the digest summary through the MCP server (plan 1b: D1, D2, E3): the
+/// renderer's summary rides with the file, at most 8 KiB, and says what decides
+/// whether to open it: per root the effects by type, the physical tables
+/// written (the dependency group's whole set), temporary tables, commits,
+/// boundaries entered and the unresolved call sites as counts. The serialized
+/// `tools/call` result stays under 40,000 characters.
+///
+/// Discrimination: the summary's content is pinned by `digest_cli`'s unit tests
+/// (`digest_summary_*`, each with its break); this test pins the plumbing:
+/// dropping the `WriteAction::Summary` in `DigestJob::serialize` (back to
+/// `JobOutput::text`) fails it at "a summary" (2026-11-04); restored, it passes.
+#[test]
+fn digest_summary_through_mcp_on_the_fixture() {
+    let mut s = crate::mcp_server::Server::ready(&workspace(), None);
+    let result = s.call(
+        1,
+        "alsem_digest",
+        serde_json::json!({"routines": [ISSUE_DOC], "deterministic": true}),
+    );
+    let text = result.to_string();
+    let env = crate::mcp_server::envelope(&result);
+    assert!(env["stdoutFile"].is_object(), "a file: {env}");
+    let summary = &env["summary"];
+    assert!(summary.is_object(), "a summary: {env}");
+    assert!(
+        summary.to_string().len() <= al_sem::engine::batch::output::SUMMARY_CAP_BYTES,
+        "{summary}"
+    );
+    assert!(text.len() <= 40_000, "{} characters", text.len());
+    let r = &summary["routines"][0];
+    assert_eq!(
+        r["routine"], "Codeunit Out Issue Document::IssueDoc",
+        "{summary}"
+    );
+    let t = &r["physicalTablesWritten"];
+    assert_eq!(
+        t["workspaceNames"],
+        serde_json::json!(["Out Doc", "Out Log"]),
+        "{summary}"
+    );
+    // Base Doc Line, twelve ledgers, Base Register, Base Price: the group's
+    // whole set, not the ten its `detail` names.
+    assert_eq!(t["dependency"], 15, "{summary}");
+    assert_eq!(r["temporaryTablesWritten"], 2, "{summary}");
+    assert_eq!(r["commits"], 1, "{summary}");
+    assert!(
+        r["boundariesEntered"]["count"].as_u64() >= Some(1),
+        "{summary}"
+    );
+    let u = &r["unresolved"];
+    assert_eq!(
+        (u["total"].as_u64(), u["inWorkspace"].as_u64()),
+        (Some(3), Some(2)),
+        "{summary}"
+    );
+    assert!(!summary.to_string().contains("callsiteAnchor"), "{summary}");
+    assert!(s.finish().success());
+}

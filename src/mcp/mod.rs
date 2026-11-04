@@ -36,9 +36,12 @@
 //! pointer), the inline stdout is the second text block exactly, and with a
 //! negotiated `2025-06-18` the envelope is also `structuredContent` (with
 //! `output`, the CLI's JSON parsed, when the stdout is inline JSON).
-//! Explain defaults to the human card; digest always writes a file and
-//! answers a summary; a stdout over `maxInlineBytes` (default 64 KiB) goes
-//! to a file. Every file goes into the server's private output folder
+//! Explain defaults to the human card; digest always writes a file; a stdout
+//! over `maxInlineBytes` (default 64 KiB) goes to a file. A file answer
+//! carries the renderer's `summary` when the command makes one (digest: per
+//! root the effects by type, physical tables written, commits, boundaries and
+//! unresolved counts), at most 8 KiB and inside the frame bound (MCP output
+//! plan 1b). Every file goes into the server's private output folder
 //! ([`output`]).
 //!
 //! **Engine children (stage 3).** Each child keeps its revision between

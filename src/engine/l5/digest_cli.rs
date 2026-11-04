@@ -2470,6 +2470,197 @@ pub struct DigestRunResult {
     pub json_text: String,
     pub human_text: String,
     pub exit_code: u8, // 0 = OK, 2 = zero roots
+    /// What the document says, in at most [`SUMMARY_CAP_BYTES`] (MCP output plan
+    /// 1b): [`digest_summary`]. The MCP server sends it beside the file the
+    /// document goes to.
+    pub summary: serde_json::Value,
+}
+
+use crate::engine::batch::output::SUMMARY_CAP_BYTES;
+
+/// How many routines [`digest_summary`] lists, and how many names per list.
+const SUMMARY_ROUTINES: usize = 20;
+const SUMMARY_NAMES: usize = 10;
+
+/// The tables a digest effect writes, `(resource id, display)`: a direct
+/// effect's resource, a dependency boundary group's whole set.
+fn written_tables(e: &DigestEffectFull) -> Vec<(&str, &str)> {
+    if !e.group_resources.is_empty() {
+        return e
+            .group_resources
+            .iter()
+            .map(|(id, d)| (id.as_str(), d.as_str()))
+            .collect();
+    }
+    let get = |k: &str| {
+        e.detail
+            .iter()
+            .find(|(key, _)| key == k)
+            .map(|(_, v)| v.as_str())
+    };
+    match get("resourceId") {
+        Some(id) => vec![(id, get("resourceDisplay").unwrap_or(id))],
+        None => vec![],
+    }
+}
+
+/// One root's summary: effects by type, physical tables written (workspace
+/// and dependency), temporary tables, commits, boundaries entered, coverage
+/// and the unresolved call sites as counts. `counts_only` drops every name.
+fn digest_entry_summary(
+    e: &DigestEntryFull,
+    primary: Option<&str>,
+    counts_only: bool,
+) -> serde_json::Value {
+    use serde_json::json;
+    let mut by_type: BTreeMap<&str, u64> = BTreeMap::new();
+    let (mut ws_tables, mut dep_tables, mut temp_tables) =
+        (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
+    let mut unnamed_writes = 0u64;
+    let mut boundaries: BTreeMap<&str, u64> = BTreeMap::new();
+    for f in &e.effects {
+        *by_type.entry(f.effect_type.as_str()).or_default() += 1;
+        let detail = |k: &str| {
+            f.detail
+                .iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.as_str())
+        };
+        if let Some(b) = detail("boundary") {
+            *boundaries.entry(b).or_default() += 1;
+        }
+        if !matches!(
+            f.effect_type.as_str(),
+            "DB_INSERT" | "DB_MODIFY" | "DB_DELETE"
+        ) {
+            continue;
+        }
+        let tables = written_tables(f);
+        if tables.is_empty() {
+            unnamed_writes += 1;
+        }
+        let temporary = detail("tempState") == Some("known(true)");
+        for (id, display) in tables {
+            if temporary {
+                temp_tables.insert(display);
+            } else if primary.is_some_and(|p| id.split('/').next() == Some(p)) {
+                ws_tables.insert(display);
+            } else {
+                dep_tables.insert(display);
+            }
+        }
+    }
+    let mut callees: BTreeMap<&str, u64> = BTreeMap::new();
+    let (mut polymorphic, mut dynamic, mut in_ws) = (0u64, 0u64, 0u64);
+    for u in &e.unresolved {
+        *callees.entry(u.callee_display.as_str()).or_default() += 1;
+        match u.status.as_str() {
+            "polymorphic" => polymorphic += 1,
+            "dynamic-target" => dynamic += 1,
+            _ => {}
+        }
+        if u.callsite_file
+            .as_deref()
+            .is_some_and(|f| f.starts_with("ws:"))
+        {
+            in_ws += 1;
+        }
+    }
+    let mut top: Vec<(&str, u64)> = callees.into_iter().collect();
+    top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    fn names<'a>(s: &BTreeSet<&'a str>) -> Vec<&'a str> {
+        s.iter().take(SUMMARY_NAMES).copied().collect()
+    }
+    let mut tables = json!({
+        "count": ws_tables.len() + dep_tables.len(),
+        "workspace": ws_tables.len(),
+        "dependency": dep_tables.len(),
+    });
+    let mut boundary = json!({"count": boundaries.len()});
+    let mut unresolved = json!({
+        "total": e.unresolved.len(),
+        "polymorphic": polymorphic,
+        "dynamicTarget": dynamic,
+        "inWorkspace": in_ws,
+    });
+    if !counts_only {
+        tables["workspaceNames"] = json!(names(&ws_tables));
+        tables["dependencyNames"] = json!(names(&dep_tables));
+        let mut b: Vec<(&str, u64)> = boundaries.into_iter().collect();
+        b.sort_by(|x, y| y.1.cmp(&x.1).then(x.0.cmp(y.0)));
+        boundary["names"] = json!(b.iter().take(5).map(|(n, _)| *n).collect::<Vec<_>>());
+        unresolved["topCallees"] = json!(
+            top.iter()
+                .take(3)
+                .map(|(c, n)| json!({"callee": c, "count": n}))
+                .collect::<Vec<_>>()
+        );
+    }
+    let mut v = json!({
+        "routine": owner_qualified(&e.object_display, &e.routine_display),
+        "coverage": e.coverage_status,
+        "coverageReasons": e.coverage_reasons,
+        "effects": e.effects.len(),
+        "effectsByType": by_type,
+        "physicalTablesWritten": tables,
+        "temporaryTablesWritten": temp_tables.len(),
+        "commits": by_type.get("COMMIT").copied().unwrap_or(0),
+        "boundariesEntered": boundary,
+        "unresolved": unresolved,
+    });
+    if unnamed_writes > 0 {
+        v["writesWithoutTable"] = json!(unnamed_writes);
+    }
+    v
+}
+
+/// The digest's summary (MCP output plan 1b, D1/D2): the document's totals and,
+/// per root (the first [`SUMMARY_ROUTINES`]), what decides whether to open the
+/// file. Never the unresolved call sites themselves: their counts. Kept under
+/// [`SUMMARY_CAP_BYTES`]: past it every name is dropped (counts only), then
+/// routines are dropped from the end; never a spill.
+pub fn digest_summary(
+    entries: &[DigestEntryFull],
+    roots_requested: usize,
+    changed_roots_diagnostics: usize,
+    primary: Option<&str>,
+) -> serde_json::Value {
+    use serde_json::json;
+    let total_unresolved: usize = entries.iter().map(|e| e.unresolved.len()).sum();
+    let build = |counts_only: bool, routines: usize| {
+        let listed: Vec<serde_json::Value> = entries
+            .iter()
+            .take(routines)
+            .map(|e| digest_entry_summary(e, primary, counts_only))
+            .collect();
+        let mut v = json!({
+            "kind": "digest",
+            "rootsRequested": roots_requested,
+            "rootsResolved": entries.len(),
+            "totalEffects": entries.iter().map(|e| e.effects.len()).sum::<usize>(),
+            "totalUnresolved": total_unresolved,
+            "changedRootsDiagnostics": changed_roots_diagnostics,
+            "routinesListed": listed.len(),
+            "routines": listed,
+        });
+        if counts_only {
+            v["countsOnly"] = json!(true);
+        }
+        v
+    };
+    let fits = |v: &serde_json::Value| v.to_string().len() <= SUMMARY_CAP_BYTES;
+    let full = build(false, SUMMARY_ROUTINES);
+    if fits(&full) {
+        return full;
+    }
+    let mut routines = SUMMARY_ROUTINES.min(entries.len());
+    loop {
+        let v = build(true, routines);
+        if fits(&v) || routines == 0 {
+            return v;
+        }
+        routines -= 1;
+    }
 }
 
 /// Run the full digest pipeline for a workspace.
@@ -2666,7 +2857,7 @@ impl Job for DigestJob<'_> {
             Err(f) => f,
             // A DigestPipelineError → the message verbatim (it already starts
             // with "digest:"), exit 1, mirroring cli/digest.ts's catch.
-            Ok(r) => JobOutput::text(
+            Ok(r) => JobOutput::text_with_summary(
                 self.out,
                 r.map(|r| {
                     let text = if self.human {
@@ -2674,7 +2865,7 @@ impl Job for DigestJob<'_> {
                     } else {
                         r.json_text
                     };
-                    (text, r.exit_code)
+                    (text, r.exit_code, r.summary)
                 }),
             ),
         }
@@ -2706,6 +2897,7 @@ fn digest_view(cx: &mut ViewCx<'_>, req: &DigestRequest<'_>) -> DigestRunResult 
         DigestEffects::default()
     };
     let resolved = cx.view().model();
+    let primary_guid = primary_guid_of(resolved).map(str::to_string);
     let workspace_fp =
         crate::engine::l5::snapshot_full::workspace_fingerprint_of(cx.inputs(), alsem_ver);
 
@@ -2780,11 +2972,19 @@ fn digest_view(cx: &mut ViewCx<'_>, req: &DigestRequest<'_>) -> DigestRunResult 
         human_text.push_str(&t.human_line());
         human_text.push('\n');
     }
+    // rootsRequested as `payload.summary` counts it (roots + query diagnostics).
+    let summary = digest_summary(
+        &entries,
+        changed_roots.roots.len() + query_diagnostics.len(),
+        changed_roots.diagnostics.len(),
+        primary_guid.as_deref(),
+    );
 
     DigestRunResult {
         json_text,
         human_text,
         exit_code,
+        summary,
     }
 }
 
@@ -3075,6 +3275,210 @@ mod tests {
             entry_diagnostics: diagnostics,
             declaration_only: false,
         }
+    }
+
+    /// A digest effect of `ty` with `detail` and (for a boundary group) its
+    /// whole resource set.
+    fn effect(ty: &str, detail: &[(&str, &str)], group: &[(&str, &str)]) -> DigestEffectFull {
+        DigestEffectFull {
+            effect_type: ty.to_string(),
+            detail: detail
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            provenance: "transitive",
+            evidence: FullAnchor {
+                source_kind: "unavailable",
+                file: None,
+                line: None,
+                column: None,
+                excerpt: None,
+            },
+            via_paths: vec![],
+            via_paths_truncated: false,
+            conditionality: crate::engine::l5::conditionality::UNKNOWN,
+            transaction_context: "unknown",
+            guarantees: vec![],
+            fact_id: "f".to_string(),
+            scoped_guarantees: vec![],
+            group_resources: group
+                .iter()
+                .map(|(i, d)| (i.to_string(), d.to_string()))
+                .collect(),
+            group_resource_paths: vec![],
+            origin_operation_ids: vec![],
+            effect_is_kt: false,
+            literal_unreachable: false,
+        }
+    }
+
+    fn unresolved(callee: &str, status: &str, file: &str) -> UnresolvedConeItem {
+        UnresolvedConeItem {
+            callsite_id: format!("{file}/{callee}"),
+            callsite_file: Some(file.to_string()),
+            callsite_line: Some(3),
+            callsite_column: Some(8),
+            callee_display: callee.to_string(),
+            status: status.to_string(),
+            candidates: Some(vec!["a-very-long-candidate-stable-id".to_string(); 10]),
+            open_world: None,
+            closed_world_followable: false,
+            publisher_scoped: false,
+            owning_routine: "r".to_string(),
+            owning_routine_display: "R".to_string(),
+        }
+    }
+
+    /// MCP output plan 1b (D1, D2): the summary counts what decides whether to
+    /// open the file (effects by type, physical tables written split workspace
+    /// and dependency with a boundary group's WHOLE set, temporary tables,
+    /// commits, boundaries) and gives the unresolved call sites as counts and
+    /// top callees, never the items. Hand-stated: a workspace insert, a
+    /// temporary delete, a 12-table dependency group, a commit group, three
+    /// unresolved sites (two in the workspace).
+    ///
+    /// Discrimination (2026-11-04): embedding `e.unresolved`'s items in the
+    /// entry summary fails at "no call-site item"; ignoring `group_resources`
+    /// fails at the dependency count (0, not 12); restored, it passes.
+    #[test]
+    fn digest_summary_counts_and_names_without_the_unresolved_items() {
+        let dep: Vec<(String, String)> = (1..=12)
+            .map(|i| (format!("dep/table/{i}"), format!("Base Ledger {i:02}")))
+            .collect();
+        let dep_refs: Vec<(&str, &str)> =
+            dep.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let mut e = entry_with(vec![]);
+        e.object_display = "Codeunit Out Issue Document".to_string();
+        e.routine_display = "IssueDoc".to_string();
+        e.coverage_status = "partial".to_string();
+        e.coverage_reasons = vec!["interface-open-world".to_string()];
+        e.effects = vec![
+            effect(
+                "DB_INSERT",
+                &[
+                    ("resourceId", "ws/table/1"),
+                    ("resourceDisplay", "Out Log"),
+                    ("tempState", "known(false)"),
+                ],
+                &[],
+            ),
+            effect(
+                "DB_DELETE",
+                &[
+                    ("resourceId", "ws/table/1"),
+                    ("resourceDisplay", "Out Log"),
+                    ("tempState", "known(true)"),
+                ],
+                &[],
+            ),
+            effect(
+                "DB_INSERT",
+                &[
+                    ("boundary", "Codeunit Base Poster::OnRun"),
+                    ("resources", "Base Ledger 01"),
+                ],
+                &dep_refs,
+            ),
+            effect(
+                "COMMIT",
+                &[("boundary", "Codeunit Base Poster::OnRun")],
+                &[],
+            ),
+        ];
+        e.unresolved = vec![
+            unresolved("Codeunit.Run(<dynamic>)", "dynamic-target", "ws:src/A.al"),
+            unresolved("Handler.Handle", "polymorphic", "ws:src/A.al"),
+            unresolved(
+                "Codeunit.Run(<dynamic>)",
+                "dynamic-target",
+                "dep:g:src/B.al",
+            ),
+        ];
+        let s = digest_summary(&[e], 1, 0, Some("ws"));
+        let text = s.to_string();
+        assert!(text.len() <= SUMMARY_CAP_BYTES, "{text}");
+        assert!(
+            !text.contains("callsiteAnchor") && !text.contains("a-very-long-candidate"),
+            "no call-site item: {text}"
+        );
+        let r = &s["routines"][0];
+        assert_eq!(r["routine"], "Codeunit Out Issue Document::IssueDoc");
+        assert_eq!(r["effectsByType"]["DB_INSERT"], 2, "{s}");
+        assert_eq!(r["commits"], 1, "{s}");
+        let t = &r["physicalTablesWritten"];
+        assert_eq!(
+            (t["workspace"].as_u64(), t["dependency"].as_u64()),
+            (Some(1), Some(12)),
+            "{s}"
+        );
+        assert_eq!(t["count"], 13);
+        assert_eq!(t["workspaceNames"], serde_json::json!(["Out Log"]));
+        assert_eq!(
+            t["dependencyNames"].as_array().map(Vec::len),
+            Some(SUMMARY_NAMES)
+        );
+        assert_eq!(r["temporaryTablesWritten"], 1);
+        assert_eq!(r["boundariesEntered"]["count"], 1);
+        let u = &r["unresolved"];
+        assert_eq!(
+            (
+                u["total"].as_u64(),
+                u["polymorphic"].as_u64(),
+                u["dynamicTarget"].as_u64(),
+                u["inWorkspace"].as_u64()
+            ),
+            (Some(3), Some(1), Some(2), Some(2)),
+            "{s}"
+        );
+        assert_eq!(
+            u["topCallees"][0],
+            serde_json::json!({"callee": "Codeunit.Run(<dynamic>)", "count": 2})
+        );
+        assert!(s.get("countsOnly").is_none(), "{s}");
+    }
+
+    /// MCP output plan 1b: past [`SUMMARY_CAP_BYTES`] the summary degrades to
+    /// counts (no names), then lists fewer routines; it never exceeds the cap.
+    /// Hand-stated: 40 routines, each writing 12 long-named dependency tables.
+    ///
+    /// Discrimination (2026-11-04): returning `full` without the cap check
+    /// fails at the size assertion (17,495 bytes); restored, it passes.
+    #[test]
+    fn digest_summary_degrades_to_counts_under_the_cap() {
+        let dep: Vec<(String, String)> = (1..=12)
+            .map(|i| {
+                (
+                    format!("dep/table/{i}"),
+                    format!("A Rather Long Dependency Table Name {i:02}"),
+                )
+            })
+            .collect();
+        let dep_refs: Vec<(&str, &str)> =
+            dep.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let entries: Vec<DigestEntryFull> = (0..40)
+            .map(|i| {
+                let mut e = entry_with(vec![]);
+                e.object_display = format!("Codeunit A Long Object Name Number {i}");
+                e.routine_display = format!("ALongRoutineName{i}");
+                e.effects = vec![effect(
+                    "DB_MODIFY",
+                    &[("boundary", "Codeunit X::OnRun")],
+                    &dep_refs,
+                )];
+                e
+            })
+            .collect();
+        let s = digest_summary(&entries, 40, 0, Some("ws"));
+        let text = s.to_string();
+        assert!(text.len() <= SUMMARY_CAP_BYTES, "{} bytes", text.len());
+        assert_eq!(s["countsOnly"], true, "{text}");
+        assert!(
+            !text.contains("A Rather Long Dependency"),
+            "no names: {text}"
+        );
+        let listed = s["routinesListed"].as_u64().unwrap();
+        assert!((1..=SUMMARY_ROUTINES as u64).contains(&listed), "{text}");
+        assert_eq!(s["rootsResolved"], 40);
     }
 
     /// #69 I3, construction: the failed join becomes one diagnostic per problem

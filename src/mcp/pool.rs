@@ -25,6 +25,7 @@ use serde_json::{Value, json};
 use super::output::{OutputSink, SinkError};
 use super::tools::{self, CommandCall, EngineCall, Universe};
 use super::{Decide, WORKER_QUEUE_DEPTH, codes};
+use crate::engine::batch::output::SUMMARY_CAP_BYTES;
 use crate::engine::host::AskParams;
 use crate::engine::host::front::{EngineFront, FrontConfig};
 use crate::wire::{
@@ -717,46 +718,17 @@ fn flag_value<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
         .find_map(|a| a.strip_prefix(&prefix))
 }
 
-/// A digest's summary: what an agent needs to decide whether to open the
-/// file.
-fn digest_summary(bytes: &[u8], json_format: bool) -> Value {
-    if !json_format {
-        let text = String::from_utf8_lossy(bytes);
-        return json!({"format": "human", "lines": text.lines().count()});
+/// A renderer's summary as the envelope carries it. The renderer keeps its
+/// summary under [`SUMMARY_CAP_BYTES`] itself (degrading to counts, MCP output
+/// plan 1b); one over it anyway (a renderer bug) is replaced by its size,
+/// never spilled and never left to grow the frame.
+fn bounded_summary(summary: Value) -> Value {
+    let bytes = summary.to_string().len();
+    if bytes <= SUMMARY_CAP_BYTES {
+        summary
+    } else {
+        json!({"omitted": "over the summary cap", "bytes": bytes})
     }
-    let Ok(doc) = serde_json::from_slice::<Value>(bytes) else {
-        return json!({"format": "json", "note": "the output is not JSON"});
-    };
-    const KEPT: usize = 50;
-    let entries = doc["payload"]["entries"].as_array();
-    let listed: Vec<Value> = entries
-        .into_iter()
-        .flatten()
-        .take(KEPT)
-        .map(|e| {
-            let r = &e["routine"];
-            json!({
-                "routine": format!(
-                    "{}::{}",
-                    r["objectDisplay"].as_str().unwrap_or("?"),
-                    r["display"].as_str().unwrap_or("?")
-                ),
-                "coverage": e["coverage"]["status"],
-                "effects": e["effects"].as_array().map_or(0, Vec::len),
-                "unresolved": e["unresolved"],
-            })
-        })
-        .collect();
-    let count = |v: &Value| v.as_array().map_or(0, Vec::len);
-    json!({
-        "format": "json",
-        "schemaVersion": doc["schemaVersion"],
-        "summary": doc["payload"]["summary"],
-        "diagnostics": count(&doc["diagnostics"]),
-        "changedRootsDiagnostics": count(&doc["payload"]["changedRootsDiagnostics"]),
-        "entriesTotal": entries.map_or(0, Vec::len),
-        "entries": listed,
-    })
 }
 
 /// The extension of a file holding `argv`'s stdout.
@@ -867,7 +839,6 @@ fn run_command(
     let compute_ms = started.elapsed().as_millis();
     let revision = answer.revision.clone();
     let meta = answer.meta.clone();
-    let mut summary = None;
     let mut parsed = None;
     let outcome = match answer.outcome {
         Outcome::Cli {
@@ -876,6 +847,7 @@ fn run_command(
             stderr,
             changed_paths,
             changed_paths_truncated,
+            summary,
         } => {
             let placed = place_stdout(shared, call, stdout).and_then(|(stdout, bytes)| {
                 let stderr = match stderr {
@@ -888,20 +860,25 @@ fn run_command(
                 Ok((stdout, stderr, bytes))
             });
             match placed {
-                Ok((stdout, stderr, bytes)) => {
+                Ok((stdout, stderr, _bytes)) => {
                     let json_format = flag_value(&call.argv, "format") == Some("json");
-                    if call.always_file {
-                        summary = bytes.as_deref().map(|b| digest_summary(b, json_format));
-                    }
                     if let (Stdout::Text(t), true) = (&stdout, json_format) {
                         parsed = serde_json::from_str::<Value>(t).ok();
                     }
+                    // The renderer's summary (MCP output plan 1b): built from its
+                    // own data before the frame is bounded, so `bound_frame`
+                    // counts it; kept when the stdout is a file, the only case
+                    // an agent needs it.
+                    let summary = summary
+                        .filter(|_| matches!(stdout, Stdout::File(_)))
+                        .map(bounded_summary);
                     Outcome::Cli {
                         exit_code,
                         stdout,
                         stderr,
                         changed_paths,
                         changed_paths_truncated,
+                        summary,
                     }
                 }
                 Err((o, m)) => Outcome::failed(o, m),
@@ -958,9 +935,6 @@ fn run_command(
                 for (k, v) in e {
                     m.insert(k.clone(), v.clone());
                 }
-            }
-            if let (Some(s), false) = (&summary, is_error) {
-                m.insert("summary".into(), s.clone());
             }
         }
         let output = if is_error { None } else { parsed.clone() };

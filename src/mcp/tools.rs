@@ -249,7 +249,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_digest",
-            "Digest changed AL code: the transitive effects (writes, commits, errors, events, UI) of the changed roots. Give at least one of `routines` (stable ids or display names), `files` (changed source files, relative to the workspace or the git top level) or `diff` (a unified diff's text). The output always goes to a file in the server's output folder; the answer carries its path, size, SHA-256 and a summary (roots requested and resolved, effect counts, per-root coverage).",
+            "Digest changed AL code: the transitive effects (writes, commits, errors, events, UI) of the changed roots. Give at least one of `routines` (stable ids or display names), `files` (changed source files, relative to the workspace or the git top level) or `diff` (a unified diff's text). The output always goes to a file in the server's output folder; the answer carries its path, size, SHA-256 and a summary of at most 8 KiB (roots requested and resolved; per root: effects by type, physical tables written in the workspace and in dependencies, temporary tables, commits, dependency boundaries entered, coverage and its reasons, unresolved call sites as counts with the top callees).",
             schema(
                 vec![
                     ("routines", string_array("Changed routines.")),

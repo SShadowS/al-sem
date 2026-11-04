@@ -428,10 +428,12 @@ fn a_transcript_answers_what_the_cli_answers() {
             "{env}"
         );
         assert_eq!(cli_bytes(&env), expected);
-        assert_eq!(env["summary"]["summary"]["rootsResolved"], 1, "{env}");
-        assert_eq!(env["summary"]["entriesTotal"], 1, "{env}");
+        // The renderer's summary (MCP output plan 1b).
+        assert_eq!(env["summary"]["kind"], "digest", "{env}");
+        assert_eq!(env["summary"]["rootsResolved"], 1, "{env}");
+        assert_eq!(env["summary"]["routinesListed"], 1, "{env}");
         assert_eq!(
-            env["summary"]["entries"][0]["routine"],
+            env["summary"]["routines"][0]["routine"],
             "Codeunit Explain Post::PostOrder"
         );
 
@@ -626,8 +628,8 @@ fn output_paths_outside_the_folder_are_refused() {
 /// What a Windows client gets (design §10, fail-closed: no handle-relative
 /// creation, so neither the server's output folder nor the child's spill
 /// directory writes anything; the `no-output-dir` hook takes that path on
-/// any platform): a digest comes back inline (`stdoutText`) with its
-/// summary, a stdout over the request's inline cap comes back inline, every
+/// any platform): a digest comes back inline (`stdoutText`, no summary: the
+/// answer is there), a stdout over the request's inline cap comes back inline, every
 /// answer is the CLI's bytes, an `out` is refused (`refusedPath`), and the
 /// output folder stays empty.
 ///
@@ -652,7 +654,9 @@ fn the_inline_only_path_delivers_inline() {
     assert!(env["stdoutText"].is_string(), "{env}");
     assert!(env.get("stdoutFile").is_none(), "{env}");
     assert_eq!(cli_bytes(&env), expected);
-    assert_eq!(env["summary"]["summary"]["rootsResolved"], 1, "{env}");
+    // MCP output plan 1b/1e: a summary goes with a file only; inline, the
+    // answer itself is there.
+    assert!(env.get("summary").is_none(), "{env}");
     let argv = ["query", "touches", w, "--table", "50400", "--deterministic"];
     let expected = cli(&argv);
     let env = envelope(&s.call(

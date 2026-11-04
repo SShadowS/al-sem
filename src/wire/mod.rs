@@ -288,6 +288,9 @@ pub enum Outcome {
         stderr: Stderr,
         changed_paths: Vec<String>,
         changed_paths_truncated: bool,
+        /// The renderer's summary of the stdout (MCP output plan 1b/1e;
+        /// [`WriteAction::Summary`]), at most a few KB by its renderer's cap.
+        summary: Option<serde_json::Value>,
     },
     /// An infrastructure outcome: why no command answered.
     Failed {
@@ -430,6 +433,8 @@ struct RawAnswer {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     changed_paths_truncated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    summary: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     outcome: Option<FailedOutcome>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     message: Option<String>,
@@ -475,6 +480,7 @@ impl From<Answer> for RawAnswer {
             stderr_file: None,
             changed_paths: Vec::new(),
             changed_paths_truncated: false,
+            summary: None,
             outcome: None,
             message: None,
             diagnostic_file: None,
@@ -495,9 +501,11 @@ impl From<Answer> for RawAnswer {
                 stderr,
                 changed_paths,
                 changed_paths_truncated,
+                summary,
             } => {
                 raw.kind = "cli".into();
                 raw.exit_code = Some(exit_code);
+                raw.summary = summary;
                 match stdout {
                     Stdout::Text(t) => raw.stdout_text = Some(t),
                     Stdout::File(f) => raw.stdout_file = Some(f),
@@ -552,6 +560,7 @@ impl TryFrom<RawAnswer> for Answer {
                     stderr,
                     changed_paths: raw.changed_paths,
                     changed_paths_truncated: raw.changed_paths_truncated,
+                    summary: raw.summary,
                 }
             }
             "failed" => Outcome::Failed {
@@ -603,10 +612,12 @@ pub fn cli_outcome(
     spill: &Spill<'_>,
 ) -> Result<Outcome, WireError> {
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    let mut summary = None;
     for a in &out.actions {
         match a {
             WriteAction::Stdout(b) => stdout.extend_from_slice(b),
             WriteAction::Stderr(b) => stderr.extend_from_slice(b),
+            WriteAction::Summary(v) => summary = Some(v.clone()),
             WriteAction::File(p, _) | WriteAction::Dir(p) => {
                 return Err(WireError::FileWrite(p.display().to_string()));
             }
@@ -632,6 +643,7 @@ pub fn cli_outcome(
         stderr,
         changed_paths: Vec::new(),
         changed_paths_truncated: false,
+        summary,
     })
 }
 
@@ -1195,6 +1207,7 @@ mod tests {
                 stderr: Stderr::Lines(StderrLines::from_lines(&stderr)),
                 changed_paths: (0..changed).map(|i| format!("src/f{i}.al")).collect(),
                 changed_paths_truncated: false,
+                summary: None,
             },
             revision: None,
             meta: AnswerMeta::default(),
@@ -1493,6 +1506,7 @@ mod tests {
                 stderr: Stderr::Lines(StderrLines::from_lines(&["e"; 1])),
                 changed_paths: vec![],
                 changed_paths_truncated: false,
+                summary: None,
             },
             Some(rev.clone()),
         );
