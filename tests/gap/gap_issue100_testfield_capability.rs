@@ -733,11 +733,13 @@ fn policy_hits(ws: &Path, yaml: &str) -> Result<BTreeSet<String>, String> {
         return Err(format!("exit {} {:?}", out.exit_code, out.stderr_lines));
     };
     let doc: Value = serde_json::from_str(&text).expect("policy json");
+    // 1-based, as `policy check` prints lines since #368.
     let decl_line = |name: &str| -> u64 {
         POLICY_CU
             .lines()
             .position(|l| l.contains(&format!("procedure {name}()")))
             .unwrap() as u64
+            + 1
     };
     let mut hits = BTreeSet::new();
     for f in doc["findings"].as_array().expect("findings") {

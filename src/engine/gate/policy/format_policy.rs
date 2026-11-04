@@ -14,6 +14,7 @@ use crate::engine::gate::ordered_json::{Jv, serialize_jv};
 use crate::engine::gate::policy::policy_engine::PolicyRunResult;
 use crate::engine::gate::policy::policy_types::RuleRunSummary;
 use crate::engine::l5::finding::{EvidenceStep, Finding, SourceAnchor};
+use crate::engine::line_base::{LINE_BASE, shown};
 
 // ---------------------------------------------------------------------------
 // Finding serializer (policy-specific — insertion order, fingerprint LAST).
@@ -22,15 +23,18 @@ use crate::engine::l5::finding::{EvidenceStep, Finding, SourceAnchor};
 /// Serialize the INTERNAL `SourceAnchor` to `{ sourceUnitId, range{…},
 /// enclosingRoutineId, syntaxKind }`. Optional hash tails are skip-if-none (always
 /// none for policy findings). Mirrors al-sem `SourceAnchor` JSON.stringify order.
+///
+/// Lines are 1-based (#368; the document says `lineBase: 1`), converted here, where
+/// they leave the engine; columns stay 0-based ([`crate::engine::line_base`]).
 fn anchor_to_jv(a: &SourceAnchor) -> Jv {
     let mut pairs: Vec<(String, Jv)> = vec![
         ("sourceUnitId".to_string(), Jv::s(&a.source_unit_id)),
         (
             "range".to_string(),
             Jv::Obj(vec![
-                ("startLine".to_string(), Jv::Num(a.start_line as i64)),
+                ("startLine".to_string(), Jv::Num(shown(a.start_line) as i64)),
                 ("startColumn".to_string(), Jv::Num(a.start_column as i64)),
-                ("endLine".to_string(), Jv::Num(a.end_line as i64)),
+                ("endLine".to_string(), Jv::Num(shown(a.end_line) as i64)),
                 ("endColumn".to_string(), Jv::Num(a.end_column as i64)),
             ]),
         ),
@@ -228,6 +232,8 @@ pub fn format_policy_json(
             "dependencies".to_string(),
             Jv::from_json(&dependencies.to_json()),
         ),
+        // #368: every `startLine`/`endLine` below is 1-based.
+        ("lineBase".to_string(), Jv::Num(i64::from(LINE_BASE))),
         ("policySource".to_string(), Jv::s(&result.policy_source)),
         ("policyVersion".to_string(), Jv::Num(result.policy_version)),
         (
@@ -315,13 +321,16 @@ pub fn format_policy_sarif(result: &PolicyRunResult, driver_version: &str) -> St
                                 (
                                     "region".to_string(),
                                     Jv::Obj(vec![
+                                        // SARIF regions are 1-based in line AND
+                                        // column (SARIF 2.1.0 §3.30.5-6), as the
+                                        // analyze SARIF writes them (#368).
                                         (
                                             "startLine".to_string(),
-                                            Jv::Num(f.primary_location.start_line as i64),
+                                            Jv::Num(shown(f.primary_location.start_line) as i64),
                                         ),
                                         (
                                             "startColumn".to_string(),
-                                            Jv::Num(f.primary_location.start_column as i64),
+                                            Jv::Num(f.primary_location.start_column as i64 + 1),
                                         ),
                                     ]),
                                 ),

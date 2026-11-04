@@ -155,6 +155,26 @@ fn primary_location_to_value(
     v
 }
 
+/// The `--with-evidence` `evidencePath` as JSON, its lines 1-based (#368).
+///
+/// The steps hold the model's 0-based rows (`project_evidence_path` shares
+/// `StableSourceAnchor` with the R4 finding projection, which keeps them); this is
+/// where an evidence line leaves the engine, so the conversion happens here, once
+/// ([`crate::engine::line_base`]). Columns stay 0-based.
+fn evidence_path_to_value(steps: &[StableEvidenceStep]) -> serde_json::Value {
+    use crate::engine::line_base::shown;
+    let shown_steps: Vec<StableEvidenceStep> = steps
+        .iter()
+        .map(|s| {
+            let mut s = s.clone();
+            s.source_anchor.range.start_line = shown(s.source_anchor.range.start_line);
+            s.source_anchor.range.end_line = shown(s.source_anchor.range.end_line);
+            s
+        })
+        .collect();
+    serde_json::to_value(&shown_steps).expect("StableEvidenceStep[] serializes to JSON")
+}
+
 /// Project a `FindingSummary` to a `serde_json::Value` (the `findings[]` element
 /// shape from `src/projection/finding-summary.ts` as consumed by
 /// `buildCompactReport`). Key order is irrelevant — `sort_and_drop_nulls` sorts.
@@ -188,9 +208,10 @@ fn finding_summary_to_value(s: &FindingSummary, ev: Option<&FindingEvidence>) ->
     // Always emitted under the flag (even when empty []) so the key's presence is the
     // schema signal; OMITTED entirely on the default path (ev is None).
     if let Some(e) = ev {
-        let steps = serde_json::to_value(&e.evidence_path)
-            .expect("StableEvidenceStep[] serializes to JSON");
-        obj.insert("evidencePath".to_string(), steps);
+        obj.insert(
+            "evidencePath".to_string(),
+            evidence_path_to_value(&e.evidence_path),
+        );
     }
 
     obj.insert("fingerprint".to_string(), s.fingerprint.clone().into());
@@ -274,6 +295,14 @@ pub fn project_diagnostics(diags: &[Diagnostic]) -> serde_json::Value {
 // + `makeEnvelope`)
 // ---------------------------------------------------------------------------
 
+/// `schemaVersion` of the `analyze --with-evidence` document.
+///
+/// 1.1.0 (E3): additive `evidencePath` and `primaryLocation.enclosingMember` /
+/// `originatingObject`. 2.0.0 (#368, MCP output plan §4.1): every `evidencePath`
+/// line is 1-based and `payload.lineBase: 1` says so (a value's meaning changed:
+/// major).
+pub const ANALYZE_EVIDENCE_SCHEMA_VERSION: &str = "2.0.0";
+
 /// The inputs the JSON formatter needs from the resolved pipeline.
 pub struct JsonFormatInputs<'a> {
     /// Post-filter, post-scope, post-limit findings (pre-sorted).
@@ -296,7 +325,8 @@ pub struct JsonFormatInputs<'a> {
     /// Opt-in `--with-evidence` augmentation. `None` ⇒ default path: NO `evidencePath`,
     /// NO `enclosingMember`/`originatingObject`, `schemaVersion "1.0.0"` (byte-identical
     /// to today). `Some(slice)` ⇒ per-finding evidence aligned BY INDEX with `findings`,
-    /// emitted on each finding (+ its `primaryLocation`), and `schemaVersion "1.1.0"`.
+    /// emitted on each finding (+ its `primaryLocation`), `payload.lineBase: 1`, and
+    /// `schemaVersion` [`ANALYZE_EVIDENCE_SCHEMA_VERSION`].
     pub evidence: Option<&'a [FindingEvidence]>,
 }
 
@@ -389,6 +419,15 @@ pub fn build_analyze_json(inputs: &JsonFormatInputs<'_>) -> String {
         serde_json::Value::Array(findings_arr),
     );
     payload.insert("summary".to_string(), serde_json::Value::Object(summary));
+    // #368: the evidence document states its line base (every line in it is 1-based:
+    // `primaryLocation`/`terminalLocation` always were, `evidencePath` is since 2.0.0).
+    // The default document keeps its 1.0.0 shape byte for byte.
+    if inputs.evidence.is_some() {
+        payload.insert(
+            "lineBase".to_string(),
+            crate::engine::line_base::LINE_BASE.into(),
+        );
+    }
 
     // --- envelope ---
     // Pinned `"1970-01-01T00:00:00Z"` (deterministic) or a live 24-byte
@@ -409,9 +448,10 @@ pub fn build_analyze_json(inputs: &JsonFormatInputs<'_>) -> String {
     envelope.insert("kind".to_string(), "analyze-report".into());
     envelope.insert("payload".to_string(), serde_json::Value::Object(payload));
     // RE-8: default (no --with-evidence) keeps "1.0.0" (the differential asserts it);
-    // under the flag emit "1.1.0". The no-flag output stays byte-identical.
+    // under the flag emit ANALYZE_EVIDENCE_SCHEMA_VERSION. The no-flag output stays
+    // byte-identical.
     let schema_version = if inputs.evidence.is_some() {
-        "1.1.0"
+        ANALYZE_EVIDENCE_SCHEMA_VERSION
     } else {
         "1.0.0"
     };

@@ -19,6 +19,7 @@
     ],
     "mode": "crossApp"
   },
+  "lineBase": 1,
   "policySource": "disabled",
   "policyVersion": 0,
   "ruleSummaries": [],

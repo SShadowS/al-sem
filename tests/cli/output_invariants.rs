@@ -7,6 +7,8 @@
 //! Each invariant lands with the plan item that makes it true. Today:
 //! - 1a: [`anchor_source_check_on_the_fixture`] (every `file:line` a human output prints
 //!   opens to the line it describes) and [`every_document_states_line_base_1`].
+//! - #368: [`evidence_anchors_open_to_what_they_describe`] (the same for every
+//!   `sourceAnchor` of `analyze --with-evidence` and `policy check`).
 //!
 //! The CDO twin is `output_cdo` (the same checks on three real routines, under
 //! `scripts/cdo-gate`).
@@ -479,6 +481,183 @@ fn every_document_states_line_base_1() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// What the source line behind one evidence `sourceAnchor` must hold, from its
+/// `syntaxKind` and the step's note: a loop's keyword, a call's method (`Modify on T`
+/// -> `modify`, `calls Helper` -> `helper`), a routine's `procedure`/`trigger`.
+/// Empty for a kind with no word to look for (counted as unverifiable).
+fn evidence_tokens(kind: &str, note: &str) -> Vec<String> {
+    let word = |s: &str| -> String {
+        s.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .find(|w| !w.is_empty())
+            .unwrap_or("")
+            .to_lowercase()
+    };
+    match kind {
+        "for_statement" | "while_statement" | "repeat_statement" | "foreach_statement" => {
+            vec![kind.trim_end_matches("_statement").to_string()]
+        }
+        // `calls Helper`, `accesses Customer.Name`, `forwards customer (...) to X`,
+        // `passes Customer to EnrichCustomer, ...`, else the method first:
+        // `Modify on Customer`, `Commit`.
+        "call_expression" | "member_expression" | "identifier" => {
+            let next = |rest: &str| last_segment(rest.split(' ').next().unwrap_or(""));
+            if let Some(rest) = note
+                .strip_prefix("calls ")
+                .or_else(|| note.strip_prefix("accesses "))
+                .or_else(|| note.strip_prefix("forwards "))
+            {
+                vec![next(rest)]
+            } else if let Some((_, callee)) = note
+                .strip_prefix("passes ")
+                .and_then(|rest| rest.split_once(" to "))
+            {
+                vec![word(callee)]
+            } else {
+                vec![word(note)]
+            }
+        }
+        k if k.contains("procedure") => vec!["procedure".to_string()],
+        k if k.contains("trigger") => vec!["trigger".to_string()],
+        _ => vec![],
+    }
+}
+
+/// Every evidence `sourceAnchor` in an analyze `--with-evidence` or `policy check`
+/// JSON document (`findings` under `payload` or at the top), and the policy finding's
+/// own `primaryLocation` (the same shape), as anchors for [`check_anchors`].
+fn evidence_anchors(label: &str, doc: &Value) -> Vec<Anchor> {
+    let findings = doc["payload"]["findings"]
+        .as_array()
+        .or_else(|| doc["findings"].as_array())
+        .unwrap_or_else(|| panic!("{label}: no findings array: {doc}"));
+    let mut out = Vec::new();
+    let mut push = |a: &Value, note: &str| {
+        let line = a["range"]["startLine"].as_u64().expect("startLine") as usize;
+        let kind = a["syntaxKind"].as_str().unwrap_or("");
+        out.push(Anchor {
+            file: a["sourceUnitId"].as_str().unwrap_or("").to_string(),
+            line,
+            tokens: evidence_tokens(kind, note),
+            printed: format!("[{label}] {kind} at line {line}: {note}"),
+        });
+    };
+    for f in findings {
+        if f["primaryLocation"]["range"].is_object() {
+            push(&f["primaryLocation"], "");
+        }
+        for step in f["evidencePath"].as_array().into_iter().flatten() {
+            push(&step["sourceAnchor"], step["note"].as_str().unwrap_or(""));
+        }
+    }
+    out
+}
+
+/// Item T for the analyze surface (#368): every `sourceAnchor` that
+/// `alsem analyze --with-evidence` and `alsem policy check` print opens to the line
+/// it describes (a loop step to its loop keyword, a call step to its method, a
+/// routine step to its `procedure`/`trigger` line), and both documents state
+/// `lineBase: 1`. Runs on the cross-app fixture (`dep:` anchors included, via
+/// `--scope all`), five corpus workspaces (every loop kind, call, member and
+/// identifier steps) and a policy workspace.
+///
+/// Discrimination (2026-11-04): printing the 0-based `startLine` again in
+/// `format_json::evidence_path_to_value` (`shown(..)` -> the raw row) fails this test
+/// (143 of the 146 analyze anchors open one line early; the other 3 are adjacent
+/// field accesses whose line above names the same field); doing it in
+/// `format_policy::anchor_to_jv` fails it at the policy run (3 of 3); each passes
+/// restored.
+#[test]
+fn evidence_anchors_open_to_what_they_describe() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let corpus = |w: &str| manifest.join("tests/r0-corpus").join(w);
+    let fixture_ws = workspace();
+    let dump = tempfile::tempdir().unwrap();
+    dump_dependency_source(&fixture_ws, dump.path());
+    let runs: Vec<(PathBuf, Vec<&str>)> = vec![
+        (
+            fixture_ws.clone(),
+            vec!["analyze", "--with-evidence", "--scope", "all"],
+        ),
+        (
+            corpus("ws-d1-multi-caller"),
+            vec!["analyze", "--with-evidence"],
+        ),
+        (
+            corpus("ws-d8-commit-in-tx"),
+            vec!["analyze", "--with-evidence"],
+        ),
+        // Every loop kind (for, while, repeat, foreach).
+        (
+            corpus("ws-statement-tree"),
+            vec!["analyze", "--with-evidence"],
+        ),
+        // Member and identifier steps (field accesses, a forwarded record).
+        (corpus("ws-d3"), vec!["analyze", "--with-evidence"]),
+        // Over a hundred repeat-loop and call steps.
+        (
+            corpus("ws-d5-modifyall"),
+            vec!["analyze", "--with-evidence"],
+        ),
+        (
+            manifest.join("tests/fixtures/cli-c-policy/ws-policy-api-isolated-storage"),
+            vec!["policy", "check"],
+        ),
+    ];
+    let mut all = Checked::default();
+    let mut per_run = Vec::new();
+    let mut failures = Vec::new();
+    for (ws, argv) in &runs {
+        let ws_s = ws.to_string_lossy().into_owned();
+        let label = format!("{} {}", argv.join(" "), ws.file_name().unwrap().display());
+        let mut a = argv.clone();
+        a.extend([ws_s.as_str(), "--format", "json"]);
+        let (out, err, code) = run_alsem(&a);
+        assert_eq!(code, 0, "{label}: {err}");
+        let doc: Value = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{label}: {e}"));
+        let base = if doc.get("payload").is_some() {
+            &doc["payload"]["lineBase"]
+        } else {
+            &doc["lineBase"]
+        };
+        if base != 1 {
+            failures.push(format!("{label}: lineBase is {base}"));
+        }
+        let anchors = evidence_anchors(&label, &doc);
+        let c = check_anchors(&anchors, ws, dump.path());
+        per_run.push(format!(
+            "{label}: {} anchors, {} matched ({} dep), {} unverifiable",
+            anchors.len(),
+            c.matched,
+            c.matched_dep,
+            c.unverifiable
+        ));
+        all.matched += c.matched;
+        all.matched_dep += c.matched_dep;
+        all.unverifiable += c.unverifiable;
+        all.missing_file += c.missing_file;
+        failures.extend(c.failures);
+    }
+    eprintln!("{}", per_run.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "evidence that does not open to what it describes:\n{}\n\n{}",
+        failures.join("\n"),
+        per_run.join("\n")
+    );
+    assert_eq!(
+        all.missing_file, 0,
+        "every anchor's file exists: {per_run:?}"
+    );
+    // Precondition: the check looked at enough anchors, `dep:` ones included.
+    assert!(
+        all.matched >= 100 && all.matched_dep >= 1,
+        "only {} anchors checked ({} in dependency code):\n{}",
+        all.matched,
+        all.matched_dep,
+        per_run.join("\n")
+    );
 }
 
 /// Item T, the digest summary through the MCP server (plan 1b: D1, D2, E3): the

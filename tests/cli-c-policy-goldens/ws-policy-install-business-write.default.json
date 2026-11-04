@@ -19,6 +19,7 @@
     ],
     "mode": "crossApp"
   },
+  "lineBase": 1,
   "policySource": "default",
   "policyVersion": 1,
   "ruleSummaries": [
@@ -110,9 +111,9 @@
       "primaryLocation": {
         "sourceUnitId": "ws:src/Install.al",
         "range": {
-          "startLine": 4,
+          "startLine": 5,
           "startColumn": 4,
-          "endLine": 10,
+          "endLine": 11,
           "endColumn": 8
         },
         "enclosingRoutineId": "ac228c5277c851f0/57085dff18917dda71dc9bdf96f4107cb51fdc40edac7d0c6b4946b98d156e4b",
@@ -124,9 +125,9 @@
           "sourceAnchor": {
             "sourceUnitId": "ws:src/Install.al",
             "range": {
-              "startLine": 4,
+              "startLine": 5,
               "startColumn": 4,
-              "endLine": 10,
+              "endLine": 11,
               "endColumn": 8
             },
             "enclosingRoutineId": "ac228c5277c851f0/57085dff18917dda71dc9bdf96f4107cb51fdc40edac7d0c6b4946b98d156e4b",
@@ -139,9 +140,9 @@
           "sourceAnchor": {
             "sourceUnitId": "ws:src/Install.al",
             "range": {
-              "startLine": 4,
+              "startLine": 5,
               "startColumn": 4,
-              "endLine": 10,
+              "endLine": 11,
               "endColumn": 8
             },
             "enclosingRoutineId": "ac228c5277c851f0/57085dff18917dda71dc9bdf96f4107cb51fdc40edac7d0c6b4946b98d156e4b",

@@ -109,7 +109,8 @@ pub struct AnalyzeArgs {
     /// `--with-evidence` — opt-in augmentation of the `--format json` output: each
     /// finding gains an `evidencePath` (the stable-projected call chain) plus a
     /// POSITION-derived `enclosingMember`/`originatingObject` discriminator on its
-    /// `primaryLocation`, and the envelope `schemaVersion` becomes `"1.1.0"`. When
+    /// `primaryLocation`, the payload states `lineBase: 1` (every line 1-based, the
+    /// evidence too since #368), and the envelope `schemaVersion` becomes `"2.0.0"`. When
     /// `false` (the default, and ALWAYS in the parity harness) the JSON output is
     /// byte-identical to today (all new keys absent, `schemaVersion "1.0.0"`). (RE-8)
     pub with_evidence: bool,
@@ -1119,7 +1120,7 @@ pub(crate) fn empty_output_result(
                 dynamic_dispatch_sites: vec![],
             };
             // Fail-closed path has zero findings; --with-evidence still bumps the
-            // schemaVersion to "1.1.0" (an empty evidence slice carries no per-finding
+            // schemaVersion to "2.0.0" (an empty evidence slice carries no per-finding
             // keys), keeping the flag's schema signal consistent.
             let empty_evidence: Vec<FindingEvidence> = Vec::new();
             build_analyze_json(&JsonFormatInputs {
