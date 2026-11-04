@@ -59,6 +59,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matching effect observed; coverage incomplete`; `yes` and `no` print bare (prove's answer is
   authoritative; the JSON `answer` is unchanged). Prove JSON 2.3.0 (additive): `obligations`
   gains `unresolvedInWorkspace {notResolved, openWorld}` and `topUnresolvedCallees` (3).
+- **One answer to "does R write T" across explain, digest and prove, by construction.** `alsem
+  explain --routine R --writes-table T` and `alsem digest … --writes-table T` (repeatable; MCP
+  `writesTables`) print prove's own answer per table (`cards[].tableAnswers`,
+  `entries[].tableAnswers`: `answer`, `evidence`, `blockedBy`, `assumptions`; a human line per
+  table): all three call one evaluation, `prove::TableQuestions::answer` (classification,
+  field-guarded matches, caller resolution, the obligation rules, the loaded-subscribers label).
+  Such a run counts the cones' analysis gaps, as prove's plan does. Not with `digest --schema 2`.
+- **Routines that share a display print apart** (T-W2-24): an overload in the same app prints its
+  parameters (`Note(Msg: Text; Level: Integer)`), a routine of another app with the same
+  qualified display gets ` [<app name>]`, in path lines and every qualified display (digest's
+  `payload.routines[].display` included).
+- **Workspace-code write lines count operations**: `Out Item: Insert 1, ModifyAll 1, Rename 1`,
+  the section header saying these are the cone's retained representative operations (at least
+  that many). Exact counts need the per-root reach of the terminal-fact index, which the passed
+  entry does not keep (left open).
+- **Entry-point table names are nearest first**: by each table's witness length through the
+  entry point, then by name (was alphabetical).
 
 ### Fixed (#369: dependency writes with no witness path, and colliding `factId`s)
 

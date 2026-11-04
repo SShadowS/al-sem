@@ -9,8 +9,8 @@ Codeunit Out Log Mgt::WriteLog  ws:src/OutIssueDocument.Codeunit.al:53
     caller rule (applied by Codeunit Out Issue Document::IssueDoc; skipped by Codeunit Out Subscribers::LogIssued, Codeunit Out Tests::WriteLogInserts): rejects when Doc.Status <> Doc.Status::Open: (platform message)  [TestField ws:src/OutIssueDocument.Codeunit.al:12]
     reached from page action Issue on Page Out Doc Card (caption "Issue") at ws:src/Pages.al:18
   commits: none
-  writes in workspace code (1 table):
-    Out Log: Insert — known persistent
+  writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
+    Out Log: Insert 1 — known persistent
       Insert at ws:src/OutIssueDocument.Codeunit.al:61
       fields WriteLog assigns on this table (not operation-specific): Entry No., Message
   temporary records (not writes): 1 table in workspace code (1 effect row): Out Log; 0 tables only beyond entry points; only temporary: 0 tables

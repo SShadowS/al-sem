@@ -1834,3 +1834,142 @@ fn prove_states_coverage_assumptions_and_limits() {
         "{no}"
     );
 }
+
+/// Every table both fixture apps declare (`table <n> "<name>"`), read from
+/// the AL: listed tables and tables no output names alike.
+fn fixture_tables() -> Vec<String> {
+    let mut out = Vec::new();
+    for dir in ["ws/src", "dep/src"] {
+        let d = crate::output_fixture::fixture_root().join(dir);
+        let mut files: Vec<_> = std::fs::read_dir(&d)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        files.sort();
+        for f in files {
+            for l in std::fs::read_to_string(&f).unwrap().lines() {
+                if let Some(rest) = l.strip_prefix("table ")
+                    && let Some(name) = rest.split('"').nth(1)
+                {
+                    out.push(name.to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// W2-2 gap (a), T-W2-16 leg 2 (design §3.2.1, R3a): explain's and digest's
+/// `--writes-table T` answer through prove's own evaluation
+/// (`prove::TableQuestions::answer`), so for EVERY table of both fixture
+/// apps — the ones some output lists and the ones none names — and three
+/// roots, their `answer`, `blockedBy` and `assumptions` equal `prove
+/// writes-table:T`'s exactly. Precondition: the set holds `yes`, `unknown`
+/// answers and tables no explain card lists.
+///
+/// Discrimination (2026-11-04): explain's and digest's `table_answers`
+/// handing the evaluation a wrong cone fact (`fires_table_events: false`
+/// instead of the cone's) fails at "WriteLog explain vs prove: Out Doc"
+/// (`no` without its `loaded-subscribers` assumption); restored, passes. A
+/// break inside the shared `TableQuestions::answer` moves both sides alike,
+/// which is the point: there is one evaluation.
+#[test]
+fn explain_digest_and_prove_give_one_table_answer() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let tables = fixture_tables();
+    assert!(tables.len() >= 15, "{tables:?}");
+    let json = |args: Vec<String>| -> Value {
+        let a: Vec<&str> = args.iter().map(String::as_str).collect();
+        let (out, err, code) = run_alsem(&a);
+        assert_eq!(code, 0, "{args:?}: {err}");
+        serde_json::from_str(&out).unwrap()
+    };
+    let key = |v: &Value| {
+        (
+            v["answer"].clone(),
+            v.get("blockedBy").cloned().unwrap_or(serde_json::json!([])),
+            v.get("assumptions").cloned().unwrap_or(Value::Null),
+        )
+    };
+    let mut answers = std::collections::BTreeSet::new();
+    let mut unlisted = 0;
+    for routine in [ISSUE_DOC, WRITE_LOG, FIELD_OPS] {
+        let mut ex = vec![
+            "explain".to_string(),
+            ws.clone(),
+            "--routine".into(),
+            routine.into(),
+        ];
+        let mut dg = vec![
+            "digest".to_string(),
+            ws.clone(),
+            "--routine".into(),
+            routine.into(),
+        ];
+        for t in &tables {
+            for v in [&mut ex, &mut dg] {
+                v.push("--writes-table".into());
+                v.push(t.clone());
+            }
+        }
+        ex.extend(["--format".into(), "json".into()]);
+        let e = json(ex);
+        let d = json(dg);
+        let card = &e["cards"][0];
+        let listed = card["effects"].to_string();
+        let ea = card["tableAnswers"].as_array().unwrap();
+        let da = d["payload"]["entries"][0]["tableAnswers"]
+            .as_array()
+            .unwrap();
+        assert_eq!(ea.len(), tables.len());
+        for (i, t) in tables.iter().enumerate() {
+            let p = json(vec![
+                "prove".into(),
+                ws.clone(),
+                routine.into(),
+                format!("writes-table:{t}"),
+                "--format".into(),
+                "json".into(),
+            ]);
+            let pr = &p["payload"]["result"];
+            assert_eq!(key(&ea[i]), key(pr), "{routine} explain vs prove: {t}");
+            assert_eq!(key(&da[i]), key(pr), "{routine} digest vs prove: {t}");
+            answers.insert(pr["answer"].as_str().unwrap().to_string());
+            if !listed.contains(&format!("\"{t}\"")) {
+                unlisted += 1;
+            }
+        }
+    }
+    assert!(
+        answers.contains("yes") && answers.contains("unknown"),
+        "{answers:?}"
+    );
+    assert!(unlisted > 10, "tables no card lists: {unlisted}");
+}
+
+/// T-W2-24 on the fixture: `Out Overloads::RunBoth` calls two overloads of
+/// `Note`. The human paths print each with its parameters, and digest's
+/// routine table keys them apart with distinct displays.
+#[test]
+fn overloads_print_with_their_signatures() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let (human, err, code) = run_alsem(&["explain", &ws, "--routine", "Out Overloads::RunBoth"]);
+    assert_eq!(code, 0, "{err}");
+    for want in [
+        "path: RunBoth → Note(Msg: Text)\n",
+        "path: RunBoth → Note(Msg: Text; Level: Integer)\n",
+    ] {
+        assert!(human.contains(want), "{want}\n{human}");
+    }
+    let (out, _, _) = run_alsem(&["digest", &ws, "--routine", "Out Overloads::RunBoth"]);
+    let d: Value = serde_json::from_str(&out).unwrap();
+    let displays: Vec<&str> = d["payload"]["routines"]
+        .as_object()
+        .unwrap()
+        .values()
+        .filter_map(|r| r["display"].as_str())
+        .filter(|s| s.contains("::Note"))
+        .collect();
+    assert_eq!(displays.len(), 2, "{displays:?}");
+    assert_ne!(displays[0], displays[1]);
+}

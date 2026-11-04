@@ -65,6 +65,7 @@ use crate::engine::l5::digest_cli::{
     resolve_changed_roots, run_digest_query_full_from_entries,
 };
 use crate::engine::l5::field_writers::{WriteKind, field_writes};
+use crate::engine::l5::prove::TableAnswers;
 use crate::engine::l5::rollup::classify_detail;
 use crate::engine::l5::routine_rollup::{
     FAMILIES, OTHER_KINDS, RenderOpts, RollupCx, RollupTotals, RoutineRollup, TableWrites,
@@ -133,6 +134,8 @@ pub struct ExplainJob<'a> {
     opts: RenderOpts,
     /// `--show-source` (W2-7): the cited line ±2 under each human location.
     show_source: bool,
+    /// `--writes-table T` (W2-2 gap (a)): prove's answer for each table.
+    writes_tables: Vec<String>,
 }
 
 /// The command's two renderings and its exit code.
@@ -155,7 +158,15 @@ impl<'a> ExplainJob<'a> {
             out,
             opts: RenderOpts::new(false, None),
             show_source: false,
+            writes_tables: Vec::new(),
         }
+    }
+
+    /// `--writes-table T`, repeated (W2-2 gap (a)).
+    #[must_use]
+    pub fn with_writes_tables(mut self, tables: Vec<String>) -> ExplainJob<'a> {
+        self.writes_tables = tables;
+        self
     }
 
     /// `--show-source` (W2-7).
@@ -294,7 +305,15 @@ impl Job for ExplainJob<'_> {
             vec![Cell::Effects, Cell::L4]
         };
         Ok(PlanPart {
-            plan: explain_plan(resolved.roots.iter().cloned().collect()),
+            // `--writes-table` reads the cones' gap counts (declared needs:
+            // only then are they counted).
+            plan: if self.writes_tables.is_empty() {
+                explain_plan(resolved.roots.iter().cloned().collect())
+            } else {
+                crate::engine::session::counting_cone_gaps(explain_plan(
+                    resolved.roots.iter().cloned().collect(),
+                ))
+            },
             reads,
             carry: Some(Box::new(resolved)),
         })
@@ -320,7 +339,7 @@ impl Job for ExplainJob<'_> {
         let model = view.model();
         // W2-2 (design §3.1): the digest entries after the L4 temp-state join
         // (the plan declares `l4` with the tree), so each write has its class.
-        let full = if has_tree {
+        let (full, table_answers) = if has_tree {
             let _s = crate::engine::perf_trace::span("explain", "explain.temp_join");
             let temp_states = DbTempStates::new(model, &view.l4().bundle);
             let changed = ChangedRootsResult {
@@ -329,7 +348,14 @@ impl Job for ExplainJob<'_> {
                 touched: HashMap::new(),
                 spans: Default::default(),
             };
-            run_digest_query_full_from_entries(
+            // The cones' facts a table answer reads, before the join takes
+            // the cones.
+            let cones = if self.writes_tables.is_empty() {
+                HashMap::new()
+            } else {
+                crate::engine::l5::prove::cone_facts(&effects.unresolved)
+            };
+            let full = run_digest_query_full_from_entries(
                 &mut effects,
                 &resolved.roots,
                 &HashMap::new(),
@@ -337,9 +363,18 @@ impl Job for ExplainJob<'_> {
                 &changed,
                 &OwnerIndex::build(model),
             )
-            .entries
+            .entries;
+            // W2-2 gap (a): `--writes-table`, prove's own answer.
+            let answers = crate::engine::l5::prove::table_answers(
+                model,
+                &temp_states,
+                &full,
+                &cones,
+                &self.writes_tables,
+            );
+            (full, answers)
         } else {
-            Vec::new()
+            (Vec::new(), Default::default())
         };
         let apps = view.target().dependencies().apps;
         let sources = (self.show_source && self.human)
@@ -354,6 +389,7 @@ impl Job for ExplainJob<'_> {
             prepared,
             self.opts,
             sources.as_ref(),
+            &table_answers,
         );
         drop(full);
         drop(effects);
@@ -1012,6 +1048,7 @@ fn render(
     prepared: Option<&ExplainIndexes>,
     opts: RenderOpts,
     sources: Option<&crate::engine::source_excerpt::SourceTexts>,
+    table_answers: &TableAnswers,
 ) -> ExplainRunResult {
     use crate::engine::perf_trace::span;
     let built;
@@ -1045,12 +1082,16 @@ fn render(
         .map(|rid| {
             let entry = full.iter().find(|e| &e.routine_id == rid);
             let card = Card::build(&ix, &cross, rid, entry, &rcx, tests_reaching.as_ref(), opts);
-            (
-                card.sort_key.clone(),
-                rid.clone(),
-                card.json(),
-                card.human(),
-            )
+            let (mut json, mut human) = (card.json(), card.human());
+            // `--writes-table` (W2-2 gap (a)): prove's own answer per table,
+            // before `next:`.
+            if let Some((values, lines)) = table_answers.get(rid) {
+                json["tableAnswers"] = json!(values);
+                let at = human.find("\n  next:").map_or(human.len(), |i| i + 1);
+                let text: String = lines.iter().map(|l| format!("  {l}\n")).collect();
+                human.insert_str(at, &text);
+            }
+            (card.sort_key.clone(), rid.clone(), json, human)
         })
         .collect();
     drop(cards_span);

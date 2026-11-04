@@ -7,8 +7,8 @@ Codeunit Explain Tests::PostUnreleasedFails  ws:src/tests.al:9
   rules: none of its own; inherited: none
   callers: none
   commits: no observed COMMIT
-  writes in workspace code (1 table):
-    Explain Order: Modify — known persistent
+  writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
+    Explain Order: Modify 1 — known persistent
       Modify at ws:src/post.al:18
       path: PostUnreleasedFails → Explain Post::PostOrder
       fields PostOrder assigns on this table (not operation-specific): Posted, Status

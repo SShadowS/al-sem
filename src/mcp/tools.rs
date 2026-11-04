@@ -203,6 +203,12 @@ pub fn tool_list() -> Vec<Value> {
                 vec![
                     ("routines", string_array("Routine selectors (mode 1).")),
                     (
+                        "writesTables",
+                        string_array(
+                            "Mode 1: answer 'does it write table T?' per card, as alsem_prove writes-table:T answers.",
+                        ),
+                    ),
+                    (
                         "diff",
                         json!({"type": "string", "description": "A unified diff's text (mode 2)."}),
                     ),
@@ -272,6 +278,12 @@ pub fn tool_list() -> Vec<Value> {
             schema(
                 vec![
                     ("routines", string_array("Changed routines.")),
+                    (
+                        "writesTables",
+                        string_array(
+                            "Answer 'does it write table T?' per root (entries[].tableAnswers), as alsem_prove writes-table:T answers.",
+                        ),
+                    ),
                     ("files", string_array("Changed source files.")),
                     (
                         "diff",
@@ -690,6 +702,9 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
                 v.opt("max-paths", &n.to_string());
             }
             v.switch("show-source", a.flag("showSource")?);
+            for t in a.strings("writesTables")?.unwrap_or_default() {
+                v.opt("writes-table", t);
+            }
             v
         }
         "alsem_prove" => {
@@ -747,6 +762,9 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             }
             if let Some(n) = a.count("schema")? {
                 v.opt("schema", &n.to_string());
+            }
+            for t in a.strings("writesTables")?.unwrap_or_default() {
+                v.opt("writes-table", t);
             }
             always_file = true;
             v

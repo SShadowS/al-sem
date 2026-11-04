@@ -851,6 +851,12 @@ struct ExplainCli {
     /// `aldump --dump-dependency-source` writes for a dependency).
     #[arg(long = "show-source", default_value_t = false)]
     show_source: bool,
+
+    /// With `--routine`: answer "does it write table T?" for each card, by
+    /// the evaluation `alsem prove <routine> writes-table:T` uses (the same
+    /// answer, blockers and assumptions). May be repeated.
+    #[arg(long = "writes-table", action = clap::ArgAction::Append)]
+    writes_table: Vec<String>,
 }
 
 /// `FingerprintCli` — arguments for `alsem fingerprint <ws>`.
@@ -973,6 +979,13 @@ struct DigestCli {
     /// JSON without indentation.
     #[arg(long = "compact", default_value_t = false)]
     compact: bool,
+
+    /// Answer "does it write table T?" for each root, by the evaluation
+    /// `alsem prove <routine> writes-table:T` uses (the same answer, blockers
+    /// and assumptions): `entries[].tableAnswers`. May be repeated. Not with
+    /// --schema 2.
+    #[arg(long = "writes-table", action = clap::ArgAction::Append)]
+    writes_table: Vec<String>,
 
     /// `2`: the 2.x JSON document (the old shape over the current analysis),
     /// kept for one release window after wave 2 (removed at the latest of one
@@ -2158,7 +2171,7 @@ fn plan_digest(d: DigestCli, cx: &PlanCx) -> Planned {
             compact: d.compact,
             max_paths: d.max_paths,
         },
-        Some(2) if d.detail || d.compact || d.max_paths.is_some() => {
+        Some(2) if d.detail || d.compact || d.max_paths.is_some() || !d.writes_table.is_empty() => {
             return failed(
                 "al-sem digest: --schema 2 takes no --detail, --max-paths or --compact \
                  (the 2.x document has no folds or caps)",
@@ -2268,7 +2281,11 @@ fn plan_digest(d: DigestCli, cx: &PlanCx) -> Planned {
                 include_reads: d.include_reads,
                 diff_root,
             };
-            Box::new(DigestJob::new(req, d.format == "human", d.out.as_deref()).with_render(render))
+            Box::new(
+                DigestJob::new(req, d.format == "human", d.out.as_deref())
+                    .with_render(render)
+                    .with_writes_tables(d.writes_table.clone()),
+            )
         },
     )
 }
@@ -2434,7 +2451,8 @@ fn plan_explain(e: ExplainCli, cx: &PlanCx) -> Planned {
             Box::new(
                 ExplainJob::new(req, e.format == "human", e.out.as_deref())
                     .with_render(e.detail, e.max_paths)
-                    .with_show_source(e.show_source),
+                    .with_show_source(e.show_source)
+                    .with_writes_tables(e.writes_table.clone()),
             )
         },
     )

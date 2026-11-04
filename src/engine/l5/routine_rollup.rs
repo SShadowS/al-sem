@@ -116,6 +116,9 @@ pub struct RollupCx<'m> {
     /// Stable routine id → its first model row.
     rows: HashMap<&'m str, usize>,
     app_names: HashMap<String, String>,
+    /// Qualified display → the distinct stable ids that share it (T-W2-24:
+    /// overloads, and objects of one name in two apps).
+    shared: HashMap<String, Vec<&'m str>>,
 }
 
 /// Who owns an operation (design §3.5): the qualified owner routine, its
@@ -148,7 +151,7 @@ impl<'m> RollupCx<'m> {
         if let Some(p) = &model.primary_app {
             app_names.insert(p.app_guid.to_ascii_lowercase(), p.name.clone());
         }
-        RollupCx {
+        let mut cx = RollupCx {
             model,
             // Every id kind: a no-path row's owner and an operation's original
             // kind are read by `lookup` / `claims` (design §3.5).
@@ -173,7 +176,65 @@ impl<'m> RollupCx<'m> {
                 m
             },
             app_names,
+            shared: HashMap::new(),
+        };
+        let mut shared: HashMap<String, Vec<&'m str>> = HashMap::new();
+        for (&stable, &i) in &cx.rows {
+            shared.entry(cx.qualified_row(i)).or_default().push(stable);
         }
+        shared.retain(|_, ids| {
+            ids.sort_unstable();
+            ids.len() > 1
+        });
+        cx.shared = shared;
+        cx
+    }
+
+    /// What tells a routine apart from another of the same qualified
+    /// display (design §3.8 rule 6, T-W2-24): its parameter list for an
+    /// overload in the same app (`(Msg: Text; Level: Integer)`), ` [<app>]`
+    /// when a colliding routine is in another app; empty when the display is
+    /// its own.
+    #[must_use]
+    pub fn disambiguator(&self, stable_id: &str) -> String {
+        let Some(&i) = self.rows.get(stable_id) else {
+            return String::new();
+        };
+        let Some(ids) = self.shared.get(&self.qualified_row(i)) else {
+            return String::new();
+        };
+        let r = &self.model.workspace.routines[i];
+        let app_of = |s: &str| {
+            self.rows
+                .get(s)
+                .map(|&j| self.model.workspace.routines[j].app_guid.as_str())
+        };
+        let mut out = String::new();
+        if ids
+            .iter()
+            .any(|s| *s != stable_id && app_of(s) == Some(r.app_guid.as_str()))
+        {
+            out.push_str(&format!(
+                "({})",
+                r.parameters
+                    .iter()
+                    .map(|p| format!(
+                        "{}{}: {}",
+                        if p.is_var { "var " } else { "" },
+                        p.name,
+                        p.type_text
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ));
+        }
+        if ids
+            .iter()
+            .any(|s| app_of(s).is_some_and(|a| a != r.app_guid))
+        {
+            out.push_str(&format!(" [{}]", self.app_label(&r.app_guid)));
+        }
+        out
     }
 
     /// The `(object, routine)` names of a stable routine id's first row.
@@ -201,9 +262,10 @@ impl<'m> RollupCx<'m> {
     /// The qualified display of a stable routine id, else the id.
     #[must_use]
     pub fn qualified(&self, stable_id: &str) -> String {
-        self.rows
-            .get(stable_id)
-            .map_or_else(|| stable_id.to_string(), |&i| self.qualified_row(i))
+        self.rows.get(stable_id).map_or_else(
+            || stable_id.to_string(),
+            |&i| format!("{}{}", self.qualified_row(i), self.disambiguator(stable_id)),
+        )
     }
 
     /// A witness path as one line (design §3.8 rules 6, 7): the root, then
@@ -228,12 +290,13 @@ impl<'m> RollupCx<'m> {
                 .clone()
                 .or_else(|| h.callee_display.clone())
                 .unwrap_or_default();
-            let name = match h.to_routine_id.as_deref().and_then(|t| self.names_of(t)) {
+            let to = h.to_routine_id.as_deref().unwrap_or("");
+            let name = match self.names_of(to) {
                 Some((o, n)) if o != object => {
                     object = o.clone();
-                    format!("{o}::{n}")
+                    format!("{o}::{n}{}", self.disambiguator(to))
                 }
-                Some((_, n)) => n,
+                Some((_, n)) => format!("{n}{}", self.disambiguator(to)),
                 None => fallback,
             };
             parts.push(format!("{tag}{name}"));
@@ -281,9 +344,9 @@ impl<'m> RollupCx<'m> {
             };
             let name = if o != object && !o.is_empty() {
                 object = o.clone();
-                format!("{o}::{n}")
+                format!("{o}::{n}{}", self.disambiguator(&s.to))
             } else {
-                n
+                format!("{n}{}", self.disambiguator(&s.to))
             };
             parts.push(format!("{tag}{name}"));
         }
@@ -1547,7 +1610,8 @@ pub fn workspace_write_lines(
         return Vec::new();
     }
     let mut out = vec![format!(
-        "writes in workspace code ({}{}):",
+        "writes in workspace code ({}{}; operation counts are the cone's retained \
+         representative operations, at least that many):",
         plural(r.workspace_code.len(), "table", "tables"),
         if r.unresolved_own.is_empty() {
             ""
@@ -1566,7 +1630,7 @@ pub fn workspace_write_lines(
         out.push(format!(
             "  {}: {} — {}",
             t.table,
-            t.kinds.iter().cloned().collect::<Vec<_>>().join(", "),
+            representative_counts(t, entry, cx),
             class_note(&t.classes)
         ));
         // Path and anchor of one witness (F13): the representative row's.
@@ -1624,6 +1688,40 @@ pub fn workspace_write_lines(
         ));
     }
     out
+}
+
+/// A table record's operation kinds with counts (W2-2 gap (c), design §3.6):
+/// the distinct operation ids the cone RETAINED on its rows, per original
+/// kind (`Insert 2, ModifyAll 1`), labelled by the section header as at
+/// least that many. Not the exact count of §3.6: the cone keeps
+/// representatives per row (`origin_operation_ids`), and the exact count
+/// needs the terminal-fact index's per-root reach in the root's class, which
+/// the passed entry does not keep. A row with no operation id counts its
+/// digest type once.
+fn representative_counts(t: &TableWrites, entry: &DigestEntryFull, cx: &RollupCx<'_>) -> String {
+    let mut ops: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
+    let mut bare: BTreeMap<String, usize> = BTreeMap::new();
+    for &i in &t.rows {
+        let e = &entry.effects[i];
+        if e.origin_operation_ids.is_empty() {
+            *bare
+                .entry(type_kind(&e.effect_type).to_string())
+                .or_default() += 1;
+        }
+        for op in &e.origin_operation_ids {
+            let kind = cx.op_kind(op).unwrap_or(type_kind(&e.effect_type));
+            ops.entry(kind.to_string()).or_default().insert(op.as_str());
+        }
+    }
+    let mut counts: BTreeMap<String, usize> = ops.into_iter().map(|(k, s)| (k, s.len())).collect();
+    for (k, n) in bare {
+        *counts.entry(k).or_default() += n;
+    }
+    counts
+        .iter()
+        .map(|(k, n)| format!("{k} {n}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// `caller-dependent writes` (design §4.1 section 11).
@@ -1817,8 +1915,22 @@ pub fn beyond_lines(
             .iter()
             .map(|(t, ids)| format!("{} on {}", type_kind(t), ids.len()))
             .collect();
-        let mut names: Vec<String> = p.tables.values().map(|s| (*s).to_string()).collect();
-        names.sort();
+        // W2-2 gap (d), design §4.1: nearest first — by the length of each
+        // table's witness through the entry point (prefix + call distance
+        // from the target to the nearest live writer), then by name; a table
+        // with no witness last, by name.
+        let mut names: Vec<String> = table_witnesses(r, entry, p)
+            .iter()
+            .map(|t| t.table.to_string())
+            .collect();
+        let mut rest: Vec<String> = p
+            .tables
+            .values()
+            .filter(|s| !names.iter().any(|n| n == *s))
+            .map(|s| (*s).to_string())
+            .collect();
+        rest.sort();
+        names.extend(rest);
         let names = fold(names, caps::TABLES, "tables", o.detail);
         let mut s = format!(
             "  {}, entered at {} — {}",
@@ -2232,6 +2344,56 @@ mod tests {
             fold(items(40), caps::TABLES, "tables", true).shown.len(),
             40
         );
+    }
+
+    /// T-W2-24 (design §3.8 rule 6): routines that share a qualified display
+    /// print apart: an overload in the same app by its parameters, a routine
+    /// of another app by that app's name; a display of its own prints bare.
+    /// The model is stated by assignment (no fixture app pair shares an
+    /// object name).
+    ///
+    /// Discrimination (2026-11-04): `disambiguator` returning "" always (the
+    /// old display) fails at "overloads differ"; restored, passes.
+    #[test]
+    fn shared_displays_print_apart() {
+        use crate::engine::l5::test_support::{empty_resolved, routine};
+        use crate::program::model::workspace::ModelParameter;
+        let param = |i: u32, name: &str, ty: &str| ModelParameter {
+            index: i,
+            name: name.to_string(),
+            type_text: ty.to_string(),
+            is_var: false,
+            is_record: false,
+            table_name: None,
+        };
+        let mut m = empty_resolved();
+        let mut a = routine("Note", "procedure");
+        a.stable_routine_id = "ws:Note#1".into();
+        a.parameters = vec![param(0, "Msg", "Text")];
+        let mut b = routine("Note", "procedure");
+        b.stable_routine_id = "ws:Note#2".into();
+        b.parameters = vec![param(0, "Msg", "Text"), param(1, "Level", "Integer")];
+        let mut c = routine("Note", "procedure");
+        c.stable_routine_id = "dep:Note#1".into();
+        c.app_guid = "dep".into();
+        let mut d = routine("Alone", "procedure");
+        d.stable_routine_id = "ws:Alone".into();
+        m.workspace.routines = vec![a, b, c, d];
+        let apps = vec![serde_json::json!({"appId": "dep", "name": "Base App"})];
+        let cx = RollupCx::new(&m, &apps);
+        let (qa, qb, qc) = (
+            cx.qualified("ws:Note#1"),
+            cx.qualified("ws:Note#2"),
+            cx.qualified("dep:Note#1"),
+        );
+        assert_ne!(qa, qb, "overloads differ");
+        assert!(qa.ends_with("Note(Msg: Text) [app]"), "{qa}");
+        assert!(
+            qb.ends_with("Note(Msg: Text; Level: Integer) [app]"),
+            "{qb}"
+        );
+        assert!(qc.ends_with("Note [Base App]"), "{qc}");
+        assert!(cx.qualified("ws:Alone").ends_with("::Alone"));
     }
 
     #[test]

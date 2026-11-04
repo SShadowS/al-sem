@@ -1116,6 +1116,178 @@ pub(crate) fn evaluate_writes_table(
     evaluate_may_question(entry, oblg, &question, false, via_callers, field_guarded)
 }
 
+/// Everything "does the root write table T" reads (design §3.2.1, R3a; the
+/// W2-2 gap (a)): the root's passed and joined entry, the L4 temp states for
+/// the caller-frame question, the cone's gap count and table-event bit, the
+/// world. Prove's `writes-table`, explain's and digest's `--writes-table` all
+/// answer through [`TableQuestions::answer`], so the three tools give ONE
+/// answer by construction (T-W2-16 leg 2).
+pub(crate) struct TableQuestions<'a> {
+    pub model: &'a crate::program::model::workspace::Model,
+    pub temp_states: &'a crate::engine::l5::digest_cli::DbTempStates<'a>,
+    pub root: &'a str,
+    pub entry: &'a DigestEntryFull,
+    pub gaps_in_cone_count: usize,
+    pub fires_table_events: bool,
+    pub world: World,
+}
+
+/// One table's answer and the caller-resolved writes its evidence cites.
+pub(crate) struct TableAnswer {
+    pub result: ProveResult,
+    pub via_callers: HashMap<usize, CallerRef>,
+}
+
+impl TableQuestions<'_> {
+    /// `writes-table:<table>`: `Err` for a table the program does not know
+    /// (G40: matching no write would read as a proven `no`).
+    pub(crate) fn answer(&self, table: &str) -> Result<TableAnswer, String> {
+        if !names_a_known_table(self.model, table) {
+            return Err(format!(
+                "unknown table '{table}': no table of the program has that name or number"
+            ));
+        }
+        let question = ProveQuestion::WritesTable {
+            table: table.to_string(),
+        };
+        // G25: caller-dependent writes asked in the callers' frames.
+        let via_callers = resolve_caller_dependent_writes(
+            self.model,
+            self.temp_states,
+            self.root,
+            self.entry,
+            &question,
+        );
+        // G36: field-guarded RecordRef writes, judged against the table.
+        let field_guarded = crate::engine::l5::field_guard::resolve_field_guarded_writes(
+            self.model,
+            crate::engine::l5::digest_cli::primary_guid_of(self.model).unwrap_or(""),
+            self.entry,
+            table,
+        );
+        let mut result = prove_with_callers(
+            self.entry,
+            self.gaps_in_cone_count,
+            &question,
+            &via_callers,
+            &field_guarded,
+            self.world,
+        );
+        result.obligations.relies_on_loaded_subscribers =
+            relies_on_loaded_subscribers(&result, self.entry, self.fires_table_events);
+        Ok(TableAnswer {
+            result,
+            via_callers,
+        })
+    }
+}
+
+/// A table answer as explain and digest print it in JSON: the table, prove's
+/// `answer`, `blockedBy` and `assumptions` in prove's own serialization, and
+/// how many evidence rows it cites.
+pub(crate) fn table_answer_value(table: &str, a: &TableAnswer) -> serde_json::Value {
+    let r = &a.result;
+    let mut v = serde_json::json!({
+        "table": table,
+        "answer": r.answer.as_str(),
+        "evidence": r.evidence.as_ref().map_or(0, Vec::len),
+        "blockedBy": r.blocked_by.as_ref().map_or_else(Vec::new, |b| b.iter().map(blocker_to_value).collect()),
+    });
+    if let Some(label) = r.obligations.assumption() {
+        v["assumptions"] = serde_json::json!([label]);
+    }
+    v
+}
+
+/// Per root stable id: the JSON values and human lines of its
+/// `--writes-table` answers (explain and digest, W2-2 gap (a)).
+pub(crate) type TableAnswers = HashMap<String, (Vec<serde_json::Value>, Vec<String>)>;
+
+/// Every `tables` answer for every root of `entries`, in the default world,
+/// through [`TableQuestions::answer`]. `cones`: per root, its cone's gap
+/// count and table-event bit ([`cone_facts`], read before the entries are
+/// joined, which takes the cones).
+pub(crate) fn cone_facts(
+    cones: &BTreeMap<String, crate::engine::l5::digest_cli::UnresolvedCone>,
+) -> HashMap<String, (usize, bool)> {
+    cones
+        .iter()
+        .map(|(r, c)| {
+            (
+                r.clone(),
+                (
+                    c.gaps_in_cone
+                        .expect("a --writes-table plan counts the gaps in the cone"),
+                    c.fires_table_events
+                        .expect("a --writes-table plan reads the cone's table events"),
+                ),
+            )
+        })
+        .collect()
+}
+
+/// [`table_answers`] needs [`cone_facts`] of a plan through
+/// `session::counting_cone_gaps`.
+pub(crate) fn table_answers(
+    model: &crate::program::model::workspace::Model,
+    temp_states: &crate::engine::l5::digest_cli::DbTempStates<'_>,
+    entries: &[DigestEntryFull],
+    cones: &HashMap<String, (usize, bool)>,
+    tables: &[String],
+) -> TableAnswers {
+    let mut out = TableAnswers::new();
+    if tables.is_empty() {
+        return out;
+    }
+    for entry in entries {
+        let &(gaps_in_cone_count, fires_table_events) = cones
+            .get(&entry.routine_id)
+            .expect("a --writes-table plan counts each root's cone");
+        let q = TableQuestions {
+            model,
+            temp_states,
+            root: &entry.routine_id,
+            entry,
+            gaps_in_cone_count,
+            fires_table_events,
+            world: World::of_flags(false),
+        };
+        let (mut values, mut lines) = (Vec::new(), Vec::new());
+        for t in tables {
+            match q.answer(t) {
+                Ok(a) => {
+                    values.push(table_answer_value(t, &a));
+                    lines.push(table_answer_human(t, &a));
+                }
+                Err(e) => {
+                    values.push(serde_json::json!({"table": t, "error": e}));
+                    lines.push(format!("writes-table:{t}: {e}"));
+                }
+            }
+        }
+        out.insert(entry.routine_id.clone(), (values, lines));
+    }
+    out
+}
+
+/// The human line of a table answer.
+pub(crate) fn table_answer_human(table: &str, a: &TableAnswer) -> String {
+    let r = &a.result;
+    let mut s = format!("writes-table:{table}: {}", r.answer.as_str());
+    let n = r.evidence.as_ref().map_or(0, Vec::len);
+    if n > 0 {
+        s.push_str(&format!(" ({n} evidence)"));
+    }
+    if let Some(b) = r.blocked_by.as_ref().filter(|b| !b.is_empty()) {
+        s.push_str(&format!(" (blocked by {})", b.len()));
+    }
+    if let Some(label) = r.obligations.assumption() {
+        s.push_str(&format!("; assumes {label}"));
+    }
+    s.push_str(" — the answer alsem prove gives");
+    s
+}
+
 // ---------------------------------------------------------------------------
 // JSON anchor helper
 // ---------------------------------------------------------------------------
@@ -2066,30 +2238,34 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
              declares an event of that name"
         ));
     }
-    // G25: caller-dependent writes asked in the callers' frames, while the
-    // bundle is alive.
-    let via_callers = query_full
-        .entries
-        .first()
-        .map_or_else(HashMap::new, |entry| {
-            resolve_caller_dependent_writes(
-                resolved,
-                &temp_states,
-                root_id,
+    // `writes-table`: THE shared table answer (design §3.2.1), while the
+    // bundle is alive; explain and digest `--writes-table` call the same.
+    let table_answer = match (&parsed_question, query_full.entries.first()) {
+        (ProveQuestion::WritesTable { table }, Some(entry)) => Some(
+            TableQuestions {
+                model: resolved,
+                temp_states: &temp_states,
+                root: root_id,
                 entry,
-                &parsed_question,
-            )
-        });
-    // G36: field-guarded RecordRef writes, judged against the asked table.
-    let field_guarded = match (&parsed_question, query_full.entries.first()) {
-        (ProveQuestion::WritesTable { table }, Some(entry)) => {
-            crate::engine::l5::field_guard::resolve_field_guarded_writes(
-                resolved,
-                crate::engine::l5::digest_cli::primary_guid_of(resolved).unwrap_or(""),
-                entry,
-                table,
-            )
-        }
+                gaps_in_cone_count,
+                fires_table_events,
+                world: World::of_flags(closed_world),
+            }
+            .answer(table)
+            .map_err(|e| format!("prove: internal error — {e}"))?,
+        ),
+        _ => None,
+    };
+    // G25: caller-dependent writes asked in the callers' frames (a question
+    // other than writes-table resolves none).
+    let other_via_callers = match (&table_answer, query_full.entries.first()) {
+        (None, Some(entry)) => resolve_caller_dependent_writes(
+            resolved,
+            &temp_states,
+            root_id,
+            entry,
+            &parsed_question,
+        ),
         _ => HashMap::new(),
     };
     // The bundle's only borrower is dead: release `l4`.
@@ -2106,16 +2282,22 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     let entry = &query_full.entries[0];
 
     // Run tristate evaluation
-    let mut prove_result = prove_with_callers(
-        entry,
-        gaps_in_cone_count,
-        &parsed_question,
-        &via_callers,
-        &field_guarded,
-        World::of_flags(closed_world),
-    );
-    prove_result.obligations.relies_on_loaded_subscribers =
-        relies_on_loaded_subscribers(&prove_result, entry, fires_table_events);
+    let (prove_result, via_callers) = match table_answer {
+        Some(a) => (a.result, a.via_callers),
+        None => {
+            let mut r = prove_with_callers(
+                entry,
+                gaps_in_cone_count,
+                &parsed_question,
+                &other_via_callers,
+                &HashMap::new(),
+                World::of_flags(closed_world),
+            );
+            r.obligations.relies_on_loaded_subscribers =
+                relies_on_loaded_subscribers(&r, entry, fires_table_events);
+            (r, other_via_callers)
+        }
+    };
 
     // W2-8 (2h): where the obligations point, in the answer's world.
     let pointers = ObligationPointers::of(entry, prove_result.obligations.world);

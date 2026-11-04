@@ -8,8 +8,8 @@ dependencies: Out Base (embedded)
   commits: may — none in workspace code; 1 commit-bearing entry point:
     Codeunit Base Poster::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15
       path: IssueDoc → [run] Base Poster::OnRun → PostDocument (COMMIT at dep:Out Base:src/BasePoster.Codeunit.al:46)
-  writes in workspace code (1 table):
-    Out Log: Insert — known persistent
+  writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
+    Out Log: Insert 1 — known persistent
       Insert at ws:src/OutIssueDocument.Codeunit.al:61
       path: IssueDoc → Out Log Mgt::WriteLog
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary; alsem prove names the caller
