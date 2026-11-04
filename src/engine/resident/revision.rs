@@ -85,8 +85,9 @@ pub enum ArtifactKey {
         rules: bool,
     },
     /// One root's witnesses (plan 2026-11-03, item W): its
-    /// `DigestEntryResult` before any read's own passes
-    /// (`digest_cli::root_entries`), a function of the root (stable id) and
+    /// `DigestEntryResult` after the literal pass every effects reader runs
+    /// (`digest_cli::passed_root_entries`; MCP output wave 2 W2-1b, so a warm
+    /// ask pays nothing for the pass), a function of the root (stable id) and
     /// `include_reads` alone over any tree holding it, so explain, prove and
     /// digest on the same root share it within the revision. Filled off the
     /// request's own `Tree(scope)`; never carried to the next revision.
@@ -703,7 +704,7 @@ impl Revision {
         snapshot: &Snapshot<ArtifactKey, Artifact>,
         scratch: &WitnessScratch,
     ) -> Result<Arc<Option<DigestEntryResult>>, String> {
-        use crate::engine::l5::digest_cli::{BoundaryMode, root_entries};
+        use crate::engine::l5::digest_cli::{BoundaryMode, passed_root_entries};
         // The key may already be in `snapshot`: a request that read the
         // snapshot before a concurrent request published the key claims it
         // once that fill is over (the store's step (a)), then fills off the
@@ -740,7 +741,11 @@ impl Revision {
             self.witness
                 .batches
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let entries = root_entries(tree, model, &absent, include_reads, BoundaryMode::On);
+            // W2-1b: memoized AFTER the literal pass, which every reader
+            // runs (design §3.1), so a warm ask on this root pays nothing
+            // for it; one `LiteralReach` per batch.
+            let entries =
+                passed_root_entries(tree, model, &absent, include_reads, BoundaryMode::On);
             for (root, entry) in absent.into_iter().zip(entries) {
                 held.insert(
                     ArtifactKey::Witness {

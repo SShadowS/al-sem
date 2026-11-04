@@ -81,8 +81,11 @@ use crate::program::model::workspace::{
 use al_syntax::IdentifierFoldExt;
 
 /// The JSON schema id of the document. `/2` (MCP output plan 1a): every
-/// `line` is 1-based, and the document says so (`lineBase: 1`).
-pub const SCHEMA: &str = "al-sem.explain/2";
+/// `line` is 1-based, and the document says so (`lineBase: 1`). `/2.1`
+/// (MCP output wave 2, W2-1, additive): a write, commit or event the root
+/// cannot reach under literal arguments carries `literalUnreachable: true`.
+/// (`/3` stays the wave-2 redesign's, design §4.2.)
+pub const SCHEMA: &str = "al-sem.explain/2.1";
 
 /// How the command names its routines.
 #[derive(Debug, Clone)]
