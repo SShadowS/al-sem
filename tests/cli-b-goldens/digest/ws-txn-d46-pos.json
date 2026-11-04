@@ -32,7 +32,7 @@
               "column": 8,
               "excerpt": "commit",
               "file": "ws:src/InstallCU.al",
-              "line": 34,
+              "line": 35,
               "sourceKind": "source"
             },
             "factId": "aeb6e256328d0bc0",
@@ -78,7 +78,7 @@
                   "anchor": {
                     "column": 8,
                     "file": "ws:src/InstallCU.al",
-                    "line": 23,
+                    "line": 24,
                     "sourceKind": "source"
                   },
                   "calleeDisplay": "DoSetup",
@@ -106,7 +106,7 @@
               "column": 12,
               "excerpt": "Setup.Insert",
               "file": "ws:src/InstallCU.al",
-              "line": 32,
+              "line": 33,
               "sourceKind": "source"
             },
             "factId": "1b8a1d95b74b8f7c",
@@ -130,7 +130,7 @@
                   "anchor": {
                     "column": 8,
                     "file": "ws:src/InstallCU.al",
-                    "line": 23,
+                    "line": 24,
                     "sourceKind": "source"
                   },
                   "calleeDisplay": "DoSetup",
@@ -152,7 +152,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/InstallCU.al",
-            "line": 21,
+            "line": 22,
             "sourceKind": "source"
           },
           "display": "OnInstallAppPerCompany",
@@ -180,7 +180,7 @@
               "column": 8,
               "excerpt": "commit",
               "file": "ws:src/InstallCU.al",
-              "line": 34,
+              "line": 35,
               "sourceKind": "source"
             },
             "factId": "1161ef8efe183dd9",
@@ -237,7 +237,7 @@
               "column": 12,
               "excerpt": "Setup.Insert",
               "file": "ws:src/InstallCU.al",
-              "line": 32,
+              "line": 33,
               "sourceKind": "source"
             },
             "factId": "63af67ee66fc4502",
@@ -266,7 +266,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/InstallCU.al",
-            "line": 26,
+            "line": 27,
             "sourceKind": "source"
           },
           "display": "DoSetup",
@@ -294,7 +294,7 @@
               "column": 8,
               "excerpt": "commit",
               "file": "ws:src/UpgradeCU.al",
-              "line": 17,
+              "line": 18,
               "sourceKind": "source"
             },
             "factId": "5564d69a99d91528",
@@ -351,7 +351,7 @@
               "column": 12,
               "excerpt": "Setup.Modify",
               "file": "ws:src/UpgradeCU.al",
-              "line": 15,
+              "line": 16,
               "sourceKind": "source"
             },
             "factId": "cd5b1a00fdc31d54",
@@ -380,7 +380,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/UpgradeCU.al",
-            "line": 9,
+            "line": 10,
             "sourceKind": "source"
           },
           "display": "DoUpgrade",
@@ -408,7 +408,7 @@
               "column": 8,
               "excerpt": "commit",
               "file": "ws:src/UpgradeCU.al",
-              "line": 17,
+              "line": 18,
               "sourceKind": "source"
             },
             "factId": "02ee06c8b7a2675d",
@@ -454,7 +454,7 @@
                   "anchor": {
                     "column": 8,
                     "file": "ws:src/UpgradeCU.al",
-                    "line": 6,
+                    "line": 7,
                     "sourceKind": "source"
                   },
                   "calleeDisplay": "DoUpgrade",
@@ -482,7 +482,7 @@
               "column": 12,
               "excerpt": "Setup.Modify",
               "file": "ws:src/UpgradeCU.al",
-              "line": 15,
+              "line": 16,
               "sourceKind": "source"
             },
             "factId": "ab9ed9a86a85e6f1",
@@ -506,7 +506,7 @@
                   "anchor": {
                     "column": 8,
                     "file": "ws:src/UpgradeCU.al",
-                    "line": 6,
+                    "line": 7,
                     "sourceKind": "source"
                   },
                   "calleeDisplay": "DoUpgrade",
@@ -528,7 +528,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/UpgradeCU.al",
-            "line": 4,
+            "line": 5,
             "sourceKind": "source"
           },
           "display": "OnUpgradePerCompany",
@@ -543,6 +543,7 @@
         }
       }
     ],
+    "lineBase": 1,
     "summary": {
       "rootsRequested": 4,
       "rootsResolved": 4,
@@ -551,5 +552,5 @@
     },
     "workspaceFingerprint": "369c4515c708fe7831c9af975d8a55ce0e8d1baf6090a0e083e3d6d8e7f602e8"
   },
-  "schemaVersion": "1.8.0"
+  "schemaVersion": "2.0.0"
 }

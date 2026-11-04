@@ -80,8 +80,9 @@ use crate::program::model::workspace::{
 };
 use al_syntax::IdentifierFoldExt;
 
-/// The JSON schema id of the document.
-pub const SCHEMA: &str = "al-sem.explain/1";
+/// The JSON schema id of the document. `/2` (MCP output plan 1a): every
+/// `line` is 1-based, and the document says so (`lineBase: 1`).
+pub const SCHEMA: &str = "al-sem.explain/2";
 
 /// How the command names its routines.
 #[derive(Debug, Clone)]
@@ -436,9 +437,13 @@ fn anchor_json(a: &PAnchor) -> Value {
     })
 }
 
-/// `file:line`, as digest's human output prints an anchor.
+/// `file:line`, as digest's human output prints an anchor (1-based line).
 fn anchor_human(a: &PAnchor) -> String {
-    format!("{}:{}", a.source_unit_id, a.start_line)
+    format!(
+        "{}:{}",
+        a.source_unit_id,
+        crate::engine::line_base::shown(a.start_line)
+    )
 }
 
 /// One text read from the IR's per-`#if`-arm list: `Ok(None)` when there is
@@ -834,6 +839,10 @@ fn render(
     };
     let mut doc = Map::new();
     doc.insert("schema".into(), SCHEMA.into());
+    doc.insert(
+        "lineBase".into(),
+        crate::engine::line_base::LINE_BASE.into(),
+    );
     doc.insert("mode".into(), mode_name.into());
     match mode {
         // One selector: the single-routine document, unchanged. Two or more:
@@ -1099,6 +1108,8 @@ fn effect_anchor(e: &DigestEffectResult) -> Value {
     })
 }
 
+/// `file:line` of an anchor already in the document's JSON shape, whose line
+/// [`anchor_to_value`] wrote 1-based: printed as it is.
 fn anchor_value_human(v: &Value) -> String {
     match (v["file"].as_str(), v["line"].as_u64()) {
         (Some(f), Some(l)) => format!("{f}:{l}"),

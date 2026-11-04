@@ -695,13 +695,14 @@ fn vendored(name: &str) -> PathBuf {
     repo().join("tests/cli-b-goldens/diff/snapshots").join(name)
 }
 
-/// A temp copy of a vendored diff input, upgraded to v4 (D6's three edits),
-/// then `edit` applied.
+/// A temp copy of a vendored diff input at the current schema (v4's three
+/// edits, then v5's: 1-based lines and `lineBase: 1`), then `edit` applied.
 fn v4_copy(dir: &Path, name: &str, out: &str, edit: impl Fn(&mut Value)) -> PathBuf {
     let mut v: Value = serde_json::from_slice(&std::fs::read(vendored(name)).unwrap()).unwrap();
-    // The vendored inputs carry D6's three edits themselves (final panel F5:
-    // asserted, never re-applied here, so a stale input header fails).
-    assert_eq!(v["schemaVersion"], 4, "precondition: {name} is v4");
+    // The vendored inputs carry D6's three edits and v5's two themselves (final
+    // panel F5: asserted, never re-applied here, so a stale input header fails).
+    assert_eq!(v["schemaVersion"], 5, "precondition: {name} is v5");
+    assert_eq!(v["lineBase"], 1, "precondition: {name} states lineBase 1");
     assert_eq!(
         v["analysisUniverse"], "single-app",
         "precondition: {name} states its universe"
@@ -737,7 +738,7 @@ fn diff(old: &Path, new: &Path) -> DiffRunOutcome {
 }
 
 /// T7: a temp copy of a vendored input edited back to `schemaVersion: 3`,
-/// diffed against a v4 file. stderr names 3, v4 and the remedy; exit 1.
+/// diffed against a current (v5) file. stderr names 3, v5 and the remedy; exit 1.
 ///
 /// Break: accept 3 -> loads, fails.
 #[test]
@@ -753,7 +754,7 @@ fn diff_refuses_schema_3() {
     assert_eq!(outcome.exit_code, 1);
     let msg = outcome.error_message.expect("a load error");
     assert!(msg.contains("schemaVersion 3"), "{msg}");
-    assert!(msg.contains("(v4)"), "{msg}");
+    assert!(msg.contains("(v5)"), "{msg}");
     assert!(
         msg.contains("re-create it with 'alsem fingerprint'"),
         "{msg}"

@@ -2,5 +2,5 @@
   question: writes-table:Base Ledger 01
   answer:   yes
   evidence: 1 effect(s)
-    [DB_INSERT] transitive — ws:src/OutIssueDocument.Codeunit.al:14
+    [DB_INSERT] transitive — ws:src/OutIssueDocument.Codeunit.al:15
   obligations: unresolved=2, openWorld=1, coverage=incomplete

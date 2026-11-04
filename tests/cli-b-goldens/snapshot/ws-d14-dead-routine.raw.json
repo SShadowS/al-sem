@@ -17,7 +17,7 @@
       "callsiteId": "a3c882280b009076/609585be4ad09835acbf3a4740dfde1506aa78a340562bbaf7c8be6f043fd0c2/cs0",
       "controlContext": "top-level",
       "endColumn": 14,
-      "endLine": 4,
+      "endLine": 5,
       "order": {
         "dominatesSuccessReturn": true,
         "frameId": 0,
@@ -27,7 +27,7 @@
       "routine": "11111111-0000-0000-0000-00000000d14a:Codeunit:50114#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc",
       "sourceFile": "ws:src/codeunit.al",
       "startColumn": 2,
-      "startLine": 4
+      "startLine": 5
     }
   ],
   "callsiteResolutions": [
@@ -122,6 +122,7 @@
       "path": "app.json"
     }
   ],
+  "lineBase": 1,
   "operationIndex": [],
   "permissionFacts": [],
   "rootClassifications": [
@@ -137,9 +138,9 @@
         "enclosingRoutineId": "a3c882280b009076/609585be4ad09835acbf3a4740dfde1506aa78a340562bbaf7c8be6f043fd0c2",
         "range": {
           "endColumn": 5,
-          "endLine": 5,
+          "endLine": 6,
           "startColumn": 1,
-          "startLine": 2
+          "startLine": 3
         },
         "sourceUnitId": "ws:src/codeunit.al",
         "syntaxKind": "trigger_declaration"
@@ -170,7 +171,7 @@
     ]
   },
   "schemaFacts": [],
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "typedEdges": [
     {
       "callsiteId": "a3c882280b009076/609585be4ad09835acbf3a4740dfde1506aa78a340562bbaf7c8be6f043fd0c2/cs0",
@@ -181,9 +182,9 @@
         "enclosingRoutineId": "a3c882280b009076/609585be4ad09835acbf3a4740dfde1506aa78a340562bbaf7c8be6f043fd0c2",
         "range": {
           "endColumn": 14,
-          "endLine": 4,
+          "endLine": 5,
           "startColumn": 2,
-          "startLine": 4
+          "startLine": 5
         },
         "sourceUnitId": "ws:src/codeunit.al",
         "syntaxKind": "call_expression"

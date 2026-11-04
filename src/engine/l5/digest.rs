@@ -4561,11 +4561,15 @@ impl Serialize for DetailSer<'_> {
 }
 
 /// Ordered QueryWitnessHop serialize — per-variant V8 field order (= projectHop literal).
-struct HopSer<'a>(&'a QueryWitnessHop);
+/// `.1` is added to every anchor line: `digest` writes 1-based lines
+/// ([`crate::engine::line_base::LINE_BASE`]), the R4-F projection the model's 0-based rows.
+struct HopSer<'a>(&'a QueryWitnessHop, u32);
 impl Serialize for HopSer<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
         let h = self.0;
+        let anchor_entry =
+            |map: &mut S::SerializeMap, a: &Option<HopAnchor>| anchor_entry(map, a, self.1);
         let mut map = serializer.serialize_map(None)?;
         map.serialize_entry("kind", h.kind)?;
         map.serialize_entry("fromRoutineId", &h.from_routine_id)?;
@@ -4660,14 +4664,16 @@ impl Serialize for HopSer<'_> {
 fn anchor_entry<M: serde::ser::SerializeMap>(
     map: &mut M,
     anchor: &Option<HopAnchor>,
+    line_offset: u32,
 ) -> Result<(), M::Error> {
     if let Some(a) = anchor {
-        map.serialize_entry("anchor", &AnchorSer(a))?;
+        map.serialize_entry("anchor", &AnchorSer(a, line_offset))?;
     }
     Ok(())
 }
 
-struct AnchorSer<'a>(&'a HopAnchor);
+/// A hop anchor; `.1` is added to its line (see [`HopSer`]).
+struct AnchorSer<'a>(&'a HopAnchor, u32);
 impl Serialize for AnchorSer<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
@@ -4676,7 +4682,7 @@ impl Serialize for AnchorSer<'_> {
         map.serialize_entry("sourceKind", "source")?;
         map.serialize_entry("file", &a.file)?;
         if let Some(l) = a.line {
-            map.serialize_entry("line", &l)?;
+            map.serialize_entry("line", &(l + self.1))?;
         }
         if let Some(c) = a.column {
             map.serialize_entry("column", &c)?;
@@ -4686,9 +4692,11 @@ impl Serialize for AnchorSer<'_> {
 }
 
 /// Public helper for digest_cli: convert a `QueryWitnessHop` to a `serde_json::Value`
-/// using the same field ordering as `HopSer`. Used by `project_digest_document`.
+/// using the same field ordering as `HopSer`. Used by `project_digest_document`, so
+/// its anchor line is 1-based (`lineBase: 1`).
 pub fn hop_to_json_value(hop: &QueryWitnessHop) -> serde_json::Value {
-    serde_json::to_value(HopSer(hop)).unwrap_or(serde_json::Value::Null)
+    serde_json::to_value(HopSer(hop, crate::engine::line_base::LINE_BASE))
+        .unwrap_or(serde_json::Value::Null)
 }
 
 /// Ordered effect serialize — FIXED key order: type, detail, provenance, evidence,
@@ -4714,7 +4722,7 @@ impl Serialize for EffectSer<'_> {
         let via: Vec<Vec<HopSer>> = e
             .via_paths
             .iter()
-            .map(|p| p.iter().map(|h| HopSer(&h.inner)).collect())
+            .map(|p| p.iter().map(|h| HopSer(&h.inner, 0)).collect())
             .collect();
         map.serialize_entry("viaPaths", &via)?;
         map.serialize_entry("viaPathsTruncated", &e.via_paths_truncated)?;

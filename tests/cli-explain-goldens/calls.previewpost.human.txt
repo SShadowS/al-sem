@@ -1,9 +1,9 @@
-Codeunit Calls Post::PreviewPost  ws:src/post.al:35
+Codeunit Calls Post::PreviewPost  ws:src/post.al:36
   rules: none of its own
-  inherits via CheckPreview: rejects when Preview: "A preview cannot post."  [Error ws:src/checks.al:22]
-  inherits from table trigger OnModify (run by Modify at ws:src/post.al:40): rejects when Blocked: "A blocked order cannot change."  [Error ws:src/order.al:24]
+  inherits via CheckPreview: rejects when Preview: "A preview cannot post."  [Error ws:src/checks.al:23]
+  inherits from table trigger OnModify (run by Modify at ws:src/post.al:41): rejects when Blocked: "A blocked order cannot change."  [Error ws:src/order.al:25]
   caller rules: no known caller
-  writes Calls Order (DB_MODIFY) at ws:src/post.al:40
+  writes Calls Order (DB_MODIFY) at ws:src/post.al:41
   commits: no
   tests: none reach it
 

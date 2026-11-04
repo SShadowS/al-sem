@@ -43,7 +43,7 @@
               "column": 8,
               "excerpt": "TempLog.DeleteAll",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 57,
+              "line": 58,
               "sourceKind": "source"
             },
             "factId": "e6dc7b3e3b98f30e",
@@ -69,7 +69,7 @@
               "column": 8,
               "excerpt": "Log.Insert",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 60,
+              "line": 61,
               "sourceKind": "source"
             },
             "factId": "7d2d91f972099cc8",
@@ -89,7 +89,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/OutIssueDocument.Codeunit.al",
-            "line": 52,
+            "line": 53,
             "sourceKind": "source"
           },
           "display": "WriteLog",
@@ -104,6 +104,7 @@
         }
       }
     ],
+    "lineBase": 1,
     "summary": {
       "rootsRequested": 1,
       "rootsResolved": 1,
@@ -112,5 +113,5 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "1.8.0"
+  "schemaVersion": "2.0.0"
 }

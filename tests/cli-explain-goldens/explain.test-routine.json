@@ -9,7 +9,7 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/post.al",
-              "line": 12,
+              "line": 13,
               "sourceKind": "source"
             },
             "conditionality": "unknown",
@@ -27,7 +27,7 @@
               "column": 8,
               "excerpt": "Message",
               "file": "ws:src/post.al",
-              "line": 18,
+              "line": 19,
               "sourceKind": "source"
             },
             "conditionality": "guarded-by-IsHandled",
@@ -43,7 +43,7 @@
               "column": 8,
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
-              "line": 17,
+              "line": 18,
               "sourceKind": "source"
             },
             "conditionality": "guarded-by-IsHandled",
@@ -69,7 +69,7 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/tests.al",
-            "line": 14,
+            "line": 15,
             "sourceKind": "source"
           },
           "callee": "Assert.ExpectedError",
@@ -81,7 +81,7 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/tests.al",
-            "line": 15,
+            "line": 16,
             "sourceKind": "source"
           },
           "callee": "Assert.IsTrue",
@@ -95,7 +95,7 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/tests.al",
-          "line": 8,
+          "line": 9,
           "sourceKind": "source"
         },
         "doc": null,
@@ -115,7 +115,8 @@
     }
   ],
   "diagnostics": [],
+  "lineBase": 1,
   "mode": "routine",
-  "schema": "al-sem.explain/1",
+  "schema": "al-sem.explain/2",
   "selector": "PostUnreleasedFails"
 }

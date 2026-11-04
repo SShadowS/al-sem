@@ -31,7 +31,7 @@
               "column": 8,
               "excerpt": "Message",
               "file": "ws:src/Sender.Codeunit.al",
-              "line": 8,
+              "line": 9,
               "sourceKind": "source"
             },
             "factId": "164c21bfb5fa6f3b",
@@ -51,7 +51,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/Sender.Codeunit.al",
-            "line": 6,
+            "line": 7,
             "sourceKind": "source"
           },
           "display": "MessageOnly",
@@ -66,6 +66,7 @@
         }
       }
     ],
+    "lineBase": 1,
     "summary": {
       "rootsRequested": 1,
       "rootsResolved": 1,
@@ -74,5 +75,5 @@
     },
     "workspaceFingerprint": "6bbd1a2d99abadce08496fe643c9429f0d3981694b9ad61899df905cc9eebb26"
   },
-  "schemaVersion": "1.8.0"
+  "schemaVersion": "2.0.0"
 }

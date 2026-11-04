@@ -1,23 +1,23 @@
-Codeunit Out Issue Document::IssueDoc  ws:src/OutIssueDocument.Codeunit.al:2
-  rejects when Doc.Status <> Doc.Status::Open: (platform message)  [TestField ws:src/OutIssueDocument.Codeunit.al:11]
+Codeunit Out Issue Document::IssueDoc  ws:src/OutIssueDocument.Codeunit.al:3
+  rejects when Doc.Status <> Doc.Status::Open: (platform message)  [TestField ws:src/OutIssueDocument.Codeunit.al:12]
   inherited rules: none
   caller rules: none (1 known caller(s))
-  writes  (DB_DELETE, unknown) at ws:src/OutIssueDocument.Codeunit.al:14
-  writes Out Log [Entry No., Message] (DB_DELETE) at ws:src/OutIssueDocument.Codeunit.al:57
-  writes  (DB_INSERT, unknown) at ws:src/OutIssueDocument.Codeunit.al:14
-  writes  (DB_INSERT, unknown) at ws:src/OutIssueDocument.Codeunit.al:14
-  writes Out Log [Entry No., Message] (DB_INSERT) at ws:src/OutIssueDocument.Codeunit.al:60
-  writes Out Doc [Status] (DB_MODIFY) at ws:src/OutIssueDocument.Codeunit.al:13
-  writes  (DB_MODIFY, unknown) at ws:src/OutIssueDocument.Codeunit.al:14
+  writes  (DB_DELETE, unknown) at ws:src/OutIssueDocument.Codeunit.al:15
+  writes Out Log [Entry No., Message] (DB_DELETE) at ws:src/OutIssueDocument.Codeunit.al:58
+  writes  (DB_INSERT, unknown) at ws:src/OutIssueDocument.Codeunit.al:15
+  writes  (DB_INSERT, unknown) at ws:src/OutIssueDocument.Codeunit.al:15
+  writes Out Log [Entry No., Message] (DB_INSERT) at ws:src/OutIssueDocument.Codeunit.al:61
+  writes Out Doc [Status] (DB_MODIFY) at ws:src/OutIssueDocument.Codeunit.al:14
   writes  (DB_MODIFY, unknown) at ws:src/OutIssueDocument.Codeunit.al:15
+  writes  (DB_MODIFY, unknown) at ws:src/OutIssueDocument.Codeunit.al:16
   commits: may
-  raises OnAfterIssueDoc (unknown) at ws:src/OutIssueDocument.Codeunit.al:24
-  raises  (unknown) at ws:src/OutIssueDocument.Codeunit.al:14
+  raises OnAfterIssueDoc (unknown) at ws:src/OutIssueDocument.Codeunit.al:25
+  raises  (unknown) at ws:src/OutIssueDocument.Codeunit.al:15
   extension point OnAfterIssueDoc: 1 subscriber(s)
   extension point : 0 subscriber(s)
-  reached from page action Issue on Page Out Doc Card (caption "Issue") at ws:src/Pages.al:17
+  reached from page action Issue on Page Out Doc Card (caption "Issue") at ws:src/Pages.al:18
   tests: none reach it
-  gap: unresolved-call (callee Codeunit.Run(<dynamic>), status dynamic-target) at dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al:44
-  gap: unresolved-call (callee Codeunit.Run(<dynamic>), status dynamic-target) at ws:src/OutIssueDocument.Codeunit.al:20
-  gap: unresolved-call (callee Handler.Handle, status polymorphic) at ws:src/OutIssueDocument.Codeunit.al:22
+  gap: unresolved-call (callee Codeunit.Run(<dynamic>), status dynamic-target) at dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al:45
+  gap: unresolved-call (callee Codeunit.Run(<dynamic>), status dynamic-target) at ws:src/OutIssueDocument.Codeunit.al:21
+  gap: unresolved-call (callee Handler.Handle, status polymorphic) at ws:src/OutIssueDocument.Codeunit.al:23
 

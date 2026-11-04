@@ -251,13 +251,14 @@ fn reads_workspace(dir: &Path) {
     write(&dir.join("src/Work.al"), WORK_AL);
 }
 
-/// The evidence line (0-based, as `t1` reads it) of the first `WORK_AL` line
+/// The evidence line (1-based, `lineBase: 1`) of the first `WORK_AL` line
 /// whose trim is `text`.
 fn line_of(text: &str) -> u64 {
     WORK_AL
         .lines()
         .position(|l| l.trim() == text)
         .unwrap_or_else(|| panic!("fixture: no line {text}")) as u64
+        + 1
 }
 
 /// Both modes of the reads workspace: (flag-off, flag-on).

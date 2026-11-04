@@ -43,6 +43,7 @@ use crate::engine::l5::transaction_spans::{SeedKind, TransactionSpan};
 use crate::engine::l5::unresolved_cone::{
     DEFAULT_MAX_DEPTH, UnresolvedConeItem, UnresolvedTraversal, unresolved_cone,
 };
+use crate::engine::line_base::{shown, shown_opt};
 use crate::engine::session::{Cell, RunKey};
 use crate::program::model::workspace::Model;
 
@@ -1793,13 +1794,15 @@ pub fn run_digest_query_full_from_entries(
 // JSON document projection
 // ---------------------------------------------------------------------------
 
+/// An anchor's JSON: `a.line` is the model's 0-based row, written 1-based
+/// (`lineBase: 1`, [`crate::engine::line_base`]).
 pub fn anchor_to_value(a: &FullAnchor) -> serde_json::Value {
     let mut m = serde_json::Map::new();
     m.insert("sourceKind".into(), a.source_kind.into());
     if let Some(ref f) = a.file {
         m.insert("file".into(), f.clone().into());
     }
-    if let Some(l) = a.line {
+    if let Some(l) = shown_opt(a.line) {
         m.insert("line".into(), l.into());
     }
     if let Some(c) = a.column {
@@ -1899,7 +1902,7 @@ fn unresolved_item_to_value(item: &UnresolvedConeItem) -> serde_json::Value {
         let mut anch = serde_json::Map::new();
         anch.insert("sourceKind".into(), "source".into());
         anch.insert("file".into(), f.clone().into());
-        if let Some(l) = item.callsite_line {
+        if let Some(l) = shown_opt(item.callsite_line) {
             anch.insert("line".into(), l.into());
         }
         if let Some(c) = item.callsite_column {
@@ -2229,6 +2232,11 @@ pub fn project_digest_document(
     if include_reads {
         payload.insert("includeReads".into(), true.into());
     }
+    // 2.0.0: every `line` in this document is 1-based.
+    payload.insert(
+        "lineBase".into(),
+        crate::engine::line_base::LINE_BASE.into(),
+    );
     payload.insert("summary".into(), serde_json::Value::Object(summary));
     payload.insert(
         "workspaceFingerprint".into(),
@@ -2286,7 +2294,10 @@ pub fn project_digest_document(
     // with `file` and `candidates` (#339): file inputs read paths as diffs do
     // (#77). Not purely additive on the file side either: a file input that
     // resolved as written may now be `file-ambiguous` and give no roots.
-    env.insert("schemaVersion".into(), "1.8.0".into());
+    // 2.0.0 (MCP output plan 1a): every `line` (evidence, routine anchors,
+    // via-path hops, unresolved call sites, test coverage) is 1-based, and
+    // `payload.lineBase: 1` says so. Major: a value's meaning changed.
+    env.insert("schemaVersion".into(), "2.0.0".into());
 
     // The block goes in after the null drop, so its `ratio: null` survives; the
     // keep-nulls sort then orders it (and the payload key it lands in).
@@ -2347,7 +2358,7 @@ fn format_entries_human(entries: &[DigestEntryFull]) -> String {
             let ev_line = eff
                 .evidence
                 .line
-                .map(|l| format!(":{}", l))
+                .map(|l| format!(":{}", shown(l)))
                 .unwrap_or_default();
             let excerpt = eff
                 .evidence

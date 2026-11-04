@@ -50,6 +50,7 @@ use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l4::effect_query::{
     AncestorTouch, DbEffectQuery, TableTouch, UNKNOWN_TABLE_ID, is_unknown_table,
 };
+use crate::engine::line_base::{LINE_BASE, shown};
 use crate::engine::session::{Cell, View, query_plan};
 use crate::program::body::features::RECEIVER_PARAM_INDEX;
 use crate::program::model::declaring::DeclaringObjects;
@@ -59,8 +60,9 @@ use crate::program::model::workspace::{
 use crate::program::resolve::full::LoadedDependencies;
 
 /// The JSON envelope's `schemaVersion` for both `query` subcommands. 1.1.0 (#66):
-/// additive `payload.dependencies` {mode, apps}.
-const QUERY_SCHEMA_VERSION: &str = "1.1.0";
+/// additive `payload.dependencies` {mode, apps}. 2.0.0 (MCP output plan 1a):
+/// every `line` is 1-based, and `payload.lineBase: 1` says so.
+const QUERY_SCHEMA_VERSION: &str = "2.0.0";
 
 /// Which direction(s) a `query touches` run reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -709,12 +711,14 @@ impl<'a> OperationJoin<'a> {
     }
 }
 
+/// `o.line` / `rr.line` are the model's 0-based rows; every rendering below
+/// writes them 1-based (`lineBase: 1`, [`crate::engine::line_base`]).
 fn origin_json(origin: Option<&OperationRef>) -> Value {
     match origin {
         None => Value::Null,
         Some(o) => json!({
             "routine": routine_ref_json(&o.owner),
-            "anchor": { "file": o.file, "line": o.line, "column": o.column },
+            "anchor": { "file": o.file, "line": shown(o.line), "column": o.column },
         }),
     }
 }
@@ -722,7 +726,7 @@ fn origin_json(origin: Option<&OperationRef>) -> Value {
 /// `Object::Routine at file:line` — the human rendering of an effect's origin.
 fn origin_human(origin: Option<&OperationRef>, operation_id: &str) -> String {
     match origin {
-        Some(o) => format!("{} at {}:{}", o.owner.qualified(), o.file, o.line),
+        Some(o) => format!("{} at {}:{}", o.owner.qualified(), o.file, shown(o.line)),
         None => format!("(outside the workspace: {operation_id})"),
     }
 }
@@ -732,7 +736,7 @@ fn routine_ref_json(rr: &RoutineRef) -> Value {
         "display": rr.display,
         "objectDisplay": rr.object_display,
         "stableId": rr.stable_id,
-        "anchor": { "file": rr.file, "line": rr.line, "column": rr.column },
+        "anchor": { "file": rr.file, "line": shown(rr.line), "column": rr.column },
     })
 }
 
@@ -816,6 +820,7 @@ fn envelope(
 ) -> String {
     if let Value::Object(m) = &mut payload {
         m.insert("dependencies".into(), deps.to_json());
+        m.insert("lineBase".into(), LINE_BASE.into());
     }
     let mut env = Map::new();
     env.insert("alsemVersion".into(), alsem_ver.into());
@@ -1075,7 +1080,7 @@ fn render_query_touches_body(
                         "    {} — {}:{}\n",
                         rr.qualified(),
                         rr.file,
-                        rr.line
+                        shown(rr.line)
                     )),
                     None => human.push_str(&format!("    {internal}\n")),
                 }

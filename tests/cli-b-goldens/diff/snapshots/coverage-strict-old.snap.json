@@ -58,6 +58,7 @@
       "path": "app.json"
     }
   ],
+  "lineBase": 1,
   "operationIndex": [],
   "permissionFacts": [],
   "rootClassifications": [
@@ -73,9 +74,9 @@
         "enclosingRoutineId": "437708a07d538c57/c45d5f611d7163033bb7acb99f27902ae05d8425bd5e4fcd7b1642f36e1a417a",
         "range": {
           "endColumn": 8,
-          "endLine": 8,
+          "endLine": 9,
           "startColumn": 4,
-          "startLine": 2
+          "startLine": 3
         },
         "sourceUnitId": "ws:src/runner.al",
         "syntaxKind": "procedure"
@@ -92,7 +93,7 @@
     ]
   },
   "schemaFacts": [],
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "typedEdges": [],
   "workspaceFingerprint": "b476fc8f0388c1a408541e070339209e27177a46799f1e7e5211c10f2588be49"
 }

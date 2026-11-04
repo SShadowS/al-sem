@@ -26,13 +26,13 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/OutIssueDocument.Codeunit.al",
-            "line": 57
+            "line": 58
           },
           "routine": {
             "anchor": {
               "column": 4,
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 52
+              "line": 53
             },
             "display": "WriteLog",
             "objectDisplay": "Codeunit Out Log Mgt",
@@ -52,13 +52,13 @@
           "anchor": {
             "column": 8,
             "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
-            "line": 6
+            "line": 7
           },
           "routine": {
             "anchor": {
               "column": 4,
               "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
-              "line": 2
+              "line": 3
             },
             "display": "OnRun",
             "objectDisplay": "Codeunit Base Poster",
@@ -78,13 +78,13 @@
           "anchor": {
             "column": 11,
             "file": "ws:src/OutIssueDocument.Codeunit.al",
-            "line": 39
+            "line": 40
           },
           "routine": {
             "anchor": {
               "column": 4,
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 34
+              "line": 35
             },
             "display": "ScanFields",
             "objectDisplay": "Codeunit Out Issue Document",
@@ -103,13 +103,13 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/OutIssueDocument.Codeunit.al",
-            "line": 60
+            "line": 61
           },
           "routine": {
             "anchor": {
               "column": 4,
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 52
+              "line": 53
             },
             "display": "WriteLog",
             "objectDisplay": "Codeunit Out Log Mgt",
@@ -129,13 +129,13 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/OutIssueDocument.Codeunit.al",
-            "line": 13
+            "line": 14
           },
           "routine": {
             "anchor": {
               "column": 4,
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 2
+              "line": 3
             },
             "display": "IssueDoc",
             "objectDisplay": "Codeunit Out Issue Document",
@@ -155,13 +155,13 @@
           "anchor": {
             "column": 18,
             "file": "ws:src/OutIssueDocument.Codeunit.al",
-            "line": 41
+            "line": 42
           },
           "routine": {
             "anchor": {
               "column": 4,
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 34
+              "line": 35
             },
             "display": "ScanFields",
             "objectDisplay": "Codeunit Out Issue Document",
@@ -173,13 +173,14 @@
         "via": "inherited"
       }
     ],
+    "lineBase": 1,
     "routine": {
       "resolution": "resolved",
       "routine": {
         "anchor": {
           "column": 4,
           "file": "ws:src/OutIssueDocument.Codeunit.al",
-          "line": 2
+          "line": 3
         },
         "display": "IssueDoc",
         "objectDisplay": "Codeunit Out Issue Document",
@@ -188,5 +189,5 @@
       "selector": "Out Issue Document.IssueDoc"
     }
   },
-  "schemaVersion": "1.1.0"
+  "schemaVersion": "2.0.0"
 }

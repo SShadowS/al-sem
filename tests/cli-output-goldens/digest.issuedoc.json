@@ -42,7 +42,7 @@
               "column": 8,
               "excerpt": "TaskScheduler.CreateTask",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 18,
+              "line": 19,
               "sourceKind": "source"
             },
             "factId": "e28b3de46714ba70",
@@ -93,7 +93,7 @@
               "column": 8,
               "excerpt": "enters Out Base.OnRun",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 14,
+              "line": 15,
               "sourceKind": "source"
             },
             "factId": "ee69de9d9133b75f",
@@ -128,7 +128,7 @@
               "column": 8,
               "excerpt": "enters Out Base.OnRun",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 14,
+              "line": 15,
               "sourceKind": "source"
             },
             "factId": "dbb35aab093e98c0",
@@ -163,7 +163,7 @@
               "column": 8,
               "excerpt": "TempLog.DeleteAll",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 57,
+              "line": 58,
               "sourceKind": "source"
             },
             "factId": "5141fd0a447226eb",
@@ -178,7 +178,7 @@
                   "anchor": {
                     "column": 8,
                     "file": "ws:src/OutIssueDocument.Codeunit.al",
-                    "line": 16,
+                    "line": 17,
                     "sourceKind": "source"
                   },
                   "calleeDisplay": "LogMgt.WriteLog",
@@ -208,7 +208,7 @@
               "column": 8,
               "excerpt": "enters Out Base.OnRun",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 14,
+              "line": 15,
               "sourceKind": "source"
             },
             "factId": "2299df03090dd5dd",
@@ -243,7 +243,7 @@
               "column": 8,
               "excerpt": "enters Out Base.OnRun",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 14,
+              "line": 15,
               "sourceKind": "source"
             },
             "factId": "d1e1b546fd8d6f5c",
@@ -278,7 +278,7 @@
               "column": 8,
               "excerpt": "Log.Insert",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 60,
+              "line": 61,
               "sourceKind": "source"
             },
             "factId": "369cf30301f856c2",
@@ -293,7 +293,7 @@
                   "anchor": {
                     "column": 8,
                     "file": "ws:src/OutIssueDocument.Codeunit.al",
-                    "line": 16,
+                    "line": 17,
                     "sourceKind": "source"
                   },
                   "calleeDisplay": "LogMgt.WriteLog",
@@ -322,7 +322,7 @@
               "column": 8,
               "excerpt": "Doc.Modify",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 13,
+              "line": 14,
               "sourceKind": "source"
             },
             "factId": "65e80a0b8fa09ee5",
@@ -357,7 +357,7 @@
               "column": 8,
               "excerpt": "enters Out Base.OnRun",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 14,
+              "line": 15,
               "sourceKind": "source"
             },
             "factId": "88c2872efa55e67e",
@@ -392,7 +392,7 @@
               "column": 8,
               "excerpt": "enters Out Base.OnRun",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 15,
+              "line": 16,
               "sourceKind": "source"
             },
             "factId": "36d60a20668909d0",
@@ -423,7 +423,7 @@
               "column": 8,
               "excerpt": "Doc.TestField",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 11,
+              "line": 12,
               "sourceKind": "source"
             },
             "factId": "9e69c25f46bf74ab",
@@ -459,7 +459,7 @@
               "column": 8,
               "excerpt": "enters Out Base.OnRun",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 14,
+              "line": 15,
               "sourceKind": "source"
             },
             "factId": "3c11a869e7cc7cbc",
@@ -494,7 +494,7 @@
               "column": 8,
               "excerpt": "OnAfterIssueDoc",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 24,
+              "line": 25,
               "sourceKind": "source"
             },
             "factId": "780f878558bbd68f",
@@ -518,7 +518,7 @@
                   "anchor": {
                     "column": 8,
                     "file": "ws:src/OutIssueDocument.Codeunit.al",
-                    "line": 24,
+                    "line": 25,
                     "sourceKind": "source"
                   },
                   "calleeDisplay": "OnAfterIssueDoc",
@@ -546,7 +546,7 @@
               "column": 8,
               "excerpt": "enters Out Base.OnRun",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 14,
+              "line": 15,
               "sourceKind": "source"
             },
             "factId": "e3cb657fcb1d748d",
@@ -579,7 +579,7 @@
               "column": 8,
               "excerpt": "Client.Get",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 71,
+              "line": 72,
               "sourceKind": "source"
             },
             "factId": "75166aca19c90410",
@@ -594,7 +594,7 @@
                   "anchor": {
                     "column": 8,
                     "file": "ws:src/OutIssueDocument.Codeunit.al",
-                    "line": 17,
+                    "line": 18,
                     "sourceKind": "source"
                   },
                   "calleeDisplay": "Sender.Notify",
@@ -617,7 +617,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/OutIssueDocument.Codeunit.al",
-            "line": 2,
+            "line": 3,
             "sourceKind": "source"
           },
           "display": "IssueDoc",
@@ -630,7 +630,7 @@
             "callsiteAnchor": {
               "column": 8,
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 20,
+              "line": 21,
               "sourceKind": "source"
             },
             "owningRoutine": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475",
@@ -642,7 +642,7 @@
             "callsiteAnchor": {
               "column": 8,
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 22,
+              "line": 23,
               "sourceKind": "source"
             },
             "candidates": [
@@ -658,7 +658,7 @@
             "callsiteAnchor": {
               "column": 8,
               "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
-              "line": 44,
+              "line": 45,
               "sourceKind": "source"
             },
             "owningRoutine": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#a6f92b1e5bb3136870d2899a70cbf892fd183132481d199afb1c8f9d21b70359",
@@ -673,6 +673,7 @@
         }
       }
     ],
+    "lineBase": 1,
     "summary": {
       "rootsRequested": 1,
       "rootsResolved": 1,
@@ -681,5 +682,5 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "1.8.0"
+  "schemaVersion": "2.0.0"
 }

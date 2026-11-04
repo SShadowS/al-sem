@@ -17,7 +17,7 @@
       "callsiteId": "4823a6a1208a12ad/c45d5f611d7163033bb7acb99f27902ae05d8425bd5e4fcd7b1642f36e1a417a/cs0",
       "controlContext": "top-level",
       "endColumn": 27,
-      "endLine": 8,
+      "endLine": 9,
       "order": {
         "dominatesSuccessReturn": true,
         "frameId": 0,
@@ -27,7 +27,7 @@
       "routine": "dd5c5n5o-0005-0005-0005-000000000005:Codeunit:50400#234129ee000c7de20fad2dc35dbe5676a8ba94802c5c0d9c411bf712350377a6",
       "sourceFile": "ws:src/runner.al",
       "startColumn": 8,
-      "startLine": 8
+      "startLine": 9
     }
   ],
   "callsiteResolutions": [
@@ -106,6 +106,7 @@
       "path": "app.json"
     }
   ],
+  "lineBase": 1,
   "operationIndex": [],
   "permissionFacts": [],
   "rootClassifications": [
@@ -121,9 +122,9 @@
         "enclosingRoutineId": "4823a6a1208a12ad/c45d5f611d7163033bb7acb99f27902ae05d8425bd5e4fcd7b1642f36e1a417a",
         "range": {
           "endColumn": 8,
-          "endLine": 9,
+          "endLine": 10,
           "startColumn": 4,
-          "startLine": 2
+          "startLine": 3
         },
         "sourceUnitId": "ws:src/runner.al",
         "syntaxKind": "procedure"
@@ -140,7 +141,7 @@
     ]
   },
   "schemaFacts": [],
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "typedEdges": [
     {
       "callsiteId": "4823a6a1208a12ad/c45d5f611d7163033bb7acb99f27902ae05d8425bd5e4fcd7b1642f36e1a417a/cs0",
@@ -152,9 +153,9 @@
         "enclosingRoutineId": "4823a6a1208a12ad/c45d5f611d7163033bb7acb99f27902ae05d8425bd5e4fcd7b1642f36e1a417a",
         "range": {
           "endColumn": 27,
-          "endLine": 8,
+          "endLine": 9,
           "startColumn": 8,
-          "startLine": 8
+          "startLine": 9
         },
         "sourceUnitId": "ws:src/runner.al",
         "syntaxKind": "call_expression"

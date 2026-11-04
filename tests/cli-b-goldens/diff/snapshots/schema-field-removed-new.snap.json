@@ -41,6 +41,7 @@
       "path": "app.json"
     }
   ],
+  "lineBase": 1,
   "operationIndex": [],
   "permissionFacts": [],
   "rootClassifications": [],
@@ -66,7 +67,7 @@
       "stableId": "dd1f1e1d-0001-0001-0001-000000000001:Table:50100#K0"
     }
   ],
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "typedEdges": [],
   "workspaceFingerprint": "c7d267557d28ed5797786152c70e62d9ffc8ade04aeeda64b9b04c38599dbbd7"
 }

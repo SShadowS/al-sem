@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (MCP output plan 1a: every line 1-based)
+
+- **explain, prove, digest, query, fingerprint and the snapshots print and serialize 1-based
+  lines, and every document says so with `lineBase: 1`** (plan
+  `docs/superpowers/plans/2026-11-04-mcp-output-fixes.md`, item 1a, owner decision 1). They
+  printed the model's 0-based rows as `file:line`, so an agent's `Read`, `grep -n` or editor
+  landed one statement early; `alsem graph`, `alsem analyze`, SARIF and the HTML report were
+  1-based already. The model stays 0-based; `src/engine/line_base.rs` converts once, where a line
+  leaves the engine, after every sort and hash. Columns stay 0-based. Schema bumps (a value's
+  meaning changed, so major): digest 1.8.0 → 2.0.0, prove 1.4.0 → 2.0.0, query 1.1.0 → 2.0.0,
+  fingerprint-query 1.3.0 → 2.0.0, routine inventory 1.2.0 → 2.0.0, explain `al-sem.explain/1`
+  → `/2`, snapshot schema 4 → 5 (with a `lineBase` header key; old snapshots are refused, as
+  every schema bump does, and `alsem fingerprint` re-creates them). The MCP envelope of every
+  command answer carries `lineBase: 1`. The aldump R4-F projections keep the model's rows,
+  except the snapshot projection, which is the snapshot's own serializer.
+  **Readers to update with this change:** bc-dev-mcp's risk join (`src/core/risk.ts:99-110`,
+  `:158-169`) adds 1 to a digest routine anchor and must drop the `+ 1`; the ConTinAI citation
+  consumer and the editor extension (file:line links relayed by the LSP) read the new base.
+
+### Added (MCP output plan 1a: output invariants)
+
+- **`tests/cli/output_invariants.rs`** (always on, the wave-0 fixture) and
+  **`tests/cli/output_cdo.rs`** (the first CDO-gated `cli` member, now run by `scripts/cdo-gate`
+  on `IssueReminder`, `RunReportID` and `UpdateLastUpload` off one `alsem mcp` server): every
+  `file:line` a human output prints opens to the line it describes (the anchor source-check;
+  `dep:` anchors through `aldump --dump-dependency-source`; a sample of 50 on CDO), and every
+  JSON document and MCP envelope states `lineBase: 1`.
+
 ### Added (MCP output plan, wave 0: the cross-app output fixture)
 
 - **A cross-app fixture whose dependency ships bodies, and its golden family** (plan

@@ -83,8 +83,8 @@ fn publishes_event_evidence_cites_the_publish_call() {
         assert_eq!(ev["sourceKind"], "source", "{routine}: {r}");
         assert_eq!(ev["file"], "ws:src/a.al", "{routine}: {r}");
         assert_eq!(
-            ev["line"], 4,
-            "{routine}: the OnSomething() call (0-based): {r}"
+            ev["line"], 5,
+            "{routine}: the OnSomething() call (1-based): {r}"
         );
     }
 }

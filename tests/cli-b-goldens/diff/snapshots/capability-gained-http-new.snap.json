@@ -17,7 +17,7 @@
       "callsiteId": "329ef0f82c87a42c/de9b69db03e9e2548647a483811a73d9c3ee0a78b51352debe15468e6d1c902e/cs0",
       "controlContext": "top-level",
       "endColumn": 55,
-      "endLine": 9,
+      "endLine": 10,
       "order": {
         "dominatesSuccessReturn": true,
         "frameId": 0,
@@ -27,7 +27,7 @@
       "routine": "dd2c2a2b-0002-0002-0002-000000000002:Codeunit:50200#e57c74f799c7f386398a2313e4ccb697e320d480f5798771b3a58510188862c4",
       "sourceFile": "ws:src/processor.al",
       "startColumn": 8,
-      "startLine": 9
+      "startLine": 10
     }
   ],
   "callsiteResolutions": [
@@ -110,6 +110,7 @@
       "path": "app.json"
     }
   ],
+  "lineBase": 1,
   "operationIndex": [],
   "permissionFacts": [],
   "rootClassifications": [
@@ -125,9 +126,9 @@
         "enclosingRoutineId": "329ef0f82c87a42c/de9b69db03e9e2548647a483811a73d9c3ee0a78b51352debe15468e6d1c902e",
         "range": {
           "endColumn": 8,
-          "endLine": 11,
+          "endLine": 12,
           "startColumn": 4,
-          "startLine": 2
+          "startLine": 3
         },
         "sourceUnitId": "ws:src/processor.al",
         "syntaxKind": "procedure"
@@ -144,7 +145,7 @@
     ]
   },
   "schemaFacts": [],
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "typedEdges": [],
   "workspaceFingerprint": "ce4704d0f0ec6dfc8a8679e636fdb2468549e452779e20b66721e78bf841d851"
 }

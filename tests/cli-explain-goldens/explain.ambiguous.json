@@ -10,7 +10,8 @@
       "selector": "CheckAmount"
     }
   ],
+  "lineBase": 1,
   "mode": "routine",
-  "schema": "al-sem.explain/1",
+  "schema": "al-sem.explain/2",
   "selector": "CheckAmount"
 }

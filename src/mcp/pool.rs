@@ -947,6 +947,12 @@ fn run_command(
                 m.entry("stale").or_insert(json!(false));
                 m.entry("changedPaths").or_insert(json!([]));
                 m.entry("changedPathsTruncated").or_insert(json!(false));
+                // Every line the answer prints or serializes is 1-based (MCP
+                // output plan 1a).
+                m.insert(
+                    "lineBase".into(),
+                    json!(crate::engine::line_base::LINE_BASE),
+                );
             }
             if let Some(e) = extras.as_object() {
                 for (k, v) in e {

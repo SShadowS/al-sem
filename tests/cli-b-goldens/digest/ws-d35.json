@@ -37,7 +37,7 @@
               "column": 8,
               "excerpt": "Message",
               "file": "ws:src/Codeunit.al",
-              "line": 20,
+              "line": 21,
               "sourceKind": "source"
             },
             "factId": "341879c5930fec57",
@@ -57,7 +57,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/Codeunit.al",
-            "line": 18,
+            "line": 19,
             "sourceKind": "source"
           },
           "display": "OnBeforePrintSafe",
@@ -85,7 +85,7 @@
               "column": 8,
               "excerpt": "commit",
               "file": "ws:src/Codeunit.al",
-              "line": 6,
+              "line": 7,
               "sourceKind": "source"
             },
             "factId": "d41571e0450b5d46",
@@ -136,7 +136,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/Codeunit.al",
-            "line": 4,
+            "line": 5,
             "sourceKind": "source"
           },
           "display": "OnAfterPostDirect",
@@ -164,7 +164,7 @@
               "column": 8,
               "excerpt": "commit",
               "file": "ws:src/Codeunit.al",
-              "line": 31,
+              "line": 32,
               "sourceKind": "source"
             },
             "factId": "c71eaa213728e0a7",
@@ -215,7 +215,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/Codeunit.al",
-            "line": 29,
+            "line": 30,
             "sourceKind": "source"
           },
           "display": "PersistAudit",
@@ -243,7 +243,7 @@
               "column": 8,
               "excerpt": "commit",
               "file": "ws:src/Codeunit.al",
-              "line": 26,
+              "line": 27,
               "sourceKind": "source"
             },
             "factId": "fb56165678f0df67",
@@ -294,7 +294,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/Codeunit.al",
-            "line": 24,
+            "line": 25,
             "sourceKind": "source"
           },
           "display": "NonSubscriberCommit",
@@ -322,7 +322,7 @@
               "column": 8,
               "excerpt": "commit",
               "file": "ws:src/Codeunit.al",
-              "line": 31,
+              "line": 32,
               "sourceKind": "source"
             },
             "factId": "e4a8376aa5d518ba",
@@ -368,7 +368,7 @@
                   "anchor": {
                     "column": 8,
                     "file": "ws:src/Codeunit.al",
-                    "line": 13,
+                    "line": 14,
                     "sourceKind": "source"
                   },
                   "calleeDisplay": "PersistAudit",
@@ -390,7 +390,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/Codeunit.al",
-            "line": 11,
+            "line": 12,
             "sourceKind": "source"
           },
           "display": "OnAfterValidateTransitive",
@@ -405,6 +405,7 @@
         }
       }
     ],
+    "lineBase": 1,
     "summary": {
       "rootsRequested": 5,
       "rootsResolved": 5,
@@ -413,5 +414,5 @@
     },
     "workspaceFingerprint": "f6926434e3c7c47f07ebe2d627f769e903e898f08ea05d5357827ef685db3a81"
   },
-  "schemaVersion": "1.8.0"
+  "schemaVersion": "2.0.0"
 }

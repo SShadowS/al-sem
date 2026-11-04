@@ -68,13 +68,15 @@ fn facts(doc: &Value) -> Vec<Value> {
     out
 }
 
-/// The (0-based) line of the first occurrence of `needle` in `file`.
+/// The 1-based line (the documents' `lineBase: 1`) of the first occurrence of
+/// `needle` in `file`.
 fn line_of(file: &Path, needle: &str) -> u64 {
     std::fs::read_to_string(file)
         .unwrap()
         .lines()
         .position(|l| l.contains(needle))
         .unwrap_or_else(|| panic!("{needle} in {file:?}")) as u64
+        + 1
 }
 
 // ---------------------------------------------------------------------------
@@ -575,16 +577,27 @@ fn single_app_flag_reaches_fingerprint_routine() {
         // Minted from the base binary, so never regenerated.
         let path = repo().join("tests/cli-b-goldens/single-app").join(file);
         let base = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+        // Since the base: schema 1.3.0, then 2.0.0 (MCP output plan 1a), whose
+        // payload states `lineBase: 1` (the fixture's block has no line to move).
         let (old, new) = (
             "\"schemaVersion\": \"1.2.0\"",
-            "\"schemaVersion\": \"1.3.0\"",
+            "\"schemaVersion\": \"2.0.0\"",
         );
         assert_eq!(
             base.matches(old).count(),
             version_lines,
             "{format}: the stated line"
         );
-        let want = base.replace(old, new);
+        let (summary, with_base) = (
+            "\n    \"summary\": {",
+            "\n    \"lineBase\": 1,\n    \"summary\": {",
+        );
+        assert_eq!(
+            base.matches(summary).count(),
+            version_lines,
+            "{format}: the payload's summary key"
+        );
+        let want = base.replace(old, new).replace(summary, with_base);
         assert_eq!(got, want, "{format}: --single-app != the base's default");
     }
 }

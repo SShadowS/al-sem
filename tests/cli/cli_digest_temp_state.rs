@@ -145,8 +145,8 @@ fn has_label(e: &Value) -> bool {
     })
 }
 
-/// The 0-based line of the unique `// @marker` comment — the convention of a
-/// digest viaPath hop's `anchor.line`.
+/// The 1-based line of the unique `// @marker` comment — the convention of a
+/// digest viaPath hop's `anchor.line` (`lineBase: 1`).
 fn line_of(marker: &str) -> u64 {
     let tag = format!("// @{marker}");
     let src = probe_al();
@@ -157,7 +157,7 @@ fn line_of(marker: &str) -> u64 {
         .map(|(i, _)| i)
         .collect();
     assert_eq!(hits.len(), 1, "marker {marker} must be unique: {hits:?}");
-    hits[0] as u64
+    hits[0] as u64 + 1
 }
 
 fn is_kt(eff: &Value) -> bool {
@@ -273,8 +273,8 @@ fn collect_temp_states(v: &Value, out: &mut BTreeSet<String>) {
 fn check_mode(single_app: bool) -> Vec<String> {
     let (mode, doc) = &docs()[if single_app { 0 } else { 1 }];
     let mut failures = Vec::new();
-    if doc["schemaVersion"] != "1.8.0" {
-        failures.push(format!("schemaVersion {} != 1.8.0", doc["schemaVersion"]));
+    if doc["schemaVersion"] != "2.0.0" {
+        failures.push(format!("schemaVersion {} != 2.0.0", doc["schemaVersion"]));
     }
 
     // Every DB_INSERT in the routine has the expected value.

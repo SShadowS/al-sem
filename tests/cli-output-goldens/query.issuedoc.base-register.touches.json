@@ -29,7 +29,7 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/OutIssueDocument.Codeunit.al",
-          "line": 2
+          "line": 3
         },
         "display": "IssueDoc",
         "objectDisplay": "Codeunit Out Issue Document",
@@ -37,6 +37,7 @@
       },
       "selector": "Out Issue Document.IssueDoc"
     },
+    "lineBase": 1,
     "table": {
       "id": "d0d00001-0000-4000-8000-0000000000b1/table/70020",
       "isUnknownBucket": false,
@@ -53,5 +54,5 @@
       "witnesses": []
     }
   },
-  "schemaVersion": "1.1.0"
+  "schemaVersion": "2.0.0"
 }

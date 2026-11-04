@@ -29,13 +29,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 57
+              "line": 58
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/OutIssueDocument.Codeunit.al",
-                "line": 52
+                "line": 53
               },
               "display": "WriteLog",
               "objectDisplay": "Codeunit Out Log Mgt",
@@ -52,13 +52,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 60
+              "line": 61
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/OutIssueDocument.Codeunit.al",
-                "line": 52
+                "line": 53
               },
               "display": "WriteLog",
               "objectDisplay": "Codeunit Out Log Mgt",
@@ -76,7 +76,7 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/OutIssueDocument.Codeunit.al",
-          "line": 2
+          "line": 3
         },
         "display": "IssueDoc",
         "objectDisplay": "Codeunit Out Issue Document",
@@ -84,6 +84,7 @@
       },
       "selector": "Out Issue Document.IssueDoc"
     },
+    "lineBase": 1,
     "table": {
       "id": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
       "isUnknownBucket": false,
@@ -106,13 +107,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 57
+              "line": 58
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/OutIssueDocument.Codeunit.al",
-                "line": 52
+                "line": 53
               },
               "display": "WriteLog",
               "objectDisplay": "Codeunit Out Log Mgt",
@@ -123,7 +124,7 @@
             "anchor": {
               "column": 16,
               "file": "ws:src/Pages.al",
-              "line": 21
+              "line": 22
             },
             "display": "OnAction",
             "objectDisplay": "Page Out Doc Card",
@@ -140,13 +141,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 60
+              "line": 61
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/OutIssueDocument.Codeunit.al",
-                "line": 52
+                "line": 53
               },
               "display": "WriteLog",
               "objectDisplay": "Codeunit Out Log Mgt",
@@ -157,7 +158,7 @@
             "anchor": {
               "column": 16,
               "file": "ws:src/Pages.al",
-              "line": 21
+              "line": 22
             },
             "display": "OnAction",
             "objectDisplay": "Page Out Doc Card",
@@ -169,5 +170,5 @@
       ]
     }
   },
-  "schemaVersion": "1.1.0"
+  "schemaVersion": "2.0.0"
 }

@@ -96,12 +96,13 @@
       "path": "app.json"
     }
   ],
+  "lineBase": 1,
   "operationIndex": [
     {
       "controlContext": "top-level",
       "displayText": "Item.Modify",
       "endColumn": 21,
-      "endLine": 7,
+      "endLine": 8,
       "operationId": "ebf5db1ea5d5b849/e18e7f010da9703fe54d0049c392d7fde34a24deef25abf055e14494f8073355/op0",
       "order": {
         "dominatesSuccessReturn": true,
@@ -112,7 +113,7 @@
       "routine": "dd3p3e3f-0003-0003-0003-000000000003:Codeunit:50300#bd531b980f4449e2a1c7a969b61e65084243c8b4fbdf080e99f0189c15f13942",
       "sourceFile": "ws:src/manager.al",
       "startColumn": 8,
-      "startLine": 7
+      "startLine": 8
     }
   ],
   "permissionFacts": [
@@ -143,9 +144,9 @@
         "enclosingRoutineId": "ebf5db1ea5d5b849/e18e7f010da9703fe54d0049c392d7fde34a24deef25abf055e14494f8073355",
         "range": {
           "endColumn": 8,
-          "endLine": 8,
+          "endLine": 9,
           "startColumn": 4,
-          "startLine": 2
+          "startLine": 3
         },
         "sourceUnitId": "ws:src/manager.al",
         "syntaxKind": "procedure"
@@ -188,7 +189,7 @@
       "stableId": "dd3p3e3f-0003-0003-0003-000000000003:Table:50300#K0"
     }
   ],
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "typedEdges": [],
   "workspaceFingerprint": "6b1cf0515c4d6d37cb43765bba14585dadc42160b01bb8a335e68fee22705a16"
 }

@@ -172,7 +172,7 @@ fn symbol_only_dependency_table_resolves_and_is_selectable() {
     // digest, default (cross-app).
     let (doc, code) = json(&["digest", &ws, "--file", "src/Work.al"]);
     assert_eq!(code, 0, "{doc}");
-    assert_eq!(doc["schemaVersion"], "1.8.0");
+    assert_eq!(doc["schemaVersion"], "2.0.0");
     assert_eq!(doc["payload"]["dependencies"]["mode"], "crossApp");
     assert_eq!(
         app_sources(&doc),
@@ -212,7 +212,7 @@ fn symbol_only_dependency_table_resolves_and_is_selectable() {
     for sel in ["18", "Customer"] {
         let (q, code) = json(&["query", "touches", &ws, "--table", sel]);
         assert_eq!(code, 0, "--table {sel}: {q}");
-        assert_eq!(q["schemaVersion"], "1.1.0");
+        assert_eq!(q["schemaVersion"], "2.0.0");
         assert_eq!(q["payload"]["table"]["id"], dep_table(), "--table {sel}");
         assert_eq!(q["payload"]["table"]["name"], "Customer");
         assert_eq!(q["payload"]["dependencies"]["mode"], "crossApp");
@@ -625,11 +625,12 @@ fn t1_call_chain_reports_the_dependency_modify_and_commit_as_groups() {
     let ws = dir.path().to_string_lossy().to_string();
     let (doc, code) = json(&["digest", &ws, "--routine", "CallChain"]);
     assert_eq!(code, 0, "{doc}");
-    // `Lib.Outer();` is line 16 of `src/Work.al`.
+    // `Lib.Outer();` is row 16 of `src/Work.al`: the document's 1-based line 17.
     let line = crate::dep_dispatch_fixture::WS_AL
         .lines()
         .position(|l| l.trim() == "Lib.Outer();")
-        .expect("fixture: the call") as u64;
+        .expect("fixture: the call") as u64
+        + 1;
     let group = |ty: &str, count: &str, resources: &str| -> GroupView {
         (
             ty.to_string(),

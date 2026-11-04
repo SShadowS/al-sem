@@ -13,3 +13,7 @@ Re-mints:
   replacing every `<prefix>/<64 hex>` with its hash part, the json files are equal except for the
   16-hex edge ids hashed over internal callsite/operation ids, which map one-to-one; the cbor files
   decode to the same documents under the same normalization.
+- 2026-11-04 (MCP output plan 1a, snapshot schema 5): all six records. Every `startLine` /
+  `endLine` is one higher (1-based), `schemaVersion` 4 became 5 and the header gained
+  `"lineBase": 1`; nothing else changed. Checked mechanically on the json and on the decoded cbor
+  (a value-by-value walk of old against new allowing exactly those three differences).

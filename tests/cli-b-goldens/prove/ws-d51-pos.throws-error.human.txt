@@ -2,6 +2,6 @@
   question: throws-error
   answer:   yes
   evidence: 1 effect(s)
-    [ERROR_THROW] direct — ws:src/Sender.Codeunit.al:13
+    [ERROR_THROW] direct — ws:src/Sender.Codeunit.al:14
       conditionality: unconditional-on-success
   obligations: all clear

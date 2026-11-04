@@ -124,7 +124,8 @@ fn single_app_flag_reaches_inventory_only() {
     let (single, err, c2) = inventory(tmp.path(), &["--single-app"]);
     assert_eq!((c1, c2), (0, 0), "{err}");
     assert_ne!(cross, single, "precondition: the universes differ");
-    // Minted from the base binary, so never regenerated.
+    // Minted from the base binary, so never regenerated. Edited by hand once
+    // since, for MCP output plan 1a (schema 2.0.0, `lineBase: 1`, every line + 1).
     let path = repo().join("tests/cli-b-goldens/single-app/inventory.dd.json");
     let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
     assert_eq!(single, want, "--single-app != the base's default");
@@ -211,6 +212,8 @@ fn cross_app_inventory_matches_its_golden() {
     let (got, err, code) = inventory(tmp.path(), &[]);
     assert_eq!(code, 0, "{err}");
     // Minted from the head and triaged by hand (ledger), so never regenerated.
+    // Edited by hand for MCP output plan 1a (schema 2.0.0, `lineBase: 1`, every
+    // line + 1).
     let path = repo().join("tests/cli-b-goldens/cross-app/inventory.two-onruns.json");
     let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
     assert_eq!(got, want);

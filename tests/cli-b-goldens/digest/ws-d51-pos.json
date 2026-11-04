@@ -31,7 +31,7 @@
               "column": 8,
               "excerpt": "error-call",
               "file": "ws:src/Sender.Codeunit.al",
-              "line": 13,
+              "line": 14,
               "sourceKind": "source"
             },
             "factId": "13ef3af0ee3a1c65",
@@ -55,7 +55,7 @@
               "column": 8,
               "excerpt": "Client.Post",
               "file": "ws:src/Sender.Codeunit.al",
-              "line": 12,
+              "line": 13,
               "sourceKind": "source"
             },
             "factId": "9c47042e77369b78",
@@ -77,7 +77,7 @@
               "column": 8,
               "excerpt": "Error",
               "file": "ws:src/Sender.Codeunit.al",
-              "line": 13,
+              "line": 14,
               "sourceKind": "source"
             },
             "factId": "9bcff0f852b91056",
@@ -97,7 +97,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/Sender.Codeunit.al",
-            "line": 6,
+            "line": 7,
             "sourceKind": "source"
           },
           "display": "PostThenError",
@@ -112,6 +112,7 @@
         }
       }
     ],
+    "lineBase": 1,
     "summary": {
       "rootsRequested": 1,
       "rootsResolved": 1,
@@ -120,5 +121,5 @@
     },
     "workspaceFingerprint": "7b850fecf8bc63d2216a6d8e134dbdee8afdd0ceb51be87ffc52197fcef36875"
   },
-  "schemaVersion": "1.8.0"
+  "schemaVersion": "2.0.0"
 }

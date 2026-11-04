@@ -12,7 +12,7 @@
               "column": 8,
               "excerpt": "TempLog.DeleteAll",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 57,
+              "line": 58,
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -31,7 +31,7 @@
               "column": 8,
               "excerpt": "Log.Insert",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 60,
+              "line": 61,
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -56,7 +56,7 @@
           "anchor": {
             "column": 12,
             "file": "ws:src/Pages.al",
-            "line": 17,
+            "line": 18,
             "sourceKind": "source"
           },
           "caption": "Issue",
@@ -76,7 +76,7 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/OutIssueDocument.Codeunit.al",
-          "line": 52,
+          "line": 53,
           "sourceKind": "source"
         },
         "doc": null,
@@ -92,7 +92,7 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 11,
+              "line": 12,
               "sourceKind": "source"
             },
             "appliedBy": [
@@ -144,7 +144,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/Pages.al",
-            "line": 37,
+            "line": 38,
             "sourceKind": "source"
           },
           "asserts": 0,
@@ -156,7 +156,8 @@
     }
   ],
   "diagnostics": [],
+  "lineBase": 1,
   "mode": "routine",
-  "schema": "al-sem.explain/1",
+  "schema": "al-sem.explain/2",
   "selector": "Out Log Mgt::WriteLog"
 }

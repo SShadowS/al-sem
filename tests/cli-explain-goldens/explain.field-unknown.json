@@ -7,8 +7,9 @@
       "table": "Explain Order"
     }
   ],
+  "lineBase": 1,
   "mode": "field",
-  "schema": "al-sem.explain/1",
+  "schema": "al-sem.explain/2",
   "selector": {
     "field": "NoSuchField",
     "table": "Explain Order"

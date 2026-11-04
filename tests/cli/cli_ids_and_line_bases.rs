@@ -6,9 +6,9 @@
 //!   minted) id for every routine, overloads and a field trigger included.
 //! - Inventory rows carry `arity` and `sourceAnchor`, the same anchor `prove`
 //!   reports as `routine.anchor`.
-//! - Each document says its line base: graph `meta.lineBase` 1, prove and
-//!   fingerprint `payload.lineBase` 0; a graph node's `line` is the inventory
-//!   anchor's line + 1.
+//! - Each document says its line base, and it is 1 everywhere (MCP output plan
+//!   1a): graph `meta.lineBase`, prove and fingerprint `payload.lineBase`; a
+//!   graph node's `line` equals the inventory anchor's line.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -72,7 +72,7 @@ fn graph_inventory_and_prove_share_ids_and_declare_line_bases() {
 
     let inv: serde_json::Value =
         serde_json::from_str(&run(t.path(), &["fingerprint", "ws", "--inventory-only"])).unwrap();
-    assert_eq!(inv["payload"]["lineBase"], 0);
+    assert_eq!(inv["payload"]["lineBase"], 1);
     let rows = inv["payload"]["routineInventory"].as_array().unwrap();
     assert_eq!(rows.len(), 4, "P, P, Q and the field trigger: {rows:?}");
     let by_id: HashMap<&str, &serde_json::Value> = rows
@@ -104,8 +104,8 @@ fn graph_inventory_and_prove_share_ids_and_declare_line_bases() {
         assert_eq!(n["arity"], row["arity"], "{n} vs {row}");
         assert_eq!(
             n["line"].as_u64().unwrap(),
-            row["sourceAnchor"]["line"].as_u64().unwrap() + 1,
-            "graph lines are 1-based, inventory anchors 0-based: {n} vs {row}"
+            row["sourceAnchor"]["line"].as_u64().unwrap(),
+            "graph lines and inventory anchors are both 1-based: {n} vs {row}"
         );
     }
 
@@ -116,7 +116,7 @@ fn graph_inventory_and_prove_share_ids_and_declare_line_bases() {
             &["prove", "ws", id, "may-commit", "--deterministic"],
         ))
         .unwrap();
-        assert_eq!(doc["payload"]["lineBase"], 0);
+        assert_eq!(doc["payload"]["lineBase"], 1);
         assert_eq!(
             doc["payload"]["routine"]["stableId"],
             row["stableRoutineId"]

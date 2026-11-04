@@ -1,3 +1,3 @@
 --- touches unknown — the UNRESOLVED-TABLE bucket, not a table ---
   workspace-global: 1 routine(s) touch it
-    Codeunit R2a Records::DeclaredVars — ws:src/Codeunit.al:9
+    Codeunit R2a Records::DeclaredVars — ws:src/Codeunit.al:10

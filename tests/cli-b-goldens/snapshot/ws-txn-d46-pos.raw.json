@@ -17,7 +17,7 @@
       "callsiteId": "5163e6a282c9cd15/786c1ca10ce74fe39bc7a39bc942711ec88a79f6c9fcf16007a10892d7dee08f/cs0",
       "controlContext": "top-level",
       "endColumn": 19,
-      "endLine": 6,
+      "endLine": 7,
       "order": {
         "dominatesSuccessReturn": true,
         "frameId": 0,
@@ -27,14 +27,14 @@
       "routine": "11111111-0000-0000-0000-00000000d460:Codeunit:50002#4bede131c948eaabef06c2e6bfbc4f1239c15eb29e7a7e0b64b3cdeed16c79f5",
       "sourceFile": "ws:src/UpgradeCU.al",
       "startColumn": 8,
-      "startLine": 6
+      "startLine": 7
     },
     {
       "calleeDisplay": "DoSetup",
       "callsiteId": "5163e6a282c9cd15/fab9faa344f7180e7491d3606e58029233da35356177938a7150d65003093f5d/cs0",
       "controlContext": "top-level",
       "endColumn": 17,
-      "endLine": 23,
+      "endLine": 24,
       "order": {
         "dominatesSuccessReturn": true,
         "frameId": 0,
@@ -44,7 +44,7 @@
       "routine": "11111111-0000-0000-0000-00000000d460:Codeunit:50001#28129d608bb2353d1edc8a881e6073f4f07bc1388ea6d1c4caa0b7c8850cf83d",
       "sourceFile": "ws:src/InstallCU.al",
       "startColumn": 8,
-      "startLine": 23
+      "startLine": 24
     }
   ],
   "callsiteResolutions": [
@@ -379,12 +379,13 @@
       "path": "app.json"
     }
   ],
+  "lineBase": 1,
   "operationIndex": [
     {
       "controlContext": "top-level",
       "displayText": "Setup.Get",
       "endColumn": 22,
-      "endLine": 13,
+      "endLine": 14,
       "operationId": "5163e6a282c9cd15/742544f8c68d2810d9c9dfd24127da5ab0e6eadbcbd6f6621f9beb2d3bfcca1a/op0",
       "order": {
         "dominatesSuccessReturn": false,
@@ -395,13 +396,13 @@
       "routine": "11111111-0000-0000-0000-00000000d460:Codeunit:50002#3b39c65aba470dc136b74c8c2123651b7828037b7a1898d1d8e75339cf65056e",
       "sourceFile": "ws:src/UpgradeCU.al",
       "startColumn": 11,
-      "startLine": 13
+      "startLine": 14
     },
     {
       "controlContext": "conditional",
       "displayText": "Setup.Modify",
       "endColumn": 26,
-      "endLine": 15,
+      "endLine": 16,
       "operationId": "5163e6a282c9cd15/742544f8c68d2810d9c9dfd24127da5ab0e6eadbcbd6f6621f9beb2d3bfcca1a/op1",
       "order": {
         "dominatesSuccessReturn": false,
@@ -412,13 +413,13 @@
       "routine": "11111111-0000-0000-0000-00000000d460:Codeunit:50002#3b39c65aba470dc136b74c8c2123651b7828037b7a1898d1d8e75339cf65056e",
       "sourceFile": "ws:src/UpgradeCU.al",
       "startColumn": 12,
-      "startLine": 15
+      "startLine": 16
     },
     {
       "controlContext": "top-level",
       "displayText": "commit",
       "endColumn": 16,
-      "endLine": 17,
+      "endLine": 18,
       "operationId": "5163e6a282c9cd15/742544f8c68d2810d9c9dfd24127da5ab0e6eadbcbd6f6621f9beb2d3bfcca1a/op2",
       "order": {
         "dominatesSuccessReturn": true,
@@ -429,13 +430,13 @@
       "routine": "11111111-0000-0000-0000-00000000d460:Codeunit:50002#3b39c65aba470dc136b74c8c2123651b7828037b7a1898d1d8e75339cf65056e",
       "sourceFile": "ws:src/UpgradeCU.al",
       "startColumn": 8,
-      "startLine": 17
+      "startLine": 18
     },
     {
       "controlContext": "top-level",
       "displayText": "Setup.Get",
       "endColumn": 26,
-      "endLine": 30,
+      "endLine": 31,
       "operationId": "5163e6a282c9cd15/891fc7dddd2ae2ecaf276395a3a77ab66421d96eb8ac9732c85570a832a93346/op0",
       "order": {
         "dominatesSuccessReturn": false,
@@ -446,13 +447,13 @@
       "routine": "11111111-0000-0000-0000-00000000d460:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb",
       "sourceFile": "ws:src/InstallCU.al",
       "startColumn": 15,
-      "startLine": 30
+      "startLine": 31
     },
     {
       "controlContext": "conditional",
       "displayText": "Setup.Insert",
       "endColumn": 26,
-      "endLine": 32,
+      "endLine": 33,
       "operationId": "5163e6a282c9cd15/891fc7dddd2ae2ecaf276395a3a77ab66421d96eb8ac9732c85570a832a93346/op2",
       "order": {
         "dominatesSuccessReturn": false,
@@ -463,13 +464,13 @@
       "routine": "11111111-0000-0000-0000-00000000d460:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb",
       "sourceFile": "ws:src/InstallCU.al",
       "startColumn": 12,
-      "startLine": 32
+      "startLine": 33
     },
     {
       "controlContext": "top-level",
       "displayText": "commit",
       "endColumn": 16,
-      "endLine": 34,
+      "endLine": 35,
       "operationId": "5163e6a282c9cd15/891fc7dddd2ae2ecaf276395a3a77ab66421d96eb8ac9732c85570a832a93346/op3",
       "order": {
         "dominatesSuccessReturn": true,
@@ -480,7 +481,7 @@
       "routine": "11111111-0000-0000-0000-00000000d460:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb",
       "sourceFile": "ws:src/InstallCU.al",
       "startColumn": 8,
-      "startLine": 34
+      "startLine": 35
     }
   ],
   "permissionFacts": [
@@ -606,9 +607,9 @@
         "enclosingRoutineId": "5163e6a282c9cd15/fab9faa344f7180e7491d3606e58029233da35356177938a7150d65003093f5d",
         "range": {
           "endColumn": 8,
-          "endLine": 24,
+          "endLine": 25,
           "startColumn": 4,
-          "startLine": 21
+          "startLine": 22
         },
         "sourceUnitId": "ws:src/InstallCU.al",
         "syntaxKind": "trigger_declaration"
@@ -626,9 +627,9 @@
         "enclosingRoutineId": "5163e6a282c9cd15/891fc7dddd2ae2ecaf276395a3a77ab66421d96eb8ac9732c85570a832a93346",
         "range": {
           "endColumn": 8,
-          "endLine": 35,
+          "endLine": 36,
           "startColumn": 4,
-          "startLine": 26
+          "startLine": 27
         },
         "sourceUnitId": "ws:src/InstallCU.al",
         "syntaxKind": "procedure"
@@ -646,9 +647,9 @@
         "enclosingRoutineId": "5163e6a282c9cd15/742544f8c68d2810d9c9dfd24127da5ab0e6eadbcbd6f6621f9beb2d3bfcca1a",
         "range": {
           "endColumn": 8,
-          "endLine": 18,
+          "endLine": 19,
           "startColumn": 4,
-          "startLine": 9
+          "startLine": 10
         },
         "sourceUnitId": "ws:src/UpgradeCU.al",
         "syntaxKind": "procedure"
@@ -666,9 +667,9 @@
         "enclosingRoutineId": "5163e6a282c9cd15/786c1ca10ce74fe39bc7a39bc942711ec88a79f6c9fcf16007a10892d7dee08f",
         "range": {
           "endColumn": 8,
-          "endLine": 7,
+          "endLine": 8,
           "startColumn": 4,
-          "startLine": 4
+          "startLine": 5
         },
         "sourceUnitId": "ws:src/UpgradeCU.al",
         "syntaxKind": "trigger_declaration"
@@ -743,7 +744,7 @@
       "stableId": "11111111-0000-0000-0000-00000000d460:Table:50000#K0"
     }
   ],
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "typedEdges": [
     {
       "callsiteId": "5163e6a282c9cd15/fab9faa344f7180e7491d3606e58029233da35356177938a7150d65003093f5d/cs0",
@@ -754,9 +755,9 @@
         "enclosingRoutineId": "5163e6a282c9cd15/fab9faa344f7180e7491d3606e58029233da35356177938a7150d65003093f5d",
         "range": {
           "endColumn": 17,
-          "endLine": 23,
+          "endLine": 24,
           "startColumn": 8,
-          "startLine": 23
+          "startLine": 24
         },
         "sourceUnitId": "ws:src/InstallCU.al",
         "syntaxKind": "call_expression"
@@ -772,9 +773,9 @@
         "enclosingRoutineId": "5163e6a282c9cd15/786c1ca10ce74fe39bc7a39bc942711ec88a79f6c9fcf16007a10892d7dee08f",
         "range": {
           "endColumn": 19,
-          "endLine": 6,
+          "endLine": 7,
           "startColumn": 8,
-          "startLine": 6
+          "startLine": 7
         },
         "sourceUnitId": "ws:src/UpgradeCU.al",
         "syntaxKind": "call_expression"

@@ -8,9 +8,9 @@ Codeunit D47 Sender::SendAfterTempInsert  [public-procedure]
   witnesses:
     insert table "11111111-0000-0000-0000-0000000d4705/table/50100" — 1 path shown
       Path 1/1 shown:
-        direct TempRec.Insert at ws:src/Sender.Codeunit.al:14:8
+        direct TempRec.Insert at ws:src/Sender.Codeunit.al:15:8
 
     send http — 1 path shown
       Path 1/1 shown:
-        call Client.Get at ws:src/Sender.Codeunit.al:15:8
+        call Client.Get at ws:src/Sender.Codeunit.al:16:8
 

@@ -2,5 +2,5 @@
   question: writes-table:Base Price
   answer:   yes
   evidence: 1 effect(s)
-    [DB_MODIFY] transitive — ws:src/OutIssueDocument.Codeunit.al:15
+    [DB_MODIFY] transitive — ws:src/OutIssueDocument.Codeunit.al:16
   obligations: unresolved=2, openWorld=1, coverage=incomplete
