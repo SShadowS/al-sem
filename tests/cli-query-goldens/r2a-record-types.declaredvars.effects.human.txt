@@ -4,5 +4,5 @@
   scope: per operation, one routine into dependency code (alsem explain and prove follow the whole cone); temporary records are not writes
   reads: 2 on 2 tables (FindFirst 1, FindSet 1) — --all lists them
   temporary records: 1 operation on 1 table in 1 routine — --all lists them
-  table not resolved (determined at run time or not resolved): 1 operation in 1 routine (Get 1) — --all lists them
+  table not resolved: 1 operation in 1 routine (Get 1) — --all lists them
   next: alsem prove <routine> writes-table:<table> follows the whole cone for one table

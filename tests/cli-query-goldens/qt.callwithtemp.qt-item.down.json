@@ -22,6 +22,7 @@
           "tempStateUnknown": 0
         },
         "tableNotResolved": 0,
+        "tableNotResolvedRecordRef": 0,
         "temporary": 1
       },
       "touches": true,
@@ -76,5 +77,5 @@
       "selector": "QT Item"
     }
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }

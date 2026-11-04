@@ -118,6 +118,10 @@ struct ImplicitFrame {
 struct Scope {
     rvars: HashSet<String>,
     frvars: HashSet<String>,
+    /// MCP output wave 3a (Q4): the lowercased names that resolve, lexically
+    /// (parameters and locals before the object's globals), to a variable
+    /// declared `RecordRef`. A subset of `rvars`.
+    record_ref_vars: HashSet<String>,
     /// Lowercased names of the object's procedures/triggers. A bare implicit-receiver
     /// call whose method name collides with one of these is a CALL to that procedure,
     /// not a record op (legacy `object_procedure_names` collision check).
@@ -135,6 +139,35 @@ fn is_record_receiver_ty(ty: &str) -> bool {
 
 fn is_record_ty(v: &VarDecl) -> bool {
     v.ty.as_deref().map(is_record_receiver_ty).unwrap_or(false)
+}
+
+/// The AL `RecordRef` type, exactly (Q4): not `Record …`, not `RecordId`.
+fn is_record_ref_ty(ty: Option<&str>) -> bool {
+    ty.is_some_and(|t| t.trim().eq_ignore_ascii_case("recordref"))
+}
+
+/// The lowercased names a routine's lexical scope resolves to a `RecordRef`
+/// variable: the object's globals first, then the routine's locals and
+/// parameters, each later declaration taking the name (a local shadows a
+/// global of another type).
+fn record_ref_names(o: &al_syntax::ir::ObjectDecl, routine: &RoutineDecl) -> HashSet<String> {
+    let mut by_name: HashMap<String, bool> = HashMap::new();
+    for v in o.globals.iter().chain(routine.locals.iter()) {
+        by_name.insert(
+            v.name.to_ascii_lowercase(),
+            is_record_ref_ty(v.ty.as_deref()),
+        );
+    }
+    for p in &routine.params {
+        by_name.insert(
+            p.name.to_ascii_lowercase(),
+            is_record_ref_ty(p.ty.as_deref()),
+        );
+    }
+    by_name
+        .into_iter()
+        .filter_map(|(n, is_ref)| is_ref.then_some(n))
+        .collect()
 }
 
 /// Does the object expose an implicit `Rec` (legacy `implicit_base_receiver` +
@@ -266,6 +299,7 @@ fn build_scope(
     frvars.extend(params_locals);
     (
         Scope {
+            record_ref_vars: record_ref_names(o, routine),
             rvars,
             frvars,
             object_procedure_names,
@@ -1012,7 +1046,9 @@ impl<'a> SpineCtx<'a> {
             {
                 self.identifier_ref_set.insert(n.to_ascii_lowercase());
             }
-            // Record-op classification + (op_type, receiver text) for the emit.
+            // Record-op classification + (op_type, receiver text) for the emit;
+            // `receiver_is_record_ref` (Q4) is set by the explicit-receiver arm.
+            let mut receiver_is_record_ref = false;
             let record_op: Option<(&'static str, String)> = match &fe.kind {
                 Member { object, member, .. } => {
                     let recv_name = match &self.file.ir.expr(*object).kind {
@@ -1020,10 +1056,14 @@ impl<'a> SpineCtx<'a> {
                         _ => None,
                     };
                     let is_rec = recv_name
-                        .map(|r| self.scope.rvars.contains(&r))
+                        .as_ref()
+                        .map(|r| self.scope.rvars.contains(r))
                         .unwrap_or(false);
                     match (is_rec, record_op_type(&member.to_ascii_lowercase())) {
                         (true, Some(op)) => {
+                            receiver_is_record_ref = recv_name
+                                .as_ref()
+                                .is_some_and(|r| self.scope.record_ref_vars.contains(r));
                             Some((op, self.raw(&self.file.ir.expr(*object).origin).to_string()))
                         }
                         _ => None,
@@ -1106,6 +1146,7 @@ impl<'a> SpineCtx<'a> {
                                 }
                             })
                         },
+                        receiver_is_record_ref,
                     });
                     let k = if *op_type == "LockTable" {
                         "lock"
@@ -3286,6 +3327,56 @@ codeunit 50002 C
             .map(|r| (r.identifier.as_str(), r.condition_kind.as_str()))
             .collect();
         assert_eq!(got, [("plain", "if"), ("paren", "if"), ("name", "if")]);
+    }
+
+    /// MCP output wave 3a (Q4): an operation's receiver is a RecordRef exactly
+    /// when the name resolves, lexically, to a variable declared `RecordRef`: a
+    /// `RecordRef` parameter or local, a `RecordRef` global no local shadows;
+    /// never a `Record`, never a local `Record` shadowing a `RecordRef` global,
+    /// never the implicit `Rec`.
+    #[test]
+    fn a_record_ref_receiver_is_marked_per_operation() {
+        const SRC: &str = r#"
+table 50005 T
+{
+    fields { field(1; F; Integer) { } }
+    var
+        GlobalRef: RecordRef;
+        Shadowed: RecordRef;
+
+    procedure Caller(ParamRef: RecordRef)
+    var
+        LocalRef: RecordRef;
+        Shadowed: Record Customer;
+        Cust: Record Customer;
+    begin
+        ParamRef.FindSet();
+        LocalRef.Next();
+        GlobalRef.Modify();
+        Shadowed.FindFirst();
+        Cust.Get();
+        Modify();
+    end;
+}
+"#;
+        let (features, _, _) =
+            ir_features_for_named_routine(SRC, "Caller", "g", "u").expect("routine");
+        let got: Vec<(&str, bool)> = features
+            .record_operations
+            .iter()
+            .map(|o| (o.record_variable_name.as_str(), o.receiver_is_record_ref))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("ParamRef", true),
+                ("LocalRef", true),
+                ("GlobalRef", true),
+                ("Shadowed", false),
+                ("Cust", false),
+                ("Rec", false),
+            ]
+        );
     }
 
     /// #96: `Insert`'s RunTrigger literal is captured, like Modify/Delete's (the

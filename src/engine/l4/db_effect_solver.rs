@@ -1910,6 +1910,7 @@ pub(crate) mod tests {
             in_statement_position: false,
             run_trigger: None,
             modify_all_field: None,
+            receiver_is_record_ref: false,
         }
     }
 

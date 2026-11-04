@@ -1590,7 +1590,9 @@ fn fields_follow_the_original_operation_kind() {
 /// `Out Log` lock-only with its own lock's anchor and owner; the RecordRef
 /// lock on a table decided at run time in the table-not-resolved bucket and
 /// counted on the locks line. `Validate` is no L4 operation (a trigger-class
-/// op), so the fixture's `Validate` adds no row.
+/// op), so the fixture's `Validate` adds no row. Wave 3a (Q4): that lock's
+/// receiver is a declared `RecordRef`, so both lines say "a RecordRef (table
+/// decided at run time)" and neither says "table not resolved".
 ///
 /// Discrimination (2026-11-04): `op_family` putting `LockTable` in the write
 /// family fails at the summary (writes 7 on 3 tables); restored, passes.
@@ -1604,7 +1606,8 @@ fn locks_are_their_own_class_in_query_effects() {
     assert!(
         summary.contains("summary: 9 operations — writes that may persist 5 on 2 tables")
             && summary.contains("locks 2 on 2 tables")
-            && summary.contains("table not resolved 1 in 1 routine"),
+            && summary.contains("on a RecordRef (table decided at run time) 1 in 1 routine")
+            && !summary.contains("table not resolved"),
         "{human}"
     );
     let writes: Vec<&str> = human
@@ -1617,8 +1620,8 @@ fn locks_are_their_own_class_in_query_effects() {
     assert!(
         human.contains(
             "  locks (2 tables; not writes): Out Item (also written), Out Log at \
-             ws:src/OutFieldOps.Codeunit.al:21 in Codeunit Out Field Ops::LockLog; table not \
-             resolved: 1 lock\n"
+             ws:src/OutFieldOps.Codeunit.al:21 in Codeunit Out Field Ops::LockLog; a RecordRef \
+             (table decided at run time): 1 lock\n"
         ),
         "{human}"
     );

@@ -534,6 +534,7 @@ fn record_op(
         in_statement_position: false,
         run_trigger: Some(true),
         modify_all_field: None,
+        receiver_is_record_ref: false,
     }
 }
 

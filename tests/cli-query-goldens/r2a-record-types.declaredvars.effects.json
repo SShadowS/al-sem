@@ -146,6 +146,10 @@
       "scope": "operations-one-routine-deep",
       "tableNotResolved": {
         "operations": 1,
+        "recordRef": {
+          "operations": 0,
+          "routines": 0
+        },
         "routines": 1
       },
       "temporary": {
@@ -169,5 +173,5 @@
       }
     }
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }

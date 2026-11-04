@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (MCP output wave 3a)
+
+- **Q4: "RecordRef" only where the receiver is one.** The body walk now records, per record
+  operation, whether its receiver resolves lexically (parameters and locals before the object's
+  globals) to a variable declared `RecordRef` (`PRecordOperation::receiver_is_record_ref`,
+  forwarded to `ModelRecordOperation`; serde-skipped, read only by `alsem query`, so no detector
+  input moved). `alsem query effects` splits its "table not resolved" bucket: `on a RecordRef
+  (table decided at run time): N operations in M routines` and `table not resolved: …` for the
+  rest, in the summary line, the bucket lines, the locks line and each `--all` row (was one
+  `table not resolved (determined at run time or not resolved)` line for both). `query touches`
+  says how many of the unresolved operations in the cone are on a RecordRef. Query JSON
+  **3.1.0** (additive): such a row carries `receiver: "RecordRef"`;
+  `summary.tableNotResolved.recordRef {operations, routines}` and
+  `down.counts.tableNotResolvedRecordRef` count them. Goldens: `cli-query-goldens`,
+  `cli-output-goldens` and `gate-goldens/batch/one-job` query files (version line, the new
+  counts, the split wording); `ir-l2-goldens/l2_features.snapshot` (its `Debug` digest of every
+  routine with a record operation shows the new field).
+
 ### Changed (MCP output wave 2, W2-4 … W2-8)
 
 - **Digest size budgets decided (owner, 2026-11-04):** the default digest JSON (pretty) of `CDO

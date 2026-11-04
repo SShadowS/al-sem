@@ -69,8 +69,13 @@ use crate::program::resolve::full::LoadedDependencies;
 /// `notTouching` and `unknown` callers, and in the informative case one
 /// `callers[]` row per touching caller; `down` adds `counts`, `beyond` and each
 /// witness's `touchClass`. The spec gives `query effects`' W2-2 changes the same
-/// 3.0.0, so W2-2 adds to this major rather than bumping again.
-const QUERY_SCHEMA_VERSION: &str = "3.0.0";
+/// 3.0.0, so W2-2 adds to this major rather than bumping again. 3.1.0 (wave
+/// 3a, additive): an unresolved-table row whose receiver is a RecordRef says
+/// `receiver: "RecordRef"`, and the summaries count them
+/// (`tableNotResolved.recordRef`, `down.counts.tableNotResolvedRecordRef`);
+/// the reserved `beyond` fields and `summary.scope` are filled from the
+/// capability cone.
+const QUERY_SCHEMA_VERSION: &str = "3.1.0";
 
 /// Which direction(s) a `query touches` run reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -763,6 +768,27 @@ impl<'a> OperationJoin<'a> {
             line: op.source_anchor.start_line,
             column: op.source_anchor.start_column,
         })
+    }
+
+    /// Q4 (MCP output wave 3a): the operation's receiver is a variable
+    /// declared `RecordRef` (`ModelRecordOperation::receiver_is_record_ref`),
+    /// read off the same claiming row [`Self::get`] reads. `false` for an
+    /// operation outside the model's routines: nothing is invented.
+    pub fn receiver_is_record_ref(&self, operation_id: &str) -> bool {
+        self.index
+            .last_record_operation(operation_id)
+            .is_some_and(|(_, op)| op.receiver_is_record_ref)
+    }
+}
+
+/// The human name of a row's table: a RecordRef's "table decided at run
+/// time" (Q4) is said only where the receiver is one; any other unresolved
+/// table is "table not resolved".
+fn unresolved_label(record_ref: bool) -> &'static str {
+    if record_ref {
+        "a RecordRef (table decided at run time)"
+    } else {
+        "table not resolved"
     }
 }
 
@@ -1534,18 +1560,29 @@ fn render_touches_down(
     // Operations on a table not resolved "may be this table". They are outside
     // the four class counts, unless the query table IS that bucket (then they
     // are the witnesses themselves).
-    let not_resolved = if is_unknown_table(table_id) {
-        witnesses.len()
+    let (not_resolved, not_resolved_ref) = if is_unknown_table(table_id) {
+        let refs = witnesses
+            .iter()
+            .filter(|w| cx.ops.receiver_is_record_ref(w.operation_id))
+            .count();
+        (witnesses.len(), refs)
     } else {
         query
             .bundle()
             .db_effects(rix)
             .filter(|e| is_unknown_table(e.table_id))
-            .count()
+            .fold((0, 0), |(n, r), e| {
+                (
+                    n + 1,
+                    r + usize::from(cx.ops.receiver_is_record_ref(e.operation_id)),
+                )
+            })
     };
     let mut counts_v = counts_json(&counts);
     if let Value::Object(m) = &mut counts_v {
         m.insert("tableNotResolved".into(), not_resolved.into());
+        // Q4 (3.1.0): of them, on a RecordRef receiver.
+        m.insert("tableNotResolvedRecordRef".into(), not_resolved_ref.into());
         m.insert("byOp".into(), json!(by_op));
     }
     payload.insert(
@@ -1618,8 +1655,13 @@ fn render_touches_down(
         }
     }
     if not_resolved > 0 && !is_unknown_table(table_id) {
+        let refs = if not_resolved_ref > 0 {
+            format!(", {not_resolved_ref} of them on a RecordRef (table decided at run time)")
+        } else {
+            String::new()
+        };
         human.push_str(&format!(
-            "  table not resolved: {} in this cone (they may be this table) — --table unknown lists them\n",
+            "  table not resolved: {} in this cone{refs} (they may be this table) — --table unknown lists them\n",
             plural(not_resolved, "operation", "operations")
         ));
     }
@@ -2016,6 +2058,14 @@ fn render_query_effects_body(
                 ops.get(t.operation_id, &join).as_ref(),
                 Some(tables.get(t.table_id)),
             );
+            // Q4 (3.1.0, additive): an unresolved table's receiver, where it
+            // is a RecordRef.
+            if is_unknown_table(t.table_id)
+                && ops.receiver_is_record_ref(t.operation_id)
+                && let Value::Object(m) = &mut v
+            {
+                m.insert("receiver".into(), "RecordRef".into());
+            }
             if t.via != crate::engine::l4::effect_store::ViaRank::Direct
                 && let Value::Object(m) = &mut v
             {
@@ -2057,15 +2107,29 @@ fn render_query_effects_body(
         ops: BTreeMap<&'t str, usize>,
     }
     let mut buckets: BTreeMap<&'static str, Bucket<'_>> = BTreeMap::new();
+    // Q4: the "table not resolved" bucket split by whether the receiver is a
+    // RecordRef (true) or not (false); the bucket itself keeps the total.
+    let mut unresolved: BTreeMap<bool, Bucket<'_>> = BTreeMap::new();
     for (i, t) in effects.iter().enumerate() {
-        let b = buckets.entry(bucket(t)).or_default();
-        b.rows.push(i);
-        b.tables.insert(t.table_id);
-        *b.ops.entry(t.op).or_default() += 1;
-        b.owners.insert(ops.get(t.operation_id, &join).map_or_else(
+        let name = bucket(t);
+        let owner = ops.get(t.operation_id, &join).map_or_else(
             || "(outside the workspace)".to_string(),
             |o| o.owner.qualified(),
-        ));
+        );
+        let mut parts = vec![buckets.entry(name).or_default()];
+        if name == "tableNotResolved" {
+            parts.push(
+                unresolved
+                    .entry(ops.receiver_is_record_ref(t.operation_id))
+                    .or_default(),
+            );
+        }
+        for b in parts {
+            b.rows.push(i);
+            b.tables.insert(t.table_id);
+            *b.ops.entry(t.op).or_default() += 1;
+            b.owners.insert(owner.clone());
+        }
     }
     // Per table, the may-persist and caller-dependent writes (+ locks on it).
     let by_table = |name: &str| -> Vec<(&str, Vec<usize>)> {
@@ -2131,7 +2195,12 @@ fn render_query_effects_body(
         "temporary": {"operations": count("temporary"), "tables": ntables("temporary"),
                       "routines": buckets.get("temporary").map_or(0, |b| b.owners.len())},
         "tableNotResolved": {"operations": count("tableNotResolved"),
-                             "routines": buckets.get("tableNotResolved").map_or(0, |b| b.owners.len())},
+                             "routines": buckets.get("tableNotResolved").map_or(0, |b| b.owners.len()),
+                             // Q4 (3.1.0): of them, on a RecordRef receiver.
+                             "recordRef": {
+                                 "operations": unresolved.get(&true).map_or(0, |b| b.rows.len()),
+                                 "routines": unresolved.get(&true).map_or(0, |b| b.owners.len()),
+                             }},
         "byTable": write_tables,
         "scope": "operations-one-routine-deep",
     });
@@ -2178,16 +2247,18 @@ fn render_query_effects_body(
             plural(buckets["temporary"].owners.len(), "routine", "routines")
         ));
     }
-    if count("tableNotResolved") > 0 {
-        parts.push(format!(
-            "table not resolved {} in {}",
-            count("tableNotResolved"),
-            plural(
-                buckets["tableNotResolved"].owners.len(),
-                "routine",
-                "routines"
-            )
-        ));
+    // Q4: RecordRef operations first, then the rest of "table not resolved".
+    for (record_ref, label) in [
+        (true, "on a RecordRef (table decided at run time)"),
+        (false, "table not resolved"),
+    ] {
+        if let Some(b) = unresolved.get(&record_ref) {
+            parts.push(format!(
+                "{label} {} in {}",
+                b.rows.len(),
+                plural(b.owners.len(), "routine", "routines")
+            ));
+        }
     }
     human.push_str(&format!(
         "  summary: {} — {}\n",
@@ -2281,13 +2352,21 @@ fn render_query_effects_body(
     // written says so (its write line carries `+ LockTable n`); a lock-only
     // table prints its first lock's own anchor and owner; locks on a table not
     // resolved are counted apart (they are in that bucket).
-    let unresolved_locks = buckets.get("tableNotResolved").map_or(0, |b| {
-        b.rows
-            .iter()
-            .filter(|&&i| op_family(effects[i].op) == "lock")
-            .count()
-    });
-    if buckets.contains_key("locks") || unresolved_locks > 0 {
+    // Q4: per receiver kind (a RecordRef first), so a RecordRef lock says so.
+    let unresolved_locks: Vec<(bool, usize)> = [true, false]
+        .into_iter()
+        .map(|record_ref| {
+            let n = unresolved.get(&record_ref).map_or(0, |b| {
+                b.rows
+                    .iter()
+                    .filter(|&&i| op_family(effects[i].op) == "lock")
+                    .count()
+            });
+            (record_ref, n)
+        })
+        .filter(|&(_, n)| n > 0)
+        .collect();
+    if buckets.contains_key("locks") || !unresolved_locks.is_empty() {
         let written: BTreeSet<&str> = ["writes", "callerDependent"]
             .iter()
             .filter_map(|k| buckets.get(*k))
@@ -2330,11 +2409,12 @@ fn render_query_effects_body(
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        if unresolved_locks > 0 {
+        for (i, (record_ref, count)) in unresolved_locks.into_iter().enumerate() {
             line.push_str(&format!(
-                "{}table not resolved: {}",
-                if n > 0 { "; " } else { "" },
-                plural(unresolved_locks, "lock", "locks")
+                "{}{}: {}",
+                if n > 0 || i > 0 { "; " } else { "" },
+                unresolved_label(record_ref),
+                plural(count, "lock", "locks")
             ));
         }
         human.push_str(&line);
@@ -2364,14 +2444,21 @@ fn render_query_effects_body(
             if all { "" } else { " — --all lists them" }
         ));
     }
-    if let Some(b) = buckets.get("tableNotResolved") {
-        human.push_str(&format!(
-            "  table not resolved (determined at run time or not resolved): {} in {} ({}){}\n",
-            plural(b.rows.len(), "operation", "operations"),
-            plural(b.owners.len(), "routine", "routines"),
-            ops_text(&b.ops),
-            if all { "" } else { " — --all lists them" }
-        ));
+    // Q4: "RecordRef" only where the receiver is one; every other operation
+    // on an unresolved table is "table not resolved".
+    for (record_ref, label) in [
+        (true, "on a RecordRef (table decided at run time)"),
+        (false, "table not resolved"),
+    ] {
+        if let Some(b) = unresolved.get(&record_ref) {
+            human.push_str(&format!(
+                "  {label}: {} in {} ({}){}\n",
+                plural(b.rows.len(), "operation", "operations"),
+                plural(b.owners.len(), "routine", "routines"),
+                ops_text(&b.ops),
+                if all { "" } else { " — --all lists them" }
+            ));
+        }
     }
     human.push_str(
         "  next: alsem prove <routine> writes-table:<table> follows the whole cone for one table\n",
@@ -2381,9 +2468,7 @@ fn render_query_effects_body(
     }
     for e in effects.iter().filter(|_| all) {
         let table = if is_unknown_table(e.table_id) {
-            format!(
-                "{UNKNOWN_TABLE_ID} (table not resolved: determined at run time or not resolved)"
-            )
+            unresolved_label(ops.receiver_is_record_ref(e.operation_id)).to_string()
         } else {
             match tables.get(e.table_id) {
                 Some(name) => name.to_string(),

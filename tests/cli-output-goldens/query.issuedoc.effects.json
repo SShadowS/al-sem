@@ -106,6 +106,7 @@
             "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#dc74df7bb7bcbc92cfb38268a3daedc82b01192f10c23c33ccb4342d44bb987b"
           }
         },
+        "receiver": "RecordRef",
         "tableId": "unknown",
         "tempState": "unknown",
         "via": "inherited"
@@ -193,6 +194,7 @@
             "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#dc74df7bb7bcbc92cfb38268a3daedc82b01192f10c23c33ccb4342d44bb987b"
           }
         },
+        "receiver": "RecordRef",
         "tableId": "unknown",
         "tempState": "unknown",
         "via": "inherited"
@@ -269,6 +271,10 @@
       "scope": "operations-one-routine-deep",
       "tableNotResolved": {
         "operations": 2,
+        "recordRef": {
+          "operations": 2,
+          "routines": 1
+        },
         "routines": 1
       },
       "temporary": {
@@ -292,5 +298,5 @@
       }
     }
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }
