@@ -1,6 +1,7 @@
 --- Codeunit Out Issue Document::IssueDoc ---
   question: writes-table:Base Doc Line
   answer:   yes
-  evidence: 1 effect(s)
-    [DB_DELETE] transitive — ws:src/OutIssueDocument.Codeunit.al:15
+  evidence: 1 effect
+    [DB_DELETE] beyond Codeunit Base Poster::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15
+      path: IssueDoc → [run] Base Poster::OnRun (DeleteAll at dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al:7)
   obligations: unresolved=2, openWorld=1, coverage=incomplete

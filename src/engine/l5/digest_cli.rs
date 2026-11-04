@@ -946,6 +946,9 @@ pub struct DigestEffectFull {
     /// G35: per group resource id, one example path inside the dependency
     /// ([`crate::engine::l5::group_path`]); `prove` shows the matched ones.
     pub group_resource_paths: Vec<(String, crate::engine::l5::group_path::GroupPathOutcome)>,
+    /// W2-6: a resource-less group's terminal witness (`DigestEffectResult`'s
+    /// field of the same name).
+    pub group_terminal_path: Option<crate::engine::l5::group_path::GroupPathOutcome>,
     /// The operations the effect originates from, and its class's "known
     /// temporary" flag: what [`DbTempStates`] joins on, so `prove` can ask the
     /// same write in a CALLER's frame (G25). Not serialized.
@@ -1558,6 +1561,19 @@ pub(crate) fn literal_reach_pass(
                     &mut suffixes,
                     &never,
                 );
+                // W2-6 (2f): a resource-less group (COMMIT, HTTP, UI, …) gets
+                // its own terminal witness: through the crossing to a live
+                // state owning a direct fact of its type.
+                if e.group_resources.is_empty()
+                    && !e.effect_type.starts_with("DB_")
+                    && e.effect_type != "EVENT_PUBLISH"
+                {
+                    let ops = vec![(String::new(), reach.terminal_ops(&e.effect_type))];
+                    e.group_terminal_path = group_paths
+                        .paths(&reach, &tree, entries, e, &ops, &mut suffixes, &never)
+                        .pop()
+                        .map(|(_, o)| o);
+                }
                 // Each resource judged from THIS crossing's entry states.
                 e.group_resource_status = candidates
                     .iter()
@@ -1902,6 +1918,7 @@ pub fn run_digest_query_full_from_entries(
                         .into_iter()
                         .filter(|(id, _)| !eff.dead_group_resources.contains(id))
                         .collect(),
+                    group_terminal_path: eff.group_terminal_path.take(),
                     origin_operation_ids: eff.origin_operation_ids.clone(),
                     effect_is_kt: is_known_temp_state(eff.temp_state.as_ref()),
                     literal_unreachable: eff.literal_unreachable,
@@ -3549,6 +3566,7 @@ mod tests {
                 .map(|(i, d)| (i.to_string(), d.to_string()))
                 .collect(),
             group_resource_paths: vec![],
+            group_terminal_path: None,
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,

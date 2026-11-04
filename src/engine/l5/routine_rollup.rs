@@ -222,18 +222,7 @@ impl<'m> RollupCx<'m> {
         ];
         for h in hops {
             let h = &h.inner;
-            let kind = h.edge_kind.as_deref().unwrap_or(h.kind);
-            let tag = if kind.starts_with("object-run") {
-                "[run] "
-            } else if kind == "event-dispatch" {
-                "[event] "
-            } else if kind == "implicit-trigger" {
-                "[trigger] "
-            } else if kind == "interface-dispatch" {
-                "[interface] "
-            } else {
-                ""
-            };
+            let tag = edge_tag(h.edge_kind.as_deref().unwrap_or(h.kind));
             let fallback = h
                 .to_display
                 .clone()
@@ -250,6 +239,87 @@ impl<'m> RollupCx<'m> {
             parts.push(format!("{tag}{name}"));
         }
         parts.join(" → ")
+    }
+
+    /// A group witness (W2-0b/W2-6) as one line (design §3.8 rules 6, 7):
+    /// the root, then each step's routine (the object only when it
+    /// changes), tagged by its edge, then `(<what> at <terminal anchor>)`.
+    /// With `from`, the steps before it print as `…` (the crossing's prefix,
+    /// printed once elsewhere).
+    #[must_use]
+    pub fn witness_line(
+        &self,
+        root: &str,
+        w: &crate::engine::l5::group_path::GroupPath,
+        from: Option<usize>,
+        what: &str,
+    ) -> String {
+        let (mut object, root_name) = self
+            .names_of(root)
+            .unwrap_or_else(|| (String::new(), root.to_string()));
+        let mut parts = vec![root_name];
+        let start = from.unwrap_or(0).min(w.steps.len());
+        if start > 0 {
+            parts.push("…".to_string());
+            object = w.steps[start - 1]
+                .display
+                .rsplit_once("::")
+                .map(|(o, _)| o.split_once(' ').map_or(o, |(_, n)| n).to_string())
+                .unwrap_or_default();
+        }
+        for s in &w.steps[start..] {
+            let tag = edge_tag(&s.edge);
+            let (o, n) = match self.names_of(&s.to) {
+                Some(on) => on,
+                None => match s.display.rsplit_once("::") {
+                    Some((o, n)) => (
+                        o.split_once(' ').map_or(o, |(_, n)| n).to_string(),
+                        n.to_string(),
+                    ),
+                    None => (String::new(), s.display.clone()),
+                },
+            };
+            let name = if o != object && !o.is_empty() {
+                object = o.clone();
+                format!("{o}::{n}")
+            } else {
+                n
+            };
+            parts.push(format!("{tag}{name}"));
+        }
+        let at = match (&w.terminal.file, w.terminal.line) {
+            (Some(f), Some(l)) => format!(" at {}", self.location(f, l)),
+            _ => String::new(),
+        };
+        let mut line = format!("{} ({what}{at})", parts.join(" → "));
+        if !w.through_entry_point {
+            line.push_str(&format!(
+                "; this path does not pass the entry point: {}",
+                no_path_reason(w.reason.unwrap_or("search-cap"))
+            ));
+        }
+        line
+    }
+
+    /// A source location as the human outputs print it (design §3.8 rule 5):
+    /// `<file>:<line>`, 1-based.
+    #[must_use]
+    pub fn location(&self, file: &str, line: u32) -> String {
+        format!("{file}:{}", shown(line))
+    }
+
+    /// The kind a witness's terminal operation prints as: its original
+    /// record-operation kind, else the effect type.
+    #[must_use]
+    pub fn terminal_kind<'s>(&self, op: &str, effect_type: &'s str) -> &'s str
+    where
+        'm: 's,
+    {
+        self.ops
+            .claims(op)
+            .first()
+            .and_then(|c| self.ops.record_operation(c))
+            .map_or(effect_type, |o| o.op.as_str())
     }
 
     /// The qualified `<Type> <Object>::<Routine>` of model row `i`.
@@ -325,6 +395,35 @@ impl<'m> RollupCx<'m> {
             dependency: self.model.role_of_app(&r.app_guid) == Role::Dependency,
             outcome,
         })
+    }
+}
+
+/// A path tag by edge kind (design §3.8 rule 7).
+#[must_use]
+pub fn edge_tag(kind: &str) -> &'static str {
+    if kind.starts_with("object-run") {
+        "[run] "
+    } else if kind == "event-dispatch" {
+        "[event] "
+    } else if kind == "implicit-trigger" {
+        "[trigger] "
+    } else if kind == "interface-dispatch" {
+        "[interface] "
+    } else {
+        ""
+    }
+}
+
+/// Why a witness is unavailable, in words (design §3.4.2: never invent a
+/// path; say why there is none).
+#[must_use]
+pub fn no_path_reason(reason: &str) -> &'static str {
+    match reason {
+        "no-witness" => "the witness search found no live route through this entry point",
+        "search-cap" => "search cap reached",
+        "cancelled" => "the search was cancelled",
+        "no-operation-id" => "no operation id on the fact",
+        _ => "no witness",
     }
 }
 
@@ -1382,13 +1481,56 @@ pub fn commit_lines(
             crossing_name(c),
             c.sites.join("; ")
         ));
-        if let Some(p) = c.prefix_row {
-            for l in path_lines(cx, &entry.routine_id, &entry.effects[p], o.path_cap.min(1)) {
-                out.push(format!("    prefix {l}"));
-            }
+        // W2-6 (2f): the COMMIT's own terminal witness through the crossing.
+        if o.path_cap > 0 {
+            out.extend(
+                terminal_witness_lines(cx, entry, c, "COMMIT")
+                    .into_iter()
+                    .map(|l| format!("    {l}")),
+            );
         }
     }
     out
+}
+
+/// The `path:` line of a crossing's resource-less group of type `ty`
+/// (W2-6): its terminal witness, or why it has none.
+fn terminal_witness_lines(
+    cx: &RollupCx<'_>,
+    entry: &DigestEntryFull,
+    c: &CrossingView,
+    ty: &str,
+) -> Vec<String> {
+    let Some(e) = c
+        .rows
+        .iter()
+        .map(|&i| &entry.effects[i])
+        .find(|e| e.effect_type == ty && !e.literal_unreachable)
+    else {
+        return Vec::new();
+    };
+    match &e.group_terminal_path {
+        Some(Ok(w)) => vec![format!(
+            "path: {}",
+            cx.witness_line(
+                &entry.routine_id,
+                w,
+                None,
+                cx.terminal_kind(&w.terminal.operation_id, ty)
+            )
+        )],
+        Some(Err(n)) => vec![format!("no path kept: {}", no_path_reason(n.reason))],
+        None => vec!["no path kept: no witness was searched".to_string()],
+    }
+}
+
+/// The index of a witness's crossing step: the first step entering one of
+/// the crossing's targets.
+fn crossing_step(
+    w: &crate::engine::l5::group_path::GroupPath,
+    targets: &[String],
+) -> Option<usize> {
+    w.steps.iter().position(|s| targets.contains(&s.to))
 }
 
 /// `writes in workspace code` (design §4.1 section 10). `fields(t)`: the
@@ -1520,12 +1662,79 @@ struct EntryPoint<'r> {
     commit: bool,
     prefix: Option<usize>,
     temp_only: bool,
+    /// Its crossings (indices into `RoutineRollup::crossings`).
+    crossings: Vec<usize>,
+}
+
+/// One may-persist table's witness beyond an entry point (W2-6).
+struct TableWitness<'e> {
+    table: &'e str,
+    /// The terminal's digest write type.
+    ty: &'e str,
+    crossing: usize,
+    witness: Result<&'e crate::engine::l5::group_path::GroupPath, &'static str>,
+}
+
+/// Every may-persist table's witness beyond `p`, nearest first (shortest
+/// witness, then table name); a table with no witness last, by name.
+fn table_witnesses<'e>(
+    r: &'e RoutineRollup,
+    entry: &'e DigestEntryFull,
+    p: &EntryPoint<'_>,
+) -> Vec<TableWitness<'e>> {
+    let mut out: Vec<TableWitness<'e>> = Vec::new();
+    for &ci in &p.crossings {
+        let c = &r.crossings[ci];
+        for &i in &c.rows {
+            let e = &entry.effects[i];
+            if e.literal_unreachable
+                || !is_write(&e.effect_type)
+                || classify_detail(&e.detail) == WriteClass::Temporary
+            {
+                continue;
+            }
+            for (id, w) in &e.group_resource_paths {
+                let Some(table) = c.tables.get(id) else {
+                    continue;
+                };
+                let witness = w.as_ref().map_err(|n| n.reason);
+                // One witness per table: the shortest over its rows.
+                if let Some(prev) = out.iter_mut().find(|t| t.table == table.as_str()) {
+                    let shorter = match (&witness, &prev.witness) {
+                        (Ok(a), Ok(b)) => a.steps.len() < b.steps.len(),
+                        (Ok(_), Err(_)) => true,
+                        _ => false,
+                    };
+                    if shorter {
+                        *prev = TableWitness {
+                            table,
+                            ty: &e.effect_type,
+                            crossing: ci,
+                            witness,
+                        };
+                    }
+                    continue;
+                }
+                out.push(TableWitness {
+                    table,
+                    ty: &e.effect_type,
+                    crossing: ci,
+                    witness,
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| {
+        let len = |t: &TableWitness<'_>| t.witness.as_ref().map_or(usize::MAX, |w| w.steps.len());
+        len(a).cmp(&len(b)).then(a.table.cmp(b.table))
+    });
+    out
 }
 
 fn entry_points(r: &RoutineRollup) -> Vec<EntryPoint<'_>> {
     let mut by_key: BTreeMap<&str, usize> = BTreeMap::new();
     let mut out: Vec<EntryPoint<'_>> = Vec::new();
-    for c in &r.crossings {
+    for (ci, c) in r.crossings.iter().enumerate() {
         let key = match c.target_ids.as_slice() {
             [one] => one.as_str(),
             _ => c.id.as_str(),
@@ -1542,10 +1751,12 @@ fn entry_points(r: &RoutineRollup) -> Vec<EntryPoint<'_>> {
                 commit: false,
                 prefix: None,
                 temp_only: true,
+                crossings: Vec::new(),
             });
             out.len() - 1
         });
         let p = &mut out[i];
+        p.crossings.push(ci);
         p.sites.extend(c.sites.iter().map(String::as_str));
         p.tables
             .extend(c.tables.iter().map(|(k, v)| (k.as_str(), v.as_str())));
@@ -1648,10 +1859,52 @@ pub fn beyond_lines(
     );
     for p in &shown.shown {
         out.push(line(p));
+        if o.path_cap == 0 {
+            continue;
+        }
         if let Some(i) = p.prefix {
             for l in path_lines(cx, &entry.routine_id, &entry.effects[i], 1) {
                 out.push(format!("    prefix {l}"));
             }
+        }
+        // W2-6 (2f, design §3.4.2, §9 q2): one representative terminal
+        // witness, labelled as such, to the nearest table; every table's
+        // witness with --detail. With several sites, the representative
+        // names the site it passes: a site's tables are its own.
+        let witnesses = table_witnesses(r, entry, p);
+        let render = |t: &TableWitness<'_>| -> String {
+            let c = &r.crossings[t.crossing];
+            match t.witness {
+                Ok(w) => {
+                    let from = crossing_step(w, &c.target_ids);
+                    let what = cx.terminal_kind(&w.terminal.operation_id, type_kind(t.ty));
+                    let mut s = cx.witness_line(&entry.routine_id, w, from, what);
+                    if p.sites.len() > 1
+                        && let Some(step) = from.and_then(|i| w.steps.get(i))
+                        && let (Some(f), Some(l)) = (&step.file, step.line)
+                    {
+                        s.push_str(&format!("; through the site at {}", cx.location(f, l)));
+                    }
+                    s
+                }
+                Err(reason) => format!("no path kept: {}", no_path_reason(reason)),
+            }
+        };
+        if o.detail {
+            for t in &witnesses {
+                out.push(format!("    {}: {}", t.table, render(t)));
+            }
+        } else if let Some(t) = witnesses.first() {
+            out.push(format!(
+                "    representative path ({}{}): {}",
+                t.table,
+                if witnesses.len() > 1 {
+                    format!(", the nearest of {} tables", witnesses.len())
+                } else {
+                    String::new()
+                },
+                render(t)
+            ));
         }
     }
     if shown.hidden > 0 {

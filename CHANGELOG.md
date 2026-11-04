@@ -26,6 +26,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when used) instead of dropping it; today every digest effect type has a family. `Validate` is
   no operation of either substrate (a trigger-class op: its effects are its `OnValidate`'s), so
   query's `validate` bucket stays empty on real code.
+- **W2-6 (2f): every group gets a real witness, COMMIT and resource-less groups included.** The
+  literal pass gives a resource-less group (COMMIT, HTTP, UI, …) its own terminal witness through
+  its crossing to a live state owning a direct fact of its type (W2-0b's suffix search), or the
+  reason it has none. Prove JSON **2.3.0** (additive): such evidence carries `groupPath`,
+  `crossing`, `throughEntryPoint` and `groupWitness` (or `groupPathUnavailable`). Prove human
+  prints where each effect sits (`[COMMIT] beyond Codeunit X::OnRun, entered at …`, `[DB_INSERT]
+  at …`) and its path, ending `(<Kind> at <terminal anchor>)`; `evidence: N effects`. Explain and
+  digest human print a commit-bearing entry point's own COMMIT path, and per entry point one
+  `representative path (<table>, the nearest of N tables)` (it names the site it passes when the
+  entry point has several); `--detail` prints every table's witness, or why it has none. Digest
+  JSON 3.x: a COMMIT / HTTP / UI / ERROR group row carries its representative witness in `paths`
+  (or `pathUnavailable`); explain JSON's resource-less group rows carry `paths` and `pathOutcome`.
 
 ### Fixed (#369: dependency writes with no witness path, and colliding `factId`s)
 

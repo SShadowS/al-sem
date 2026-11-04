@@ -3610,6 +3610,11 @@ pub struct DigestEffectResult {
     /// ([`crate::engine::l5::group_path`]). Set only for `prove`'s read; not
     /// serialized.
     pub group_resource_paths: Vec<(String, crate::engine::l5::group_path::GroupPathOutcome)>,
+    /// W2-6 (2f, design §3.4.2): a resource-less group's (COMMIT, HTTP, UI,
+    /// …) terminal witness through its crossing: a live state owning a
+    /// direct fact of the group's type, or why there is none. `None` off
+    /// such a group. Set by the literal pass; not serialized.
+    pub group_terminal_path: Option<crate::engine::l5::group_path::GroupPathOutcome>,
     /// W2-0c (design §3.3.1): per group resource, whether the group's
     /// crossing reaches it from its own entry states. A `Disproved` one is
     /// also in `dead_group_resources` (the refined membership drops it;
@@ -4735,6 +4740,7 @@ fn digest_one_root<'i>(
                 literal_unreachable: false,
                 dead_group_resources: Vec::new(),
                 group_resource_paths: Vec::new(),
+                group_terminal_path: None,
                 group_resource_status: Vec::new(),
                 crossing,
             });

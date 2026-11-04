@@ -1,7 +1,7 @@
 --- Codeunit D35 Demo::OnBeforePrintSafe ---
   question: reaches-ui
   answer:   yes
-  evidence: 1 effect(s)
-    [UI_MESSAGE] direct — ws:src/Codeunit.al:21
+  evidence: 1 effect
+    [UI_MESSAGE] at ws:src/Codeunit.al:21
       conditionality: unconditional-on-success
   obligations: all clear

@@ -1573,3 +1573,92 @@ fn locks_are_their_own_class_in_query_effects() {
         "{human}"
     );
 }
+
+/// W2-6, 2f (design §3.4.2, T-W2-5's commit leg, §9 q2): a commit-bearing
+/// entry point gets a REAL terminal witness: through its crossing (the first
+/// hop leaves the root at the `Base Poster.Run()` site, line 15) to a live
+/// state owning the `Commit()` (the terminal opens to that line). prove
+/// `may-commit`, explain's commit line and digest's COMMIT group row cite the
+/// same terminal. Beyond an entry point the default prints exactly one
+/// witness, labelled representative, and `--detail` one per listed table.
+///
+/// Discrimination (2026-11-04): the literal pass not computing
+/// `group_terminal_path` (left `None`) fails at "prove's COMMIT evidence has a
+/// witness"; restored, passes.
+#[test]
+fn a_commit_beyond_an_entry_point_has_its_own_terminal_witness() {
+    let ws = workspace();
+    let wss = ws.to_string_lossy().into_owned();
+    let dump = tempfile::tempdir().unwrap();
+    dump_dependency_source(&ws, dump.path());
+    let json = |args: &[&str]| -> Value {
+        let (out, err, code) = run_alsem(args);
+        assert_eq!(code, 0, "{args:?}: {err}");
+        serde_json::from_str(&out).unwrap()
+    };
+    let p = json(&["prove", &wss, ISSUE_DOC, "may-commit", "--format", "json"]);
+    let ev = &p["payload"]["result"]["evidence"][0];
+    let w = &ev["groupWitness"];
+    assert!(w.is_object(), "prove's COMMIT evidence has a witness: {ev}");
+    assert_eq!(ev["throughEntryPoint"], true, "{ev}");
+    assert_eq!(w["hops"][0]["line"], 15, "the crossing's site: {w}");
+    assert_eq!(w["hops"][0]["edge"], "object-run-resolved", "{w}");
+    let t = &w["terminal"];
+    let file = t["file"].as_str().unwrap();
+    let line = t["line"].as_u64().unwrap() as usize;
+    let text = source_of(file, &ws, dump.path()).expect("the terminal's file");
+    assert!(
+        text.lines().nth(line - 1).unwrap().contains("Commit()"),
+        "the terminal opens to the Commit: {file}:{line}"
+    );
+    // explain cites the same terminal.
+    let (human, _, _) = run_alsem(&["explain", &wss, "--routine", ISSUE_DOC]);
+    let commit_path = human
+        .lines()
+        .skip_while(|l| !l.starts_with("  commits:"))
+        .find(|l| l.trim_start().starts_with("path:"))
+        .unwrap_or_else(|| panic!("no commit path:\n{human}"));
+    assert!(
+        commit_path.ends_with(&format!("(COMMIT at {file}:{line})")),
+        "{commit_path}"
+    );
+    // digest's COMMIT group row: the same terminal, labelled representative.
+    let d = json(&["digest", &wss, "--routine", ISSUE_DOC, "--format", "json"]);
+    let row = d["payload"]["entries"][0]["effects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["type"] == "COMMIT")
+        .expect("a COMMIT row");
+    assert_eq!(row["paths"][0]["representative"], true, "{row}");
+    assert_eq!(row["paths"][0]["terminal"], *t, "{row}");
+    // One representative per entry point by default; one per table with
+    // --detail (Base Poster lists 14).
+    let beyond = |text: &str| -> Vec<String> {
+        text.lines()
+            .skip_while(|l| !l.starts_with("  writes beyond"))
+            .skip(1)
+            .take_while(|l| l.starts_with("    "))
+            .map(String::from)
+            .collect()
+    };
+    let default = beyond(&human);
+    assert_eq!(
+        default
+            .iter()
+            .filter(|l| l.trim_start().starts_with("representative path ("))
+            .count(),
+        2,
+        "{default:#?}"
+    );
+    let (detail, _, _) = run_alsem(&["explain", &wss, "--routine", ISSUE_DOC, "--detail"]);
+    let detail = beyond(&detail);
+    assert_eq!(
+        detail
+            .iter()
+            .filter(|l| l.starts_with("      Base ") && l.contains(" at dep:"))
+            .count(),
+        15,
+        "{detail:#?}"
+    );
+}

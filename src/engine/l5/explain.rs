@@ -1664,7 +1664,24 @@ impl Card {
                         "resourcesListed": false,
                     }),
                     _ => {
-                        json!({"type": ty, "crossing": crossing, "conditionality": e.conditionality})
+                        let mut v = json!({"type": ty, "crossing": crossing, "conditionality": e.conditionality});
+                        // W2-6 (2f): a resource-less group's own terminal
+                        // witness, or why it has none.
+                        match &e.group_terminal_path {
+                            Some(Ok(w)) if opts.path_cap > 0 => {
+                                v["paths"] =
+                                    json!([crate::engine::l5::prove::group_witness_value(w)]);
+                                v["pathOutcome"] = json!(if w.through_entry_point {
+                                    "found"
+                                } else {
+                                    "outside-entry-point"
+                                });
+                            }
+                            Some(Ok(_)) => {}
+                            Some(Err(n)) => v["pathOutcome"] = json!(n.reason),
+                            None => {}
+                        }
+                        v
                     }
                 };
                 mark_dead(&mut v, e);

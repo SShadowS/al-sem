@@ -1,8 +1,8 @@
 --- Codeunit D34 Demo::DirectCommitInLoop ---
   question: commits-on-success-path
   answer:   unknown
-  evidence: 1 effect(s)
-    [COMMIT] direct — ws:src/Codeunit.al:10
+  evidence: 1 effect
+    [COMMIT] at ws:src/Codeunit.al:10
       conditionality: loop-body
   blockedBy: 1 blocker(s)
     [non-unconditional-effect-exists] COMMIT with conditionality "loop-body" @ ws:src/Codeunit.al:10

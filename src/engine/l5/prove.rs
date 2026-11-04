@@ -1155,7 +1155,9 @@ pub struct ProveDocumentArgs<'a> {
 /// edge kind, its site id, the routine entered (stable id and qualified
 /// display) and where the edge leaves its calling routine (1-based line);
 /// then the terminal operation.
-fn group_witness_value(path: &crate::engine::l5::group_path::GroupPath) -> serde_json::Value {
+pub(crate) fn group_witness_value(
+    path: &crate::engine::l5::group_path::GroupPath,
+) -> serde_json::Value {
     let line = |l: Option<u32>| l.map(crate::engine::line_base::shown);
     let hops: Vec<serde_json::Value> = path
         .steps
@@ -1258,6 +1260,29 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
                         None => {}
                     }
                 }
+                // W2-6 (2f, prove 2.3.0): a resource-less group's terminal
+                // witness, for any question that cites it.
+                if let (Some(w), Some(obj)) = (&effects[i].group_terminal_path, v.as_object_mut())
+                {
+                    match w {
+                        Ok(path) => {
+                            obj.insert(
+                                "groupPath".into(),
+                                serde_json::json!({"hops": path.hops}),
+                            );
+                            obj.insert("crossing".into(), path.crossing.clone().into());
+                            obj.insert("throughEntryPoint".into(), path.through_entry_point.into());
+                            if let Some(reason) = path.reason {
+                                obj.insert("throughEntryPointReason".into(), reason.into());
+                            }
+                            obj.insert("groupWitness".into(), group_witness_value(path));
+                        }
+                        Err(none) => {
+                            obj.insert("crossing".into(), none.crossing.clone().into());
+                            obj.insert("groupPathUnavailable".into(), none.reason.into());
+                        }
+                    }
+                }
                 v
             })
             .collect();
@@ -1329,7 +1354,9 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     // 2.2.0 (wave 2, W2-0b, additive): a writes-table group match's
     // `groupPath` traverses its crossing, and carries `crossing`,
     // `throughEntryPoint` and the structured `groupWitness` beside it.
-    env.insert("schemaVersion".into(), "2.2.0".into());
+    // 2.3.0 (W2-6, additive): a resource-less group's evidence (COMMIT,
+    // HTTP, UI, …) carries the same fields for its own terminal witness.
+    env.insert("schemaVersion".into(), "2.3.0".into());
 
     serialize_document_value(serde_json::Value::Object(env))
 }
@@ -1338,13 +1365,22 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
 // Human formatter (formatProveHuman)
 // ---------------------------------------------------------------------------
 
+/// What the human answer needs to print paths (W2-6): the model joins and
+/// the root's stable id. `None` for the no-root document.
+pub struct HumanPaths<'c, 'm> {
+    pub cx: &'c crate::engine::l5::routine_rollup::RollupCx<'m>,
+    pub root: &'c str,
+}
+
 pub fn format_prove_human(
     routine_display: &str,
     object_display: &str,
     question: &str,
     prove_result: &ProveResult,
     effects: &[DigestEffectFull],
+    paths: Option<&HumanPaths<'_, '_>>,
 ) -> String {
+    use crate::engine::l5::routine_rollup::{is_group, no_path_reason, plural};
     let mut lines: Vec<String> = Vec::new();
 
     // Routine header
@@ -1353,27 +1389,84 @@ pub fn format_prove_human(
     lines.push(format!("  question: {}", question));
     lines.push(format!("  answer:   {}", prove_result.answer.as_str()));
 
-    // Evidence
+    let asked_table = match parse_question(question) {
+        Some(ProveQuestion::WritesTable { table }) => Some(table),
+        _ => None,
+    };
+    // Evidence (W2-6, design §4.7): where each effect sits, and the path to it
+    // (prefix and terminal of one witness, never invented).
     if let Some(ref indices) = prove_result.evidence
         && !indices.is_empty()
     {
-        lines.push(format!("  evidence: {} effect(s)", indices.len()));
+        lines.push(format!(
+            "  evidence: {}",
+            plural(indices.len(), "effect", "effects")
+        ));
         for &i in indices {
             let eff = &effects[i];
-            let ev_file = eff.evidence.file.as_deref().unwrap_or("(unavailable)");
-            let ev_line = eff
-                .evidence
-                .line
-                .map(|l| format!(":{}", shown(l)))
-                .unwrap_or_default();
-            // Mirror TS: `[${eff.type}] ${eff.provenance} — ${evFile}${evLine}`
-            // The em-dash is U+2014. `conditionality` is already a &'static str.
-            lines.push(format!(
-                "    [{}] {} \u{2014} {}{}",
-                eff.effect_type, eff.provenance, ev_file, ev_line
-            ));
+            let at = match (&eff.evidence.file, eff.evidence.line) {
+                (Some(f), Some(l)) => match paths {
+                    Some(p) => p.cx.location(f, l),
+                    None => format!("{f}:{}", shown(l)),
+                },
+                (Some(f), None) => f.clone(),
+                _ => "no position kept".to_string(),
+            };
+            let group = is_group(eff);
+            let boundary = eff
+                .detail
+                .iter()
+                .find(|(k, _)| k == "boundary")
+                .map(|(_, v)| v.as_str());
+            lines.push(match (group, boundary) {
+                (true, Some(b)) => format!("    [{}] beyond {b}, entered at {at}", eff.effect_type),
+                _ => format!("    [{}] at {at}", eff.effect_type),
+            });
             if eff.conditionality != "unknown" {
                 lines.push(format!("      conditionality: {}", eff.conditionality));
+            }
+            let Some(p) = paths else {
+                continue;
+            };
+            let witness = if group {
+                match &asked_table {
+                    Some(table) => eff.group_resource_paths.iter().find_map(|(id, w)| {
+                        let display = eff
+                            .group_resources
+                            .iter()
+                            .find(|(r, _)| r == id)
+                            .map(|(_, d)| d.as_str());
+                        name_or_id_matches(display, Some(id), table).then_some(w)
+                    }),
+                    None => eff.group_terminal_path.as_ref(),
+                }
+            } else {
+                None
+            };
+            match witness {
+                Some(Ok(w)) => lines.push(format!(
+                    "      path: {}",
+                    p.cx.witness_line(
+                        p.root,
+                        w,
+                        None,
+                        p.cx.terminal_kind(&w.terminal.operation_id, &eff.effect_type)
+                    )
+                )),
+                Some(Err(n)) => {
+                    lines.push(format!("      no path kept: {}", no_path_reason(n.reason)))
+                }
+                None if !group => {
+                    if let Some(v) = eff
+                        .via_paths
+                        .iter()
+                        .filter(|v| !v.is_empty())
+                        .min_by_key(|v| v.len())
+                    {
+                        lines.push(format!("      path: {}", p.cx.path_line(p.root, v)));
+                    }
+                }
+                None => {}
             }
         }
     }
@@ -1766,8 +1859,14 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             deterministic,
         });
 
-        let human_text =
-            format_prove_human(routine_selector, "", question_text, &dummy_result, &[]);
+        let human_text = format_prove_human(
+            routine_selector,
+            "",
+            question_text,
+            &dummy_result,
+            &[],
+            None,
+        );
 
         return Ok(ProveRunResult {
             json_text,
@@ -1903,12 +2002,21 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         deterministic,
     });
 
+    // W2-6: the human answer's paths read the model's names (and, W2-7, the
+    // loaded apps' names).
+    let dependencies = cx.view().target().dependencies();
+    let rollup_cx =
+        crate::engine::l5::routine_rollup::RollupCx::new(cx.view().model(), &dependencies.apps);
     let human_text = format_prove_human(
         &entry.routine_display,
         &entry.object_display,
         question_text,
         &prove_result,
         &entry.effects,
+        Some(&HumanPaths {
+            cx: &rollup_cx,
+            root: root_id,
+        }),
     );
 
     let summary = serde_json::json!({
@@ -2382,6 +2490,7 @@ mod tests {
             scoped_guarantees: vec![],
             group_resources: vec![],
             group_resource_paths: vec![],
+            group_terminal_path: None,
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
@@ -2417,6 +2526,7 @@ mod tests {
             scoped_guarantees: vec![],
             group_resources: vec![],
             group_resource_paths: vec![],
+            group_terminal_path: None,
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
@@ -2552,6 +2662,7 @@ mod tests {
             scoped_guarantees: vec![],
             group_resources: vec![],
             group_resource_paths: vec![],
+            group_terminal_path: None,
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
@@ -2604,6 +2715,7 @@ mod tests {
             scoped_guarantees: vec![],
             group_resources: vec![],
             group_resource_paths: vec![],
+            group_terminal_path: None,
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,

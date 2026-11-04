@@ -32,6 +32,34 @@
           {
             "conditionality": "unknown",
             "crossing": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
+            "pathOutcome": "found",
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "display": "Codeunit Base Poster::OnRun",
+                    "edge": "object-run-resolved",
+                    "edgeId": "51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
+                    "file": "ws:src/OutIssueDocument.Codeunit.al",
+                    "line": 15,
+                    "to": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
+                  },
+                  {
+                    "display": "Codeunit Base Poster::PostDocument",
+                    "edge": "direct-call",
+                    "edgeId": "9c6111a83a31bbff/810777ec24f485a082352742d1ed938ac54d03e97272675493521d2830e28aba/cs0",
+                    "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
+                    "line": 8,
+                    "to": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#a6f92b1e5bb3136870d2899a70cbf892fd183132481d199afb1c8f9d21b70359"
+                  }
+                ],
+                "terminal": {
+                  "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
+                  "line": 46,
+                  "operationId": "9c6111a83a31bbff/4e7d6ef0e2bb3e3936c2d85040e9cbc4494c8f3eda89b147641f3655b38b5f59/op15"
+                }
+              }
+            ],
             "type": "COMMIT"
           }
         ],
@@ -82,6 +110,34 @@
           {
             "conditionality": "unknown",
             "crossing": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
+            "pathOutcome": "found",
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "display": "Codeunit Base Poster::OnRun",
+                    "edge": "object-run-resolved",
+                    "edgeId": "51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
+                    "file": "ws:src/OutIssueDocument.Codeunit.al",
+                    "line": 15,
+                    "to": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
+                  },
+                  {
+                    "display": "Codeunit Base Poster::PostDocument",
+                    "edge": "direct-call",
+                    "edgeId": "9c6111a83a31bbff/810777ec24f485a082352742d1ed938ac54d03e97272675493521d2830e28aba/cs0",
+                    "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
+                    "line": 8,
+                    "to": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#a6f92b1e5bb3136870d2899a70cbf892fd183132481d199afb1c8f9d21b70359"
+                  }
+                ],
+                "terminal": {
+                  "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
+                  "line": 41,
+                  "operationId": "9c6111a83a31bbff/4e7d6ef0e2bb3e3936c2d85040e9cbc4494c8f3eda89b147641f3655b38b5f59/op13"
+                }
+              }
+            ],
             "type": "ERROR_IMPLICIT"
           }
         ],
