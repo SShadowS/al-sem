@@ -340,7 +340,8 @@ fn engine_requests_answer_what_the_cli_answers() {
         assert_eq!(env["revision"]["generation"], 1, "one revision: {env}");
         if *method == "digest" {
             assert!(env["stdoutFile"].is_object(), "a digest is a file: {env}");
-            assert_eq!(env["summary"]["entriesTotal"], 1, "{env}");
+            // The renderer's summary (MCP output plan 1b).
+            assert_eq!(env["summary"]["routinesListed"], 1, "{env}");
         }
     }
     let st = s.status(30);

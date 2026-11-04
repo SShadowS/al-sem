@@ -1,0 +1,8 @@
+dependencies: Out Base (embedded)
+--- Codeunit Out Issue Document::IssueDoc vs Out Log (a0a00001-0000-4000-8000-0000000000a1/table/50101) ---
+  down: yes (2 witness(es))
+    [DeleteAll] via inherited, temp known(true) — Codeunit Out Log Mgt::WriteLog at ws:src/OutIssueDocument.Codeunit.al:58
+    [Insert] via inherited, temp known(false) — Codeunit Out Log Mgt::WriteLog at ws:src/OutIssueDocument.Codeunit.al:61
+  up: 1 of 1 transitive caller(s) touch it (trivially — this routine touches it itself)
+    +1 Page Out Doc Card::OnAction [DeleteAll] via inherited — Codeunit Out Log Mgt::WriteLog at ws:src/OutIssueDocument.Codeunit.al:58
+    +1 Page Out Doc Card::OnAction [Insert] via inherited — Codeunit Out Log Mgt::WriteLog at ws:src/OutIssueDocument.Codeunit.al:61

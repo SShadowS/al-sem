@@ -15,7 +15,7 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/subscriber.al",
-          "line": 3
+          "line": 4
         },
         "display": "HandlePosted",
         "objectDisplay": "Codeunit D8BadSubscriber",
@@ -23,6 +23,7 @@
       },
       "selector": "HandlePosted"
     },
+    "lineBase": 1,
     "table": {
       "id": "11111111-0000-0000-0000-00000000d80a/table/37",
       "isUnknownBucket": false,
@@ -45,13 +46,13 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/posting.al",
-              "line": 11
+              "line": 12
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/posting.al",
-                "line": 2
+                "line": 3
               },
               "display": "PostSalesDoc",
               "objectDisplay": "Codeunit D8PostingChain",
@@ -62,7 +63,7 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/posting.al",
-              "line": 2
+              "line": 3
             },
             "display": "PostSalesDoc",
             "objectDisplay": "Codeunit D8PostingChain",
@@ -74,5 +75,5 @@
       ]
     }
   },
-  "schemaVersion": "1.1.0"
+  "schemaVersion": "2.0.0"
 }

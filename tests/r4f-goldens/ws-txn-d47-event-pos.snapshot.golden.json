@@ -224,9 +224,9 @@
         "sourceAnchor": {
           "sourceUnitId": "ws:src/Publisher.Codeunit.al",
           "range": {
-            "startLine": 15,
+            "startLine": 16,
             "startColumn": 8,
-            "endLine": 15,
+            "endLine": 16,
             "endColumn": 24
           },
           "enclosingRoutineId": "2584d981b3f23bbc/4e3e888e63bce330dfce9c26ca1d6036c6e285add05714dc15caacda3593ecb8",
@@ -242,9 +242,9 @@
         "publishAnchor": {
           "sourceUnitId": "ws:src/Publisher.Codeunit.al",
           "range": {
-            "startLine": 19,
+            "startLine": 20,
             "startColumn": 4,
-            "endLine": 21,
+            "endLine": 22,
             "endColumn": 8
           },
           "enclosingRoutineId": "2584d981b3f23bbc/8ecd741f61ab0d2e54f53d737d95b2f4bd6f9ec711ba71c9d1ade8f050239b50",
@@ -253,9 +253,9 @@
         "subscriberAnchor": {
           "sourceUnitId": "ws:src/Subscriber.Codeunit.al",
           "range": {
-            "startLine": 3,
+            "startLine": 4,
             "startColumn": 4,
-            "endLine": 10,
+            "endLine": 11,
             "endColumn": 8
           },
           "enclosingRoutineId": "2584d981b3f23bbc/fbb9cf674ae49f1430f9c8c28952aca6029162d1d710f840a6b67ae8a0a3d8c3",
@@ -269,9 +269,9 @@
         "operationId": "2584d981b3f23bbc/4e3e888e63bce330dfce9c26ca1d6036c6e285add05714dc15caacda3593ecb8/op0",
         "routine": "11111111-0000-0000-0000-0000000d4720:Codeunit:50000#1b14d37dcf2ab2bfe14c21ea39032c69934029e553023cd2e8ef7fc364eeaf5f",
         "sourceFile": "ws:src/Publisher.Codeunit.al",
-        "startLine": 12,
+        "startLine": 13,
         "startColumn": 8,
-        "endLine": 12,
+        "endLine": 13,
         "endColumn": 22,
         "displayText": "Rec.Get",
         "controlContext": "top-level",
@@ -286,9 +286,9 @@
         "operationId": "2584d981b3f23bbc/4e3e888e63bce330dfce9c26ca1d6036c6e285add05714dc15caacda3593ecb8/op1",
         "routine": "11111111-0000-0000-0000-0000000d4720:Codeunit:50000#1b14d37dcf2ab2bfe14c21ea39032c69934029e553023cd2e8ef7fc364eeaf5f",
         "sourceFile": "ws:src/Publisher.Codeunit.al",
-        "startLine": 14,
+        "startLine": 15,
         "startColumn": 8,
-        "endLine": 14,
+        "endLine": 15,
         "endColumn": 20,
         "displayText": "Rec.Modify",
         "controlContext": "top-level",
@@ -305,9 +305,9 @@
         "callsiteId": "2584d981b3f23bbc/4e3e888e63bce330dfce9c26ca1d6036c6e285add05714dc15caacda3593ecb8/cs0",
         "routine": "11111111-0000-0000-0000-0000000d4720:Codeunit:50000#1b14d37dcf2ab2bfe14c21ea39032c69934029e553023cd2e8ef7fc364eeaf5f",
         "sourceFile": "ws:src/Publisher.Codeunit.al",
-        "startLine": 15,
+        "startLine": 16,
         "startColumn": 8,
-        "endLine": 15,
+        "endLine": 16,
         "endColumn": 24,
         "calleeDisplay": "OnAfterProcess",
         "controlContext": "top-level",
@@ -322,9 +322,9 @@
         "callsiteId": "2584d981b3f23bbc/fbb9cf674ae49f1430f9c8c28952aca6029162d1d710f840a6b67ae8a0a3d8c3/cs0",
         "routine": "11111111-0000-0000-0000-0000000d4720:Codeunit:50001#286cfef4fb8de5396d3920d266b96550e0dfbeec1e622b269958aae4c2b671ae",
         "sourceFile": "ws:src/Subscriber.Codeunit.al",
-        "startLine": 9,
+        "startLine": 10,
         "startColumn": 8,
-        "endLine": 9,
+        "endLine": 10,
         "endColumn": 65,
         "calleeDisplay": "Client.Post",
         "controlContext": "top-level",
@@ -388,9 +388,9 @@
         "sourceAnchor": {
           "sourceUnitId": "ws:src/Publisher.Codeunit.al",
           "range": {
-            "startLine": 19,
+            "startLine": 20,
             "startColumn": 4,
-            "endLine": 21,
+            "endLine": 22,
             "endColumn": 8
           },
           "enclosingRoutineId": "2584d981b3f23bbc/8ecd741f61ab0d2e54f53d737d95b2f4bd6f9ec711ba71c9d1ade8f050239b50",
@@ -408,9 +408,9 @@
         "sourceAnchor": {
           "sourceUnitId": "ws:src/Subscriber.Codeunit.al",
           "range": {
-            "startLine": 3,
+            "startLine": 4,
             "startColumn": 4,
-            "endLine": 10,
+            "endLine": 11,
             "endColumn": 8
           },
           "enclosingRoutineId": "2584d981b3f23bbc/fbb9cf674ae49f1430f9c8c28952aca6029162d1d710f840a6b67ae8a0a3d8c3",
@@ -430,9 +430,9 @@
         "sourceAnchor": {
           "sourceUnitId": "ws:src/Publisher.Codeunit.al",
           "range": {
-            "startLine": 8,
+            "startLine": 9,
             "startColumn": 4,
-            "endLine": 16,
+            "endLine": 17,
             "endColumn": 8
           },
           "enclosingRoutineId": "2584d981b3f23bbc/4e3e888e63bce330dfce9c26ca1d6036c6e285add05714dc15caacda3593ecb8",
@@ -450,9 +450,9 @@
         "sourceAnchor": {
           "sourceUnitId": "ws:src/Subscriber.Codeunit.al",
           "range": {
-            "startLine": 3,
+            "startLine": 4,
             "startColumn": 4,
-            "endLine": 10,
+            "endLine": 11,
             "endColumn": 8
           },
           "enclosingRoutineId": "2584d981b3f23bbc/fbb9cf674ae49f1430f9c8c28952aca6029162d1d710f840a6b67ae8a0a3d8c3",

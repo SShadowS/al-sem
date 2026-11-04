@@ -31,7 +31,7 @@
               "column": 8,
               "excerpt": "commit",
               "file": "ws:src/NormalCU.al",
-              "line": 35,
+              "line": 36,
               "sourceKind": "source"
             },
             "factId": "49f3a3a18ca24731",
@@ -88,7 +88,7 @@
               "column": 12,
               "excerpt": "Setup.Insert",
               "file": "ws:src/NormalCU.al",
-              "line": 33,
+              "line": 34,
               "sourceKind": "source"
             },
             "factId": "0fed3f95c2025e0c",
@@ -117,7 +117,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/NormalCU.al",
-            "line": 27,
+            "line": 28,
             "sourceKind": "source"
           },
           "display": "DoSetup",
@@ -145,7 +145,7 @@
               "column": 8,
               "excerpt": "commit",
               "file": "ws:src/NormalCU.al",
-              "line": 35,
+              "line": 36,
               "sourceKind": "source"
             },
             "factId": "da953d8ae0f202d0",
@@ -191,7 +191,7 @@
                   "anchor": {
                     "column": 8,
                     "file": "ws:src/NormalCU.al",
-                    "line": 24,
+                    "line": 25,
                     "sourceKind": "source"
                   },
                   "calleeDisplay": "DoSetup",
@@ -219,7 +219,7 @@
               "column": 12,
               "excerpt": "Setup.Insert",
               "file": "ws:src/NormalCU.al",
-              "line": 33,
+              "line": 34,
               "sourceKind": "source"
             },
             "factId": "e17e7d0193e26e7d",
@@ -243,7 +243,7 @@
                   "anchor": {
                     "column": 8,
                     "file": "ws:src/NormalCU.al",
-                    "line": 24,
+                    "line": 25,
                     "sourceKind": "source"
                   },
                   "calleeDisplay": "DoSetup",
@@ -265,7 +265,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/NormalCU.al",
-            "line": 22,
+            "line": 23,
             "sourceKind": "source"
           },
           "display": "RunSetup",
@@ -280,6 +280,7 @@
         }
       }
     ],
+    "lineBase": 1,
     "summary": {
       "rootsRequested": 2,
       "rootsResolved": 2,
@@ -288,5 +289,5 @@
     },
     "workspaceFingerprint": "153dd1f50142677bb6b39ef22a0e7e2e23f75e2a3c9f1a1a81e883dd47ae93a7"
   },
-  "schemaVersion": "1.8.0"
+  "schemaVersion": "2.1.0"
 }

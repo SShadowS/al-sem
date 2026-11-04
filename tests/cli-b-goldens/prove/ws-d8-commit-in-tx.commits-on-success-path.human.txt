@@ -2,6 +2,6 @@
   question: commits-on-success-path
   answer:   yes
   evidence: 1 effect(s)
-    [COMMIT] direct — ws:src/subscriber.al:10
+    [COMMIT] direct — ws:src/subscriber.al:11
       conditionality: unconditional-on-success
   obligations: all clear

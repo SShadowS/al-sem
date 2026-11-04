@@ -8,11 +8,12 @@
       "apps": [],
       "mode": "crossApp"
     },
+    "lineBase": 1,
     "table": {
       "candidates": [],
       "resolution": "unmatched",
       "selector": "No Such Table At All"
     }
   },
-  "schemaVersion": "1.1.0"
+  "schemaVersion": "2.0.0"
 }

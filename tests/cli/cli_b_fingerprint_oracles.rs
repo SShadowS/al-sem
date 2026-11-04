@@ -601,7 +601,8 @@ fn item8_call_hop_with_anchor() {
         line: Some(12),
         column: Some(8),
     };
-    assert_eq!(format_hop(&hop), "DoWork (via DoWork at ws:src/a.al:12:8)");
+    // Row 12 prints as line 13 (1-based); the column stays 0-based.
+    assert_eq!(format_hop(&hop), "DoWork (via DoWork at ws:src/a.al:13:8)");
 }
 
 #[test]
@@ -627,7 +628,7 @@ fn item8_object_run_unresolved_target() {
     };
     assert_eq!(
         format_hop(&hop),
-        "Runner (via Codeunit.Run <unresolved> at ws:src/b.al:3:1)"
+        "Runner (via Codeunit.Run <unresolved> at ws:src/b.al:4:1)"
     );
 }
 
@@ -668,7 +669,7 @@ fn item8_interface_dispatch_pluralization() {
     };
     assert_eq!(
         format_hop(&many),
-        "Handle (via interface IProcessor, 3 candidates at ws:src/c.al:7:2)"
+        "Handle (via interface IProcessor, 3 candidates at ws:src/c.al:8:2)"
     );
 }
 
@@ -760,7 +761,7 @@ fn item8_terminal_operation_and_callsite_and_synthetic() {
     };
     assert_eq!(
         format_terminal_hop(&op),
-        "direct Header.Modify at ws:src/p.al:9:8"
+        "direct Header.Modify at ws:src/p.al:10:8"
     );
     let cs = TerminalHopInfo {
         evidence_kind: "callsite".to_string(),

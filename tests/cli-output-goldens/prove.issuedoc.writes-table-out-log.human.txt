@@ -1,0 +1,7 @@
+--- Codeunit Out Issue Document::IssueDoc ---
+  question: writes-table:Out Log
+  answer:   yes
+  evidence: 1 effect(s)
+    [DB_INSERT] transitive — ws:src/OutIssueDocument.Codeunit.al:61
+      conditionality: unconditional-on-success
+  obligations: unresolved=2, openWorld=1, coverage=incomplete

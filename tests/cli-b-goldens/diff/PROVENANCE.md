@@ -20,5 +20,13 @@ nothing else: `"schemaVersion": 3` became `4`; `"analysisUniverse":
 `"role": "primary"` was added to the one `apps[]` row. Every diff output stayed
 byte-identical.
 
+They were upgraded by hand again from schema 4 to schema 5 for the MCP output
+plan's item 1a (2026-11-04, lines 1-based), with exactly these edits and nothing
+else: `"schemaVersion": 4` became `5`; `"lineBase": 1` was added (in its sorted
+place, after `inputs`); and every `startLine` / `endLine` value (46 in all, in
+`callsiteIndex`, `operationIndex`, `eventDeclarations`, `rootClassifications` and
+`typedEdges`) went up by one. Columns did not change. Every diff output stayed
+byte-identical.
+
 `al-sem-OBOLETE` (the source of the witness copies) is a frozen, read-only
 archive — it is never a live oracle for this repo.

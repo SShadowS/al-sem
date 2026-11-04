@@ -18,13 +18,13 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/Codeunit.al",
-            "line": 17
+            "line": 18
           },
           "routine": {
             "anchor": {
               "column": 4,
               "file": "ws:src/Codeunit.al",
-              "line": 9
+              "line": 10
             },
             "display": "DeclaredVars",
             "objectDisplay": "Codeunit R2a Records",
@@ -44,13 +44,13 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/Codeunit.al",
-            "line": 16
+            "line": 17
           },
           "routine": {
             "anchor": {
               "column": 4,
               "file": "ws:src/Codeunit.al",
-              "line": 9
+              "line": 10
             },
             "display": "DeclaredVars",
             "objectDisplay": "Codeunit R2a Records",
@@ -70,13 +70,13 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/Codeunit.al",
-            "line": 19
+            "line": 20
           },
           "routine": {
             "anchor": {
               "column": 4,
               "file": "ws:src/Codeunit.al",
-              "line": 9
+              "line": 10
             },
             "display": "DeclaredVars",
             "objectDisplay": "Codeunit R2a Records",
@@ -95,13 +95,13 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/Codeunit.al",
-            "line": 18
+            "line": 19
           },
           "routine": {
             "anchor": {
               "column": 4,
               "file": "ws:src/Codeunit.al",
-              "line": 9
+              "line": 10
             },
             "display": "DeclaredVars",
             "objectDisplay": "Codeunit R2a Records",
@@ -114,13 +114,14 @@
         "via": "direct"
       }
     ],
+    "lineBase": 1,
     "routine": {
       "resolution": "resolved",
       "routine": {
         "anchor": {
           "column": 4,
           "file": "ws:src/Codeunit.al",
-          "line": 9
+          "line": 10
         },
         "display": "DeclaredVars",
         "objectDisplay": "Codeunit R2a Records",
@@ -129,5 +130,5 @@
       "selector": "DeclaredVars"
     }
   },
-  "schemaVersion": "1.1.0"
+  "schemaVersion": "2.0.0"
 }

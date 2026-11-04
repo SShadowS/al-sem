@@ -10,6 +10,29 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+/// The most bytes a [`WriteAction::Summary`] takes serialized (MCP output plan
+/// 1b): past it a renderer degrades its summary to counts, never to a spill.
+pub const SUMMARY_CAP_BYTES: usize = 8 * 1024;
+
+/// `full` when it fits [`SUMMARY_CAP_BYTES`]; else `list_key`'s array cut from
+/// the end until it does (with `listed` set to what is left and `truncated`
+/// true). The plain cap of a list-shaped summary (MCP output plan 1e).
+pub fn capped_summary(mut full: serde_json::Value, list_key: &str) -> serde_json::Value {
+    let fits = |v: &serde_json::Value| v.to_string().len() <= SUMMARY_CAP_BYTES;
+    while !fits(&full) {
+        let Some(list) = full.get_mut(list_key).and_then(|v| v.as_array_mut()) else {
+            return serde_json::json!({"omitted": "over the summary cap"});
+        };
+        if list.pop().is_none() {
+            return serde_json::json!({"omitted": "over the summary cap"});
+        }
+        let n = list.len();
+        full["listed"] = n.into();
+        full["truncated"] = true.into();
+    }
+    full
+}
+
 /// One write a command makes, in the order its standalone run makes it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WriteAction {
@@ -18,6 +41,11 @@ pub enum WriteAction {
     File(PathBuf, Vec<u8>),
     /// A directory the following `File`s go into, created when missing.
     Dir(PathBuf),
+    /// What the stdout says, in a few hundred bytes, for a front end that
+    /// delivers the stdout as a file (the MCP server's envelope `summary`, MCP
+    /// output plan 1b/1e). The renderer builds it from its own data, never by
+    /// parsing the stdout. Standalone and batch runs write nothing for it.
+    Summary(serde_json::Value),
 }
 
 impl WriteAction {
@@ -65,6 +93,33 @@ impl JobOutput {
         }
     }
 
+    /// [`JobOutput::text`] with the renderer's `summary` of the text
+    /// ([`WriteAction::Summary`]) after it, when the text was written and the
+    /// summary is not `null` (a renderer path that makes none).
+    pub fn text_with_summary(
+        out: Option<&str>,
+        result: Result<(String, u8, serde_json::Value), String>,
+    ) -> JobOutput {
+        match result {
+            Ok((text, exit, summary)) => {
+                let mut actions = vec![WriteAction::out(out, text)];
+                if !summary.is_null() {
+                    actions.push(WriteAction::Summary(summary));
+                }
+                JobOutput { actions, exit }
+            }
+            Err(message) => JobOutput::line(&message, 1),
+        }
+    }
+
+    /// The renderer's summary, when the job made one.
+    pub fn summary(&self) -> Option<&serde_json::Value> {
+        self.actions.iter().find_map(|a| match a {
+            WriteAction::Summary(v) => Some(v),
+            _ => None,
+        })
+    }
+
     /// One `line` on stderr, then `exit`.
     pub fn line(line: &str, exit: u8) -> JobOutput {
         JobOutput {
@@ -79,6 +134,7 @@ impl JobOutput {
             WriteAction::Stdout(b) | WriteAction::Stderr(b) => b.len(),
             WriteAction::File(p, b) => p.as_os_str().len() + b.len(),
             WriteAction::Dir(p) => p.as_os_str().len(),
+            WriteAction::Summary(v) => v.to_string().len(),
         };
         self.actions.iter().map(|a| len(a) as u64).sum()
     }
@@ -183,6 +239,8 @@ pub fn replay_on(
             WriteAction::Stderr(bytes) => sink.stderr(bytes),
             WriteAction::File(path, bytes) => sink.file(path, bytes),
             WriteAction::Dir(path) => sink.dir(path),
+            // A front end's summary: no stream carries it.
+            WriteAction::Summary(_) => Ok(()),
         };
         match (done, action) {
             (Err((target, e)), _) => {

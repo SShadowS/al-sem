@@ -36,6 +36,7 @@ use crate::engine::l5::digest_cli::{
     primary_guid_of, resolve_changed_roots, run_digest_query_full_from_entries,
 };
 use crate::engine::l5::unresolved_cone::UnresolvedConeItem;
+use crate::engine::line_base::{shown, shown_opt};
 use crate::engine::session::{Cell, prove_plan};
 use std::collections::{HashMap, HashSet};
 
@@ -1054,7 +1055,8 @@ fn anchor_to_json(
     if let Some(f) = file {
         m.insert("file".into(), f.into());
     }
-    if let Some(l) = line {
+    // The model's 0-based row, written 1-based (`lineBase: 1`).
+    if let Some(l) = shown_opt(line) {
         m.insert("line".into(), l.into());
     }
     if let Some(c) = column {
@@ -1231,9 +1233,12 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     // payload
     let mut payload = serde_json::Map::new();
     payload.insert("question".into(), question.into());
-    // G13: every `line` in this document (anchors, evidence, via-path hops) is
-    // 0-based; `alsem graph`'s are 1-based (its `meta.lineBase`).
-    payload.insert("lineBase".into(), 0.into());
+    // G13 / MCP output plan 1a: every `line` in this document (anchors,
+    // evidence, via-path hops) is 1-based, as `alsem graph`'s are.
+    payload.insert(
+        "lineBase".into(),
+        crate::engine::line_base::LINE_BASE.into(),
+    );
     payload.insert("result".into(), serde_json::Value::Object(result_obj));
     payload.insert("routine".into(), serde_json::Value::Object(routine_ref));
     payload.insert("workspaceFingerprint".into(), workspace_fp.into());
@@ -1250,7 +1255,9 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     env.insert("payload".into(), serde_json::Value::Object(payload));
     // 1.4.0: effects' `detail.tempState` is digest's per-operation, class-
     // filtered join (#69 D4).
-    env.insert("schemaVersion".into(), "1.4.0".into());
+    // 2.0.0 (MCP output plan 1a): every `line` is 1-based (`lineBase: 1`).
+    // 2.1.0 (plan 1d): evidence effects carry digest 2.1.0's group fields.
+    env.insert("schemaVersion".into(), "2.1.0".into());
 
     serialize_document_value(serde_json::Value::Object(env))
 }
@@ -1285,7 +1292,7 @@ pub fn format_prove_human(
             let ev_line = eff
                 .evidence
                 .line
-                .map(|l| format!(":{}", l))
+                .map(|l| format!(":{}", shown(l)))
                 .unwrap_or_default();
             // Mirror TS: `[${eff.type}] ${eff.provenance} — ${evFile}${evLine}`
             // The em-dash is U+2014. `conditionality` is already a &'static str.
@@ -1313,7 +1320,7 @@ pub fn format_prove_human(
                         .anchor
                         .as_ref()
                         .and_then(|a| a.line)
-                        .map(|l| format!(":{}", l))
+                        .map(|l| format!(":{}", shown(l)))
                         .unwrap_or_default();
                     format!(" @ {}{}", f, line_str)
                 }
@@ -1362,6 +1369,9 @@ pub struct ProveRunResult {
     pub human_text: String,
     /// Exit code: 0 = answered, 2 = routine not resolved (dummy-doc)
     pub exit_code: u8,
+    /// The answer line and obligations, for a file answer (MCP output plan
+    /// 1e); `null` for the dummy document.
+    pub summary: serde_json::Value,
 }
 
 /// Run the full prove pipeline for a workspace + routine selector + question text.
@@ -1529,7 +1539,7 @@ impl Job for ProveJob<'_> {
         let r = doc
             .one::<Result<ProveRunResult, String>>()
             .unwrap_or_else(|f| unreachable!("prove fails no side: {f:?}"));
-        JobOutput::text(
+        JobOutput::text_with_summary(
             self.out,
             r.map(|r| {
                 let text = if self.human {
@@ -1537,7 +1547,7 @@ impl Job for ProveJob<'_> {
                 } else {
                     r.json_text
                 };
-                (text, r.exit_code)
+                (text, r.exit_code, r.summary)
             }),
         )
     }
@@ -1636,6 +1646,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             json_text,
             human_text,
             exit_code: 2,
+            summary: serde_json::Value::Null,
         });
     }
 
@@ -1773,10 +1784,20 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         &entry.effects,
     );
 
+    let summary = serde_json::json!({
+        "kind": "prove",
+        "routine": owner_qualified(&entry.object_display, &entry.routine_display),
+        "question": question_text,
+        "answer": prove_result.answer.as_str(),
+        "evidence": prove_result.evidence.as_ref().map_or(0, Vec::len),
+        "blockedBy": prove_result.blocked_by.as_ref().map_or(0, Vec::len),
+        "obligations": obligations_to_value(&prove_result.obligations),
+    });
     Ok(ProveRunResult {
         json_text,
         human_text,
         exit_code: 0,
+        summary,
     })
 }
 

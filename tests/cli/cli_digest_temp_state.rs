@@ -145,8 +145,8 @@ fn has_label(e: &Value) -> bool {
     })
 }
 
-/// The 0-based line of the unique `// @marker` comment — the convention of a
-/// digest viaPath hop's `anchor.line`.
+/// The 1-based line of the unique `// @marker` comment — the convention of a
+/// digest viaPath hop's `anchor.line` (`lineBase: 1`).
 fn line_of(marker: &str) -> u64 {
     let tag = format!("// @{marker}");
     let src = probe_al();
@@ -157,7 +157,7 @@ fn line_of(marker: &str) -> u64 {
         .map(|(i, _)| i)
         .collect();
     assert_eq!(hits.len(), 1, "marker {marker} must be unique: {hits:?}");
-    hits[0] as u64
+    hits[0] as u64 + 1
 }
 
 fn is_kt(eff: &Value) -> bool {
@@ -273,8 +273,8 @@ fn collect_temp_states(v: &Value, out: &mut BTreeSet<String>) {
 fn check_mode(single_app: bool) -> Vec<String> {
     let (mode, doc) = &docs()[if single_app { 0 } else { 1 }];
     let mut failures = Vec::new();
-    if doc["schemaVersion"] != "1.8.0" {
-        failures.push(format!("schemaVersion {} != 1.8.0", doc["schemaVersion"]));
+    if doc["schemaVersion"] != "2.1.0" {
+        failures.push(format!("schemaVersion {} != 2.1.0", doc["schemaVersion"]));
     }
 
     // Every DB_INSERT in the routine has the expected value.
@@ -1232,7 +1232,7 @@ fn digest_insert_parts(e: &Value) -> Vec<(String, String, String)> {
 /// `Customer` from the dependency's `HandleDep`, `Ws Flag` from the workspace's
 /// `HandleInWs`. The cross-app digest reaches both through the call into the
 /// dependency's publisher, so since #160 step 6 rule B (spec §14.3.5) they are
-/// ONE `DB_INSERT` group at that call (`enters XBase.OnDepEvent`) listing the
+/// ONE `DB_INSERT` group at that call (`enters Codeunit Dep Lib::OnDepEvent`) listing the
 /// same two tables, with no per-resource insert and no `temp-state-incoherent`
 /// item (a group names resources, not the dependency's operations, so it has
 /// no `detail.tempState`). `--single-app` has no insert (the precondition that
@@ -1290,7 +1290,7 @@ fn cross_app_digest_reads_the_cross_app_store() {
         })
         .collect();
     let want_groups = vec![(
-        "XBase.OnDepEvent".to_string(),
+        "Codeunit Dep Lib::OnDepEvent".to_string(),
         // Resource-id order: the workspace's table id sorts first.
         "Ws Flag, Customer".to_string(),
         None,

@@ -24,7 +24,7 @@
       "callsiteId": "1e2b5317f65ee29d/b208326fa10ca29ed890204c14cfdb7fec35fbc456d8c661366f457bc384881f/cs0",
       "controlContext": "top-level",
       "endColumn": 24,
-      "endLine": 23,
+      "endLine": 24,
       "order": {
         "dominatesSuccessReturn": true,
         "frameId": 0,
@@ -34,14 +34,14 @@
       "routine": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330",
       "sourceFile": "ws:src/Work.al",
       "startColumn": 8,
-      "startLine": 23
+      "startLine": 24
     },
     {
       "calleeDisplay": "Lib.Outer",
       "callsiteId": "1e2b5317f65ee29d/c6f7d0c5400137d57d473231aa7885a6b9eb1e82535e753f8b828d5d0e9082ae/cs0",
       "controlContext": "top-level",
       "endColumn": 19,
-      "endLine": 16,
+      "endLine": 17,
       "order": {
         "dominatesSuccessReturn": true,
         "frameId": 0,
@@ -51,7 +51,7 @@
       "routine": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea",
       "sourceFile": "ws:src/Work.al",
       "startColumn": 8,
-      "startLine": 16
+      "startLine": 17
     }
   ],
   "callsiteResolutions": [
@@ -298,9 +298,9 @@
         "enclosingRoutineId": "1e2b5317f65ee29d/15be442f50338ff0ec9a8d2a09430461c9dfcc5505d3d6262982b6a2b1cb228e",
         "range": {
           "endColumn": 8,
-          "endLine": 42,
+          "endLine": 43,
           "startColumn": 4,
-          "startLine": 37
+          "startLine": 38
         },
         "sourceUnitId": "ws:src/Work.al",
         "syntaxKind": "procedure"
@@ -350,12 +350,13 @@
       "path": ".alpackages/probe_XBase_1.0.0.0.app"
     }
   ],
+  "lineBase": 1,
   "operationIndex": [
     {
       "controlContext": "top-level",
       "displayText": "Cust.Insert",
       "endColumn": 21,
-      "endLine": 30,
+      "endLine": 31,
       "operationId": "1e2b5317f65ee29d/08a0e8321ca2e66246ab84a0358b5501013da2b83cf2eebbc85a56ed7652b149/op0",
       "order": {
         "dominatesSuccessReturn": true,
@@ -366,13 +367,13 @@
       "routine": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b8639b321a7b761371329176d52b28230370ba7ae47e1c2a25059a5452980d4a",
       "sourceFile": "ws:src/Work.al",
       "startColumn": 8,
-      "startLine": 30
+      "startLine": 31
     },
     {
       "controlContext": "top-level",
       "displayText": "Flag.Insert",
       "endColumn": 21,
-      "endLine": 41,
+      "endLine": 42,
       "operationId": "1e2b5317f65ee29d/15be442f50338ff0ec9a8d2a09430461c9dfcc5505d3d6262982b6a2b1cb228e/op0",
       "order": {
         "dominatesSuccessReturn": true,
@@ -383,13 +384,13 @@
       "routine": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171#f0ffda384ed60fe2a01bf1f6ec979e480f4737c2c9ed3eab1826cf562bc836aa",
       "sourceFile": "ws:src/Work.al",
       "startColumn": 8,
-      "startLine": 41
+      "startLine": 42
     },
     {
       "controlContext": "top-level",
       "displayText": "Cust.Insert",
       "endColumn": 21,
-      "endLine": 28,
+      "endLine": 29,
       "operationId": "638807334d78fe12/4ba11e038e944a00934ed700e76fefb9340e97686afe8ef35ea06b7906844a71/op0",
       "order": {
         "dominatesSuccessReturn": true,
@@ -400,7 +401,7 @@
       "routine": "bbbb7070-0000-0000-0000-000000000070:Codeunit:11#b2719ebaa321a4f878a37b3e7b56ca0365c0747ff3d151f54c4c60a0a09ed892",
       "sourceFile": "dep:bbbb7070-0000-0000-0000-000000000070:src/Lib.al",
       "startColumn": 8,
-      "startLine": 28
+      "startLine": 29
     }
   ],
   "permissionFacts": [
@@ -472,9 +473,9 @@
         "enclosingRoutineId": "1e2b5317f65ee29d/c6f7d0c5400137d57d473231aa7885a6b9eb1e82535e753f8b828d5d0e9082ae",
         "range": {
           "endColumn": 8,
-          "endLine": 17,
+          "endLine": 18,
           "startColumn": 4,
-          "startLine": 12
+          "startLine": 13
         },
         "sourceUnitId": "ws:src/Work.al",
         "syntaxKind": "procedure"
@@ -492,9 +493,9 @@
         "enclosingRoutineId": "1e2b5317f65ee29d/b208326fa10ca29ed890204c14cfdb7fec35fbc456d8c661366f457bc384881f",
         "range": {
           "endColumn": 8,
-          "endLine": 24,
+          "endLine": 25,
           "startColumn": 4,
-          "startLine": 19
+          "startLine": 20
         },
         "sourceUnitId": "ws:src/Work.al",
         "syntaxKind": "procedure"
@@ -512,9 +513,9 @@
         "enclosingRoutineId": "1e2b5317f65ee29d/08a0e8321ca2e66246ab84a0358b5501013da2b83cf2eebbc85a56ed7652b149",
         "range": {
           "endColumn": 8,
-          "endLine": 31,
+          "endLine": 32,
           "startColumn": 4,
-          "startLine": 26
+          "startLine": 27
         },
         "sourceUnitId": "ws:src/Work.al",
         "syntaxKind": "procedure"
@@ -532,9 +533,9 @@
         "enclosingRoutineId": "1e2b5317f65ee29d/15be442f50338ff0ec9a8d2a09430461c9dfcc5505d3d6262982b6a2b1cb228e",
         "range": {
           "endColumn": 8,
-          "endLine": 42,
+          "endLine": 43,
           "startColumn": 4,
-          "startLine": 37
+          "startLine": 38
         },
         "sourceUnitId": "ws:src/Work.al",
         "syntaxKind": "procedure"
@@ -591,7 +592,7 @@
       "stableId": "aaaa7070-0000-0000-0000-000000000070:Table:50170#1"
     }
   ],
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "typedEdges": [
     {
       "callsiteId": "1e2b5317f65ee29d/c6f7d0c5400137d57d473231aa7885a6b9eb1e82535e753f8b828d5d0e9082ae/cs0",
@@ -603,9 +604,9 @@
         "enclosingRoutineId": "1e2b5317f65ee29d/c6f7d0c5400137d57d473231aa7885a6b9eb1e82535e753f8b828d5d0e9082ae",
         "range": {
           "endColumn": 19,
-          "endLine": 16,
+          "endLine": 17,
           "startColumn": 8,
-          "startLine": 16
+          "startLine": 17
         },
         "sourceUnitId": "ws:src/Work.al",
         "syntaxKind": "call_expression"
@@ -622,9 +623,9 @@
         "enclosingRoutineId": "1e2b5317f65ee29d/b208326fa10ca29ed890204c14cfdb7fec35fbc456d8c661366f457bc384881f",
         "range": {
           "endColumn": 24,
-          "endLine": 23,
+          "endLine": 24,
           "startColumn": 8,
-          "startLine": 23
+          "startLine": 24
         },
         "sourceUnitId": "ws:src/Work.al",
         "syntaxKind": "call_expression"

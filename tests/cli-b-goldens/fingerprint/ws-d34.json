@@ -41,7 +41,7 @@
                           "column": 8,
                           "excerpt": "commit",
                           "file": "ws:src/Codeunit.al",
-                          "line": 47,
+                          "line": 48,
                           "sourceKind": "source"
                         },
                         "operationId": "a75a3c25c5320dcd/691053475741d64edaba80206bad8ba185061558aec4c24c10047904deb88158/op0"
@@ -54,7 +54,7 @@
                               "anchor": {
                                 "column": 12,
                                 "file": "ws:src/Codeunit.al",
-                                "line": 30,
+                                "line": 31,
                                 "sourceKind": "source"
                               },
                               "calleeDisplay": "Persist",
@@ -129,7 +129,7 @@
                           "column": 12,
                           "excerpt": "commit",
                           "file": "ws:src/Codeunit.al",
-                          "line": 9,
+                          "line": 10,
                           "sourceKind": "source"
                         },
                         "operationId": "a75a3c25c5320dcd/10608aafc963ede74520763dee2ab35a9ba82a2c8720ab9055245be79b97d11d/op0"
@@ -200,7 +200,7 @@
                           "column": 16,
                           "excerpt": "commit",
                           "file": "ws:src/Codeunit.al",
-                          "line": 21,
+                          "line": 22,
                           "sourceKind": "source"
                         },
                         "operationId": "a75a3c25c5320dcd/ff0824dbeb922a1ff22cfdbb22a7ea3405e3d8a50860e66d0b1f6fe7db78d750/op0"
@@ -271,7 +271,7 @@
                           "column": 8,
                           "excerpt": "commit",
                           "file": "ws:src/Codeunit.al",
-                          "line": 40,
+                          "line": 41,
                           "sourceKind": "source"
                         },
                         "operationId": "a75a3c25c5320dcd/86a4c072419b015025aa45ec09412bae901eff1afc07ca4dc83a384519e2e861/op0"
@@ -313,6 +313,7 @@
       "includeInherited": true,
       "witnessLimit": 3
     },
+    "lineBase": 1,
     "summary": {
       "renderedBlocks": 4,
       "rootsConfigIgnored": false,
@@ -320,5 +321,5 @@
     },
     "workspaceFingerprint": "18bd295463f855581d92f3e2f4f696aec9575f2eee33c1469df6c45ca2d35d4e"
   },
-  "schemaVersion": "1.3.0"
+  "schemaVersion": "2.0.0"
 }

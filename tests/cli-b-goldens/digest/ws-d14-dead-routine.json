@@ -28,7 +28,7 @@
           "anchor": {
             "column": 1,
             "file": "ws:src/codeunit.al",
-            "line": 9,
+            "line": 10,
             "sourceKind": "source"
           },
           "display": "DeadHelper",
@@ -53,7 +53,7 @@
           "anchor": {
             "column": 1,
             "file": "ws:src/codeunit.al",
-            "line": 7,
+            "line": 8,
             "sourceKind": "source"
           },
           "display": "LiveHelper",
@@ -78,7 +78,7 @@
           "anchor": {
             "column": 1,
             "file": "ws:src/codeunit.al",
-            "line": 2,
+            "line": 3,
             "sourceKind": "source"
           },
           "display": "OnRun",
@@ -93,6 +93,7 @@
         }
       }
     ],
+    "lineBase": 1,
     "summary": {
       "rootsRequested": 3,
       "rootsResolved": 3,
@@ -101,5 +102,5 @@
     },
     "workspaceFingerprint": "27982e562e0f7d50b80b3135bd69215672059411d7f470a27618b9037ee83d05"
   },
-  "schemaVersion": "1.8.0"
+  "schemaVersion": "2.1.0"
 }

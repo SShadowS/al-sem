@@ -33,6 +33,122 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   eviction fails it (35 to 37 l4 fills of 40); no pins fails it; the explain indexes' kind name
   drifting fails it.
 
+### Changed (MCP output plan 1f: tool descriptions, first pass)
+
+- **The MCP tool descriptions and server instructions state what an agent needs before it
+  calls** (plan item 1f; review S1, E5, E7): every command tool says its lines are 1-based, its
+  typical size and when the answer goes to a file with a summary, when `format: json` is worth
+  it, and its dependency depth in one sentence (explain/digest: summarized per entry point;
+  prove: the whole cone; query: one routine deep, until the plan's item 3a). `query effects` no
+  longer claims a "complete" list; digest names `files`/`diff` as the change modes;
+  `alsem_refresh` no longer says there is no built revision to update. The full rewrite is the
+  plan's item 3b.
+
+### Added (MCP output plan 1e: a summary on every spilled answer)
+
+- **An explain, query or prove answer that goes to a file carries a summary** (plan item 1e;
+  review E2). Only digest had one; an 80 KB explain card arrived as `{path, bytes, sha256}`. The
+  renderer builds it from its own data (`ExplainRunResult`, `QueryRunResult`, `ProveRunResult`
+  gain `summary`): explain, each card's header line and the length of its lists (own rules,
+  writes, events, UI, callers, tests, gaps) and its commit verdict; query effects, the effects
+  by operation, by temp state, the tables and the not-known-temporary writes; query touches, the
+  `down`/`up` headlines with every list as a count; prove, the answer, the evidence and blocker
+  counts and the obligations. Capped at 8 KiB (`capped_summary`), sent only beside a file.
+
+### Fixed (MCP output plan 1d: boundary groups)
+
+- **A dependency boundary group names its boundary owner-qualified, lists every resource, and
+  claims no unresolved resource it cannot have** (plan item 1d; review B2, D4, P2). Digest and
+  prove printed `<App>.<Routine>` (`Base Application.OnRun` for both Reminder-Issue and
+  Sales-Calc. Discount); now `Codeunit Reminder-Issue::OnRun`, as `query` names a routine. The
+  JSON gains `resources[]` ({id, display}, every resource in resource-id order;
+  `detail.resourceCount` is its length) beside `detail.resources`, which still names the first
+  ten, so "Issued Reminder Header" is never lost by omission. `unresolvedResources` counts only
+  database writes (every COMMIT, UI, ERROR, HTTP, FILE or background group claimed one), and such
+  a resource-less group no longer states `resourceCount: "0"` / `resources: ""`. Digest schema
+  2.1.0, prove 2.1.0. Fact ids and canonical keys are unchanged.
+
+### Changed (MCP output plan 1c: one copy of each answer)
+
+- **An MCP answer carries its stdout once in what the client reads** (plan item 1c; review P3,
+  E1, E6). Measured through Claude Code first, as the plan asked: with `structuredContent`
+  present the client reads and size-checks that field alone (a result with 46,167 characters of
+  text blocks and 83,840 of `structuredContent` was reported as 82,195 characters and filed). So
+  `structuredContent` now holds the answer exactly once: the parsed `output` without
+  `stdoutText` for an inline JSON stdout, else `stdoutText`; before, a JSON answer was there
+  twice (and three times counting the text block). The first text block drops the
+  `"<the next content block>"` placeholder key; the text blocks keep the byte contract.
+  `alsem_prove` answers `human` by default (owner decision 3; `format: json` for the full
+  evidence). A call naming no `maxInlineBytes` gets 40 KiB, not 64 KiB, so an inline answer's
+  `structuredContent` stays under Claude Code's 50,000-character limit. The LSP relay keeps the
+  CLI's defaults (prove `json`, 64 KiB).
+
+### Fixed (MCP output plan 1b: the digest summary)
+
+- **`alsem_digest`'s summary no longer embeds every unresolved call site, says what decides
+  whether to open the file, and is bounded** (plan item 1b; review D1, D2, E3). The server built
+  it by parsing the stdout and copied each root's whole `unresolved` array into it: 270,781
+  characters for `IssueReminder`, which Claude Code moved out of the conversation, and it was
+  added after the frame bound. Now the renderer builds it from its own data
+  (`digest_cli::digest_summary`, carried as `WriteAction::Summary` → the wire's
+  `Outcome::Cli.summary` → the envelope) before the frame is bounded: per root the effects by
+  type, the physical tables written (workspace and dependency, a boundary group's whole set, up
+  to ten names each), temporary tables, commits, the boundaries entered, coverage and its
+  reasons, and the unresolved call sites as `{total, polymorphic, dynamicTarget, inWorkspace,
+  topCallees[3]}`. Capped at 8 KiB (`SUMMARY_CAP_BYTES`): past it the names go, then routines
+  from the end; never a spill. The server keeps a summary only beside a file (an inline answer
+  holds the answer itself), and replaces one over the cap by its size. The server no longer
+  parses any stdout for it.
+
+### Changed (MCP output plan 1a: every line 1-based)
+
+- **explain, prove, digest, query, fingerprint and the snapshots print and serialize 1-based
+  lines, and every document says so with `lineBase: 1`** (plan
+  `docs/superpowers/plans/2026-11-04-mcp-output-fixes.md`, item 1a, owner decision 1). They
+  printed the model's 0-based rows as `file:line`, so an agent's `Read`, `grep -n` or editor
+  landed one statement early; `alsem graph`, `alsem analyze`, SARIF and the HTML report were
+  1-based already. The model stays 0-based; `src/engine/line_base.rs` converts once, where a line
+  leaves the engine, after every sort and hash. Columns stay 0-based. Schema bumps (a value's
+  meaning changed, so major): digest 1.8.0 → 2.0.0, prove 1.4.0 → 2.0.0, query 1.1.0 → 2.0.0,
+  fingerprint-query 1.3.0 → 2.0.0, routine inventory 1.2.0 → 2.0.0, explain `al-sem.explain/1`
+  → `/2`, snapshot schema 4 → 5 (with a `lineBase` header key; old snapshots are refused, as
+  every schema bump does, and `alsem fingerprint` re-creates them). The MCP envelope of every
+  command answer carries `lineBase: 1`. The aldump R4-F projections keep the model's rows,
+  except the snapshot projection, which is the snapshot's own serializer.
+  **Readers to update with this change:** bc-dev-mcp's risk join (`src/core/risk.ts:99-110`,
+  `:158-169`) adds 1 to a digest routine anchor and must drop the `+ 1`; the ConTinAI citation
+  consumer and the editor extension (file:line links relayed by the LSP) read the new base.
+
+### Added (MCP output plan 1a: output invariants)
+
+- **`tests/cli/output_invariants.rs`** (always on, the wave-0 fixture) and
+  **`tests/cli/output_cdo.rs`** (the first CDO-gated `cli` member, now run by `scripts/cdo-gate`
+  on `IssueReminder`, `RunReportID` and `UpdateLastUpload` off one `alsem mcp` server): every
+  `file:line` a human output prints opens to the line it describes (the anchor source-check;
+  `dep:` anchors through `aldump --dump-dependency-source`; a sample of 50 on CDO), and every
+  JSON document and MCP envelope states `lineBase: 1`.
+
+### Added (MCP output plan, wave 0: the cross-app output fixture)
+
+- **A cross-app fixture whose dependency ships bodies, and its golden family** (plan
+  `docs/superpowers/plans/2026-11-04-mcp-output-fixes.md`, item 0b). Every explain/query golden
+  before it was single-app, so the shapes an agent meets on a real workspace never reached a
+  golden. `tests/fixtures/mcp-output/` (the workspace `ws/` and the dependency's sources `dep/`,
+  packed into `ws/.alpackages/` by `write_source_app`; `output_fixture::fixture_app_matches_its_sources`
+  keeps the two equal) has: a workspace routine that runs a dependency codeunit whose callee
+  writes twelve tables, modifies a thirteenth, raises a dependency event, runs a dynamic codeunit
+  and commits (boundary groups with a commit, more than ten resources, an event group and a
+  dependency gap), a second dependency `OnRun` (two boundaries with one routine name), temporary
+  and physical writes on one table in the workspace and in the dependency, a `RecordRef.Next()`
+  loop, a dynamic `Codeunit.Run`, an interface call, an HTTP call, a background task, an own
+  event with a subscriber, a page action caller and one `[Test]` procedure. The new `cli` member
+  `output_fixture` pins explain, prove (`may-commit` and `writes-table` for seven tables), digest
+  (default and `--include-reads --tests`) and query (`effects`, `touches`) on it, JSON and human,
+  in `tests/cli-output-goldens/` (a new golden directory, declared in `scripts/check-goldens`).
+  The goldens show today's defects on purpose (blank boundary names, `Out Base.OnRun` for two
+  codeunits, resources cut at ten, `unresolvedResources=1` on a commit, 0-based lines); each later
+  item of the plan moves them.
+
 ### Changed (the finer dependency re-resolution rule for S)
 
 - **An S edit re-resolves only the dependency files whose recorded answers changed** (plan

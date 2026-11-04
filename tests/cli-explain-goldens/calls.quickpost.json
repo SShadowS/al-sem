@@ -12,7 +12,7 @@
               "column": 8,
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
-              "line": 24,
+              "line": 25,
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -33,7 +33,7 @@
           "anchor": {
             "column": 12,
             "file": "ws:src/checks.al",
-            "line": 52,
+            "line": 53,
             "sourceKind": "source"
           },
           "callee": "Codeunit Error Message Management::LogSimpleError",
@@ -45,7 +45,7 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/post.al",
-            "line": 23,
+            "line": 24,
             "sourceKind": "source"
           },
           "field": "Amount",
@@ -57,7 +57,7 @@
               "anchor": {
                 "column": 16,
                 "file": "ws:src/order.al",
-                "line": 15,
+                "line": 16,
                 "sourceKind": "source"
               },
               "comment": null,
@@ -101,7 +101,7 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/post.al",
-            "line": 24,
+            "line": 25,
             "sourceKind": "source"
           },
           "kind": "table-trigger-rules-skipped",
@@ -112,7 +112,7 @@
               "anchor": {
                 "column": 12,
                 "file": "ws:src/order.al",
-                "line": 24,
+                "line": 25,
                 "sourceKind": "source"
               },
               "comment": null,
@@ -138,7 +138,7 @@
                   "anchor": {
                     "column": 11,
                     "file": "ws:src/order.al",
-                    "line": 23,
+                    "line": 24,
                     "sourceKind": "source"
                   },
                   "kind": "Other",
@@ -160,7 +160,7 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/post.al",
-          "line": 17,
+          "line": 18,
           "sourceKind": "source"
         },
         "doc": null,
@@ -177,7 +177,7 @@
             "anchor": {
               "column": 12,
               "file": "ws:src/checks.al",
-              "line": 5,
+              "line": 6,
               "sourceKind": "source"
             },
             "comment": null,
@@ -213,7 +213,7 @@
             "anchor": {
               "column": 12,
               "file": "ws:src/checks.al",
-              "line": 14,
+              "line": 15,
               "sourceKind": "source"
             },
             "comment": null,
@@ -240,7 +240,7 @@
                 "anchor": {
                   "column": 11,
                   "file": "ws:src/checks.al",
-                  "line": 13,
+                  "line": 14,
                   "sourceKind": "source"
                 },
                 "kind": "Other",
@@ -257,7 +257,8 @@
     }
   ],
   "diagnostics": [],
+  "lineBase": 1,
   "mode": "routine",
-  "schema": "al-sem.explain/1",
+  "schema": "al-sem.explain/2",
   "selector": "QuickPost"
 }

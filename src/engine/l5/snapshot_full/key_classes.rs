@@ -42,6 +42,7 @@ pub const SNAPSHOT_KEYS: &[(&str, KeyClass)] = &[
     ("workspaceFingerprint", KeyClass::Input),
     ("generatedAt", KeyClass::Header),
     ("analysisUniverse", KeyClass::Header),
+    ("lineBase", KeyClass::Header),
     ("apps", KeyClass::Inventory),
     ("identities", KeyClass::Evidence),
     ("contractFacts", KeyClass::Inventory),

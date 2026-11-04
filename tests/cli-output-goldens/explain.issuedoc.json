@@ -1,0 +1,352 @@
+{
+  "cards": [
+    {
+      "effects": {
+        "commitSites": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "enters Codeunit Base Poster::OnRun",
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 15,
+              "sourceKind": "source"
+            },
+            "conditionality": "unknown",
+            "via": []
+          }
+        ],
+        "commits": "may",
+        "events": [
+          {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 25,
+              "sourceKind": "source"
+            },
+            "conditionality": "unknown",
+            "event": "OnAfterIssueDoc",
+            "eventId": "a0a00001-0000-4000-8000-0000000000a1/Codeunit/50110/event/onafterissuedoc",
+            "via": [
+              "OnAfterIssueDoc"
+            ]
+          },
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "enters Codeunit Base Poster::OnRun",
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 15,
+              "sourceKind": "source"
+            },
+            "conditionality": "unknown",
+            "event": "",
+            "eventId": "",
+            "via": []
+          }
+        ],
+        "ui": [],
+        "writes": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "enters Codeunit Base Poster::OnRun",
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 15,
+              "sourceKind": "source"
+            },
+            "conditionality": "unknown",
+            "fieldCaptions": {},
+            "fields": [],
+            "op": "DB_DELETE",
+            "table": "",
+            "tableId": "",
+            "via": []
+          },
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "TempLog.DeleteAll",
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 58,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "fieldCaptions": {},
+            "fields": [
+              "Entry No.",
+              "Message"
+            ],
+            "op": "DB_DELETE",
+            "table": "Out Log",
+            "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
+            "via": [
+              "WriteLog"
+            ]
+          },
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "enters Codeunit Base Poster::OnRun",
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 15,
+              "sourceKind": "source"
+            },
+            "conditionality": "unknown",
+            "fieldCaptions": {},
+            "fields": [],
+            "op": "DB_INSERT",
+            "table": "",
+            "tableId": "",
+            "via": []
+          },
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "enters Codeunit Base Poster::OnRun",
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 15,
+              "sourceKind": "source"
+            },
+            "conditionality": "unknown",
+            "fieldCaptions": {},
+            "fields": [],
+            "op": "DB_INSERT",
+            "table": "",
+            "tableId": "",
+            "via": []
+          },
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Log.Insert",
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 61,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "fieldCaptions": {},
+            "fields": [
+              "Entry No.",
+              "Message"
+            ],
+            "op": "DB_INSERT",
+            "table": "Out Log",
+            "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
+            "via": [
+              "WriteLog"
+            ]
+          },
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Doc.Modify",
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 14,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "fieldCaptions": {},
+            "fields": [
+              "Status"
+            ],
+            "op": "DB_MODIFY",
+            "table": "Out Doc",
+            "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50100",
+            "via": []
+          },
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "enters Codeunit Base Poster::OnRun",
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 15,
+              "sourceKind": "source"
+            },
+            "conditionality": "unknown",
+            "fieldCaptions": {},
+            "fields": [],
+            "op": "DB_MODIFY",
+            "table": "",
+            "tableId": "",
+            "via": []
+          },
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "enters Codeunit Base Calc::OnRun",
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 16,
+              "sourceKind": "source"
+            },
+            "conditionality": "unknown",
+            "fieldCaptions": {},
+            "fields": [],
+            "op": "DB_MODIFY",
+            "table": "",
+            "tableId": "",
+            "via": []
+          }
+        ]
+      },
+      "extensionPoints": [
+        {
+          "anchor": {
+            "column": 8,
+            "file": "ws:src/OutIssueDocument.Codeunit.al",
+            "line": 25,
+            "sourceKind": "source"
+          },
+          "conditionalOnAppSet": true,
+          "event": "OnAfterIssueDoc",
+          "eventId": "a0a00001-0000-4000-8000-0000000000a1/Codeunit/50110/event/onafterissuedoc",
+          "isHandled": false,
+          "subscriberRoutines": [
+            {
+              "app": "a0a00001-0000-4000-8000-0000000000a1",
+              "conditional": false,
+              "id": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50115#3d62c09f85109c26633ebda45b73c39253717f79f193717e2c4326d374ce2e6f",
+              "routine": "Codeunit Out Subscribers::LogIssued",
+              "rules": []
+            }
+          ],
+          "subscribers": 1
+        },
+        {
+          "anchor": {
+            "column": 8,
+            "excerpt": "enters Codeunit Base Poster::OnRun",
+            "file": "ws:src/OutIssueDocument.Codeunit.al",
+            "line": 15,
+            "sourceKind": "source"
+          },
+          "conditionalOnAppSet": true,
+          "event": "",
+          "eventId": "",
+          "isHandled": false,
+          "subscriberRoutines": [],
+          "subscribers": 0
+        }
+      ],
+      "gaps": [
+        {
+          "anchor": {
+            "column": 8,
+            "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
+            "line": 45,
+            "sourceKind": "source"
+          },
+          "callee": "Codeunit.Run(<dynamic>)",
+          "in": "PostDocument",
+          "kind": "unresolved-call",
+          "status": "dynamic-target"
+        },
+        {
+          "anchor": {
+            "column": 8,
+            "file": "ws:src/OutIssueDocument.Codeunit.al",
+            "line": 21,
+            "sourceKind": "source"
+          },
+          "callee": "Codeunit.Run(<dynamic>)",
+          "in": "IssueDoc",
+          "kind": "unresolved-call",
+          "status": "dynamic-target"
+        },
+        {
+          "anchor": {
+            "column": 8,
+            "file": "ws:src/OutIssueDocument.Codeunit.al",
+            "line": 23,
+            "sourceKind": "source"
+          },
+          "callee": "Handler.Handle",
+          "in": "IssueDoc",
+          "kind": "unresolved-call",
+          "status": "polymorphic"
+        }
+      ],
+      "reachedFrom": [
+        {
+          "action": "Issue",
+          "actionKind": "action",
+          "anchor": {
+            "column": 12,
+            "file": "ws:src/Pages.al",
+            "line": 18,
+            "sourceKind": "source"
+          },
+          "caption": "Issue",
+          "kind": "PageAction",
+          "object": "Out Doc Card",
+          "objectType": "Page",
+          "runObject": null,
+          "tooltip": null,
+          "via": [
+            "OnAction",
+            "IssueDoc"
+          ]
+        }
+      ],
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 3,
+          "sourceKind": "source"
+        },
+        "doc": null,
+        "id": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475",
+        "name": "IssueDoc",
+        "object": "Out Issue Document",
+        "objectCaption": null,
+        "objectType": "Codeunit"
+      },
+      "rules": {
+        "callers": [],
+        "inherited": [],
+        "knownCallers": 1,
+        "own": [
+          {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 12,
+              "sourceKind": "source"
+            },
+            "comment": null,
+            "id": "51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/rule0",
+            "kind": "TestField",
+            "message": {
+              "args": [],
+              "candidates": [],
+              "labelComment": null,
+              "source": "Platform",
+              "text": null,
+              "var": null
+            },
+            "stops": "always",
+            "stopsReason": null,
+            "when": [
+              {
+                "field": "Status",
+                "kind": "FieldCompare",
+                "op": "<>",
+                "recordVar": "Doc",
+                "table": "Out Doc",
+                "value": "Doc.Status::Open"
+              }
+            ],
+            "whenText": "Doc.Status <> Doc.Status::Open"
+          }
+        ]
+      },
+      "tests": []
+    }
+  ],
+  "diagnostics": [],
+  "lineBase": 1,
+  "mode": "routine",
+  "schema": "al-sem.explain/2",
+  "selector": "Out Issue Document::IssueDoc"
+}

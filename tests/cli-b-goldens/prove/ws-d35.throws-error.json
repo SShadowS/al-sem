@@ -11,7 +11,7 @@
   "generatedAt": "1970-01-01T00:00:00Z",
   "kind": "prove",
   "payload": {
-    "lineBase": 0,
+    "lineBase": 1,
     "question": "throws-error",
     "result": {
       "answer": "no",
@@ -27,7 +27,7 @@
       "anchor": {
         "column": 4,
         "file": "ws:src/Codeunit.al",
-        "line": 18,
+        "line": 19,
         "sourceKind": "source"
       },
       "display": "OnBeforePrintSafe",
@@ -36,5 +36,5 @@
     },
     "workspaceFingerprint": "f6926434e3c7c47f07ebe2d627f769e903e898f08ea05d5357827ef685db3a81"
   },
-  "schemaVersion": "1.4.0"
+  "schemaVersion": "2.1.0"
 }

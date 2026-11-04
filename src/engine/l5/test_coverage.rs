@@ -121,6 +121,8 @@ pub struct CoveredItem {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Anchor {
     pub file: String,
+    /// The model's 0-based row; serialized 1-based (`lineBase: 1`).
+    #[serde(serialize_with = "crate::engine::line_base::serialize_shown")]
     pub line: u32,
 }
 
@@ -848,7 +850,8 @@ mod tests {
         );
         let json = tc.to_json_value();
         assert_eq!(json["uncovered"][0]["reason"], "declaration-only");
-        assert_eq!(json["uncovered"][0]["anchor"]["line"], 3);
+        // The row 3 is written 1-based.
+        assert_eq!(json["uncovered"][0]["anchor"]["line"], 4);
     }
 
     #[test]

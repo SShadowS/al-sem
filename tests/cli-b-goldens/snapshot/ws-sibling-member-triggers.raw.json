@@ -76,6 +76,7 @@
       "path": "app.json"
     }
   ],
+  "lineBase": 1,
   "operationIndex": [],
   "permissionFacts": [],
   "rootClassifications": [
@@ -92,9 +93,9 @@
         "enclosingRoutineId": "f497fcf40fd16ba3/59da86c6db221568270bda45af10454f303b0715a139ee68975d8d413c1fb2e8",
         "range": {
           "endColumn": 20,
-          "endLine": 20,
+          "endLine": 21,
           "startColumn": 16,
-          "startLine": 18
+          "startLine": 19
         },
         "sourceUnitId": "ws:src/SiblingTriggers.Page.al",
         "syntaxKind": "trigger_declaration"
@@ -113,9 +114,9 @@
         "enclosingRoutineId": "f497fcf40fd16ba3/a6b6e752e94d20add0a3c31382229de9f4154ecd0609106f7e5d1bad526e55de",
         "range": {
           "endColumn": 20,
-          "endLine": 26,
+          "endLine": 27,
           "startColumn": 16,
-          "startLine": 24
+          "startLine": 25
         },
         "sourceUnitId": "ws:src/SiblingTriggers.Page.al",
         "syntaxKind": "trigger_declaration"
@@ -139,7 +140,7 @@
     ]
   },
   "schemaFacts": [],
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "typedEdges": [],
   "workspaceFingerprint": "c40b4647270fae89f9861ea27242e8eb39759c6bff5c3f68254962ed7db62edd"
 }

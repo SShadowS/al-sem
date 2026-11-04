@@ -5,7 +5,7 @@
   "generatedAt": "1970-01-01T00:00:00Z",
   "kind": "prove",
   "payload": {
-    "lineBase": 0,
+    "lineBase": 1,
     "question": "throws-error",
     "result": {
       "answer": "yes",
@@ -18,7 +18,7 @@
             "column": 8,
             "excerpt": "error-call",
             "file": "ws:src/Sender.Codeunit.al",
-            "line": 13,
+            "line": 14,
             "sourceKind": "source"
           },
           "factId": "13ef3af0ee3a1c65",
@@ -45,7 +45,7 @@
       "anchor": {
         "column": 4,
         "file": "ws:src/Sender.Codeunit.al",
-        "line": 6,
+        "line": 7,
         "sourceKind": "source"
       },
       "display": "PostThenError",
@@ -54,5 +54,5 @@
     },
     "workspaceFingerprint": "7b850fecf8bc63d2216a6d8e134dbdee8afdd0ceb51be87ffc52197fcef36875"
   },
-  "schemaVersion": "1.4.0"
+  "schemaVersion": "2.1.0"
 }

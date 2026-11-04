@@ -368,13 +368,14 @@ fn summary(e: &Value) -> String {
 }
 
 /// Is `hop` an `implicit-trigger` hop into a routine named `trigger`, anchored
-/// at (line, column)?
-fn is_trigger_hop(hop: &Value, trigger: &str, line: u64, column: u64) -> bool {
+/// at (row, column)? `row` is the 0-based line of [`SITES`]; the document's
+/// line is 1-based (`lineBase: 1`).
+fn is_trigger_hop(hop: &Value, trigger: &str, row: u64, column: u64) -> bool {
     hop["kind"] == "implicit-trigger"
         && hop["toDisplay"]
             .as_str()
             .is_some_and(|d| d.ends_with(trigger))
-        && hop["anchor"]["line"] == line
+        && hop["anchor"]["line"] == row + 1
         && hop["anchor"]["column"] == column
 }
 
@@ -850,9 +851,10 @@ fn a4_bindings_and_keys_are_per_operation() {
                 phys[0]["viaPaths"]
             ));
         }
-        if first_hops.iter().any(|h| h["anchor"]["line"] == 77) {
+        // Row 77 (the temporary op) is the document's 1-based line 78.
+        if first_hops.iter().any(|h| h["anchor"]["line"] == 78) {
             f.push(format!(
-                "[{mode}] digest MixedValidate: a physical viaPath is anchored at the temporary op (77)"
+                "[{mode}] digest MixedValidate: a physical viaPath is anchored at the temporary op (row 77)"
             ));
         }
     }
@@ -1041,7 +1043,7 @@ fn write_cross_app_workspace(dir: &Path) {
 /// "Dep Log") reports the `DB_INSERT` on "Dep Log". Since #160 step 6 rule B
 /// (spec §14.3.5) the trigger fires into dependency code, so the insert is
 /// the `DB_INSERT` group of that boundary: its identity is the firing
-/// Validate (evidence 6:8), it enters `Dep96.OnValidate`, lists "Dep Log",
+/// Validate (evidence 6:8), it enters `Table Dep Trig::OnValidate`, lists "Dep Log",
 /// has the empty via path (the root's own operation is the boundary) and is
 /// `unknown`. Precondition (true today): cross-app L4 `query effects` already
 /// has that insert via implicit-trigger, and the fixture line is where the
@@ -1099,8 +1101,9 @@ fn a6_dependency_trigger_reaches_the_workspace_caller() {
         })
         .collect();
     let want = vec![serde_json::json!({
-        "detail": {"boundary": "Dep96.OnValidate", "resourceCount": "1", "resources": "Dep Log"},
-        "evidence": [6, 8],
+        "detail": {"boundary": "Table Dep Trig::OnValidate", "resourceCount": "1", "resources": "Dep Log"},
+        // Row 6, column 8 (the fixture check above): line 7 in the 1-based document.
+        "evidence": [7, 8],
         "viaPaths": [[]],
         "conditionality": "unknown",
     })];

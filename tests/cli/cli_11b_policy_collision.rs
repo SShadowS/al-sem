@@ -310,8 +310,9 @@ fn query_effects_origin_is_the_last_owning_rows_operation() {
         !lines.is_empty(),
         "precondition: Go's effects include Work's op0: {doc}"
     );
+    // The model's rows are 0-based; the document's lines 1-based (`lineBase: 1`).
     assert!(
-        lines.iter().all(|&l| l == b_line),
-        "every op0 origin is arm B's line {b_line} (arm A: {a_line}): {lines:?}"
+        lines.iter().all(|&l| l == b_line + 1),
+        "every op0 origin is arm B's row {b_line} (arm A: {a_line}), written 1-based: {lines:?}"
     );
 }

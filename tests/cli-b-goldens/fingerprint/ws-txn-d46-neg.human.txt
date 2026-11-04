@@ -11,16 +11,16 @@ Codeunit Normal Handler::RunSetup  [public-procedure]
   witnesses:
     commit transaction — 1 path shown
       Path 1/1 shown:
-        DoSetup (via DoSetup at ws:src/NormalCU.al:24:8)
-          → direct commit at ws:src/NormalCU.al:35:8
+        DoSetup (via DoSetup at ws:src/NormalCU.al:25:8)
+          → direct commit at ws:src/NormalCU.al:36:8
 
     insert table "11111111-0000-0000-0000-00000000d461/table/50000" — 1 path shown
       Path 1/1 shown:
-        DoSetup (via DoSetup at ws:src/NormalCU.al:24:8)
-          → direct Setup.Insert at ws:src/NormalCU.al:33:12
+        DoSetup (via DoSetup at ws:src/NormalCU.al:25:8)
+          → direct Setup.Insert at ws:src/NormalCU.al:34:12
 
     read table "11111111-0000-0000-0000-00000000d461/table/50000" — 1 path shown
       Path 1/1 shown:
-        DoSetup (via DoSetup at ws:src/NormalCU.al:24:8)
-          → direct Setup.Get at ws:src/NormalCU.al:31:15
+        DoSetup (via DoSetup at ws:src/NormalCU.al:25:8)
+          → direct Setup.Get at ws:src/NormalCU.al:32:15
 

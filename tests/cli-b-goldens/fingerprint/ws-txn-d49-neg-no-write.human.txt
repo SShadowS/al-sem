@@ -7,5 +7,5 @@ Codeunit D49 Sender::MessageOnly  [public-procedure]
   witnesses:
     ui-message ui — 1 path shown
       Path 1/1 shown:
-        call Message at ws:src/Sender.Codeunit.al:8:8
+        call Message at ws:src/Sender.Codeunit.al:9:8
 

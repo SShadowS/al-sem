@@ -51,7 +51,7 @@
                           "column": 8,
                           "excerpt": "Rec.Modify",
                           "file": "ws:src/Sender.Codeunit.al",
-                          "line": 13,
+                          "line": 14,
                           "sourceKind": "source"
                         },
                         "operationId": "52424ddea2af29e4/e2d0ecb6bef7ddcc73934b486afe9c4529d5b67cce7d8ae8979ec62bd77cddda/op1"
@@ -80,7 +80,7 @@
                           "column": 8,
                           "excerpt": "Rec.Get",
                           "file": "ws:src/Sender.Codeunit.al",
-                          "line": 11,
+                          "line": 12,
                           "sourceKind": "source"
                         },
                         "operationId": "52424ddea2af29e4/e2d0ecb6bef7ddcc73934b486afe9c4529d5b67cce7d8ae8979ec62bd77cddda/op0"
@@ -163,6 +163,7 @@
       "includeInherited": true,
       "witnessLimit": 3
     },
+    "lineBase": 1,
     "summary": {
       "renderedBlocks": 1,
       "rootsConfigIgnored": false,
@@ -170,5 +171,5 @@
     },
     "workspaceFingerprint": "c6699cf6323bea4482f8eb641cd8f8ad5f5688c22d669234161e0cb01359a0da"
   },
-  "schemaVersion": "1.3.0"
+  "schemaVersion": "2.0.0"
 }
