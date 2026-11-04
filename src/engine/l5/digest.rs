@@ -3486,6 +3486,12 @@ pub struct DigestEffectResult {
     /// ([`crate::engine::l5::group_path`]). Set only for `prove`'s read; not
     /// serialized.
     pub group_resource_paths: Vec<(String, crate::engine::l5::group_path::GroupPathOutcome)>,
+    /// W2-0c (design §3.3.1): per group resource, whether the group's
+    /// crossing reaches it from its own entry states. A `Disproved` one is
+    /// also in `dead_group_resources` (the refined membership drops it;
+    /// `group_resources` stays the raw membership). Set only for `prove`'s
+    /// read; not serialized.
+    pub group_resource_status: Vec<(String, crate::engine::l5::literal_reach::ResourceStatus)>,
     /// G23: the root cannot reach the effect once literal Boolean arguments
     /// are followed ([`crate::engine::l5::literal_reach`]). Set only for
     /// `prove`'s read; not serialized.
@@ -4589,6 +4595,7 @@ fn digest_one_root<'i>(
                 literal_unreachable: false,
                 dead_group_resources: Vec::new(),
                 group_resource_paths: Vec::new(),
+                group_resource_status: Vec::new(),
                 crossing,
             });
         }

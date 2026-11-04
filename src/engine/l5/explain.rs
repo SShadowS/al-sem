@@ -1165,6 +1165,26 @@ fn anchor_value_human(v: &Value) -> String {
     }
 }
 
+/// W2-1, raw versus refined (design §3.1): a row the root cannot reach
+/// under literal arguments stays listed, marked, so it never reads like a
+/// live one.
+fn dead_note(e: &DigestEffectResult) -> &'static str {
+    if e.literal_unreachable {
+        ", ruled out by literal arguments"
+    } else {
+        ""
+    }
+}
+
+/// [`dead_note`]'s JSON twin: `literalUnreachable: true`, only then.
+fn mark_dead(v: &mut Value, e: &DigestEffectResult) {
+    if e.literal_unreachable
+        && let Some(o) = v.as_object_mut()
+    {
+        o.insert("literalUnreachable".into(), true.into());
+    }
+}
+
 fn detail<'e>(e: &'e DigestEffectResult, key: &str) -> Option<&'e str> {
     e.detail
         .iter()
@@ -1400,7 +1420,7 @@ impl Card {
                     }
                 }
                 writes_human.push(format!(
-                    "writes {table}{} ({}{}) at {}",
+                    "writes {table}{} ({}{}{}) at {}",
                     if fields.is_empty() {
                         String::new()
                     } else {
@@ -1415,9 +1435,10 @@ impl Card {
                     } else {
                         format!(", {}", e.conditionality)
                     },
+                    dead_note(e),
                     anchor_value_human(&anchor),
                 ));
-                writes.push(json!({
+                let mut w = json!({
                     "op": ty,
                     "table": table,
                     "tableId": table_id,
@@ -1426,14 +1447,20 @@ impl Card {
                     "conditionality": e.conditionality,
                     "via": via,
                     "anchor": anchor,
-                }));
+                });
+                mark_dead(&mut w, e);
+                writes.push(w);
             } else if ty == "COMMIT" {
-                commit_unconditional |= e.conditionality == UNCONDITIONAL;
-                commit_sites.push(json!({
+                // W2-1: a literal-dead COMMIT does not make the routine one
+                // that may commit.
+                commit_unconditional |= e.conditionality == UNCONDITIONAL && !e.literal_unreachable;
+                let mut c = json!({
                     "conditionality": e.conditionality,
                     "via": via,
                     "anchor": anchor,
-                }));
+                });
+                mark_dead(&mut c, e);
+                commit_sites.push(c);
             } else if ty == "EVENT_PUBLISH" {
                 let event_id = detail(e, "resourceId").unwrap_or("");
                 let symbol = model.events.graph.events.iter().find(|s| s.id == event_id);
@@ -1442,17 +1469,20 @@ impl Card {
                     |s| s.event_name.clone(),
                 );
                 events_human.push(format!(
-                    "raises {event} ({}) at {}",
+                    "raises {event} ({}{}) at {}",
                     e.conditionality,
+                    dead_note(e),
                     anchor_value_human(&anchor)
                 ));
-                events.push(json!({
+                let mut ev = json!({
                     "event": event,
                     "eventId": event_id,
                     "conditionality": e.conditionality,
                     "via": via,
                     "anchor": anchor,
-                }));
+                });
+                mark_dead(&mut ev, e);
+                events.push(ev);
                 // An extension point: an event the routine raises itself (a
                 // call straight into the publisher).
                 if via.len() <= 1 {
