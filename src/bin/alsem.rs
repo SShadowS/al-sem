@@ -360,6 +360,12 @@ struct QueryTouchesCli {
     #[arg(long = "direction", default_value = "both")]
     direction: String,
 
+    /// Every witness, the callers' included, and no fold. By default a caller
+    /// list is counted (and, when the routine does not touch the table itself,
+    /// one row per touching caller), and human lists are folded.
+    #[arg(long = "all", default_value_t = false)]
+    all: bool,
+
     /// Output format: human | json. Defaults to human.
     #[arg(long = "format", default_value = "human")]
     format: String,
@@ -1673,6 +1679,7 @@ fn plan_query_touches(t: QueryTouchesCli) -> Planned {
                     &t.table,
                     t.from.as_deref(),
                     direction,
+                    t.all,
                     version,
                     t.deterministic,
                     t.single_app,

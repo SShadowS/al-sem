@@ -11,6 +11,20 @@
     "direction": "down",
     "down": {
       "answerable": true,
+      "beyond": [],
+      "counts": {
+        "byOp": {
+          "FindSet": 1,
+          "Modify": 1
+        },
+        "knownPersistent": 2,
+        "possiblyPersistent": {
+          "callerDependent": 0,
+          "tempStateUnknown": 0
+        },
+        "tableNotResolved": 0,
+        "temporary": 0
+      },
       "touches": true,
       "witnessCount": 2,
       "witnesses": [
@@ -35,6 +49,7 @@
             }
           },
           "tempState": "known(false)",
+          "touchClass": "knownPersistent",
           "via": "direct"
         },
         {
@@ -58,6 +73,7 @@
             }
           },
           "tempState": "known(false)",
+          "touchClass": "knownPersistent",
           "via": "inherited"
         }
       ]
@@ -85,5 +101,5 @@
       "selector": "MC Customer"
     }
   },
-  "schemaVersion": "2.0.0"
+  "schemaVersion": "3.0.0"
 }

@@ -1,0 +1,80 @@
+{
+  "alsemVersion": "cli-query-v1",
+  "deterministic": true,
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "query.touches",
+  "payload": {
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "direction": "down",
+    "down": {
+      "answerable": true,
+      "beyond": [],
+      "counts": {
+        "byOp": {
+          "Insert": 1
+        },
+        "knownPersistent": 0,
+        "possiblyPersistent": {
+          "callerDependent": 0,
+          "tempStateUnknown": 0
+        },
+        "tableNotResolved": 0,
+        "temporary": 1
+      },
+      "touches": true,
+      "witnessCount": 1,
+      "witnesses": [
+        {
+          "op": "Insert",
+          "operationId": "46598e8ae640a0a8/df980d5b2960e89e21f2452e4999035332235f104bbebfa4faac1c33412033e1/op0",
+          "origin": {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/QTTouches.al",
+              "line": 33
+            },
+            "routine": {
+              "anchor": {
+                "column": 4,
+                "file": "ws:src/QTTouches.al",
+                "line": 31
+              },
+              "display": "WriteItem",
+              "objectDisplay": "Codeunit QT Touches",
+              "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#6a863bfb0eb86b6e845ad40acc2308a3480e63e10299e4a629604c6a43c90d72"
+            }
+          },
+          "tempState": "known(true)",
+          "touchClass": "temporary",
+          "via": "inherited"
+        }
+      ]
+    },
+    "from": {
+      "resolution": "resolved",
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/QTTouches.al",
+          "line": 44
+        },
+        "display": "CallWithTemp",
+        "objectDisplay": "Codeunit QT Touches",
+        "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#e638f22869d8fa1ba69c0c5ea9d3deec52cbf1271e9c38dfedb76176d2ccac80"
+      },
+      "selector": "CallWithTemp"
+    },
+    "lineBase": 1,
+    "table": {
+      "id": "07070707-0000-4000-8000-000000000071/table/50700",
+      "isUnknownBucket": false,
+      "name": "QT Item",
+      "resolution": "resolved",
+      "selector": "QT Item"
+    }
+  },
+  "schemaVersion": "3.0.0"
+}

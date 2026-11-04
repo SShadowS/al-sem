@@ -108,6 +108,11 @@ pub(crate) struct Case {
     exit_code: i32,
 }
 
+/// The W2-3 touches fixture, relative to `tests/r0-corpus` (it lives under
+/// `tests/fixtures/` so it moves no r0-corpus golden family, and under `ws/` so
+/// `ids_parent_baseline`'s fixture-app set does not change).
+const QT_WS: &str = "../fixtures/query-touches/ws";
+
 pub(crate) const CORPUS: &[Case] = &[
     // A table the routine touches DIRECTLY, both directions. `ModifyHelper`'s
     // own `Cust.Modify()` is `via: direct` with `temp: parameter-dependent(0)`
@@ -219,6 +224,100 @@ pub(crate) const CORPUS: &[Case] = &[
         args: &["--routine", "OnAfterPostSalesDoc"],
         exit_code: 0,
     },
+    // ---- MCP output wave 2, W2-3 (spec §4.6, T-W2-10): `tests/fixtures/query-touches`.
+    // Indices 9..=16; the tests below name them by slug (`case`).
+    // A parameterized writer: its own Insert is caller-dependent (possibly
+    // persistent), and because it touches the table every caller does: the
+    // trivial `up` is one counted line with no witness built.
+    Case {
+        slug: "qt.writeitem.qt-item.both",
+        workspace: QT_WS,
+        sub: "touches",
+        args: &["--table", "QT Item", "--from", "WriteItem"],
+        exit_code: 0,
+    },
+    // The same with `--all`: every caller's witnesses, as before W2-3.
+    Case {
+        slug: "qt.writeitem.qt-item.both.all",
+        workspace: QT_WS,
+        sub: "touches",
+        args: &["--table", "QT Item", "--from", "WriteItem", "--all"],
+        exit_code: 0,
+    },
+    // A temporary-only root: every touch is on a temporary record, and it is
+    // still a touch (counted and folded, never dropped).
+    Case {
+        slug: "qt.temponly.qt-item.both",
+        workspace: QT_WS,
+        sub: "touches",
+        args: &["--table", "QT Item", "--from", "TempOnly"],
+        exit_code: 0,
+    },
+    // Caller-frame temp rebinding: WriteItem's caller-dependent Insert is a
+    // temporary-record touch in this caller's frame.
+    Case {
+        slug: "qt.callwithtemp.qt-item.down",
+        workspace: QT_WS,
+        sub: "touches",
+        args: &[
+            "--table",
+            "QT Item",
+            "--from",
+            "CallWithTemp",
+            "--direction",
+            "down",
+        ],
+        exit_code: 0,
+    },
+    // Persistent, rebound-temporary and temporary touches in one cone.
+    Case {
+        slug: "qt.mixed.qt-item.down",
+        workspace: QT_WS,
+        sub: "touches",
+        args: &[
+            "--table",
+            "QT Item",
+            "--from",
+            "Mixed",
+            "--direction",
+            "down",
+        ],
+        exit_code: 0,
+    },
+    // The informative case: Leaf does not touch QT Item; Top1, Top2 and Entry
+    // do through other branches, Top3 does not. One line per caller with its
+    // first witness and count.
+    Case {
+        slug: "qt.leaf.qt-item.up",
+        workspace: QT_WS,
+        sub: "touches",
+        args: &["--table", "QT Item", "--from", "Leaf", "--direction", "up"],
+        exit_code: 0,
+    },
+    // The informative case with `--all`: every caller's witnesses.
+    Case {
+        slug: "qt.leaf.qt-item.up.all",
+        workspace: QT_WS,
+        sub: "touches",
+        args: &[
+            "--table",
+            "QT Item",
+            "--from",
+            "Leaf",
+            "--direction",
+            "up",
+            "--all",
+        ],
+        exit_code: 0,
+    },
+    // The unscoped (workspace-global) list on the fixture.
+    Case {
+        slug: "qt.qt-item.global",
+        workspace: QT_WS,
+        sub: "touches",
+        args: &["--table", "QT Item"],
+        exit_code: 0,
+    },
 ];
 
 fn check_case(c: &Case) {
@@ -304,6 +403,205 @@ fn query_effects_event_subscriber_via() {
     check_case(&CORPUS[8]);
 }
 
+/// The corpus case named `slug`.
+fn case(slug: &str) -> &'static Case {
+    CORPUS
+        .iter()
+        .find(|c| c.slug == slug)
+        .unwrap_or_else(|| panic!("no corpus case {slug}"))
+}
+
+/// W2-3: every `tests/fixtures/query-touches` golden.
+#[test]
+fn query_touches_w2_3_fixture_goldens() {
+    let qt: Vec<&Case> = CORPUS.iter().filter(|c| c.workspace == QT_WS).collect();
+    assert_eq!(qt.len(), 8);
+    for c in qt {
+        check_case(c);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// W2-3 (spec §4.6, T-W2-10): the touches counts, on the fixture.
+// ---------------------------------------------------------------------------
+
+fn num(v: &serde_json::Value) -> u64 {
+    v.as_u64().unwrap_or_else(|| panic!("not a number: {v}"))
+}
+
+/// `knownPersistent + possiblyPersistent + temporary == witnessCount`, and the
+/// class counts equal the witnesses' own `touchClass`es.
+fn assert_down_partition(down: &serde_json::Value) -> [u64; 4] {
+    let c = &down["counts"];
+    let classes = [
+        num(&c["knownPersistent"]),
+        num(&c["possiblyPersistent"]["tempStateUnknown"]),
+        num(&c["possiblyPersistent"]["callerDependent"]),
+        num(&c["temporary"]),
+    ];
+    let ws = down["witnesses"]
+        .as_array()
+        .expect("down keeps every witness");
+    assert_eq!(classes.iter().sum::<u64>(), num(&down["witnessCount"]));
+    assert_eq!(ws.len() as u64, num(&down["witnessCount"]));
+    for (k, name) in [
+        "knownPersistent",
+        "tempStateUnknown",
+        "callerDependent",
+        "temporary",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let n = ws.iter().filter(|w| w["touchClass"] == *name).count() as u64;
+        assert_eq!(n, classes[k], "{name}: {down}");
+    }
+    assert_eq!(down["beyond"], serde_json::json!([]), "reserved for wave 3");
+    classes
+}
+
+/// `callersTouching + callersNotTouching + callersUnknown == transitiveCallers`,
+/// with the named lists matching their counts.
+fn assert_up_partition(up: &serde_json::Value) {
+    let (t, n, u) = (
+        num(&up["callersTouching"]),
+        num(&up["callersNotTouching"]),
+        num(&up["callersUnknown"]),
+    );
+    assert_eq!(t + n + u, num(&up["transitiveCallers"]), "{up}");
+    assert_eq!(up["notTouching"].as_array().unwrap().len() as u64, n);
+    assert_eq!(up["unknown"].as_array().unwrap().len() as u64, u);
+}
+
+/// The trivial case (the routine touches the table itself): `up` is counted,
+/// carries no witness and prints one line; the down witness is the
+/// caller-dependent Insert. `--all` restores the caller witnesses.
+#[test]
+fn touches_trivial_up_is_counted_not_enumerated() {
+    let v = json_of(case("qt.writeitem.qt-item.both"));
+    let down = &v["payload"]["down"];
+    assert_eq!(assert_down_partition(down), [0, 0, 1, 0]);
+    let up = &v["payload"]["up"];
+    assert_up_partition(up);
+    assert_eq!(up["informative"], serde_json::json!(false));
+    assert_eq!(num(&up["callersTouching"]), 5);
+    assert!(up.get("witnesses").is_none(), "built never: {up}");
+    assert!(up.get("callers").is_none(), "{up}");
+
+    let ws = fixtures_dir().join(QT_WS).to_string_lossy().to_string();
+    let (human, _) = run_alsem(
+        &[
+            "query",
+            "touches",
+            &ws,
+            "--table",
+            "QT Item",
+            "--from",
+            "WriteItem",
+        ],
+        "human",
+    );
+    let up_lines: Vec<&str> = human
+        .lines()
+        .skip_while(|l| !l.starts_with("  up:"))
+        .collect();
+    assert_eq!(up_lines.len(), 1, "one `up` line: {human}");
+
+    let all = json_of(case("qt.writeitem.qt-item.both.all"));
+    let w = all["payload"]["up"]["witnesses"].as_array().expect("--all");
+    assert_eq!(w.len(), 14, "every caller witness under --all");
+}
+
+/// A temporary-only root: every touch is temporary, and it is still a touch
+/// (`touches: true`, counted, the callers counted as touching it).
+#[test]
+fn touches_temporary_only_root_is_a_touch() {
+    let v = json_of(case("qt.temponly.qt-item.both"));
+    let down = &v["payload"]["down"];
+    assert_eq!(down["touches"], serde_json::json!(true));
+    assert_eq!(assert_down_partition(down), [0, 0, 0, 2]);
+    let up = &v["payload"]["up"];
+    assert_up_partition(up);
+    assert_eq!(num(&up["callersTouching"]), 2, "Mixed and Entry");
+}
+
+/// Caller-frame temp rebinding: WriteItem's caller-dependent Insert is a
+/// temporary-record touch in CallWithTemp's frame, and the mixed cone counts
+/// each class.
+#[test]
+fn touches_counts_in_the_callers_frame() {
+    let v = json_of(case("qt.callwithtemp.qt-item.down"));
+    let down = &v["payload"]["down"];
+    assert_eq!(assert_down_partition(down), [0, 0, 0, 1]);
+    assert_eq!(down["witnesses"][0]["op"], serde_json::json!("Insert"));
+
+    let m = json_of(case("qt.mixed.qt-item.down"));
+    // Get (persistent), WriteItem's Insert rebound to temporary, TempOnly's
+    // Insert and FindFirst (temporary).
+    assert_eq!(assert_down_partition(&m["payload"]["down"]), [1, 0, 0, 3]);
+    assert_eq!(
+        m["payload"]["down"]["counts"]["byOp"],
+        serde_json::json!({"FindFirst": 1, "Get": 1, "Insert": 2})
+    );
+}
+
+/// The informative case: Leaf does not touch QT Item; Top1, Top2 and Entry do
+/// through other branches, Top3 does not (and is named). One `callers[]` row
+/// per touching caller; `--all` adds every witness.
+#[test]
+fn touches_informative_up_aggregates_per_caller() {
+    let v = json_of(case("qt.leaf.qt-item.up"));
+    let up = &v["payload"]["up"];
+    assert_up_partition(up);
+    assert_eq!(up["informative"], serde_json::json!(true));
+    assert_eq!(num(&up["callersTouching"]), 3);
+    assert_eq!(num(&up["callersNotTouching"]), 1);
+    assert_eq!(
+        up["notTouching"][0]["routine"]["display"],
+        serde_json::json!("Top3")
+    );
+    let callers = up["callers"].as_array().unwrap();
+    assert_eq!(callers.len(), 3);
+    assert!(up.get("witnesses").is_none());
+    let all = json_of(case("qt.leaf.qt-item.up.all"));
+    let w = all["payload"]["up"]["witnesses"].as_array().unwrap();
+    let total: u64 = callers.iter().map(|c| num(&c["witnessCount"])).sum();
+    assert_eq!(w.len() as u64, total, "the counts are the --all witnesses");
+    for c in callers {
+        let counts = &c["counts"];
+        let sum = num(&counts["knownPersistent"])
+            + num(&counts["possiblyPersistent"]["tempStateUnknown"])
+            + num(&counts["possiblyPersistent"]["callerDependent"])
+            + num(&counts["temporary"]);
+        assert_eq!(sum, num(&c["witnessCount"]), "{c}");
+    }
+}
+
+/// T-W2-10's work check, through the shipped renderer: in the default trivial
+/// case no caller witness is built; the informative case builds one per
+/// touching caller; only `--all` builds the product. The counter is the
+/// query's own (`DbEffectQuery::ancestor_witnesses_built`).
+#[test]
+fn touches_default_never_builds_the_caller_witness_product() {
+    use al_sem::engine::l4::effect_query_cli::{
+        Direction, QuerySubstrate, query_view, render_query_touches,
+    };
+    let ws = fixtures_dir().join(QT_WS);
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(&ws, &crate::fingerprint_needs());
+    let view = query_view(&inputs, true).expect("query view");
+    let substrate = QuerySubstrate::of(&view);
+    let built = |from: &str, direction: Direction, all: bool| {
+        let r = render_query_touches(&substrate, "QT Item", Some(from), direction, all, "t", true);
+        assert_eq!(r.exit_code, 0);
+        r.ancestor_witnesses_built
+    };
+    assert_eq!(built("WriteItem", Direction::Both, false), 0);
+    assert_eq!(built("WriteItem", Direction::Up, false), 0);
+    assert_eq!(built("WriteItem", Direction::Both, true), 14);
+    assert_eq!(built("Leaf", Direction::Up, false), 3);
+    assert!(built("Leaf", Direction::Up, true) > 3);
+}
+
 // ---------------------------------------------------------------------------
 // Semantic assertions — the goldens pin BYTES, these pin MEANING.
 //
@@ -339,10 +637,14 @@ fn ancestor_scoped_answer_is_informative_and_anchored() {
     assert_eq!(up["callersTouching"], serde_json::json!(1));
     assert_eq!(up["transitiveCallers"], serde_json::json!(2));
 
-    let w = &up["witnesses"][0];
-    assert_eq!(w["depth"], serde_json::json!(2));
+    // W2-3: the informative default carries one row per touching caller, its
+    // first witness and its count (`--all` adds `witnesses`).
+    let c = &up["callers"][0];
+    assert_eq!(c["depth"], serde_json::json!(2));
+    assert_eq!(c["routine"]["display"], serde_json::json!("PostSalesDoc"));
+    assert_eq!(c["witnessCount"], serde_json::json!(1));
+    let w = &c["firstWitness"];
     assert_eq!(w["op"], serde_json::json!("ModifyAll"));
-    assert_eq!(w["routine"]["display"], serde_json::json!("PostSalesDoc"));
     assert_eq!(
         w["origin"]["routine"]["display"],
         serde_json::json!("PostSalesDoc"),

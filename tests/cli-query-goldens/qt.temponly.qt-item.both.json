@@ -1,0 +1,116 @@
+{
+  "alsemVersion": "cli-query-v1",
+  "deterministic": true,
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "query.touches",
+  "payload": {
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "direction": "both",
+    "down": {
+      "answerable": true,
+      "beyond": [],
+      "counts": {
+        "byOp": {
+          "FindFirst": 1,
+          "Insert": 1
+        },
+        "knownPersistent": 0,
+        "possiblyPersistent": {
+          "callerDependent": 0,
+          "tempStateUnknown": 0
+        },
+        "tableNotResolved": 0,
+        "temporary": 2
+      },
+      "touches": true,
+      "witnessCount": 2,
+      "witnesses": [
+        {
+          "op": "FindFirst",
+          "operationId": "46598e8ae640a0a8/5ab6bc4aaac8091515f37b87ac829267644e77ee8ce41aad1483cafe08cd7419/op1",
+          "origin": {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/QTTouches.al",
+              "line": 41
+            },
+            "routine": {
+              "anchor": {
+                "column": 4,
+                "file": "ws:src/QTTouches.al",
+                "line": 36
+              },
+              "display": "TempOnly",
+              "objectDisplay": "Codeunit QT Touches",
+              "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
+            }
+          },
+          "tempState": "known(true)",
+          "touchClass": "temporary",
+          "via": "direct"
+        },
+        {
+          "op": "Insert",
+          "operationId": "46598e8ae640a0a8/5ab6bc4aaac8091515f37b87ac829267644e77ee8ce41aad1483cafe08cd7419/op0",
+          "origin": {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/QTTouches.al",
+              "line": 40
+            },
+            "routine": {
+              "anchor": {
+                "column": 4,
+                "file": "ws:src/QTTouches.al",
+                "line": 36
+              },
+              "display": "TempOnly",
+              "objectDisplay": "Codeunit QT Touches",
+              "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
+            }
+          },
+          "tempState": "known(true)",
+          "touchClass": "temporary",
+          "via": "direct"
+        }
+      ]
+    },
+    "from": {
+      "resolution": "resolved",
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/QTTouches.al",
+          "line": 36
+        },
+        "display": "TempOnly",
+        "objectDisplay": "Codeunit QT Touches",
+        "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
+      },
+      "selector": "TempOnly"
+    },
+    "lineBase": 1,
+    "table": {
+      "id": "07070707-0000-4000-8000-000000000071/table/50700",
+      "isUnknownBucket": false,
+      "name": "QT Item",
+      "resolution": "resolved",
+      "selector": "QT Item"
+    },
+    "up": {
+      "callersNotTouching": 0,
+      "callersTouching": 2,
+      "callersUnknown": 0,
+      "informative": false,
+      "notTouching": [],
+      "note": "this routine itself touches the table, so its callers touch it through this routine (summaries are transitive-down) — not a finding; each caller is still probed, and one without a summary row is unknown",
+      "scoped": true,
+      "transitiveCallers": 2,
+      "unknown": []
+    }
+  },
+  "schemaVersion": "3.0.0"
+}
