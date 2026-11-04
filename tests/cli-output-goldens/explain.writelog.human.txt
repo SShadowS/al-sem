@@ -1,10 +1,21 @@
 Codeunit Out Log Mgt::WriteLog  ws:src/OutIssueDocument.Codeunit.al:53
-  rules: none of its own
-  inherited rules: none
-  caller rule (applied by Codeunit Out Issue Document::IssueDoc; skipped by Codeunit Out Subscribers::LogIssued, Codeunit Out Tests::WriteLogInserts): rejects when Doc.Status <> Doc.Status::Open: (platform message)  [TestField ws:src/OutIssueDocument.Codeunit.al:12]
-  writes Out Log [Entry No., Message] (DB_DELETE) at ws:src/OutIssueDocument.Codeunit.al:58
-  writes Out Log [Entry No., Message] (DB_INSERT) at ws:src/OutIssueDocument.Codeunit.al:61
-  commits: no
-  reached from page action Issue on Page Out Doc Card (caption "Issue") at ws:src/Pages.al:18
+  summary: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none; commits: none; events: 0 (0 raised in workspace code); callers: 3, reached from 1 page action; tests: 1; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  coverage: complete
+  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
+  limits: none
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  rules: none of its own; inherited: none
+  callers: 3 — Codeunit Out Issue Document::IssueDoc, Codeunit Out Subscribers::LogIssued, Codeunit Out Tests::WriteLogInserts; reached from 1 page action
+    caller rule (applied by Codeunit Out Issue Document::IssueDoc; skipped by Codeunit Out Subscribers::LogIssued, Codeunit Out Tests::WriteLogInserts): rejects when Doc.Status <> Doc.Status::Open: (platform message)  [TestField ws:src/OutIssueDocument.Codeunit.al:12]
+    reached from page action Issue on Page Out Doc Card (caption "Issue") at ws:src/Pages.al:18
+  commits: none
+  writes in workspace code (1 table):
+    Out Log: Insert — known persistent
+      Insert at ws:src/OutIssueDocument.Codeunit.al:61
+      fields WriteLog assigns on this table (not operation-specific): Entry No., Message
+  temporary records (not writes): 1 table in workspace code (1 effect row): Out Log; 0 tables only beyond entry points; only temporary: 0 tables
+  events: 0 raised in workspace code; 0 more only beyond entry points
+  extension points: none (the routine publishes no event itself)
   test Codeunit Out Tests::WriteLogInserts (0 own assert(s))
+  next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

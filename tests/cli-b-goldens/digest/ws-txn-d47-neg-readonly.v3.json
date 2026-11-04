@@ -1,0 +1,145 @@
+{
+  "alsemVersion": "cli-b-v1",
+  "deterministic": true,
+  "diagnostics": [],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "digest",
+  "payload": {
+    "changed": {
+      "diffProvided": false,
+      "files": [
+        "src/Sender.Codeunit.al"
+      ]
+    },
+    "changedRootsDiagnostics": [],
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "entries": [
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {
+              "method": "Get"
+            },
+            "evidence": {
+              "column": 8,
+              "excerpt": "Client.Get",
+              "file": "ws:src/Sender.Codeunit.al",
+              "line": 12,
+              "sourceKind": "source"
+            },
+            "factId": "211b45ff6ef73613",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/Sender.Codeunit.al",
+                  "line": 12
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "HTTP"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/Sender.Codeunit.al",
+            "line": 7,
+            "sourceKind": "source"
+          },
+          "display": "JustFetch",
+          "objectDisplay": "Codeunit D47 Sender",
+          "stableId": "11111111-0000-0000-0000-0000000d4703:Codeunit:50000#6c737101e21cd197b3b5e801d215066718f65229b241140d55cedc0d907404ba"
+        },
+        "scopedGuaranteesFolded": 0,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "none",
+            "entryPoints": 0,
+            "ownSites": 0
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {
+            "http": 1
+          },
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 0,
+            "ownedByApp": 0
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 1
+        }
+      }
+    ],
+    "lineBase": 1,
+    "pathCap": 1,
+    "routines": {
+      "r:7614785d0209": {
+        "display": "Codeunit D47 Sender::JustFetch",
+        "file": "ws:src/Sender.Codeunit.al",
+        "stableId": "11111111-0000-0000-0000-0000000d4703:Codeunit:50000#6c737101e21cd197b3b5e801d215066718f65229b241140d55cedc0d907404ba"
+      }
+    },
+    "summary": {
+      "rootsRequested": 1,
+      "rootsResolved": 1,
+      "totalEffects": 1,
+      "totalUnresolved": 0
+    },
+    "workspaceFingerprint": "9a26de0865bbcbff926a04804ba7498aecbc802ada68e2c5c834dbc7c66ddbd9"
+  },
+  "schemaVersion": "3.0.0"
+}

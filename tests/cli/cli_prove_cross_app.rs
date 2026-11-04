@@ -96,7 +96,8 @@ fn has_kind(v: &Value, kind: &str) -> bool {
 /// `digest <ws> --routine <r>`'s one entry, cross-app.
 fn digest_entry(ws: &Path, routine: &str) -> Value {
     let ws = ws.to_string_lossy();
-    let (v, code) = json(&["digest", &ws, "--routine", routine]);
+    // W2-2: the 2.x document's fields (the old shape, current analysis).
+    let (v, code) = json(&["digest", &ws, "--routine", routine, "--schema", "2"]);
     assert_eq!(code, 0, "digest --routine {routine}: {v}");
     v["payload"]["entries"][0].clone()
 }

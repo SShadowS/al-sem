@@ -1,0 +1,643 @@
+{
+  "alsemVersion": "cli-b-v1",
+  "deterministic": true,
+  "diagnostics": [
+    {
+      "code": "DIAG-detect",
+      "message": "d43-event-ishandled-skip: conditionReferences substrate empty; dispatch-site detection limited",
+      "severity": "warning"
+    }
+  ],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "digest",
+  "payload": {
+    "changed": {
+      "diffProvided": false,
+      "files": [
+        "src/Codeunit.al"
+      ]
+    },
+    "changedRootsDiagnostics": [],
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "entries": [
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Message",
+              "file": "ws:src/Codeunit.al",
+              "line": 21,
+              "sourceKind": "source"
+            },
+            "factId": "341879c5930fec57",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/Codeunit.al",
+                  "line": 21
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "UI_MESSAGE"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/Codeunit.al",
+            "line": 19,
+            "sourceKind": "source"
+          },
+          "display": "OnBeforePrintSafe",
+          "objectDisplay": "Codeunit D35 Demo",
+          "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#1be0eff0fbb25b77ecb6f9f1b24ebe73871f6247c771631252866fb39fabeb93"
+        },
+        "scopedGuaranteesFolded": 0,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "none",
+            "entryPoints": 0,
+            "ownSites": 0
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {
+            "ui": 1
+          },
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 0,
+            "ownedByApp": 0
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 1
+        }
+      },
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "commit",
+              "file": "ws:src/Codeunit.al",
+              "line": 7,
+              "sourceKind": "source"
+            },
+            "factId": "d41571e0450b5d46",
+            "guarantees": [
+              "COMMIT_REACHABLE",
+              "COMMIT_ON_SUCCESS_PATH",
+              "COMMIT_DOMINATES_RETURN"
+            ],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/Codeunit.al",
+                  "line": 7,
+                  "operationId": "511ed63c628ea3b0/54db1217a95bcf580507f08e916cf526fdca91452213bbb8d2649e65c4a3495e/op0"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "scopedGuarantees": [
+              {
+                "commitOccurrenceId": "d41571e0450b5d46",
+                "interveningBoundary": "none",
+                "label": "COMMIT_DOMINATES_RETURN",
+                "returnOccurrenceId": "922630b94cda5acc",
+                "scope": "root",
+                "validForRefutation": true
+              }
+            ],
+            "status": "live",
+            "transactionContext": "span-has-no-known-writes",
+            "type": "COMMIT"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/Codeunit.al",
+            "line": 5,
+            "sourceKind": "source"
+          },
+          "display": "OnAfterPostDirect",
+          "objectDisplay": "Codeunit D35 Demo",
+          "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#70651530caee0c1d7a5bff0fa6da803446a7a10092730ec1ad3d142da9620c7f"
+        },
+        "scopedGuaranteesFolded": 3,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "yes",
+            "entryPoints": 0,
+            "ownSites": 1
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {},
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 0,
+            "ownedByApp": 0
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 1
+        }
+      },
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "commit",
+              "file": "ws:src/Codeunit.al",
+              "line": 32,
+              "sourceKind": "source"
+            },
+            "factId": "c71eaa213728e0a7",
+            "guarantees": [
+              "COMMIT_REACHABLE",
+              "COMMIT_ON_SUCCESS_PATH",
+              "COMMIT_DOMINATES_RETURN"
+            ],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/Codeunit.al",
+                  "line": 32,
+                  "operationId": "511ed63c628ea3b0/04b1847f66852adc73dcfcee051b74cbda81ab6958449ff477a3ce8749e0c079/op0"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "scopedGuarantees": [
+              {
+                "commitOccurrenceId": "c71eaa213728e0a7",
+                "interveningBoundary": "none",
+                "label": "COMMIT_DOMINATES_RETURN",
+                "returnOccurrenceId": "b40c5d1e1481d0a7",
+                "scope": "root",
+                "validForRefutation": true
+              }
+            ],
+            "status": "live",
+            "transactionContext": "span-has-no-known-writes",
+            "type": "COMMIT"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/Codeunit.al",
+            "line": 30,
+            "sourceKind": "source"
+          },
+          "display": "PersistAudit",
+          "objectDisplay": "Codeunit D35 Demo",
+          "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#a48ec94ff9566709129af3e35f12ad569c376df0c9883faaebb98023a0e9da4a"
+        },
+        "scopedGuaranteesFolded": 3,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "yes",
+            "entryPoints": 0,
+            "ownSites": 1
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {},
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 0,
+            "ownedByApp": 0
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 1
+        }
+      },
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "commit",
+              "file": "ws:src/Codeunit.al",
+              "line": 27,
+              "sourceKind": "source"
+            },
+            "factId": "fb56165678f0df67",
+            "guarantees": [
+              "COMMIT_REACHABLE",
+              "COMMIT_ON_SUCCESS_PATH",
+              "COMMIT_DOMINATES_RETURN"
+            ],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/Codeunit.al",
+                  "line": 27,
+                  "operationId": "511ed63c628ea3b0/ef20a969bbaa7a57292e76e8606885fe2d5a2498366853addea053d96fba5258/op0"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "scopedGuarantees": [
+              {
+                "commitOccurrenceId": "fb56165678f0df67",
+                "interveningBoundary": "none",
+                "label": "COMMIT_DOMINATES_RETURN",
+                "returnOccurrenceId": "b627ad3ddc42ac6d",
+                "scope": "root",
+                "validForRefutation": true
+              }
+            ],
+            "status": "live",
+            "transactionContext": "span-has-no-known-writes",
+            "type": "COMMIT"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/Codeunit.al",
+            "line": 25,
+            "sourceKind": "source"
+          },
+          "display": "NonSubscriberCommit",
+          "objectDisplay": "Codeunit D35 Demo",
+          "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#c937f452b226f2394cc4c00d2efb29e7f15730196e2230b656bab5c00ec98d1a"
+        },
+        "scopedGuaranteesFolded": 3,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "yes",
+            "entryPoints": 0,
+            "ownSites": 1
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {},
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 0,
+            "ownedByApp": 0
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 1
+        }
+      },
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "commit",
+              "file": "ws:src/Codeunit.al",
+              "line": 32,
+              "sourceKind": "source"
+            },
+            "factId": "e4a8376aa5d518ba",
+            "guarantees": [
+              "COMMIT_REACHABLE",
+              "COMMIT_ON_SUCCESS_PATH",
+              "COMMIT_DOMINATES_RETURN"
+            ],
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "edge": "direct-call",
+                    "line": 14,
+                    "to": "r:587a02fcde0c"
+                  }
+                ],
+                "terminal": {
+                  "file": "ws:src/Codeunit.al",
+                  "line": 32,
+                  "operationId": "511ed63c628ea3b0/04b1847f66852adc73dcfcee051b74cbda81ab6958449ff477a3ce8749e0c079/op0"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "transitive",
+            "scopedGuarantees": [
+              {
+                "commitOccurrenceId": "e4a8376aa5d518ba",
+                "interveningBoundary": "none",
+                "label": "COMMIT_DOMINATES_RETURN",
+                "returnOccurrenceId": "2819d611e0a70d40",
+                "scope": "root",
+                "validForRefutation": true
+              }
+            ],
+            "status": "live",
+            "transactionContext": "span-has-no-known-writes",
+            "type": "COMMIT"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/Codeunit.al",
+            "line": 12,
+            "sourceKind": "source"
+          },
+          "display": "OnAfterValidateTransitive",
+          "objectDisplay": "Codeunit D35 Demo",
+          "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#efdfd5305f3740f85650f1d429eb33b8150f1c17402c8d89f568453390c1e050"
+        },
+        "scopedGuaranteesFolded": 3,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "yes",
+            "entryPoints": 0,
+            "ownSites": 1
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {},
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 0,
+            "ownedByApp": 0
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 2
+        }
+      }
+    ],
+    "lineBase": 1,
+    "pathCap": 1,
+    "routines": {
+      "r:03b944ecefab": {
+        "display": "Codeunit D35 Demo::OnAfterPostDirect",
+        "file": "ws:src/Codeunit.al",
+        "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#70651530caee0c1d7a5bff0fa6da803446a7a10092730ec1ad3d142da9620c7f"
+      },
+      "r:3fc48f1ed374": {
+        "display": "Codeunit D35 Demo::NonSubscriberCommit",
+        "file": "ws:src/Codeunit.al",
+        "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#c937f452b226f2394cc4c00d2efb29e7f15730196e2230b656bab5c00ec98d1a"
+      },
+      "r:587a02fcde0c": {
+        "display": "Codeunit D35 Demo::PersistAudit",
+        "file": "ws:src/Codeunit.al",
+        "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#a48ec94ff9566709129af3e35f12ad569c376df0c9883faaebb98023a0e9da4a"
+      },
+      "r:88277d8dd76e": {
+        "display": "Codeunit D35 Demo::OnBeforePrintSafe",
+        "file": "ws:src/Codeunit.al",
+        "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#1be0eff0fbb25b77ecb6f9f1b24ebe73871f6247c771631252866fb39fabeb93"
+      },
+      "r:e2e0d2172cfd": {
+        "display": "Codeunit D35 Demo::OnAfterValidateTransitive",
+        "file": "ws:src/Codeunit.al",
+        "stableId": "11111111-0000-0000-0000-00000000d350:Codeunit:51100#efdfd5305f3740f85650f1d429eb33b8150f1c17402c8d89f568453390c1e050"
+      }
+    },
+    "summary": {
+      "rootsRequested": 5,
+      "rootsResolved": 5,
+      "totalEffects": 5,
+      "totalUnresolved": 0
+    },
+    "workspaceFingerprint": "f6926434e3c7c47f07ebe2d627f769e903e898f08ea05d5357827ef685db3a81"
+  },
+  "schemaVersion": "3.0.0"
+}

@@ -52,8 +52,10 @@ fn assert_rendered(label: &str, json_text: &str, human_text: &str, want_human: b
         "{label}: a JSON string prints the raw receiver index:\n{json_text}"
     );
     if want_human {
+        // W2-2: `query effects`' default human form names the receiver as
+        // `caller-dependent: Rec` (its `--all` rows print the state text).
         assert!(
-            human_text.contains(REC),
+            human_text.contains(REC) || human_text.contains("(caller-dependent: Rec)"),
             "{label}: human text lacks `{REC}`:\n{human_text}"
         );
     }

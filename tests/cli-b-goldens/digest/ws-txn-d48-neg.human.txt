@@ -1,6 +1,9 @@
 --- Codeunit D48 Sender Neg::SendOnce ---
+  summary: no observed write that may persist; caller-dependent: none; commits: none; events: 0 (0 raised in workspace code); HTTP at 1 place; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
-  [HTTP] direct
-    evidence: ws:src/D48Neg.Codeunit.al:13 "Client.Send"
-    detail: method=Send
-    via: 1 path(s)
+  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
+  limits: none
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  commits: none
+  events: 0 raised in workspace code; 0 more only beyond entry points
+  HTTP at 1 place: HTTP at ws:src/D48Neg.Codeunit.al:13 (unconditional-on-success)

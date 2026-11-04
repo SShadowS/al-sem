@@ -1,0 +1,245 @@
+{
+  "alsemVersion": "cli-b-v1",
+  "deterministic": true,
+  "diagnostics": [],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "digest",
+  "payload": {
+    "changed": {
+      "diffProvided": false,
+      "files": [
+        "src/Rec.Table.al",
+        "src/Sender.Codeunit.al"
+      ]
+    },
+    "changedRootsDiagnostics": [
+      {
+        "file": "src/Rec.Table.al",
+        "kind": "file-unmatched"
+      }
+    ],
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "entries": [
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [
+            "object-run-unresolved"
+          ],
+          "status": "partial"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "class": "physical",
+            "classReason": "known-persistent",
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {
+              "resourceDisplay": "D49 Rec",
+              "resourceId": "11111111-0000-0000-0000-0000000d4902/table/50100",
+              "tempState": "known(false)"
+            },
+            "evidence": {
+              "column": 8,
+              "excerpt": "Rec.Modify",
+              "file": "ws:src/Sender.Codeunit.al",
+              "line": 14,
+              "sourceKind": "source"
+            },
+            "factId": "00cda7804c9127d8",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/Sender.Codeunit.al",
+                  "line": 14,
+                  "operationId": "52424ddea2af29e4/e2d0ecb6bef7ddcc73934b486afe9c4529d5b67cce7d8ae8979ec62bd77cddda/op1"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "DB_MODIFY"
+          },
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Rec.Get",
+              "file": "ws:src/Sender.Codeunit.al",
+              "line": 12,
+              "sourceKind": "source"
+            },
+            "factId": "6cda70870642a2ab",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/Sender.Codeunit.al",
+                  "line": 12,
+                  "operationId": "52424ddea2af29e4/e2d0ecb6bef7ddcc73934b486afe9c4529d5b67cce7d8ae8979ec62bd77cddda/op0"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT"
+          },
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Page.RunModal",
+              "file": "ws:src/Sender.Codeunit.al",
+              "line": 15,
+              "sourceKind": "source"
+            },
+            "factId": "40c1ea6e11ec8aee",
+            "guarantees": [
+              "WRITE_PENDING_AT_UI"
+            ],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/Sender.Codeunit.al",
+                  "line": 15
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "scopedGuarantees": [
+              {
+                "interveningBoundary": "none",
+                "ioOccurrenceId": "40c1ea6e11ec8aee",
+                "label": "WRITE_PENDING_AT_UI",
+                "scope": "root",
+                "validForRefutation": true,
+                "writeOccurrenceId": "00cda7804c9127d8"
+              }
+            ],
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "UI_WINDOW_OPEN"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/Sender.Codeunit.al",
+            "line": 8,
+            "sourceKind": "source"
+          },
+          "display": "ModifyThenRunModal",
+          "objectDisplay": "Codeunit D49 Sender",
+          "stableId": "11111111-0000-0000-0000-0000000d4902:Codeunit:50000#5098a6b4ccf565e1ea2c49aaa4c34564280e943633b182038eb006d80f813721"
+        },
+        "scopedGuaranteesFolded": 1,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "no observed",
+            "entryPoints": 0,
+            "ownSites": 0
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 1
+          },
+          "kinds": {
+            "errors": 1,
+            "ui": 1
+          },
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 1,
+            "ownedByApp": 1
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [
+          {
+            "calleeDisplay": "Page.RunModal",
+            "callsiteAnchor": {
+              "column": 8,
+              "file": "ws:src/Sender.Codeunit.al",
+              "line": 15,
+              "sourceKind": "source"
+            },
+            "owningRoutine": "11111111-0000-0000-0000-0000000d4902:Codeunit:50000#5098a6b4ccf565e1ea2c49aaa4c34564280e943633b182038eb006d80f813721",
+            "owningRoutineDisplay": "ModifyThenRunModal",
+            "status": "unfetched-dependency"
+          }
+        ],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 1
+        }
+      }
+    ],
+    "lineBase": 1,
+    "pathCap": 1,
+    "routines": {
+      "r:577b872ad696": {
+        "display": "Codeunit D49 Sender::ModifyThenRunModal",
+        "file": "ws:src/Sender.Codeunit.al",
+        "stableId": "11111111-0000-0000-0000-0000000d4902:Codeunit:50000#5098a6b4ccf565e1ea2c49aaa4c34564280e943633b182038eb006d80f813721"
+      }
+    },
+    "summary": {
+      "rootsRequested": 1,
+      "rootsResolved": 1,
+      "totalEffects": 3,
+      "totalUnresolved": 1
+    },
+    "workspaceFingerprint": "c6699cf6323bea4482f8eb641cd8f8ad5f5688c22d669234161e0cb01359a0da"
+  },
+  "schemaVersion": "3.0.0"
+}

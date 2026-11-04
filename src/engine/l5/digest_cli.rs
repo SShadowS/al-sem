@@ -44,7 +44,7 @@ use crate::engine::l5::transaction_spans::{SeedKind, TransactionSpan};
 use crate::engine::l5::unresolved_cone::{
     DEFAULT_MAX_DEPTH, UnresolvedConeItem, UnresolvedTraversal, unresolved_cone,
 };
-use crate::engine::line_base::{shown, shown_opt};
+use crate::engine::line_base::shown_opt;
 use crate::engine::session::{Cell, RunKey};
 use crate::program::model::workspace::Model;
 
@@ -955,6 +955,10 @@ pub struct DigestEffectFull {
     /// followed ([`crate::engine::l5::literal_reach`]); a MAY question does not
     /// count it. Not serialized.
     pub literal_unreachable: bool,
+    /// W2-2: a boundary group's crossing (design §3.3); `None` off a group.
+    /// The rollup groups rows by it; the 3.x digest serializes it once per
+    /// entry (`entries[].crossings`).
+    pub crossing: Option<Arc<crate::engine::l5::digest::Crossing>>,
 }
 
 pub struct FullAnchor {
@@ -1901,6 +1905,7 @@ pub fn run_digest_query_full_from_entries(
                     origin_operation_ids: eff.origin_operation_ids.clone(),
                     effect_is_kt: is_known_temp_state(eff.temp_state.as_ref()),
                     literal_unreachable: eff.literal_unreachable,
+                    crossing: eff.crossing.clone(),
                 });
             }
         }
@@ -1969,7 +1974,7 @@ fn hop_to_value(hop: &crate::engine::l5::digest::ProjectedHop) -> serde_json::Va
     crate::engine::l5::digest::hop_to_json_value(&hop.inner)
 }
 
-fn scoped_guarantee_to_value(
+pub(crate) fn scoped_guarantee_to_value(
     sg: &crate::engine::l5::ordering_engine::ScopedGuarantee,
 ) -> serde_json::Value {
     let mut m = serde_json::Map::new();
@@ -2063,7 +2068,7 @@ pub fn effect_to_value(eff: &DigestEffectFull) -> serde_json::Value {
     serde_json::Value::Object(m)
 }
 
-fn unresolved_item_to_value(item: &UnresolvedConeItem) -> serde_json::Value {
+pub(crate) fn unresolved_item_to_value(item: &UnresolvedConeItem) -> serde_json::Value {
     let mut m = serde_json::Map::new();
     if let Some(ref f) = item.callsite_file {
         // Build callsiteAnchor
@@ -2113,51 +2118,8 @@ fn entry_to_value(entry: &DigestEntryFull) -> serde_json::Value {
     let effects: Vec<serde_json::Value> = entry.effects.iter().map(effect_to_value).collect();
     m.insert("effects".into(), serde_json::Value::Array(effects));
 
-    // entryDiagnostics
-    let ed: Vec<serde_json::Value> = entry
-        .entry_diagnostics
-        .iter()
-        .map(|d| {
-            let mut dm = serde_json::Map::new();
-            dm.insert("kind".into(), d.kind.into());
-            if let Some(ref et) = d.effect_type {
-                dm.insert("effectType".into(), et.clone().into());
-            }
-            if let Some(ref fs) = d.fact_subject {
-                dm.insert("factSubject".into(), fs.clone().into());
-            }
-            if let Some(ref id) = d.fact_id {
-                dm.insert("factId".into(), id.clone().into());
-            }
-            if let Some(ref op) = d.operation_id {
-                dm.insert("operationId".into(), op.clone().into());
-            }
-            if let Some(reason) = d.reason {
-                dm.insert("reason".into(), reason.into());
-            }
-            serde_json::Value::Object(dm)
-        })
-        .collect();
-    m.insert("entryDiagnostics".into(), serde_json::Value::Array(ed));
-
-    // routine
-    let mut routine_m = serde_json::Map::new();
-    routine_m.insert("stableId".into(), entry.routine_id.clone().into());
-    routine_m.insert("display".into(), entry.routine_display.clone().into());
-    routine_m.insert("objectDisplay".into(), entry.object_display.clone().into());
-    if let Some(ref a) = entry.routine_anchor {
-        routine_m.insert("anchor".into(), anchor_to_value(a));
-    }
-    if entry.declaration_only {
-        routine_m.insert("declarationOnly".into(), true.into());
-    }
-    if !entry.routine_anchors.is_empty() {
-        routine_m.insert(
-            "anchors".into(),
-            serde_json::Value::Array(entry.routine_anchors.iter().map(anchor_to_value).collect()),
-        );
-    }
-    m.insert("routine".into(), serde_json::Value::Object(routine_m));
+    m.insert("entryDiagnostics".into(), entry_diagnostics_to_value(entry));
+    m.insert("routine".into(), routine_to_value(entry));
 
     // unresolved
     let ur: Vec<serde_json::Value> = entry
@@ -2187,6 +2149,57 @@ fn entry_to_value(entry: &DigestEntryFull) -> serde_json::Value {
     );
 
     serde_json::Value::Object(m)
+}
+
+/// An entry's `entryDiagnostics` list (both document shapes).
+pub(crate) fn entry_diagnostics_to_value(entry: &DigestEntryFull) -> serde_json::Value {
+    let ed: Vec<serde_json::Value> = entry
+        .entry_diagnostics
+        .iter()
+        .map(|d| {
+            let mut dm = serde_json::Map::new();
+            dm.insert("kind".into(), d.kind.into());
+            if let Some(ref et) = d.effect_type {
+                dm.insert("effectType".into(), et.clone().into());
+            }
+            if let Some(ref fs) = d.fact_subject {
+                dm.insert("factSubject".into(), fs.clone().into());
+            }
+            if let Some(ref id) = d.fact_id {
+                dm.insert("factId".into(), id.clone().into());
+            }
+            if let Some(ref op) = d.operation_id {
+                dm.insert("operationId".into(), op.clone().into());
+            }
+            if let Some(reason) = d.reason {
+                dm.insert("reason".into(), reason.into());
+            }
+            serde_json::Value::Object(dm)
+        })
+        .collect();
+    serde_json::Value::Array(ed)
+}
+
+/// An entry's `routine` block (both document shapes: bc-dev-mcp reads its
+/// `anchor` and `anchors`).
+pub(crate) fn routine_to_value(entry: &DigestEntryFull) -> serde_json::Value {
+    let mut routine_m = serde_json::Map::new();
+    routine_m.insert("stableId".into(), entry.routine_id.clone().into());
+    routine_m.insert("display".into(), entry.routine_display.clone().into());
+    routine_m.insert("objectDisplay".into(), entry.object_display.clone().into());
+    if let Some(ref a) = entry.routine_anchor {
+        routine_m.insert("anchor".into(), anchor_to_value(a));
+    }
+    if entry.declaration_only {
+        routine_m.insert("declarationOnly".into(), true.into());
+    }
+    if !entry.routine_anchors.is_empty() {
+        routine_m.insert(
+            "anchors".into(),
+            serde_json::Value::Array(entry.routine_anchors.iter().map(anchor_to_value).collect()),
+        );
+    }
+    serde_json::Value::Object(routine_m)
 }
 
 /// One changed-roots diagnostic as digest's JSON writes it (`explain --diff`
@@ -2353,6 +2366,7 @@ pub fn project_digest_document(
     deterministic: bool,
     test_coverage: Option<serde_json::Value>,
     include_reads: bool,
+    v3: Option<V3Inputs<'_>>,
 ) -> String {
     // payload.summary
     // rootsRequested = roots.length + queryResult.diagnostics.length (contracts/digest.ts:443).
@@ -2379,8 +2393,22 @@ pub fn project_digest_document(
         changed.insert("routines".into(), serde_json::Value::Array(rv));
     }
 
-    // entries
-    let entries_val: Vec<serde_json::Value> = entries.iter().map(entry_to_value).collect();
+    // entries: the 3.x projection (W2-2, design §4.4) unless `--schema 2`.
+    let mut routines_table = None;
+    let entries_val: Vec<serde_json::Value> = match &v3 {
+        Some(v) => {
+            let rt =
+                crate::engine::l5::digest_v3::RoutineTable::build(entries, v.rollups, v.cx, v.opts);
+            let out = entries
+                .iter()
+                .zip(v.rollups)
+                .map(|(e, r)| crate::engine::l5::digest_v3::entry_v3(e, r, &rt, v.cx, v.opts))
+                .collect();
+            routines_table = Some(rt.table);
+            out
+        }
+        None => entries.iter().map(entry_to_value).collect(),
+    };
 
     // changedRootsDiagnostics
     let crd: Vec<serde_json::Value> = changed_roots_result
@@ -2410,6 +2438,13 @@ pub fn project_digest_document(
         "workspaceFingerprint".into(),
         workspace_fp.to_string().into(),
     );
+    if let (Some(table), Some(v)) = (routines_table, &v3) {
+        payload.insert("routines".into(), table);
+        payload.insert("pathCap".into(), v.opts.path_cap.into());
+        if v.opts.detail {
+            payload.insert("detail".into(), true.into());
+        }
+    }
 
     // Envelope
     // makeEnvelope: deterministic ? pinned epoch : live ISO-8601 (#18 — was a dead
@@ -2476,7 +2511,13 @@ pub fn project_digest_document(
     // under literal arguments carries `literalUnreachable: true`; a group
     // whose refined list is shorter than its raw one counts the refined list
     // and keeps `detail.resourcesOriginalCount`.
-    env.insert("schemaVersion".into(), "2.2.0".into());
+    // 3.0.0 (MCP output wave 2, W2-2, design §4.4): the rendering
+    // redesign (`digest_v3`'s module doc); `--schema 2` keeps 2.2.0.
+    let compact = v3.as_ref().is_some_and(|v| v.compact);
+    env.insert(
+        "schemaVersion".into(),
+        if v3.is_some() { "3.0.0" } else { "2.2.0" }.into(),
+    );
 
     // The block goes in after the null drop, so its `ratio: null` survives; the
     // keep-nulls sort then orders it (and the payload key it lands in).
@@ -2485,7 +2526,20 @@ pub fn project_digest_document(
         doc["payload"]["testCoverage"] = block;
         doc = sort_keys_keep_nulls(doc);
     }
+    if compact {
+        let mut s = serde_json::to_string(&doc).expect("serde_json serialization");
+        s.push('\n');
+        return s;
+    }
     serialize_normalized_value(&doc)
+}
+
+/// What the 3.x projection reads beside the entries (W2-2).
+pub struct V3Inputs<'a> {
+    pub rollups: &'a [crate::engine::l5::routine_rollup::RoutineRollup],
+    pub cx: &'a crate::engine::l5::routine_rollup::RollupCx<'a>,
+    pub opts: crate::engine::l5::routine_rollup::RenderOpts,
+    pub compact: bool,
 }
 
 pub struct ChangedInputContract {
@@ -2498,13 +2552,47 @@ pub struct ChangedInputContract {
 // Human formatter (formatDigestHuman)
 // ---------------------------------------------------------------------------
 
-/// The human digest: the entry blocks, then one line per changed-roots
-/// diagnostic in input order, with no blank line between (#340).
-pub fn format_digest_human(
+/// The human digest (W2-2, design §4.3): per root the explain card's effect
+/// sections, rendered by the same functions (`routine_rollup`), then its
+/// diagnostics as counts by kind and reason (each one, with its operation,
+/// under `--detail`); then one line per changed-roots diagnostic in input
+/// order, with no blank line between (#340).
+pub fn format_digest_human_v3(
     entries: &[DigestEntryFull],
+    rollups: &[crate::engine::l5::routine_rollup::RoutineRollup],
+    cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
+    opts: crate::engine::l5::routine_rollup::RenderOpts,
     changed: &[ChangedRootsDiagnostic],
 ) -> String {
-    let mut text = format_entries_human(entries);
+    use crate::engine::l5::routine_rollup as rr;
+    let mut text = if entries.is_empty() {
+        "digest: no changed roots resolved\n".to_string()
+    } else {
+        let mut lines: Vec<String> = Vec::new();
+        for (entry, r) in entries.iter().zip(rollups) {
+            let display = owner_qualified(&entry.object_display, &entry.routine_display);
+            lines.push(format!("--- {display} ---"));
+            let mut body: Vec<String> = rr::header_lines(r, entry, &[]);
+            if entry.effects.is_empty() {
+                body.push("effects: none".to_string());
+            }
+            body.extend(rr::commit_lines(r, entry, cx, opts));
+            body.extend(rr::workspace_write_lines(r, entry, cx, opts, &|_| None));
+            body.extend(rr::caller_dependent_lines(r, entry));
+            body.extend(rr::beyond_lines(r, entry, cx, opts));
+            body.extend(rr::no_path_lines(r, entry, cx, opts));
+            body.extend(rr::literal_dead_lines(r, opts));
+            body.extend(rr::temporary_lines(r, opts));
+            body.extend(rr::event_lines(r, cx, opts));
+            body.extend(rr::kind_lines(r, entry));
+            body.extend(rr::workspace_gap_lines(r, entry, opts));
+            body.extend(rr::dependency_gap_lines(r, opts));
+            body.extend(diagnostic_lines(entry, opts.detail));
+            lines.extend(body.into_iter().map(|l| format!("  {l}")));
+            lines.push(String::new());
+        }
+        lines.join("\n")
+    };
     for d in changed {
         text.push_str(&changed_roots_diagnostic_human(d));
         text.push('\n');
@@ -2512,100 +2600,61 @@ pub fn format_digest_human(
     text
 }
 
-fn format_entries_human(entries: &[DigestEntryFull]) -> String {
-    if entries.is_empty() {
-        return "digest: no changed roots resolved\n".to_string();
+/// `diagnostics: kind n; kind n (reason n)`, or each one with `detail`.
+fn diagnostic_lines(entry: &DigestEntryFull, detail: bool) -> Vec<String> {
+    if entry.entry_diagnostics.is_empty() {
+        return Vec::new();
     }
-    let mut lines: Vec<String> = Vec::new();
-    for entry in entries {
-        let display = owner_qualified(&entry.object_display, &entry.routine_display);
-        lines.push(format!("--- {} ---", display));
-        lines.push(format!("  coverage: {}", entry.coverage_status));
-        if !entry.coverage_reasons.is_empty() {
-            lines.push(format!("  reasons: {}", entry.coverage_reasons.join(", ")));
-        }
-        if entry.effects.is_empty() {
-            lines.push("  (no effects)".to_string());
-        }
-        for eff in &entry.effects {
-            let prov_tag = if eff.provenance == "direct" {
-                "direct"
-            } else {
-                "transitive"
-            };
-            let ev_file = eff.evidence.file.as_deref().unwrap_or("(unavailable)");
-            let ev_line = eff
-                .evidence
-                .line
-                .map(|l| format!(":{}", shown(l)))
-                .unwrap_or_default();
-            let excerpt = eff
-                .evidence
-                .excerpt
-                .as_deref()
-                .map(|e| format!(" \"{}\"", e))
-                .unwrap_or_default();
-            // W2-1: a literal-dead row says so (its JSON twin carries
-            // `literalUnreachable`).
-            let dead = if eff.literal_unreachable {
-                " (ruled out by literal arguments)"
-            } else {
-                ""
-            };
-            lines.push(format!("  [{}] {}{dead}", eff.effect_type, prov_tag));
-            lines.push(format!("    evidence: {}{}{}", ev_file, ev_line, excerpt));
-            let detail_entries: Vec<String> = eff
-                .detail
-                .iter()
-                .map(|(k, v)| format!("{}={}", k, v))
-                .collect();
-            if !detail_entries.is_empty() {
-                lines.push(format!("    detail: {}", detail_entries.join(", ")));
-            }
-            if !eff.via_paths.is_empty() {
-                let truncated_str = if eff.via_paths_truncated {
-                    " (truncated)"
-                } else {
-                    ""
-                };
-                lines.push(format!(
-                    "    via: {} path(s){}",
-                    eff.via_paths.len(),
-                    truncated_str
-                ));
-            }
-        }
-        if !entry.unresolved.is_empty() {
-            lines.push(format!(
-                "  unresolved: {} callsite(s)",
-                entry.unresolved.len()
-            ));
-            if entry.unresolved_traversal.truncated {
-                lines.push("    (traversal truncated)".to_string());
-            }
-        }
-        if !entry.entry_diagnostics.is_empty() {
-            for d in &entry.entry_diagnostics {
-                let et_part = d
-                    .effect_type
-                    .as_deref()
-                    .map(|et| format!(" ({})", et))
-                    .unwrap_or_default();
-                lines.push(format!(
-                    "  diagnostic: {}{}{}{}",
+    if detail {
+        return entry
+            .entry_diagnostics
+            .iter()
+            .map(|d| {
+                format!(
+                    "diagnostic: {}{}{}{}",
                     d.kind,
-                    et_part,
+                    d.effect_type
+                        .as_deref()
+                        .map(|et| format!(" ({et})"))
+                        .unwrap_or_default(),
                     d.reason.map(|r| format!(" reason={r}")).unwrap_or_default(),
                     d.operation_id
                         .as_deref()
                         .map(|o| format!(" op={o}"))
                         .unwrap_or_default()
-                ));
-            }
-        }
-        lines.push(String::new());
+                )
+            })
+            .collect();
     }
-    lines.join("\n")
+    let mut by: BTreeMap<&str, (usize, BTreeMap<&str, usize>)> = BTreeMap::new();
+    for d in &entry.entry_diagnostics {
+        let slot = by.entry(d.kind).or_default();
+        slot.0 += 1;
+        if let Some(r) = d.reason {
+            *slot.1.entry(r).or_default() += 1;
+        }
+    }
+    let parts: Vec<String> = by
+        .into_iter()
+        .map(|(k, (n, reasons))| {
+            if reasons.is_empty() {
+                format!("{k} {n}")
+            } else {
+                format!(
+                    "{k} {n} ({})",
+                    reasons
+                        .iter()
+                        .map(|(r, c)| format!("{r} {c}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+        })
+        .collect();
+    vec![format!(
+        "diagnostics: {} (--detail lists each with its operation)",
+        parts.join("; ")
+    )]
 }
 
 // ---------------------------------------------------------------------------
@@ -2668,135 +2717,23 @@ use crate::engine::batch::output::SUMMARY_CAP_BYTES;
 const SUMMARY_ROUTINES: usize = 20;
 const SUMMARY_NAMES: usize = 10;
 
-/// The tables a digest effect writes, `(resource id, display)`: a direct
-/// effect's resource, a dependency boundary group's whole set.
-fn written_tables(e: &DigestEffectFull) -> Vec<(&str, &str)> {
-    if !e.group_resources.is_empty() {
-        return e
-            .group_resources
-            .iter()
-            .map(|(id, d)| (id.as_str(), d.as_str()))
-            .collect();
-    }
-    let get = |k: &str| {
-        e.detail
-            .iter()
-            .find(|(key, _)| key == k)
-            .map(|(_, v)| v.as_str())
-    };
-    match get("resourceId") {
-        Some(id) => vec![(id, get("resourceDisplay").unwrap_or(id))],
-        None => vec![],
-    }
-}
-
-/// One root's summary: effects by type, physical tables written (workspace
-/// and dependency), temporary tables, commits, boundaries entered, coverage
-/// and the unresolved call sites as counts. `counts_only` drops every name.
+/// One root's summary (W2-2, design §3.1): the root, its coverage, its
+/// effects by type and the ONE [`RollupTotals`] serialization every reader
+/// prints (`summary`), plus, unless `counts_only`, the first names of each
+/// list (may-persist tables in this app and in dependencies, entry points,
+/// top callees of the dependency gaps).
+///
+/// [`RollupTotals`]: crate::engine::l5::routine_rollup::RollupTotals
 fn digest_entry_summary(
     e: &DigestEntryFull,
-    primary: Option<&str>,
+    r: &crate::engine::l5::routine_rollup::RoutineRollup,
+    cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
     counts_only: bool,
 ) -> serde_json::Value {
     use serde_json::json;
     let mut by_type: BTreeMap<&str, u64> = BTreeMap::new();
-    let (mut ws_tables, mut dep_tables, mut temp_tables, mut caller_tables) = (
-        BTreeSet::new(),
-        BTreeSet::new(),
-        BTreeSet::new(),
-        BTreeSet::new(),
-    );
-    let mut unnamed_writes = 0u64;
-    let mut boundaries: BTreeMap<&str, u64> = BTreeMap::new();
     for f in &e.effects {
         *by_type.entry(f.effect_type.as_str()).or_default() += 1;
-        let detail = |k: &str| {
-            f.detail
-                .iter()
-                .find(|(key, _)| key == k)
-                .map(|(_, v)| v.as_str())
-        };
-        if let Some(b) = detail("boundary") {
-            *boundaries.entry(b).or_default() += 1;
-        }
-        // W2-1: a write the root cannot reach under literal arguments is no
-        // write here (its row stays in the document, marked).
-        if !matches!(
-            f.effect_type.as_str(),
-            "DB_INSERT" | "DB_MODIFY" | "DB_DELETE"
-        ) || f.literal_unreachable
-        {
-            continue;
-        }
-        let tables = written_tables(f);
-        if tables.is_empty() {
-            unnamed_writes += 1;
-        }
-        // W2-1 (design §3.2): the shared three-class classifier.
-        let class = crate::engine::l5::rollup::classify_detail(&f.detail);
-        for (id, display) in tables {
-            match class {
-                crate::engine::l5::rollup::WriteClass::Temporary => {
-                    temp_tables.insert(display);
-                }
-                crate::engine::l5::rollup::WriteClass::CallerDependent(_) => {
-                    caller_tables.insert(display);
-                }
-                crate::engine::l5::rollup::WriteClass::Physical(_) => {
-                    if primary.is_some_and(|p| id.split('/').next() == Some(p)) {
-                        ws_tables.insert(display);
-                    } else {
-                        dep_tables.insert(display);
-                    }
-                }
-            }
-        }
-    }
-    let mut callees: BTreeMap<&str, u64> = BTreeMap::new();
-    let (mut polymorphic, mut dynamic, mut in_ws) = (0u64, 0u64, 0u64);
-    for u in &e.unresolved {
-        *callees.entry(u.callee_display.as_str()).or_default() += 1;
-        match u.status.as_str() {
-            "polymorphic" => polymorphic += 1,
-            "dynamic-target" => dynamic += 1,
-            _ => {}
-        }
-        if u.callsite_file
-            .as_deref()
-            .is_some_and(|f| f.starts_with("ws:"))
-        {
-            in_ws += 1;
-        }
-    }
-    let mut top: Vec<(&str, u64)> = callees.into_iter().collect();
-    top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
-    fn names<'a>(s: &BTreeSet<&'a str>) -> Vec<&'a str> {
-        s.iter().take(SUMMARY_NAMES).copied().collect()
-    }
-    let mut tables = json!({
-        "count": ws_tables.len() + dep_tables.len(),
-        "workspace": ws_tables.len(),
-        "dependency": dep_tables.len(),
-    });
-    let mut boundary = json!({"count": boundaries.len()});
-    let mut unresolved = json!({
-        "total": e.unresolved.len(),
-        "polymorphic": polymorphic,
-        "dynamicTarget": dynamic,
-        "inWorkspace": in_ws,
-    });
-    if !counts_only {
-        tables["workspaceNames"] = json!(names(&ws_tables));
-        tables["dependencyNames"] = json!(names(&dep_tables));
-        let mut b: Vec<(&str, u64)> = boundaries.into_iter().collect();
-        b.sort_by(|x, y| y.1.cmp(&x.1).then(x.0.cmp(y.0)));
-        boundary["names"] = json!(b.iter().take(5).map(|(n, _)| *n).collect::<Vec<_>>());
-        unresolved["topCallees"] = json!(
-            top.iter()
-                .take(3)
-                .map(|(c, n)| json!({"callee": c, "count": n}))
-                .collect::<Vec<_>>()
-        );
     }
     let mut v = json!({
         "routine": owner_qualified(&e.object_display, &e.routine_display),
@@ -2804,18 +2741,29 @@ fn digest_entry_summary(
         "coverageReasons": e.coverage_reasons,
         "effects": e.effects.len(),
         "effectsByType": by_type,
-        "physicalTablesWritten": tables,
-        "temporaryTablesWritten": temp_tables.len(),
-        "commits": by_type.get("COMMIT").copied().unwrap_or(0),
-        "boundariesEntered": boundary,
-        "unresolved": unresolved,
+        "summary": r.totals.to_json(),
     });
-    if unnamed_writes > 0 {
-        v["writesWithoutTable"] = json!(unnamed_writes);
-    }
-    // W2-1: tables written only if the caller passes a persistent record.
-    if !caller_tables.is_empty() {
-        v["callerDependentTablesWritten"] = json!(caller_tables.len());
+    if !counts_only {
+        let (own, dep) = r.may_write_names(cx);
+        let take = |s: Vec<String>| s.into_iter().take(SUMMARY_NAMES).collect::<Vec<_>>();
+        v["names"] = json!({
+            "tablesOwnedByApp": take(own),
+            "tablesOwnedByDependencies": take(dep),
+            "entryPoints": r
+                .crossings
+                .iter()
+                .filter(|c| c.writes())
+                .take(5)
+                .map(|c| c.name.clone())
+                .collect::<Vec<_>>(),
+            "topCallees": r
+                .gaps
+                .top_callees
+                .iter()
+                .take(3)
+                .map(|(c, n)| json!({"callee": c, "count": n}))
+                .collect::<Vec<_>>(),
+        });
     }
     v
 }
@@ -2827,17 +2775,19 @@ fn digest_entry_summary(
 /// routines are dropped from the end; never a spill.
 pub fn digest_summary(
     entries: &[DigestEntryFull],
+    rollups: &[crate::engine::l5::routine_rollup::RoutineRollup],
+    cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
     roots_requested: usize,
     changed_roots_diagnostics: usize,
-    primary: Option<&str>,
 ) -> serde_json::Value {
     use serde_json::json;
     let total_unresolved: usize = entries.iter().map(|e| e.unresolved.len()).sum();
     let build = |counts_only: bool, routines: usize| {
         let listed: Vec<serde_json::Value> = entries
             .iter()
+            .zip(rollups)
             .take(routines)
-            .map(|e| digest_entry_summary(e, primary, counts_only))
+            .map(|(e, r)| digest_entry_summary(e, r, cx, counts_only))
             .collect();
         let mut v = json!({
             "kind": "digest",
@@ -2910,6 +2860,37 @@ pub fn run_digest_pipeline(
     )
 }
 
+/// [`run_digest_pipeline`] rendered as `render` says (the CLI's default is
+/// `DigestRender::default()`, the 3.x document).
+#[allow(clippy::too_many_arguments)] // CLI flags, one each
+pub fn run_digest_pipeline_render(
+    inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
+    changed_files: Option<Vec<String>>,
+    changed_routines: Option<Vec<String>>,
+    diff_text: Option<String>,
+    alsem_ver: &str,
+    deterministic: bool,
+    single_app: bool,
+    render: crate::engine::l5::digest_v3::DigestRender,
+) -> Result<DigestRunResult, String> {
+    digest_pipeline_rendered(
+        crate::engine::l5::detectors::default_detectors(),
+        DigestRequest {
+            inputs,
+            changed_files,
+            changed_routines,
+            diff_text,
+            alsem_ver,
+            deterministic,
+            single_app,
+            tests: false,
+            include_reads: false,
+            diff_root: DiffRoot::Workspace,
+        },
+        render,
+    )
+}
+
 /// The CLI inputs of one digest run ([`run_digest_pipeline`]'s flags).
 /// `max_paths_override` is not here: the pipeline has never read it.
 pub struct DigestRequest<'a> {
@@ -2936,11 +2917,28 @@ pub(crate) fn digest_pipeline_with(
     detectors: Vec<crate::engine::l5::registry::Detector>,
     req: DigestRequest<'_>,
 ) -> Result<DigestRunResult, String> {
+    // The in-process API keeps the 2.x document (`--schema 2`), which the
+    // engine-fact tests read; the CLI's default is 3.x (W2-2).
+    digest_pipeline_rendered(
+        detectors,
+        req,
+        crate::engine::l5::digest_v3::DigestRender::schema2(),
+    )
+}
+
+/// [`digest_pipeline_with`] rendered as `render` says (`--schema 2`,
+/// `--detail`, `--compact`, `--max-paths`).
+pub fn digest_pipeline_rendered(
+    detectors: Vec<crate::engine::l5::registry::Detector>,
+    req: DigestRequest<'_>,
+    render: crate::engine::l5::digest_v3::DigestRender,
+) -> Result<DigestRunResult, String> {
     let job = DigestJob {
         detectors,
         req,
         human: false,
         out: None,
+        render,
     };
     crate::engine::batch::run_doc(&job)
         .one::<Result<DigestRunResult, String>>()
@@ -2956,6 +2954,8 @@ pub struct DigestJob<'a> {
     /// `--format human`: the human text, else the JSON.
     human: bool,
     out: Option<&'a str>,
+    /// `--schema 2`, `--detail`, `--compact`, `--max-paths` (design §5).
+    render: crate::engine::l5::digest_v3::DigestRender,
 }
 
 impl<'a> DigestJob<'a> {
@@ -2966,7 +2966,15 @@ impl<'a> DigestJob<'a> {
             req,
             human,
             out,
+            render: Default::default(),
         }
+    }
+
+    /// The document's rendering (design §5).
+    #[must_use]
+    pub fn with_render(mut self, render: crate::engine::l5::digest_v3::DigestRender) -> Self {
+        self.render = render;
+        self
     }
 
     fn changed_input<'i>(
@@ -3048,7 +3056,11 @@ impl Job for DigestJob<'_> {
     }
 
     fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
-        Ok(SideDoc::new(Ok::<_, String>(digest_view(cx, &self.req))))
+        Ok(SideDoc::new(Ok::<_, String>(digest_view(
+            cx,
+            &self.req,
+            self.render,
+        ))))
     }
 
     fn view_failed(&self, _: SideIx, failure: &ViewFailure) -> Result<SideDoc, JobFailure> {
@@ -3081,7 +3093,11 @@ impl Job for DigestJob<'_> {
 /// Digest off its prepared view: the default run (the envelope diagnostics),
 /// the tx map off its `det`, the effects off its tree and the L4 store off its
 /// `l4` (#160 §4.4.4, step 6 D7).
-fn digest_view(cx: &mut ViewCx<'_>, req: &DigestRequest<'_>) -> DigestRunResult {
+fn digest_view(
+    cx: &mut ViewCx<'_>,
+    req: &DigestRequest<'_>,
+    render: crate::engine::l5::digest_v3::DigestRender,
+) -> DigestRunResult {
     let DigestRequest {
         changed_files,
         changed_routines,
@@ -3103,7 +3119,6 @@ fn digest_view(cx: &mut ViewCx<'_>, req: &DigestRequest<'_>) -> DigestRunResult 
         DigestEffects::default()
     };
     let resolved = cx.view().model();
-    let primary_guid = primary_guid_of(resolved).map(str::to_string);
     let workspace_fp =
         crate::engine::l5::snapshot_full::workspace_fingerprint_of(cx.inputs(), alsem_ver);
 
@@ -3125,6 +3140,20 @@ fn digest_view(cx: &mut ViewCx<'_>, req: &DigestRequest<'_>) -> DigestRunResult 
     );
     let entries = query_full.entries;
     let query_diagnostics = query_full.query_diagnostics;
+    // W2-2: one rollup per root, read by the summary and the renderers.
+    let rollup_cx = crate::engine::l5::routine_rollup::RollupCx::new(resolved, &dependencies.apps);
+    let rollups: Vec<crate::engine::l5::routine_rollup::RoutineRollup> = entries
+        .iter()
+        .map(|e| crate::engine::l5::routine_rollup::RoutineRollup::build(e, &rollup_cx))
+        .collect();
+    // rootsRequested as `payload.summary` counts it (roots + query diagnostics).
+    let summary = digest_summary(
+        &entries,
+        &rollups,
+        &rollup_cx,
+        changed_roots.roots.len() + query_diagnostics.len(),
+        changed_roots.diagnostics.len(),
+    );
     // #254: the coverage block reads the graph the effects step built off the
     // tree (#160 step 6: the tree itself is released inside `prepare`). A
     // `--tests` plan always builds the tree, roots or not (`digest_plan`).
@@ -3138,14 +3167,13 @@ fn digest_view(cx: &mut ViewCx<'_>, req: &DigestRequest<'_>) -> DigestRunResult 
             &changed,
         )
     });
-    // #69 D1.4: the query's inputs (the effects, the L4 store) are dead here.
-    // Free them before the JSON projection.
+    // #69 D1.4: the query's inputs (the effects, the L4 store's join) are dead
+    // here. Free them before the JSON projection. (The cells are released
+    // after it: the 3.x projection names routines off the model.)
     drop(temp_states);
     drop(tx_ctx_map);
     drop(owners);
     drop(effects);
-    cx.release(Cell::L4);
-    cx.release(Cell::Effects);
 
     let exit_code: u8 = if changed_roots.roots.is_empty() { 2 } else { 0 };
 
@@ -3168,23 +3196,32 @@ fn digest_view(cx: &mut ViewCx<'_>, req: &DigestRequest<'_>) -> DigestRunResult 
         deterministic,
         test_coverage.as_ref().map(|t| t.to_json_value()),
         *include_reads,
+        (!render.schema2).then_some(V3Inputs {
+            rollups: &rollups,
+            cx: &rollup_cx,
+            opts: render.opts(),
+            compact: render.compact,
+        }),
     );
 
-    // Human. The dependencies line appears only when apps were loaded, so a
-    // workspace with no dependency reads the same in both modes.
-    let mut human_text =
-        dependencies.prefix_human(format_digest_human(&entries, &changed_roots.diagnostics));
+    // Human (W2-2, design §4.3): per root the explain card's effect sections,
+    // rendered by the same functions. The dependencies line appears only when
+    // apps were loaded, so a workspace with no dependency reads the same in
+    // both modes.
+    let mut human_text = dependencies.prefix_human(format_digest_human_v3(
+        &entries,
+        &rollups,
+        &rollup_cx,
+        render.opts(),
+        &changed_roots.diagnostics,
+    ));
     if let Some(t) = &test_coverage {
         human_text.push_str(&t.human_line());
         human_text.push('\n');
     }
-    // rootsRequested as `payload.summary` counts it (roots + query diagnostics).
-    let summary = digest_summary(
-        &entries,
-        changed_roots.roots.len() + query_diagnostics.len(),
-        changed_roots.diagnostics.len(),
-        primary_guid.as_deref(),
-    );
+    drop(rollup_cx);
+    cx.release(Cell::L4);
+    cx.release(Cell::Effects);
 
     DigestRunResult {
         json_text,
@@ -3515,6 +3552,7 @@ mod tests {
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
+            crossing: None,
         }
     }
 
@@ -3600,7 +3638,10 @@ mod tests {
                 "dep:g:src/B.al",
             ),
         ];
-        let s = digest_summary(&[e], 1, 0, Some("ws"));
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+        let s = digest_summary(&[e], &[r], &cx, 1, 0);
         let text = s.to_string();
         assert!(text.len() <= SUMMARY_CAP_BYTES, "{text}");
         assert!(
@@ -3610,37 +3651,139 @@ mod tests {
         let r = &s["routines"][0];
         assert_eq!(r["routine"], "Codeunit Out Issue Document::IssueDoc");
         assert_eq!(r["effectsByType"]["DB_INSERT"], 2, "{s}");
-        assert_eq!(r["commits"], 1, "{s}");
-        let t = &r["physicalTablesWritten"];
+        // W2-2: the one RollupTotals serialization.
+        let t = &r["summary"];
+        assert_eq!(t["commits"]["answer"], "may", "{s}");
+        assert_eq!(t["commits"]["entryPoints"], 1, "{s}");
+        let w = &t["mayWriteTables"];
         assert_eq!(
-            (t["workspace"].as_u64(), t["dependency"].as_u64()),
+            (w["ownedByApp"].as_u64(), w["byDependencies"].as_u64()),
             (Some(1), Some(12)),
             "{s}"
         );
-        assert_eq!(t["count"], 13);
-        assert_eq!(t["workspaceNames"], serde_json::json!(["Out Log"]));
+        assert_eq!(w["count"], 13);
         assert_eq!(
-            t["dependencyNames"].as_array().map(Vec::len),
+            r["names"]["tablesOwnedByApp"],
+            serde_json::json!(["Out Log"])
+        );
+        assert_eq!(
+            r["names"]["tablesOwnedByDependencies"]
+                .as_array()
+                .map(Vec::len),
             Some(SUMMARY_NAMES)
         );
-        assert_eq!(r["temporaryTablesWritten"], 1);
-        assert_eq!(r["boundariesEntered"]["count"], 1);
-        let u = &r["unresolved"];
+        // Out Log's temporary delete: Out Log is also written persistently.
+        assert_eq!(t["temporaryOnlyTables"], 0);
+        assert_eq!(t["entryPoints"]["count"], 1);
+        let g = &t["gaps"];
         assert_eq!(
             (
-                u["total"].as_u64(),
-                u["polymorphic"].as_u64(),
-                u["dynamicTarget"].as_u64(),
-                u["inWorkspace"].as_u64()
+                g["workspace"].as_u64(),
+                g["dependency"].as_u64(),
+                g["notPlaced"].as_u64()
             ),
-            (Some(3), Some(1), Some(2), Some(2)),
+            (Some(2), Some(1), Some(0)),
             "{s}"
         );
         assert_eq!(
-            u["topCallees"][0],
-            serde_json::json!({"callee": "Codeunit.Run(<dynamic>)", "count": 2})
+            r["names"]["topCallees"][0],
+            serde_json::json!({"callee": "Codeunit.Run(<dynamic>)", "count": 1})
         );
         assert!(s.get("countsOnly").is_none(), "{s}");
+    }
+
+    /// W2-2, T-W2-1: a rollup total is a union by identity, never a sum of
+    /// section counts. Hand-stated: `Shared` written in workspace code AND
+    /// listed by a group beyond `Codeunit Base Poster::OnRun`, `Other` listed by
+    /// two groups (Insert and Modify) of that one crossing, and a temporary
+    /// `Scratch` insert, and a caller-dependent `Arg` modify. Expected by hand:
+    /// 2 may-persist tables (both owned by dependencies), 1 entry point,
+    /// `Scratch` temporary-only, `Arg` caller-dependent and not may-persist.
+    ///
+    /// Discrimination (2026-11-04): computing `may_write_tables` as the sum of
+    /// the workspace-code records and every crossing's table count fails (3,
+    /// not 2); counting a caller-dependent contribution as physical (its arm
+    /// adding to `live_tables`) fails too (3, not 2); each restored, it passes.
+    #[test]
+    fn rollup_totals_are_unions_by_identity() {
+        let mut own = effect(
+            "DB_INSERT",
+            &[
+                ("resourceId", "dep/table/1"),
+                ("resourceDisplay", "Shared"),
+                ("tempState", "known(false)"),
+            ],
+            &[],
+        );
+        own.evidence.source_kind = "source";
+        own.evidence.file = Some("ws:src/A.al".to_string());
+        own.evidence.line = Some(4);
+        let mut temp = effect(
+            "DB_INSERT",
+            &[
+                ("resourceId", "ws/table/9"),
+                ("resourceDisplay", "Scratch"),
+                ("tempState", "known(true)"),
+            ],
+            &[],
+        );
+        temp.evidence.source_kind = "source";
+        let group = |ty: &str, res: &[(&str, &str)]| {
+            effect(ty, &[("boundary", "Codeunit Base Poster::OnRun")], res)
+        };
+        let mut arg = effect(
+            "DB_MODIFY",
+            &[
+                ("resourceId", "ws/table/5"),
+                ("resourceDisplay", "Arg"),
+                ("tempState", "parameter-dependent(0)"),
+            ],
+            &[],
+        );
+        arg.evidence.source_kind = "source";
+        let mut e = entry_with(vec![]);
+        e.effects = vec![
+            own,
+            temp,
+            arg,
+            group(
+                "DB_INSERT",
+                &[("dep/table/1", "Shared"), ("dep/table/2", "Other")],
+            ),
+            group("DB_MODIFY", &[("dep/table/2", "Other")]),
+        ];
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+        assert_eq!(r.workspace_code.len(), 1, "one workspace-code record");
+        assert_eq!(r.crossings.len(), 1, "one crossing, two group rows");
+        let t = &r.totals;
+        assert_eq!(t.may_write_tables, 2, "{t:?}");
+        assert_eq!((t.owned_by_app, t.by_dependencies), (0, 2), "{t:?}");
+        assert_eq!(t.entry_points, 1, "{t:?}");
+        assert_eq!(t.temporary_only_tables, 1, "{t:?}");
+        assert_eq!(
+            r.crossings[0].by_type["DB_INSERT"].len(),
+            2,
+            "tables per kind"
+        );
+        // T-W2-20: the caller-dependent `Arg` write is its own section and
+        // never a may-persist table.
+        assert_eq!(t.caller_dependent_tables, 1, "{t:?}");
+        assert_eq!(r.caller_dependent.len(), 1);
+        assert!(!r.may_write.contains_key("ws/table/5"), "{t:?}");
+    }
+
+    /// A model whose primary app is `ws`.
+    fn ws_model() -> Model {
+        let mut m = crate::engine::l5::test_support::empty_resolved();
+        m.primary_app = Some(crate::engine::gate::app_attribution::App {
+            app_guid: "ws".to_string(),
+            publisher: String::new(),
+            name: String::new(),
+            version: String::new(),
+        });
+        m
     }
 
     /// MCP output plan 1b: past [`SUMMARY_CAP_BYTES`] the summary degrades to
@@ -3674,7 +3817,13 @@ mod tests {
                 e
             })
             .collect();
-        let s = digest_summary(&entries, 40, 0, Some("ws"));
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let rollups: Vec<_> = entries
+            .iter()
+            .map(|e| crate::engine::l5::routine_rollup::RoutineRollup::build(e, &cx))
+            .collect();
+        let s = digest_summary(&entries, &rollups, &cx, 40, 0);
         let text = s.to_string();
         assert!(text.len() <= SUMMARY_CAP_BYTES, "{} bytes", text.len());
         assert_eq!(s["countsOnly"], true, "{text}");
@@ -3757,27 +3906,56 @@ mod tests {
             "fact-1",
             vec![("op-a".to_string(), JoinProblem::ClassAbsent)],
         );
-        let text = format_digest_human(&[entry_with(diags)], &[]);
+        // W2-2: each diagnostic with its operation under --detail; counts by
+        // kind and reason by default.
+        let entries = [entry_with(diags)];
+        let text = human(&entries, &[], true);
         assert!(
             text.contains(
                 "diagnostic: temp-state-incoherent (DB_INSERT) reason=class-absent op=op-a"
             ),
             "reason=class-absent op=op-a missing: {text}"
         );
+        let text = human(&entries, &[], false);
+        assert!(
+            text.contains("diagnostics: temp-state-incoherent 1 (class-absent 1)"),
+            "{text}"
+        );
     }
 
-    /// #340 A4: with no changed-roots diagnostic the human text is byte-identical
-    /// to the pre-#340 output, trailing newline included.
+    /// The human digest of `entries` over a model whose primary app is `ws`.
+    fn human(
+        entries: &[DigestEntryFull],
+        changed: &[ChangedRootsDiagnostic],
+        detail: bool,
+    ) -> String {
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let rollups: Vec<_> = entries
+            .iter()
+            .map(|e| crate::engine::l5::routine_rollup::RoutineRollup::build(e, &cx))
+            .collect();
+        format_digest_human_v3(
+            entries,
+            &rollups,
+            &cx,
+            crate::engine::l5::routine_rollup::RenderOpts::new(detail, None),
+            changed,
+        )
+    }
+
+    /// #340 A4: with no changed-roots diagnostic the human text ends with the
+    /// entry block, trailing newline included.
     #[test]
     fn human_output_unchanged_without_changed_roots_diagnostics() {
         assert_eq!(
-            format_digest_human(&[], &[]),
+            human(&[], &[], false),
             "digest: no changed roots resolved\n"
         );
-        assert_eq!(
-            format_digest_human(&[entry_with(Vec::new())], &[]),
-            "--- R ---\n  coverage: complete\n  (no effects)\n"
-        );
+        let text = human(&[entry_with(Vec::new())], &[], false);
+        assert!(text.starts_with("--- R ---\n  summary: "), "{text}");
+        assert!(text.contains("\n  effects: none\n"), "{text}");
+        assert!(text.ends_with('\n') && !text.ends_with("\n\n"), "{text}");
     }
 
     /// #340 A3: one line per changed-roots diagnostic, every variant, in input
@@ -3855,14 +4033,14 @@ mod tests {
         );
         // (a) no entries.
         assert_eq!(
-            format_digest_human(&[], &changed),
+            human(&[], &changed, false),
             format!("digest: no changed roots resolved\n{lines}")
         );
         // (b) one entry: its block, then the lines, no blank line between.
-        assert_eq!(
-            format_digest_human(&[entry_with(Vec::new())], &changed),
-            format!("--- R ---\n  coverage: complete\n  (no effects)\n{lines}")
-        );
+        let entries = [entry_with(Vec::new())];
+        let block = human(&entries, &[], false);
+        assert_eq!(human(&entries, &changed, false), format!("{block}{lines}"));
+        assert!(!block.ends_with("\n\n"), "{block}");
     }
 
     // -- #2 gaps-in-cone app-level prefix oracle (moved from prove.rs, #160 step 9)

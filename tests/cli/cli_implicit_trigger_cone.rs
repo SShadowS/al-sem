@@ -266,7 +266,13 @@ fn query_effects(routine: &str) -> Vec<Value> {
         (tmp, v)
     });
     let substrate = &QuerySubstrate::of(view);
-    let q = render_query_effects(substrate, &format!("Trig Caller.{routine}"), "t", true);
+    let q = render_query_effects(
+        substrate,
+        &format!("Trig Caller.{routine}"),
+        false,
+        "t",
+        true,
+    );
     let doc: Value = serde_json::from_str(&q.json_text).expect("query json");
     doc["payload"]["effects"]
         .as_array()
@@ -1064,7 +1070,7 @@ fn a6_dependency_trigger_reaches_the_workspace_caller() {
 
     let view = query_view(&read(ws), false).expect("query view");
     let substrate = QuerySubstrate::of(&view);
-    let q = render_query_effects(&substrate, "Ws Caller.ValidateDep", "t", true);
+    let q = render_query_effects(&substrate, "Ws Caller.ValidateDep", false, "t", true);
     let qdoc: Value = serde_json::from_str(&q.json_text).expect("query json");
     let l4: Vec<(String, String)> = qdoc["payload"]["effects"]
         .as_array()

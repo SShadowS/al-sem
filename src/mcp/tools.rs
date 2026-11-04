@@ -198,7 +198,7 @@ pub fn tool_list() -> Vec<Value> {
     vec![
         tool(
             "alsem_explain",
-            "Explain AL routines: the evidence card of each (its own rules with their conditions and messages, inherited and caller rules, what it writes, commits and raises, the page actions and tests that reach it, and what the engine could not see). Exactly one mode: `routines` (one or more selectors: display name, `<owner>::<routine>` or stable id), `diff` (a unified diff's text; one card per routine it changes; `diffRoot` is the folder its paths are relative to, default the git top level), or `table` with `field` (every workspace routine that writes the field). Default format is the human card; `format: json` gives schema al-sem.explain/2.1 (larger; for tools that parse it). Lines are 1-based. Size: a few lines for a small routine; 100-200 KB for one that calls into Base Application, which then goes to a file with a summary (each card's header and counts) — read the summary first. Dependency code: summarized per entry point (one row per boundary and effect type), not listed table by table. Returns the exact `alsem explain` stdout.",
+            "Explain AL routines: the evidence card of each (its own rules with their conditions and messages, inherited and caller rules, what it writes, commits and raises, the page actions and tests that reach it, and what the engine could not see). Exactly one mode: `routines` (one or more selectors: display name, `<owner>::<routine>` or stable id), `diff` (a unified diff's text; one card per routine it changes; `diffRoot` is the folder its paths are relative to, default the git top level), or `table` with `field` (every workspace routine that writes the field). Default format is the human card: a summary line first (tables it may write, owned by the app and by dependencies; commits; events; callers; tests; gaps), then coverage, assumptions, limits and scope, then the sections; temporary records are counted apart, never as writes; long lists are folded with the full count (`detail: true` lists everything). `format: json` gives schema al-sem.explain/3 (larger; for tools that parse it). Lines are 1-based. Size: a few lines for a small routine; tens of KB human (hundreds of KB JSON) for one that calls into Base Application, which then goes to a file with a summary (each card's header and counts) — read the summary first. Dependency code: the whole cone, grouped per entry point (tables per kind, names folded). Returns the exact `alsem explain` stdout.",
             schema(
                 vec![
                     ("routines", string_array("Routine selectors (mode 1).")),
@@ -221,6 +221,14 @@ pub fn tool_list() -> Vec<Value> {
                     (
                         "format",
                         json!({"type": "string", "enum": ["human", "json"], "description": "Output format (default human)."}),
+                    ),
+                    (
+                        "detail",
+                        json!({"type": "boolean", "description": "Every list complete, no fold (every table, entry point, page action, dependency gap, event name); up to 3 paths per item."}),
+                    ),
+                    (
+                        "maxPaths",
+                        json!({"type": "integer", "minimum": 0, "description": "Paths per item (default 1; 3 with detail; at most 3)."}),
                     ),
                 ],
                 &[],
@@ -256,7 +264,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_digest",
-            "Digest AL code: the transitive effects (writes, commits, errors, events, UI) of the given roots. Give at least one of `routines` (stable ids or display names: that routine's effects), `files` (changed source files, relative to the workspace or the git top level) or `diff` (a unified diff's text); `files` and `diff` are the change modes. Lines are 1-based. Dependency code: the whole cone, grouped per entry point. The file is often megabytes for a routine that calls Base Application (pass `format: human` for a shorter one); read the summary first. The output always goes to a file in the server's output folder; the answer carries its path, size, SHA-256 and a summary of at most 8 KiB (roots requested and resolved; per root: effects by type, physical tables written in the workspace and in dependencies, temporary tables, commits, dependency boundaries entered, coverage and its reasons, unresolved call sites as counts with the top callees).",
+            "Digest AL code: the transitive effects (writes, commits, errors, events, UI) of the given roots. Give at least one of `routines` (stable ids or display names: that routine's effects), `files` (changed source files, relative to the workspace or the git top level) or `diff` (a unified diff's text); `files` and `diff` are the change modes. Lines are 1-based. Dependency code: the whole cone, grouped per entry point. JSON is schema 3.0.0: every effect row, paths as structured hops into a `payload.routines` table, one path on a decision effect by default (`detail: true` keeps every path, guarantee, diagnostic and unresolved call site; `schema: 2` gives the 2.x document). The file is up to about 1,000 KB for a routine that calls Base Application (pass `format: human` for a shorter one); read the summary first. The output always goes to a file in the server's output folder; the answer carries its path, size, SHA-256 and a summary of at most 8 KiB (roots requested and resolved; per root: coverage, effects by type, and the same summary explain prints: tables it may write, owned by the app and by dependencies, caller-dependent tables, commits, events, kind families, gaps by where, temporary-only tables, writes with no path kept, entry points; first names of each list).",
             schema(
                 vec![
                     ("routines", string_array("Changed routines.")),
@@ -281,6 +289,22 @@ pub fn tool_list() -> Vec<Value> {
                         "includeReads",
                         json!({"type": "boolean", "description": "Add DB_READ effects, one per table read site."}),
                     ),
+                    (
+                        "detail",
+                        json!({"type": "boolean", "description": "Unfolded 3.x: every path (up to 3), scoped guarantee, diagnostic, unresolved call site and group witness."}),
+                    ),
+                    (
+                        "maxPaths",
+                        json!({"type": "integer", "minimum": 0, "description": "Paths per effect (default 1 on a decision effect; 3 with detail; at most 3)."}),
+                    ),
+                    (
+                        "compact",
+                        json!({"type": "boolean", "description": "JSON without indentation."}),
+                    ),
+                    (
+                        "schema",
+                        json!({"type": "integer", "enum": [2, 3], "description": "2: the 2.x document (old shape, current analysis), for one release window; not with detail, maxPaths or compact."}),
+                    ),
                     ("deterministic", deterministic()),
                 ],
                 &[],
@@ -289,12 +313,16 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_query_effects",
-            "A routine's transitive database-effect list (every record operation, reads and temporary records included, each with its temp state and `via` provenance). Dependency code: one routine deep (the operations of the first dependency routine entered; deeper writes are in alsem_explain / alsem_digest boundary groups and alsem_prove writes-table). Lines are 1-based. Size: up to ~130 KB human for a routine that reaches Base Application; over the inline cap it goes to a file with a summary (counts by operation and temp state). `format: json` is larger. Returns the exact `alsem query effects` stdout (default format human).",
+            "A routine's transitive database-effect list (every record operation, reads and temporary records included, each with its temp state and `via` provenance). Dependency code: one routine deep (the operations of the first dependency routine entered; deeper writes are in alsem_explain / alsem_digest boundary groups and alsem_prove writes-table). Lines are 1-based. Human: a summary line (writes that may persist, caller-dependent writes, locks, validate, reads, temporary records, table not resolved — each operation in exactly one), then writes per table with the first operation's location and first hop; `all: true` adds one line per operation. Size: a few KB human by default; `format: json` holds every row (with `firstHop`) and a `summary`, ~700 KB for a routine that reaches Base Application, and then goes to a file with a summary (counts by operation and temp state). Returns the exact `alsem query effects` stdout (default format human).",
             schema(
                 vec![
                     (
                         "routine",
                         json!({"type": "string", "description": "Routine selector: internal id, stable id, `Object.Routine`, or a bare routine name."}),
+                    ),
+                    (
+                        "all",
+                        json!({"type": "boolean", "description": "Every operation in the human output, one line each (`--all`); JSON always holds every row."}),
                     ),
                     (
                         "format",
@@ -414,6 +442,17 @@ impl<'a> Args<'a> {
 
     fn flag(&self, key: &str) -> Result<bool, Invalid> {
         Ok(self.bool(key)?.unwrap_or(false))
+    }
+
+    /// A non-negative integer, or absent.
+    fn count(&self, key: &str) -> Result<Option<u64>, Invalid> {
+        match self.map.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => v
+                .as_u64()
+                .map(Some)
+                .ok_or_else(|| format!("'{key}' must be a non-negative integer")),
+        }
     }
 
     /// A selector array: absent, or one or more non-empty strings.
@@ -632,6 +671,12 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
                 "format",
                 &a.enumerated("format", &["human", "json"], "human")?,
             );
+            // Design §5: `--max-paths` only when the caller sets it, so
+            // `detail` alone gives the detail cap.
+            v.switch("detail", a.flag("detail")?);
+            if let Some(n) = a.count("maxPaths")? {
+                v.opt("max-paths", &n.to_string());
+            }
             v
         }
         "alsem_prove" => {
@@ -681,12 +726,22 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             v.switch("tests", a.flag("tests")?);
             v.switch("include-reads", a.flag("includeReads")?);
             v.switch("deterministic", a.flag("deterministic")?);
+            // Design §5: `--max-paths` only when set (`detail` alone gives 3).
+            v.switch("detail", a.flag("detail")?);
+            v.switch("compact", a.flag("compact")?);
+            if let Some(n) = a.count("maxPaths")? {
+                v.opt("max-paths", &n.to_string());
+            }
+            if let Some(n) = a.count("schema")? {
+                v.opt("schema", &n.to_string());
+            }
             always_file = true;
             v
         }
         "alsem_query_effects" => {
             let mut v = Argv::new(&["query", "effects"], &workspace);
             v.opt("routine", a.required("routine")?);
+            v.switch("all", a.flag("all")?);
             v.opt(
                 "format",
                 &a.enumerated("format", &["human", "json"], "human")?,

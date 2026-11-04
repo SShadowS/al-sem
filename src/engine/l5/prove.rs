@@ -1207,12 +1207,13 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     if let Some(ref indices) = prove_result.evidence
         && !indices.is_empty()
     {
-        // Re-use digest effect_to_value to produce the same DigestEffectContract
-        // shape; a write resolved through a caller says which (G25).
+        // Prove's own serializer (W2-2, design §4.7): the 2.x effect shape
+        // ConTinAI's verify.py reads; a write resolved through a caller says
+        // which (G25).
         let ev: Vec<serde_json::Value> = indices
             .iter()
             .map(|&i| {
-                let mut v = crate::engine::l5::digest_cli::effect_to_value(&effects[i]);
+                let mut v = evidence_value(&effects[i]);
                 if let (Some(c), Some(obj)) = (via_callers.get(&i), v.as_object_mut()) {
                     obj.insert(
                         "viaCaller".into(),
@@ -1501,6 +1502,61 @@ pub(crate) fn prove_pipeline_with(
     crate::engine::batch::run_doc(&job)
         .one()
         .unwrap_or_else(|f| unreachable!("prove fails no side: {f:?}"))
+}
+
+/// One evidence row of prove's JSON (W2-2, design §4.7, A9/F8): prove's own
+/// 2.x contract, started as a copy of the digest 2.x effect serializer so a
+/// change to the digest document never moves prove's. ConTinAI's `verify.py`
+/// reads `evidence.{file, line}`; prove's additive fields go on top.
+pub(crate) fn evidence_value(eff: &DigestEffectFull) -> serde_json::Value {
+    use crate::engine::l5::digest_cli::{anchor_to_value, scoped_guarantee_to_value};
+    let mut m = serde_json::Map::new();
+    m.insert("type".into(), eff.effect_type.clone().into());
+    let mut detail_obj = serde_json::Map::new();
+    for (k, v) in &eff.detail {
+        detail_obj.insert(k.clone(), v.clone().into());
+    }
+    m.insert("detail".into(), serde_json::Value::Object(detail_obj));
+    if !eff.group_resources.is_empty() {
+        let all: Vec<serde_json::Value> = eff
+            .group_resources
+            .iter()
+            .map(|(id, display)| serde_json::json!({"id": id, "display": display}))
+            .collect();
+        m.insert("resources".into(), serde_json::Value::Array(all));
+    }
+    m.insert("provenance".into(), eff.provenance.into());
+    m.insert("evidence".into(), anchor_to_value(&eff.evidence));
+    let via: Vec<serde_json::Value> = eff
+        .via_paths
+        .iter()
+        .map(|path| {
+            serde_json::Value::Array(
+                path.iter()
+                    .map(|h| crate::engine::l5::digest::hop_to_json_value(&h.inner))
+                    .collect(),
+            )
+        })
+        .collect();
+    m.insert("viaPaths".into(), serde_json::Value::Array(via));
+    m.insert("viaPathsTruncated".into(), eff.via_paths_truncated.into());
+    if eff.literal_unreachable {
+        m.insert("literalUnreachable".into(), true.into());
+    }
+    m.insert("confidence".into(), "static".into());
+    m.insert("conditionality".into(), eff.conditionality.into());
+    m.insert("transactionContext".into(), eff.transaction_context.into());
+    let guarantees: Vec<serde_json::Value> =
+        eff.guarantees.iter().map(|g| g.clone().into()).collect();
+    m.insert("guarantees".into(), serde_json::Value::Array(guarantees));
+    m.insert("factId".into(), eff.fact_id.clone().into());
+    let sg: Vec<serde_json::Value> = eff
+        .scoped_guarantees
+        .iter()
+        .map(scoped_guarantee_to_value)
+        .collect();
+    m.insert("scopedGuarantees".into(), serde_json::Value::Array(sg));
+    serde_json::Value::Object(m)
 }
 
 /// [`prove_pipeline_with`] on a target built already: a test hand-states the
@@ -2329,6 +2385,7 @@ mod tests {
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
+            crossing: None,
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::MayCommit);
@@ -2363,6 +2420,7 @@ mod tests {
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
+            crossing: None,
         };
         let entry = minimal_entry("complete", vec![], vec![commit], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::CommitsOnSuccessPath);
@@ -2497,6 +2555,7 @@ mod tests {
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
+            crossing: None,
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::CommitsOnSuccessPath);
@@ -2548,6 +2607,7 @@ mod tests {
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
+            crossing: None,
         };
         let entry = minimal_entry("complete", vec![], vec![effect], vec![], false);
         let result = prove(&entry, 0, &ProveQuestion::CommitsOnSuccessPath);

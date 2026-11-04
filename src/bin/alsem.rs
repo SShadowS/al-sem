@@ -411,6 +411,11 @@ struct QueryEffectsCli {
     /// (as `analyze` and `graph` do), so effects on a dependency's tables resolve.
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
+
+    /// Every operation in the human output (one line each), every table and
+    /// every loaded dependency app; the JSON always holds every row.
+    #[arg(long = "all", default_value_t = false)]
+    all: bool,
 }
 
 /// `PolicyCli` — top-level `policy` subcommand group.
@@ -824,6 +829,15 @@ struct ExplainCli {
     /// (as `analyze` and `graph` do), at more memory and time.
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
+
+    /// Every list complete, no fold: every table, entry point, page action,
+    /// dependency gap and event-group name; up to 3 paths per item.
+    #[arg(long = "detail", default_value_t = false)]
+    detail: bool,
+
+    /// Paths per item (default 1; 3 with --detail; at most 3; 0: none).
+    #[arg(long = "max-paths")]
+    max_paths: Option<usize>,
 }
 
 /// `FingerprintCli` — arguments for `alsem fingerprint <ws>`.
@@ -932,9 +946,28 @@ struct DigestCli {
     #[arg(long = "diff-root")]
     diff_root: Option<String>,
 
-    /// Maximum number of via-paths per effect (reserved; wired but not yet honoured).
+    /// Paths per effect in the JSON document and the human output (default 1
+    /// on a decision effect; 3 with --detail; at most 3; 0: none, counts only).
     #[arg(long = "max-paths")]
     max_paths: Option<usize>,
+
+    /// Unfolded 3.x document: every path kept (up to 3), every scoped
+    /// guarantee, diagnostic, unresolved call site and per-resource group
+    /// witness; the human output lists every name.
+    #[arg(long = "detail", default_value_t = false)]
+    detail: bool,
+
+    /// JSON without indentation.
+    #[arg(long = "compact", default_value_t = false)]
+    compact: bool,
+
+    /// `2`: the 2.x JSON document (the old shape over the current analysis),
+    /// kept for one release window after wave 2 (removed at the latest of one
+    /// full release, bc-dev-mcp's pin moving past 2.x, and 90 days; the date
+    /// goes into the CHANGELOG at release preparation). Not with --detail,
+    /// --max-paths or --compact.
+    #[arg(long = "schema")]
+    schema: Option<u32>,
 
     /// Output format: json | human. Defaults to json.
     #[arg(long = "format", default_value = "json")]
@@ -1709,6 +1742,7 @@ fn plan_query_effects(e: QueryEffectsCli) -> Planned {
             let (e, inputs, version) = hold(slot, (e, inputs, version));
             Box::new(
                 QueryJob::effects(inputs, &e.routine, version, e.deterministic, e.single_app)
+                    .all_rows(e.all)
                     .written(e.format == "json", e.out.as_deref()),
             )
         },
@@ -2100,6 +2134,33 @@ fn plan_digest(d: DigestCli, cx: &PlanCx) -> Planned {
         );
     }
 
+    // W2-2 (design §5): `--schema 2` is the 2.x document, which has no folds
+    // or caps to set; any other schema is unknown. Usage errors: exit 2.
+    let render = match d.schema {
+        None | Some(3) => al_sem::engine::l5::digest_v3::DigestRender {
+            schema2: false,
+            detail: d.detail,
+            compact: d.compact,
+            max_paths: d.max_paths,
+        },
+        Some(2) if d.detail || d.compact || d.max_paths.is_some() => {
+            return failed(
+                "al-sem digest: --schema 2 takes no --detail, --max-paths or --compact \
+                 (the 2.x document has no folds or caps)",
+                2,
+                1,
+            );
+        }
+        Some(2) => al_sem::engine::l5::digest_v3::DigestRender::schema2(),
+        Some(n) => {
+            return failed(
+                format!("al-sem digest: unknown --schema {n}. Expected: 2 or 3"),
+                2,
+                1,
+            );
+        }
+    };
+
     // Resolve the --changed alias FIRST, once: the diff decision below and the
     // diff-root decision both use this one answer (#77).
     let inputs = DigestInputs::of(&d);
@@ -2192,7 +2253,7 @@ fn plan_digest(d: DigestCli, cx: &PlanCx) -> Planned {
                 include_reads: d.include_reads,
                 diff_root,
             };
-            Box::new(DigestJob::new(req, d.format == "human", d.out.as_deref()))
+            Box::new(DigestJob::new(req, d.format == "human", d.out.as_deref()).with_render(render))
         },
     )
 }
@@ -2355,7 +2416,10 @@ fn plan_explain(e: ExplainCli, cx: &PlanCx) -> Planned {
                 mode,
                 single_app: e.single_app,
             };
-            Box::new(ExplainJob::new(req, e.format == "human", e.out.as_deref()))
+            Box::new(
+                ExplainJob::new(req, e.format == "human", e.out.as_deref())
+                    .with_render(e.detail, e.max_paths),
+            )
         },
     )
 }

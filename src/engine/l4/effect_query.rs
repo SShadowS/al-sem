@@ -75,7 +75,7 @@
 //! [`ReverseEffectIndex::class_members`] is never exposed past this facade —
 //! see that module's doc for why rendering it would be a lie.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::engine::l4::combined_graph::PrimaryGraph;
@@ -261,6 +261,8 @@ pub struct DbEffectQuery<'a> {
     /// list sorted + deduped so the BFS below is deterministic regardless of
     /// `graph.edges_by_from`'s `HashMap` iteration order. O(V + E) to build.
     rev_condensation: Vec<Vec<GraphSccIx>>,
+    /// Each routine's direct callees ([`Self::direct_callees`]).
+    callees: HashMap<SolveIx, Vec<SolveIx>>,
     /// How many [`TableTouch`]es of a transitive CALLER this query has built
     /// (T-W2-10): [`Self::ancestors_touching`] adds one per witness,
     /// [`Self::callers_aggregated`] one per touching caller (its first
@@ -294,13 +296,43 @@ impl<'a> DbEffectQuery<'a> {
             preds.sort_unstable();
             preds.dedup();
         }
+        // W2-2 (design §4.5): each routine's direct callees, sorted by
+        // internal id and distinct, for `firstHop`.
+        let mut callees: HashMap<SolveIx, Vec<(String, SolveIx)>> = HashMap::new();
+        for (from, edges) in &graph.edges_by_from {
+            let Some(f) = bundle.routine_ix(from) else {
+                continue;
+            };
+            let list = callees.entry(f).or_default();
+            for e in edges {
+                if let Some(t) = bundle.routine_ix(&e.to)
+                    && t != f
+                {
+                    list.push((e.to.clone(), t));
+                }
+            }
+        }
+        let callees = callees
+            .into_iter()
+            .map(|(f, mut v)| {
+                v.sort();
+                v.dedup();
+                (f, v.into_iter().map(|(_, t)| t).collect())
+            })
+            .collect();
         DbEffectQuery {
             bundle,
             index,
             scc,
             rev_condensation,
+            callees,
             ancestor_witnesses: AtomicUsize::new(0),
         }
+    }
+
+    /// `r`'s direct callees with a summary, sorted by internal routine id.
+    pub fn direct_callees(&self, r: SolveIx) -> &[SolveIx] {
+        self.callees.get(&r).map_or(&[], Vec::as_slice)
     }
 
     /// The caller witnesses built so far (see the field's doc).

@@ -12,6 +12,6 @@
   ],
   "lineBase": 1,
   "mode": "routine",
-  "schema": "al-sem.explain/2.1",
+  "schema": "al-sem.explain/3",
   "selector": "CheckAmount"
 }

@@ -266,6 +266,9 @@ fn digest_marks_a_literal_dead_write_as_prove_judges_it() {
                 "--format",
                 "json",
                 "--deterministic",
+                // W2-2: the 2.x document's fields.
+                "--schema",
+                "2",
             ],
         )
     };

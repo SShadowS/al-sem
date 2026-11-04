@@ -7,6 +7,177 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (#369: dependency writes with no witness path, and colliding `factId`s)
+
+- **A write deep in dependency code through a `var` record parameter now gets its witness.** Such
+  a write takes its temp class from the caller, so only the proof walk (`enumerate_proofs`) can
+  witness it. Past the crossing into dependency code the walk listed every simple path until one
+  reached the write, which grows exponentially with depth; on the CDO baseline every one of the 78
+  facts behind the 77 no-path rows of `CDO Issue Document::IssueReminder` (57) and `CDO E-Mail
+  Handler::RunReportID` (20) spent the 25 000-state limit first (the writes sat 13–35 calls deep).
+  The crossing already fixes the candidate's key, so the walk now asks only whether the write is
+  reachable below it: one breadth-first search over states, each visited once (`seed_reach`). The
+  rows become members of the group of their crossing. None of the issue's hypotheses H1–H4 held.
+- **An unresolved write is never witnessed by a typed one.** The witness's carrier test let a
+  typed insert carry an insert whose table is not known (`fact_equivalent` compares tables only
+  when both name one), so an unresolved RecordRef insert in Continia Delivery Network was shown at
+  a workspace `CDO Queue Entry` / `CDO E-Mail Log` insert, with that row's path and `factId`. A
+  carrier now names a table exactly when the fact does (as the proof walk already required); the
+  write is counted in its crossing's group as unresolved.
+- **A digest row with no terminal id is keyed by its first originating operation and its
+  resource** (`build_canonical_key`'s terminal id, and the resource beside the effect type as
+  `DB_READ` already had), so no-path rows no longer share one `factId` per effect type. A row
+  with no originating operation either (an `EVENT_PUBLISH`, which has no operation id) is keyed by
+  its resource alone, so two such publishes of different events on one path cannot share an id.
+  Goldens moved for this alone, each an `EVENT_PUBLISH` row's `factId` (and `canonicalKey`):
+  `tests/cli-b-goldens/digest/ws-d8-commit-in-tx{.json,.v3.json,.diff.json}`,
+  `tests/cli-b-goldens/prove/ws-d8-commit-in-tx.publishes-event-onafterpostsalesdoc.json`,
+  `tests/cli-output-goldens/digest.issuedoc{,.detail}.json`,
+  `tests/r4f-goldens/ws-txn-d47-event-pos.digest.golden.json`. No consumer keyed on the old collision: `ordering_facts` and the ordering engine key by
+  `factId` within one entry (a collision merged two rows' data there), and `alsem diff` keys its
+  capabilities `op|resourceKind|resourceId`.
+- CDO baseline `bc3ccb18`, before → after: IssueReminder 275 rows (222 distinct `factId`s, 57
+  no-path rows over 5 ids) → 220 rows, all distinct, 0 no-path; RunReportID 227 (210, 20 over 4) →
+  206, all distinct, 0 no-path. Pinned by `cdo_i369_no_path_rows_and_fact_ids`.
+- **One prove verdict moves:** IssueReminder `writes-table:Data Exch.` goes from `yes` to
+  `unknown`. The `yes` rested only on a no-path row. Its write is now in five groups (one
+  DB_DELETE, two DB_INSERT, two DB_MODIFY) on two crossings, both `literal-dead`, checked by hand
+  in the source: `Incoming Document Attachment.Insert(true)` at
+  `CDOElectronicDocumentMgt.Codeunit.al:182` (into `Table Incoming Document Attachment::OnInsert`)
+  runs only after `if not (RecordFilter.Number in [Database::"Sales Invoice Header",
+  Database::"Sales Cr.Memo Header"]) then exit;` (line 170), and `Codeunit.Run(Codeunit::"Sales-Calc.
+  Discount", SalesLine)` at `CDOFile.Table.al:125` only after `if RecRef.Number <> Database::"Sales
+  Header" then exit;` (line 115). IssueReminder passes an `Issued Reminder Header` (table 297), and
+  its kept paths enter through `RunReportID`'s `OutputAction::CreateElectronicDoc` and `::SaveAsPDF`
+  branches while `DocHandle` passes `OutputAction::Handle`. The other 72 prove questions checked on
+  both roots keep their verdict.
+
+### Changed (MCP output wave 2, W2-2 part 4: `query effects` summary first; first hops)
+
+Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §4.5, §4.6.
+
+- **`query effects` human is summary first.** One `summary:` line puts every operation in exactly
+  one bucket, in this precedence: table not resolved, then the write class of its temp state
+  (temporary records; caller-dependent writes), then the op family (writes that may persist,
+  locks, validate — never a read —, reads, unclassified). Then `coverage:` and `scope:` lines
+  (the `dependencies:` first line moves into the scope line as a count; `--all` names the apps),
+  writes that may persist and caller-dependent writes per table (operation counts, `+ LockTable`
+  on a table also written, the first operation's location and owner, and `through <first hop>`),
+  locks, validate, reads, temporary records and table-not-resolved as counts, and `next:`.
+  `--all` (new; MCP `all`) adds one line per operation, the old layout.
+- **JSON (query 3.0.0, additive):** `payload.summary` (`writes {operations, tables,
+  knownPersistent, tempStateUnknown}`, `callerDependent`, `locks`, `validate`, `reads`,
+  `unclassified`, `temporary {operations, tables, routines}`, `tableNotResolved {operations,
+  routines}`, `byTable[{table, tableId, ops, class, first, beyond: []}]`, `scope`), and on every
+  row that is not the routine's own, `firstHop` (the routine) or `firstHop: null` with
+  `firstHopUnavailable`. Every existing row field is unchanged (`via`, `origin`, …).
+- **`firstHop` is a real association**: the first direct callee, in sorted order, whose summary
+  holds a row equal to the row's complete contribution (operation id, table, op kind and its
+  temp state here); otherwise none, with the reason. `query touches` prints the same
+  `through <first hop>` on its witness lines, and its scope line carries the dependencies count
+  (W2-3's leftovers).
+
+### Changed (MCP output wave 2, W2-2 part 3: digest human, digest JSON 3.0.0, `--schema 2`)
+
+Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §4.3, §4.4,
+§4.7, §5.
+
+- **Digest human** prints, per root, explain's effect sections through the same functions
+  (summary, coverage, assumptions, limits, scope, commits, writes in workspace code,
+  caller-dependent writes, writes beyond entry points, writes with no path kept, literal-dead
+  tables, temporary records, events, kind families, gaps), then its diagnostics as counts by
+  kind and reason (each with its operation under `--detail`). The old per-row
+  `[TYPE] direct / evidence / detail / via` blocks are gone.
+- **Digest JSON 3.0.0** (major) is the default: every effect row kept (multiplicity included),
+  with `status` (`live` / `literal-dead`) and `class` / `classReason` on table writes; paths as
+  `paths: [{hops: [{edge, to, line, file?}], terminal}]` whose `to` is a key of the new
+  `payload.routines` table (`r:` + 12 hex of the stable id's SHA-256, extended on a collision),
+  one path on a decision effect by default (may-persist and caller-dependent writes, COMMIT,
+  HTTP, FILE, BACKGROUND_TASK, ISOLATED_STORAGE, TELEMETRY, UI_*, ERROR_*), none on events,
+  reads and temporary rows, with `pathsKept`, `pathsOmitted` and `pathsProducerTruncated` (the
+  old `viaPaths` / `viaPathsTruncated`); group rows name their `crossing` (a key of the new
+  `entries[].crossings`, which holds the id, boundary, targets, sites and prefix once) instead
+  of the "enters X" evidence, list every table as `resources[{id, display}]` and every event
+  as `eventsByPublisher[{publisher, events}]`, and a may-persist group row carries one
+  representative terminal witness (`paths[0].representative`); `detail.resources` (the
+  first-ten string) is dropped; only non-trivial `scopedGuarantees` (`scopedGuaranteesFolded`
+  counts the rest); `entryDiagnosticCounts` instead of `entryDiagnostics`; `unresolved` holds
+  workspace and not-placed call sites (`candidateCount` for `candidates`) and
+  `unresolvedInDependencies` the dependency ones as counts and top callees; new
+  `entries[].summary` (`RollupTotals`), `coverage.assumptions` / `coverage.limits`,
+  `payload.pathCap`. `entries[].routine` (anchor and anchors), `factId`, `detail.tempState`,
+  `provenance`, `conditionality`, `transactionContext` and `guarantees` are unchanged.
+- **New flags**: `--detail` (unfolded 3.x: every path up to 3, every scoped guarantee,
+  diagnostic, unresolved item and per-resource group witness), `--compact` (no indentation),
+  `--max-paths N` (now honoured: paths per effect, at most 3), `--schema 2` (the 2.2.0 document,
+  the old shape over the current analysis, for one release window; with `--detail`,
+  `--max-paths` or `--compact` it exits 2). MCP `alsem_digest` takes `detail`, `maxPaths`,
+  `compact` and `schema`. `run_digest_pipeline` (the in-process API) keeps the 2.x document;
+  `run_digest_pipeline_render` renders either.
+- **Prove's evidence serializer is its own** (`prove::evidence_value`, a copy of the 2.x effect
+  shape), so the digest redesign never moves prove's JSON; prove output is unchanged.
+
+### Changed (MCP output wave 2, W2-2 part 2: the explain card, human and `al-sem.explain/3`)
+
+Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §4.1, §4.2, §5.
+
+- **Explain reads the L4 temp-state join.** `explain_plan` now declares `l4` with its tree, and
+  the card reads the root's digest entry after the join and the literal pass, so every write has
+  the class digest and prove give it (physical, caller-dependent, temporary). Explain now pays the
+  L4 build that `digest` and `query` already pay (measured in the W2-2 commits).
+- **The human card is summary first.** One `summary:` line (tables it may write, owned by the app
+  and by dependencies, and writes on a table not resolved; caller-dependent tables; commits;
+  events; each present kind family; callers and page actions; tests; gaps by where), then
+  `coverage:`, `assumptions:`, `limits:`, `notes:` (when present) and `scope:`, then rules,
+  callers (page actions grouped by caption and page object past 3), commits with their sites and
+  commit-bearing entry points, writes in workspace code (one block per table: kinds, class, the
+  representative witness's anchor and path, the fields each owner assigns), caller-dependent
+  writes, writes beyond dependency entry points (one line per entry point: sites, tables per kind,
+  names folded at 12, other kinds, events), writes with no path kept (by the owner's app, with the
+  owner and location the operation index recovers), literal-dead tables, temporary records (never
+  writes), events by publisher, extension points (never a group), one line per kind family (UI,
+  HTTP, file, background tasks, isolated storage, telemetry, errors), tests, gaps in workspace
+  code, gaps in dependency code as counts and top callees, and `next:`. A group row never prints
+  with an empty name and never becomes an extension point.
+- **`al-sem.explain/3`** (major): `cards[].summary` (`RollupTotals` plus `callers`,
+  `pageActions`, `tests`), `coverage {status, reasons, assumptions, limits, notes}`; each write
+  carries `class`, `classReason`, `opKinds` and its `tempState`; a group row carries `crossing`
+  (listed once in `effects.crossings` with its targets, target ids, sites and prefix),
+  `resourceCount` and every `resources[]` entry instead of `table: ""` / `tableId: ""` and the
+  "enters X" anchor; an event group carries its count (`resourcesListed: false`; the names with
+  `--detail`); a write with no witness carries `noPathKept` and the recovered `owner`;
+  `effects.{http, file, backgroundTasks, isolatedStorage, telemetry, errors}` beside `ui`;
+  `reachedFromSummary`, `gapsInDependencies`; `effects.commits` is `yes`, `may`, `none` (complete
+  coverage, no limit) or `no observed` (was `no`). Folded by default and complete with `--detail`: a page action's `via` and
+  `tooltip`, dependency gaps, event-group names. `fields` and `via` keep their names. No outside
+  reader: the editor extension uses only the call-hierarchy and property requests (plan §4.1).
+- **New flags** `explain --detail` (every list, no fold) and `--max-paths N` (paths per item:
+  default 1, 3 with `--detail`, at most 3); MCP `alsem_explain` takes `detail` and `maxPaths`
+  (passed only when set, so `detail` alone gives 3).
+
+### Changed (MCP output wave 2, W2-2 part 1: one rollup and one summary for every effects output)
+
+Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.1, §3.6,
+§3.8 rule 4.
+
+- **New `engine::l5::routine_rollup`.** One root's digest entry (after the L4 temp-state join and
+  the literal pass) is sorted once into sections: writes in workspace code (one record per table),
+  caller-dependent writes, crossings into dependency code (by the crossing's identity, with the
+  refined resource lists), writes with no path kept (with the owner the operation index
+  recovers), temporary records, literal-dead tables, commits, events, the other kind families and
+  the gaps by where the call site is. `RollupTotals` is the one summary every output prints;
+  every total is a union by identity, never a sum of section counts.
+- **The digest MCP summary (1b) prints `RollupTotals`.** Per root: `summary` (`mayWriteTables
+  {count, ownedByApp, byDependencies}`, `unresolvedTableWrites`, `callerDependentTables`,
+  `commits {answer, ownSites, entryPoints}`, `events`, `kinds`, `gaps {workspace, dependency,
+  notPlaced}`, `temporaryOnlyTables`, `literalDeadTables`, `noPathKept`, `entryPoints`) and
+  `names` (first tables owned by the app and by dependencies, entry points, top callees). The
+  old `physicalTablesWritten`, `temporaryTablesWritten`, `commits`, `boundariesEntered`,
+  `unresolved`, `writesWithoutTable` and `callerDependentTablesWritten` fields are gone.
+  Literal-dead resources count nowhere; temporary contributions never count as writes.
+- **One fold helper.** `routine_rollup::fold` (the cap, or every item when at most a quarter
+  more; tables 12, all when 15 or fewer) replaces `query touches`' local `fold_len`.
+
 ### Changed (MCP output wave 2, W2-1b: the literal pass memoized per revision; schema bumps)
 
 Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.1, §11.10.

@@ -1,14 +1,26 @@
 Codeunit Calls Post::QuickPost  ws:src/post.al:18
+  summary: no observed write that may persist; caller-dependent: 1 table; commits: none; events: 0 (0 raised in workspace code); errors at 1 place; callers: none; tests: none; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  coverage: complete
+  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
+  limits: none
+  notes: error-collector 1, table-trigger-rules-skipped 2
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   rules: none of its own
   inherits via CheckOrder: rejects when Order."No." = '': "The order has no number."  [Error ws:src/checks.al:6]
   inherits via CheckOrder > CheckCustomer: rejects when Order.Blocked: "The customer is blocked."  [Error ws:src/checks.al:15]
-  caller rules: no known caller
-  writes Calls Order [Amount] (DB_MODIFY) at ws:src/post.al:25
-  commits: no
+  callers: none
+  commits: none
+  caller-dependent writes (1 table): written only if the caller passes a record that is not temporary; alsem prove names the caller
+    Calls Order: Modify — depends on the caller's record argument at ws:src/post.al:25
+  events: 0 raised in workspace code; 0 more only beyond entry points
+  extension points: none (the routine publishes no event itself)
+  errors at 1 place: ERROR_THROW at ws:src/checks.al:6 (error-path)
   tests: none reach it
-  gap: error-collector (callee Codeunit Error Message Management::LogSimpleError, routine Codeunit Calls Checks::LogIfBlocked) at ws:src/checks.al:53
-  gap: table-trigger-rules-skipped (what assign of Calls Order.Amount, table Calls Order) at ws:src/post.al:24
-    skips Table Calls Order::OnValidate: rejects when Status <> Status::Open  [TestField ws:src/order.al:16]
-  gap: table-trigger-rules-skipped (what modify on Calls Order, table Calls Order) at ws:src/post.al:25
-    skips Table Calls Order::OnModify: rejects when Blocked  [Error ws:src/order.al:25]
+  gaps in workspace code (3 gaps):
+    gap: error-collector (callee Codeunit Error Message Management::LogSimpleError, routine Codeunit Calls Checks::LogIfBlocked) at ws:src/checks.al:53
+    gap: table-trigger-rules-skipped (what assign of Calls Order.Amount, table Calls Order) at ws:src/post.al:24
+      skips Table Calls Order::OnValidate: rejects when Status <> Status::Open  [TestField ws:src/order.al:16]
+    gap: table-trigger-rules-skipped (what modify on Calls Order, table Calls Order) at ws:src/post.al:25
+      skips Table Calls Order::OnModify: rejects when Blocked  [Error ws:src/order.al:25]
+  next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

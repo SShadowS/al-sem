@@ -1,9 +1,18 @@
 Codeunit Explain Post::Archive  ws:src/post.al:23
+  summary: no observed write that may persist; caller-dependent: 1 table; commits: yes (1 site); events: 0 (0 raised in workspace code); callers: none; tests: none; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  coverage: complete
+  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
+  limits: none
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   doc: Archives without any check.
-  rules: none of its own
-  inherited rules: none
-  caller rules: no known caller
-  writes Explain Order [Status] (DB_MODIFY) at ws:src/post.al:26
-  commits: yes
+  rules: none of its own; inherited: none
+  callers: none
+  commits: yes — 1 site in workspace code; 0 commit-bearing entry points:
+    COMMIT at ws:src/post.al:27 (unconditional-on-success)
+  caller-dependent writes (1 table): written only if the caller passes a record that is not temporary; alsem prove names the caller
+    Explain Order: Modify — depends on the caller's record argument at ws:src/post.al:26
+  events: 0 raised in workspace code; 0 more only beyond entry points
+  extension points: none (the routine publishes no event itself)
   tests: none reach it
+  next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

@@ -1,0 +1,625 @@
+{
+  "alsemVersion": "cli-b-v1",
+  "deterministic": true,
+  "diagnostics": [],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "digest",
+  "payload": {
+    "changed": {
+      "diffProvided": false,
+      "files": [
+        "src/D48Pos.Codeunit.al"
+      ]
+    },
+    "changedRootsDiagnostics": [],
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "entries": [
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {
+              "method": "Send"
+            },
+            "evidence": {
+              "column": 8,
+              "excerpt": "Client.Send",
+              "file": "ws:src/D48Pos.Codeunit.al",
+              "line": 15,
+              "sourceKind": "source"
+            },
+            "factId": "a689dbf263569916",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/D48Pos.Codeunit.al",
+                  "line": 15
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "HTTP"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/D48Pos.Codeunit.al",
+            "line": 8,
+            "sourceKind": "source"
+          },
+          "display": "SendOne",
+          "objectDisplay": "Codeunit D48 Sender",
+          "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50000#575f7874587897f82348220d404de819860d274571630bbafa38721de672ef16"
+        },
+        "scopedGuaranteesFolded": 0,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "none",
+            "entryPoints": 0,
+            "ownSites": 0
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {
+            "http": 1
+          },
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 0,
+            "ownedByApp": 0
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 1
+        }
+      },
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "conditionality": "loop-body",
+            "confidence": "static",
+            "detail": {
+              "method": "Send"
+            },
+            "evidence": {
+              "column": 8,
+              "excerpt": "Client.Send",
+              "file": "ws:src/D48Pos.Codeunit.al",
+              "line": 15,
+              "sourceKind": "source"
+            },
+            "factId": "38c70e42fe9a7037",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "edge": "direct-call",
+                    "line": 32,
+                    "to": "r:20ab43ac5fd3"
+                  },
+                  {
+                    "edge": "variable-typed-call",
+                    "line": 40,
+                    "to": "r:1c088b4fbe9f"
+                  }
+                ],
+                "terminal": {
+                  "file": "ws:src/D48Pos.Codeunit.al",
+                  "line": 15
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "transitive",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "HTTP"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/D48Pos.Codeunit.al",
+            "line": 25,
+            "sourceKind": "source"
+          },
+          "display": "ProcessAll",
+          "objectDisplay": "Codeunit D48 Loop Caller",
+          "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50001#341ea40393c719987aa24f563f883e09ab6132174f4ef8275f8d997ecbf8650e"
+        },
+        "scopedGuaranteesFolded": 0,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "none",
+            "entryPoints": 0,
+            "ownSites": 0
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {
+            "http": 1
+          },
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 0,
+            "ownedByApp": 0
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 3
+        }
+      },
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {
+              "method": "Send"
+            },
+            "evidence": {
+              "column": 8,
+              "excerpt": "Client.Send",
+              "file": "ws:src/D48Pos.Codeunit.al",
+              "line": 15,
+              "sourceKind": "source"
+            },
+            "factId": "dcde102cebfc3bd8",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "edge": "variable-typed-call",
+                    "line": 40,
+                    "to": "r:1c088b4fbe9f"
+                  }
+                ],
+                "terminal": {
+                  "file": "ws:src/D48Pos.Codeunit.al",
+                  "line": 15
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "transitive",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "HTTP"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/D48Pos.Codeunit.al",
+            "line": 36,
+            "sourceKind": "source"
+          },
+          "display": "SendOne",
+          "objectDisplay": "Codeunit D48 Loop Caller",
+          "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50001#575f7874587897f82348220d404de819860d274571630bbafa38721de672ef16"
+        },
+        "scopedGuaranteesFolded": 0,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "none",
+            "entryPoints": 0,
+            "ownSites": 0
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {
+            "http": 1
+          },
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 0,
+            "ownedByApp": 0
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 2
+        }
+      },
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {
+              "method": "Send"
+            },
+            "evidence": {
+              "column": 8,
+              "excerpt": "Client.Send",
+              "file": "ws:src/D48Pos.Codeunit.al",
+              "line": 15,
+              "sourceKind": "source"
+            },
+            "factId": "62015033955c8a7a",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "edge": "variable-typed-call",
+                    "line": 54,
+                    "to": "r:1c088b4fbe9f"
+                  }
+                ],
+                "terminal": {
+                  "file": "ws:src/D48Pos.Codeunit.al",
+                  "line": 15
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "transitive",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "HTTP"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/D48Pos.Codeunit.al",
+            "line": 50,
+            "sourceKind": "source"
+          },
+          "display": "DoSendOnce",
+          "objectDisplay": "Codeunit D48 Non Loop Caller",
+          "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50002#197d34c68565ddcb1cc7fa6474f1b19b163362119fb2dcd8b8eaff37d3af2ce9"
+        },
+        "scopedGuaranteesFolded": 0,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "none",
+            "entryPoints": 0,
+            "ownSites": 0
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {
+            "http": 1
+          },
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 0,
+            "ownedByApp": 0
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 2
+        }
+      },
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "conditionality": "loop-body",
+            "confidence": "static",
+            "detail": {
+              "fileOp": "write-blob"
+            },
+            "evidence": {
+              "column": 12,
+              "excerpt": "F.WriteAllText",
+              "file": "ws:src/D48Pos.Codeunit.al",
+              "line": 73,
+              "sourceKind": "source"
+            },
+            "factId": "55a3870ca804c405",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/D48Pos.Codeunit.al",
+                  "line": 73
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "FILE"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/D48Pos.Codeunit.al",
+            "line": 65,
+            "sourceKind": "source"
+          },
+          "display": "ExportAll",
+          "objectDisplay": "Codeunit D48 File Loop",
+          "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50003#c430e2d2f95fd1b5c0bbbf663dc9783e81063456de7781a8cca3c89ebb6c015d"
+        },
+        "scopedGuaranteesFolded": 0,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "none",
+            "entryPoints": 0,
+            "ownSites": 0
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 1
+          },
+          "kinds": {
+            "file": 1
+          },
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 0,
+            "ownedByApp": 0
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [
+          {
+            "calleeDisplay": "F.WriteAllText",
+            "callsiteAnchor": {
+              "column": 12,
+              "file": "ws:src/D48Pos.Codeunit.al",
+              "line": 73,
+              "sourceKind": "source"
+            },
+            "owningRoutine": "11111111-0000-0000-0000-00000000d480:Codeunit:50003#c430e2d2f95fd1b5c0bbbf663dc9783e81063456de7781a8cca3c89ebb6c015d",
+            "owningRoutineDisplay": "ExportAll",
+            "status": "unresolved-receiver-type"
+          }
+        ],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 1
+        }
+      }
+    ],
+    "lineBase": 1,
+    "pathCap": 1,
+    "routines": {
+      "r:1c088b4fbe9f": {
+        "display": "Codeunit D48 Sender::SendOne",
+        "file": "ws:src/D48Pos.Codeunit.al",
+        "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50000#575f7874587897f82348220d404de819860d274571630bbafa38721de672ef16"
+      },
+      "r:20ab43ac5fd3": {
+        "display": "Codeunit D48 Loop Caller::SendOne",
+        "file": "ws:src/D48Pos.Codeunit.al",
+        "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50001#575f7874587897f82348220d404de819860d274571630bbafa38721de672ef16"
+      },
+      "r:604fd4291df3": {
+        "display": "Codeunit D48 Loop Caller::ProcessAll",
+        "file": "ws:src/D48Pos.Codeunit.al",
+        "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50001#341ea40393c719987aa24f563f883e09ab6132174f4ef8275f8d997ecbf8650e"
+      },
+      "r:d12fd39da928": {
+        "display": "Codeunit D48 Non Loop Caller::DoSendOnce",
+        "file": "ws:src/D48Pos.Codeunit.al",
+        "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50002#197d34c68565ddcb1cc7fa6474f1b19b163362119fb2dcd8b8eaff37d3af2ce9"
+      },
+      "r:e579f0ca91c9": {
+        "display": "Codeunit D48 File Loop::ExportAll",
+        "file": "ws:src/D48Pos.Codeunit.al",
+        "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50003#c430e2d2f95fd1b5c0bbbf663dc9783e81063456de7781a8cca3c89ebb6c015d"
+      }
+    },
+    "summary": {
+      "rootsRequested": 5,
+      "rootsResolved": 5,
+      "totalEffects": 5,
+      "totalUnresolved": 1
+    },
+    "workspaceFingerprint": "598ae8ef367e11fc639c1b762c08ea95a321cc8e1edb679fbf999289aeeb3770"
+  },
+  "schemaVersion": "3.0.0"
+}

@@ -55,17 +55,23 @@ use crate::engine::gate::format_json::{serialize_normalized_value, sort_keys_kee
 use crate::engine::l4::effect_query_cli::{
     OwnerIndex, Resolution, object_display, owner_qualified, resolve_table_selector,
 };
-use crate::engine::l5::conditionality::UNCONDITIONAL;
 use crate::engine::l5::cross_rules::{
     CallerRule, CrossRules, CrossRulesIndex, EXPANSION_BUDGET, Inh, MAX_DEPTH,
 };
-use crate::engine::l5::digest::DigestEffectResult;
 use crate::engine::l5::digest_cli::{
-    ChangedInput, ChangedRootsDiagnostic, DiffRoot, DigestEffects, FullAnchor, anchor_to_value,
+    ChangedInput, ChangedRootsDiagnostic, ChangedRootsResult, DbTempStates, DiffRoot,
+    DigestEffectFull, DigestEffects, DigestEntryFull, FullAnchor, anchor_to_value,
     changed_roots_diagnostic_human, changed_roots_diagnostic_to_value, primary_guid_of,
-    resolve_changed_roots,
+    resolve_changed_roots, run_digest_query_full_from_entries,
 };
 use crate::engine::l5::field_writers::{WriteKind, field_writes};
+use crate::engine::l5::rollup::classify_detail;
+use crate::engine::l5::routine_rollup::{
+    FAMILIES, RenderOpts, RollupCx, RollupTotals, RoutineRollup, TableWrites, beyond_lines,
+    caller_dependent_lines, caps, class_json, commit_lines, crossing_key, dependency_gap_lines,
+    event_lines, family_of, fold, header_lines, is_group, kind_lines, literal_dead_lines,
+    no_path_lines, plural as rf_plural, temporary_lines, workspace_write_lines,
+};
 use crate::engine::l5::rules_index::{FieldWriters, RulesIndex, WriteSite, Writer as IndexWriter};
 use crate::engine::session::{Cell, explain_plan};
 use crate::program::body::features::PAnchor;
@@ -84,8 +90,17 @@ use al_syntax::IdentifierFoldExt;
 /// `line` is 1-based, and the document says so (`lineBase: 1`). `/2.1`
 /// (MCP output wave 2, W2-1, additive): a write, commit or event the root
 /// cannot reach under literal arguments carries `literalUnreachable: true`.
-/// (`/3` stays the wave-2 redesign's, design §4.2.)
-pub const SCHEMA: &str = "al-sem.explain/2.1";
+/// `/3` (MCP output wave 2, W2-2, design §4.2): `cards[].summary` (the
+/// rollup's `RollupTotals`), `coverage {status, reasons, assumptions,
+/// limits, notes}`; each write carries `class`, `classReason`, `opKinds` and
+/// its `tempState`; a group row names its `crossing` (listed once in
+/// `effects.crossings`) with `resourceCount` and every resource, never an
+/// empty `table`; an event group carries its count (`resourcesListed:
+/// false`; the names with `--detail`); a write with no witness carries
+/// `noPathKept` and the recovered `owner`; every kind family has its list;
+/// `reachedFromSummary` and `gapsInDependencies`; dependency gaps and a page
+/// action's `via` / `tooltip` only with `--detail`.
+pub const SCHEMA: &str = "al-sem.explain/3";
 
 /// How the command names its routines.
 #[derive(Debug, Clone)]
@@ -114,6 +129,8 @@ pub struct ExplainJob<'a> {
     /// `--format human`: the human text, else the JSON.
     human: bool,
     out: Option<&'a str>,
+    /// `--detail` and `--max-paths` (design §5).
+    opts: RenderOpts,
 }
 
 /// The command's two renderings and its exit code.
@@ -130,7 +147,19 @@ pub struct ExplainRunResult {
 impl<'a> ExplainJob<'a> {
     #[must_use]
     pub fn new(req: ExplainRequest<'a>, human: bool, out: Option<&'a str>) -> ExplainJob<'a> {
-        ExplainJob { req, human, out }
+        ExplainJob {
+            req,
+            human,
+            out,
+            opts: RenderOpts::new(false, None),
+        }
+    }
+
+    /// `--detail` (no fold, every list) and `--max-paths N` (design §5).
+    #[must_use]
+    pub fn with_render(mut self, detail: bool, max_paths: Option<usize>) -> ExplainJob<'a> {
+        self.opts = RenderOpts::new(detail, max_paths);
+        self
     }
 }
 
@@ -247,16 +276,24 @@ impl Job for ExplainJob<'_> {
             }
             ExplainMode::Field { table, field } => resolve_field(model, table, field),
         };
+        // W2-2: a plan with a tree also declares `l4`, the temp-state join's
+        // store (explain_plan); a plan with none reads neither.
+        let reads = if resolved.roots.is_empty() {
+            vec![Cell::Effects]
+        } else {
+            vec![Cell::Effects, Cell::L4]
+        };
         Ok(PlanPart {
             plan: explain_plan(resolved.roots.iter().cloned().collect()),
-            reads: vec![Cell::Effects],
+            reads,
             carry: Some(Box::new(resolved)),
         })
     }
 
     fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
         let resolved: Resolved = cx.take_carry();
-        let effects = if cx.has_tree() {
+        let has_tree = cx.has_tree();
+        let mut effects = if has_tree {
             cx.take_effects()
         } else {
             DigestEffects::default()
@@ -269,9 +306,47 @@ impl Job for ExplainJob<'_> {
             prepared.is_some() || !view.is_served(),
             "a served explain view carries its revision's explain indexes"
         );
-        let result = render(view.model(), &self.req.mode, &resolved, &effects, prepared);
+        let model = view.model();
+        // W2-2 (design §3.1): the digest entries after the L4 temp-state join
+        // (the plan declares `l4` with the tree), so each write has its class.
+        let full = if has_tree {
+            let _s = crate::engine::perf_trace::span("explain", "explain.temp_join");
+            let temp_states = DbTempStates::new(model, &view.l4().bundle);
+            let changed = ChangedRootsResult {
+                roots: resolved.roots.clone(),
+                diagnostics: Vec::new(),
+                touched: HashMap::new(),
+                spans: Default::default(),
+            };
+            run_digest_query_full_from_entries(
+                &mut effects,
+                &resolved.roots,
+                &HashMap::new(),
+                &temp_states,
+                &changed,
+                &OwnerIndex::build(model),
+            )
+            .entries
+        } else {
+            Vec::new()
+        };
+        let apps = view.target().dependencies().apps;
+        let result = render(
+            model,
+            &self.req.mode,
+            &resolved,
+            &effects,
+            &full,
+            &apps,
+            prepared,
+            self.opts,
+        );
+        drop(full);
         drop(effects);
         cx.release(Cell::Effects);
+        if has_tree {
+            cx.release(Cell::L4);
+        }
         Ok(SideDoc::new(Ok::<_, String>(result)))
     }
 
@@ -797,12 +872,16 @@ fn path_names(
 
 /// Everything the document needs, rendered: over `prepared`, the indexes a
 /// resident revision keeps for `model`, else over indexes built here.
+#[allow(clippy::too_many_arguments)] // the card's inputs, one each
 fn render(
     model: &Model,
     mode: &ExplainMode,
     resolved: &Resolved,
     effects: &DigestEffects,
+    full: &[DigestEntryFull],
+    apps: &[Value],
     prepared: Option<&ExplainIndexes>,
+    opts: RenderOpts,
 ) -> ExplainRunResult {
     use crate::engine::perf_trace::span;
     let built;
@@ -826,13 +905,16 @@ fn render(
         )
     });
     let cards_span = span("explain", "explain.cards");
+    // W2-2: one rollup context for every card (names, the operation index).
+    let rcx = RollupCx::new(model, apps);
     // (anchor sort key, routine id, JSON, human text) per card.
     type Rendered = (Option<(String, u32, u32)>, String, Value, String);
     let mut cards: Vec<Rendered> = resolved
         .roots
         .iter()
         .map(|rid| {
-            let card = Card::build(&ix, &cross, rid, effects, tests_reaching.as_ref());
+            let entry = full.iter().find(|e| &e.routine_id == rid);
+            let card = Card::build(&ix, &cross, rid, entry, &rcx, tests_reaching.as_ref(), opts);
             (
                 card.sort_key.clone(),
                 rid.clone(),
@@ -1093,26 +1175,100 @@ struct Card {
     own: Vec<PRule>,
     inherited: Vec<(Value, String)>,
     callers: Vec<(Value, String)>,
-    /// How many known callers the routine has (the human text says when
-    /// there is none).
-    known_callers: usize,
+    /// The known routine callers, qualified (page-action triggers apart).
+    known_callers: Vec<String>,
+    /// Every known caller row, page-action triggers included (the caller
+    /// rules' `knownCallers`).
+    known_caller_rows: usize,
     writes: Vec<Value>,
-    writes_human: Vec<String>,
     commits: &'static str,
     commit_sites: Vec<Value>,
     events: Vec<Value>,
-    events_human: Vec<String>,
-    ui: Vec<Value>,
-    ui_human: Vec<String>,
+    /// Per kind family ([`FAMILIES`]): own rows and group rows.
+    families: BTreeMap<&'static str, Vec<Value>>,
+    crossings: Vec<Value>,
     reached_from: Vec<(Value, String)>,
     extension_points: Vec<(Value, String)>,
     tests: Vec<(Value, String)>,
     gaps: Vec<Gap>,
+    /// W2-2: the rollup's totals (with callers, page actions and tests).
+    totals: RollupTotals,
+    coverage: Value,
+    gaps_in_dependencies: Value,
+    /// The human lines of the shared sections, rendered once.
+    header: Vec<String>,
+    sections: Sections,
+    opts: RenderOpts,
+}
+
+/// `(name, count)`, most first.
+type Ranked = Vec<(String, usize)>;
+
+/// The rollup's human sections, in card order (design §4.1).
+#[derive(Default)]
+struct Sections {
+    commits: Vec<String>,
+    workspace: Vec<String>,
+    caller_dependent: Vec<String>,
+    beyond: Vec<String>,
+    no_path: Vec<String>,
+    dead: Vec<String>,
+    temporary: Vec<String>,
+    events: Vec<String>,
+    kinds: Vec<String>,
+    dependency_gaps: Vec<String>,
+}
+
+/// A gap whose call site is in dependency code (folded by default, §4.2).
+fn is_dependency_gap(g: &Gap) -> bool {
+    g.json["kind"].as_str() == Some("unresolved-call")
+        && g.json["anchor"]["file"]
+            .as_str()
+            .is_some_and(|f| !f.starts_with("ws:"))
+}
+
+/// A gap that is analysis incompleteness (`limits:`) or a note (§3.7).
+fn gap_class(kind: &str) -> Option<&'static str> {
+    match kind {
+        "body-unavailable"
+        | "parse-incomplete"
+        | "symbol-only-dependency"
+        | "cone-truncated"
+        | "cross-call-rules-truncated" => Some("limit"),
+        "table-trigger-rules-skipped"
+        | "error-collector"
+        | "text-differs-by-directive"
+        | "field-caption-unknown" => Some("note"),
+        _ => None,
+    }
+}
+
+/// The entry of a root the digest query built none for (declaration-only, or
+/// not in the tree): no effect, no gap.
+fn empty_entry(rid: &str) -> DigestEntryFull {
+    DigestEntryFull {
+        routine_id: rid.to_string(),
+        routine_display: String::new(),
+        object_display: String::new(),
+        routine_anchor: None,
+        routine_anchors: Vec::new(),
+        coverage_status: "unknown".to_string(),
+        coverage_reasons: Vec::new(),
+        effects: Vec::new(),
+        unresolved: Vec::new(),
+        unresolved_traversal: crate::engine::l5::unresolved_cone::UnresolvedTraversal {
+            truncated: false,
+            max_depth: 0,
+            visited_routines: 0,
+        },
+        entry_diagnostics: Vec::new(),
+        declaration_only: false,
+    }
 }
 
 /// The routine names of an effect's shortest witness path (its hops'
 /// targets); empty for an effect of the routine's own body.
-fn via_names(e: &DigestEffectResult) -> Vec<String> {
+fn via_names(e: &DigestEffectFull) -> Vec<String> {
     e.via_paths
         .iter()
         .min_by_key(|p| p.len())
@@ -1129,33 +1285,10 @@ fn via_names(e: &DigestEffectResult) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// An effect's anchor: its evidence, or for an event publication (the
-/// publisher's own fact, with no operation) the call into the publisher, the
-/// last hop of its shortest path (digest's G32 rule).
-fn effect_anchor(e: &DigestEffectResult) -> Value {
-    if e.evidence.source_kind == "unavailable"
-        && let Some(a) = e
-            .via_paths
-            .iter()
-            .min_by_key(|p| p.len())
-            .and_then(|p| p.last())
-            .and_then(|h| h.inner.anchor.as_ref())
-    {
-        return anchor_to_value(&FullAnchor {
-            source_kind: "source",
-            file: Some(a.file.clone()),
-            line: a.line,
-            column: a.column,
-            excerpt: None,
-        });
-    }
-    anchor_to_value(&FullAnchor {
-        source_kind: e.evidence.source_kind,
-        file: e.evidence.file.clone(),
-        line: e.evidence.line,
-        column: e.evidence.column,
-        excerpt: e.evidence.excerpt.clone(),
-    })
+/// An effect's anchor: its evidence (an event publication's is already the
+/// call into the publisher: digest's G32 rule, applied by the digest query).
+fn effect_anchor(e: &DigestEffectFull) -> Value {
+    anchor_to_value(&e.evidence)
 }
 
 /// `file:line` of an anchor already in the document's JSON shape, whose line
@@ -1164,23 +1297,14 @@ fn anchor_value_human(v: &Value) -> String {
     match (v["file"].as_str(), v["line"].as_u64()) {
         (Some(f), Some(l)) => format!("{f}:{l}"),
         (Some(f), None) => f.to_string(),
-        _ => "(no anchor)".to_string(),
+        _ => "no position kept".to_string(),
     }
 }
 
 /// W2-1, raw versus refined (design §3.1): a row the root cannot reach
-/// under literal arguments stays listed, marked, so it never reads like a
-/// live one.
-fn dead_note(e: &DigestEffectResult) -> &'static str {
-    if e.literal_unreachable {
-        ", ruled out by literal arguments"
-    } else {
-        ""
-    }
-}
-
-/// [`dead_note`]'s JSON twin: `literalUnreachable: true`, only then.
-fn mark_dead(v: &mut Value, e: &DigestEffectResult) {
+/// under literal arguments stays listed with `literalUnreachable: true`, so it
+/// never reads like a live one.
+fn mark_dead(v: &mut Value, e: &DigestEffectFull) {
     if e.literal_unreachable
         && let Some(o) = v.as_object_mut()
     {
@@ -1188,7 +1312,7 @@ fn mark_dead(v: &mut Value, e: &DigestEffectResult) {
     }
 }
 
-fn detail<'e>(e: &'e DigestEffectResult, key: &str) -> Option<&'e str> {
+fn detail<'e>(e: &'e DigestEffectFull, key: &str) -> Option<&'e str> {
     e.detail
         .iter()
         .find(|(k, _)| k == key)
@@ -1200,8 +1324,10 @@ impl Card {
         ix: &Indexes<'_>,
         cross: &CrossRules<'_>,
         rid: &str,
-        effects: &DigestEffects,
+        full: Option<&DigestEntryFull>,
+        rcx: &RollupCx<'_>,
         tests_reaching: Option<&BTreeMap<String, Vec<(String, bool)>>>,
+        opts: RenderOpts,
     ) -> Card {
         let model = ix.model;
         let rows: Vec<usize> = ix.rows_of(rid).to_vec();
@@ -1361,24 +1487,85 @@ impl Card {
             }
         }
 
-        // Effects.
-        let entry = effects.entries.iter().find(|e| e.routine_id == rid);
-        let effs: &[DigestEffectResult] = entry.map_or(&[], |e| e.effects.as_slice());
+        // Effects (W2-2, design §4.1, §4.2): the root's digest entry after the
+        // L4 temp-state join and the literal pass, and its rollup.
+        let empty;
+        let full = match full {
+            Some(f) => f,
+            None => {
+                empty = empty_entry(rid);
+                &empty
+            }
+        };
+        let rollup = RoutineRollup::build(full, rcx);
+        let effs: &[DigestEffectFull] = &full.effects;
         let tables = table_by_id_preferring_real(&model.workspace.tables);
         let mut writes = Vec::new();
-        let mut writes_human = Vec::new();
         let mut commit_sites = Vec::new();
-        let mut commit_unconditional = false;
         let mut events = Vec::new();
-        let mut events_human = Vec::new();
         let mut extension_points: Vec<(Value, String)> = Vec::new();
-        let mut ui = Vec::new();
-        let mut ui_human = Vec::new();
+        let mut families: BTreeMap<&'static str, Vec<Value>> = BTreeMap::new();
         let mut uncaptioned: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         for e in effs {
             let via = via_names(e);
             let anchor = effect_anchor(e);
             let ty = e.effect_type.as_str();
+            // 2a: a group row names its crossing (listed once under
+            // `effects.crossings`), never an empty table, and is never an
+            // extension point.
+            if is_group(e) {
+                let crossing = crossing_key(e);
+                let mut v = match ty {
+                    "DB_INSERT" | "DB_MODIFY" | "DB_DELETE" => {
+                        let (class, reason) = class_json(classify_detail(&e.detail));
+                        let mut v = json!({
+                            "op": ty,
+                            "crossing": crossing,
+                            "class": class,
+                            "classReason": reason,
+                            "resourceCount": e.group_resources.len(),
+                            "resources": e.group_resources.iter()
+                                .map(|(id, d)| json!({"id": id, "display": d}))
+                                .collect::<Vec<_>>(),
+                            "conditionality": e.conditionality,
+                        });
+                        for k in ["tempState", "resourcesOriginalCount", "unresolvedResources"] {
+                            if let Some(x) = detail(e, k) {
+                                v[k] = json!(x);
+                            }
+                        }
+                        v
+                    }
+                    "EVENT_PUBLISH" if opts.detail => json!({
+                        "crossing": crossing,
+                        "resourceCount": e.group_resources.len(),
+                        "resourcesListed": true,
+                        "events": e.group_resources.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+                    }),
+                    // O2: explain folds an event group's names to a count.
+                    "EVENT_PUBLISH" => json!({
+                        "crossing": crossing,
+                        "resourceCount": e.group_resources.len(),
+                        "resourcesListed": false,
+                    }),
+                    _ => {
+                        json!({"type": ty, "crossing": crossing, "conditionality": e.conditionality})
+                    }
+                };
+                mark_dead(&mut v, e);
+                match ty {
+                    "DB_INSERT" | "DB_MODIFY" | "DB_DELETE" => writes.push(v),
+                    "COMMIT" => commit_sites.push(v),
+                    "EVENT_PUBLISH" => events.push(v),
+                    "UI_ERROR" => families.entry("errors").or_default().push(v),
+                    other => {
+                        if let Some(f) = family_of(other) {
+                            families.entry(f).or_default().push(v);
+                        }
+                    }
+                }
+                continue;
+            }
             if ty.starts_with("DB_") && ty != "DB_READ" {
                 let table_id = detail(e, "resourceId").unwrap_or("");
                 let table = detail(e, "resourceDisplay").unwrap_or(table_id);
@@ -1422,41 +1609,49 @@ impl Card {
                         }
                     }
                 }
-                writes_human.push(format!(
-                    "writes {table}{} ({}{}{}) at {}",
-                    if fields.is_empty() {
-                        String::new()
-                    } else {
-                        format!(
-                            " [{}]",
-                            fields.iter().copied().collect::<Vec<_>>().join(", ")
-                        )
-                    },
-                    e.effect_type,
-                    if e.conditionality == UNCONDITIONAL {
-                        String::new()
-                    } else {
-                        format!(", {}", e.conditionality)
-                    },
-                    dead_note(e),
-                    anchor_value_human(&anchor),
-                ));
+                let class = classify_detail(&e.detail);
+                let (class_name, reason) = class_json(class);
+                let op_kinds: BTreeSet<&str> = e
+                    .origin_operation_ids
+                    .iter()
+                    .filter_map(|op| rcx.op_kind(op))
+                    .collect();
                 let mut w = json!({
                     "op": ty,
+                    "opKinds": op_kinds,
                     "table": table,
                     "tableId": table_id,
+                    "class": class_name,
+                    "classReason": reason,
                     "fields": fields.iter().collect::<Vec<_>>(),
                     "fieldCaptions": Value::Object(captions),
                     "conditionality": e.conditionality,
                     "via": via,
                     "anchor": anchor,
                 });
+                if let Some(t) = detail(e, "tempState") {
+                    w["tempState"] = json!(t);
+                }
+                // §3.5, section 13: a write with no witness names the owner
+                // the operation index recovered.
+                if e.evidence.source_kind == "unavailable" {
+                    w["noPathKept"] = json!(true);
+                    if let Some(o) = e
+                        .origin_operation_ids
+                        .iter()
+                        .find_map(|op| rcx.op_owner(op))
+                    {
+                        w["owner"] = json!({
+                            "display": o.display,
+                            "stableId": o.stable_id,
+                            "outcome": o.outcome,
+                            "anchor": o.anchor,
+                        });
+                    }
+                }
                 mark_dead(&mut w, e);
                 writes.push(w);
             } else if ty == "COMMIT" {
-                // W2-1: a literal-dead COMMIT does not make the routine one
-                // that may commit.
-                commit_unconditional |= e.conditionality == UNCONDITIONAL && !e.literal_unreachable;
                 let mut c = json!({
                     "conditionality": e.conditionality,
                     "via": via,
@@ -1471,12 +1666,6 @@ impl Card {
                     || detail(e, "resourceDisplay").unwrap_or(event_id).to_string(),
                     |s| s.event_name.clone(),
                 );
-                events_human.push(format!(
-                    "raises {event} ({}{}) at {}",
-                    e.conditionality,
-                    dead_note(e),
-                    anchor_value_human(&anchor)
-                ));
                 let mut ev = json!({
                     "event": event,
                     "eventId": event_id,
@@ -1568,16 +1757,17 @@ impl Card {
                         human,
                     ));
                 }
-            } else if ty.starts_with("UI_") && ty != "UI_ERROR" {
-                // Interactive UI only, as `prove reaches-ui` counts it: an
-                // `Error` is a check, shown under `rules`.
-                ui_human.push(format!("{ty} at {}", anchor_value_human(&anchor)));
-                ui.push(json!({
+            } else if let Some(f) = family_of(ty) {
+                // 2e: every kind family. The routine's own `Error` is a check,
+                // shown under `rules` (as `prove reaches-ui` treats it).
+                let mut v = json!({
                     "type": ty,
                     "conditionality": e.conditionality,
                     "via": via,
                     "anchor": anchor,
-                }));
+                });
+                mark_dead(&mut v, e);
+                families.entry(f).or_default().push(v);
             }
         }
         for (table, fields) in uncaptioned {
@@ -1596,11 +1786,7 @@ impl Card {
                 ]),
             ));
         }
-        let commits = match (commit_sites.is_empty(), commit_unconditional) {
-            (true, _) => "no",
-            (false, true) => "yes",
-            (false, false) => "may",
-        };
+        let commits = rollup.totals.commits;
 
         // Reached from: the page actions whose trigger reaches a row of the
         // routine over the resolved calls (or is one).
@@ -1729,8 +1915,8 @@ impl Card {
 
         // Gaps of the cone: the unresolved call sites digest's cone lists,
         // and the symbol-only routines the resolved calls reach.
-        if let Some(cone) = effects.unresolved.get(rid) {
-            for item in &cone.items {
+        {
+            for item in &full.unresolved {
                 let kind = if matches!(item.status.as_str(), "external" | "unfetched-dependency") {
                     "symbol-only-dependency"
                 } else {
@@ -1779,7 +1965,7 @@ impl Card {
                 g.key.4.push_str(&g.json.to_string());
                 gaps.push(g);
             }
-            if cone.traversal.truncated {
+            if full.unresolved_traversal.truncated {
                 gaps.push(Gap::new(
                     "cone-truncated",
                     None,
@@ -1787,7 +1973,7 @@ impl Card {
                         "detail".to_string(),
                         Value::from(format!(
                             "the call cone was cut at depth {}: effects and gaps past it are not listed",
-                            cone.traversal.max_depth
+                            full.unresolved_traversal.max_depth
                         )),
                     )]),
                 ));
@@ -1870,6 +2056,141 @@ impl Card {
         }
         gaps.sort_by(|a, b| a.key.cmp(&b.key));
 
+        // W2-2: the rollup's totals, with explain's callers and tests (F16k).
+        let mut totals = rollup.totals.clone();
+        // F16j: a page action's trigger is counted under page actions, not as
+        // a routine caller.
+        let routine_callers: Vec<String> = known_callers
+            .iter()
+            .filter(|&&c| {
+                let r = ix.row(c);
+                !(r.kind == "trigger" && r.object_type.starts_with("Page"))
+            })
+            .map(|&c| ix.qualified(c))
+            .collect();
+        totals.callers = Some(routine_callers.len());
+        totals.page_actions = Some(reached_from.len());
+        totals.tests = Some(tests.len());
+        let mut limits: Vec<String> = Vec::new();
+        let mut notes: BTreeMap<&str, usize> = BTreeMap::new();
+        for g in &gaps {
+            let kind = g.json["kind"].as_str().unwrap_or("");
+            match gap_class(kind) {
+                Some("limit") if kind != "cone-truncated" => limits.push(kind.to_string()),
+                Some("note") => *notes.entry(kind).or_default() += 1,
+                _ => {}
+            }
+        }
+        limits.sort();
+        let mut counted: Vec<String> = Vec::new();
+        for k in limits {
+            match counted.last_mut() {
+                Some(last) if last.split(' ').next() == Some(k.as_str()) => {
+                    let n: usize = last
+                        .split(' ')
+                        .nth(1)
+                        .and_then(|n| n.parse().ok())
+                        .unwrap_or(1);
+                    *last = format!("{k} {}", n + 1);
+                }
+                _ => counted.push(format!("{k} 1")),
+            }
+        }
+        let mut header = header_lines(&rollup, full, &counted);
+        header[0] = totals.human();
+        if !notes.is_empty() {
+            header.insert(
+                4,
+                format!(
+                    "notes: {}",
+                    notes
+                        .iter()
+                        .map(|(k, n)| format!("{k} {n}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            );
+        }
+        let fields_of = |t: &TableWrites| -> Option<String> {
+            let mut by_owner: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
+            for &i in &t.rows {
+                for op in &full.effects[i].origin_operation_ids {
+                    if let Some(row) = ix.op_row(op.as_str())
+                        && let Some(f) = ix.row_fields(row, &t.table_id)
+                    {
+                        by_owner
+                            .entry(ix.row(row).name.clone())
+                            .or_default()
+                            .extend(f.iter().map(String::as_str));
+                    }
+                }
+            }
+            if by_owner.is_empty() {
+                return None;
+            }
+            Some(
+                by_owner
+                    .iter()
+                    .map(|(owner, f)| {
+                        let names = fold(
+                            f.iter().map(|s| (*s).to_string()).collect(),
+                            caps::FIELDS,
+                            "fields",
+                            opts.detail,
+                        );
+                        format!(
+                            "fields {owner} assigns on this table (not operation-specific): {}",
+                            names.joined()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )
+        };
+        let sections = Sections {
+            commits: commit_lines(&rollup, full, rcx, opts),
+            workspace: workspace_write_lines(&rollup, full, rcx, opts, &fields_of),
+            caller_dependent: caller_dependent_lines(&rollup, full),
+            beyond: beyond_lines(&rollup, full, rcx, opts),
+            no_path: no_path_lines(&rollup, full, rcx, opts),
+            dead: literal_dead_lines(&rollup, opts),
+            temporary: temporary_lines(&rollup, opts),
+            events: event_lines(&rollup, rcx, opts),
+            kinds: kind_lines(&rollup, full),
+            dependency_gaps: dependency_gap_lines(&rollup, opts),
+        };
+        let crossings: Vec<Value> = rollup
+            .crossings
+            .iter()
+            .map(|c| {
+                json!({
+                    "key": c.id,
+                    "boundary": c.name,
+                    "targets": c.target_ids.iter().map(|t| rcx.qualified(t)).collect::<Vec<_>>(),
+                    "targetIds": c.target_ids,
+                    "sites": c.sites,
+                    "prefix": c.prefix_row.map(|i| via_names(&full.effects[i])),
+                })
+            })
+            .collect();
+        let g = &rollup.gaps;
+        let gaps_in_dependencies = json!({
+            "total": g.dependency,
+            "polymorphic": g.dependency_polymorphic,
+            "dynamicTarget": g.dependency_dynamic,
+            "notPlaced": g.not_placed.len(),
+            "topCallees": g.top_callees.iter().take(caps::TOP_CALLEES)
+                .map(|(c, n)| json!({"callee": c, "count": n}))
+                .collect::<Vec<_>>(),
+        });
+        let coverage = json!({
+            "status": full.coverage_status,
+            "reasons": full.coverage_reasons,
+            "assumptions": ["loaded-program"],
+            "limits": counted,
+            "notes": notes,
+        });
+
         Card {
             sort_key: anchor
                 .as_ref()
@@ -1881,43 +2202,111 @@ impl Card {
             own,
             inherited,
             callers,
-            known_callers: known_callers.len(),
+            known_callers: routine_callers,
+            known_caller_rows: known_callers.len(),
             writes,
-            writes_human,
             commits,
             commit_sites,
             events,
-            events_human,
-            ui,
-            ui_human,
+            families,
+            crossings,
             reached_from,
             extension_points,
             tests,
             gaps,
+            totals,
+            coverage,
+            gaps_in_dependencies,
+            header,
+            sections,
+            opts,
         }
     }
 
     fn json(&self) -> Value {
+        let detail = self.opts.detail;
+        let mut effects = json!({
+            "writes": self.writes,
+            "commits": self.commits,
+            "commitSites": self.commit_sites,
+            "events": self.events,
+            "crossings": self.crossings,
+        });
+        for (key, _) in FAMILIES {
+            effects[*key] = json!(self.families.get(key).cloned().unwrap_or_default());
+        }
+        // `via` and `tooltip` of a page action only with `--detail` (§4.2).
+        let reached_from: Vec<Value> = self
+            .reached_from
+            .iter()
+            .map(|r| {
+                let mut v = r.0.clone();
+                if !detail && let Some(o) = v.as_object_mut() {
+                    o.remove("via");
+                    o.remove("tooltip");
+                }
+                v
+            })
+            .collect();
         json!({
             "routine": self.routine,
+            "summary": self.totals.to_json(),
+            "coverage": self.coverage,
             "rules": {
                 "own": self.own.iter().map(rule_json).collect::<Vec<_>>(),
                 "inherited": self.inherited.iter().map(|r| r.0.clone()).collect::<Vec<_>>(),
                 "callers": self.callers.iter().map(|r| r.0.clone()).collect::<Vec<_>>(),
-                "knownCallers": self.known_callers,
+                "knownCallers": self.known_caller_rows,
             },
-            "effects": {
-                "writes": self.writes,
-                "commits": self.commits,
-                "commitSites": self.commit_sites,
-                "events": self.events,
-                "ui": self.ui,
-            },
-            "reachedFrom": self.reached_from.iter().map(|r| r.0.clone()).collect::<Vec<_>>(),
+            "effects": effects,
+            "reachedFrom": reached_from,
+            "reachedFromSummary": self.reached_from_summary(),
             "extensionPoints": self.extension_points.iter().map(|r| r.0.clone()).collect::<Vec<_>>(),
             "tests": self.tests.iter().map(|r| r.0.clone()).collect::<Vec<_>>(),
-            "gaps": self.gaps.iter().map(|g| g.json.clone()).collect::<Vec<_>>(),
+            "gaps": self
+                .gaps
+                .iter()
+                .filter(|g| detail || !is_dependency_gap(g))
+                .map(|g| g.json.clone())
+                .collect::<Vec<_>>(),
+            "gapsInDependencies": self.gaps_in_dependencies,
         })
+    }
+
+    /// The page actions by caption and by page object (§4.1 section 8).
+    fn reached_from_summary(&self) -> Value {
+        let (captions, objects) = self.action_counts();
+        json!({
+            "actions": self.reached_from.len(),
+            "objects": objects.len(),
+            "byCaption": captions.iter().map(|(c, n)| json!({"caption": c, "count": n})).collect::<Vec<_>>(),
+            "byObject": objects.iter().map(|(o, n)| json!({"object": o, "count": n})).collect::<Vec<_>>(),
+        })
+    }
+
+    /// (caption, count) and (page object, count), most first.
+    fn action_counts(&self) -> (Ranked, Ranked) {
+        let mut captions: BTreeMap<String, usize> = BTreeMap::new();
+        let mut objects: BTreeMap<String, usize> = BTreeMap::new();
+        for (v, _) in &self.reached_from {
+            let caption = v["caption"]
+                .as_str()
+                .or(v["action"].as_str())
+                .unwrap_or("")
+                .to_string();
+            *captions.entry(caption).or_default() += 1;
+            let object = object_display(
+                v["objectType"].as_str().unwrap_or(""),
+                v["object"].as_str().unwrap_or(""),
+            );
+            *objects.entry(object).or_default() += 1;
+        }
+        let ranked = |m: BTreeMap<String, usize>| {
+            let mut v: Vec<(String, usize)> = m.into_iter().collect();
+            v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            v
+        };
+        (ranked(captions), ranked(objects))
     }
 
     fn human(&self) -> String {
@@ -1934,55 +2323,127 @@ impl Card {
             out.push_str(s);
             out.push('\n');
         };
+        let detail = self.opts.detail;
+        // 1-6: summary, coverage, assumptions, limits, notes, scope.
+        for h in &self.header {
+            line(h);
+        }
         if let Some(d) = &self.doc {
             line(&format!("doc: {}", d.replace('\n', " / ")));
         }
-        if self.own.is_empty() {
-            line("rules: none of its own");
+        // 7: rules, own and inherited.
+        if self.own.is_empty() && self.inherited.is_empty() {
+            line("rules: none of its own; inherited: none");
+        } else {
+            if self.own.is_empty() {
+                line("rules: none of its own");
+            }
+            for r in &self.own {
+                line(&rule_human(r));
+            }
+            if self.inherited.is_empty() {
+                line("inherited rules: none");
+            }
+            for (_, h) in &self.inherited {
+                line(h);
+            }
         }
-        for r in &self.own {
-            line(&rule_human(r));
-        }
-        if self.inherited.is_empty() {
-            line("inherited rules: none");
-        }
-        for (_, h) in &self.inherited {
-            line(h);
-        }
-        if self.known_callers == 0 {
-            line("caller rules: no known caller");
-        } else if self.callers.is_empty() {
+        // 8: callers with their caller rules, then the page actions.
+        let names = fold(self.known_callers.clone(), caps::TABLES, "callers", detail);
+        let actions = self.reached_from.len();
+        let reached = if actions == 0 {
+            String::new()
+        } else {
+            format!(
+                "; reached from {}",
+                rf_plural(actions, "page action", "page actions")
+            )
+        };
+        if self.known_callers.is_empty() {
+            line(&format!("callers: none{reached}"));
+        } else {
             line(&format!(
-                "caller rules: none ({} known caller(s))",
-                self.known_callers
+                "callers: {} — {}{reached}",
+                self.known_callers.len(),
+                names.joined()
             ));
         }
         for (_, h) in &self.callers {
-            line(h);
+            line(&format!("  {h}"));
         }
-        for w in &self.writes_human {
-            line(w);
+        if actions <= 3 || detail {
+            for (_, h) in &self.reached_from {
+                line(&format!("  {h}"));
+            }
+        } else {
+            let (captions, objects) = self.action_counts();
+            let by = |v: Vec<(String, usize)>, cap: usize, unit: &'static str| {
+                fold(
+                    v.into_iter().map(|(c, n)| format!("{c} {n}")).collect(),
+                    cap,
+                    unit,
+                    false,
+                )
+                .joined()
+            };
+            line(&format!(
+                "  by caption ({}): {}",
+                rf_plural(captions.len(), "caption", "captions"),
+                by(captions, caps::CAPTIONS, "captions")
+            ));
+            line(&format!(
+                "  most actions ({}): {} (--detail lists every action)",
+                rf_plural(objects.len(), "page object", "page objects"),
+                by(objects, caps::PAGE_OBJECTS, "page objects")
+            ));
         }
-        line(&format!("commits: {}", self.commits));
-        for e in &self.events_human {
-            line(e);
+        // 9-16: the shared effect sections.
+        let s = &self.sections;
+        for section in [
+            &s.commits,
+            &s.workspace,
+            &s.caller_dependent,
+            &s.beyond,
+            &s.no_path,
+            &s.dead,
+            &s.temporary,
+            &s.events,
+        ] {
+            for l in section {
+                line(l);
+            }
+        }
+        // 17: extension points (never a group).
+        if self.extension_points.is_empty() {
+            line("extension points: none (the routine publishes no event itself)");
         }
         for (_, h) in &self.extension_points {
             line(h);
         }
-        for u in &self.ui_human {
-            line(u);
+        // 18: kind families.
+        for l in &s.kinds {
+            line(l);
         }
-        for (_, h) in &self.reached_from {
-            line(h);
-        }
+        // 19: tests.
         if self.tests.is_empty() {
             line("tests: none reach it");
         }
         for (_, h) in &self.tests {
             line(h);
         }
-        for g in &self.gaps {
+        // 20: gaps in workspace code (dependency gaps fold, 21).
+        let shown: Vec<&Gap> = self
+            .gaps
+            .iter()
+            .filter(|g| detail || !is_dependency_gap(g))
+            .collect();
+        if !shown.is_empty() {
+            line(&format!(
+                "gaps in workspace code ({}):",
+                rf_plural(shown.len(), "gap", "gaps")
+            ));
+        }
+        for g in shown {
             let kind = g.json["kind"].as_str().unwrap_or("");
             let what = ["callee", "routine", "what", "table", "app", "status"]
                 .iter()
@@ -1995,7 +2456,7 @@ impl Card {
                 .map(|a| format!(" at {}", anchor_value_human(a)))
                 .unwrap_or_default();
             line(&format!(
-                "gap: {kind}{}{at}",
+                "  gap: {kind}{}{at}",
                 if what.is_empty() {
                     String::new()
                 } else {
@@ -2006,7 +2467,7 @@ impl Card {
             for r in g.json["rules"].as_array().into_iter().flatten() {
                 let when = r["whenText"].as_str().unwrap_or("");
                 line(&format!(
-                    "  skips {}: {}  [{} {}]",
+                    "    skips {}: {}  [{} {}]",
                     r["in"].as_str().unwrap_or(""),
                     if when.is_empty() {
                         "always".to_string()
@@ -2018,6 +2479,15 @@ impl Card {
                 ));
             }
         }
+        // 21: gaps in dependency code, as counts.
+        for l in &s.dependency_gaps {
+            line(l);
+        }
+        // 22: next.
+        line(
+            "next: alsem prove <routine> writes-table:<table> for one table with its witness; \
+             may-commit for the commits; alsem query effects for every operation one routine deep",
+        );
         out.push('\n');
         out
     }

@@ -23,7 +23,8 @@ fn digest(ws: &Path, args: &[&str]) -> Value {
         .arg("digest")
         .arg(ws)
         .args(args)
-        .args(["--deterministic", "--format", "json"])
+        // W2-2: the 2.x document's fields (the old shape, current analysis).
+        .args(["--deterministic", "--format", "json", "--schema", "2"])
         .env("ALCH_DRIVER_VERSION_OVERRIDE", VERSION_OVERRIDE)
         .output()
         .expect("spawn alsem");

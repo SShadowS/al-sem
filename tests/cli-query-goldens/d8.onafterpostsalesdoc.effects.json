@@ -11,6 +11,11 @@
     "effectCount": 1,
     "effects": [
       {
+        "firstHop": {
+          "display": "HandlePosted",
+          "objectDisplay": "Codeunit D8BadSubscriber",
+          "stableId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50109#715258fd9a80d3130d49a07aadbc434d15fe547b2e1521eb003f19d3a5ce6bf0"
+        },
         "isUnknownBucket": false,
         "op": "Insert",
         "operationId": "469fd5cc0952e4c7/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574/op1",
@@ -51,6 +56,59 @@
         "stableId": "11111111-0000-0000-0000-00000000d80a:Codeunit:50108#eaac6eca26a910fdaf516812b47df87bc3b39578ed2941a6341edc720ca4b5ec"
       },
       "selector": "OnAfterPostSalesDoc"
+    },
+    "summary": {
+      "byTable": [
+        {
+          "beyond": [],
+          "class": "physical",
+          "first": {
+            "firstHop": "Codeunit D8BadSubscriber::HandlePosted",
+            "operationId": "469fd5cc0952e4c7/de44ffb97b75e0364873d48d89b13d9c03c4f18ce271401a46c0eb6e39b89574/op1"
+          },
+          "ops": {
+            "Insert": 1
+          },
+          "table": "Audit Entry",
+          "tableId": "11111111-0000-0000-0000-00000000d80a/table/50100"
+        }
+      ],
+      "callerDependent": {
+        "operations": 0,
+        "tables": 0
+      },
+      "locks": {
+        "operations": 0,
+        "tables": 0
+      },
+      "reads": {
+        "operations": 0,
+        "tables": 0
+      },
+      "scope": "operations-one-routine-deep",
+      "tableNotResolved": {
+        "operations": 0,
+        "routines": 0
+      },
+      "temporary": {
+        "operations": 0,
+        "routines": 0,
+        "tables": 0
+      },
+      "unclassified": {
+        "operations": 0,
+        "ops": {}
+      },
+      "validate": {
+        "operations": 0,
+        "tables": 0
+      },
+      "writes": {
+        "knownPersistent": 1,
+        "operations": 1,
+        "tables": 1,
+        "tempStateUnknown": 0
+      }
     }
   },
   "schemaVersion": "3.0.0"

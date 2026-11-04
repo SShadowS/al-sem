@@ -1,35 +1,51 @@
 --- Codeunit D48 Sender::SendOne ---
+  summary: no observed write that may persist; caller-dependent: none; commits: none; events: 0 (0 raised in workspace code); HTTP at 1 place; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
-  [HTTP] direct
-    evidence: ws:src/D48Pos.Codeunit.al:15 "Client.Send"
-    detail: method=Send
-    via: 1 path(s)
+  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
+  limits: none
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  commits: none
+  events: 0 raised in workspace code; 0 more only beyond entry points
+  HTTP at 1 place: HTTP at ws:src/D48Pos.Codeunit.al:15 (unconditional-on-success)
 
 --- Codeunit D48 Loop Caller::ProcessAll ---
+  summary: no observed write that may persist; caller-dependent: none; commits: none; events: 0 (0 raised in workspace code); HTTP at 1 place; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
-  [HTTP] transitive
-    evidence: ws:src/D48Pos.Codeunit.al:15 "Client.Send"
-    detail: method=Send
-    via: 1 path(s)
+  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
+  limits: none
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  commits: none
+  events: 0 raised in workspace code; 0 more only beyond entry points
+  HTTP at 1 place: HTTP at ws:src/D48Pos.Codeunit.al:15 (loop-body)
 
 --- Codeunit D48 Loop Caller::SendOne ---
+  summary: no observed write that may persist; caller-dependent: none; commits: none; events: 0 (0 raised in workspace code); HTTP at 1 place; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
-  [HTTP] transitive
-    evidence: ws:src/D48Pos.Codeunit.al:15 "Client.Send"
-    detail: method=Send
-    via: 1 path(s)
+  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
+  limits: none
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  commits: none
+  events: 0 raised in workspace code; 0 more only beyond entry points
+  HTTP at 1 place: HTTP at ws:src/D48Pos.Codeunit.al:15 (unconditional-on-success)
 
 --- Codeunit D48 Non Loop Caller::DoSendOnce ---
+  summary: no observed write that may persist; caller-dependent: none; commits: none; events: 0 (0 raised in workspace code); HTTP at 1 place; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
-  [HTTP] transitive
-    evidence: ws:src/D48Pos.Codeunit.al:15 "Client.Send"
-    detail: method=Send
-    via: 1 path(s)
+  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
+  limits: none
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  commits: none
+  events: 0 raised in workspace code; 0 more only beyond entry points
+  HTTP at 1 place: HTTP at ws:src/D48Pos.Codeunit.al:15 (unconditional-on-success)
 
 --- Codeunit D48 File Loop::ExportAll ---
+  summary: no observed write that may persist; caller-dependent: none; commits: none; events: 0 (0 raised in workspace code); file at 1 place; gaps: 1 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
-  [FILE] direct
-    evidence: ws:src/D48Pos.Codeunit.al:73 "F.WriteAllText"
-    detail: fileOp=write-blob
-    via: 1 path(s)
-  unresolved: 1 callsite(s)
+  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
+  limits: none
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  commits: none
+  events: 0 raised in workspace code; 0 more only beyond entry points
+  file at 1 place: FILE at ws:src/D48Pos.Codeunit.al:73 (loop-body)
+  gaps in workspace code (1 call the engine cannot follow):
+    F.WriteAllText (unresolved-receiver-type) in ExportAll at ws:src/D48Pos.Codeunit.al:73

@@ -139,6 +139,7 @@ pub mod ordering_facts;
 pub mod conditionality;
 pub mod diff_parser;
 pub mod digest_cli;
+pub mod digest_v3;
 // G23: effects unreachable once literal Boolean arguments are followed.
 pub mod field_guard;
 pub mod group_path;
@@ -146,6 +147,7 @@ pub mod literal_reach;
 pub mod recref_flow;
 // MCP output wave 2 (W2-1): the write classifier every reader shares.
 pub mod rollup;
+pub mod routine_rollup;
 // MCP output wave 2 (W2-0a): one lossless record per direct capability fact.
 pub mod terminal_facts;
 // Shared deterministic routine-selector resolution (5-form resolveSelector

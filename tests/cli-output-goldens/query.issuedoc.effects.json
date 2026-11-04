@@ -19,6 +19,11 @@
     "effectCount": 6,
     "effects": [
       {
+        "firstHop": {
+          "display": "WriteLog",
+          "objectDisplay": "Codeunit Out Log Mgt",
+          "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
+        },
         "isUnknownBucket": false,
         "op": "DeleteAll",
         "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op0",
@@ -45,6 +50,11 @@
         "via": "inherited"
       },
       {
+        "firstHop": {
+          "display": "OnRun",
+          "objectDisplay": "Codeunit Base Poster",
+          "stableId": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
+        },
         "isUnknownBucket": false,
         "op": "DeleteAll",
         "operationId": "9c6111a83a31bbff/810777ec24f485a082352742d1ed938ac54d03e97272675493521d2830e28aba/op0",
@@ -71,6 +81,11 @@
         "via": "inherited"
       },
       {
+        "firstHop": {
+          "display": "ScanFields",
+          "objectDisplay": "Codeunit Out Issue Document",
+          "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#dc74df7bb7bcbc92cfb38268a3daedc82b01192f10c23c33ccb4342d44bb987b"
+        },
         "isUnknownBucket": true,
         "op": "FindSet",
         "operationId": "51168e57cf87e49c/4dfc5ec56855389b4864017d8e40ec6609ddddc2a942d9f9bcc235293f787830/op0",
@@ -96,6 +111,11 @@
         "via": "inherited"
       },
       {
+        "firstHop": {
+          "display": "WriteLog",
+          "objectDisplay": "Codeunit Out Log Mgt",
+          "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
+        },
         "isUnknownBucket": false,
         "op": "Insert",
         "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op1",
@@ -148,6 +168,11 @@
         "via": "direct"
       },
       {
+        "firstHop": {
+          "display": "ScanFields",
+          "objectDisplay": "Codeunit Out Issue Document",
+          "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#dc74df7bb7bcbc92cfb38268a3daedc82b01192f10c23c33ccb4342d44bb987b"
+        },
         "isUnknownBucket": true,
         "op": "Next",
         "operationId": "51168e57cf87e49c/4dfc5ec56855389b4864017d8e40ec6609ddddc2a942d9f9bcc235293f787830/op1",
@@ -187,6 +212,84 @@
         "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"
       },
       "selector": "Out Issue Document.IssueDoc"
+    },
+    "summary": {
+      "byTable": [
+        {
+          "beyond": [],
+          "class": "physical",
+          "first": {
+            "firstHop": "Codeunit Base Poster::OnRun",
+            "operationId": "9c6111a83a31bbff/810777ec24f485a082352742d1ed938ac54d03e97272675493521d2830e28aba/op0"
+          },
+          "ops": {
+            "DeleteAll": 1
+          },
+          "table": "Base Doc Line",
+          "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70021"
+        },
+        {
+          "beyond": [],
+          "class": "physical",
+          "first": {
+            "firstHop": "Codeunit Out Log Mgt::WriteLog",
+            "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op1"
+          },
+          "ops": {
+            "Insert": 1
+          },
+          "table": "Out Log",
+          "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50101"
+        },
+        {
+          "beyond": [],
+          "class": "callerDependent",
+          "first": {
+            "operationId": "51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/op1"
+          },
+          "ops": {
+            "Modify": 1
+          },
+          "table": "Out Doc",
+          "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50100"
+        }
+      ],
+      "callerDependent": {
+        "operations": 1,
+        "tables": 1
+      },
+      "locks": {
+        "operations": 0,
+        "tables": 0
+      },
+      "reads": {
+        "operations": 0,
+        "tables": 0
+      },
+      "scope": "operations-one-routine-deep",
+      "tableNotResolved": {
+        "operations": 2,
+        "routines": 1
+      },
+      "temporary": {
+        "operations": 1,
+        "routines": 1,
+        "tables": 1
+      },
+      "unclassified": {
+        "operations": 0,
+        "ops": {}
+      },
+      "validate": {
+        "operations": 0,
+        "tables": 0
+      },
+      "writes": {
+        "knownPersistent": 2,
+        "operations": 2,
+        "tables": 2,
+        "tempStateUnknown": 0
+      }
     }
   },
   "schemaVersion": "3.0.0"

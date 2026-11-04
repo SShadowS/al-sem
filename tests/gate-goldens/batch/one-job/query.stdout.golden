@@ -37,6 +37,7 @@
         "via": "direct"
       },
       {
+        "firstHopUnavailable": "no-callee-holds-the-contribution",
         "isUnknownBucket": false,
         "op": "Modify",
         "operationId": "c8d0efe535357e91/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0",
@@ -77,6 +78,58 @@
         "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c"
       },
       "selector": "CallerA"
+    },
+    "summary": {
+      "byTable": [
+        {
+          "beyond": [],
+          "class": "physical",
+          "first": {
+            "operationId": "c8d0efe535357e91/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0"
+          },
+          "ops": {
+            "Modify": 1
+          },
+          "table": "MC Customer",
+          "tableId": "11111111-0000-0000-0000-00000000d01a/table/50101"
+        }
+      ],
+      "callerDependent": {
+        "operations": 0,
+        "tables": 0
+      },
+      "locks": {
+        "operations": 0,
+        "tables": 0
+      },
+      "reads": {
+        "operations": 1,
+        "tables": 1
+      },
+      "scope": "operations-one-routine-deep",
+      "tableNotResolved": {
+        "operations": 0,
+        "routines": 0
+      },
+      "temporary": {
+        "operations": 0,
+        "routines": 0,
+        "tables": 0
+      },
+      "unclassified": {
+        "operations": 0,
+        "ops": {}
+      },
+      "validate": {
+        "operations": 0,
+        "tables": 0
+      },
+      "writes": {
+        "knownPersistent": 1,
+        "operations": 1,
+        "tables": 1,
+        "tempStateUnknown": 0
+      }
     }
   },
   "schemaVersion": "3.0.0"

@@ -1,0 +1,143 @@
+{
+  "alsemVersion": "cli-b-v1",
+  "deterministic": true,
+  "diagnostics": [],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "digest",
+  "payload": {
+    "changed": {
+      "diffProvided": false,
+      "files": [
+        "src/Sender.Codeunit.al"
+      ]
+    },
+    "changedRootsDiagnostics": [],
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "entries": [
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Message",
+              "file": "ws:src/Sender.Codeunit.al",
+              "line": 9,
+              "sourceKind": "source"
+            },
+            "factId": "164c21bfb5fa6f3b",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/Sender.Codeunit.al",
+                  "line": 9
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "UI_MESSAGE"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/Sender.Codeunit.al",
+            "line": 7,
+            "sourceKind": "source"
+          },
+          "display": "MessageOnly",
+          "objectDisplay": "Codeunit D49 Sender",
+          "stableId": "11111111-0000-0000-0000-0000000d4904:Codeunit:50000#840a858e760822ba41f6398bfd0574cb2a2aa32f3b8b06ede6c8c3c9a5250cb5"
+        },
+        "scopedGuaranteesFolded": 0,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "none",
+            "entryPoints": 0,
+            "ownSites": 0
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {
+            "ui": 1
+          },
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 0,
+            "ownedByApp": 0
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 1
+        }
+      }
+    ],
+    "lineBase": 1,
+    "pathCap": 1,
+    "routines": {
+      "r:6c3455f21c4a": {
+        "display": "Codeunit D49 Sender::MessageOnly",
+        "file": "ws:src/Sender.Codeunit.al",
+        "stableId": "11111111-0000-0000-0000-0000000d4904:Codeunit:50000#840a858e760822ba41f6398bfd0574cb2a2aa32f3b8b06ede6c8c3c9a5250cb5"
+      }
+    },
+    "summary": {
+      "rootsRequested": 1,
+      "rootsResolved": 1,
+      "totalEffects": 1,
+      "totalUnresolved": 0
+    },
+    "workspaceFingerprint": "6bbd1a2d99abadce08496fe643c9429f0d3981694b9ad61899df905cc9eebb26"
+  },
+  "schemaVersion": "3.0.0"
+}

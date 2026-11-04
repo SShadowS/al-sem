@@ -1,0 +1,207 @@
+{
+  "alsemVersion": "cli-b-v1",
+  "deterministic": true,
+  "diagnostics": [],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "digest",
+  "payload": {
+    "changed": {
+      "diffProvided": false,
+      "files": [
+        "src/Sender.Codeunit.al"
+      ]
+    },
+    "changedRootsDiagnostics": [],
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "entries": [
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "error-call",
+              "file": "ws:src/Sender.Codeunit.al",
+              "line": 14,
+              "sourceKind": "source"
+            },
+            "factId": "9963b3dfd1694aaa",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/Sender.Codeunit.al",
+                  "line": 14,
+                  "operationId": "67f3b01c68b9d23c/749ef522e8dd8316d82a4084633c8b7661abea490d3a2b86cb5afe9de1f0f4fa/op0"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "ERROR_THROW"
+          },
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {
+              "method": "Get"
+            },
+            "evidence": {
+              "column": 8,
+              "excerpt": "Client.Get",
+              "file": "ws:src/Sender.Codeunit.al",
+              "line": 13,
+              "sourceKind": "source"
+            },
+            "factId": "27de6e318e6a1376",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/Sender.Codeunit.al",
+                  "line": 13
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "HTTP"
+          },
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Error",
+              "file": "ws:src/Sender.Codeunit.al",
+              "line": 14,
+              "sourceKind": "source"
+            },
+            "factId": "e2b217e020e90e58",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/Sender.Codeunit.al",
+                  "line": 14
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "UI_ERROR"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/Sender.Codeunit.al",
+            "line": 8,
+            "sourceKind": "source"
+          },
+          "display": "GetThenError",
+          "objectDisplay": "Codeunit D51 NegSender",
+          "stableId": "aaaabbbb-cccc-dddd-eeee-100000000d51:Codeunit:50201#2e254ac7f120ad15b09c2e5449a1513e4746dbbfba3c362dc73c040a888723e1"
+        },
+        "scopedGuaranteesFolded": 0,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "none",
+            "entryPoints": 0,
+            "ownSites": 0
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {
+            "errors": 1,
+            "http": 1
+          },
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 0,
+            "ownedByApp": 0
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 1
+        }
+      }
+    ],
+    "lineBase": 1,
+    "pathCap": 1,
+    "routines": {
+      "r:a02cde649a7b": {
+        "display": "Codeunit D51 NegSender::GetThenError",
+        "file": "ws:src/Sender.Codeunit.al",
+        "stableId": "aaaabbbb-cccc-dddd-eeee-100000000d51:Codeunit:50201#2e254ac7f120ad15b09c2e5449a1513e4746dbbfba3c362dc73c040a888723e1"
+      }
+    },
+    "summary": {
+      "rootsRequested": 1,
+      "rootsResolved": 1,
+      "totalEffects": 3,
+      "totalUnresolved": 0
+    },
+    "workspaceFingerprint": "cce9f4a181c0dc8ab6f329a35c9ae37a2adb0432613af167f388719bb9d5bb05"
+  },
+  "schemaVersion": "3.0.0"
+}
