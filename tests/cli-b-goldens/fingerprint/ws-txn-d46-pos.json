@@ -42,7 +42,7 @@
                           "column": 12,
                           "excerpt": "Setup.Insert",
                           "file": "ws:src/InstallCU.al",
-                          "line": 32,
+                          "line": 33,
                           "sourceKind": "source"
                         },
                         "operationId": "5163e6a282c9cd15/891fc7dddd2ae2ecaf276395a3a77ab66421d96eb8ac9732c85570a832a93346/op2"
@@ -55,7 +55,7 @@
                               "anchor": {
                                 "column": 8,
                                 "file": "ws:src/InstallCU.al",
-                                "line": 23,
+                                "line": 24,
                                 "sourceKind": "source"
                               },
                               "calleeDisplay": "DoSetup",
@@ -88,7 +88,7 @@
                           "column": 15,
                           "excerpt": "Setup.Get",
                           "file": "ws:src/InstallCU.al",
-                          "line": 30,
+                          "line": 31,
                           "sourceKind": "source"
                         },
                         "operationId": "5163e6a282c9cd15/891fc7dddd2ae2ecaf276395a3a77ab66421d96eb8ac9732c85570a832a93346/op0"
@@ -101,7 +101,7 @@
                               "anchor": {
                                 "column": 8,
                                 "file": "ws:src/InstallCU.al",
-                                "line": 23,
+                                "line": 24,
                                 "sourceKind": "source"
                               },
                               "calleeDisplay": "DoSetup",
@@ -149,7 +149,7 @@
                           "column": 8,
                           "excerpt": "commit",
                           "file": "ws:src/InstallCU.al",
-                          "line": 34,
+                          "line": 35,
                           "sourceKind": "source"
                         },
                         "operationId": "5163e6a282c9cd15/891fc7dddd2ae2ecaf276395a3a77ab66421d96eb8ac9732c85570a832a93346/op3"
@@ -162,7 +162,7 @@
                               "anchor": {
                                 "column": 8,
                                 "file": "ws:src/InstallCU.al",
-                                "line": 23,
+                                "line": 24,
                                 "sourceKind": "source"
                               },
                               "calleeDisplay": "DoSetup",
@@ -246,7 +246,7 @@
                           "column": 12,
                           "excerpt": "Setup.Insert",
                           "file": "ws:src/InstallCU.al",
-                          "line": 32,
+                          "line": 33,
                           "sourceKind": "source"
                         },
                         "operationId": "5163e6a282c9cd15/891fc7dddd2ae2ecaf276395a3a77ab66421d96eb8ac9732c85570a832a93346/op2"
@@ -275,7 +275,7 @@
                           "column": 15,
                           "excerpt": "Setup.Get",
                           "file": "ws:src/InstallCU.al",
-                          "line": 30,
+                          "line": 31,
                           "sourceKind": "source"
                         },
                         "operationId": "5163e6a282c9cd15/891fc7dddd2ae2ecaf276395a3a77ab66421d96eb8ac9732c85570a832a93346/op0"
@@ -319,7 +319,7 @@
                           "column": 8,
                           "excerpt": "commit",
                           "file": "ws:src/InstallCU.al",
-                          "line": 34,
+                          "line": 35,
                           "sourceKind": "source"
                         },
                         "operationId": "5163e6a282c9cd15/891fc7dddd2ae2ecaf276395a3a77ab66421d96eb8ac9732c85570a832a93346/op3"
@@ -399,7 +399,7 @@
                           "column": 12,
                           "excerpt": "Setup.Modify",
                           "file": "ws:src/UpgradeCU.al",
-                          "line": 15,
+                          "line": 16,
                           "sourceKind": "source"
                         },
                         "operationId": "5163e6a282c9cd15/742544f8c68d2810d9c9dfd24127da5ab0e6eadbcbd6f6621f9beb2d3bfcca1a/op1"
@@ -428,7 +428,7 @@
                           "column": 11,
                           "excerpt": "Setup.Get",
                           "file": "ws:src/UpgradeCU.al",
-                          "line": 13,
+                          "line": 14,
                           "sourceKind": "source"
                         },
                         "operationId": "5163e6a282c9cd15/742544f8c68d2810d9c9dfd24127da5ab0e6eadbcbd6f6621f9beb2d3bfcca1a/op0"
@@ -472,7 +472,7 @@
                           "column": 8,
                           "excerpt": "commit",
                           "file": "ws:src/UpgradeCU.al",
-                          "line": 17,
+                          "line": 18,
                           "sourceKind": "source"
                         },
                         "operationId": "5163e6a282c9cd15/742544f8c68d2810d9c9dfd24127da5ab0e6eadbcbd6f6621f9beb2d3bfcca1a/op2"
@@ -552,7 +552,7 @@
                           "column": 12,
                           "excerpt": "Setup.Modify",
                           "file": "ws:src/UpgradeCU.al",
-                          "line": 15,
+                          "line": 16,
                           "sourceKind": "source"
                         },
                         "operationId": "5163e6a282c9cd15/742544f8c68d2810d9c9dfd24127da5ab0e6eadbcbd6f6621f9beb2d3bfcca1a/op1"
@@ -565,7 +565,7 @@
                               "anchor": {
                                 "column": 8,
                                 "file": "ws:src/UpgradeCU.al",
-                                "line": 6,
+                                "line": 7,
                                 "sourceKind": "source"
                               },
                               "calleeDisplay": "DoUpgrade",
@@ -598,7 +598,7 @@
                           "column": 11,
                           "excerpt": "Setup.Get",
                           "file": "ws:src/UpgradeCU.al",
-                          "line": 13,
+                          "line": 14,
                           "sourceKind": "source"
                         },
                         "operationId": "5163e6a282c9cd15/742544f8c68d2810d9c9dfd24127da5ab0e6eadbcbd6f6621f9beb2d3bfcca1a/op0"
@@ -611,7 +611,7 @@
                               "anchor": {
                                 "column": 8,
                                 "file": "ws:src/UpgradeCU.al",
-                                "line": 6,
+                                "line": 7,
                                 "sourceKind": "source"
                               },
                               "calleeDisplay": "DoUpgrade",
@@ -659,7 +659,7 @@
                           "column": 8,
                           "excerpt": "commit",
                           "file": "ws:src/UpgradeCU.al",
-                          "line": 17,
+                          "line": 18,
                           "sourceKind": "source"
                         },
                         "operationId": "5163e6a282c9cd15/742544f8c68d2810d9c9dfd24127da5ab0e6eadbcbd6f6621f9beb2d3bfcca1a/op2"
@@ -672,7 +672,7 @@
                               "anchor": {
                                 "column": 8,
                                 "file": "ws:src/UpgradeCU.al",
-                                "line": 6,
+                                "line": 7,
                                 "sourceKind": "source"
                               },
                               "calleeDisplay": "DoUpgrade",
@@ -726,6 +726,7 @@
       "includeInherited": true,
       "witnessLimit": 3
     },
+    "lineBase": 1,
     "summary": {
       "renderedBlocks": 4,
       "rootsConfigIgnored": false,
@@ -733,5 +734,5 @@
     },
     "workspaceFingerprint": "369c4515c708fe7831c9af975d8a55ce0e8d1baf6090a0e083e3d6d8e7f602e8"
   },
-  "schemaVersion": "1.3.0"
+  "schemaVersion": "2.0.0"
 }

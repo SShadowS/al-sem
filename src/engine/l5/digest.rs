@@ -1603,7 +1603,19 @@ fn boundary_terminal(e: &SnapshotGraphEdge, idx: &FingerprintIndexes) -> (Bounda
         .and_then(|b| b.dependency_app.get(to))
         .map_or("", |a| &**a);
     let routine = idx.routine_display_by_id.get(to).map_or(to, String::as_str);
-    let mut display = format!("{app}.{routine}");
+    // MCP output plan 1d (B2): the owner-qualified name (`Codeunit
+    // Reminder-Issue::OnRun`, as `query` prints a routine), so two `OnRun`s of
+    // one app no longer read alike; `<App>.<Routine>` only when the owner's
+    // identity is not in the snapshot.
+    let owner = to.split_once(ROUTINE_ID_SEPARATOR).and_then(|(object, _)| {
+        let kind = object.split(':').nth(1)?;
+        let name = idx.stable_id_to_display.get(object)?;
+        (!name.is_empty()).then(|| format!("{kind} {name}"))
+    });
+    let mut display = match owner {
+        Some(owner) => format!("{owner}::{routine}"),
+        None => format!("{app}.{routine}"),
+    };
     let at = |a: &crate::engine::l5::snapshot::SnapshotSourceAnchor| {
         (
             Some(a.source_unit_id.clone()),
@@ -4148,7 +4160,13 @@ fn digest_one_root<'i>(
                         acc.via.fold_cond(c);
                     }
                     acc.via.truncated |= input_truncated;
-                    if acc.group.is_some() && fact.resource_id().is_none() {
+                    // MCP output plan 1d (P2): only a database write can miss
+                    // its table; a COMMIT, UI, ERROR, HTTP, FILE or background
+                    // fact never has a resource, so it is no "unresolved" one.
+                    if acc.group.is_some()
+                        && fact.resource_id().is_none()
+                        && acc.effect_type.starts_with("DB_")
+                    {
                         acc.group_unresolved += 1;
                     }
                     if let (Some((_, resources)), Some(r)) = (&mut acc.group, fact.resource_id()) {
@@ -4273,13 +4291,17 @@ fn digest_one_root<'i>(
             };
             // A group's detail (spec §14.3.5 item 3): the dependency routine it
             // enters, its distinct resources' count and the first 10 of them,
-            // in resource-id order. Values stay strings.
+            // in resource-id order. Values stay strings. MCP output plan 1d
+            // (P2): only a type with resources (a table write or read, an event)
+            // states them; the JSON lists every one as `resources[]` beside.
+            let has_resources =
+                acc.effect_type.starts_with("DB_") || acc.effect_type == "EVENT_PUBLISH";
             let detail = match &acc.group {
                 Some((b, resources)) => {
-                    let mut d = vec![
-                        ("boundary".to_string(), b.display.clone()),
-                        ("resourceCount".to_string(), resources.len().to_string()),
-                        (
+                    let mut d = vec![("boundary".to_string(), b.display.clone())];
+                    if has_resources {
+                        d.push(("resourceCount".to_string(), resources.len().to_string()));
+                        d.push((
                             "resources".to_string(),
                             resources
                                 .values()
@@ -4287,8 +4309,8 @@ fn digest_one_root<'i>(
                                 .map(String::as_str)
                                 .collect::<Vec<_>>()
                                 .join(", "),
-                        ),
-                    ];
+                        ));
+                    }
                     // Writes beyond the boundary whose table is not known: the
                     // resources above are not all the group writes.
                     if acc.group_unresolved > 0 {
@@ -4561,11 +4583,15 @@ impl Serialize for DetailSer<'_> {
 }
 
 /// Ordered QueryWitnessHop serialize — per-variant V8 field order (= projectHop literal).
-struct HopSer<'a>(&'a QueryWitnessHop);
+/// `.1` is added to every anchor line: `digest` writes 1-based lines
+/// ([`crate::engine::line_base::LINE_BASE`]), the R4-F projection the model's 0-based rows.
+struct HopSer<'a>(&'a QueryWitnessHop, u32);
 impl Serialize for HopSer<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
         let h = self.0;
+        let anchor_entry =
+            |map: &mut S::SerializeMap, a: &Option<HopAnchor>| anchor_entry(map, a, self.1);
         let mut map = serializer.serialize_map(None)?;
         map.serialize_entry("kind", h.kind)?;
         map.serialize_entry("fromRoutineId", &h.from_routine_id)?;
@@ -4660,14 +4686,16 @@ impl Serialize for HopSer<'_> {
 fn anchor_entry<M: serde::ser::SerializeMap>(
     map: &mut M,
     anchor: &Option<HopAnchor>,
+    line_offset: u32,
 ) -> Result<(), M::Error> {
     if let Some(a) = anchor {
-        map.serialize_entry("anchor", &AnchorSer(a))?;
+        map.serialize_entry("anchor", &AnchorSer(a, line_offset))?;
     }
     Ok(())
 }
 
-struct AnchorSer<'a>(&'a HopAnchor);
+/// A hop anchor; `.1` is added to its line (see [`HopSer`]).
+struct AnchorSer<'a>(&'a HopAnchor, u32);
 impl Serialize for AnchorSer<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
@@ -4676,7 +4704,7 @@ impl Serialize for AnchorSer<'_> {
         map.serialize_entry("sourceKind", "source")?;
         map.serialize_entry("file", &a.file)?;
         if let Some(l) = a.line {
-            map.serialize_entry("line", &l)?;
+            map.serialize_entry("line", &(l + self.1))?;
         }
         if let Some(c) = a.column {
             map.serialize_entry("column", &c)?;
@@ -4686,9 +4714,11 @@ impl Serialize for AnchorSer<'_> {
 }
 
 /// Public helper for digest_cli: convert a `QueryWitnessHop` to a `serde_json::Value`
-/// using the same field ordering as `HopSer`. Used by `project_digest_document`.
+/// using the same field ordering as `HopSer`. Used by `project_digest_document`, so
+/// its anchor line is 1-based (`lineBase: 1`).
 pub fn hop_to_json_value(hop: &QueryWitnessHop) -> serde_json::Value {
-    serde_json::to_value(HopSer(hop)).unwrap_or(serde_json::Value::Null)
+    serde_json::to_value(HopSer(hop, crate::engine::line_base::LINE_BASE))
+        .unwrap_or(serde_json::Value::Null)
 }
 
 /// Ordered effect serialize — FIXED key order: type, detail, provenance, evidence,
@@ -4714,7 +4744,7 @@ impl Serialize for EffectSer<'_> {
         let via: Vec<Vec<HopSer>> = e
             .via_paths
             .iter()
-            .map(|p| p.iter().map(|h| HopSer(&h.inner)).collect())
+            .map(|p| p.iter().map(|h| HopSer(&h.inner, 0)).collect())
             .collect();
         map.serialize_entry("viaPaths", &via)?;
         map.serialize_entry("viaPathsTruncated", &e.via_paths_truncated)?;

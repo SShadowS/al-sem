@@ -32,13 +32,19 @@
 //! `timing`, `revision` (always present, `null` until the child is
 //! resident); or `kind: "failed"` (`isError: true`), an infrastructure
 //! outcome (`engineError`, `refusedPath`, `busy`, `protocol`, ...). The
-//! envelope's JSON is the first text block (with `stdoutText` replaced by a
-//! pointer), the inline stdout is the second text block exactly, and with a
-//! negotiated `2025-06-18` the envelope is also `structuredContent` (with
-//! `output`, the CLI's JSON parsed, when the stdout is inline JSON).
-//! Explain defaults to the human card; digest always writes a file and
-//! answers a summary; a stdout over `maxInlineBytes` (default 64 KiB) goes
-//! to a file. Every file goes into the server's private output folder
+//! envelope's JSON without `stdoutText` is the first text block, the inline
+//! stdout is the second text block exactly, and with a negotiated
+//! `2025-06-18` the envelope is also `structuredContent`, holding the answer
+//! once: `output` (the CLI's JSON parsed, no `stdoutText`) when the stdout is
+//! inline JSON, else `stdoutText` (MCP output plan 1c: Claude Code reads and
+//! size-checks `structuredContent` alone). `alsem_prove` answers human by
+//! default; a call that names no `maxInlineBytes` gets 40 KiB.
+//! Explain defaults to the human card; digest always writes a file; a stdout
+//! over `maxInlineBytes` (default 40 KiB) goes to a file. A file answer
+//! carries the renderer's `summary` when the command makes one (digest: per
+//! root the effects by type, physical tables written, commits, boundaries and
+//! unresolved counts), at most 8 KiB and inside the frame bound (MCP output
+//! plan 1b). Every file goes into the server's private output folder
 //! ([`output`]).
 //!
 //! **Engine children (stage 3).** Each child keeps its revision between
@@ -77,7 +83,7 @@ pub const WORKER_QUEUE_DEPTH: usize = 16;
 pub const DEFAULT_MAX_CHILDREN: usize = 2;
 
 /// The server's `instructions` in its `initialize` result.
-pub const INSTRUCTIONS: &str = "al-sem answers questions about Microsoft Dynamics 365 Business Central AL code by whole-program analysis. Use alsem_explain before editing a routine (its rules, writes, callers, tests), alsem_prove for yes/no safety questions, alsem_digest for the effects of a change, alsem_query_* for table effects. Answers are the exact output of the alsem CLI.";
+pub const INSTRUCTIONS: &str = "al-sem answers questions about Microsoft Dynamics 365 Business Central AL code by whole-program analysis. Use alsem_explain before editing a routine (its rules, writes, callers, tests), alsem_prove for yes/no safety questions, alsem_digest for the effects of a change, alsem_query_* for table effects. Answers are the exact output of the alsem CLI. Every line number is 1-based. Answers for a routine that calls into Base Application are often 50-200 KB: they go to a file with a summary, so read the summary first.";
 
 /// The JSON-RPC error codes the server answers.
 pub mod codes {

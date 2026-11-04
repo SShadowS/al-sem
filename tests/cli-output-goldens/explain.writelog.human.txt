@@ -1,0 +1,10 @@
+Codeunit Out Log Mgt::WriteLog  ws:src/OutIssueDocument.Codeunit.al:53
+  rules: none of its own
+  inherited rules: none
+  caller rule (applied by Codeunit Out Issue Document::IssueDoc; skipped by Codeunit Out Subscribers::LogIssued, Codeunit Out Tests::WriteLogInserts): rejects when Doc.Status <> Doc.Status::Open: (platform message)  [TestField ws:src/OutIssueDocument.Codeunit.al:12]
+  writes Out Log [Entry No., Message] (DB_DELETE) at ws:src/OutIssueDocument.Codeunit.al:58
+  writes Out Log [Entry No., Message] (DB_INSERT) at ws:src/OutIssueDocument.Codeunit.al:61
+  commits: no
+  reached from page action Issue on Page Out Doc Card (caption "Issue") at ws:src/Pages.al:18
+  test Codeunit Out Tests::WriteLogInserts (0 own assert(s))
+

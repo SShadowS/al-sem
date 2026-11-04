@@ -1,0 +1,4 @@
+--- Codeunit Out Log Mgt::WriteLog ---
+  question: may-commit
+  answer:   no
+  obligations: all clear

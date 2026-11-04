@@ -34,7 +34,7 @@
               "column": 8,
               "excerpt": "commit",
               "file": "ws:src/subscriber.al",
-              "line": 10,
+              "line": 11,
               "sourceKind": "source"
             },
             "factId": "b33cddbee316af7c",
@@ -72,7 +72,7 @@
                   "anchor": {
                     "column": 8,
                     "file": "ws:src/posting.al",
-                    "line": 12,
+                    "line": 13,
                     "sourceKind": "source"
                   },
                   "calleeDisplay": "OnAfterPostSalesDoc",
@@ -109,7 +109,7 @@
               "column": 8,
               "excerpt": "Audit.Insert",
               "file": "ws:src/subscriber.al",
-              "line": 9,
+              "line": 10,
               "sourceKind": "source"
             },
             "factId": "e634e7000e71edc3",
@@ -133,7 +133,7 @@
                   "anchor": {
                     "column": 8,
                     "file": "ws:src/posting.al",
-                    "line": 12,
+                    "line": 13,
                     "sourceKind": "source"
                   },
                   "calleeDisplay": "OnAfterPostSalesDoc",
@@ -170,7 +170,7 @@
               "column": 8,
               "excerpt": "Header.Modify",
               "file": "ws:src/posting.al",
-              "line": 9,
+              "line": 10,
               "sourceKind": "source"
             },
             "factId": "bb00b9ed9f7fee27",
@@ -196,7 +196,7 @@
               "column": 8,
               "excerpt": "Line.ModifyAll",
               "file": "ws:src/posting.al",
-              "line": 11,
+              "line": 12,
               "sourceKind": "source"
             },
             "factId": "69ff114840bfe64f",
@@ -222,7 +222,7 @@
               "column": 8,
               "excerpt": "Header.Modify",
               "file": "ws:src/posting.al",
-              "line": 14,
+              "line": 15,
               "sourceKind": "source"
             },
             "factId": "52d1eb55968c00d4",
@@ -244,7 +244,7 @@
               "column": 8,
               "excerpt": "Header.Get",
               "file": "ws:src/posting.al",
-              "line": 7,
+              "line": 8,
               "sourceKind": "source"
             },
             "factId": "8094a50ad4752c4a",
@@ -270,7 +270,7 @@
               "column": 8,
               "excerpt": "OnAfterPostSalesDoc",
               "file": "ws:src/posting.al",
-              "line": 12,
+              "line": 13,
               "sourceKind": "source"
             },
             "factId": "e66c5260759155aa",
@@ -294,7 +294,7 @@
                   "anchor": {
                     "column": 8,
                     "file": "ws:src/posting.al",
-                    "line": 12,
+                    "line": 13,
                     "sourceKind": "source"
                   },
                   "calleeDisplay": "OnAfterPostSalesDoc",
@@ -316,7 +316,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/posting.al",
-            "line": 2,
+            "line": 3,
             "sourceKind": "source"
           },
           "display": "PostSalesDoc",
@@ -331,6 +331,7 @@
         }
       }
     ],
+    "lineBase": 1,
     "summary": {
       "rootsRequested": 1,
       "rootsResolved": 1,
@@ -339,5 +340,5 @@
     },
     "workspaceFingerprint": "422fd5d79e0d95f73a850372a04ff8ed07ccc5ee82deecc2ee2bcf44aa4ef31f"
   },
-  "schemaVersion": "1.8.0"
+  "schemaVersion": "2.1.0"
 }

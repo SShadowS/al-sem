@@ -14,7 +14,7 @@
 //!   → B0's snapshot serializers — **NOT this module**.
 //! - `--format json` WITH query flag (`--witness`, `--roots`, `--routine`,
 //!   `--include-inherited`) → `fingerprint_query` → `project_fingerprint_query`
-//!   → JSON envelope (kind `fingerprint-query`, schemaVersion `1.3.0`).
+//!   → JSON envelope (kind `fingerprint-query`, schemaVersion `2.0.0`).
 //! - `--format human` → `fingerprint_query` → `format_fingerprint_human`.
 //!
 //! ## Witness modes
@@ -35,6 +35,7 @@ use crate::engine::l5::digest::{
 };
 use crate::engine::l5::selector_index::{SelectorIndexes, narrow_to_owner, resolve_selector};
 use crate::engine::l5::snapshot::{CapabilitySnapshot, SnapCapabilityExtra, SnapValueSource};
+use crate::engine::line_base::{shown, shown_opt};
 
 // Re-export for use by the CLI module.
 pub use self::types::*;
@@ -870,13 +871,15 @@ pub fn fact_id_of(f: &SnapFact) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// project_fingerprint_query — JSON envelope (fingerprint-query, 1.3.0)
+// project_fingerprint_query — JSON envelope (fingerprint-query, 2.0.0)
 // Mirrors `projectFingerprintQuery` in `src/contracts/fingerprint-query.ts`.
 // ---------------------------------------------------------------------------
 
 /// 1.3.0 (#160 step 9, O9-25): additive, a path's `boundary` object and a
 /// boundary form of a witness's `evidence` (rule B, cross-app only).
-pub const FINGERPRINT_QUERY_CONTRACT_VERSION: &str = "1.3.0";
+/// 2.0.0 (MCP output plan 1a): every `line` is 1-based (`payload.lineBase: 1`),
+/// in the human form too.
+pub const FINGERPRINT_QUERY_CONTRACT_VERSION: &str = "2.0.0";
 
 /// Build a `normalizeAnchorPath`-normalized file path: forward slashes,
 /// keep the `ws:` prefix intact (it is NOT stripped — the golden keeps it).
@@ -898,7 +901,7 @@ fn boundary_to_json(b: &crate::engine::l5::digest::PathBoundary) -> serde_json::
         let mut anch = serde_json::Map::new();
         anch.insert("sourceKind".into(), "source".into());
         anch.insert("file".into(), normalize_anchor_path(file).into());
-        if let Some(l) = b.line {
+        if let Some(l) = shown_opt(b.line) {
             anch.insert("line".into(), l.into());
         }
         if let Some(c) = b.column {
@@ -929,7 +932,7 @@ fn project_witness_json(bw: &BlockWitness, workspace_root: &str) -> serde_json::
             anchor.insert("column".into(), (*column).into());
             anchor.insert("excerpt".into(), excerpt.clone().into());
             anchor.insert("file".into(), file.clone().into());
-            anchor.insert("line".into(), (*line).into());
+            anchor.insert("line".into(), shown(*line).into());
             anchor.insert("sourceKind".into(), "source".into());
             // Sorted: anchor, operationId
             let mut ev_obj = serde_json::Map::new();
@@ -1026,7 +1029,7 @@ fn query_hop_to_json(hop: &QueryWitnessHop, _workspace_root: &str) -> serde_json
         let mut anch = serde_json::Map::new();
         anch.insert("sourceKind".into(), "source".into());
         anch.insert("file".into(), file.into());
-        if let Some(l) = a.line {
+        if let Some(l) = shown_opt(a.line) {
             anch.insert("line".into(), l.into());
         }
         if let Some(c) = a.column {
@@ -1409,6 +1412,11 @@ fn project_query_envelope(
             "filters",
             Doc::value(serde_json::Value::Object(filters_map)),
         ),
+        // 2.0.0: every witness `line` is 1-based.
+        (
+            "lineBase",
+            Doc::value(crate::engine::line_base::LINE_BASE.into()),
+        ),
         ("blocks", blocks),
         (
             "diagnostics",
@@ -1714,8 +1722,13 @@ fn raw_anchor_suffix(
     line: Option<u32>,
     column: Option<u32>,
 ) -> String {
+    // The line 1-based (`lineBase: 1`); an absent one stays the `0` placeholder.
     match source_file {
-        Some(sf) => format!(" at {sf}:{}:{}", line.unwrap_or(0), column.unwrap_or(0)),
+        Some(sf) => format!(
+            " at {sf}:{}:{}",
+            shown_opt(line).unwrap_or(0),
+            column.unwrap_or(0)
+        ),
         None => String::new(),
     }
 }
@@ -1723,7 +1736,7 @@ fn raw_anchor_suffix(
 pub fn format_terminal_hop(t: &TerminalHopInfo) -> String {
     // Mirrors formatHop case "terminal" in format-fingerprint.ts.
     let loc = if let Some(ref sf) = t.source_file {
-        let line = t.line.unwrap_or(0);
+        let line = shown_opt(t.line).unwrap_or(0);
         let col = t.column.unwrap_or(0);
         format!(" at {sf}:{line}:{col}")
     } else {

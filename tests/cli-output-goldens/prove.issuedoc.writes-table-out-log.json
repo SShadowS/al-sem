@@ -1,0 +1,80 @@
+{
+  "alsemVersion": "cli-output-v1",
+  "deterministic": true,
+  "diagnostics": [],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "prove",
+  "payload": {
+    "lineBase": 1,
+    "question": "writes-table:Out Log",
+    "result": {
+      "answer": "yes",
+      "evidence": [
+        {
+          "conditionality": "unconditional-on-success",
+          "confidence": "static",
+          "detail": {
+            "resourceDisplay": "Out Log",
+            "resourceId": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
+            "tempState": "known(false)"
+          },
+          "evidence": {
+            "column": 8,
+            "excerpt": "Log.Insert",
+            "file": "ws:src/OutIssueDocument.Codeunit.al",
+            "line": 61,
+            "sourceKind": "source"
+          },
+          "factId": "369cf30301f856c2",
+          "guarantees": [],
+          "provenance": "transitive",
+          "scopedGuarantees": [],
+          "transactionContext": "unknown",
+          "type": "DB_INSERT",
+          "viaPaths": [
+            [
+              {
+                "anchor": {
+                  "column": 8,
+                  "file": "ws:src/OutIssueDocument.Codeunit.al",
+                  "line": 17,
+                  "sourceKind": "source"
+                },
+                "calleeDisplay": "LogMgt.WriteLog",
+                "callsiteId": "51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs2",
+                "edgeKind": "variable-typed-call",
+                "fromDisplay": "IssueDoc",
+                "fromRoutineId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475",
+                "kind": "variable-typed-call",
+                "receiverType": "Codeunit \"Out Log Mgt\"",
+                "toDisplay": "WriteLog",
+                "toRoutineId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
+              }
+            ]
+          ],
+          "viaPathsTruncated": false
+        }
+      ],
+      "obligations": {
+        "analysisGaps": 0,
+        "coneTruncated": false,
+        "coverageComplete": false,
+        "openWorldRows": 1,
+        "unresolvedCallsites": 2
+      }
+    },
+    "routine": {
+      "anchor": {
+        "column": 4,
+        "file": "ws:src/OutIssueDocument.Codeunit.al",
+        "line": 3,
+        "sourceKind": "source"
+      },
+      "display": "IssueDoc",
+      "objectDisplay": "Codeunit Out Issue Document",
+      "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"
+    },
+    "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
+  },
+  "schemaVersion": "2.1.0"
+}

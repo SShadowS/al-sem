@@ -11,18 +11,18 @@ Codeunit Install Handler::OnInstallAppPerCompany  [install-codeunit]
   witnesses:
     commit transaction — 1 path shown
       Path 1/1 shown:
-        DoSetup (via DoSetup at ws:src/InstallCU.al:23:8)
-          → direct commit at ws:src/InstallCU.al:34:8
+        DoSetup (via DoSetup at ws:src/InstallCU.al:24:8)
+          → direct commit at ws:src/InstallCU.al:35:8
 
     insert table "11111111-0000-0000-0000-00000000d460/table/50000" — 1 path shown
       Path 1/1 shown:
-        DoSetup (via DoSetup at ws:src/InstallCU.al:23:8)
-          → direct Setup.Insert at ws:src/InstallCU.al:32:12
+        DoSetup (via DoSetup at ws:src/InstallCU.al:24:8)
+          → direct Setup.Insert at ws:src/InstallCU.al:33:12
 
     read table "11111111-0000-0000-0000-00000000d460/table/50000" — 1 path shown
       Path 1/1 shown:
-        DoSetup (via DoSetup at ws:src/InstallCU.al:23:8)
-          → direct Setup.Get at ws:src/InstallCU.al:30:15
+        DoSetup (via DoSetup at ws:src/InstallCU.al:24:8)
+          → direct Setup.Get at ws:src/InstallCU.al:31:15
 
 
 Codeunit Install Handler::DoSetup  [install-codeunit]
@@ -36,15 +36,15 @@ Codeunit Install Handler::DoSetup  [install-codeunit]
   witnesses:
     commit transaction — 1 path shown
       Path 1/1 shown:
-        direct commit at ws:src/InstallCU.al:34:8
+        direct commit at ws:src/InstallCU.al:35:8
 
     insert table "11111111-0000-0000-0000-00000000d460/table/50000" — 1 path shown
       Path 1/1 shown:
-        direct Setup.Insert at ws:src/InstallCU.al:32:12
+        direct Setup.Insert at ws:src/InstallCU.al:33:12
 
     read table "11111111-0000-0000-0000-00000000d460/table/50000" — 1 path shown
       Path 1/1 shown:
-        direct Setup.Get at ws:src/InstallCU.al:30:15
+        direct Setup.Get at ws:src/InstallCU.al:31:15
 
 
 Codeunit Upgrade Handler::DoUpgrade  [upgrade-codeunit]
@@ -57,15 +57,15 @@ Codeunit Upgrade Handler::DoUpgrade  [upgrade-codeunit]
   witnesses:
     commit transaction — 1 path shown
       Path 1/1 shown:
-        direct commit at ws:src/UpgradeCU.al:17:8
+        direct commit at ws:src/UpgradeCU.al:18:8
 
     modify table "11111111-0000-0000-0000-00000000d460/table/50000" — 1 path shown
       Path 1/1 shown:
-        direct Setup.Modify at ws:src/UpgradeCU.al:15:12
+        direct Setup.Modify at ws:src/UpgradeCU.al:16:12
 
     read table "11111111-0000-0000-0000-00000000d460/table/50000" — 1 path shown
       Path 1/1 shown:
-        direct Setup.Get at ws:src/UpgradeCU.al:13:11
+        direct Setup.Get at ws:src/UpgradeCU.al:14:11
 
 
 Codeunit Upgrade Handler::OnUpgradePerCompany  [upgrade-codeunit]
@@ -78,16 +78,16 @@ Codeunit Upgrade Handler::OnUpgradePerCompany  [upgrade-codeunit]
   witnesses:
     commit transaction — 1 path shown
       Path 1/1 shown:
-        DoUpgrade (via DoUpgrade at ws:src/UpgradeCU.al:6:8)
-          → direct commit at ws:src/UpgradeCU.al:17:8
+        DoUpgrade (via DoUpgrade at ws:src/UpgradeCU.al:7:8)
+          → direct commit at ws:src/UpgradeCU.al:18:8
 
     modify table "11111111-0000-0000-0000-00000000d460/table/50000" — 1 path shown
       Path 1/1 shown:
-        DoUpgrade (via DoUpgrade at ws:src/UpgradeCU.al:6:8)
-          → direct Setup.Modify at ws:src/UpgradeCU.al:15:12
+        DoUpgrade (via DoUpgrade at ws:src/UpgradeCU.al:7:8)
+          → direct Setup.Modify at ws:src/UpgradeCU.al:16:12
 
     read table "11111111-0000-0000-0000-00000000d460/table/50000" — 1 path shown
       Path 1/1 shown:
-        DoUpgrade (via DoUpgrade at ws:src/UpgradeCU.al:6:8)
-          → direct Setup.Get at ws:src/UpgradeCU.al:13:11
+        DoUpgrade (via DoUpgrade at ws:src/UpgradeCU.al:7:8)
+          → direct Setup.Get at ws:src/UpgradeCU.al:14:11
 

@@ -14,44 +14,44 @@ Codeunit D8PostingChain::PostSalesDoc  [public-procedure]
   witnesses:
     commit transaction — 1 path shown
       Path 1/1 shown:
-        OnAfterPostSalesDoc (via OnAfterPostSalesDoc at ws:src/posting.al:12:8)
+        OnAfterPostSalesDoc (via OnAfterPostSalesDoc at ws:src/posting.al:13:8)
           → event 11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc
-            → direct commit at ws:src/subscriber.al:10:8
+            → direct commit at ws:src/subscriber.al:11:8
 
     error-implicit error — 1 path shown
       Path 1/1 shown:
-        direct Header.Get at ws:src/posting.al:7:8
+        direct Header.Get at ws:src/posting.al:8:8
 
     insert table "11111111-0000-0000-0000-00000000d80a/table/50100" — 1 path shown
       Path 1/1 shown:
-        OnAfterPostSalesDoc (via OnAfterPostSalesDoc at ws:src/posting.al:12:8)
+        OnAfterPostSalesDoc (via OnAfterPostSalesDoc at ws:src/posting.al:13:8)
           → event 11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc
-            → direct Audit.Insert at ws:src/subscriber.al:9:8
+            → direct Audit.Insert at ws:src/subscriber.al:10:8
 
     modify table "11111111-0000-0000-0000-00000000d80a/table/36" — 1 path shown
       Path 1/1 shown:
-        direct Header.Modify at ws:src/posting.al:9:8
+        direct Header.Modify at ws:src/posting.al:10:8
 
     modify table "11111111-0000-0000-0000-00000000d80a/table/36" — 1 path shown
       Path 1/1 shown:
-        direct Header.Modify at ws:src/posting.al:14:8
+        direct Header.Modify at ws:src/posting.al:15:8
 
     modify table "11111111-0000-0000-0000-00000000d80a/table/37" — 1 path shown
       Path 1/1 shown:
-        direct Line.ModifyAll at ws:src/posting.al:11:8
+        direct Line.ModifyAll at ws:src/posting.al:12:8
 
     publish event "11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc" — 1 path shown
       Path 1/1 shown:
-        OnAfterPostSalesDoc (via OnAfterPostSalesDoc at ws:src/posting.al:12:8)
+        OnAfterPostSalesDoc (via OnAfterPostSalesDoc at ws:src/posting.al:13:8)
           → publish event
 
     read table "11111111-0000-0000-0000-00000000d80a/table/36" — 1 path shown
       Path 1/1 shown:
-        direct Header.Get at ws:src/posting.al:7:8
+        direct Header.Get at ws:src/posting.al:8:8
 
     subscribe event — 1 path shown
       Path 1/1 shown:
-        OnAfterPostSalesDoc (via OnAfterPostSalesDoc at ws:src/posting.al:12:8)
+        OnAfterPostSalesDoc (via OnAfterPostSalesDoc at ws:src/posting.al:13:8)
           → event 11111111-0000-0000-0000-00000000d80a/Codeunit/50108/event/onafterpostsalesdoc
             → subscribe event
 
@@ -66,11 +66,11 @@ Codeunit D8BadSubscriber::HandlePosted  [event-subscriber]
   witnesses:
     commit transaction — 1 path shown
       Path 1/1 shown:
-        direct commit at ws:src/subscriber.al:10:8
+        direct commit at ws:src/subscriber.al:11:8
 
     insert table "11111111-0000-0000-0000-00000000d80a/table/50100" — 1 path shown
       Path 1/1 shown:
-        direct Audit.Insert at ws:src/subscriber.al:9:8
+        direct Audit.Insert at ws:src/subscriber.al:10:8
 
     subscribe event — 1 path shown
       Path 1/1 shown:

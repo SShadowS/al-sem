@@ -15,7 +15,7 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/checks.al",
-          "line": 7,
+          "line": 8,
           "sourceKind": "source"
         },
         "doc": "Checks an order before it is posted.",
@@ -34,7 +34,7 @@
             "anchor": {
               "column": 12,
               "file": "ws:src/checks.al",
-              "line": 14,
+              "line": 15,
               "sourceKind": "source"
             },
             "comment": "released only",
@@ -69,7 +69,7 @@
             "anchor": {
               "column": 12,
               "file": "ws:src/checks.al",
-              "line": 16,
+              "line": 17,
               "sourceKind": "source"
             },
             "comment": null,
@@ -109,7 +109,7 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/checks.al",
-              "line": 19,
+              "line": 20,
               "sourceKind": "source"
             },
             "comment": "A customer is required.\nIt is checked before the blocked flag.",
@@ -156,7 +156,7 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/checks.al",
-              "line": 20,
+              "line": 21,
               "sourceKind": "source"
             },
             "comment": null,
@@ -204,7 +204,7 @@
             "anchor": {
               "column": 12,
               "file": "ws:src/checks.al",
-              "line": 24,
+              "line": 25,
               "sourceKind": "source"
             },
             "comment": null,
@@ -261,7 +261,8 @@
     }
   ],
   "diagnostics": [],
+  "lineBase": 1,
   "mode": "routine",
-  "schema": "al-sem.explain/1",
+  "schema": "al-sem.explain/2",
   "selector": "CheckOrder"
 }

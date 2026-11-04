@@ -251,13 +251,14 @@ fn reads_workspace(dir: &Path) {
     write(&dir.join("src/Work.al"), WORK_AL);
 }
 
-/// The evidence line (0-based, as `t1` reads it) of the first `WORK_AL` line
+/// The evidence line (1-based, `lineBase: 1`) of the first `WORK_AL` line
 /// whose trim is `text`.
 fn line_of(text: &str) -> u64 {
     WORK_AL
         .lines()
         .position(|l| l.trim() == text)
         .unwrap_or_else(|| panic!("fixture: no line {text}")) as u64
+        + 1
 }
 
 /// Both modes of the reads workspace: (flag-off, flag-on).
@@ -471,7 +472,7 @@ fn reads_of_two_tables_below_a_recordref_keep_their_own_witness() {
 
 /// T5 (A3): cross-app, `CallChain` calls the dependency's `Outer`, whose
 /// `Inner` reads Customer. The read is one `DB_READ` group that enters
-/// `XBase.Outer`, names Customer, and stops there: the via path is the root's
+/// `Codeunit Dep Lib::Outer`, names Customer, and stops there: the via path is the root's
 /// own call (empty), with no hop inside the dependency.
 #[test]
 fn dependency_read_is_a_boundary_group() {
@@ -483,7 +484,11 @@ fn dependency_read_is_a_boundary_group() {
     let reads = effects_of(&on, "CallChain", "DB_READ");
     assert_eq!(reads.len(), 1, "{on}");
     let g = reads[0];
-    assert_eq!(s(&g["detail"]["boundary"]), "XBase.Outer", "{g}");
+    assert_eq!(
+        s(&g["detail"]["boundary"]),
+        "Codeunit Dep Lib::Outer",
+        "{g}"
+    );
     assert_eq!(s(&g["detail"]["resourceCount"]), "1", "{g}");
     assert_eq!(s(&g["detail"]["resources"]), "Customer", "{g}");
     assert_eq!(s(&g["conditionality"]), "unknown", "{g}");

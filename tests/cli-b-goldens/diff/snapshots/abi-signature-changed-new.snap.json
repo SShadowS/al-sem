@@ -87,12 +87,13 @@
       "path": "app.json"
     }
   ],
+  "lineBase": 1,
   "operationIndex": [
     {
       "controlContext": "top-level",
       "displayText": "Invoice.Insert",
       "endColumn": 24,
-      "endLine": 8,
+      "endLine": 9,
       "operationId": "9571a8b7de5cd97d/a66b184aeb7bc9d41e7ddc99b6944fff561c6d38ccdd5b2a2feffb70bbe2e7a2/op0",
       "order": {
         "dominatesSuccessReturn": true,
@@ -103,7 +104,7 @@
       "routine": "dd6a6b6i-0006-0006-0006-000000000006:Codeunit:50600#941a097a8ca0202a8559f804725ae1aa87cdd9e86b676529acf700002d253076",
       "sourceFile": "ws:src/invoicer.al",
       "startColumn": 8,
-      "startLine": 8
+      "startLine": 9
     }
   ],
   "permissionFacts": [
@@ -134,9 +135,9 @@
         "enclosingRoutineId": "9571a8b7de5cd97d/a66b184aeb7bc9d41e7ddc99b6944fff561c6d38ccdd5b2a2feffb70bbe2e7a2",
         "range": {
           "endColumn": 8,
-          "endLine": 9,
+          "endLine": 10,
           "startColumn": 4,
-          "startLine": 2
+          "startLine": 3
         },
         "sourceUnitId": "ws:src/invoicer.al",
         "syntaxKind": "procedure"
@@ -179,7 +180,7 @@
       "stableId": "dd6a6b6i-0006-0006-0006-000000000006:Table:50600#K0"
     }
   ],
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "typedEdges": [],
   "workspaceFingerprint": "a515227e9a88078cf4dd089d940c87bfd148346967f6a92aa260ee724aefd897"
 }

@@ -279,13 +279,21 @@ fn snap_capability_extra(e: &CapabilityExtra) -> SnapCapabilityExtra {
 //   (modelInstanceId-pinned "r0/<hash>"), reconstructed from the owning routine.
 // ===========================================================================
 
+/// Lines hold the model's 0-based rows and serialize 1-based (snapshot schema
+/// 5, `lineBase: 1`, [`crate::engine::line_base`]); columns stay 0-based.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SnapshotRange {
-    #[serde(rename = "startLine")]
+    #[serde(
+        rename = "startLine",
+        serialize_with = "crate::engine::line_base::serialize_shown"
+    )]
     pub start_line: u32,
     #[serde(rename = "startColumn")]
     pub start_column: u32,
-    #[serde(rename = "endLine")]
+    #[serde(
+        rename = "endLine",
+        serialize_with = "crate::engine::line_base::serialize_shown"
+    )]
     pub end_line: u32,
     #[serde(rename = "endColumn")]
     pub end_column: u32,
@@ -1015,11 +1023,18 @@ pub struct SnapshotOperationEvidence {
     pub routine: String,
     #[serde(rename = "sourceFile")]
     pub source_file: String,
-    #[serde(rename = "startLine")]
+    /// 0-based row, serialized 1-based (see [`SnapshotRange`]).
+    #[serde(
+        rename = "startLine",
+        serialize_with = "crate::engine::line_base::serialize_shown"
+    )]
     pub start_line: u32,
     #[serde(rename = "startColumn")]
     pub start_column: u32,
-    #[serde(rename = "endLine")]
+    #[serde(
+        rename = "endLine",
+        serialize_with = "crate::engine::line_base::serialize_shown"
+    )]
     pub end_line: u32,
     #[serde(rename = "endColumn")]
     pub end_column: u32,
@@ -1044,11 +1059,18 @@ pub struct SnapshotCallsiteEvidence {
     pub routine: String,
     #[serde(rename = "sourceFile")]
     pub source_file: String,
-    #[serde(rename = "startLine")]
+    /// 0-based row, serialized 1-based (see [`SnapshotRange`]).
+    #[serde(
+        rename = "startLine",
+        serialize_with = "crate::engine::line_base::serialize_shown"
+    )]
     pub start_line: u32,
     #[serde(rename = "startColumn")]
     pub start_column: u32,
-    #[serde(rename = "endLine")]
+    #[serde(
+        rename = "endLine",
+        serialize_with = "crate::engine::line_base::serialize_shown"
+    )]
     pub end_line: u32,
     #[serde(rename = "endColumn")]
     pub end_column: u32,

@@ -1,0 +1,163 @@
+{
+  "cards": [
+    {
+      "effects": {
+        "commitSites": [],
+        "commits": "no",
+        "events": [],
+        "ui": [],
+        "writes": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "TempLog.DeleteAll",
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 58,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "fieldCaptions": {},
+            "fields": [
+              "Entry No.",
+              "Message"
+            ],
+            "op": "DB_DELETE",
+            "table": "Out Log",
+            "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
+            "via": []
+          },
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Log.Insert",
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 61,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "fieldCaptions": {},
+            "fields": [
+              "Entry No.",
+              "Message"
+            ],
+            "op": "DB_INSERT",
+            "table": "Out Log",
+            "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
+            "via": []
+          }
+        ]
+      },
+      "extensionPoints": [],
+      "gaps": [],
+      "reachedFrom": [
+        {
+          "action": "Issue",
+          "actionKind": "action",
+          "anchor": {
+            "column": 12,
+            "file": "ws:src/Pages.al",
+            "line": 18,
+            "sourceKind": "source"
+          },
+          "caption": "Issue",
+          "kind": "PageAction",
+          "object": "Out Doc Card",
+          "objectType": "Page",
+          "runObject": null,
+          "tooltip": null,
+          "via": [
+            "OnAction",
+            "IssueDoc",
+            "WriteLog"
+          ]
+        }
+      ],
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 53,
+          "sourceKind": "source"
+        },
+        "doc": null,
+        "id": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0",
+        "name": "WriteLog",
+        "object": "Out Log Mgt",
+        "objectCaption": null,
+        "objectType": "Codeunit"
+      },
+      "rules": {
+        "callers": [
+          {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 12,
+              "sourceKind": "source"
+            },
+            "appliedBy": [
+              "Codeunit Out Issue Document::IssueDoc"
+            ],
+            "comment": null,
+            "id": "51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/rule0",
+            "in": "Codeunit Out Issue Document::IssueDoc",
+            "kind": "TestField",
+            "message": {
+              "args": [],
+              "candidates": [],
+              "labelComment": null,
+              "source": "Platform",
+              "text": null,
+              "var": null
+            },
+            "note": "applies only when called from the callers in appliedBy",
+            "presentIn": [
+              "Codeunit Out Issue Document::IssueDoc"
+            ],
+            "skippedBy": [
+              "Codeunit Out Subscribers::LogIssued",
+              "Codeunit Out Tests::WriteLogInserts"
+            ],
+            "stops": "always",
+            "stopsReason": null,
+            "trigger": null,
+            "via": [],
+            "when": [
+              {
+                "field": "Status",
+                "kind": "FieldCompare",
+                "op": "<>",
+                "recordVar": "Doc",
+                "table": "Out Doc",
+                "value": "Doc.Status::Open"
+              }
+            ],
+            "whenText": "Doc.Status <> Doc.Status::Open"
+          }
+        ],
+        "inherited": [],
+        "knownCallers": 3,
+        "own": []
+      },
+      "tests": [
+        {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/Pages.al",
+            "line": 38,
+            "sourceKind": "source"
+          },
+          "asserts": 0,
+          "id": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50130#706d1d394b8aba299e7b8a5fffbde697e3c3b46b66a7ef61e8f02928f79e9079",
+          "test": "Codeunit Out Tests::WriteLogInserts",
+          "viaEvent": false
+        }
+      ]
+    }
+  ],
+  "diagnostics": [],
+  "lineBase": 1,
+  "mode": "routine",
+  "schema": "al-sem.explain/2",
+  "selector": "Out Log Mgt::WriteLog"
+}

@@ -1848,7 +1848,7 @@ fn declaration_only_procedures_are_roots() {
     assert_eq!(e["routine"]["declarationOnly"], true);
     assert_eq!(
         anchor(e),
-        ("ws:src/IFoo.Interface.al".to_string(), 2, 4),
+        ("ws:src/IFoo.Interface.al".to_string(), 3, 4),
         "(a) {doc}"
     );
     let id = e["routine"]["stableId"].as_str().unwrap();
@@ -1880,8 +1880,8 @@ fn declaration_only_procedures_are_roots() {
         "(a) {doc}"
     );
     assert!(diags(&doc).is_empty(), "(a) {doc}");
-    // (f) the additive keys shipped in digest 1.5.0 (current: 1.8.0, #353).
-    assert_eq!(doc["schemaVersion"], "1.8.0");
+    // (f) the additive keys shipped in digest 1.5.0 (current: 2.1.0).
+    assert_eq!(doc["schemaVersion"], "2.1.0");
 
     // (b) `--file` on IFoo: both methods.
     let (doc, code) = digest(ws, &["--file", "src/IFoo.Interface.al"], None);
@@ -2008,7 +2008,7 @@ fn entry_anchor_is_the_declaration() {
     assert_eq!(code, 0, "{doc}");
     assert_eq!(
         anchor(entry(&doc, "OnAfterPostSalesDoc")),
-        ("ws:src/posting.al".to_string(), 18, 4)
+        ("ws:src/posting.al".to_string(), 19, 4)
     );
     let d34 = std::fs::read_to_string(corpus("ws-d34").join("src/Codeunit.al"))
         .unwrap()
@@ -2018,7 +2018,7 @@ fn entry_anchor_is_the_declaration() {
     assert_eq!(code, 0, "{doc}");
     assert_eq!(
         anchor(entry(&doc, "Persist")),
-        ("ws:src/Codeunit.al".to_string(), 45, 4)
+        ("ws:src/Codeunit.al".to_string(), 46, 4)
     );
 
     // (b) the original unit spelling; (d) a UTF-8 byte column.
@@ -2039,16 +2039,16 @@ fn entry_anchor_is_the_declaration() {
     assert_eq!(code, 0, "{doc}");
     assert_eq!(
         anchor(entry(&doc, "X")),
-        ("ws:src/MixedCase.Codeunit.al".to_string(), 2, 4),
+        ("ws:src/MixedCase.Codeunit.al".to_string(), 3, 4),
         "(b)"
     );
     assert_eq!(
         anchor(entry(&doc, "Y")),
-        ("ws:src/MixedCase.Codeunit.al".to_string(), 6, 11),
+        ("ws:src/MixedCase.Codeunit.al".to_string(), 7, 11),
         "(d)"
     );
 
-    // (e) prove reads the same anchor; its schema stays 1.3.0.
+    // (e) prove reads the same anchor (1-based since prove schema 2.0.0).
     let prove = run_prove_pipeline(
         &al_sem::program::inputs::WorkspaceInputs::read(
             &corpus("ws-d34"),
@@ -2062,7 +2062,7 @@ fn entry_anchor_is_the_declaration() {
     )
     .expect("prove runs");
     let p: Value = serde_json::from_str(&prove.json_text).unwrap();
-    assert_eq!(p["schemaVersion"], "1.4.0");
+    assert_eq!(p["schemaVersion"], "2.1.0");
     let a = &p["payload"]["routine"]["anchor"];
     assert_eq!(
         (
@@ -2070,26 +2070,28 @@ fn entry_anchor_is_the_declaration() {
             a["line"].as_i64(),
             a["column"].as_i64()
         ),
-        ("ws:src/Codeunit.al", Some(45), Some(4)),
+        ("ws:src/Codeunit.al", Some(46), Some(4)),
         "{p}"
     );
 }
 
-/// bc-dev-mcp's join, transcribed literally (`src/core/risk.ts:99-110` and
-/// `:158-169` at `715e0b9`): an entry joins a subject when the display matches,
-/// the anchor file minus `ws:` equals the subject file (case-insensitive), and
-/// `anchor.line + 1` lies in the subject's 1-based `[start, end]`.
+/// bc-dev-mcp's join (`src/core/risk.ts:99-110` and `:158-169` at `715e0b9`): an
+/// entry joins a subject when the display matches, the anchor file minus `ws:`
+/// equals the subject file (case-insensitive), and the anchor line lies in the
+/// subject's 1-based `[start, end]`. Since digest schema 2.0.0 the anchor line is
+/// 1-based itself; the transcription at `715e0b9` added 1 to a 0-based line, and
+/// bc-dev-mcp must drop that `+ 1` together with this change.
 fn joins(e: &Value, name: &str, file: &str, start: i64, end: i64) -> bool {
     let (afile, aline, _) = anchor(e);
     e["routine"]["display"] == name
         && afile.trim_start_matches("ws:").to_lowercase() == file.to_lowercase()
-        && (start..=end).contains(&(aline + 1))
+        && (start..=end).contains(&aline)
 }
 
 /// A4(c). A multi-declaration id is anchored at its LAST TOUCHED declaration and
 /// lists every declaration in `routine.anchors`.
 ///
-/// `Dup`'s arms are 1-based lines 20-23 and 25-28 (anchor lines 19 and 24).
+/// `Dup`'s arms are 1-based lines 20-23 and 25-28 (anchor lines 20 and 25).
 /// Mutations: (i) first declaration regardless of touch -> (c1), (c3), (c4)
 /// fail; (ii) last declaration regardless of touch -> (c2) fails; (iii) first
 /// TOUCHED declaration -> (c3), (c4) fail; (iv) drop `routine.anchors` -> the
@@ -2132,7 +2134,7 @@ fn duplicate_id_anchor_follows_the_changed_arm() {
         &[],
         Some(&one_line_diff("src/Shapes.al", 26, "    begin")),
     );
-    assert_eq!(dup_lines(&c1), (24, vec![19, 24]), "(c1) {c1}");
+    assert_eq!(dup_lines(&c1), (25, vec![20, 25]), "(c1) {c1}");
     assert_eq!(join(&c1), (false, true), "(c1) joins arm B only");
 
     // (c2) the first arm only.
@@ -2141,7 +2143,7 @@ fn duplicate_id_anchor_follows_the_changed_arm() {
         &[],
         Some(&one_line_diff("src/Shapes.al", 21, "    begin")),
     );
-    assert_eq!(dup_lines(&c2), (19, vec![19, 24]), "(c2) {c2}");
+    assert_eq!(dup_lines(&c2), (20, vec![20, 25]), "(c2) {c2}");
     assert_eq!(join(&c2), (true, false), "(c2) joins arm A only");
 
     // (c3) both arms in one diff.
@@ -2155,17 +2157,17 @@ fn duplicate_id_anchor_follows_the_changed_arm() {
 +    begin
 ";
     let (c3, _) = digest(ws, &[], Some(both));
-    assert_eq!(dup_lines(&c3), (24, vec![19, 24]), "(c3) {c3}");
+    assert_eq!(dup_lines(&c3), (25, vec![20, 25]), "(c3) {c3}");
 
     // (c4) `--file` and `--routine`: every declaration is touched -> the last.
     let (c4, _) = digest(ws, &["--file", "src/Shapes.al"], None);
-    assert_eq!(dup_lines(&c4), (24, vec![19, 24]), "(c4) {c4}");
+    assert_eq!(dup_lines(&c4), (25, vec![20, 25]), "(c4) {c4}");
     assert_eq!(
         join(&c4),
         (false, true),
         "(c4) the stated limit: a reader that ignores `anchors` joins arm B only"
     );
-    assert_eq!(dup_lines(&routine_doc).0, 24, "(c4) --routine Dup");
+    assert_eq!(dup_lines(&routine_doc).0, 25, "(c4) --routine Dup");
 }
 
 /// Plan Task 3: a routine's declaration starts at its first attached attribute;
@@ -2257,7 +2259,7 @@ fn mixed_inputs_union_touched_declarations() {
         Some(&one_line_diff("src/Shapes.al", 21, "    begin")),
     );
     assert_eq!(code, 0, "{doc}");
-    assert_eq!(anchor(entry(&doc, "Dup")).1, 24, "{doc}");
+    assert_eq!(anchor(entry(&doc, "Dup")).1, 25, "{doc}");
 }
 
 /// Review focus 2: a modified file with headers and no hunk takes every

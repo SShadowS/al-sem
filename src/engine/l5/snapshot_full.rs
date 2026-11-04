@@ -53,7 +53,9 @@ pub(crate) use key_classes::{close_shard, filter_by_class};
 
 /// The snapshot schema version: THE one constant (the composer, the loader and
 /// the shard manifest read it). 4 (#220): `analysisUniverse` and `apps[].role`.
-pub const SNAPSHOT_SCHEMA_VERSION: i64 = 4;
+/// 5 (MCP output plan 1a): every `startLine`/`endLine` is 1-based, and the
+/// header `lineBase: 1` says so (columns stay 0-based).
+pub const SNAPSHOT_SCHEMA_VERSION: i64 = 5;
 
 /// Options for composing the full cli-b snapshot.
 pub struct FullSnapshotOptions<'a> {
@@ -278,6 +280,10 @@ pub(crate) fn assemble_full_snapshot(
     m.insert(
         "analysisUniverse".into(),
         CborValue::Text(opts.universe.as_str().into()),
+    );
+    m.insert(
+        "lineBase".into(),
+        CborValue::Int(i64::from(crate::engine::line_base::LINE_BASE)),
     );
     m.insert("apps".into(), apps);
     m.insert("identities".into(), identities);
@@ -1430,7 +1436,8 @@ pub fn build_inventory_envelope(
 /// `originatingObject` for member-trigger routines (field/control/action/dataitem
 /// trigger). Rust-only projection (not in the byte-parity harness).
 /// 1.2.0 (#220): additive `apps[].role` and `payload.analysisUniverse`.
-pub const INVENTORY_SCHEMA_VERSION: &str = "1.2.0";
+/// 2.0.0 (MCP output plan 1a): every line is 1-based (`payload.lineBase: 1`).
+pub const INVENTORY_SCHEMA_VERSION: &str = "2.0.0";
 
 /// Case-insensitive secondary-sort comparator for the inventory `enclosingMember`
 /// key (RE-6). `None` orders before `Some`; two `Some`s compare on their
@@ -1535,7 +1542,7 @@ fn build_inventory_doc(
                 CborValue::Text(r.stable_routine_id.clone()),
             );
             // G13: the declaration's anchor (prove's `routine.anchor` shape,
-            // 0-based line and column) and the parameter count.
+            // 1-based line, 0-based column) and the parameter count.
             m.insert(
                 "arity".into(),
                 CborValue::Int(i64::try_from(r.parameters.len()).unwrap_or(i64::MAX)),
@@ -1544,7 +1551,10 @@ fn build_inventory_doc(
             let mut anchor: IndexMap<String, CborValue> = IndexMap::new();
             anchor.insert("column".into(), CborValue::Int(i64::from(a.start_column)));
             anchor.insert("file".into(), CborValue::Text(a.source_unit_id.clone()));
-            anchor.insert("line".into(), CborValue::Int(i64::from(a.start_line)));
+            anchor.insert(
+                "line".into(),
+                CborValue::Int(i64::from(crate::engine::line_base::shown(a.start_line))),
+            );
             anchor.insert("sourceKind".into(), CborValue::Text("source".into()));
             m.insert("sourceAnchor".into(), CborValue::Map(anchor));
             (
@@ -1567,8 +1577,11 @@ fn build_inventory_doc(
     payload.insert("apps".into(), apps);
     payload.insert("identities".into(), identities);
     payload.insert("routineInventory".into(), routine_inventory);
-    // G13: `routineInventory[].sourceAnchor.line` is 0-based, as in `prove`.
-    payload.insert("lineBase".into(), CborValue::Int(0));
+    // G13: `routineInventory[].sourceAnchor.line` is 1-based, as in `prove`.
+    payload.insert(
+        "lineBase".into(),
+        CborValue::Int(i64::from(crate::engine::line_base::LINE_BASE)),
+    );
     payload.insert("coverage".into(), coverage);
     payload.insert("rootClassifications".into(), root_classifications);
 

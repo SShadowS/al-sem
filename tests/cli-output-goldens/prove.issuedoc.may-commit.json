@@ -1,0 +1,69 @@
+{
+  "alsemVersion": "cli-output-v1",
+  "deterministic": true,
+  "diagnostics": [],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "prove",
+  "payload": {
+    "lineBase": 1,
+    "question": "may-commit",
+    "result": {
+      "answer": "yes",
+      "evidence": [
+        {
+          "conditionality": "unknown",
+          "confidence": "static",
+          "detail": {
+            "boundary": "Codeunit Base Poster::OnRun"
+          },
+          "evidence": {
+            "column": 8,
+            "excerpt": "enters Codeunit Base Poster::OnRun",
+            "file": "ws:src/OutIssueDocument.Codeunit.al",
+            "line": 15,
+            "sourceKind": "source"
+          },
+          "factId": "ee69de9d9133b75f",
+          "guarantees": [
+            "COMMIT_REACHABLE"
+          ],
+          "provenance": "transitive",
+          "scopedGuarantees": [
+            {
+              "interveningBoundary": "none",
+              "label": "COMMIT_REACHABLE",
+              "scope": "owning-routine",
+              "validForRefutation": false
+            }
+          ],
+          "transactionContext": "unknown",
+          "type": "COMMIT",
+          "viaPaths": [
+            []
+          ],
+          "viaPathsTruncated": false
+        }
+      ],
+      "obligations": {
+        "analysisGaps": 0,
+        "coneTruncated": false,
+        "coverageComplete": false,
+        "openWorldRows": 1,
+        "unresolvedCallsites": 2
+      }
+    },
+    "routine": {
+      "anchor": {
+        "column": 4,
+        "file": "ws:src/OutIssueDocument.Codeunit.al",
+        "line": 3,
+        "sourceKind": "source"
+      },
+      "display": "IssueDoc",
+      "objectDisplay": "Codeunit Out Issue Document",
+      "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"
+    },
+    "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
+  },
+  "schemaVersion": "2.1.0"
+}

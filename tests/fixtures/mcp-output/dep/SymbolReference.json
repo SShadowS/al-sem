@@ -1,0 +1,20 @@
+{"RuntimeVersion":"13.0","Tables":[
+{"Id":70001,"Name":"Base Ledger 01","Fields":[{"Id":1,"Name":"Entry No.","TypeDefinition":{"Name":"Integer"}}]},
+{"Id":70002,"Name":"Base Ledger 02","Fields":[{"Id":1,"Name":"Entry No.","TypeDefinition":{"Name":"Integer"}}]},
+{"Id":70003,"Name":"Base Ledger 03","Fields":[{"Id":1,"Name":"Entry No.","TypeDefinition":{"Name":"Integer"}}]},
+{"Id":70004,"Name":"Base Ledger 04","Fields":[{"Id":1,"Name":"Entry No.","TypeDefinition":{"Name":"Integer"}}]},
+{"Id":70005,"Name":"Base Ledger 05","Fields":[{"Id":1,"Name":"Entry No.","TypeDefinition":{"Name":"Integer"}}]},
+{"Id":70006,"Name":"Base Ledger 06","Fields":[{"Id":1,"Name":"Entry No.","TypeDefinition":{"Name":"Integer"}}]},
+{"Id":70007,"Name":"Base Ledger 07","Fields":[{"Id":1,"Name":"Entry No.","TypeDefinition":{"Name":"Integer"}}]},
+{"Id":70008,"Name":"Base Ledger 08","Fields":[{"Id":1,"Name":"Entry No.","TypeDefinition":{"Name":"Integer"}}]},
+{"Id":70009,"Name":"Base Ledger 09","Fields":[{"Id":1,"Name":"Entry No.","TypeDefinition":{"Name":"Integer"}}]},
+{"Id":70010,"Name":"Base Ledger 10","Fields":[{"Id":1,"Name":"Entry No.","TypeDefinition":{"Name":"Integer"}}]},
+{"Id":70011,"Name":"Base Ledger 11","Fields":[{"Id":1,"Name":"Entry No.","TypeDefinition":{"Name":"Integer"}}]},
+{"Id":70012,"Name":"Base Ledger 12","Fields":[{"Id":1,"Name":"Entry No.","TypeDefinition":{"Name":"Integer"}}]},
+{"Id":70020,"Name":"Base Register","Fields":[{"Id":1,"Name":"No.","TypeDefinition":{"Name":"Integer"}},{"Id":2,"Name":"Last Entry No.","TypeDefinition":{"Name":"Integer"}}]},
+{"Id":70021,"Name":"Base Doc Line","Fields":[{"Id":1,"Name":"Doc No.","TypeDefinition":{"Name":"Code"}},{"Id":2,"Name":"Line No.","TypeDefinition":{"Name":"Integer"}}]},
+{"Id":70022,"Name":"Base Price","Fields":[{"Id":1,"Name":"Item No.","TypeDefinition":{"Name":"Code"}},{"Id":2,"Name":"Unit Price","TypeDefinition":{"Name":"Decimal"}}]}
+],"Codeunits":[
+{"Id":70100,"Name":"Base Poster","Methods":[]},
+{"Id":70101,"Name":"Base Calc","Methods":[]}
+],"AppId":"d0d00001-0000-4000-8000-0000000000b1","Name":"Out Base","Publisher":"probe","Version":"1.0.0.0"}

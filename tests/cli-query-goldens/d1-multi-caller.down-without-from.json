@@ -9,7 +9,8 @@
       "mode": "crossApp"
     },
     "direction": "down",
-    "error": "a `down` query is about one routine's cone — pass --from <routine>, or omit --direction for the workspace-global list"
+    "error": "a `down` query is about one routine's cone — pass --from <routine>, or omit --direction for the workspace-global list",
+    "lineBase": 1
   },
-  "schemaVersion": "1.1.0"
+  "schemaVersion": "2.0.0"
 }

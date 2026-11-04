@@ -18,6 +18,9 @@ pub mod incremental;
 pub(crate) mod joined_key;
 pub mod l4;
 pub mod l5;
+/// The one line base of the engine-query surface (explain, prove, digest,
+/// query, fingerprint, snapshots): 1-based, stated as `lineBase`.
+pub mod line_base;
 /// Permanent, env-gated performance tracing (spec 2026-07-18). Zero-cost when
 /// `ALSEM_TRACE` is unset; emits a Chrome-Trace side file otherwise. See the
 /// module doc for the disabled-path / crash-safety / threading contracts.

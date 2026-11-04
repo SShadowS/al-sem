@@ -87,12 +87,13 @@
       "path": "app.json"
     }
   ],
+  "lineBase": 1,
   "operationIndex": [
     {
       "controlContext": "top-level",
       "displayText": "Entry.Insert",
       "endColumn": 22,
-      "endLine": 7,
+      "endLine": 8,
       "operationId": "aaae2f8d0ae94e06/c5084e18412296b33c3ce4f28b6d4c8cf8c99d13ac7f0aa0ccd050aaff5bd26d/op0",
       "order": {
         "dominatesSuccessReturn": true,
@@ -103,7 +104,7 @@
       "routine": "dd7e7f7g-0007-0007-0007-000000000007:Codeunit:50700#bd036240d944dfa203338651758b10276974497653d2fcc56f19fae52c887fde",
       "sourceFile": "ws:src/ledger.al",
       "startColumn": 8,
-      "startLine": 7
+      "startLine": 8
     }
   ],
   "permissionFacts": [
@@ -134,9 +135,9 @@
         "enclosingRoutineId": "aaae2f8d0ae94e06/c5084e18412296b33c3ce4f28b6d4c8cf8c99d13ac7f0aa0ccd050aaff5bd26d",
         "range": {
           "endColumn": 8,
-          "endLine": 8,
+          "endLine": 9,
           "startColumn": 4,
-          "startLine": 2
+          "startLine": 3
         },
         "sourceUnitId": "ws:src/ledger.al",
         "syntaxKind": "procedure"
@@ -174,7 +175,7 @@
       "stableId": "dd7e7f7g-0007-0007-0007-000000000007:Table:50700#K0"
     }
   ],
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "typedEdges": [],
   "workspaceFingerprint": "ed1cd6b40029641e0f6617ffd3292c10490becc4842094b6d2d6aa02f6a76dd6"
 }

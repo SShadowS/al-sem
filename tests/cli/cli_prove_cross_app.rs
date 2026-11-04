@@ -362,7 +362,7 @@ fn prove_commits_on_success_path_through_boundary_is_unknown() {
         .unwrap_or_default();
     assert!(
         ev.iter()
-            .any(|e| e["type"] == "COMMIT" && e["detail"]["boundary"] == "XBase.Outer"),
+            .any(|e| e["type"] == "COMMIT" && e["detail"]["boundary"] == "Codeunit Dep Lib::Outer"),
         "precondition: the commit is reached through the boundary: {v}"
     );
     assert_eq!(answer(&v), "unknown", "{v}");
@@ -401,7 +401,10 @@ fn prove_matches_a_group_resource_beyond_ten() {
     assert_eq!(answer(&v), "yes", "{v}");
     let ev = result(&v)["evidence"].as_array().expect("evidence");
     assert_eq!(ev.len(), 1, "{v}");
-    assert_eq!(ev[0]["detail"]["boundary"], "XBase.W", "the group: {v}");
+    assert_eq!(
+        ev[0]["detail"]["boundary"], "Codeunit Dep W::W",
+        "the group: {v}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -609,7 +612,9 @@ fn single_app_flag_reaches_prove() {
     ] {
         let got = run(&["--single-app"], format);
         // Minted from the base binary, so never regenerated: regen mode
-        // compares too.
+        // compares too. Edited by hand once since, for the 1-based lines of
+        // MCP output plan 1a (schema 2.0.0, `lineBase: 1`, the anchor's line + 1),
+        // then 1d (schema 2.1.0, no other change on this fixture).
         let path = t8_golden(file);
         let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
         assert_eq!(got, want, "{format}: --single-app != the base's default");

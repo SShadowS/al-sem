@@ -9,7 +9,7 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/post.al",
-              "line": 12,
+              "line": 13,
               "sourceKind": "source"
             },
             "conditionality": "unknown",
@@ -26,7 +26,7 @@
               "column": 8,
               "excerpt": "Message",
               "file": "ws:src/post.al",
-              "line": 18,
+              "line": 19,
               "sourceKind": "source"
             },
             "conditionality": "guarded-by-IsHandled",
@@ -40,7 +40,7 @@
               "column": 8,
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
-              "line": 17,
+              "line": 18,
               "sourceKind": "source"
             },
             "conditionality": "guarded-by-IsHandled",
@@ -63,7 +63,7 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/post.al",
-            "line": 12,
+            "line": 13,
             "sourceKind": "source"
           },
           "conditionalOnAppSet": true,
@@ -90,7 +90,7 @@
           "anchor": {
             "column": 12,
             "file": "ws:src/card.al",
-            "line": 18,
+            "line": 19,
             "sourceKind": "source"
           },
           "caption": "P&ost",
@@ -109,7 +109,7 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/post.al",
-          "line": 4,
+          "line": 5,
           "sourceKind": "source"
         },
         "doc": "Posts a released order.\nIt marks the order posted.",
@@ -128,7 +128,7 @@
             "anchor": {
               "column": 12,
               "file": "ws:src/post.al",
-              "line": 10,
+              "line": 11,
               "sourceKind": "source"
             },
             "comment": null,
@@ -162,7 +162,7 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/post.al",
-              "line": 11,
+              "line": 12,
               "sourceKind": "source"
             },
             "comment": null,
@@ -204,7 +204,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/tests.al",
-            "line": 8,
+            "line": 9,
             "sourceKind": "source"
           },
           "asserts": 3,
@@ -216,7 +216,8 @@
     }
   ],
   "diagnostics": [],
+  "lineBase": 1,
   "mode": "routine",
-  "schema": "al-sem.explain/1",
+  "schema": "al-sem.explain/2",
   "selector": "PostOrder"
 }

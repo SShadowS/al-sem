@@ -424,6 +424,16 @@ impl LspEngines {
             universe: Universe::CrossApp,
             freshness: Freshness::Fresh,
         };
+        // The editor keeps the CLI's defaults (module doc): the MCP tools' own
+        // (prove human, a 40 KiB inline cap; MCP output plan 1c) serve an
+        // agent's client, not the extension.
+        if tool == "alsem_prove" {
+            args.entry("format").or_insert_with(|| json!("json"));
+        }
+        if tools::TOOL_NAMES.contains(&tool) && !matches!(tool, "alsem_status" | "alsem_refresh") {
+            args.entry("maxInlineBytes")
+                .or_insert_with(|| json!(crate::wire::DEFAULT_INLINE_BYTES));
+        }
         let call = match tools::parse_call(tool, Some(&Value::Object(args)), &defaults) {
             Ok(c) => c,
             Err(why) => {

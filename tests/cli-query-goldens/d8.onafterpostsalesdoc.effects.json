@@ -18,13 +18,13 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/subscriber.al",
-            "line": 9
+            "line": 10
           },
           "routine": {
             "anchor": {
               "column": 4,
               "file": "ws:src/subscriber.al",
-              "line": 3
+              "line": 4
             },
             "display": "HandlePosted",
             "objectDisplay": "Codeunit D8BadSubscriber",
@@ -37,13 +37,14 @@
         "via": "event-subscriber"
       }
     ],
+    "lineBase": 1,
     "routine": {
       "resolution": "resolved",
       "routine": {
         "anchor": {
           "column": 4,
           "file": "ws:src/posting.al",
-          "line": 18
+          "line": 19
         },
         "display": "OnAfterPostSalesDoc",
         "objectDisplay": "Codeunit D8PostingChain",
@@ -52,5 +53,5 @@
       "selector": "OnAfterPostSalesDoc"
     }
   },
-  "schemaVersion": "1.1.0"
+  "schemaVersion": "2.0.0"
 }

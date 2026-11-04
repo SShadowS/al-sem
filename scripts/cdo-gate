@@ -94,6 +94,16 @@ if ! cargo test "${profile[@]}" --test l4_summary_differential; then
     status=1
 fi
 
+# ⟨MCP output plan, item T⟩ The output invariants on three CDO routines (anchor
+# source-check, `lineBase`, ...): `tests/cli/output_cdo.rs`, the one CDO-gated
+# member of the `cli` umbrella. It reads every answer off ONE `alsem mcp` server
+# (one resident build), so its tests share a process: plain `cargo test`, filtered
+# to the member.
+echo "cdo-gate: running cli output_cdo (output invariants on CDO)..."
+if ! cargo test "${profile[@]}" --test cli output_cdo::; then
+    status=1
+fi
+
 # ⟨2026-09-14⟩ The SAME defect as the l4 digest above, found the same way and
 # twice in one day: CDO-gated tests also live in `--lib`, and this script ran
 # only integration targets, so they were on NO runner here either.

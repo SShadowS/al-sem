@@ -95,7 +95,7 @@
         "bbbb7070-0000-0000-0000-000000000070:Table:18"
       ]
     },
-    "lineBase": 0,
+    "lineBase": 1,
     "rootClassifications": [
       {
         "confidence": "static",
@@ -109,9 +109,9 @@
           "enclosingRoutineId": "1e2b5317f65ee29d/c6f7d0c5400137d57d473231aa7885a6b9eb1e82535e753f8b828d5d0e9082ae",
           "range": {
             "endColumn": 8,
-            "endLine": 17,
+            "endLine": 18,
             "startColumn": 4,
-            "startLine": 12
+            "startLine": 13
           },
           "sourceUnitId": "ws:src/Work.al",
           "syntaxKind": "procedure"
@@ -129,9 +129,9 @@
           "enclosingRoutineId": "1e2b5317f65ee29d/b208326fa10ca29ed890204c14cfdb7fec35fbc456d8c661366f457bc384881f",
           "range": {
             "endColumn": 8,
-            "endLine": 24,
+            "endLine": 25,
             "startColumn": 4,
-            "startLine": 19
+            "startLine": 20
           },
           "sourceUnitId": "ws:src/Work.al",
           "syntaxKind": "procedure"
@@ -149,9 +149,9 @@
           "enclosingRoutineId": "1e2b5317f65ee29d/08a0e8321ca2e66246ab84a0358b5501013da2b83cf2eebbc85a56ed7652b149",
           "range": {
             "endColumn": 8,
-            "endLine": 31,
+            "endLine": 32,
             "startColumn": 4,
-            "startLine": 26
+            "startLine": 27
           },
           "sourceUnitId": "ws:src/Work.al",
           "syntaxKind": "procedure"
@@ -169,9 +169,9 @@
           "enclosingRoutineId": "1e2b5317f65ee29d/15be442f50338ff0ec9a8d2a09430461c9dfcc5505d3d6262982b6a2b1cb228e",
           "range": {
             "endColumn": 8,
-            "endLine": 42,
+            "endLine": 43,
             "startColumn": 4,
-            "startLine": 37
+            "startLine": 38
           },
           "sourceUnitId": "ws:src/Work.al",
           "syntaxKind": "procedure"
@@ -189,9 +189,9 @@
           "enclosingRoutineId": "1e2b5317f65ee29d/fb69409071bbc7e62f79efa3ada6b2d1af42aa7d0d0db1157548672ee86d75b8",
           "range": {
             "endColumn": 8,
-            "endLine": 5,
+            "endLine": 6,
             "startColumn": 4,
-            "startLine": 2
+            "startLine": 3
           },
           "sourceUnitId": "ws:src/Extra.al",
           "syntaxKind": "trigger_declaration"
@@ -207,7 +207,7 @@
         "sourceAnchor": {
           "column": 4,
           "file": "ws:src/Work.al",
-          "line": 12,
+          "line": 13,
           "sourceKind": "source"
         },
         "stableRoutineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#40d9d2544a5b8a79e48e580e9fc63bb0cc614347e200633610c2a2b268a920ea"
@@ -220,7 +220,7 @@
         "sourceAnchor": {
           "column": 4,
           "file": "ws:src/Work.al",
-          "line": 19,
+          "line": 20,
           "sourceKind": "source"
         },
         "stableRoutineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b7084bdf99f6b054e77188a85fa1aad72f8afc0a314d46ac3c2c8ee718140330"
@@ -233,7 +233,7 @@
         "sourceAnchor": {
           "column": 4,
           "file": "ws:src/Work.al",
-          "line": 26,
+          "line": 27,
           "sourceKind": "source"
         },
         "stableRoutineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50170#b8639b321a7b761371329176d52b28230370ba7ae47e1c2a25059a5452980d4a"
@@ -246,7 +246,7 @@
         "sourceAnchor": {
           "column": 4,
           "file": "ws:src/Work.al",
-          "line": 37,
+          "line": 38,
           "sourceKind": "source"
         },
         "stableRoutineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50171#f0ffda384ed60fe2a01bf1f6ec979e480f4737c2c9ed3eab1826cf562bc836aa"
@@ -259,12 +259,12 @@
         "sourceAnchor": {
           "column": 4,
           "file": "ws:src/Extra.al",
-          "line": 2,
+          "line": 3,
           "sourceKind": "source"
         },
         "stableRoutineId": "aaaa7070-0000-0000-0000-000000000070:Codeunit:50176#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
       }
     ]
   },
-  "schemaVersion": "1.2.0"
+  "schemaVersion": "2.0.0"
 }

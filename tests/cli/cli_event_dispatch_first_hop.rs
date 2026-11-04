@@ -287,8 +287,9 @@ fn event_hops_carry_onx_id(eff: &Value, f: &mut Vec<String>) {
     }
 }
 
-/// The evidence is `source` at `(SUBSCRIBER_FILE, line, column)`.
-fn evidence_at(eff: &Value, line: u64, column: u64, f: &mut Vec<String>) {
+/// The evidence is `source` at `(SUBSCRIBER_FILE, row, column)`: `row` is the
+/// 0-based line of [`SITES`], the document's line is 1-based (`lineBase: 1`).
+fn evidence_at(eff: &Value, row: u64, column: u64, f: &mut Vec<String>) {
     let ev = &eff["evidence"];
     if ev["sourceKind"] != "source" {
         f.push(format!(
@@ -297,6 +298,7 @@ fn evidence_at(eff: &Value, line: u64, column: u64, f: &mut Vec<String>) {
         ));
         return;
     }
+    let line = row + 1;
     if ev["file"] != SUBSCRIBER_FILE || ev["line"] != line || ev["column"] != column {
         f.push(format!(
             "evidence at {}:{}:{} (want {SUBSCRIBER_FILE}:{line}:{column})",

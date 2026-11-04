@@ -50,7 +50,7 @@ fn cli_stdin(argv: &[&str], stdin: Option<&str>) -> (Vec<u8>, Vec<u8>, u8) {
 }
 
 /// One `alsem mcp` server and its client end.
-struct Server {
+pub(crate) struct Server {
     child: Child,
     input: ChildStdin,
     output: BufReader<ChildStdout>,
@@ -94,11 +94,11 @@ impl Server {
     }
 
     /// A server initialized at `2025-06-18` and ready.
-    fn ready(workspace: &Path, hook: Option<&str>) -> Server {
+    pub(crate) fn ready(workspace: &Path, hook: Option<&str>) -> Server {
         Server::ready_args(workspace, hook, &[])
     }
 
-    fn ready_args(workspace: &Path, hook: Option<&str>, extra: &[&str]) -> Server {
+    pub(crate) fn ready_args(workspace: &Path, hook: Option<&str>, extra: &[&str]) -> Server {
         let mut s = Server::start_args(workspace, hook, extra);
         let r = s.request(json!(0), "initialize", json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}));
         assert_eq!(r["result"]["protocolVersion"], "2025-06-18", "{r}");
@@ -148,7 +148,7 @@ impl Server {
         r
     }
 
-    fn call(&mut self, id: i64, tool: &str, args: Value) -> Value {
+    pub(crate) fn call(&mut self, id: i64, tool: &str, args: Value) -> Value {
         let r = self.request(
             json!(id),
             "tools/call",
@@ -159,7 +159,7 @@ impl Server {
     }
 
     /// Close stdin and wait for the server's exit.
-    fn finish(mut self) -> std::process::ExitStatus {
+    pub(crate) fn finish(mut self) -> std::process::ExitStatus {
         drop(self.input);
         self.child.wait().unwrap()
     }
@@ -168,14 +168,36 @@ impl Server {
 /// A tools/call result's envelope (its `structuredContent`), checked
 /// against its text blocks: the first is the envelope's JSON without
 /// `stdoutText`, the second (when the stdout is inline) the stdout exactly.
-fn envelope(result: &Value) -> Value {
-    let env = result["structuredContent"].clone();
+///
+/// MCP output plan 1c: the first block is the envelope with no `stdoutText`
+/// key (no placeholder), and `structuredContent` holds the answer once:
+/// `output` (no `stdoutText`) for an inline JSON stdout, else `stdoutText`.
+/// The returned envelope is the head plus the inline stdout as `stdoutText`
+/// (so [`cli_bytes`] reads the CLI's bytes from the text block).
+pub(crate) fn envelope(result: &Value) -> Value {
+    let structured = result["structuredContent"].clone();
     let content = result["content"].as_array().expect("content blocks");
     let head: Value = serde_json::from_str(content[0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(head["kind"], env["kind"]);
-    if let Some(text) = env["stdoutText"].as_str() {
-        assert_eq!(content.len(), 2);
-        assert_eq!(content[1]["text"].as_str(), Some(text));
+    assert!(head.get("stdoutText").is_none(), "no placeholder: {head}");
+    assert_eq!(head["kind"], structured["kind"]);
+    let mut env = head.clone();
+    if content.len() == 2 {
+        let text = content[1]["text"].as_str().unwrap();
+        env["stdoutText"] = json!(text);
+        if structured.get("output").is_some() {
+            assert!(
+                structured.get("stdoutText").is_none(),
+                "one copy: output XOR stdoutText: {structured}"
+            );
+            let mut without = structured.clone();
+            without.as_object_mut().unwrap().remove("output");
+            assert_eq!(without, head, "structuredContent is the head plus output");
+        } else {
+            assert_eq!(structured, env, "structuredContent is the envelope");
+        }
+    } else {
+        assert_eq!(content.len(), 1);
+        assert!(structured.get("stdoutText").is_none(), "{structured}");
     }
     assert_eq!(
         result["isError"],
@@ -187,7 +209,7 @@ fn envelope(result: &Value) -> Value {
 }
 
 /// A cli envelope's (stdout bytes, stderr bytes, exit).
-fn cli_bytes(env: &Value) -> (Vec<u8>, Vec<u8>, u8) {
+pub(crate) fn cli_bytes(env: &Value) -> (Vec<u8>, Vec<u8>, u8) {
     assert_eq!(env["kind"], "cli", "{env}");
     let stdout = match (env.get("stdoutText"), env.get("stdoutFile")) {
         (Some(Value::String(t)), None) => t.clone().into_bytes(),
@@ -207,7 +229,7 @@ fn cli_bytes(env: &Value) -> (Vec<u8>, Vec<u8>, u8) {
 }
 
 /// A spill file's bytes, checked against its length and hash.
-fn file_bytes(f: &Value) -> Vec<u8> {
+pub(crate) fn file_bytes(f: &Value) -> Vec<u8> {
     let b = std::fs::read(f["path"].as_str().unwrap()).expect("the file exists");
     assert_eq!(b.len() as u64, f["bytes"].as_u64().unwrap());
     assert_eq!(
@@ -330,7 +352,16 @@ fn a_transcript_answers_what_the_cli_answers() {
         (
             "alsem_prove",
             json!({"routine": "PostOrder", "question": "may-commit", "deterministic": true}),
-            vec!["prove", w, "PostOrder", "may-commit", "--deterministic"],
+            // The MCP default for prove is human (plan 1c); the CLI's, json.
+            vec![
+                "prove",
+                w,
+                "PostOrder",
+                "may-commit",
+                "--deterministic",
+                "--format",
+                "human",
+            ],
             None,
         ),
         (
@@ -388,6 +419,10 @@ fn a_transcript_answers_what_the_cli_answers() {
         assert_eq!(cli_bytes(&env), expected, "{tool} {args}");
         assert_eq!(env["universe"], "cross-app");
         assert_eq!(env["stale"], false);
+        // MCP output plan 1a: the envelope states the line base of the answer.
+        // Discrimination (2026-11-04): dropping the insert in `pool.rs`'s
+        // `wrap` fails here (`null`); restored, it passes.
+        assert_eq!(env["lineBase"], 1, "{tool}: {env}");
         // The resident child: every call off one revision of the workspace.
         assert_eq!(
             env["revision"]["generation"], 1,
@@ -402,7 +437,7 @@ fn a_transcript_answers_what_the_cli_answers() {
         json!({"routines": ["Archive"], "format": "json"}),
     );
     assert_eq!(
-        env["structuredContent"]["output"]["schema"], "al-sem.explain/1",
+        env["structuredContent"]["output"]["schema"], "al-sem.explain/2",
         "{env}"
     );
 
@@ -424,10 +459,12 @@ fn a_transcript_answers_what_the_cli_answers() {
             "{env}"
         );
         assert_eq!(cli_bytes(&env), expected);
-        assert_eq!(env["summary"]["summary"]["rootsResolved"], 1, "{env}");
-        assert_eq!(env["summary"]["entriesTotal"], 1, "{env}");
+        // The renderer's summary (MCP output plan 1b).
+        assert_eq!(env["summary"]["kind"], "digest", "{env}");
+        assert_eq!(env["summary"]["rootsResolved"], 1, "{env}");
+        assert_eq!(env["summary"]["routinesListed"], 1, "{env}");
         assert_eq!(
-            env["summary"]["entries"][0]["routine"],
+            env["summary"]["routines"][0]["routine"],
             "Codeunit Explain Post::PostOrder"
         );
 
@@ -444,7 +481,15 @@ fn a_transcript_answers_what_the_cli_answers() {
         assert_eq!(cli_bytes(&env), expected);
 
         // `out`: written inside the output folder, the same bytes.
-        let argv = ["prove", w, "PostOrder", "may-commit", "--deterministic"];
+        let argv = [
+            "prove",
+            w,
+            "PostOrder",
+            "may-commit",
+            "--deterministic",
+            "--format",
+            "human",
+        ];
         let expected = cli(&argv);
         let env = envelope(&s.call(
         132,
@@ -622,8 +667,8 @@ fn output_paths_outside_the_folder_are_refused() {
 /// What a Windows client gets (design §10, fail-closed: no handle-relative
 /// creation, so neither the server's output folder nor the child's spill
 /// directory writes anything; the `no-output-dir` hook takes that path on
-/// any platform): a digest comes back inline (`stdoutText`) with its
-/// summary, a stdout over the request's inline cap comes back inline, every
+/// any platform): a digest comes back inline (`stdoutText`, no summary: the
+/// answer is there), a stdout over the request's inline cap comes back inline, every
 /// answer is the CLI's bytes, an `out` is refused (`refusedPath`), and the
 /// output folder stays empty.
 ///
@@ -648,7 +693,9 @@ fn the_inline_only_path_delivers_inline() {
     assert!(env["stdoutText"].is_string(), "{env}");
     assert!(env.get("stdoutFile").is_none(), "{env}");
     assert_eq!(cli_bytes(&env), expected);
-    assert_eq!(env["summary"]["summary"]["rootsResolved"], 1, "{env}");
+    // MCP output plan 1b/1e: a summary goes with a file only; inline, the
+    // answer itself is there.
+    assert!(env.get("summary").is_none(), "{env}");
     let argv = ["query", "touches", w, "--table", "50400", "--deterministic"];
     let expected = cli(&argv);
     let env = envelope(&s.call(
@@ -845,7 +892,15 @@ mod faults {
         let env = envelope(&r);
         assert_eq!(env["kind"], "failed", "{r}");
         assert_eq!(env["outcome"], "engineError", "{r}");
-        let expected = cli(&["prove", w, "PostOrder", "may-commit", "--deterministic"]);
+        let expected = cli(&[
+            "prove",
+            w,
+            "PostOrder",
+            "may-commit",
+            "--deterministic",
+            "--format",
+            "human",
+        ]);
         let env = envelope(&s.call(2, "alsem_prove", args));
         assert_eq!(cli_bytes(&env), expected);
         let st = s.call(3, "alsem_status", json!({}))["structuredContent"].clone();

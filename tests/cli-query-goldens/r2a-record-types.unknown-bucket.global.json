@@ -9,6 +9,7 @@
       "mode": "crossApp"
     },
     "direction": "both",
+    "lineBase": 1,
     "table": {
       "id": "unknown",
       "isUnknownBucket": true,
@@ -23,7 +24,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/Codeunit.al",
-            "line": 9
+            "line": 10
           },
           "display": "DeclaredVars",
           "objectDisplay": "Codeunit R2a Records",
@@ -33,5 +34,5 @@
       "scoped": false
     }
   },
-  "schemaVersion": "1.1.0"
+  "schemaVersion": "2.0.0"
 }

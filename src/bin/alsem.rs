@@ -3843,6 +3843,8 @@ mod tests {
             match a {
                 WriteAction::Stdout(b) => stdout.extend(b),
                 WriteAction::Stderr(b) => stderr.extend(b),
+                // A front end's summary (MCP output plan 1b/1e): no stream.
+                WriteAction::Summary(_) => {}
                 other => panic!("no file write expected: {other:?}"),
             }
         }

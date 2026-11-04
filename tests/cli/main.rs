@@ -15,6 +15,9 @@ mod symbol_app;
 #[path = "../common/regen.rs"]
 mod regen;
 
+#[path = "../common/cdo.rs"]
+mod cdo;
+
 #[path = "../common/temp_state_probe.rs"]
 mod temp_state_probe;
 
@@ -191,4 +194,7 @@ mod gate_suppress_baseline_differential;
 mod ids_file_list_independence;
 mod ids_parent_baseline;
 mod mcp_server;
+mod output_cdo;
+mod output_fixture;
+mod output_invariants;
 mod temp_storage_failure;

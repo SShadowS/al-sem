@@ -1,12 +1,12 @@
-Codeunit Explain Tests::PostUnreleasedFails  ws:src/tests.al:8
+Codeunit Explain Tests::PostUnreleasedFails  ws:src/tests.al:9
   rules: none of its own
   inherited rules: none
   caller rules: no known caller
-  writes Explain Order [Posted, Status] (DB_MODIFY, guarded-by-IsHandled) at ws:src/post.al:17
+  writes Explain Order [Posted, Status] (DB_MODIFY, guarded-by-IsHandled) at ws:src/post.al:18
   commits: no
-  raises OnBeforePostOrder (unknown) at ws:src/post.al:12
-  UI_MESSAGE at ws:src/post.al:18
+  raises OnBeforePostOrder (unknown) at ws:src/post.al:13
+  UI_MESSAGE at ws:src/post.al:19
   tests: none reach it
-  gap: symbol-only-dependency (callee Assert.ExpectedError, status external) at ws:src/tests.al:14
-  gap: symbol-only-dependency (callee Assert.IsTrue, status external) at ws:src/tests.al:15
+  gap: symbol-only-dependency (callee Assert.ExpectedError, status external) at ws:src/tests.al:15
+  gap: symbol-only-dependency (callee Assert.IsTrue, status external) at ws:src/tests.al:16
 

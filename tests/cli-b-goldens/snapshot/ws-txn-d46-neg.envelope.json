@@ -22,7 +22,7 @@
         "callsiteId": "1f0dcf35161dfd3e/3305a7339de83bb9cf50ad4ac8601b68eefca9f043048fa3050f85eda96362a3/cs0",
         "controlContext": "top-level",
         "endColumn": 17,
-        "endLine": 24,
+        "endLine": 25,
         "order": {
           "dominatesSuccessReturn": true,
           "frameId": 0,
@@ -32,7 +32,7 @@
         "routine": "11111111-0000-0000-0000-00000000d461:Codeunit:50001#b8669e55319108c890634c4a59a65673f0a99a138ff874f926b31d5f202b118b",
         "sourceFile": "ws:src/NormalCU.al",
         "startColumn": 8,
-        "startLine": 24
+        "startLine": 25
       }
     ],
     "callsiteResolutions": [
@@ -216,12 +216,13 @@
         "path": "app.json"
       }
     ],
+    "lineBase": 1,
     "operationIndex": [
       {
         "controlContext": "top-level",
         "displayText": "Setup.Get",
         "endColumn": 26,
-        "endLine": 31,
+        "endLine": 32,
         "operationId": "1f0dcf35161dfd3e/1eb9f4ab2c84095b8b812d7412755d2dce9707e54a87d63626459383ead69ada/op0",
         "order": {
           "dominatesSuccessReturn": false,
@@ -232,13 +233,13 @@
         "routine": "11111111-0000-0000-0000-00000000d461:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb",
         "sourceFile": "ws:src/NormalCU.al",
         "startColumn": 15,
-        "startLine": 31
+        "startLine": 32
       },
       {
         "controlContext": "conditional",
         "displayText": "Setup.Insert",
         "endColumn": 26,
-        "endLine": 33,
+        "endLine": 34,
         "operationId": "1f0dcf35161dfd3e/1eb9f4ab2c84095b8b812d7412755d2dce9707e54a87d63626459383ead69ada/op2",
         "order": {
           "dominatesSuccessReturn": false,
@@ -249,13 +250,13 @@
         "routine": "11111111-0000-0000-0000-00000000d461:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb",
         "sourceFile": "ws:src/NormalCU.al",
         "startColumn": 12,
-        "startLine": 33
+        "startLine": 34
       },
       {
         "controlContext": "top-level",
         "displayText": "commit",
         "endColumn": 16,
-        "endLine": 35,
+        "endLine": 36,
         "operationId": "1f0dcf35161dfd3e/1eb9f4ab2c84095b8b812d7412755d2dce9707e54a87d63626459383ead69ada/op3",
         "order": {
           "dominatesSuccessReturn": true,
@@ -266,7 +267,7 @@
         "routine": "11111111-0000-0000-0000-00000000d461:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb",
         "sourceFile": "ws:src/NormalCU.al",
         "startColumn": 8,
-        "startLine": 35
+        "startLine": 36
       }
     ],
     "permissionFacts": [
@@ -338,9 +339,9 @@
           "enclosingRoutineId": "1f0dcf35161dfd3e/3305a7339de83bb9cf50ad4ac8601b68eefca9f043048fa3050f85eda96362a3",
           "range": {
             "endColumn": 8,
-            "endLine": 25,
+            "endLine": 26,
             "startColumn": 4,
-            "startLine": 22
+            "startLine": 23
           },
           "sourceUnitId": "ws:src/NormalCU.al",
           "syntaxKind": "procedure"
@@ -394,7 +395,7 @@
         "stableId": "11111111-0000-0000-0000-00000000d461:Table:50000#K0"
       }
     ],
-    "snapshotSchemaVersion": 4,
+    "snapshotSchemaVersion": 5,
     "typedEdges": [
       {
         "callsiteId": "1f0dcf35161dfd3e/3305a7339de83bb9cf50ad4ac8601b68eefca9f043048fa3050f85eda96362a3/cs0",
@@ -405,9 +406,9 @@
           "enclosingRoutineId": "1f0dcf35161dfd3e/3305a7339de83bb9cf50ad4ac8601b68eefca9f043048fa3050f85eda96362a3",
           "range": {
             "endColumn": 17,
-            "endLine": 24,
+            "endLine": 25,
             "startColumn": 8,
-            "startLine": 24
+            "startLine": 25
           },
           "sourceUnitId": "ws:src/NormalCU.al",
           "syntaxKind": "call_expression"

@@ -31,7 +31,7 @@
               "column": 8,
               "excerpt": "commit",
               "file": "ws:src/Codeunit.al",
-              "line": 47,
+              "line": 48,
               "sourceKind": "source"
             },
             "factId": "e3c3c0ed206a5f3a",
@@ -62,7 +62,7 @@
                   "anchor": {
                     "column": 12,
                     "file": "ws:src/Codeunit.al",
-                    "line": 30,
+                    "line": 31,
                     "sourceKind": "source"
                   },
                   "calleeDisplay": "Persist",
@@ -84,7 +84,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/Codeunit.al",
-            "line": 25,
+            "line": 26,
             "sourceKind": "source"
           },
           "display": "TransitiveCommit",
@@ -112,7 +112,7 @@
               "column": 12,
               "excerpt": "commit",
               "file": "ws:src/Codeunit.al",
-              "line": 9,
+              "line": 10,
               "sourceKind": "source"
             },
             "factId": "f0647a58f72646cf",
@@ -141,7 +141,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/Codeunit.al",
-            "line": 3,
+            "line": 4,
             "sourceKind": "source"
           },
           "display": "DirectCommitInLoop",
@@ -169,7 +169,7 @@
               "column": 8,
               "excerpt": "commit",
               "file": "ws:src/Codeunit.al",
-              "line": 47,
+              "line": 48,
               "sourceKind": "source"
             },
             "factId": "f7d05864755549d4",
@@ -220,7 +220,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/Codeunit.al",
-            "line": 45,
+            "line": 46,
             "sourceKind": "source"
           },
           "display": "Persist",
@@ -245,7 +245,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/Codeunit.al",
-            "line": 43,
+            "line": 44,
             "sourceKind": "source"
           },
           "display": "DoWork",
@@ -273,7 +273,7 @@
               "column": 16,
               "excerpt": "commit",
               "file": "ws:src/Codeunit.al",
-              "line": 21,
+              "line": 22,
               "sourceKind": "source"
             },
             "factId": "7722ced2203dad62",
@@ -302,7 +302,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/Codeunit.al",
-            "line": 14,
+            "line": 15,
             "sourceKind": "source"
           },
           "display": "NestedCommit",
@@ -330,7 +330,7 @@
               "column": 8,
               "excerpt": "commit",
               "file": "ws:src/Codeunit.al",
-              "line": 40,
+              "line": 41,
               "sourceKind": "source"
             },
             "factId": "8acc15c875242342",
@@ -381,7 +381,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/Codeunit.al",
-            "line": 34,
+            "line": 35,
             "sourceKind": "source"
           },
           "display": "CommitAfterLoop",
@@ -396,6 +396,7 @@
         }
       }
     ],
+    "lineBase": 1,
     "summary": {
       "rootsRequested": 6,
       "rootsResolved": 6,
@@ -404,5 +405,5 @@
     },
     "workspaceFingerprint": "18bd295463f855581d92f3e2f4f696aec9575f2eee33c1469df6c45ca2d35d4e"
   },
-  "schemaVersion": "1.8.0"
+  "schemaVersion": "2.1.0"
 }

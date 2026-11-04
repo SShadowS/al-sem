@@ -22,7 +22,7 @@
         "callsiteId": "9b6811a0827502f0/027b190c8d7f64f9af48ef766492468522a030709daf161984d6d7a07dce2049/cs0",
         "controlContext": "top-level",
         "endColumn": 30,
-        "endLine": 12,
+        "endLine": 13,
         "order": {
           "dominatesSuccessReturn": true,
           "frameId": 0,
@@ -32,7 +32,7 @@
         "routine": "11111111-0000-0000-0000-00000000d481:Codeunit:50000#87be6e12ef6d9ff4dbfc63ca7c99925ef35263973d450e98dcb316037967511b",
         "sourceFile": "ws:src/D48Neg.Codeunit.al",
         "startColumn": 8,
-        "startLine": 12
+        "startLine": 13
       }
     ],
     "callsiteResolutions": [
@@ -114,6 +114,7 @@
         "path": "app.json"
       }
     ],
+    "lineBase": 1,
     "operationIndex": [],
     "permissionFacts": [],
     "rootClassifications": [
@@ -129,9 +130,9 @@
           "enclosingRoutineId": "9b6811a0827502f0/027b190c8d7f64f9af48ef766492468522a030709daf161984d6d7a07dce2049",
           "range": {
             "endColumn": 8,
-            "endLine": 13,
+            "endLine": 14,
             "startColumn": 4,
-            "startLine": 5
+            "startLine": 6
           },
           "sourceUnitId": "ws:src/D48Neg.Codeunit.al",
           "syntaxKind": "procedure"
@@ -148,7 +149,7 @@
       ]
     },
     "schemaFacts": [],
-    "snapshotSchemaVersion": 4,
+    "snapshotSchemaVersion": 5,
     "typedEdges": [],
     "workspaceFingerprint": "17fbcaab4eb174ec9f7c2e3d53f24d2fc8c3bbf94cf005e47d7c9d3069575c4a"
   },
