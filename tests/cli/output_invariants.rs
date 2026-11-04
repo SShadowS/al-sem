@@ -1410,3 +1410,125 @@ fn explain_digest_and_prove_agree_on_the_fixture() {
         );
     }
 }
+
+/// The fixture root that writes `Out Item` with every operation kind the
+/// field rule tells apart (`Out Field Ops::RunAll`, W2-4).
+pub(crate) const FIELD_OPS: &str = "Out Field Ops::RunAll";
+
+/// W2-4, T-W2-4 (design §4.1 rule 2d): a write states fields by its ORIGINAL
+/// operation kind. `Insert` / `Modify`: the fields its owning routine assigns
+/// on the table (assignments and `Validate` alike), named per owner and worded
+/// "not operation-specific"; `ModifyAll`: its own field argument; `Rename`:
+/// the primary key; `Delete` / `DeleteAll` / `LockTable`: nothing, even when
+/// the routine assigns fields on that table (`Purge` sets `Bin.Code` before its
+/// `DeleteAll`). `Validate` is no digest write type, so it never names a write
+/// kind; its field is in its routine's assignments (`Create`'s `Status`).
+/// Expected by hand from `OutFieldOps.Codeunit.al`. Two routines write `Out
+/// Item` (`Create`, `CloseAll`, `Relabel`): one clause each.
+///
+/// Discrimination (2026-11-04): `write_fields` attaching the owner's assigned
+/// fields to every operation kind (the old rule) fails at "Out Bin's DeleteAll
+/// states no field"; restored, passes.
+#[test]
+fn fields_follow_the_original_operation_kind() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let (human, err, code) = run_alsem(&["explain", &ws, "--routine", FIELD_OPS]);
+    assert_eq!(code, 0, "{err}");
+    let (out, err, code) = run_alsem(&["explain", &ws, "--routine", FIELD_OPS, "--format", "json"]);
+    assert_eq!(code, 0, "{err}");
+    let doc: Value = serde_json::from_str(&out).unwrap();
+    let writes = doc["cards"][0]["effects"]["writes"].as_array().unwrap();
+    let row = |table: &str, kind: &str| -> &Value {
+        writes
+            .iter()
+            .find(|w| {
+                w["table"] == table && w["opKinds"].as_array().unwrap().iter().any(|k| k == kind)
+            })
+            .unwrap_or_else(|| panic!("no {kind} row on {table}: {writes:?}"))
+    };
+    let empty = |v: &Value| match v {
+        Value::Object(m) => m.is_empty(),
+        Value::Array(a) => a.is_empty(),
+        _ => false,
+    };
+    let bin = row("Out Bin", "DeleteAll");
+    assert!(
+        empty(&bin["fields"]) && empty(&bin["fieldOps"]) && empty(&bin["renames"]),
+        "Out Bin's DeleteAll states no field: {bin}"
+    );
+    let insert = row("Out Item", "Insert");
+    assert_eq!(
+        insert["fields"],
+        serde_json::json!({"Codeunit Out Field Ops::Create": ["No.", "Qty", "Status"]}),
+        "{insert}"
+    );
+    let modify_all = row("Out Item", "ModifyAll");
+    assert!(empty(&modify_all["fields"]), "{modify_all}");
+    assert_eq!(
+        modify_all["fieldOps"],
+        serde_json::json!([{"op": "ModifyAll", "field": "Status", "in": "Codeunit Out Field Ops::CloseAll"}])
+    );
+    let rename = row("Out Item", "Rename");
+    assert!(
+        empty(&rename["fields"]) && empty(&rename["fieldOps"]),
+        "{rename}"
+    );
+    assert_eq!(
+        rename["renames"],
+        serde_json::json!(["Codeunit Out Field Ops::Relabel"])
+    );
+    assert!(
+        !writes.iter().any(|w| w["opKinds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|k| k == "Validate")),
+        "Validate is no write kind"
+    );
+    // The human block: Out Bin has no fields line; Out Item one clause per
+    // owner, in the stated wording.
+    let block = |table: &str| -> Vec<&str> {
+        let lines: Vec<&str> = human.lines().collect();
+        let start = lines
+            .iter()
+            .position(|l| l.trim_start().starts_with(&format!("{table}: ")))
+            .unwrap_or_else(|| panic!("no {table} block:\n{human}"));
+        lines[start + 1..]
+            .iter()
+            .take_while(|l| l.starts_with("      "))
+            .copied()
+            .collect()
+    };
+    assert!(
+        !block("Out Bin").iter().any(|l| l.contains("field")),
+        "Out Bin's DeleteAll states no field:\n{human}"
+    );
+    let item = block("Out Item").join("\n");
+    for want in [
+        "fields Create assigns on this table (not operation-specific): No., Qty, Status",
+        "ModifyAll sets: Status (in Codeunit Out Field Ops::CloseAll)",
+        "renames (primary key) in Codeunit Out Field Ops::Relabel",
+    ] {
+        assert!(item.contains(want), "{want}:\n{human}");
+    }
+    // The rule on every fixture card: no field on a delete-only write.
+    for routine in [ISSUE_DOC, WRITE_LOG, FIELD_OPS] {
+        let (out, _, _) = run_alsem(&["explain", &ws, "--routine", routine, "--format", "json"]);
+        let doc: Value = serde_json::from_str(&out).unwrap();
+        for w in doc["cards"][0]["effects"]["writes"].as_array().unwrap() {
+            let Some(kinds) = w["opKinds"].as_array() else {
+                continue;
+            };
+            if !kinds.is_empty()
+                && kinds
+                    .iter()
+                    .all(|k| matches!(k.as_str(), Some("Delete" | "DeleteAll" | "LockTable")))
+            {
+                assert!(
+                    empty(&w["fields"]) && empty(&w["fieldOps"]),
+                    "{routine}: {w}"
+                );
+            }
+        }
+    }
+}

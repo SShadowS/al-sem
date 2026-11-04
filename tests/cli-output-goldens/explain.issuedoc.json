@@ -154,14 +154,13 @@
             "classReason": "known-temporary",
             "conditionality": "unconditional-on-success",
             "fieldCaptions": {},
-            "fields": [
-              "Entry No.",
-              "Message"
-            ],
+            "fieldOps": [],
+            "fields": {},
             "op": "DB_DELETE",
             "opKinds": [
               "DeleteAll"
             ],
+            "renames": [],
             "table": "Out Log",
             "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
             "tempState": "known(true)",
@@ -254,14 +253,18 @@
             "classReason": "known-persistent",
             "conditionality": "unconditional-on-success",
             "fieldCaptions": {},
-            "fields": [
-              "Entry No.",
-              "Message"
-            ],
+            "fieldOps": [],
+            "fields": {
+              "Codeunit Out Log Mgt::WriteLog": [
+                "Entry No.",
+                "Message"
+              ]
+            },
             "op": "DB_INSERT",
             "opKinds": [
               "Insert"
             ],
+            "renames": [],
             "table": "Out Log",
             "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
             "tempState": "known(false)",
@@ -281,13 +284,17 @@
             "classReason": "parameter",
             "conditionality": "unconditional-on-success",
             "fieldCaptions": {},
-            "fields": [
-              "Status"
-            ],
+            "fieldOps": [],
+            "fields": {
+              "Codeunit Out Issue Document::IssueDoc": [
+                "Status"
+              ]
+            },
             "op": "DB_MODIFY",
             "opKinds": [
               "Modify"
             ],
+            "renames": [],
             "table": "Out Doc",
             "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50100",
             "tempState": "parameter-dependent(0)",

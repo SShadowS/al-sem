@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (MCP output wave 2, W2-4 … W2-8)
+
+- **W2-4 (2d): a write states fields by its original operation kind.** `alsem explain`'s table
+  writes print `fields X assigns on this table (not operation-specific): …` only for `Insert` and
+  `Modify` (one clause per owning routine), `ModifyAll sets: F (in …)` for a `ModifyAll` (the
+  operation's own field), `renames (primary key) in …` for a `Rename`, and nothing for `Delete`,
+  `DeleteAll` and `LockTable` (before, every write listed every field its routine assigned on the
+  table, a `DeleteAll` too). Explain JSON (`/3`, no outside reader): `fields` is now an object keyed
+  by the owning routine's qualified display, beside `fieldOps` (`{op, field, in}`) and `renames`.
+  A `Validate` is no digest write type; its field stays in its routine's assignments.
+
 ### Fixed (#369: dependency writes with no witness path, and colliding `factId`s)
 
 - **A write deep in dependency code through a `var` record parameter now gets its witness.** Such

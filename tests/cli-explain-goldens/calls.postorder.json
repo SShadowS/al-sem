@@ -80,14 +80,18 @@
             "classReason": "parameter",
             "conditionality": "unconditional-on-success",
             "fieldCaptions": {},
-            "fields": [
-              "Amount",
-              "Status"
-            ],
+            "fieldOps": [],
+            "fields": {
+              "Codeunit Calls Post::PostOrder": [
+                "Amount",
+                "Status"
+              ]
+            },
             "op": "DB_MODIFY",
             "opKinds": [
               "Modify"
             ],
+            "renames": [],
             "table": "Calls Order",
             "tableId": "55555555-ca11-0000-0000-0000000ca115/table/50450",
             "tempState": "parameter-dependent(0)",

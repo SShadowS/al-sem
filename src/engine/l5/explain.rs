@@ -607,10 +607,80 @@ struct IndexData {
     op_row: HashMap<String, usize>,
     /// row -> table id -> the fields that row writes on that table.
     row_fields: HashMap<usize, HashMap<String, BTreeSet<String>>>,
+    /// `ModifyAll` / `Validate` operation id -> the field it writes, as its
+    /// table declares it (W2-4, design §4.1 rule 2d: a per-op fact).
+    op_field: HashMap<String, String>,
     /// Codeunit object id -> the page actions whose `RunObject` runs it:
     /// (the page's object index, the action's index in its run actions, the
     /// raw `RunObject` value's index in the action's).
     run_by: HashMap<String, Vec<(usize, usize, usize)>>,
+}
+
+/// The fields a table write states (W2-4, [`Indexes::write_fields`]).
+#[derive(Debug, Default)]
+struct WriteFields {
+    /// Owner row of an `Insert` / `Modify` -> the fields it assigns.
+    assigned: BTreeMap<usize, BTreeSet<String>>,
+    /// (`ModifyAll` | `Validate`, its field, its owner row).
+    per_op: BTreeSet<(String, String, usize)>,
+    /// Owner rows of a `Rename`.
+    renames: BTreeSet<usize>,
+}
+
+impl WriteFields {
+    /// Every field name stated (for the captions).
+    fn names(&self) -> BTreeSet<&str> {
+        self.assigned
+            .values()
+            .flatten()
+            .map(String::as_str)
+            .chain(self.per_op.iter().map(|(_, f, _)| f.as_str()))
+            .collect()
+    }
+
+    /// The human clauses (`fields X assigns on this table (not
+    /// operation-specific): …`; `ModifyAll sets: F (in Y)`; `renames (primary
+    /// key) in Z`), or `None` when the write states no field.
+    fn human(&self, ix: &Indexes<'_>, detail: bool) -> Option<String> {
+        let mut clauses: Vec<String> = Vec::new();
+        for (&row, f) in &self.assigned {
+            let names = fold(f.iter().cloned().collect(), caps::FIELDS, "fields", detail);
+            clauses.push(format!(
+                "fields {} assigns on this table (not operation-specific): {}",
+                ix.row(row).name,
+                names.joined()
+            ));
+        }
+        for (kind, field, row) in &self.per_op {
+            let verb = if kind == "Validate" {
+                "validates"
+            } else {
+                "ModifyAll sets"
+            };
+            clauses.push(format!("{verb}: {field} (in {})", ix.qualified(*row)));
+        }
+        for &row in &self.renames {
+            clauses.push(format!("renames (primary key) in {}", ix.qualified(row)));
+        }
+        (!clauses.is_empty()).then(|| clauses.join("; "))
+    }
+
+    /// The JSON: `fields` by owner (qualified), `fieldOps` per operation,
+    /// `renames` (owners).
+    fn json(&self, ix: &Indexes<'_>) -> (Value, Value, Value) {
+        let fields: Map<String, Value> = self
+            .assigned
+            .iter()
+            .map(|(&row, f)| (ix.qualified(row), json!(f)))
+            .collect();
+        let ops: Vec<Value> = self
+            .per_op
+            .iter()
+            .map(|(k, f, row)| json!({"op": k, "field": f, "in": ix.qualified(*row)}))
+            .collect();
+        let renames: Vec<String> = self.renames.iter().map(|&r| ix.qualified(r)).collect();
+        (Value::Object(fields), json!(ops), json!(renames))
+    }
 }
 
 /// [`IndexData`] read against the model it was built from: what the cards
@@ -739,7 +809,13 @@ impl IndexData {
             v.dedup();
         }
         let mut row_fields: HashMap<usize, HashMap<String, BTreeSet<String>>> = HashMap::new();
+        let mut op_field: HashMap<String, String> = HashMap::new();
         for w in field_writes(model) {
+            if let Some(op) = w.op_id {
+                op_field
+                    .entry(op.to_string())
+                    .or_insert_with(|| w.field.to_string());
+            }
             row_fields
                 .entry(w.routine_ix)
                 .or_default()
@@ -767,6 +843,7 @@ impl IndexData {
             declaring: DeclaringRows::new(&ws.objects),
             op_row,
             row_fields,
+            op_field,
             run_by,
         }
     }
@@ -794,6 +871,44 @@ impl<'m> Indexes<'m> {
     /// The fields `row` writes on `table_id`.
     fn row_fields(&self, row: usize, table_id: &str) -> Option<&'m BTreeSet<String>> {
         self.data.row_fields.get(&row)?.get(table_id)
+    }
+
+    /// The fields one table write states (design §4.1 rule 2d, by the
+    /// ORIGINAL operation kind): `Insert` / `Modify` the fields their owning
+    /// routine assigns on the table (a routine-level fact, so never
+    /// operation-specific), one clause per owner; `ModifyAll` / `Validate` the
+    /// operation's own field argument; `Rename` the primary key; `Delete`,
+    /// `DeleteAll`, `LockTable` and a write with no op row nothing.
+    fn write_fields(&self, ops: &[String], table_id: &str) -> WriteFields {
+        let mut f = WriteFields::default();
+        for op in ops {
+            let Some(row) = self.op_row(op.as_str()) else {
+                continue;
+            };
+            let Some(kind) = self.row(row).record_operations.iter().find(|o| o.id == *op) else {
+                continue;
+            };
+            match kind.op.as_str() {
+                "Insert" | "Modify" => {
+                    if let Some(assigned) = self.row_fields(row, table_id) {
+                        f.assigned
+                            .entry(row)
+                            .or_default()
+                            .extend(assigned.iter().cloned());
+                    }
+                }
+                k @ ("ModifyAll" | "Validate") => {
+                    if let Some(field) = self.data.op_field.get(op.as_str()) {
+                        f.per_op.insert((k.to_string(), field.clone(), row));
+                    }
+                }
+                "Rename" => {
+                    f.renames.insert(row);
+                }
+                _ => {}
+            }
+        }
+        f
     }
 
     /// The page actions whose `RunObject` runs `object_id`: (the page's
@@ -1569,15 +1684,11 @@ impl Card {
             if ty.starts_with("DB_") && ty != "DB_READ" {
                 let table_id = detail(e, "resourceId").unwrap_or("");
                 let table = detail(e, "resourceDisplay").unwrap_or(table_id);
-                // The fields written, by the routines that hold the write.
-                let mut fields: BTreeSet<&str> = BTreeSet::new();
-                for op in &e.origin_operation_ids {
-                    if let Some(row) = ix.op_row(op.as_str())
-                        && let Some(f) = ix.row_fields(row, table_id)
-                    {
-                        fields.extend(f.iter().map(String::as_str));
-                    }
-                }
+                // The fields the write states, by its original operation
+                // kinds (W2-4, design §4.1 rule 2d).
+                let wf = ix.write_fields(&e.origin_operation_ids, table_id);
+                let fields = wf.names();
+                let (fields_by_owner, field_ops, renames) = wf.json(ix);
                 let mut captions = Map::new();
                 if let Some(t) = tables.get(table_id) {
                     for f in &fields {
@@ -1623,7 +1734,9 @@ impl Card {
                     "tableId": table_id,
                     "class": class_name,
                     "classReason": reason,
-                    "fields": fields.iter().collect::<Vec<_>>(),
+                    "fields": fields_by_owner,
+                    "fieldOps": field_ops,
+                    "renames": renames,
                     "fieldCaptions": Value::Object(captions),
                     "conditionality": e.conditionality,
                     "via": via,
@@ -2112,40 +2225,12 @@ impl Card {
             );
         }
         let fields_of = |t: &TableWrites| -> Option<String> {
-            let mut by_owner: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
-            for &i in &t.rows {
-                for op in &full.effects[i].origin_operation_ids {
-                    if let Some(row) = ix.op_row(op.as_str())
-                        && let Some(f) = ix.row_fields(row, &t.table_id)
-                    {
-                        by_owner
-                            .entry(ix.row(row).name.clone())
-                            .or_default()
-                            .extend(f.iter().map(String::as_str));
-                    }
-                }
-            }
-            if by_owner.is_empty() {
-                return None;
-            }
-            Some(
-                by_owner
-                    .iter()
-                    .map(|(owner, f)| {
-                        let names = fold(
-                            f.iter().map(|s| (*s).to_string()).collect(),
-                            caps::FIELDS,
-                            "fields",
-                            opts.detail,
-                        );
-                        format!(
-                            "fields {owner} assigns on this table (not operation-specific): {}",
-                            names.joined()
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            )
+            let ops: Vec<String> = t
+                .rows
+                .iter()
+                .flat_map(|&i| full.effects[i].origin_operation_ids.iter().cloned())
+                .collect();
+            ix.write_fields(&ops, &t.table_id).human(ix, opts.detail)
         };
         let sections = Sections {
             commits: commit_lines(&rollup, full, rcx, opts),
