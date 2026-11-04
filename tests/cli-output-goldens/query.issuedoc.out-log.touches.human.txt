@@ -1,8 +1,7 @@
-dependencies: Out Base (embedded)
 --- Codeunit Out Issue Document::IssueDoc vs Out Log (a0a00001-0000-4000-8000-0000000000a1/table/50101) ---
-  scope: per operation, one routine into dependency code; temporary-record touches persist nothing but use the table's schema and run its triggers; lines are 1-based
+  scope: per operation, one routine into dependency code; temporary-record touches persist nothing but use the table's schema and run its triggers; lines are 1-based; dependencies: 1 app (--all lists them)
   down: yes — 2 record touches: 1 known persistent, 0 possibly persistent, 1 on temporary records
-    [Insert] write at ws:src/OutIssueDocument.Codeunit.al:61 in Codeunit Out Log Mgt::WriteLog
+    [Insert] write at ws:src/OutIssueDocument.Codeunit.al:61 in Codeunit Out Log Mgt::WriteLog, through Codeunit Out Log Mgt::WriteLog
     temporary records: 1 touch in 1 routine (Codeunit Out Log Mgt::WriteLog 1) — --all lists them
   table not resolved: 2 operations in this cone (they may be this table) — --table unknown lists them
   up: 1 transitive caller (Page Out Doc Card::OnAction): 1 touches it, 0 do not, 0 unknown — through this routine; not a finding — --all lists their witnesses

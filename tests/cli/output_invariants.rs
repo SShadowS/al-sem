@@ -195,6 +195,13 @@ fn line_tokens(t: &str) -> Vec<String> {
         v.push(r);
         return v;
     }
+    // W2-2, query effects: `<Table>: <ops> — first <Kind> at <anchor> in …`.
+    if let Some((_, rest)) = t.split_once(" — first ")
+        && let Some(kind) = rest.split(' ').next()
+    {
+        v.push(kind.to_lowercase());
+        return v;
+    }
     // W2-2, a workspace write's witness anchor: `<Kind> at <anchor>`; a commit
     // site: `COMMIT at <anchor>`.
     if let Some((kind, _)) = t.split_once(" at ")
@@ -495,7 +502,9 @@ fn every_document_states_line_base_1() {
         ("digest", vec!["digest", &ws, "--routine", ISSUE_DOC]),
         (
             "query effects",
-            vec!["query", "effects", &ws, "--routine", ISSUE_DOC_Q],
+            // `--all` (W2-2): the default human form prints the first row per
+            // table only; every row's line with `--all`.
+            vec!["query", "effects", &ws, "--routine", ISSUE_DOC_Q, "--all"],
         ),
         (
             "query touches",
@@ -1131,6 +1140,87 @@ fn digest_path_caps_keys_and_flags_on_the_fixture() {
     let (out, _, _) = run_alsem(&["digest", &ws, "--routine", ISSUE_DOC, "--schema", "2"]);
     let v2: Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v2["schemaVersion"], "2.2.0");
+}
+
+/// W2-2, T-W2-11 on the fixture: query effects' summary buckets are
+/// exclusive and sum to `effectCount`; every `firstHop` is a routine whose
+/// own `query effects` holds the row's operation on the row's table with the
+/// row's op and temp state (the complete contribution), or is `null` with
+/// `firstHopUnavailable`; a direct row has neither. Expected by hand: 6 rows
+/// = 2 may-persist writes + 1 caller-dependent + 1 temporary + 2 on a table
+/// not resolved.
+///
+/// Discrimination (2026-11-04): taking the first sorted direct callee
+/// without the membership check (`FirstHops::of`) fails at "holds the
+/// contribution"; restored, it passes.
+#[test]
+fn query_effects_buckets_and_first_hops_on_the_fixture() {
+    let ws = workspace().to_string_lossy().into_owned();
+    // `None`: not selectable (a dependency routine is not a query selector).
+    let effects_of = |sel: &str| -> Option<Value> {
+        let (out, _, code) = run_alsem(&[
+            "query",
+            "effects",
+            &ws,
+            "--routine",
+            sel,
+            "--format",
+            "json",
+        ]);
+        (code == 0).then(|| serde_json::from_str::<Value>(&out).unwrap()["payload"].clone())
+    };
+    let p = effects_of(ISSUE_DOC_Q).expect("IssueDoc is selectable");
+    let s = &p["summary"];
+    let total: u64 = [
+        "writes",
+        "callerDependent",
+        "locks",
+        "validate",
+        "reads",
+        "unclassified",
+        "temporary",
+        "tableNotResolved",
+    ]
+    .iter()
+    .map(|k| s[k]["operations"].as_u64().unwrap())
+    .sum();
+    assert_eq!(total, p["effectCount"].as_u64().unwrap(), "{s}");
+    assert_eq!(
+        (
+            s["writes"]["operations"].as_u64(),
+            s["callerDependent"]["operations"].as_u64(),
+            s["temporary"]["operations"].as_u64(),
+            s["tableNotResolved"]["operations"].as_u64()
+        ),
+        (Some(2), Some(1), Some(1), Some(2)),
+        "{s}"
+    );
+    let mut checked = 0;
+    for e in p["effects"].as_array().unwrap() {
+        if e["via"] == "direct" {
+            assert!(e.get("firstHop").is_none(), "direct row with a hop: {e}");
+            continue;
+        }
+        let Some(hop) = e["firstHop"].as_object() else {
+            assert!(e["firstHopUnavailable"].is_string(), "{e}");
+            continue;
+        };
+        let Some(callee) = effects_of(hop["stableId"].as_str().unwrap()) else {
+            continue;
+        };
+        let holds = callee["effects"].as_array().unwrap().iter().any(|c| {
+            c["operationId"] == e["operationId"]
+                && c["tableId"] == e["tableId"]
+                && c["op"] == e["op"]
+                && c["tempState"] == e["tempState"]
+        });
+        assert!(holds, "the first hop holds the contribution: {e}");
+        checked += 1;
+    }
+    assert!(
+        checked >= 3,
+        "precondition: inherited rows with a hop ({checked})"
+    );
 }
 
 /// One table write as both documents state it: (type, class, tempState, the

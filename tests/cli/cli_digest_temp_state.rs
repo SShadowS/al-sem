@@ -311,7 +311,13 @@ fn check_mode(single_app: bool) -> Vec<String> {
         if db.is_empty() {
             continue;
         }
-        let q = render_query_effects(&substrate, &format!("Probe Writer.{name}"), "t", true);
+        let q = render_query_effects(
+            &substrate,
+            &format!("Probe Writer.{name}"),
+            false,
+            "t",
+            true,
+        );
         let qdoc: Value = serde_json::from_str(&q.json_text).expect("query json");
         let mut query_states = BTreeSet::new();
         collect_temp_states(&qdoc, &mut query_states);
@@ -1304,7 +1310,7 @@ fn cross_app_digest_reads_the_cross_app_store() {
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(ws, &crate::fingerprint_needs());
     let view = query_view(&inputs, false).expect("query view");
     let substrate = QuerySubstrate::of(&view);
-    let q = render_query_effects(&substrate, "RaiseDep", "t", true);
+    let q = render_query_effects(&substrate, "RaiseDep", false, "t", true);
     let qdoc: Value = serde_json::from_str(&q.json_text).expect("query json");
     let mut query_parts: Vec<(String, String, String)> = qdoc["payload"]["effects"]
         .as_array()

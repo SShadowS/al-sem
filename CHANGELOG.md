@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (MCP output wave 2, W2-2 part 4: `query effects` summary first; first hops)
+
+Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §4.5, §4.6.
+
+- **`query effects` human is summary first.** One `summary:` line puts every operation in exactly
+  one bucket, in this precedence: table not resolved, then the write class of its temp state
+  (temporary records; caller-dependent writes), then the op family (writes that may persist,
+  locks, validate — never a read —, reads, unclassified). Then `coverage:` and `scope:` lines
+  (the `dependencies:` first line moves into the scope line as a count; `--all` names the apps),
+  writes that may persist and caller-dependent writes per table (operation counts, `+ LockTable`
+  on a table also written, the first operation's location and owner, and `through <first hop>`),
+  locks, validate, reads, temporary records and table-not-resolved as counts, and `next:`.
+  `--all` (new; MCP `all`) adds one line per operation, the old layout.
+- **JSON (query 3.0.0, additive):** `payload.summary` (`writes {operations, tables,
+  knownPersistent, tempStateUnknown}`, `callerDependent`, `locks`, `validate`, `reads`,
+  `unclassified`, `temporary {operations, tables, routines}`, `tableNotResolved {operations,
+  routines}`, `byTable[{table, tableId, ops, class, first, beyond: []}]`, `scope`), and on every
+  row that is not the routine's own, `firstHop` (the routine) or `firstHop: null` with
+  `firstHopUnavailable`. Every existing row field is unchanged (`via`, `origin`, …).
+- **`firstHop` is a real association**: the first direct callee, in sorted order, whose summary
+  holds a row equal to the row's complete contribution (operation id, table, op kind and its
+  temp state here); otherwise none, with the reason. `query touches` prints the same
+  `through <first hop>` on its witness lines, and its scope line carries the dependencies count
+  (W2-3's leftovers).
+
 ### Changed (MCP output wave 2, W2-2 part 3: digest human, digest JSON 3.0.0, `--schema 2`)
 
 Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §4.3, §4.4,

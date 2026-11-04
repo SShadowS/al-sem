@@ -411,6 +411,11 @@ struct QueryEffectsCli {
     /// (as `analyze` and `graph` do), so effects on a dependency's tables resolve.
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
+
+    /// Every operation in the human output (one line each), every table and
+    /// every loaded dependency app; the JSON always holds every row.
+    #[arg(long = "all", default_value_t = false)]
+    all: bool,
 }
 
 /// `PolicyCli` — top-level `policy` subcommand group.
@@ -1737,6 +1742,7 @@ fn plan_query_effects(e: QueryEffectsCli) -> Planned {
             let (e, inputs, version) = hold(slot, (e, inputs, version));
             Box::new(
                 QueryJob::effects(inputs, &e.routine, version, e.deterministic, e.single_app)
+                    .all_rows(e.all)
                     .written(e.format == "json", e.out.as_deref()),
             )
         },

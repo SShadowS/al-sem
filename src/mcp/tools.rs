@@ -313,12 +313,16 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_query_effects",
-            "A routine's transitive database-effect list (every record operation, reads and temporary records included, each with its temp state and `via` provenance). Dependency code: one routine deep (the operations of the first dependency routine entered; deeper writes are in alsem_explain / alsem_digest boundary groups and alsem_prove writes-table). Lines are 1-based. Size: up to ~130 KB human for a routine that reaches Base Application; over the inline cap it goes to a file with a summary (counts by operation and temp state). `format: json` is larger. Returns the exact `alsem query effects` stdout (default format human).",
+            "A routine's transitive database-effect list (every record operation, reads and temporary records included, each with its temp state and `via` provenance). Dependency code: one routine deep (the operations of the first dependency routine entered; deeper writes are in alsem_explain / alsem_digest boundary groups and alsem_prove writes-table). Lines are 1-based. Human: a summary line (writes that may persist, caller-dependent writes, locks, validate, reads, temporary records, table not resolved — each operation in exactly one), then writes per table with the first operation's location and first hop; `all: true` adds one line per operation. Size: a few KB human by default; `format: json` holds every row (with `firstHop`) and a `summary`, ~700 KB for a routine that reaches Base Application, and then goes to a file with a summary (counts by operation and temp state). Returns the exact `alsem query effects` stdout (default format human).",
             schema(
                 vec![
                     (
                         "routine",
                         json!({"type": "string", "description": "Routine selector: internal id, stable id, `Object.Routine`, or a bare routine name."}),
+                    ),
+                    (
+                        "all",
+                        json!({"type": "boolean", "description": "Every operation in the human output, one line each (`--all`); JSON always holds every row."}),
                     ),
                     (
                         "format",
@@ -737,6 +741,7 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
         "alsem_query_effects" => {
             let mut v = Argv::new(&["query", "effects"], &workspace);
             v.opt("routine", a.required("routine")?);
+            v.switch("all", a.flag("all")?);
             v.opt(
                 "format",
                 &a.enumerated("format", &["human", "json"], "human")?,

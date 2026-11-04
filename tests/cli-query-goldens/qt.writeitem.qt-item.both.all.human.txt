@@ -5,15 +5,15 @@
   up: 5 transitive callers: 5 touch it, 0 do not, 0 unknown — through this routine; not a finding
     +1 Codeunit QT Touches::CallWithReal [Insert] write at ws:src/QTTouches.al:33 in Codeunit QT Touches::WriteItem
     +1 Codeunit QT Touches::CallWithTemp [Insert] write at ws:src/QTTouches.al:33 in Codeunit QT Touches::WriteItem (temporary record)
-    +2 Codeunit QT Touches::Top1 [Insert] write at ws:src/QTTouches.al:33 in Codeunit QT Touches::WriteItem
-    +2 Codeunit QT Touches::Mixed [FindFirst] read at ws:src/QTTouches.al:41 in Codeunit QT Touches::TempOnly (temporary record)
+    +2 Codeunit QT Touches::Top1 [Insert] write at ws:src/QTTouches.al:33 in Codeunit QT Touches::WriteItem, through Codeunit QT Touches::CallWithReal
+    +2 Codeunit QT Touches::Mixed [FindFirst] read at ws:src/QTTouches.al:41 in Codeunit QT Touches::TempOnly (temporary record), through Codeunit QT Touches::TempOnly
     +2 Codeunit QT Touches::Mixed [Get] read at ws:src/QTTouches.al:62 in Codeunit QT Touches::Mixed
-    +2 Codeunit QT Touches::Mixed [Insert] write at ws:src/QTTouches.al:40 in Codeunit QT Touches::TempOnly (temporary record)
-    +2 Codeunit QT Touches::Mixed [Insert] write at ws:src/QTTouches.al:33 in Codeunit QT Touches::WriteItem (temporary record)
-    +3 Codeunit QT Touches::Entry [Delete] write at ws:src/QTTouches.al:86 in Codeunit QT Touches::Top2
-    +3 Codeunit QT Touches::Entry [FindFirst] read at ws:src/QTTouches.al:41 in Codeunit QT Touches::TempOnly (temporary record)
-    +3 Codeunit QT Touches::Entry [Get] read at ws:src/QTTouches.al:62 in Codeunit QT Touches::Mixed
-    +3 Codeunit QT Touches::Entry [Insert] write at ws:src/QTTouches.al:40 in Codeunit QT Touches::TempOnly (temporary record)
-    +3 Codeunit QT Touches::Entry [Insert] write at ws:src/QTTouches.al:33 in Codeunit QT Touches::WriteItem
-    +3 Codeunit QT Touches::Entry [Insert] write at ws:src/QTTouches.al:33 in Codeunit QT Touches::WriteItem (temporary record)
-    +3 Codeunit QT Touches::Entry [Modify] write at ws:src/QTTouches.al:85 in Codeunit QT Touches::Top2
+    +2 Codeunit QT Touches::Mixed [Insert] write at ws:src/QTTouches.al:40 in Codeunit QT Touches::TempOnly (temporary record), through Codeunit QT Touches::TempOnly
+    +2 Codeunit QT Touches::Mixed [Insert] write at ws:src/QTTouches.al:33 in Codeunit QT Touches::WriteItem (temporary record), through Codeunit QT Touches::CallWithTemp
+    +3 Codeunit QT Touches::Entry [Delete] write at ws:src/QTTouches.al:86 in Codeunit QT Touches::Top2, through Codeunit QT Touches::Top2
+    +3 Codeunit QT Touches::Entry [FindFirst] read at ws:src/QTTouches.al:41 in Codeunit QT Touches::TempOnly (temporary record), through Codeunit QT Touches::Mixed
+    +3 Codeunit QT Touches::Entry [Get] read at ws:src/QTTouches.al:62 in Codeunit QT Touches::Mixed, through Codeunit QT Touches::Mixed
+    +3 Codeunit QT Touches::Entry [Insert] write at ws:src/QTTouches.al:40 in Codeunit QT Touches::TempOnly (temporary record), through Codeunit QT Touches::Mixed
+    +3 Codeunit QT Touches::Entry [Insert] write at ws:src/QTTouches.al:33 in Codeunit QT Touches::WriteItem, through Codeunit QT Touches::Top1
+    +3 Codeunit QT Touches::Entry [Insert] write at ws:src/QTTouches.al:33 in Codeunit QT Touches::WriteItem (temporary record), through Codeunit QT Touches::Mixed
+    +3 Codeunit QT Touches::Entry [Modify] write at ws:src/QTTouches.al:85 in Codeunit QT Touches::Top2, through Codeunit QT Touches::Top2

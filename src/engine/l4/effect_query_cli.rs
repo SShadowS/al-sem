@@ -35,7 +35,9 @@
 //! arc; a count that says "377" and a complete list is honest, a silently
 //! elided list is not.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+use crate::engine::l4::routine_interner::SolveIx;
 
 use serde_json::{Map, Value, json};
 
@@ -218,6 +220,8 @@ enum QueryAsk<'a> {
     },
     Effects {
         routine: &'a str,
+        /// `--all`: every row in the human text (W2-2).
+        all: bool,
     },
 }
 
@@ -267,8 +271,20 @@ impl<'a> QueryJob<'a> {
         deterministic: bool,
         single_app: bool,
     ) -> QueryJob<'a> {
-        let ask = QueryAsk::Effects { routine };
+        let ask = QueryAsk::Effects {
+            routine,
+            all: false,
+        };
         Self::with(inputs, ask, alsem_ver, deterministic, single_app)
+    }
+
+    /// `query effects --all` (W2-2): every row in the human text too.
+    #[must_use]
+    pub fn all_rows(mut self, all_rows: bool) -> QueryJob<'a> {
+        if let QueryAsk::Effects { all, .. } = &mut self.ask {
+            *all = all_rows;
+        }
+        self
     }
 
     fn with(
@@ -335,8 +351,8 @@ impl Job for QueryJob<'_> {
                 self.alsem_ver,
                 self.deterministic,
             ),
-            QueryAsk::Effects { routine } => {
-                render_query_effects(&substrate, routine, self.alsem_ver, self.deterministic)
+            QueryAsk::Effects { routine, all } => {
+                render_query_effects(&substrate, routine, all, self.alsem_ver, self.deterministic)
             }
         };
         Ok(SideDoc::new(Ok::<_, String>(result)))
@@ -1047,10 +1063,27 @@ pub fn render_query_touches(
 }
 
 /// Human output names the loaded dependency apps on its first line, only when
-/// there are some (a workspace with no dependency reads the same in both modes).
+/// there are some (a workspace with no dependency reads the same in both
+/// modes). An answer with a `scope:` line states them there instead (W2-2,
+/// design §4.5 Q6: `dependencies_clause`), so it gets no first line.
 fn with_dependencies_line(mut r: QueryRunResult, deps: &LoadedDependencies) -> QueryRunResult {
-    r.human_text = deps.prefix_human(r.human_text);
+    if !r.human_text.contains("\n  scope: ") {
+        r.human_text = deps.prefix_human(r.human_text);
+    }
     r
+}
+
+/// The scope line's dependencies clause (§4.5 Q6): a count, every app with
+/// `--all`; nothing when none was loaded.
+fn dependencies_clause(deps: &LoadedDependencies, all: bool) -> String {
+    match (deps.apps.len(), all) {
+        (0, _) => String::new(),
+        (n, false) => format!(
+            "; dependencies: {} (--all lists them)",
+            plural(n, "app", "apps")
+        ),
+        (_, true) => format!("; {}", deps.human_line().unwrap_or_default()),
+    }
 }
 
 fn render_query_touches_body(
@@ -1236,12 +1269,17 @@ fn render_query_touches_body(
             };
 
             human.push_str(&format!("--- {} vs {table_label} ---\n", rr.qualified()));
-            human.push_str(TOUCHES_SCOPE_LINE);
+            human.push_str(&format!(
+                "{}{}\n",
+                TOUCHES_SCOPE_LINE.trim_end(),
+                dependencies_clause(deps, all)
+            ));
 
             let cx = TouchCx {
                 query: &query,
                 join: &join,
                 ops: &ops,
+                hops: FirstHops::new(&query),
             };
             let touches_down = query.touches_table(rix, &table.id);
             if direction.wants_down() {
@@ -1340,17 +1378,28 @@ struct TouchCx<'q, 'a> {
     query: &'q DbEffectQuery<'a>,
     join: &'q RoutineJoin<'a>,
     ops: &'q OperationJoin<'a>,
+    /// W2-2: `through <first hop>` by the shared §4.5 rule.
+    hops: FirstHops<'q, 'a>,
 }
 
-impl TouchCx<'_, '_> {
-    /// `[Op] <family> at <file>:<line> in <owner><temp><via>`.
-    fn witness_line(&self, t: &TableTouch<'_>) -> String {
+impl<'a> TouchCx<'_, 'a> {
+    /// `[Op] <family> at <file>:<line> in <owner><temp><via>`, then `, through
+    /// <first hop>` on a row that is not the routine's own, when a direct
+    /// callee holds its complete contribution (design §4.5).
+    fn witness_line(&self, t: &TableTouch<'a>) -> String {
         let at = match self.ops.get(t.operation_id, self.join) {
             Some(o) => format!("at {}:{} in {}", o.file, shown(o.line), o.owner.qualified()),
             None => format!("(outside the workspace: {})", t.operation_id),
         };
+        let through = match t.via {
+            crate::engine::l4::effect_store::ViaRank::Direct => String::new(),
+            _ => match self.hops.of(t) {
+                Ok(c) => format!(", through {}", self.routine_label(c)),
+                Err(_) => String::new(),
+            },
+        };
         format!(
-            "[{}] {} {at}{}{}",
+            "[{}] {} {at}{}{}{through}",
             t.op,
             op_family(t.op),
             temp_note(t.temp_state),
@@ -1768,18 +1817,98 @@ pub fn run_query_effects_pipeline(
 pub fn render_query_effects(
     substrate: &QuerySubstrate,
     routine_selector: &str,
+    all: bool,
     alsem_ver: &str,
     deterministic: bool,
 ) -> QueryRunResult {
     with_dependencies_line(
-        render_query_effects_body(substrate, routine_selector, alsem_ver, deterministic),
+        render_query_effects_body(substrate, routine_selector, all, alsem_ver, deterministic),
         &substrate.dependencies,
     )
 }
 
+/// The exclusive bucket of one row (design §4.5, F10): table not resolved
+/// first, then the write class of its temp state, then the op family.
+fn bucket(t: &TableTouch<'_>) -> &'static str {
+    use crate::engine::l5::rollup::{WriteClass, classify};
+    if is_unknown_table(t.table_id) {
+        return "tableNotResolved";
+    }
+    match classify(&[temp_state_str(t.temp_state).as_str()]) {
+        WriteClass::Temporary => "temporary",
+        WriteClass::CallerDependent(_) => "callerDependent",
+        WriteClass::Physical(_) => match op_family(t.op) {
+            "lock" => "locks",
+            "write" => "writes",
+            "validate" => "validate",
+            "read" => "reads",
+            _ => "unclassified",
+        },
+    }
+}
+
+/// `firstHop` (design §4.5, R3g): the first direct callee, in sorted order,
+/// whose summary holds a row equal to this row's complete contribution
+/// (operation id, table, op kind and the temp state the row has here). Each
+/// callee's rows are read once into a set (Fable N10).
+struct FirstHops<'q, 'a> {
+    query: &'q DbEffectQuery<'a>,
+    sets: std::cell::RefCell<HashMap<SolveIx, Contributions<'a>>>,
+}
+
+/// One routine's rows as contribution keys: (operation id, table, op kind,
+/// temp state).
+type Contributions<'a> = std::collections::HashSet<(&'a str, &'a str, &'a str, String)>;
+
+impl<'q, 'a> FirstHops<'q, 'a> {
+    fn new(query: &'q DbEffectQuery<'a>) -> Self {
+        FirstHops {
+            query,
+            sets: Default::default(),
+        }
+    }
+
+    /// The callee, or why there is none.
+    fn of(&self, t: &TableTouch<'a>) -> Result<SolveIx, &'static str> {
+        let callees = self.query.direct_callees(t.routine);
+        if callees.is_empty() {
+            return Err("no-direct-callee-summary");
+        }
+        let key = (
+            t.operation_id,
+            t.table_id,
+            t.op,
+            temp_state_str(t.temp_state),
+        );
+        let mut sets = self.sets.borrow_mut();
+        for &c in callees {
+            let set = sets.entry(c).or_insert_with(|| {
+                self.query
+                    .bundle()
+                    .db_effects(c)
+                    .map(|e| {
+                        (
+                            e.operation_id,
+                            e.table_id,
+                            e.op,
+                            temp_state_str(e.temp_state),
+                        )
+                    })
+                    .collect()
+            });
+            if set.contains(&key) {
+                return Ok(c);
+            }
+        }
+        Err("no-callee-holds-the-contribution")
+    }
+}
+
+#[allow(clippy::too_many_lines)]
 fn render_query_effects_body(
     substrate: &QuerySubstrate,
     routine_selector: &str,
+    all: bool,
     alsem_ver: &str,
     deterministic: bool,
 ) -> QueryRunResult {
@@ -1837,6 +1966,142 @@ fn render_query_effects_body(
         };
     };
     let effects: Vec<TableTouch<'_>> = query.all_effects(rix);
+    let hops = FirstHops::new(&query);
+    let hop_label = |c: SolveIx| -> String {
+        let internal = query.bundle().routine_id(c);
+        join.get(internal)
+            .map_or_else(|| internal.to_string(), |x| x.qualified())
+    };
+
+    // Rows: every field unchanged, plus `firstHop` (or why none) on a row
+    // that is not the routine's own (ConTinAI reads `via == "direct"`).
+    let rows: Vec<Value> = effects
+        .iter()
+        .map(|t| {
+            let mut v = touch_json(
+                t,
+                ops.get(t.operation_id, &join).as_ref(),
+                Some(tables.get(t.table_id)),
+            );
+            if t.via != crate::engine::l4::effect_store::ViaRank::Direct
+                && let Value::Object(m) = &mut v
+            {
+                match hops.of(t) {
+                    Ok(c) => {
+                        let internal = query.bundle().routine_id(c);
+                        // The routine's identity (its anchor is its own
+                        // `query effects` answer's).
+                        m.insert(
+                            "firstHop".into(),
+                            join.get(internal).map_or_else(
+                                || json!({"display": internal}),
+                                |x| {
+                                    json!({
+                                        "display": x.display,
+                                        "objectDisplay": x.object_display,
+                                        "stableId": x.stable_id,
+                                    })
+                                },
+                            ),
+                        );
+                    }
+                    Err(why) => {
+                        m.insert("firstHop".into(), Value::Null);
+                        m.insert("firstHopUnavailable".into(), why.into());
+                    }
+                }
+            }
+            v
+        })
+        .collect();
+
+    // The buckets (§4.5), each a union by identity.
+    #[derive(Default)]
+    struct Bucket<'t> {
+        rows: Vec<usize>,
+        tables: BTreeSet<&'t str>,
+        owners: BTreeSet<String>,
+        ops: BTreeMap<&'t str, usize>,
+    }
+    let mut buckets: BTreeMap<&'static str, Bucket<'_>> = BTreeMap::new();
+    for (i, t) in effects.iter().enumerate() {
+        let b = buckets.entry(bucket(t)).or_default();
+        b.rows.push(i);
+        b.tables.insert(t.table_id);
+        *b.ops.entry(t.op).or_default() += 1;
+        b.owners.insert(ops.get(t.operation_id, &join).map_or_else(
+            || "(outside the workspace)".to_string(),
+            |o| o.owner.qualified(),
+        ));
+    }
+    // Per table, the may-persist and caller-dependent writes (+ locks on it).
+    let by_table = |name: &str| -> Vec<(&str, Vec<usize>)> {
+        let mut m: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+        for &i in buckets.get(name).map_or(&[][..], |b| b.rows.as_slice()) {
+            m.entry(effects[i].table_id).or_default().push(i);
+        }
+        let mut v: Vec<(&str, Vec<usize>)> = m.into_iter().collect();
+        let name_of = |id: &str| tables.get(id).unwrap_or(id).to_string();
+        v.sort_by(|a, b| {
+            b.1.len()
+                .cmp(&a.1.len())
+                .then(name_of(a.0).cmp(&name_of(b.0)))
+        });
+        v
+    };
+    let op_counts = |rows: &[usize]| -> BTreeMap<&str, usize> {
+        let mut m = BTreeMap::new();
+        for &i in rows {
+            *m.entry(effects[i].op).or_default() += 1;
+        }
+        m
+    };
+    let count = |name: &str| buckets.get(name).map_or(0, |b| b.rows.len());
+    let ntables = |name: &str| buckets.get(name).map_or(0, |b| b.tables.len());
+    let (mut known, mut unknown_temp) = (0usize, 0usize);
+    for &i in buckets.get("writes").map_or(&[][..], |b| b.rows.as_slice()) {
+        match effects[i].temp_state {
+            TempStateKind::Known(false) => known += 1,
+            _ => unknown_temp += 1,
+        }
+    }
+    let write_tables: Vec<Value> = ["writes", "callerDependent"]
+        .iter()
+        .flat_map(|b| by_table(b).into_iter().map(move |t| (*b, t)))
+        .map(|(b, (id, rows))| {
+            let first = &effects[rows[0]];
+            let mut v = json!({
+                "table": tables.get(id),
+                "tableId": id,
+                "ops": op_counts(&rows),
+                "class": if b == "writes" { "physical" } else { "callerDependent" },
+                "first": {"operationId": first.operation_id},
+                "beyond": [],
+            });
+            if first.via != crate::engine::l4::effect_store::ViaRank::Direct
+                && let Ok(c) = hops.of(first)
+            {
+                v["first"]["firstHop"] = json!(hop_label(c));
+            }
+            v
+        })
+        .collect();
+    let summary = json!({
+        "writes": {"operations": count("writes"), "tables": ntables("writes"),
+                   "knownPersistent": known, "tempStateUnknown": unknown_temp},
+        "callerDependent": {"operations": count("callerDependent"), "tables": ntables("callerDependent")},
+        "locks": {"operations": count("locks"), "tables": ntables("locks")},
+        "validate": {"operations": count("validate"), "tables": ntables("validate")},
+        "reads": {"operations": count("reads"), "tables": ntables("reads")},
+        "unclassified": {"operations": count("unclassified"),
+                         "ops": buckets.get("unclassified").map(|b| b.ops.clone()).unwrap_or_default()},
+        "temporary": {"operations": count("temporary"), "tables": ntables("temporary"),
+                      "routines": buckets.get("temporary").map_or(0, |b| b.owners.len())},
+        "tableNotResolved": {"operations": count("tableNotResolved"),
+                             "routines": buckets.get("tableNotResolved").map_or(0, |b| b.owners.len())},
+        "byTable": write_tables,
+        "scope": "operations-one-routine-deep",
+    });
 
     let payload = json!({
         "routine": {
@@ -1845,21 +2110,189 @@ fn render_query_effects_body(
             "routine": routine_ref_json(&rr),
         },
         "effectCount": effects.len(),
-        "effects": effects
-            .iter()
-            .map(|t| {
-                touch_json(
-                    t,
-                    ops.get(t.operation_id, &join).as_ref(),
-                    Some(tables.get(t.table_id)),
-                )
-            })
-            .collect::<Vec<_>>(),
+        "summary": summary,
+        "effects": rows,
     });
 
+    // Human (design §4.5): summary first, then the buckets; every row with
+    // --all.
     let mut human = format!("--- effects of {} ---\n", rr.qualified());
-    human.push_str(&format!("  {} effect(s)\n", effects.len()));
-    for e in &effects {
+    let mut parts = vec![format!(
+        "writes that may persist {} on {} ({known} known persistent, {unknown_temp} temp state unknown)",
+        count("writes"),
+        plural(ntables("writes"), "table", "tables")
+    )];
+    for (key, label) in [
+        ("callerDependent", "caller-dependent writes"),
+        ("locks", "locks"),
+        ("validate", "validate"),
+        ("reads", "reads"),
+        ("unclassified", "unclassified"),
+    ] {
+        if count(key) > 0 {
+            parts.push(format!(
+                "{label} {} on {}",
+                count(key),
+                plural(ntables(key), "table", "tables")
+            ));
+        }
+    }
+    if count("temporary") > 0 {
+        parts.push(format!(
+            "temporary records {} on {} in {}",
+            count("temporary"),
+            plural(ntables("temporary"), "table", "tables"),
+            plural(buckets["temporary"].owners.len(), "routine", "routines")
+        ));
+    }
+    if count("tableNotResolved") > 0 {
+        parts.push(format!(
+            "table not resolved {} in {}",
+            count("tableNotResolved"),
+            plural(
+                buckets["tableNotResolved"].owners.len(),
+                "routine",
+                "routines"
+            )
+        ));
+    }
+    human.push_str(&format!(
+        "  summary: {} — {}\n",
+        plural(effects.len(), "operation", "operations"),
+        parts.join("; ")
+    ));
+    human.push_str(
+        "  coverage: one routine into dependency code; operations ruled out by literal \
+         arguments are listed (alsem explain and prove drop them); lines are 1-based\n",
+    );
+    human.push_str(&format!(
+        "  scope: per operation, one routine into dependency code (alsem explain and prove \
+         follow the whole cone); temporary records are not writes{}\n",
+        dependencies_clause(deps, all)
+    ));
+    let ops_text = |m: &BTreeMap<&str, usize>| -> String {
+        let mut v: Vec<(&&str, &usize)> = m.iter().collect();
+        v.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        v.iter()
+            .map(|(k, n)| format!("{k} {n}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let table_name = |id: &str| -> String {
+        if is_unknown_table(id) {
+            "table not resolved".to_string()
+        } else {
+            tables.get(id).unwrap_or(id).to_string()
+        }
+    };
+    let locks_on: BTreeMap<&str, usize> = buckets
+        .get("locks")
+        .map(|b| {
+            let mut m = BTreeMap::new();
+            for &i in &b.rows {
+                *m.entry(effects[i].table_id).or_default() += 1;
+            }
+            m
+        })
+        .unwrap_or_default();
+    for (key, header, note) in [
+        ("writes", "writes that may persist", ""),
+        (
+            "callerDependent",
+            "caller-dependent writes",
+            "; written only if the caller passes a record that is not temporary",
+        ),
+    ] {
+        let list = by_table(key);
+        if list.is_empty() {
+            continue;
+        }
+        human.push_str(&format!(
+            "  {header} ({}{note}):\n",
+            plural(list.len(), "table", "tables")
+        ));
+        let n = fold_len(list.len(), 12, all);
+        for (id, rows) in &list[..n] {
+            let first = &effects[rows[0]];
+            let at = match ops.get(first.operation_id, &join) {
+                Some(o) => format!("at {}:{} in {}", o.file, shown(o.line), o.owner.qualified()),
+                None => format!("(outside the workspace: {})", first.operation_id),
+            };
+            let through = match first.via {
+                crate::engine::l4::effect_store::ViaRank::Direct => String::new(),
+                v => match hops.of(first) {
+                    Ok(c) => format!(", through {}{}", hop_label(c), via_note(v)),
+                    Err(_) => via_note(v).to_string(),
+                },
+            };
+            let locks = locks_on
+                .get(id)
+                .map(|n| format!(" (+ LockTable {n})"))
+                .unwrap_or_default();
+            human.push_str(&format!(
+                "    {}: {}{locks}{} — first {} {at}{through}\n",
+                table_name(id),
+                ops_text(&op_counts(rows)),
+                temp_note(first.temp_state),
+                first.op
+            ));
+        }
+        if n < list.len() {
+            human.push_str(&format!(
+                "    … +{} — --all lists them\n",
+                plural(list.len() - n, "table", "tables")
+            ));
+        }
+    }
+    if let Some(b) = buckets.get("locks") {
+        let mut names: Vec<String> = b.tables.iter().map(|t| table_name(t)).collect();
+        names.sort();
+        human.push_str(&format!(
+            "  locks ({}): {}\n",
+            plural(b.tables.len(), "table", "tables"),
+            names.join(", ")
+        ));
+    }
+    for (key, label) in [
+        ("validate", "validate (runs the field's trigger; may write)"),
+        ("reads", "reads"),
+        ("unclassified", "unclassified"),
+    ] {
+        if let Some(b) = buckets.get(key) {
+            human.push_str(&format!(
+                "  {label}: {} on {} ({}){}\n",
+                b.rows.len(),
+                plural(b.tables.len(), "table", "tables"),
+                ops_text(&b.ops),
+                if all { "" } else { " — --all lists them" }
+            ));
+        }
+    }
+    if let Some(b) = buckets.get("temporary") {
+        human.push_str(&format!(
+            "  temporary records: {} on {} in {}{}\n",
+            plural(b.rows.len(), "operation", "operations"),
+            plural(b.tables.len(), "table", "tables"),
+            plural(b.owners.len(), "routine", "routines"),
+            if all { "" } else { " — --all lists them" }
+        ));
+    }
+    if let Some(b) = buckets.get("tableNotResolved") {
+        human.push_str(&format!(
+            "  table not resolved (determined at run time or not resolved): {} in {} ({}){}\n",
+            plural(b.rows.len(), "operation", "operations"),
+            plural(b.owners.len(), "routine", "routines"),
+            ops_text(&b.ops),
+            if all { "" } else { " — --all lists them" }
+        ));
+    }
+    human.push_str(
+        "  next: alsem prove <routine> writes-table:<table> follows the whole cone for one table\n",
+    );
+    if all {
+        human.push_str(&format!("  every operation ({}):\n", effects.len()));
+    }
+    for e in effects.iter().filter(|_| all) {
         let table = if is_unknown_table(e.table_id) {
             format!("{UNKNOWN_TABLE_ID} (target table unresolved — not a table)")
         } else {
