@@ -32,12 +32,15 @@
 //! `timing`, `revision` (always present, `null` until the child is
 //! resident); or `kind: "failed"` (`isError: true`), an infrastructure
 //! outcome (`engineError`, `refusedPath`, `busy`, `protocol`, ...). The
-//! envelope's JSON is the first text block (with `stdoutText` replaced by a
-//! pointer), the inline stdout is the second text block exactly, and with a
-//! negotiated `2025-06-18` the envelope is also `structuredContent` (with
-//! `output`, the CLI's JSON parsed, when the stdout is inline JSON).
+//! envelope's JSON without `stdoutText` is the first text block, the inline
+//! stdout is the second text block exactly, and with a negotiated
+//! `2025-06-18` the envelope is also `structuredContent`, holding the answer
+//! once: `output` (the CLI's JSON parsed, no `stdoutText`) when the stdout is
+//! inline JSON, else `stdoutText` (MCP output plan 1c: Claude Code reads and
+//! size-checks `structuredContent` alone). `alsem_prove` answers human by
+//! default; a call that names no `maxInlineBytes` gets 40 KiB.
 //! Explain defaults to the human card; digest always writes a file; a stdout
-//! over `maxInlineBytes` (default 64 KiB) goes to a file. A file answer
+//! over `maxInlineBytes` (default 40 KiB) goes to a file. A file answer
 //! carries the renderer's `summary` when the command makes one (digest: per
 //! root the effects by type, physical tables written, commits, boundaries and
 //! unresolved counts), at most 8 KiB and inside the frame bound (MCP output

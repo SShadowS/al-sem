@@ -168,14 +168,36 @@ impl Server {
 /// A tools/call result's envelope (its `structuredContent`), checked
 /// against its text blocks: the first is the envelope's JSON without
 /// `stdoutText`, the second (when the stdout is inline) the stdout exactly.
+///
+/// MCP output plan 1c: the first block is the envelope with no `stdoutText`
+/// key (no placeholder), and `structuredContent` holds the answer once:
+/// `output` (no `stdoutText`) for an inline JSON stdout, else `stdoutText`.
+/// The returned envelope is the head plus the inline stdout as `stdoutText`
+/// (so [`cli_bytes`] reads the CLI's bytes from the text block).
 pub(crate) fn envelope(result: &Value) -> Value {
-    let env = result["structuredContent"].clone();
+    let structured = result["structuredContent"].clone();
     let content = result["content"].as_array().expect("content blocks");
     let head: Value = serde_json::from_str(content[0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(head["kind"], env["kind"]);
-    if let Some(text) = env["stdoutText"].as_str() {
-        assert_eq!(content.len(), 2);
-        assert_eq!(content[1]["text"].as_str(), Some(text));
+    assert!(head.get("stdoutText").is_none(), "no placeholder: {head}");
+    assert_eq!(head["kind"], structured["kind"]);
+    let mut env = head.clone();
+    if content.len() == 2 {
+        let text = content[1]["text"].as_str().unwrap();
+        env["stdoutText"] = json!(text);
+        if structured.get("output").is_some() {
+            assert!(
+                structured.get("stdoutText").is_none(),
+                "one copy: output XOR stdoutText: {structured}"
+            );
+            let mut without = structured.clone();
+            without.as_object_mut().unwrap().remove("output");
+            assert_eq!(without, head, "structuredContent is the head plus output");
+        } else {
+            assert_eq!(structured, env, "structuredContent is the envelope");
+        }
+    } else {
+        assert_eq!(content.len(), 1);
+        assert!(structured.get("stdoutText").is_none(), "{structured}");
     }
     assert_eq!(
         result["isError"],
@@ -330,7 +352,16 @@ fn a_transcript_answers_what_the_cli_answers() {
         (
             "alsem_prove",
             json!({"routine": "PostOrder", "question": "may-commit", "deterministic": true}),
-            vec!["prove", w, "PostOrder", "may-commit", "--deterministic"],
+            // The MCP default for prove is human (plan 1c); the CLI's, json.
+            vec![
+                "prove",
+                w,
+                "PostOrder",
+                "may-commit",
+                "--deterministic",
+                "--format",
+                "human",
+            ],
             None,
         ),
         (
@@ -450,7 +481,15 @@ fn a_transcript_answers_what_the_cli_answers() {
         assert_eq!(cli_bytes(&env), expected);
 
         // `out`: written inside the output folder, the same bytes.
-        let argv = ["prove", w, "PostOrder", "may-commit", "--deterministic"];
+        let argv = [
+            "prove",
+            w,
+            "PostOrder",
+            "may-commit",
+            "--deterministic",
+            "--format",
+            "human",
+        ];
         let expected = cli(&argv);
         let env = envelope(&s.call(
         132,
@@ -853,7 +892,15 @@ mod faults {
         let env = envelope(&r);
         assert_eq!(env["kind"], "failed", "{r}");
         assert_eq!(env["outcome"], "engineError", "{r}");
-        let expected = cli(&["prove", w, "PostOrder", "may-commit", "--deterministic"]);
+        let expected = cli(&[
+            "prove",
+            w,
+            "PostOrder",
+            "may-commit",
+            "--deterministic",
+            "--format",
+            "human",
+        ]);
         let env = envelope(&s.call(2, "alsem_prove", args));
         assert_eq!(cli_bytes(&env), expected);
         let st = s.call(3, "alsem_status", json!({}))["structuredContent"].clone();

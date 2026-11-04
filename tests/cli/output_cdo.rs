@@ -272,3 +272,36 @@ fn cdo_digest_summary_is_small_and_lists_the_routine() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Item T, "MCP result against the client's real limit" and "one copy" on CDO
+/// (plan 1c; E4, P3): Claude Code files a result whose `structuredContent` is
+/// over 50,000 characters (measured 2026-11-04: it reads that field alone), so
+/// with the default inline cap every one of the 30 answers keeps
+/// `structuredContent` under it, and holds the stdout at most once (`output`
+/// XOR `stdoutText`).
+///
+/// Discrimination (2026-11-04): restoring the triple copy (pre-1c) is what
+/// this catches: `RunReportID`'s writes-table JSON answer measured 103,764
+/// characters of `structuredContent` then (hands-on run). A STATED LIMIT:
+/// raising the default cap back to 64 KiB does NOT fail it (cdo profile run:
+/// pass), because none of the 30 answers has a stdout between 40 and 64 KiB
+/// (a JSON one is re-serialized compactly as `output`, smaller than its text).
+/// The 40 KiB default rests on arithmetic (stdout escaped plus a ~1 KB
+/// envelope under 50,000 characters), not on this test.
+#[test]
+fn cdo_every_answer_fits_the_client_limit() {
+    let Some(a) = cdo_answers() else { return };
+    let mut failures = Vec::new();
+    for (key, ans) in &a.answers {
+        let result: Value = serde_json::from_str(&ans.result_text).unwrap();
+        let sc = &result["structuredContent"];
+        let chars = sc.to_string().chars().count();
+        if chars > 50_000 {
+            failures.push(format!("{key}: structuredContent of {chars} characters"));
+        }
+        if sc.get("output").is_some() && sc.get("stdoutText").is_some() {
+            failures.push(format!("{key}: two copies"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

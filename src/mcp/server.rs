@@ -395,25 +395,36 @@ fn status(transport: &McpTransport, pool: &Pool, call: &EngineCall, defaults: &D
 /// block (without `stdoutText`), the inline stdout exactly as the second,
 /// and the envelope as `structuredContent` when the negotiated `version`
 /// has it. `output`: the CLI's JSON parsed (structured content only).
+///
+/// One copy of the answer in what the client reads (MCP output plan 1c, P3/E1,
+/// E6). Measured 2026-11-04 through Claude Code: with `structuredContent`
+/// present, the client reads and size-checks `structuredContent` only (a
+/// result whose text blocks held 46,167 characters and whose
+/// `structuredContent` held 83,840 was reported as 82,195 characters and
+/// saved to a file). So `structuredContent` carries the answer exactly once:
+/// `output` (the CLI's JSON, parsed) when there is one, else `stdoutText`.
+/// The text blocks keep the byte contract: the envelope without `stdoutText`
+/// (no placeholder), then the inline stdout exactly.
 fn tool_result(version: &str, envelope: &Value, is_error: bool, output: Option<Value>) -> Value {
     let mut head = envelope.clone();
     let stdout_text = head
         .as_object_mut()
         .and_then(|m| m.remove("stdoutText"))
         .and_then(|v| v.as_str().map(str::to_string));
-    if stdout_text.is_some() {
-        head["stdoutText"] = json!("<the next content block>");
-    }
     let mut content = vec![json!({"type": "text", "text": head.to_string()})];
     if let Some(text) = stdout_text {
         content.push(json!({"type": "text", "text": text}));
     }
     let mut r = json!({"content": content, "isError": is_error});
     if has_structured(version) {
-        let mut structured = envelope.clone();
-        if let Some(o) = output {
-            structured["output"] = o;
-        }
+        let structured = match output {
+            Some(o) => {
+                let mut s = head;
+                s["output"] = o;
+                s
+            }
+            None => envelope.clone(),
+        };
         r["structuredContent"] = structured;
     }
     r

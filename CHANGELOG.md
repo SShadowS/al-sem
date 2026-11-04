@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (MCP output plan 1c: one copy of each answer)
+
+- **An MCP answer carries its stdout once in what the client reads** (plan item 1c; review P3,
+  E1, E6). Measured through Claude Code first, as the plan asked: with `structuredContent`
+  present the client reads and size-checks that field alone (a result with 46,167 characters of
+  text blocks and 83,840 of `structuredContent` was reported as 82,195 characters and filed). So
+  `structuredContent` now holds the answer exactly once: the parsed `output` without
+  `stdoutText` for an inline JSON stdout, else `stdoutText`; before, a JSON answer was there
+  twice (and three times counting the text block). The first text block drops the
+  `"<the next content block>"` placeholder key; the text blocks keep the byte contract.
+  `alsem_prove` answers `human` by default (owner decision 3; `format: json` for the full
+  evidence). A call naming no `maxInlineBytes` gets 40 KiB, not 64 KiB, so an inline answer's
+  `structuredContent` stays under Claude Code's 50,000-character limit. The LSP relay keeps the
+  CLI's defaults (prove `json`, 64 KiB).
+
 ### Fixed (MCP output plan 1b: the digest summary)
 
 - **`alsem_digest`'s summary no longer embeds every unresolved call site, says what decides

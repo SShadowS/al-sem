@@ -119,6 +119,13 @@ pub enum ToolCall {
     Refresh(EngineCall),
 }
 
+/// The inline cap when a call names none (MCP output plan 1c, item T's E4):
+/// Claude Code files a result over 50,000 characters instead of showing it,
+/// and it measures `structuredContent`, which holds the stdout escaped plus
+/// the envelope. 40 KiB leaves that room; the wire's own default (64 KiB)
+/// still serves the LSP front end.
+pub const MCP_DEFAULT_INLINE_BYTES: u64 = 40 * 1024;
+
 /// The tool names, in `tools/list` order.
 pub const TOOL_NAMES: &[&str] = &[
     "alsem_explain",
@@ -151,7 +158,7 @@ fn common_properties() -> Map<String, Value> {
     );
     m.insert(
         "maxInlineBytes".into(),
-        json!({"type": "integer", "minimum": 0, "description": "The largest output returned inline (default 65536, at most 4194304); a larger one is written to a file in the server's output folder."}),
+        json!({"type": "integer", "minimum": 0, "description": "The largest output returned inline (default 40960, at most 4194304); a larger one is written to a file in the server's output folder."}),
     );
     m
 }
@@ -222,7 +229,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_prove",
-            "Prove one absence-safety question about one AL routine: yes / no / unknown, with the reason. Questions: may-commit, commits-on-success-path, writes-table:<table>, publishes-event:<event>, reaches-ui, throws-error. Returns the exact `alsem prove` stdout (default format json).",
+            "Prove one absence-safety question about one AL routine: yes / no / unknown, with the reason. Questions: may-commit, commits-on-success-path, writes-table:<table>, publishes-event:<event>, reaches-ui, throws-error. Returns the exact `alsem prove` stdout (default format human here, a few lines; `format: json` gives the evidence and its paths in full).",
             schema(
                 vec![
                     (
@@ -235,7 +242,7 @@ pub fn tool_list() -> Vec<Value> {
                     ),
                     (
                         "format",
-                        json!({"type": "string", "enum": ["json", "human"], "description": "Output format (default json)."}),
+                        json!({"type": "string", "enum": ["human", "json"], "description": "Output format (default human)."}),
                     ),
                     (
                         "closedWorld",
@@ -564,7 +571,7 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
         })?,
     };
     let max_inline_bytes = match a.map.get("maxInlineBytes") {
-        None | Some(Value::Null) => None,
+        None | Some(Value::Null) => Some(MCP_DEFAULT_INLINE_BYTES),
         Some(v) => Some(
             v.as_u64()
                 .ok_or("'maxInlineBytes' must be a non-negative integer")?,
@@ -627,9 +634,11 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             let mut v = Argv::new(&["prove"], &workspace);
             v.positionals.push(a.required("routine")?.to_string());
             v.positionals.push(a.required("question")?.to_string());
+            // MCP output plan 1c (owner decision 3): one compact copy by default;
+            // the CLI's own default stays json.
             v.opt(
                 "format",
-                &a.enumerated("format", &["json", "human"], "json")?,
+                &a.enumerated("format", &["json", "human"], "human")?,
             );
             v.switch("closed-world", a.flag("closedWorld")?);
             v.switch("deterministic", a.flag("deterministic")?);
@@ -774,11 +783,13 @@ mod tests {
             json!({"routine": "P", "question": "may-commit", "deterministic": true}),
         )
         .unwrap();
+        // MCP output plan 1c: human by default for an agent; 40 KiB inline.
+        assert_eq!(c.max_inline_bytes, Some(MCP_DEFAULT_INLINE_BYTES));
         assert_eq!(
             c.argv,
             [
                 "prove",
-                "--format=json",
+                "--format=human",
                 "--deterministic",
                 "--",
                 "/ws",

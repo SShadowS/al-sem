@@ -537,3 +537,61 @@ fn digest_summary_through_mcp_on_the_fixture() {
     assert!(!summary.to_string().contains("callsiteAnchor"), "{summary}");
     assert!(s.finish().success());
 }
+
+/// Item T, "one copy" (plan 1c, P3/E1/E6): in what the client reads
+/// (`structuredContent`: measured through Claude Code, see `server.rs`'s
+/// `tool_result`) the stdout is there exactly once, as `stdoutText` for a
+/// human answer and as the parsed `output` (no `stdoutText`) for a JSON one;
+/// the first text block has no `stdoutText` placeholder; `prove` answers human
+/// by default.
+///
+/// Discrimination (2026-11-04): putting the envelope with `stdoutText` back
+/// under `output` in `tool_result` fails at "query effects json: one copy";
+/// restoring the `"<the next content block>"` placeholder fails at "no
+/// placeholder"; restored, it passes.
+#[test]
+fn one_copy_of_each_answer() {
+    let mut s = crate::mcp_server::Server::ready(&workspace(), None);
+    let calls = [
+        (
+            "explain human",
+            "alsem_explain",
+            serde_json::json!({"routines": [ISSUE_DOC]}),
+        ),
+        (
+            "prove default",
+            "alsem_prove",
+            serde_json::json!({"routine": ISSUE_DOC, "question": "may-commit"}),
+        ),
+        (
+            "query effects json",
+            "alsem_query_effects",
+            serde_json::json!({"routine": ISSUE_DOC_Q, "format": "json"}),
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (i, (label, tool, args)) in calls.into_iter().enumerate() {
+        let r = s.call(i as i64 + 1, tool, args);
+        let content = r["content"].as_array().unwrap();
+        let head: Value = serde_json::from_str(content[0]["text"].as_str().unwrap()).unwrap();
+        if head.get("stdoutText").is_some() {
+            failures.push(format!("{label}: no placeholder: {head}"));
+        }
+        let stdout = content[1]["text"].as_str().unwrap();
+        let sc = &r["structuredContent"];
+        let as_text = sc.get("stdoutText").and_then(Value::as_str) == Some(stdout);
+        let as_output = sc
+            .get("output")
+            .is_some_and(|o| serde_json::from_str::<Value>(stdout).ok().as_ref() == Some(o));
+        if as_text == as_output {
+            failures.push(format!(
+                "{label}: one copy (stdoutText {as_text}, output {as_output})"
+            ));
+        }
+        if label == "prove default" && !stdout.starts_with("--- ") {
+            failures.push(format!("{label}: human by default: {stdout}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(s.finish().success());
+}
