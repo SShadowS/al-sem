@@ -42,6 +42,16 @@
 //!   transitive callers do, through other branches" — [`Self::ancestors`] gives
 //!   M, [`Self::ancestors_touching`] gives N, nearest-first.
 //!
+//! `alsem query touches` (MCP output wave 2, W2-3) follows that shape in its
+//! COMPUTATION, not only in its output: the trivial case calls
+//! [`DbEffectQuery::callers_membership`] (probes only, no witness), the
+//! informative case [`DbEffectQuery::callers_aggregated`] (first witness and
+//! counts per caller, streamed), and only `--all` calls
+//! [`DbEffectQuery::ancestors_touching`]. Each probe asks "has a summary row?"
+//! before "touches?", so a rowless caller is unknown, not "does not touch".
+//! [`DbEffectQuery::ancestor_witnesses_built`] counts the caller witnesses a
+//! query built, so a test can see the full product was not made.
+//!
 //! U-global alone is not a feature and must not be rendered raw: on DO the
 //! per-table `routines_touching` cardinality has a **median of 377** of 3 685
 //! routines (top 1 051 / 955 / 885 / 681, excluding the `"unknown"` bucket).
@@ -66,6 +76,7 @@
 //! see that module's doc for why rendering it would be a lie.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::engine::l4::combined_graph::PrimaryGraph;
 use crate::engine::l4::effect_lattice::TempStateKind;
@@ -131,6 +142,114 @@ pub struct AncestorTouch<'a> {
     pub depth: u32,
 }
 
+/// How one touch counts in a touches answer (MCP output wave 2, spec §4.6, O4),
+/// read from the touch's temp state in the frame of the routine asked about.
+///
+/// A temporary-record touch persists nothing, but it is still a touch of the
+/// table: it uses the table's schema and runs its triggers and table-event
+/// subscribers. So it is counted apart, never dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TouchClass {
+    /// `known(false)`: a persistent record.
+    KnownPersistent,
+    /// `unknown`: possibly persistent, temp state not determined.
+    TempStateUnknown,
+    /// `parameter-dependent(_)`: possibly persistent, decided by the caller's
+    /// argument.
+    CallerDependent,
+    /// `known(true)`: a temporary record.
+    Temporary,
+}
+
+impl TouchClass {
+    /// The class of a touch with temp state `t`.
+    pub fn of(t: &TempStateKind) -> Self {
+        match t {
+            TempStateKind::Known(false) => TouchClass::KnownPersistent,
+            TempStateKind::Unknown => TouchClass::TempStateUnknown,
+            TempStateKind::ParameterDependent(_) => TouchClass::CallerDependent,
+            TempStateKind::Known(true) => TouchClass::Temporary,
+        }
+    }
+
+    /// The JSON name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TouchClass::KnownPersistent => "knownPersistent",
+            TouchClass::TempStateUnknown => "tempStateUnknown",
+            TouchClass::CallerDependent => "callerDependent",
+            TouchClass::Temporary => "temporary",
+        }
+    }
+}
+
+/// Touches counted per [`TouchClass`]. The four counts partition the touches
+/// they were built from: [`Self::total`] is their sum.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TouchCounts {
+    pub known_persistent: usize,
+    pub temp_state_unknown: usize,
+    pub caller_dependent: usize,
+    pub temporary: usize,
+}
+
+impl TouchCounts {
+    /// Count one touch with temp state `t`.
+    pub fn add(&mut self, t: &TempStateKind) {
+        match TouchClass::of(t) {
+            TouchClass::KnownPersistent => self.known_persistent += 1,
+            TouchClass::TempStateUnknown => self.temp_state_unknown += 1,
+            TouchClass::CallerDependent => self.caller_dependent += 1,
+            TouchClass::Temporary => self.temporary += 1,
+        }
+    }
+
+    /// The touches that may persist without being known to:
+    /// temp state unknown plus caller-dependent.
+    pub fn possibly_persistent(&self) -> usize {
+        self.temp_state_unknown + self.caller_dependent
+    }
+
+    /// Every counted touch.
+    pub fn total(&self) -> usize {
+        self.known_persistent + self.possibly_persistent() + self.temporary
+    }
+}
+
+/// What the membership probes say about one transitive caller and one table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallerOutcome {
+    /// The caller has a summary row and its cone touches the table.
+    Touches,
+    /// The caller has a summary row and its cone does not touch the table.
+    DoesNotTouch,
+    /// The caller has no summary row (the solve never settled it): unknown,
+    /// never counted as "does not touch".
+    NoRow,
+}
+
+/// One touching caller's witnesses, aggregated while streaming its row: the
+/// first witness, how many there are, and their classes. The witnesses
+/// themselves are never collected.
+#[derive(Debug, Clone, Copy)]
+pub struct CallerWitnesses<'a> {
+    pub first: TableTouch<'a>,
+    pub count: usize,
+    pub counts: TouchCounts,
+}
+
+/// One transitive caller in a touches `up` answer.
+#[derive(Debug, Clone, Copy)]
+pub struct CallerTouch<'a> {
+    /// As [`AncestorTouch::depth`].
+    pub depth: u32,
+    pub routine: SolveIx,
+    pub outcome: CallerOutcome,
+    /// Only from [`DbEffectQuery::callers_aggregated`], and only when
+    /// `outcome` is [`CallerOutcome::Touches`].
+    pub witnesses: Option<CallerWitnesses<'a>>,
+}
+
 /// Everything one db-effect question needs, assembled once per workspace
 /// snapshot: the finished bundle, its transpose, the ORIGINAL Tarjan
 /// condensation, and that condensation REVERSED.
@@ -142,6 +261,13 @@ pub struct DbEffectQuery<'a> {
     /// list sorted + deduped so the BFS below is deterministic regardless of
     /// `graph.edges_by_from`'s `HashMap` iteration order. O(V + E) to build.
     rev_condensation: Vec<Vec<GraphSccIx>>,
+    /// How many [`TableTouch`]es of a transitive CALLER this query has built
+    /// (T-W2-10): [`Self::ancestors_touching`] adds one per witness,
+    /// [`Self::callers_aggregated`] one per touching caller (its first
+    /// witness), [`Self::callers_membership`] none. A touches answer that
+    /// builds the full caller-witness product in its default trivial case
+    /// shows up here.
+    ancestor_witnesses: AtomicUsize,
 }
 
 impl<'a> DbEffectQuery<'a> {
@@ -173,7 +299,20 @@ impl<'a> DbEffectQuery<'a> {
             index,
             scc,
             rev_condensation,
+            ancestor_witnesses: AtomicUsize::new(0),
         }
+    }
+
+    /// The caller witnesses built so far (see the field's doc).
+    pub fn ancestor_witnesses_built(&self) -> usize {
+        self.ancestor_witnesses.load(Ordering::Relaxed)
+    }
+
+    /// The "has summary row" probe (spec §4.6, astra r2 finding 7): without it
+    /// [`Self::touches_table`]'s `false` cannot tell "does not touch" from "no
+    /// row to ask".
+    pub fn has_summary_row(&self, r: SolveIx) -> bool {
+        self.bundle.has_row(r)
     }
 
     /// The bundle this query reads — for a consumer that needs
@@ -321,7 +460,94 @@ impl<'a> DbEffectQuery<'a> {
                 continue;
             }
             for touch in self.touches(ancestor, table_id) {
+                self.ancestor_witnesses.fetch_add(1, Ordering::Relaxed);
                 out.push(AncestorTouch { touch, depth });
+            }
+        }
+        out
+    }
+
+    /// The probe outcome for one caller: the "has summary row" probe first,
+    /// then the posting probe. No witness is read.
+    fn probe(&self, caller: SolveIx, table_id: &str) -> CallerOutcome {
+        if !self.has_summary_row(caller) {
+            CallerOutcome::NoRow
+        } else if self.touches_table(caller, table_id) {
+            CallerOutcome::Touches
+        } else {
+            CallerOutcome::DoesNotTouch
+        }
+    }
+
+    /// **U-scoped, trivial case** (spec §4.6): every transitive caller of `r`
+    /// (as [`Self::ancestors`]) with its probe outcome, and no witness built.
+    /// Used when `r` itself touches `table_id`, where every caller with a row
+    /// touches it through `r` and listing their witnesses restates the down
+    /// answer. The outcomes are still probed, never assumed: a rowless caller
+    /// is [`CallerOutcome::NoRow`].
+    pub fn callers_membership(&self, r: SolveIx, table_id: &str) -> Vec<CallerTouch<'a>> {
+        self.ancestors(r)
+            .into_iter()
+            .map(|(depth, routine)| CallerTouch {
+                depth,
+                routine,
+                outcome: self.probe(routine, table_id),
+                witnesses: None,
+            })
+            .collect()
+    }
+
+    /// **U-scoped, informative case** (spec §4.6): as
+    /// [`Self::callers_membership`], and for each touching caller its
+    /// witnesses aggregated while streaming its row — the first witness, the
+    /// count and the class counts — without collecting them.
+    pub fn callers_aggregated(&self, r: SolveIx, table_id: &str) -> Vec<CallerTouch<'a>> {
+        self.ancestors(r)
+            .into_iter()
+            .map(|(depth, routine)| {
+                let outcome = self.probe(routine, table_id);
+                let witnesses = match outcome {
+                    CallerOutcome::Touches => self.aggregate(routine, table_id),
+                    _ => None,
+                };
+                CallerTouch {
+                    depth,
+                    routine,
+                    outcome,
+                    witnesses,
+                }
+            })
+            .collect()
+    }
+
+    /// One caller's witnesses on `table_id`, streamed: the first one built,
+    /// the rest only counted. `None` when the row holds none (which
+    /// [`Self::touches_table`] being true rules out).
+    fn aggregate(&self, r: SolveIx, table_id: &str) -> Option<CallerWitnesses<'a>> {
+        let mut out: Option<CallerWitnesses<'a>> = None;
+        for e in self.bundle.db_effects(r).filter(|e| e.table_id == table_id) {
+            match &mut out {
+                Some(w) => {
+                    w.count += 1;
+                    w.counts.add(e.temp_state);
+                }
+                None => {
+                    self.ancestor_witnesses.fetch_add(1, Ordering::Relaxed);
+                    let mut counts = TouchCounts::default();
+                    counts.add(e.temp_state);
+                    out = Some(CallerWitnesses {
+                        first: TableTouch {
+                            routine: r,
+                            op: e.op,
+                            table_id: e.table_id,
+                            operation_id: e.operation_id,
+                            temp_state: e.temp_state,
+                            via: e.via,
+                        },
+                        count: 1,
+                        counts,
+                    });
+                }
             }
         }
         out
@@ -640,6 +866,122 @@ mod tests {
         assert_eq!(ups.len(), 1);
         assert_eq!(ups[0].touch.routine, ia);
         assert_eq!(ups[0].depth, 0);
+    }
+
+    /// T-W2-10 on a synthetic bundle, every precondition hand-stated: `root`
+    /// touches `T` itself, and it has three callers — `a` (a row holding `T`
+    /// twice, once on a temporary record, plus `U`), `b` (interned, NO row) and
+    /// `c` (a row without `T`, which transitivity alone would call "touches").
+    ///
+    /// - the trivial case probes each caller and builds no witness;
+    /// - a rowless caller is `NoRow`, never `DoesNotTouch`, and a caller whose
+    ///   row lacks the table is `DoesNotTouch`, never assumed to touch;
+    /// - the informative case (`root` vs `U`, which only `a` touches) builds
+    ///   one witness per touching caller and counts the rest by class.
+    #[test]
+    fn touches_up_probes_callers_without_building_the_witness_product() {
+        let ident_t = |op: &str, table: &str, opid: &str, temp: TempStateKind| EffectIdentity {
+            op: op.into(),
+            table_id: table.into(),
+            operation_id: opid.into(),
+            temp,
+        };
+        let mut u = GrowingEffectUniverse::new();
+        let root_t = u.intern(&ident_t(
+            "Insert",
+            "T",
+            "op_root",
+            TempStateKind::Known(false),
+        ));
+        let a_t_persist = u.intern(&ident_t(
+            "Modify",
+            "T",
+            "op_a1",
+            TempStateKind::Known(false),
+        ));
+        let a_t_temp = u.intern(&ident_t("Insert", "T", "op_a2", TempStateKind::Known(true)));
+        let a_u1 = u.intern(&ident_t("Get", "U", "op_a3", TempStateKind::Unknown));
+        let a_u2 = u.intern(&ident_t("Insert", "U", "op_a4", TempStateKind::Known(true)));
+        let c_other = u.intern(&ident_t("Get", "V", "op_c", TempStateKind::Known(false)));
+
+        let mut interner = RoutineInterner::new();
+        let root = interner.intern("root");
+        let a = interner.intern("a");
+        let b_ix = interner.intern("b");
+        let c = interner.intern("c");
+
+        let mut bb = SummaryBundleBuilder::new();
+        let s_root = bb.push_terminal_set(bits_of(&[root_t]));
+        bb.push_row(root, s_root, vec![ViaRank::Direct], vec![], vec![]);
+        let a_ids = [root_t, a_t_persist, a_t_temp, a_u1, a_u2];
+        let s_a = bb.push_terminal_set(bits_of(&a_ids));
+        bb.push_row(a, s_a, vec![ViaRank::Direct; a_ids.len()], vec![], vec![]);
+        let s_c = bb.push_terminal_set(bits_of(&[c_other]));
+        bb.push_row(c, s_c, vec![ViaRank::Direct], vec![], vec![]);
+        let rvid: HashMap<String, Option<String>> = HashMap::new();
+        let bundle = bb.finish(u.freeze(), interner, rvid);
+
+        let graph = combined(
+            &["root", "a", "b", "c"],
+            &[("a", "root"), ("b", "root"), ("c", "root")],
+        );
+        let scc = tarjan_of(&graph);
+        let q = DbEffectQuery::build(&bundle, &scc, &graph);
+
+        // Preconditions, as stated above.
+        assert!(q.touches_table(root, "T") && !q.touches_table(root, "U"));
+        assert!(!q.has_summary_row(b_ix) && q.has_summary_row(c));
+        assert_eq!(q.ancestors(root).len(), 3);
+
+        // Trivial case: probes only.
+        let trivial = q.callers_membership(root, "T");
+        let outcomes: Vec<_> = trivial.iter().map(|c| (c.routine, c.outcome)).collect();
+        assert_eq!(
+            outcomes,
+            vec![
+                (a, CallerOutcome::Touches),
+                (b_ix, CallerOutcome::NoRow),
+                (c, CallerOutcome::DoesNotTouch),
+            ]
+        );
+        assert!(trivial.iter().all(|c| c.witnesses.is_none()));
+        assert_eq!(
+            q.ancestor_witnesses_built(),
+            0,
+            "the trivial case builds no caller witness"
+        );
+
+        // Informative case: one witness built per touching caller.
+        let informative = q.callers_aggregated(root, "U");
+        let a_row = informative.iter().find(|x| x.routine == a).unwrap();
+        let w = a_row.witnesses.expect("a touches U");
+        assert_eq!(w.count, 2);
+        assert_eq!(
+            w.counts,
+            TouchCounts {
+                temp_state_unknown: 1,
+                temporary: 1,
+                ..TouchCounts::default()
+            }
+        );
+        assert_eq!(w.counts.total(), w.count);
+        assert_eq!(w.first.operation_id, "op_a3");
+        let b_row = informative.iter().find(|x| x.routine == b_ix).unwrap();
+        assert_eq!(b_row.outcome, CallerOutcome::NoRow);
+        assert_eq!(
+            q.ancestor_witnesses_built(),
+            1,
+            "one first witness, for `a`"
+        );
+
+        // `--all`'s full product is what the counter measures.
+        let all = q.ancestors_touching(root, "T");
+        assert_eq!(
+            all.len(),
+            3,
+            "a's three T touches (root's own Insert included)"
+        );
+        assert_eq!(q.ancestor_witnesses_built(), 1 + 3);
     }
 
     /// A routine with a row but no place in the condensation (never a graph

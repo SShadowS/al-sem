@@ -1,0 +1,5 @@
+--- Codeunit QT Touches::TempOnly vs QT Item (07070707-0000-4000-8000-000000000071/table/50700) ---
+  scope: per operation, one routine into dependency code; temporary-record touches persist nothing but use the table's schema and run its triggers; lines are 1-based
+  down: yes — 2 record touches: 0 known persistent, 0 possibly persistent, 2 on temporary records
+    temporary records: 2 touches in 1 routine (Codeunit QT Touches::TempOnly 2) — --all lists them
+  up: 2 transitive callers: 2 touch it, 0 do not, 0 unknown — through this routine; not a finding — --all lists their witnesses

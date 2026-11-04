@@ -48,7 +48,8 @@ use crate::engine::gate::format_json::{pinned_or_now_iso8601, serialize_document
 use crate::engine::gate::run::AnalysisTarget;
 use crate::engine::l4::effect_lattice::TempStateKind;
 use crate::engine::l4::effect_query::{
-    AncestorTouch, DbEffectQuery, TableTouch, UNKNOWN_TABLE_ID, is_unknown_table,
+    AncestorTouch, CallerOutcome, CallerTouch, DbEffectQuery, TableTouch, TouchClass, TouchCounts,
+    UNKNOWN_TABLE_ID, is_unknown_table,
 };
 use crate::engine::l4::operation_index::OperationIndex;
 use crate::engine::line_base::{LINE_BASE, shown};
@@ -60,8 +61,14 @@ use crate::program::resolve::full::LoadedDependencies;
 
 /// The JSON envelope's `schemaVersion` for both `query` subcommands. 1.1.0 (#66):
 /// additive `payload.dependencies` {mode, apps}. 2.0.0 (MCP output plan 1a):
-/// every `line` is 1-based, and `payload.lineBase: 1` says so.
-const QUERY_SCHEMA_VERSION: &str = "2.0.0";
+/// every `line` is 1-based, and `payload.lineBase: 1` says so. 3.0.0 (MCP output
+/// wave 2, spec §4.6): `query touches`' default `up` no longer carries
+/// `witnesses` (only `--all` does); it states the probe counts, the
+/// `notTouching` and `unknown` callers, and in the informative case one
+/// `callers[]` row per touching caller; `down` adds `counts`, `beyond` and each
+/// witness's `touchClass`. The spec gives `query effects`' W2-2 changes the same
+/// 3.0.0, so W2-2 adds to this major rather than bumping again.
+const QUERY_SCHEMA_VERSION: &str = "3.0.0";
 
 /// Which direction(s) a `query touches` run reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +117,11 @@ pub struct QueryRunResult {
     /// The answer's summary for a file answer (MCP output plan 1e); `null` on a
     /// selector failure.
     pub summary: Value,
+    /// `query touches`: the caller witnesses the answer built
+    /// ([`DbEffectQuery::ancestor_witnesses_built`]); 0 in the default trivial
+    /// case (T-W2-10). Not output — read by tests.
+    #[doc(hidden)]
+    pub ancestor_witnesses_built: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +214,7 @@ enum QueryAsk<'a> {
         table: &'a str,
         from: Option<&'a str>,
         direction: Direction,
+        all: bool,
     },
     Effects {
         routine: &'a str,
@@ -224,12 +237,15 @@ pub struct QueryJob<'a> {
 
 impl<'a> QueryJob<'a> {
     /// `alsem query touches` (see [`run_query_touches_pipeline`]), written as
-    /// JSON to stdout until [`QueryJob::written`].
+    /// JSON to stdout until [`QueryJob::written`]. `all` is `--all`: every
+    /// witness, the callers' included, and no fold.
+    #[allow(clippy::too_many_arguments)]
     pub fn touches(
         inputs: &'a dyn WorkspaceRead,
         table: &'a str,
         from: Option<&'a str>,
         direction: Direction,
+        all: bool,
         alsem_ver: &'a str,
         deterministic: bool,
         single_app: bool,
@@ -238,6 +254,7 @@ impl<'a> QueryJob<'a> {
             table,
             from,
             direction,
+            all,
         };
         Self::with(inputs, ask, alsem_ver, deterministic, single_app)
     }
@@ -308,11 +325,13 @@ impl Job for QueryJob<'_> {
                 table,
                 from,
                 direction,
+                all,
             } => render_query_touches(
                 &substrate,
                 table,
                 from,
                 direction,
+                all,
                 self.alsem_ver,
                 self.deterministic,
             ),
@@ -946,6 +965,7 @@ fn selector_failure_doc<T>(
         human_text: human,
         exit_code: 2,
         summary: Value::Null,
+        ancestor_witnesses_built: 0,
     }
 }
 
@@ -963,11 +983,13 @@ fn selector_failure_doc<T>(
 ///   callers of R touch T, nearest first. Informative precisely when R itself
 ///   does not touch T.
 /// - no `--from` — the workspace-global list, count first, uncapped.
+#[allow(clippy::too_many_arguments)]
 pub fn run_query_touches_pipeline(
     inputs: &std::sync::Arc<crate::program::inputs::WorkspaceInputs>,
     table_selector: &str,
     from: Option<&str>,
     direction: Direction,
+    all: bool,
     alsem_ver: &str,
     deterministic: bool,
     single_app: bool,
@@ -977,6 +999,7 @@ pub fn run_query_touches_pipeline(
         table_selector,
         from,
         direction,
+        all,
         alsem_ver,
         deterministic,
         single_app,
@@ -1005,6 +1028,7 @@ pub fn render_query_touches(
     table_selector: &str,
     from: Option<&str>,
     direction: Direction,
+    all: bool,
     alsem_ver: &str,
     deterministic: bool,
 ) -> QueryRunResult {
@@ -1014,6 +1038,7 @@ pub fn render_query_touches(
             table_selector,
             from,
             direction,
+            all,
             alsem_ver,
             deterministic,
         ),
@@ -1033,6 +1058,7 @@ fn render_query_touches_body(
     table_selector: &str,
     from: Option<&str>,
     direction: Direction,
+    all: bool,
     alsem_ver: &str,
     deterministic: bool,
 ) -> QueryRunResult {
@@ -1049,6 +1075,7 @@ fn render_query_touches_body(
             human_text: "query.touches: --direction down requires --from <routine>\n".to_string(),
             exit_code: 2,
             summary: Value::Null,
+            ancestor_witnesses_built: 0,
         };
     }
     let table = match resolve_table_selector(substrate.resolved(), table_selector) {
@@ -1102,6 +1129,7 @@ fn render_query_touches_body(
     payload.insert("direction".into(), direction.as_str().into());
 
     let mut human = String::new();
+    let mut ancestor_witnesses_built = 0;
     let table_label = match &table.name {
         Some(n) => format!("{n} ({})", table.id),
         None => format!(
@@ -1150,7 +1178,8 @@ fn render_query_touches_body(
                 "  workspace-global: {} routine(s) touch it\n",
                 routines.len()
             ));
-            for &ix in &routines {
+            let shown_n = fold_len(routines.len(), GLOBAL_LIST_CAP, all);
+            for &ix in &routines[..shown_n] {
                 let internal = query.bundle().routine_id(ix);
                 match join.get(internal) {
                     Some(rr) => human.push_str(&format!(
@@ -1161,6 +1190,12 @@ fn render_query_touches_body(
                     )),
                     None => human.push_str(&format!("    {internal}\n")),
                 }
+            }
+            if shown_n < routines.len() {
+                human.push_str(&format!(
+                    "    … +{} — --all lists them\n",
+                    plural(routines.len() - shown_n, "routine", "routines")
+                ));
             }
         }
         Some(r) => {
@@ -1196,123 +1231,34 @@ fn render_query_touches_body(
                     human_text: human,
                     exit_code: 0,
                     summary,
+                    ancestor_witnesses_built: 0,
                 };
             };
 
             human.push_str(&format!("--- {} vs {table_label} ---\n", rr.qualified()));
+            human.push_str(TOUCHES_SCOPE_LINE);
 
+            let cx = TouchCx {
+                query: &query,
+                join: &join,
+                ops: &ops,
+            };
             let touches_down = query.touches_table(rix, &table.id);
             if direction.wants_down() {
-                let witnesses = query.touches(rix, &table.id);
-                payload.insert(
-                    "down".into(),
-                    json!({
-                        "answerable": true,
-                        "touches": touches_down,
-                        "witnessCount": witnesses.len(),
-                        "witnesses": witnesses
-                            .iter()
-                            .map(|t| touch_json(t, ops.get(t.operation_id, &join).as_ref(), None))
-                            .collect::<Vec<_>>(),
-                    }),
-                );
-                human.push_str(&format!(
-                    "  down: {} ({} witness(es))\n",
-                    if touches_down { "yes" } else { "no" },
-                    witnesses.len()
-                ));
-                for w in &witnesses {
-                    human.push_str(&format!(
-                        "    [{}] via {}, temp {} — {}\n",
-                        w.op,
-                        w.via.as_str(),
-                        temp_state_str(w.temp_state),
-                        origin_human(ops.get(w.operation_id, &join).as_ref(), w.operation_id)
-                    ));
-                }
+                render_touches_down(&cx, rix, &table.id, all, &mut payload, &mut human);
             }
-
             if direction.wants_up() {
-                let all_ancestors = query.ancestors(rix);
-                let ups: Vec<AncestorTouch<'_>> = query.ancestors_touching(rix, &table.id);
-                let mut touching_routines: Vec<_> =
-                    ups.iter().map(|a| a.touch.routine).collect::<Vec<_>>();
-                touching_routines.sort_unstable();
-                touching_routines.dedup();
-
-                let rows: Vec<Value> = ups
-                    .iter()
-                    .map(|a| {
-                        let internal = query.bundle().routine_id(a.touch.routine);
-                        let mut m = Map::new();
-                        m.insert("depth".into(), a.depth.into());
-                        m.insert(
-                            "routine".into(),
-                            match join.get(internal) {
-                                Some(x) => routine_ref_json(&x),
-                                None => json!({ "display": internal, "objectDisplay": "", "stableId": Value::Null, "anchor": Value::Null }),
-                            },
-                        );
-                        let origin = ops.get(a.touch.operation_id, &join);
-                        if let Value::Object(t) = touch_json(&a.touch, origin.as_ref(), None) {
-                            for (k, v) in t {
-                                m.insert(k, v);
-                            }
-                        }
-                        Value::Object(m)
-                    })
-                    .collect();
-
-                // The answer-shaping rule: summaries are transitive-DOWN, so
-                // when R itself touches T every ancestor trivially does. State
-                // that instead of pretending the enumeration is a finding.
-                let note = if touches_down {
-                    "this routine itself touches the table, so every transitive caller does too \
-                     (summaries are transitive-down) — the ancestor list is not a finding here"
-                } else {
-                    "this routine does NOT touch the table; these callers reach it through other \
-                     branches"
-                };
-                payload.insert(
-                    "up".into(),
-                    json!({
-                        "scoped": true,
-                        "transitiveCallers": all_ancestors.len(),
-                        "callersTouching": touching_routines.len(),
-                        "informative": !touches_down,
-                        "note": note,
-                        "witnesses": rows,
-                    }),
+                render_touches_up(
+                    &cx,
+                    rix,
+                    &table.id,
+                    touches_down,
+                    all,
+                    &mut payload,
+                    &mut human,
                 );
-                human.push_str(&format!(
-                    "  up: {} of {} transitive caller(s) touch it{}\n",
-                    touching_routines.len(),
-                    all_ancestors.len(),
-                    if touches_down {
-                        " (trivially — this routine touches it itself)"
-                    } else {
-                        " through other branches"
-                    }
-                ));
-                for a in &ups {
-                    let internal = query.bundle().routine_id(a.touch.routine);
-                    let label = match join.get(internal) {
-                        Some(x) => x.qualified(),
-                        None => internal.to_string(),
-                    };
-                    human.push_str(&format!(
-                        "    +{} {} [{}] via {} — {}\n",
-                        a.depth,
-                        label,
-                        a.touch.op,
-                        a.touch.via.as_str(),
-                        origin_human(
-                            ops.get(a.touch.operation_id, &join).as_ref(),
-                            a.touch.operation_id
-                        )
-                    ));
-                }
             }
+            ancestor_witnesses_built = query.ancestor_witnesses_built();
         }
     }
 
@@ -1328,6 +1274,475 @@ fn render_query_touches_body(
         human_text: human,
         exit_code: 0,
         summary,
+        ancestor_witnesses_built,
+    }
+}
+
+/// The scope line every routine-scoped touches answer prints after its title.
+const TOUCHES_SCOPE_LINE: &str = "  scope: per operation, one routine into dependency code; \
+     temporary-record touches persist nothing but use the table's schema and run its triggers; \
+     lines are 1-based\n";
+
+/// The default human list cap for touches (spec §3.8 rule 4's shape: the cap,
+/// or every item when there are at most a quarter more). `--all` lists all.
+const TOUCHES_LIST_CAP: usize = 8;
+/// The workspace-global list's cap (tables' 12, all when 15 or fewer).
+const GLOBAL_LIST_CAP: usize = 12;
+/// How many owner routines the temporary-records line names.
+const TEMP_OWNERS_SHOWN: usize = 4;
+
+/// How many of `len` items a folded list shows.
+fn fold_len(len: usize, cap: usize, all: bool) -> usize {
+    if all || len <= cap + cap / 4 {
+        len
+    } else {
+        cap
+    }
+}
+
+/// The record-operation family of an op kind (spec §4.5's buckets): lock,
+/// write, validate (it runs the field's trigger and may write: never a read),
+/// read, and unclassified for any other kind.
+fn op_family(op: &str) -> &'static str {
+    match op {
+        "LockTable" => "lock",
+        "Insert" | "Modify" | "ModifyAll" | "Delete" | "DeleteAll" | "Rename" => "write",
+        "Validate" => "validate",
+        "Get" | "Next" | "IsEmpty" | "CalcFields" | "CalcSums" => "read",
+        o if o.starts_with("Find") || o.starts_with("Count") => "read",
+        _ => "unclassified",
+    }
+}
+
+/// The human temp-state note of a touch: nothing for a persistent record.
+fn temp_note(t: &TempStateKind) -> String {
+    match t {
+        TempStateKind::Known(false) => String::new(),
+        TempStateKind::Known(true) => " (temporary record)".to_string(),
+        TempStateKind::Unknown => " (temp state unknown)".to_string(),
+        TempStateKind::ParameterDependent(i) if *i == RECEIVER_PARAM_INDEX => {
+            " (caller-dependent: Rec)".to_string()
+        }
+        TempStateKind::ParameterDependent(i) => {
+            format!(" (caller-dependent: parameter {})", i + 1)
+        }
+    }
+}
+
+/// The human `via` note (spec §4.5): `direct` and `inherited` print nothing
+/// here (the first hop of an inherited touch is W2-2's `firstHop`).
+fn via_note(v: crate::engine::l4::effect_store::ViaRank) -> &'static str {
+    use crate::engine::l4::effect_store::ViaRank;
+    match v {
+        ViaRank::Direct | ViaRank::Inherited => "",
+        ViaRank::Dynamic => " (dynamic dispatch)",
+        ViaRank::EventSubscriber => " (event subscriber)",
+        ViaRank::ImplicitTrigger => " (table trigger)",
+    }
+}
+
+/// What the touches renderers share: the query and the two joins.
+struct TouchCx<'q, 'a> {
+    query: &'q DbEffectQuery<'a>,
+    join: &'q RoutineJoin<'a>,
+    ops: &'q OperationJoin<'a>,
+}
+
+impl TouchCx<'_, '_> {
+    /// `[Op] <family> at <file>:<line> in <owner><temp><via>`.
+    fn witness_line(&self, t: &TableTouch<'_>) -> String {
+        let at = match self.ops.get(t.operation_id, self.join) {
+            Some(o) => format!("at {}:{} in {}", o.file, shown(o.line), o.owner.qualified()),
+            None => format!("(outside the workspace: {})", t.operation_id),
+        };
+        format!(
+            "[{}] {} {at}{}{}",
+            t.op,
+            op_family(t.op),
+            temp_note(t.temp_state),
+            via_note(t.via)
+        )
+    }
+
+    /// The operation's owner, qualified, for the temporary-records line.
+    fn owner_label(&self, t: &TableTouch<'_>) -> String {
+        match self.ops.get(t.operation_id, self.join) {
+            Some(o) => o.owner.qualified(),
+            None => "(outside the workspace)".to_string(),
+        }
+    }
+
+    /// A witness row: [`touch_json`] plus its [`TouchClass`].
+    fn witness_json(&self, t: &TableTouch<'_>) -> Value {
+        let mut v = touch_json(t, self.ops.get(t.operation_id, self.join).as_ref(), None);
+        if let Value::Object(m) = &mut v {
+            m.insert(
+                "touchClass".into(),
+                TouchClass::of(t.temp_state).as_str().into(),
+            );
+        }
+        v
+    }
+
+    fn routine_json(&self, ix: crate::engine::l4::routine_interner::SolveIx) -> Value {
+        let internal = self.query.bundle().routine_id(ix);
+        match self.join.get(internal) {
+            Some(x) => routine_ref_json(&x),
+            None => {
+                json!({ "display": internal, "objectDisplay": "", "stableId": Value::Null, "anchor": Value::Null })
+            }
+        }
+    }
+
+    fn routine_label(&self, ix: crate::engine::l4::routine_interner::SolveIx) -> String {
+        let internal = self.query.bundle().routine_id(ix);
+        match self.join.get(internal) {
+            Some(x) => x.qualified(),
+            None => internal.to_string(),
+        }
+    }
+}
+
+fn counts_json(c: &TouchCounts) -> Value {
+    json!({
+        "knownPersistent": c.known_persistent,
+        "possiblyPersistent": {
+            "tempStateUnknown": c.temp_state_unknown,
+            "callerDependent": c.caller_dependent,
+        },
+        "temporary": c.temporary,
+    })
+}
+
+/// `a known persistent, b possibly persistent (...), c on temporary records`.
+fn counts_human(c: &TouchCounts) -> String {
+    let mut parts = vec![format!("{} known persistent", c.known_persistent)];
+    let pp = match (c.temp_state_unknown, c.caller_dependent) {
+        (0, 0) => String::new(),
+        (_, 0) => " (temp state unknown)".to_string(),
+        (0, _) => " (caller-dependent)".to_string(),
+        (u, d) => format!(" (temp state unknown {u}, caller-dependent {d})"),
+    };
+    parts.push(format!(
+        "{} possibly persistent{pp}",
+        c.possibly_persistent()
+    ));
+    parts.push(format!("{} on temporary records", c.temporary));
+    parts.join(", ")
+}
+
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// `down`: every witness in JSON (each with its class), the class counts and
+/// the reserved wave-3 `beyond`; in human the persistent and possibly
+/// persistent witnesses (folded) and one line for the temporary-record ones.
+fn render_touches_down(
+    cx: &TouchCx<'_, '_>,
+    rix: crate::engine::l4::routine_interner::SolveIx,
+    table_id: &str,
+    all: bool,
+    payload: &mut Map<String, Value>,
+    human: &mut String,
+) {
+    let query = cx.query;
+    let touches_down = query.touches_table(rix, table_id);
+    let witnesses = query.touches(rix, table_id);
+    let mut counts = TouchCounts::default();
+    let mut by_op: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for w in &witnesses {
+        counts.add(w.temp_state);
+        *by_op.entry(w.op).or_default() += 1;
+    }
+    // Operations on a table not resolved "may be this table". They are outside
+    // the four class counts, unless the query table IS that bucket (then they
+    // are the witnesses themselves).
+    let not_resolved = if is_unknown_table(table_id) {
+        witnesses.len()
+    } else {
+        query
+            .bundle()
+            .db_effects(rix)
+            .filter(|e| is_unknown_table(e.table_id))
+            .count()
+    };
+    let mut counts_v = counts_json(&counts);
+    if let Value::Object(m) = &mut counts_v {
+        m.insert("tableNotResolved".into(), not_resolved.into());
+        m.insert("byOp".into(), json!(by_op));
+    }
+    payload.insert(
+        "down".into(),
+        json!({
+            "answerable": true,
+            "touches": touches_down,
+            "witnessCount": witnesses.len(),
+            "counts": counts_v,
+            "beyond": [],
+            "witnesses": witnesses.iter().map(|t| cx.witness_json(t)).collect::<Vec<_>>(),
+        }),
+    );
+
+    if !touches_down {
+        human.push_str("  down: no — this routine's cone does not touch the table\n");
+    } else {
+        human.push_str(&format!(
+            "  down: yes — {}: {}\n",
+            plural(witnesses.len(), "record touch", "record touches"),
+            counts_human(&counts)
+        ));
+        let listed: Vec<&TableTouch<'_>> = if all {
+            witnesses.iter().collect()
+        } else {
+            witnesses
+                .iter()
+                .filter(|w| TouchClass::of(w.temp_state) != TouchClass::Temporary)
+                .collect()
+        };
+        let shown_n = fold_len(listed.len(), TOUCHES_LIST_CAP, all);
+        for w in &listed[..shown_n] {
+            human.push_str(&format!("    {}\n", cx.witness_line(w)));
+        }
+        if shown_n < listed.len() {
+            human.push_str(&format!(
+                "    … +{} (persistent or possibly persistent) — --all lists them\n",
+                plural(listed.len() - shown_n, "touch", "touches")
+            ));
+        }
+        if counts.temporary > 0 {
+            let mut owners: std::collections::BTreeMap<String, usize> =
+                std::collections::BTreeMap::new();
+            for w in witnesses
+                .iter()
+                .filter(|w| TouchClass::of(w.temp_state) == TouchClass::Temporary)
+            {
+                *owners.entry(cx.owner_label(w)).or_default() += 1;
+            }
+            let mut ranked: Vec<(String, usize)> = owners.into_iter().collect();
+            ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            let shown_owners = fold_len(ranked.len(), TEMP_OWNERS_SHOWN, all);
+            let mut names: Vec<String> = ranked[..shown_owners]
+                .iter()
+                .map(|(n, c)| format!("{n} {c}"))
+                .collect();
+            if shown_owners < ranked.len() {
+                names.push(format!(
+                    "… +{}",
+                    plural(ranked.len() - shown_owners, "routine", "routines")
+                ));
+            }
+            human.push_str(&format!(
+                "    temporary records: {} in {} ({}){}\n",
+                plural(counts.temporary, "touch", "touches"),
+                plural(ranked.len(), "routine", "routines"),
+                names.join(", "),
+                if all { "" } else { " — --all lists them" }
+            ));
+        }
+    }
+    if not_resolved > 0 && !is_unknown_table(table_id) {
+        human.push_str(&format!(
+            "  table not resolved: {} in this cone (they may be this table) — --table unknown lists them\n",
+            plural(not_resolved, "operation", "operations")
+        ));
+    }
+}
+
+/// `up`: every transitive caller probed ("has a summary row?", then
+/// "touches?"). When the routine touches the table itself (the trivial case)
+/// no caller witness is built: one counted line. Otherwise each touching
+/// caller's witnesses are streamed into its first witness and counts. `--all`
+/// adds every caller witness (the full product, as before W2-3).
+fn render_touches_up(
+    cx: &TouchCx<'_, '_>,
+    rix: crate::engine::l4::routine_interner::SolveIx,
+    table_id: &str,
+    touches_down: bool,
+    all: bool,
+    payload: &mut Map<String, Value>,
+    human: &mut String,
+) {
+    let query = cx.query;
+    let callers: Vec<CallerTouch<'_>> = if touches_down {
+        query.callers_membership(rix, table_id)
+    } else {
+        query.callers_aggregated(rix, table_id)
+    };
+    let of = |o: CallerOutcome| callers.iter().filter(move |c| c.outcome == o);
+    let touching = of(CallerOutcome::Touches).count();
+    let not_touching: Vec<&CallerTouch<'_>> = of(CallerOutcome::DoesNotTouch).collect();
+    let unknown: Vec<&CallerTouch<'_>> = of(CallerOutcome::NoRow).collect();
+    let note = if touches_down {
+        "this routine itself touches the table, so its callers touch it through this routine \
+         (summaries are transitive-down) — not a finding; each caller is still probed, and one \
+         without a summary row is unknown"
+    } else {
+        "this routine does NOT touch the table; the touching callers reach it through other \
+         branches"
+    };
+    let mut up = Map::new();
+    up.insert("scoped".into(), true.into());
+    up.insert("transitiveCallers".into(), callers.len().into());
+    up.insert("callersTouching".into(), touching.into());
+    up.insert("callersNotTouching".into(), not_touching.len().into());
+    up.insert("callersUnknown".into(), unknown.len().into());
+    up.insert("informative".into(), (!touches_down).into());
+    up.insert("note".into(), note.into());
+    up.insert(
+        "notTouching".into(),
+        not_touching
+            .iter()
+            .map(|c| json!({"depth": c.depth, "routine": cx.routine_json(c.routine)}))
+            .collect::<Vec<_>>()
+            .into(),
+    );
+    up.insert(
+        "unknown".into(),
+        unknown
+            .iter()
+            .map(|c| {
+                json!({
+                    "depth": c.depth,
+                    "routine": cx.routine_json(c.routine),
+                    "reason": "no summary row",
+                })
+            })
+            .collect::<Vec<_>>()
+            .into(),
+    );
+    if !touches_down {
+        up.insert(
+            "callers".into(),
+            callers
+                .iter()
+                .filter_map(|c| {
+                    let w = c.witnesses.as_ref()?;
+                    Some(json!({
+                        "depth": c.depth,
+                        "routine": cx.routine_json(c.routine),
+                        "witnessCount": w.count,
+                        "counts": counts_json(&w.counts),
+                        "firstWitness": cx.witness_json(&w.first),
+                    }))
+                })
+                .collect::<Vec<_>>()
+                .into(),
+        );
+    }
+    // `--all` only: the full caller-witness product.
+    let product: Vec<AncestorTouch<'_>> = if all {
+        query.ancestors_touching(rix, table_id)
+    } else {
+        Vec::new()
+    };
+    if all {
+        up.insert(
+            "witnesses".into(),
+            product
+                .iter()
+                .map(|a| {
+                    let mut m = Map::new();
+                    m.insert("depth".into(), a.depth.into());
+                    m.insert("routine".into(), cx.routine_json(a.touch.routine));
+                    if let Value::Object(t) = cx.witness_json(&a.touch) {
+                        m.extend(t);
+                    }
+                    Value::Object(m)
+                })
+                .collect::<Vec<_>>()
+                .into(),
+        );
+    }
+    payload.insert("up".into(), Value::Object(up));
+
+    let names = |list: &[&CallerTouch<'_>]| -> String {
+        let n = fold_len(list.len(), 3, all);
+        let mut v: Vec<String> = list[..n]
+            .iter()
+            .map(|c| cx.routine_label(c.routine))
+            .collect();
+        if n < list.len() {
+            v.push(format!("… +{}", list.len() - n));
+        }
+        v.join(", ")
+    };
+    let mut anomalies = String::new();
+    if !not_touching.is_empty() {
+        anomalies.push_str(&format!("; not touching: {}", names(&not_touching)));
+    }
+    if !unknown.is_empty() {
+        anomalies.push_str(&format!("; unknown (no summary row): {}", names(&unknown)));
+    }
+    if callers.is_empty() {
+        human.push_str("  up: no transitive callers\n");
+        return;
+    }
+    if touches_down {
+        let who = if callers.len() == 1 {
+            format!(" ({})", cx.routine_label(callers[0].routine))
+        } else {
+            String::new()
+        };
+        human.push_str(&format!(
+            "  up: {}{who}: {} it, {}, {} unknown — through this routine; not a finding{anomalies}{}\n",
+            plural(callers.len(), "transitive caller", "transitive callers"),
+            plural(touching, "touches", "touch"),
+            plural(not_touching.len(), "does not", "do not"),
+            unknown.len(),
+            if all { "" } else { " — --all lists their witnesses" },
+        ));
+    } else {
+        human.push_str(&format!(
+            "  up: {touching} of {} {} it through other branches, {}, {} unknown{anomalies}\n",
+            plural(callers.len(), "transitive caller", "transitive callers"),
+            if touching == 1 { "touches" } else { "touch" },
+            plural(not_touching.len(), "does not", "do not"),
+            unknown.len(),
+        ));
+        let touchers: Vec<&CallerTouch<'_>> =
+            callers.iter().filter(|c| c.witnesses.is_some()).collect();
+        let shown_n = fold_len(touchers.len(), TOUCHES_LIST_CAP, all);
+        for c in &touchers[..shown_n] {
+            let w = c.witnesses.as_ref().expect("filtered");
+            if all {
+                human.push_str(&format!(
+                    "    +{} {}: {}: {}\n",
+                    c.depth,
+                    cx.routine_label(c.routine),
+                    plural(w.count, "touch", "touches"),
+                    counts_human(&w.counts)
+                ));
+                for a in product.iter().filter(|a| a.touch.routine == c.routine) {
+                    human.push_str(&format!("      {}\n", cx.witness_line(&a.touch)));
+                }
+            } else {
+                human.push_str(&format!(
+                    "    +{} {}: {} ({}); first {}\n",
+                    c.depth,
+                    cx.routine_label(c.routine),
+                    plural(w.count, "touch", "touches"),
+                    counts_human(&w.counts),
+                    cx.witness_line(&w.first)
+                ));
+            }
+        }
+        if shown_n < touchers.len() {
+            human.push_str(&format!(
+                "    … +{} — --all lists them\n",
+                plural(touchers.len() - shown_n, "caller", "callers")
+            ));
+        }
+    }
+    if all && touches_down {
+        for a in &product {
+            human.push_str(&format!(
+                "    +{} {} {}\n",
+                a.depth,
+                cx.routine_label(a.touch.routine),
+                cx.witness_line(&a.touch)
+            ));
+        }
     }
 }
 
@@ -1424,6 +1839,7 @@ fn render_query_effects_body(
             human_text: human,
             exit_code: 0,
             summary: Value::Null,
+            ancestor_witnesses_built: 0,
         };
     };
     let effects: Vec<TableTouch<'_>> = query.all_effects(rix);
@@ -1474,6 +1890,7 @@ fn render_query_effects_body(
         human_text: human,
         exit_code: 0,
         summary,
+        ancestor_witnesses_built: 0,
     }
 }
 

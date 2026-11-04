@@ -1,0 +1,91 @@
+{
+  "alsemVersion": "cli-query-v1",
+  "deterministic": true,
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "query.touches",
+  "payload": {
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "direction": "both",
+    "down": {
+      "answerable": true,
+      "beyond": [],
+      "counts": {
+        "byOp": {
+          "Insert": 1
+        },
+        "knownPersistent": 0,
+        "possiblyPersistent": {
+          "callerDependent": 1,
+          "tempStateUnknown": 0
+        },
+        "tableNotResolved": 0,
+        "temporary": 0
+      },
+      "touches": true,
+      "witnessCount": 1,
+      "witnesses": [
+        {
+          "op": "Insert",
+          "operationId": "46598e8ae640a0a8/df980d5b2960e89e21f2452e4999035332235f104bbebfa4faac1c33412033e1/op0",
+          "origin": {
+            "anchor": {
+              "column": 8,
+              "file": "ws:src/QTTouches.al",
+              "line": 33
+            },
+            "routine": {
+              "anchor": {
+                "column": 4,
+                "file": "ws:src/QTTouches.al",
+                "line": 31
+              },
+              "display": "WriteItem",
+              "objectDisplay": "Codeunit QT Touches",
+              "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#6a863bfb0eb86b6e845ad40acc2308a3480e63e10299e4a629604c6a43c90d72"
+            }
+          },
+          "tempState": "parameter-dependent(0)",
+          "touchClass": "callerDependent",
+          "via": "direct"
+        }
+      ]
+    },
+    "from": {
+      "resolution": "resolved",
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/QTTouches.al",
+          "line": 31
+        },
+        "display": "WriteItem",
+        "objectDisplay": "Codeunit QT Touches",
+        "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#6a863bfb0eb86b6e845ad40acc2308a3480e63e10299e4a629604c6a43c90d72"
+      },
+      "selector": "WriteItem"
+    },
+    "lineBase": 1,
+    "table": {
+      "id": "07070707-0000-4000-8000-000000000071/table/50700",
+      "isUnknownBucket": false,
+      "name": "QT Item",
+      "resolution": "resolved",
+      "selector": "QT Item"
+    },
+    "up": {
+      "callersNotTouching": 0,
+      "callersTouching": 5,
+      "callersUnknown": 0,
+      "informative": false,
+      "notTouching": [],
+      "note": "this routine itself touches the table, so its callers touch it through this routine (summaries are transitive-down) — not a finding; each caller is still probed, and one without a summary row is unknown",
+      "scoped": true,
+      "transitiveCallers": 5,
+      "unknown": []
+    }
+  },
+  "schemaVersion": "3.0.0"
+}

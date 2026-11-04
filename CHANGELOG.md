@@ -21,6 +21,49 @@ Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision
   `resourcesOriginalCount`. **Explain JSON `al-sem.explain/2` → `al-sem.explain/2.1`** for its
   additive `literalUnreachable` (`/3` stays the redesign's). Goldens: the version line only.
 
+### Changed (MCP output wave 2, W2-3: `query touches` computes less and says more)
+
+Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §4.6, T-W2-10.
+
+- **The `up` answer no longer builds every caller's witnesses.** Before, `query touches --from R`
+  read every witness of every transitive caller that touches the table and printed one line per
+  witness. On the CDO baseline, `RunReportID` vs `CDO File` was 180,340 human lines (36.8 MB) and
+  a 257 MB JSON document; `IssueReminder` vs `CDO File` 412 lines (74 KB). Now, when R touches the
+  table itself (the trivial case: every caller then touches it through R), each caller is only
+  probed — "has a summary row?" first, then "touches the table?" — and `up` is one line:
+  `883 transitive callers: 883 touch it, 0 do not, 0 unknown — through this routine; not a
+  finding`. A caller with no summary row is counted as unknown, never as "does not touch", and
+  the callers that do not touch or are unknown are named. When R does not touch the table (the
+  informative case), each touching caller's witnesses are streamed into its first witness, its
+  count and its class counts; one line per caller. `--all` (MCP `all: true`) gives every caller
+  witness as before.
+- **`down` counts touches by class.** Each touch is known persistent (`known(false)`), possibly
+  persistent (temp state unknown, or caller-dependent through a parameter) or on a temporary
+  record. Temporary-record touches persist nothing, but they use the table's schema and run its
+  triggers and table-event subscribers, so they are counted and listed under `--all`, never
+  dropped; the default human form folds them into one line naming the routines that own them.
+  Operations on a table that was not resolved are counted apart ("they may be this table"):
+  `tableNotResolved` is outside the three class counts, except for `--table unknown`, where those
+  operations are the witnesses themselves and `tableNotResolved` equals `witnessCount`.
+  Human lines name the operation family (read, write, lock, validate, unclassified) and the
+  owning routine: `[Insert] write at <file>:<line> in <routine> (temp state unknown)`. Lists are
+  folded in the default human form (8, or all when there are at most 10; the workspace-global
+  list 12, or all up to 15).
+- On CDO (release-fast, one batch per binary, model built once): `RunReportID` vs `CDO File` is
+  now 12 human lines (2,099 B) and 202,063 B of JSON; `IssueReminder` vs `CDO File` 12 lines
+  (2,136 B) and 202,070 B of JSON. The four answers (human and JSON, both routines) cost 5.9 s
+  and 285 MB of peak RSS on top of the model before; now under 0.1 s and no measurable RSS.
+- **Query JSON 3.0.0** (`query touches` and `query effects`; the spec gives W2-2's `query
+  effects` changes the same major). `query touches`: `up` drops `witnesses` by default (only
+  `--all` has it) and gains `callersNotTouching`, `callersUnknown`, `notTouching[]`, `unknown[]`
+  (with `reason`), and in the informative case `callers[]` (`depth`, `routine`, `witnessCount`,
+  `counts`, `firstWitness`); `down` gains `counts` (`knownPersistent`, `possiblyPersistent`
+  {`tempStateUnknown`, `callerDependent`}, `temporary`, `tableNotResolved`, `byOp`), the
+  reserved wave-3 `beyond: []`, and a `touchClass` on each witness. `query effects` changes only
+  its `schemaVersion`.
+- Not yet (they wait on W2-2): the `through <first hop>` on an inherited touch (the shared
+  `firstHop` rule of §4.5) and moving the `dependencies:` line into the scope line.
+
 ### Changed (MCP output wave 2, W2-1: one classifier and one literal pass for every reader)
 
 Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.1, §3.2,

@@ -160,13 +160,24 @@ fn line_tokens(t: &str) -> Vec<String> {
         }
         return v;
     }
-    // query: `[Op] on T via ...` / `+1 Caller [Op] via ...`.
+    // query: `[Op] on T via ...` / `+1 Caller [Op] via ...`; touches (W2-3):
+    // `[Op] <family> at <anchor> in <owner>`.
     if let Some(op) = between(t, "[", "]")
         && op.chars().all(|c| c.is_ascii_alphabetic())
         && op.chars().next().is_some_and(|c| c.is_ascii_uppercase())
         && !op.starts_with("DB_")
         && op != "COMMIT"
-        && (t.contains(" via ") || t.starts_with('+'))
+        && (t.contains(" via ")
+            || t.starts_with('+')
+            || [
+                " write at ",
+                " read at ",
+                " lock at ",
+                " validate at ",
+                " unclassified at ",
+            ]
+            .iter()
+            .any(|f| t.contains(&format!("[{op}]{f}"))))
     {
         v.push(op.to_lowercase());
         return v;
@@ -435,6 +446,9 @@ fn every_document_states_line_base_1() {
         ),
         (
             "query touches",
+            // `--all`: the default human form folds temporary-record touches
+            // into one counted line (W2-3), so the JSON's first witness line is
+            // printed only when every witness is listed.
             vec![
                 "query",
                 "touches",
@@ -443,6 +457,7 @@ fn every_document_states_line_base_1() {
                 "Out Log",
                 "--from",
                 ISSUE_DOC_Q,
+                "--all",
             ],
         ),
         (

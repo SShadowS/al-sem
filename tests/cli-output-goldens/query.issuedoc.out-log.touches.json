@@ -19,6 +19,20 @@
     "direction": "both",
     "down": {
       "answerable": true,
+      "beyond": [],
+      "counts": {
+        "byOp": {
+          "DeleteAll": 1,
+          "Insert": 1
+        },
+        "knownPersistent": 1,
+        "possiblyPersistent": {
+          "callerDependent": 0,
+          "tempStateUnknown": 0
+        },
+        "tableNotResolved": 2,
+        "temporary": 1
+      },
       "touches": true,
       "witnessCount": 2,
       "witnesses": [
@@ -43,6 +57,7 @@
             }
           },
           "tempState": "known(true)",
+          "touchClass": "temporary",
           "via": "inherited"
         },
         {
@@ -66,6 +81,7 @@
             }
           },
           "tempState": "known(false)",
+          "touchClass": "knownPersistent",
           "via": "inherited"
         }
       ]
@@ -93,82 +109,16 @@
       "selector": "Out Log"
     },
     "up": {
+      "callersNotTouching": 0,
       "callersTouching": 1,
+      "callersUnknown": 0,
       "informative": false,
-      "note": "this routine itself touches the table, so every transitive caller does too (summaries are transitive-down) — the ancestor list is not a finding here",
+      "notTouching": [],
+      "note": "this routine itself touches the table, so its callers touch it through this routine (summaries are transitive-down) — not a finding; each caller is still probed, and one without a summary row is unknown",
       "scoped": true,
       "transitiveCallers": 1,
-      "witnesses": [
-        {
-          "depth": 1,
-          "op": "DeleteAll",
-          "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op0",
-          "origin": {
-            "anchor": {
-              "column": 8,
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 58
-            },
-            "routine": {
-              "anchor": {
-                "column": 4,
-                "file": "ws:src/OutIssueDocument.Codeunit.al",
-                "line": 53
-              },
-              "display": "WriteLog",
-              "objectDisplay": "Codeunit Out Log Mgt",
-              "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
-            }
-          },
-          "routine": {
-            "anchor": {
-              "column": 16,
-              "file": "ws:src/Pages.al",
-              "line": 22
-            },
-            "display": "OnAction",
-            "objectDisplay": "Page Out Doc Card",
-            "stableId": "a0a00001-0000-4000-8000-0000000000a1:Page:50120#152372040a7fe5cc2cfb65eca0ffaa30e8b16e933e9f83fbfbbf3a7bd1455001"
-          },
-          "tempState": "known(true)",
-          "via": "inherited"
-        },
-        {
-          "depth": 1,
-          "op": "Insert",
-          "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op1",
-          "origin": {
-            "anchor": {
-              "column": 8,
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 61
-            },
-            "routine": {
-              "anchor": {
-                "column": 4,
-                "file": "ws:src/OutIssueDocument.Codeunit.al",
-                "line": 53
-              },
-              "display": "WriteLog",
-              "objectDisplay": "Codeunit Out Log Mgt",
-              "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
-            }
-          },
-          "routine": {
-            "anchor": {
-              "column": 16,
-              "file": "ws:src/Pages.al",
-              "line": 22
-            },
-            "display": "OnAction",
-            "objectDisplay": "Page Out Doc Card",
-            "stableId": "a0a00001-0000-4000-8000-0000000000a1:Page:50120#152372040a7fe5cc2cfb65eca0ffaa30e8b16e933e9f83fbfbbf3a7bd1455001"
-          },
-          "tempState": "known(false)",
-          "via": "inherited"
-        }
-      ]
+      "unknown": []
     }
   },
-  "schemaVersion": "2.0.0"
+  "schemaVersion": "3.0.0"
 }
