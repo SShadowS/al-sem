@@ -13,7 +13,7 @@
       "effects": {
         "backgroundTasks": [],
         "commitSites": [],
-        "commits": "no observed",
+        "commits": "none",
         "crossings": [],
         "errors": [],
         "events": [],
@@ -188,7 +188,7 @@
         "callerDependentTables": 0,
         "callers": 3,
         "commits": {
-          "answer": "no observed",
+          "answer": "none",
           "entryPoints": 0,
           "ownSites": 0
         },

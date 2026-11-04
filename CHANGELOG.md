@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (MCP output wave 2, W2-2 part 3: digest human, digest JSON 3.0.0, `--schema 2`)
+
+Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §4.3, §4.4,
+§4.7, §5.
+
+- **Digest human** prints, per root, explain's effect sections through the same functions
+  (summary, coverage, assumptions, limits, scope, commits, writes in workspace code,
+  caller-dependent writes, writes beyond entry points, writes with no path kept, literal-dead
+  tables, temporary records, events, kind families, gaps), then its diagnostics as counts by
+  kind and reason (each with its operation under `--detail`). The old per-row
+  `[TYPE] direct / evidence / detail / via` blocks are gone.
+- **Digest JSON 3.0.0** (major) is the default: every effect row kept (multiplicity included),
+  with `status` (`live` / `literal-dead`) and `class` / `classReason` on table writes; paths as
+  `paths: [{hops: [{edge, to, line, file?}], terminal}]` whose `to` is a key of the new
+  `payload.routines` table (`r:` + 12 hex of the stable id's SHA-256, extended on a collision),
+  one path on a decision effect by default (may-persist and caller-dependent writes, COMMIT,
+  HTTP, FILE, BACKGROUND_TASK, ISOLATED_STORAGE, TELEMETRY, UI_*, ERROR_*), none on events,
+  reads and temporary rows, with `pathsKept`, `pathsOmitted` and `pathsProducerTruncated` (the
+  old `viaPaths` / `viaPathsTruncated`); group rows name their `crossing` (a key of the new
+  `entries[].crossings`, which holds the id, boundary, targets, sites and prefix once) instead
+  of the "enters X" evidence, list every table as `resources[{id, display}]` and every event
+  as `eventsByPublisher[{publisher, events}]`, and a may-persist group row carries one
+  representative terminal witness (`paths[0].representative`); `detail.resources` (the
+  first-ten string) is dropped; only non-trivial `scopedGuarantees` (`scopedGuaranteesFolded`
+  counts the rest); `entryDiagnosticCounts` instead of `entryDiagnostics`; `unresolved` holds
+  workspace and not-placed call sites (`candidateCount` for `candidates`) and
+  `unresolvedInDependencies` the dependency ones as counts and top callees; new
+  `entries[].summary` (`RollupTotals`), `coverage.assumptions` / `coverage.limits`,
+  `payload.pathCap`. `entries[].routine` (anchor and anchors), `factId`, `detail.tempState`,
+  `provenance`, `conditionality`, `transactionContext` and `guarantees` are unchanged.
+- **New flags**: `--detail` (unfolded 3.x: every path up to 3, every scoped guarantee,
+  diagnostic, unresolved item and per-resource group witness), `--compact` (no indentation),
+  `--max-paths N` (now honoured: paths per effect, at most 3), `--schema 2` (the 2.2.0 document,
+  the old shape over the current analysis, for one release window; with `--detail`,
+  `--max-paths` or `--compact` it exits 2). MCP `alsem_digest` takes `detail`, `maxPaths`,
+  `compact` and `schema`. `run_digest_pipeline` (the in-process API) keeps the 2.x document;
+  `run_digest_pipeline_render` renders either.
+- **Prove's evidence serializer is its own** (`prove::evidence_value`, a copy of the 2.x effect
+  shape), so the digest redesign never moves prove's JSON; prove output is unchanged.
+
 ### Changed (MCP output wave 2, W2-2 part 2: the explain card, human and `al-sem.explain/3`)
 
 Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §4.1, §4.2, §5.
@@ -37,8 +77,8 @@ Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision
   "enters X" anchor; an event group carries its count (`resourcesListed: false`; the names with
   `--detail`); a write with no witness carries `noPathKept` and the recovered `owner`;
   `effects.{http, file, backgroundTasks, isolatedStorage, telemetry, errors}` beside `ui`;
-  `reachedFromSummary`, `gapsInDependencies`; `effects.commits` is `yes`, `may` or `no observed`
-  (was `no`). Folded by default and complete with `--detail`: a page action's `via` and
+  `reachedFromSummary`, `gapsInDependencies`; `effects.commits` is `yes`, `may`, `none` (complete
+  coverage, no limit) or `no observed` (was `no`). Folded by default and complete with `--detail`: a page action's `via` and
   `tooltip`, dependency gaps, event-group names. `fields` and `via` keep their names. No outside
   reader: the editor extension uses only the call-hierarchy and property requests (plan §4.1).
 - **New flags** `explain --detail` (every list, no fold) and `--max-paths N` (paths per item:

@@ -1,0 +1,179 @@
+{
+  "alsemVersion": "cli-b-v1",
+  "deterministic": true,
+  "diagnostics": [],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "digest",
+  "payload": {
+    "changed": {
+      "diffProvided": false,
+      "files": [
+        "src/Rec.Table.al",
+        "src/Sender.Codeunit.al"
+      ]
+    },
+    "changedRootsDiagnostics": [
+      {
+        "file": "src/Rec.Table.al",
+        "kind": "file-unmatched"
+      }
+    ],
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "entries": [
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "class": "temporary",
+            "classReason": "known-temporary",
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {
+              "resourceDisplay": "D47 Rec",
+              "resourceId": "11111111-0000-0000-0000-0000000d4705/table/50100",
+              "tempState": "known(true)"
+            },
+            "evidence": {
+              "column": 8,
+              "excerpt": "TempRec.Insert",
+              "file": "ws:src/Sender.Codeunit.al",
+              "line": 15,
+              "sourceKind": "source"
+            },
+            "factId": "fd83f4fd0de47853",
+            "guarantees": [],
+            "paths": [],
+            "pathsKept": 1,
+            "pathsOmitted": 1,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "DB_INSERT"
+          },
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {
+              "method": "Get"
+            },
+            "evidence": {
+              "column": 8,
+              "excerpt": "Client.Get",
+              "file": "ws:src/Sender.Codeunit.al",
+              "line": 16,
+              "sourceKind": "source"
+            },
+            "factId": "1b3cfdd09f2a0708",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/Sender.Codeunit.al",
+                  "line": 16
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "HTTP"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/Sender.Codeunit.al",
+            "line": 7,
+            "sourceKind": "source"
+          },
+          "display": "SendAfterTempInsert",
+          "objectDisplay": "Codeunit D47 Sender",
+          "stableId": "11111111-0000-0000-0000-0000000d4705:Codeunit:50000#cc7e0d05e04c6c2a3061943bdc3dc62be0146ae5a91d97774026d7e5158f39ba"
+        },
+        "scopedGuaranteesFolded": 0,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "none",
+            "entryPoints": 0,
+            "ownSites": 0
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {
+            "http": 1
+          },
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 0,
+            "ownedByApp": 0
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 1,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 1
+        }
+      }
+    ],
+    "lineBase": 1,
+    "pathCap": 1,
+    "routines": {
+      "r:9498fc26a070": {
+        "display": "Codeunit D47 Sender::SendAfterTempInsert",
+        "file": "ws:src/Sender.Codeunit.al",
+        "stableId": "11111111-0000-0000-0000-0000000d4705:Codeunit:50000#cc7e0d05e04c6c2a3061943bdc3dc62be0146ae5a91d97774026d7e5158f39ba"
+      }
+    },
+    "summary": {
+      "rootsRequested": 1,
+      "rootsResolved": 1,
+      "totalEffects": 2,
+      "totalUnresolved": 0
+    },
+    "workspaceFingerprint": "d7511a4fe3bcaed11cec5244ebdc7b282e2294c2cf2e3782c9f106718516fe98"
+  },
+  "schemaVersion": "3.0.0"
+}

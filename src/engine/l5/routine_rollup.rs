@@ -188,6 +188,16 @@ impl<'m> RollupCx<'m> {
         Some((object.to_string(), r.name.clone()))
     }
 
+    /// The source unit of a stable routine id's first row.
+    #[must_use]
+    pub fn default_file(&self, stable_id: &str) -> Option<String> {
+        let &i = self.rows.get(stable_id)?;
+        let f = &self.model.workspace.routines[i]
+            .source_anchor
+            .source_unit_id;
+        (!f.is_empty()).then(|| f.clone())
+    }
+
     /// The qualified display of a stable routine id, else the id.
     #[must_use]
     pub fn qualified(&self, stable_id: &str) -> String {
@@ -469,7 +479,7 @@ pub struct RollupTotals {
     pub by_dependencies: usize,
     pub unresolved_table_writes: usize,
     pub caller_dependent_tables: usize,
-    /// `yes`, `may` or `no observed`.
+    /// `yes`, `may`, `none` (complete coverage, no limit) or `no observed`.
     pub commits: &'static str,
     pub commit_sites: usize,
     pub commit_entry_points: usize,
@@ -565,6 +575,7 @@ impl RollupTotals {
         ));
         let commits = match self.commits {
             "no observed" => "commits: no observed COMMIT".to_string(),
+            "none" => "commits: none".to_string(),
             answer => {
                 let mut where_ = Vec::new();
                 if self.commit_sites > 0 {
@@ -986,18 +997,27 @@ impl RoutineRollup {
 
         r.gaps = gaps_of(entry);
         r.may_write = live_tables;
-        r.totals = r.totals_of(cx, &caller_own);
+        let complete = entry.coverage_status == "complete"
+            && r.no_path.is_empty()
+            && !entry.unresolved_traversal.truncated;
+        r.totals = r.totals_of(cx, &caller_own, complete);
         r
     }
 
-    fn totals_of(&self, cx: &RollupCx<'_>, caller_own: &BTreeSet<String>) -> RollupTotals {
+    fn totals_of(
+        &self,
+        cx: &RollupCx<'_>,
+        caller_own: &BTreeSet<String>,
+        complete: bool,
+    ) -> RollupTotals {
         let live = &self.may_write;
         let owned = live.keys().filter(|id| cx.table_is_own(id)).count();
         let commit_entry_points = self.crossings.iter().filter(|c| c.commit).count();
+        // §3.7: "none" only when coverage is complete and nothing limits it.
         let commits = if self.commit_unconditional {
             "yes"
         } else if self.commit_sites.is_empty() && commit_entry_points == 0 {
-            "no observed"
+            if complete { "none" } else { "no observed" }
         } else {
             "may"
         };
@@ -1267,6 +1287,34 @@ pub fn header_lines(
         plural(r.totals.entry_points, "entry point", "entry points"),
         plural(r.totals.crossing_sites, "site", "sites")
     ));
+    out
+}
+
+/// The typed limits of an entry, as JSON (§3.7; the `limits:` line's data).
+#[must_use]
+pub fn limit_values(r: &RoutineRollup, entry: &DigestEntryFull) -> Vec<Value> {
+    let mut out = Vec::new();
+    if !r.no_path.is_empty() {
+        out.push(json!({
+            "kind": "no-path-kept",
+            "operations": r.totals.no_path_operations,
+            "tables": r.totals.no_path_tables,
+        }));
+    }
+    if entry.unresolved_traversal.truncated {
+        out.push(
+            json!({"kind": "cone-truncated", "maxDepth": entry.unresolved_traversal.max_depth}),
+        );
+    }
+    let capped = entry
+        .effects
+        .iter()
+        .flat_map(|e| e.group_resource_paths.iter())
+        .filter(|(_, p)| matches!(p, Err(n) if n.reason == "search-cap"))
+        .count();
+    if capped > 0 {
+        out.push(json!({"kind": "path-search-capped", "resources": capped}));
+    }
     out
 }
 

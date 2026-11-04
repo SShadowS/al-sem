@@ -27,11 +27,18 @@
     "entries": [
       {
         "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
           "reasons": [],
           "status": "complete"
         },
+        "crossings": {},
         "effects": [
           {
+            "class": "temporary",
+            "classReason": "known-temporary",
             "conditionality": "unconditional-on-success",
             "confidence": "static",
             "detail": {
@@ -48,16 +55,18 @@
             },
             "factId": "e6dc7b3e3b98f30e",
             "guarantees": [],
+            "paths": [],
+            "pathsKept": 1,
+            "pathsOmitted": 1,
+            "pathsProducerTruncated": false,
             "provenance": "direct",
-            "scopedGuarantees": [],
+            "status": "live",
             "transactionContext": "unknown",
-            "type": "DB_DELETE",
-            "viaPaths": [
-              []
-            ],
-            "viaPathsTruncated": false
+            "type": "DB_DELETE"
           },
           {
+            "class": "physical",
+            "classReason": "known-persistent",
             "conditionality": "unconditional-on-success",
             "confidence": "static",
             "detail": {
@@ -74,17 +83,26 @@
             },
             "factId": "7d2d91f972099cc8",
             "guarantees": [],
-            "provenance": "direct",
-            "scopedGuarantees": [],
-            "transactionContext": "unknown",
-            "type": "DB_INSERT",
-            "viaPaths": [
-              []
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/OutIssueDocument.Codeunit.al",
+                  "line": 61,
+                  "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op1"
+                }
+              }
             ],
-            "viaPathsTruncated": false
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "DB_INSERT"
           }
         ],
-        "entryDiagnostics": [],
+        "entryDiagnosticCounts": {},
         "routine": {
           "anchor": {
             "column": 4,
@@ -96,7 +114,48 @@
           "objectDisplay": "Codeunit Out Log Mgt",
           "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
         },
+        "scopedGuaranteesFolded": 0,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "none",
+            "entryPoints": 0,
+            "ownSites": 0
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {},
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 1,
+            "ownedByApp": 1
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
         "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
         "unresolvedTraversal": {
           "maxDepth": 64,
           "truncated": false,
@@ -105,6 +164,14 @@
       }
     ],
     "lineBase": 1,
+    "pathCap": 1,
+    "routines": {
+      "r:aeacadfe0cb1": {
+        "display": "Codeunit Out Log Mgt::WriteLog",
+        "file": "ws:src/OutIssueDocument.Codeunit.al",
+        "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
+      }
+    },
     "summary": {
       "rootsRequested": 1,
       "rootsResolved": 1,
@@ -113,5 +180,5 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "2.2.0"
+  "schemaVersion": "3.0.0"
 }

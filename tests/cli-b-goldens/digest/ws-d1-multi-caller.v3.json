@@ -1,0 +1,607 @@
+{
+  "alsemVersion": "cli-b-v1",
+  "deterministic": true,
+  "diagnostics": [],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "digest",
+  "payload": {
+    "changed": {
+      "diffProvided": false,
+      "files": [
+        "src/D1MultiCaller.al"
+      ]
+    },
+    "changedRootsDiagnostics": [],
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "entries": [
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "class": "physical",
+            "classReason": "known-persistent",
+            "conditionality": "loop-body",
+            "confidence": "static",
+            "detail": {
+              "resourceDisplay": "MC Customer",
+              "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
+              "tempState": "known(false)"
+            },
+            "evidence": {
+              "column": 8,
+              "excerpt": "Cust.Modify",
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 19,
+              "sourceKind": "source"
+            },
+            "factId": "1432fced4ff049e2",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "edge": "direct-call",
+                    "line": 35,
+                    "to": "r:1c7f167f4b5f"
+                  }
+                ],
+                "terminal": {
+                  "file": "ws:src/D1MultiCaller.al",
+                  "line": 19,
+                  "operationId": "c8d0efe535357e91/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "transitive",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "DB_MODIFY"
+          },
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Cust.FindSet",
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 33,
+              "sourceKind": "source"
+            },
+            "factId": "12d2ab78786edf39",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/D1MultiCaller.al",
+                  "line": 33,
+                  "operationId": "c8d0efe535357e91/583c83f41408d2e6a9c293168053e3b847fe55fbb008063ac72053f0f769ec8d/op0"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/D1MultiCaller.al",
+            "line": 30,
+            "sourceKind": "source"
+          },
+          "display": "CallerB",
+          "objectDisplay": "Codeunit D1 Multi Caller",
+          "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf"
+        },
+        "scopedGuaranteesFolded": 0,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "none",
+            "entryPoints": 0,
+            "ownSites": 0
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {
+            "errors": 1
+          },
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 1,
+            "ownedByApp": 1
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 2
+        }
+      },
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "class": "physical",
+            "classReason": "known-persistent",
+            "conditionality": "loop-body",
+            "confidence": "static",
+            "detail": {
+              "resourceDisplay": "MC Customer",
+              "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
+              "tempState": "known(false)"
+            },
+            "evidence": {
+              "column": 8,
+              "excerpt": "Cust.Modify",
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 19,
+              "sourceKind": "source"
+            },
+            "factId": "5a4a7bd7d3e83981",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "edge": "direct-call",
+                    "line": 43,
+                    "to": "r:1c7f167f4b5f"
+                  }
+                ],
+                "terminal": {
+                  "file": "ws:src/D1MultiCaller.al",
+                  "line": 19,
+                  "operationId": "c8d0efe535357e91/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "transitive",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "DB_MODIFY"
+          },
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Cust.FindSet",
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 41,
+              "sourceKind": "source"
+            },
+            "factId": "3d70d5016ea6a707",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/D1MultiCaller.al",
+                  "line": 41,
+                  "operationId": "c8d0efe535357e91/7a09251a2ee2dae7f94f959d6604b253bdd46d48055008e095a6f1371d07e030/op0"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/D1MultiCaller.al",
+            "line": 38,
+            "sourceKind": "source"
+          },
+          "display": "CallerC",
+          "objectDisplay": "Codeunit D1 Multi Caller",
+          "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c"
+        },
+        "scopedGuaranteesFolded": 0,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "none",
+            "entryPoints": 0,
+            "ownSites": 0
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {
+            "errors": 1
+          },
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 1,
+            "ownedByApp": 1
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 2
+        }
+      },
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "class": "physical",
+            "classReason": "known-persistent",
+            "conditionality": "loop-body",
+            "confidence": "static",
+            "detail": {
+              "resourceDisplay": "MC Customer",
+              "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
+              "tempState": "known(false)"
+            },
+            "evidence": {
+              "column": 8,
+              "excerpt": "Cust.Modify",
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 19,
+              "sourceKind": "source"
+            },
+            "factId": "9dc07ba4a609e78a",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "edge": "direct-call",
+                    "line": 27,
+                    "to": "r:1c7f167f4b5f"
+                  }
+                ],
+                "terminal": {
+                  "file": "ws:src/D1MultiCaller.al",
+                  "line": 19,
+                  "operationId": "c8d0efe535357e91/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "transitive",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "DB_MODIFY"
+          },
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Cust.FindSet",
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 25,
+              "sourceKind": "source"
+            },
+            "factId": "d47b464bf3ed72e4",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/D1MultiCaller.al",
+                  "line": 25,
+                  "operationId": "c8d0efe535357e91/1f759718521ad524b9d1bd5f9649038d0d7e94611c736d22d36dd6b87df43ec2/op0"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/D1MultiCaller.al",
+            "line": 22,
+            "sourceKind": "source"
+          },
+          "display": "CallerA",
+          "objectDisplay": "Codeunit D1 Multi Caller",
+          "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c"
+        },
+        "scopedGuaranteesFolded": 0,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "none",
+            "entryPoints": 0,
+            "ownSites": 0
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {
+            "errors": 1
+          },
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 1,
+            "ownedByApp": 1
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 2
+        }
+      },
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "class": "callerDependent",
+            "classReason": "parameter",
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {
+              "resourceDisplay": "MC Customer",
+              "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
+              "tempState": "parameter-dependent(0)"
+            },
+            "evidence": {
+              "column": 8,
+              "excerpt": "Cust.Modify",
+              "file": "ws:src/D1MultiCaller.al",
+              "line": 19,
+              "sourceKind": "source"
+            },
+            "factId": "b162c24ab8fb6723",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/D1MultiCaller.al",
+                  "line": 19,
+                  "operationId": "c8d0efe535357e91/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "DB_MODIFY"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/D1MultiCaller.al",
+            "line": 17,
+            "sourceKind": "source"
+          },
+          "display": "ModifyHelper",
+          "objectDisplay": "Codeunit D1 Multi Caller",
+          "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f"
+        },
+        "scopedGuaranteesFolded": 0,
+        "summary": {
+          "callerDependentTables": 1,
+          "commits": {
+            "answer": "none",
+            "entryPoints": 0,
+            "ownSites": 0
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {},
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 0,
+            "ownedByApp": 0
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 1
+        }
+      }
+    ],
+    "lineBase": 1,
+    "pathCap": 1,
+    "routines": {
+      "r:1c7f167f4b5f": {
+        "display": "Codeunit D1 Multi Caller::ModifyHelper",
+        "file": "ws:src/D1MultiCaller.al",
+        "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f"
+      },
+      "r:27ec9929ec83": {
+        "display": "Codeunit D1 Multi Caller::CallerC",
+        "file": "ws:src/D1MultiCaller.al",
+        "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c"
+      },
+      "r:481c5293e41b": {
+        "display": "Codeunit D1 Multi Caller::CallerA",
+        "file": "ws:src/D1MultiCaller.al",
+        "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c"
+      },
+      "r:72df523223fa": {
+        "display": "Codeunit D1 Multi Caller::CallerB",
+        "file": "ws:src/D1MultiCaller.al",
+        "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf"
+      }
+    },
+    "summary": {
+      "rootsRequested": 4,
+      "rootsResolved": 4,
+      "totalEffects": 7,
+      "totalUnresolved": 0
+    },
+    "workspaceFingerprint": "7b29099315fe12775912a7c35a4f9c6e730f9fcb4c52790b789fa0629ba09d01"
+  },
+  "schemaVersion": "3.0.0"
+}

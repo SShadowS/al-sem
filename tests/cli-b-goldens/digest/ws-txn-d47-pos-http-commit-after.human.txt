@@ -1,17 +1,15 @@
 --- Codeunit D47 Sender::SendThenCommit ---
+  summary: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none; commits: yes (1 site); events: 0 (0 raised in workspace code); HTTP at 1 place; errors at 1 place; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
-  [COMMIT] direct
-    evidence: ws:src/Sender.Codeunit.al:19 "commit"
-    via: 1 path(s)
-  [DB_MODIFY] direct
-    evidence: ws:src/Sender.Codeunit.al:17 "Rec.Modify"
-    detail: resourceId=11111111-0000-0000-0000-0000000d4702/table/50100, resourceDisplay=D47 Rec, tempState=known(false)
-    via: 1 path(s)
-  [ERROR_IMPLICIT] direct
-    evidence: ws:src/Sender.Codeunit.al:15 "Rec.Get"
-    via: 1 path(s)
-  [HTTP] direct
-    evidence: ws:src/Sender.Codeunit.al:18 "Client.Get"
-    detail: method=Get
-    via: 1 path(s)
+  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
+  limits: none
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  commits: yes — 1 site in workspace code; 0 commit-bearing entry points:
+    COMMIT at ws:src/Sender.Codeunit.al:19 (unconditional-on-success)
+  writes in workspace code (1 table):
+    D47 Rec: Modify — known persistent
+      Modify at ws:src/Sender.Codeunit.al:17
+  events: 0 raised in workspace code; 0 more only beyond entry points
+  HTTP at 1 place: HTTP at ws:src/Sender.Codeunit.al:18 (unconditional-on-success)
+  errors at 1 place: ERROR_IMPLICIT at ws:src/Sender.Codeunit.al:15 (unconditional-on-success)
 changed-roots: file-unmatched src/Rec.Table.al

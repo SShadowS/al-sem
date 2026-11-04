@@ -113,7 +113,12 @@ fn digest_raw_in(
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
+    // W2-2: these tests read the 2.x document's fields (`--schema 2`, the
+    // old shape over the current analysis).
     cmd.arg("digest").arg(ws).args(args);
+    if format == "json" {
+        cmd.args(["--schema", "2"]);
+    }
     let diff_dir = tempfile::tempdir().unwrap();
     if let Some(d) = diff {
         let p = diff_dir.path().join("change.diff");

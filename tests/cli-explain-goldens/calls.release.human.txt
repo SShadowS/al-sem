@@ -1,5 +1,5 @@
 Codeunit Calls Post::Release  ws:src/post.al:52
-  summary: no observed write that may persist; caller-dependent: 1 table; commits: no observed COMMIT; events: 0 (0 raised in workspace code); callers: 6; tests: none; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  summary: no observed write that may persist; caller-dependent: 1 table; commits: none; events: 0 (0 raised in workspace code); callers: 6; tests: none; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none

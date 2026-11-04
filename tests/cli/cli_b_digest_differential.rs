@@ -232,6 +232,42 @@ fn json_matches_goldens() {
     }
 }
 
+/// W2-2 (design §4.4, §8.2): the 3.0.0 document, the CLI's default. The
+/// `<fixture>.json` goldens above are the `--schema 2` document
+/// (`run_digest_pipeline` keeps it) and stay byte-stable un-regenerated.
+#[test]
+fn v3_json_matches_goldens() {
+    for fixture in DIGEST_CORPUS {
+        let fixture_dir = fixtures_dir().join(fixture);
+        let got = al_sem::engine::l5::digest_cli::run_digest_pipeline_render(
+            &al_sem::program::inputs::WorkspaceInputs::read(
+                &fixture_dir,
+                &crate::fingerprint_needs(),
+            ),
+            Some(collect_al_files(&fixture_dir)),
+            None,
+            None,
+            VERSION_OVERRIDE,
+            true,
+            false,
+            Default::default(),
+        )
+        .unwrap_or_else(|e| panic!("{fixture}: digest failed: {e}"))
+        .json_text;
+        let golden_path = goldens_dir().join(format!("{fixture}.v3.json"));
+        if regen_golden(&golden_path, &got) {
+            continue;
+        }
+        let want = std::fs::read_to_string(&golden_path)
+            .unwrap_or_else(|_| panic!("{fixture}: golden not found at {}", golden_path.display()));
+        assert!(
+            got == want,
+            "{fixture}: v3 JSON golden mismatch at byte {:?}",
+            first_diff(got.as_bytes(), want.as_bytes())
+        );
+    }
+}
+
 #[test]
 fn human_matches_goldens() {
     for fixture in DIGEST_CORPUS {

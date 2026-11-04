@@ -264,7 +264,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_digest",
-            "Digest AL code: the transitive effects (writes, commits, errors, events, UI) of the given roots. Give at least one of `routines` (stable ids or display names: that routine's effects), `files` (changed source files, relative to the workspace or the git top level) or `diff` (a unified diff's text); `files` and `diff` are the change modes. Lines are 1-based. Dependency code: the whole cone, grouped per entry point. The file is often megabytes for a routine that calls Base Application (pass `format: human` for a shorter one); read the summary first. The output always goes to a file in the server's output folder; the answer carries its path, size, SHA-256 and a summary of at most 8 KiB (roots requested and resolved; per root: effects by type, physical tables written in the workspace and in dependencies, temporary tables, commits, dependency boundaries entered, coverage and its reasons, unresolved call sites as counts with the top callees).",
+            "Digest AL code: the transitive effects (writes, commits, errors, events, UI) of the given roots. Give at least one of `routines` (stable ids or display names: that routine's effects), `files` (changed source files, relative to the workspace or the git top level) or `diff` (a unified diff's text); `files` and `diff` are the change modes. Lines are 1-based. Dependency code: the whole cone, grouped per entry point. JSON is schema 3.0.0: every effect row, paths as structured hops into a `payload.routines` table, one path on a decision effect by default (`detail: true` keeps every path, guarantee, diagnostic and unresolved call site; `schema: 2` gives the 2.x document). The file is up to about 1,000 KB for a routine that calls Base Application (pass `format: human` for a shorter one); read the summary first. The output always goes to a file in the server's output folder; the answer carries its path, size, SHA-256 and a summary of at most 8 KiB (roots requested and resolved; per root: coverage, effects by type, and the same summary explain prints: tables it may write, owned by the app and by dependencies, caller-dependent tables, commits, events, kind families, gaps by where, temporary-only tables, writes with no path kept, entry points; first names of each list).",
             schema(
                 vec![
                     ("routines", string_array("Changed routines.")),
@@ -288,6 +288,22 @@ pub fn tool_list() -> Vec<Value> {
                     (
                         "includeReads",
                         json!({"type": "boolean", "description": "Add DB_READ effects, one per table read site."}),
+                    ),
+                    (
+                        "detail",
+                        json!({"type": "boolean", "description": "Unfolded 3.x: every path (up to 3), scoped guarantee, diagnostic, unresolved call site and group witness."}),
+                    ),
+                    (
+                        "maxPaths",
+                        json!({"type": "integer", "minimum": 0, "description": "Paths per effect (default 1 on a decision effect; 3 with detail; at most 3)."}),
+                    ),
+                    (
+                        "compact",
+                        json!({"type": "boolean", "description": "JSON without indentation."}),
+                    ),
+                    (
+                        "schema",
+                        json!({"type": "integer", "enum": [2, 3], "description": "2: the 2.x document (old shape, current analysis), for one release window; not with detail, maxPaths or compact."}),
                     ),
                     ("deterministic", deterministic()),
                 ],
@@ -706,6 +722,15 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             v.switch("tests", a.flag("tests")?);
             v.switch("include-reads", a.flag("includeReads")?);
             v.switch("deterministic", a.flag("deterministic")?);
+            // Design §5: `--max-paths` only when set (`detail` alone gives 3).
+            v.switch("detail", a.flag("detail")?);
+            v.switch("compact", a.flag("compact")?);
+            if let Some(n) = a.count("maxPaths")? {
+                v.opt("max-paths", &n.to_string());
+            }
+            if let Some(n) = a.count("schema")? {
+                v.opt("schema", &n.to_string());
+            }
             always_file = true;
             v
         }

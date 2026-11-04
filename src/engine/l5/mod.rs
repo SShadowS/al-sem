@@ -139,6 +139,7 @@ pub mod ordering_facts;
 pub mod conditionality;
 pub mod diff_parser;
 pub mod digest_cli;
+pub mod digest_v3;
 // G23: effects unreachable once literal Boolean arguments are followed.
 pub mod field_guard;
 pub mod group_path;

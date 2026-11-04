@@ -13,7 +13,7 @@
       "effects": {
         "backgroundTasks": [],
         "commitSites": [],
-        "commits": "no observed",
+        "commits": "none",
         "crossings": [],
         "errors": [
           {
@@ -270,7 +270,7 @@
         "callerDependentTables": 1,
         "callers": 1,
         "commits": {
-          "answer": "no observed",
+          "answer": "none",
           "entryPoints": 0,
           "ownSites": 0
         },
@@ -472,7 +472,7 @@
       "effects": {
         "backgroundTasks": [],
         "commitSites": [],
-        "commits": "no observed",
+        "commits": "none",
         "crossings": [],
         "errors": [],
         "events": [],
@@ -550,7 +550,7 @@
         "callerDependentTables": 0,
         "callers": 0,
         "commits": {
-          "answer": "no observed",
+          "answer": "none",
           "entryPoints": 0,
           "ownSites": 0
         },

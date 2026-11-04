@@ -869,7 +869,15 @@ pub(crate) fn group_failures(label: &str, effects: &[Value]) -> Vec<String> {
         let has_resources = ty.starts_with("DB_") || ty == "EVENT_PUBLISH";
         match (has_resources, d.get("resourceCount")) {
             (true, Some(c)) => {
-                let n = e["resources"].as_array().map_or(0, Vec::len);
+                // Digest 3.x (W2-2, O2) lists an event group's events by
+                // publisher; every other list is `resources[]`.
+                let n = match e["eventsByPublisher"].as_array() {
+                    Some(by) => by
+                        .iter()
+                        .map(|p| p["events"].as_array().map_or(0, Vec::len))
+                        .sum(),
+                    None => e["resources"].as_array().map_or(0, Vec::len),
+                };
                 if c.as_str() != Some(n.to_string().as_str()) {
                     f.push(format!(
                         "{label}: {ty} resourceCount {c} != resources[] {n}"
@@ -1051,4 +1059,223 @@ fn descriptions_state_line_base_size_and_depth() {
         failures.push(format!("INSTRUCTIONS: {i}"));
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// W2-2, T-W2-8 and T-W2-22 on the fixture: for caps 0, 1, 2, 3 and 7 every
+/// own row's `paths` holds at most the effective cap (§5: N, at most 3) and
+/// `pathsOmitted == pathsKept - len(paths)`; every hop's `to` and every
+/// crossing target is a key of `payload.routines`; `--schema 2` with
+/// `--detail`, `--max-paths` or `--compact` exits 2; `--compact` is one line.
+///
+/// Discrimination (2026-11-04): writing a hop's `to` as the stable id
+/// instead of its routine key fails at "is no routine key"; restored, it
+/// passes. Limit: the fixture keeps at most 3 paths per row, so the cap
+/// clamp at 3 is checked by `pathCap` only, not by an over-long list.
+#[test]
+fn digest_path_caps_keys_and_flags_on_the_fixture() {
+    let ws = workspace().to_string_lossy().into_owned();
+    for (cap, arg) in [(0, "0"), (1, "1"), (2, "2"), (3, "3"), (3, "7")] {
+        let (out, err, code) = run_alsem(&[
+            "digest",
+            &ws,
+            "--routine",
+            ISSUE_DOC,
+            "--format",
+            "json",
+            "--max-paths",
+            arg,
+        ]);
+        assert_eq!(code, 0, "{err}");
+        let d: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(d["payload"]["pathCap"], cap, "--max-paths {arg}");
+        let keys = d["payload"]["routines"].as_object().unwrap();
+        let entry = &d["payload"]["entries"][0];
+        for e in entry["effects"].as_array().unwrap() {
+            let shown = e["paths"].as_array().map_or(0, Vec::len);
+            assert!(
+                shown <= cap,
+                "--max-paths {arg}: {shown} paths over cap {cap}: {e}"
+            );
+            if let Some(kept) = e["pathsKept"].as_u64() {
+                assert_eq!(
+                    e["pathsOmitted"].as_u64().unwrap(),
+                    kept - shown as u64,
+                    "{e}"
+                );
+            }
+            for p in e["paths"].as_array().into_iter().flatten() {
+                for h in p["hops"].as_array().unwrap() {
+                    let to = h["to"].as_str().unwrap();
+                    assert!(keys.contains_key(to), "hop to {to} is no routine key");
+                }
+            }
+        }
+        for c in entry["crossings"].as_object().unwrap().values() {
+            for t in c["targets"].as_array().unwrap() {
+                assert!(
+                    keys.contains_key(t.as_str().unwrap()),
+                    "crossing target {t}"
+                );
+            }
+        }
+    }
+    for extra in [&["--detail"][..], &["--max-paths", "1"], &["--compact"]] {
+        let mut args = vec!["digest", &ws, "--routine", ISSUE_DOC, "--schema", "2"];
+        args.extend_from_slice(extra);
+        let (_, err, code) = run_alsem(&args);
+        assert_eq!(code, 2, "--schema 2 {extra:?}: {err}");
+    }
+    let (out, _, code) = run_alsem(&["digest", &ws, "--routine", ISSUE_DOC, "--compact"]);
+    assert_eq!(code, 0);
+    assert_eq!(out.trim_end().lines().count(), 1, "compact is one line");
+    let (out, _, _) = run_alsem(&["digest", &ws, "--routine", ISSUE_DOC, "--schema", "2"]);
+    let v2: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v2["schemaVersion"], "2.2.0");
+}
+
+/// One table write as both documents state it: (type, class, tempState, the
+/// sorted resource ids it names).
+fn write_keys(rows: &[Value], explain: bool) -> Vec<(String, String, String, String)> {
+    let mut v: Vec<(String, String, String, String)> = rows
+        .iter()
+        .filter(|e| {
+            let ty = if explain { &e["op"] } else { &e["type"] };
+            matches!(ty.as_str(), Some("DB_INSERT" | "DB_MODIFY" | "DB_DELETE"))
+        })
+        .map(|e| {
+            let ty = if explain { &e["op"] } else { &e["type"] };
+            let temp = if explain {
+                e["tempState"].as_str()
+            } else {
+                e["detail"]["tempState"].as_str()
+            };
+            let mut ids: Vec<&str> = match e["resources"].as_array() {
+                Some(rs) => rs.iter().filter_map(|r| r["id"].as_str()).collect(),
+                None => vec![if explain {
+                    e["tableId"].as_str().unwrap_or("")
+                } else {
+                    e["detail"]["resourceId"].as_str().unwrap_or("")
+                }],
+            };
+            ids.sort_unstable();
+            (
+                ty.as_str().unwrap_or("").to_string(),
+                e["class"].as_str().unwrap_or("").to_string(),
+                temp.unwrap_or("").to_string(),
+                ids.join(","),
+            )
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+/// W2-2, T-W2-16 leg 1 and T-W2-6 on the fixture: explain `/3` and digest
+/// 3.0.0 give every table write the same class (equal records), digest's
+/// default and `--detail` documents hold the same multiset of rows, digest's
+/// summary and explain's are the one `RollupTotals`, and every table either
+/// lists as a may-persist or caller-dependent write is one prove answers
+/// `writes-table:T` with `yes` for. Expected by hand from the fixture's AL:
+/// 16 may-persist tables and `Out Doc` caller-dependent.
+///
+/// Discrimination (2026-11-04): explain classifying its own rows without
+/// their joined temp state (`classify(&[])`) fails at "explain and digest
+/// classes"; filtering temporary rows out of digest's default document
+/// (`entry_v3`) fails (at the class records first, which also lack them);
+/// each restored, it passes.
+#[test]
+fn explain_digest_and_prove_agree_on_the_fixture() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let json = |args: &[&str]| -> Value {
+        let (out, err, code) = run_alsem(args);
+        assert_eq!(code, 0, "{args:?}: {err}");
+        serde_json::from_str(&out).unwrap_or_else(|e| panic!("{args:?}: {e}"))
+    };
+    let explain = json(&["explain", &ws, "--routine", ISSUE_DOC, "--format", "json"]);
+    let digest = json(&["digest", &ws, "--routine", ISSUE_DOC, "--format", "json"]);
+    let detail = json(&[
+        "digest",
+        &ws,
+        "--routine",
+        ISSUE_DOC,
+        "--format",
+        "json",
+        "--detail",
+    ]);
+    let card = &explain["cards"][0];
+    let entry = &digest["payload"]["entries"][0];
+    // Leg 1: equal class records.
+    let e_writes = write_keys(card["effects"]["writes"].as_array().unwrap(), true);
+    let d_writes = write_keys(entry["effects"].as_array().unwrap(), false);
+    assert_eq!(e_writes, d_writes, "explain and digest classes");
+    // The one summary, against the hand count.
+    let summary = &card["summary"];
+    for k in [
+        "mayWriteTables",
+        "callerDependentTables",
+        "commits",
+        "events",
+        "gaps",
+        "temporaryOnlyTables",
+        "entryPoints",
+    ] {
+        assert_eq!(summary[k], entry["summary"][k], "summary {k}");
+    }
+    assert_eq!(summary["mayWriteTables"]["count"], 16, "{summary}");
+    assert_eq!(summary["callerDependentTables"], 1, "{summary}");
+    // T-W2-6: default and --detail hold the same multiset of rows.
+    let rows = |d: &Value| {
+        let mut v: Vec<String> = d["payload"]["entries"][0]["effects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                format!(
+                    "{}|{}|{}|{}|{}",
+                    e["factId"],
+                    e["type"],
+                    e["detail"]["tempState"],
+                    e["detail"]["resourceId"],
+                    e["crossing"]
+                )
+            })
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(rows(&digest), rows(&detail), "default vs --detail rows");
+    // Every listed may-persist or caller-dependent table: prove says yes.
+    let mut tables: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for w in card["effects"]["writes"].as_array().unwrap() {
+        if w["class"] == "temporary" || w["literalUnreachable"] == true {
+            continue;
+        }
+        match w["resources"].as_array() {
+            Some(rs) => tables.extend(
+                rs.iter()
+                    .filter_map(|r| r["display"].as_str().map(String::from)),
+            ),
+            None => tables.extend(
+                w["table"]
+                    .as_str()
+                    .filter(|t| !t.is_empty())
+                    .map(String::from),
+            ),
+        }
+    }
+    assert_eq!(tables.len(), 17, "16 may-persist + Out Doc: {tables:?}");
+    for t in &tables {
+        let p = json(&[
+            "prove",
+            &ws,
+            ISSUE_DOC,
+            &format!("writes-table:{t}"),
+            "--format",
+            "json",
+        ]);
+        assert_eq!(
+            p["payload"]["result"]["answer"], "yes",
+            "prove writes-table:{t}"
+        );
+    }
 }

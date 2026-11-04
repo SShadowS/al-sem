@@ -1,39 +1,55 @@
 --- Codeunit Install Handler::OnInstallAppPerCompany ---
+  summary: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none; commits: yes (1 site); events: 0 (0 raised in workspace code); gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
-  [COMMIT] transitive
-    evidence: ws:src/InstallCU.al:35 "commit"
-    via: 1 path(s)
-  [DB_INSERT] transitive
-    evidence: ws:src/InstallCU.al:33 "Setup.Insert"
-    detail: resourceId=11111111-0000-0000-0000-00000000d460/table/50000, resourceDisplay=My Setup, tempState=known(false)
-    via: 1 path(s)
+  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
+  limits: none
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  commits: yes — 1 site in workspace code; 0 commit-bearing entry points:
+    COMMIT at ws:src/InstallCU.al:35 (unconditional-on-success)
+      path: OnInstallAppPerCompany → DoSetup
+  writes in workspace code (1 table):
+    My Setup: Insert — known persistent
+      Insert at ws:src/InstallCU.al:33
+      path: OnInstallAppPerCompany → DoSetup
+  events: 0 raised in workspace code; 0 more only beyond entry points
 
 --- Codeunit Install Handler::DoSetup ---
+  summary: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none; commits: yes (1 site); events: 0 (0 raised in workspace code); gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
-  [COMMIT] direct
-    evidence: ws:src/InstallCU.al:35 "commit"
-    via: 1 path(s)
-  [DB_INSERT] direct
-    evidence: ws:src/InstallCU.al:33 "Setup.Insert"
-    detail: resourceId=11111111-0000-0000-0000-00000000d460/table/50000, resourceDisplay=My Setup, tempState=known(false)
-    via: 1 path(s)
+  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
+  limits: none
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  commits: yes — 1 site in workspace code; 0 commit-bearing entry points:
+    COMMIT at ws:src/InstallCU.al:35 (unconditional-on-success)
+  writes in workspace code (1 table):
+    My Setup: Insert — known persistent
+      Insert at ws:src/InstallCU.al:33
+  events: 0 raised in workspace code; 0 more only beyond entry points
 
 --- Codeunit Upgrade Handler::DoUpgrade ---
+  summary: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none; commits: yes (1 site); events: 0 (0 raised in workspace code); gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
-  [COMMIT] direct
-    evidence: ws:src/UpgradeCU.al:18 "commit"
-    via: 1 path(s)
-  [DB_MODIFY] direct
-    evidence: ws:src/UpgradeCU.al:16 "Setup.Modify"
-    detail: resourceId=11111111-0000-0000-0000-00000000d460/table/50000, resourceDisplay=My Setup, tempState=known(false)
-    via: 1 path(s)
+  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
+  limits: none
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  commits: yes — 1 site in workspace code; 0 commit-bearing entry points:
+    COMMIT at ws:src/UpgradeCU.al:18 (unconditional-on-success)
+  writes in workspace code (1 table):
+    My Setup: Modify — known persistent
+      Modify at ws:src/UpgradeCU.al:16
+  events: 0 raised in workspace code; 0 more only beyond entry points
 
 --- Codeunit Upgrade Handler::OnUpgradePerCompany ---
+  summary: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none; commits: yes (1 site); events: 0 (0 raised in workspace code); gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
-  [COMMIT] transitive
-    evidence: ws:src/UpgradeCU.al:18 "commit"
-    via: 1 path(s)
-  [DB_MODIFY] transitive
-    evidence: ws:src/UpgradeCU.al:16 "Setup.Modify"
-    detail: resourceId=11111111-0000-0000-0000-00000000d460/table/50000, resourceDisplay=My Setup, tempState=known(false)
-    via: 1 path(s)
+  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
+  limits: none
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  commits: yes — 1 site in workspace code; 0 commit-bearing entry points:
+    COMMIT at ws:src/UpgradeCU.al:18 (unconditional-on-success)
+      path: OnUpgradePerCompany → DoUpgrade
+  writes in workspace code (1 table):
+    My Setup: Modify — known persistent
+      Modify at ws:src/UpgradeCU.al:16
+      path: OnUpgradePerCompany → DoUpgrade
+  events: 0 raised in workspace code; 0 more only beyond entry points

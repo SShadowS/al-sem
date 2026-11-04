@@ -1,0 +1,703 @@
+{
+  "alsemVersion": "cli-b-v1",
+  "deterministic": true,
+  "diagnostics": [],
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "digest",
+  "payload": {
+    "changed": {
+      "diffProvided": false,
+      "files": [
+        "src/InstallCU.al",
+        "src/UpgradeCU.al"
+      ]
+    },
+    "changedRootsDiagnostics": [],
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "entries": [
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "commit",
+              "file": "ws:src/InstallCU.al",
+              "line": 35,
+              "sourceKind": "source"
+            },
+            "factId": "aeb6e256328d0bc0",
+            "guarantees": [
+              "COMMIT_REACHABLE",
+              "COMMIT_ON_SUCCESS_PATH",
+              "COMMIT_DOMINATES_RETURN"
+            ],
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "edge": "direct-call",
+                    "line": 24,
+                    "to": "r:8d477f67a4a4"
+                  }
+                ],
+                "terminal": {
+                  "file": "ws:src/InstallCU.al",
+                  "line": 35,
+                  "operationId": "5163e6a282c9cd15/891fc7dddd2ae2ecaf276395a3a77ab66421d96eb8ac9732c85570a832a93346/op3"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "transitive",
+            "scopedGuarantees": [
+              {
+                "commitOccurrenceId": "aeb6e256328d0bc0",
+                "interveningBoundary": "none",
+                "label": "COMMIT_DOMINATES_RETURN",
+                "returnOccurrenceId": "f0e2f97aa53d0491",
+                "scope": "root",
+                "validForRefutation": true
+              }
+            ],
+            "status": "live",
+            "transactionContext": "span-has-known-writes",
+            "type": "COMMIT"
+          },
+          {
+            "class": "physical",
+            "classReason": "known-persistent",
+            "conditionality": "conditional",
+            "confidence": "static",
+            "detail": {
+              "resourceDisplay": "My Setup",
+              "resourceId": "11111111-0000-0000-0000-00000000d460/table/50000",
+              "tempState": "known(false)"
+            },
+            "evidence": {
+              "column": 12,
+              "excerpt": "Setup.Insert",
+              "file": "ws:src/InstallCU.al",
+              "line": 33,
+              "sourceKind": "source"
+            },
+            "factId": "1b8a1d95b74b8f7c",
+            "guarantees": [
+              "COMMIT_REACHABLE"
+            ],
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "edge": "direct-call",
+                    "line": 24,
+                    "to": "r:8d477f67a4a4"
+                  }
+                ],
+                "terminal": {
+                  "file": "ws:src/InstallCU.al",
+                  "line": 33,
+                  "operationId": "5163e6a282c9cd15/891fc7dddd2ae2ecaf276395a3a77ab66421d96eb8ac9732c85570a832a93346/op2"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "transitive",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "DB_INSERT"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/InstallCU.al",
+            "line": 22,
+            "sourceKind": "source"
+          },
+          "display": "OnInstallAppPerCompany",
+          "objectDisplay": "Codeunit Install Handler",
+          "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50001#28129d608bb2353d1edc8a881e6073f4f07bc1388ea6d1c4caa0b7c8850cf83d"
+        },
+        "scopedGuaranteesFolded": 4,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "yes",
+            "entryPoints": 0,
+            "ownSites": 1
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {},
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 1,
+            "ownedByApp": 1
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 2
+        }
+      },
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "commit",
+              "file": "ws:src/InstallCU.al",
+              "line": 35,
+              "sourceKind": "source"
+            },
+            "factId": "1161ef8efe183dd9",
+            "guarantees": [
+              "COMMIT_REACHABLE",
+              "COMMIT_ON_SUCCESS_PATH",
+              "COMMIT_DOMINATES_RETURN"
+            ],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/InstallCU.al",
+                  "line": 35,
+                  "operationId": "5163e6a282c9cd15/891fc7dddd2ae2ecaf276395a3a77ab66421d96eb8ac9732c85570a832a93346/op3"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "scopedGuarantees": [
+              {
+                "commitOccurrenceId": "1161ef8efe183dd9",
+                "interveningBoundary": "none",
+                "label": "COMMIT_DOMINATES_RETURN",
+                "returnOccurrenceId": "14074a648d299e29",
+                "scope": "root",
+                "validForRefutation": true
+              }
+            ],
+            "status": "live",
+            "transactionContext": "span-has-known-writes",
+            "type": "COMMIT"
+          },
+          {
+            "class": "physical",
+            "classReason": "known-persistent",
+            "conditionality": "conditional",
+            "confidence": "static",
+            "detail": {
+              "resourceDisplay": "My Setup",
+              "resourceId": "11111111-0000-0000-0000-00000000d460/table/50000",
+              "tempState": "known(false)"
+            },
+            "evidence": {
+              "column": 12,
+              "excerpt": "Setup.Insert",
+              "file": "ws:src/InstallCU.al",
+              "line": 33,
+              "sourceKind": "source"
+            },
+            "factId": "63af67ee66fc4502",
+            "guarantees": [
+              "COMMIT_REACHABLE"
+            ],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/InstallCU.al",
+                  "line": 33,
+                  "operationId": "5163e6a282c9cd15/891fc7dddd2ae2ecaf276395a3a77ab66421d96eb8ac9732c85570a832a93346/op2"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "DB_INSERT"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/InstallCU.al",
+            "line": 27,
+            "sourceKind": "source"
+          },
+          "display": "DoSetup",
+          "objectDisplay": "Codeunit Install Handler",
+          "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb"
+        },
+        "scopedGuaranteesFolded": 4,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "yes",
+            "entryPoints": 0,
+            "ownSites": 1
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {},
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 1,
+            "ownedByApp": 1
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 1
+        }
+      },
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "commit",
+              "file": "ws:src/UpgradeCU.al",
+              "line": 18,
+              "sourceKind": "source"
+            },
+            "factId": "5564d69a99d91528",
+            "guarantees": [
+              "COMMIT_REACHABLE",
+              "COMMIT_ON_SUCCESS_PATH",
+              "COMMIT_DOMINATES_RETURN"
+            ],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/UpgradeCU.al",
+                  "line": 18,
+                  "operationId": "5163e6a282c9cd15/742544f8c68d2810d9c9dfd24127da5ab0e6eadbcbd6f6621f9beb2d3bfcca1a/op2"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "scopedGuarantees": [
+              {
+                "commitOccurrenceId": "5564d69a99d91528",
+                "interveningBoundary": "none",
+                "label": "COMMIT_DOMINATES_RETURN",
+                "returnOccurrenceId": "c00d8505d07a1da9",
+                "scope": "root",
+                "validForRefutation": true
+              }
+            ],
+            "status": "live",
+            "transactionContext": "span-has-known-writes",
+            "type": "COMMIT"
+          },
+          {
+            "class": "physical",
+            "classReason": "known-persistent",
+            "conditionality": "conditional",
+            "confidence": "static",
+            "detail": {
+              "resourceDisplay": "My Setup",
+              "resourceId": "11111111-0000-0000-0000-00000000d460/table/50000",
+              "tempState": "known(false)"
+            },
+            "evidence": {
+              "column": 12,
+              "excerpt": "Setup.Modify",
+              "file": "ws:src/UpgradeCU.al",
+              "line": 16,
+              "sourceKind": "source"
+            },
+            "factId": "cd5b1a00fdc31d54",
+            "guarantees": [
+              "COMMIT_REACHABLE"
+            ],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/UpgradeCU.al",
+                  "line": 16,
+                  "operationId": "5163e6a282c9cd15/742544f8c68d2810d9c9dfd24127da5ab0e6eadbcbd6f6621f9beb2d3bfcca1a/op1"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "DB_MODIFY"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/UpgradeCU.al",
+            "line": 10,
+            "sourceKind": "source"
+          },
+          "display": "DoUpgrade",
+          "objectDisplay": "Codeunit Upgrade Handler",
+          "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50002#3b39c65aba470dc136b74c8c2123651b7828037b7a1898d1d8e75339cf65056e"
+        },
+        "scopedGuaranteesFolded": 4,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "yes",
+            "entryPoints": 0,
+            "ownSites": 1
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {},
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 1,
+            "ownedByApp": 1
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 1
+        }
+      },
+      {
+        "coverage": {
+          "assumptions": [
+            "loaded-program"
+          ],
+          "limits": [],
+          "reasons": [],
+          "status": "complete"
+        },
+        "crossings": {},
+        "effects": [
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "commit",
+              "file": "ws:src/UpgradeCU.al",
+              "line": 18,
+              "sourceKind": "source"
+            },
+            "factId": "02ee06c8b7a2675d",
+            "guarantees": [
+              "COMMIT_REACHABLE",
+              "COMMIT_ON_SUCCESS_PATH",
+              "COMMIT_DOMINATES_RETURN"
+            ],
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "edge": "direct-call",
+                    "line": 7,
+                    "to": "r:949a0d11aa24"
+                  }
+                ],
+                "terminal": {
+                  "file": "ws:src/UpgradeCU.al",
+                  "line": 18,
+                  "operationId": "5163e6a282c9cd15/742544f8c68d2810d9c9dfd24127da5ab0e6eadbcbd6f6621f9beb2d3bfcca1a/op2"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "transitive",
+            "scopedGuarantees": [
+              {
+                "commitOccurrenceId": "02ee06c8b7a2675d",
+                "interveningBoundary": "none",
+                "label": "COMMIT_DOMINATES_RETURN",
+                "returnOccurrenceId": "e0d23833292ed59c",
+                "scope": "root",
+                "validForRefutation": true
+              }
+            ],
+            "status": "live",
+            "transactionContext": "span-has-known-writes",
+            "type": "COMMIT"
+          },
+          {
+            "class": "physical",
+            "classReason": "known-persistent",
+            "conditionality": "conditional",
+            "confidence": "static",
+            "detail": {
+              "resourceDisplay": "My Setup",
+              "resourceId": "11111111-0000-0000-0000-00000000d460/table/50000",
+              "tempState": "known(false)"
+            },
+            "evidence": {
+              "column": 12,
+              "excerpt": "Setup.Modify",
+              "file": "ws:src/UpgradeCU.al",
+              "line": 16,
+              "sourceKind": "source"
+            },
+            "factId": "ab9ed9a86a85e6f1",
+            "guarantees": [
+              "COMMIT_REACHABLE"
+            ],
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "edge": "direct-call",
+                    "line": 7,
+                    "to": "r:949a0d11aa24"
+                  }
+                ],
+                "terminal": {
+                  "file": "ws:src/UpgradeCU.al",
+                  "line": 16,
+                  "operationId": "5163e6a282c9cd15/742544f8c68d2810d9c9dfd24127da5ab0e6eadbcbd6f6621f9beb2d3bfcca1a/op1"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "transitive",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "DB_MODIFY"
+          }
+        ],
+        "entryDiagnosticCounts": {},
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/UpgradeCU.al",
+            "line": 5,
+            "sourceKind": "source"
+          },
+          "display": "OnUpgradePerCompany",
+          "objectDisplay": "Codeunit Upgrade Handler",
+          "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50002#4bede131c948eaabef06c2e6bfbc4f1239c15eb29e7a7e0b64b3cdeed16c79f5"
+        },
+        "scopedGuaranteesFolded": 4,
+        "summary": {
+          "callerDependentTables": 0,
+          "commits": {
+            "answer": "yes",
+            "entryPoints": 0,
+            "ownSites": 1
+          },
+          "entryPoints": {
+            "count": 0,
+            "sites": 0
+          },
+          "events": {
+            "distinct": 0,
+            "inWorkspaceCode": 0
+          },
+          "gaps": {
+            "dependency": 0,
+            "notPlaced": 0,
+            "workspace": 0
+          },
+          "kinds": {},
+          "literalDeadTables": 0,
+          "mayWriteTables": {
+            "byDependencies": 0,
+            "count": 1,
+            "ownedByApp": 1
+          },
+          "noPathKept": {
+            "operations": 0,
+            "tables": 0
+          },
+          "temporaryOnlyTables": 0,
+          "unresolvedTableWrites": 0
+        },
+        "unresolved": [],
+        "unresolvedInDependencies": {
+          "dynamicTarget": 0,
+          "polymorphic": 0,
+          "topCallees": [],
+          "total": 0
+        },
+        "unresolvedTraversal": {
+          "maxDepth": 64,
+          "truncated": false,
+          "visitedRoutines": 2
+        }
+      }
+    ],
+    "lineBase": 1,
+    "pathCap": 1,
+    "routines": {
+      "r:53e646d7d9ee": {
+        "display": "Codeunit Install Handler::OnInstallAppPerCompany",
+        "file": "ws:src/InstallCU.al",
+        "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50001#28129d608bb2353d1edc8a881e6073f4f07bc1388ea6d1c4caa0b7c8850cf83d"
+      },
+      "r:612095b110cb": {
+        "display": "Codeunit Upgrade Handler::OnUpgradePerCompany",
+        "file": "ws:src/UpgradeCU.al",
+        "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50002#4bede131c948eaabef06c2e6bfbc4f1239c15eb29e7a7e0b64b3cdeed16c79f5"
+      },
+      "r:8d477f67a4a4": {
+        "display": "Codeunit Install Handler::DoSetup",
+        "file": "ws:src/InstallCU.al",
+        "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb"
+      },
+      "r:949a0d11aa24": {
+        "display": "Codeunit Upgrade Handler::DoUpgrade",
+        "file": "ws:src/UpgradeCU.al",
+        "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50002#3b39c65aba470dc136b74c8c2123651b7828037b7a1898d1d8e75339cf65056e"
+      }
+    },
+    "summary": {
+      "rootsRequested": 4,
+      "rootsResolved": 4,
+      "totalEffects": 8,
+      "totalUnresolved": 0
+    },
+    "workspaceFingerprint": "369c4515c708fe7831c9af975d8a55ce0e8d1baf6090a0e083e3d6d8e7f602e8"
+  },
+  "schemaVersion": "3.0.0"
+}

@@ -36,6 +36,10 @@ fn alsem(args: &[&str]) -> (String, i32) {
 fn json(args: &[&str]) -> (Value, i32) {
     let mut a = args.to_vec();
     a.extend(["--format", "json"]);
+    // W2-2: digest's 2.x document fields (the old shape, current analysis).
+    if a.first() == Some(&"digest") {
+        a.extend(["--schema", "2"]);
+    }
     let (out, code) = alsem(&a);
     (
         serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}")),
