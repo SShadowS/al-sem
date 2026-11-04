@@ -1,10 +1,26 @@
 {
   "cards": [
     {
+      "coverage": {
+        "assumptions": [
+          "loaded-program"
+        ],
+        "limits": [],
+        "notes": {},
+        "reasons": [],
+        "status": "complete"
+      },
       "effects": {
+        "backgroundTasks": [],
         "commitSites": [],
-        "commits": "no",
+        "commits": "no observed",
+        "crossings": [],
+        "errors": [],
         "events": [],
+        "file": [],
+        "http": [],
+        "isolatedStorage": [],
+        "telemetry": [],
         "ui": [],
         "writes": [
           {
@@ -15,6 +31,8 @@
               "line": 58,
               "sourceKind": "source"
             },
+            "class": "temporary",
+            "classReason": "known-temporary",
             "conditionality": "unconditional-on-success",
             "fieldCaptions": {},
             "fields": [
@@ -22,8 +40,12 @@
               "Message"
             ],
             "op": "DB_DELETE",
+            "opKinds": [
+              "DeleteAll"
+            ],
             "table": "Out Log",
             "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
+            "tempState": "known(true)",
             "via": []
           },
           {
@@ -34,6 +56,8 @@
               "line": 61,
               "sourceKind": "source"
             },
+            "class": "physical",
+            "classReason": "known-persistent",
             "conditionality": "unconditional-on-success",
             "fieldCaptions": {},
             "fields": [
@@ -41,14 +65,25 @@
               "Message"
             ],
             "op": "DB_INSERT",
+            "opKinds": [
+              "Insert"
+            ],
             "table": "Out Log",
             "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
+            "tempState": "known(false)",
             "via": []
           }
         ]
       },
       "extensionPoints": [],
       "gaps": [],
+      "gapsInDependencies": {
+        "dynamicTarget": 0,
+        "notPlaced": 0,
+        "polymorphic": 0,
+        "topCallees": [],
+        "total": 0
+      },
       "reachedFrom": [
         {
           "action": "Issue",
@@ -63,15 +98,25 @@
           "kind": "PageAction",
           "object": "Out Doc Card",
           "objectType": "Page",
-          "runObject": null,
-          "tooltip": null,
-          "via": [
-            "OnAction",
-            "IssueDoc",
-            "WriteLog"
-          ]
+          "runObject": null
         }
       ],
+      "reachedFromSummary": {
+        "actions": 1,
+        "byCaption": [
+          {
+            "caption": "Issue",
+            "count": 1
+          }
+        ],
+        "byObject": [
+          {
+            "count": 1,
+            "object": "Page Out Doc Card"
+          }
+        ],
+        "objects": 1
+      },
       "routine": {
         "anchor": {
           "column": 4,
@@ -139,6 +184,43 @@
         "knownCallers": 3,
         "own": []
       },
+      "summary": {
+        "callerDependentTables": 0,
+        "callers": 3,
+        "commits": {
+          "answer": "no observed",
+          "entryPoints": 0,
+          "ownSites": 0
+        },
+        "entryPoints": {
+          "count": 0,
+          "sites": 0
+        },
+        "events": {
+          "distinct": 0,
+          "inWorkspaceCode": 0
+        },
+        "gaps": {
+          "dependency": 0,
+          "notPlaced": 0,
+          "workspace": 0
+        },
+        "kinds": {},
+        "literalDeadTables": 0,
+        "mayWriteTables": {
+          "byDependencies": 0,
+          "count": 1,
+          "ownedByApp": 1
+        },
+        "noPathKept": {
+          "operations": 0,
+          "tables": 0
+        },
+        "pageActions": 1,
+        "temporaryOnlyTables": 0,
+        "tests": 1,
+        "unresolvedTableWrites": 0
+      },
       "tests": [
         {
           "anchor": {
@@ -158,6 +240,6 @@
   "diagnostics": [],
   "lineBase": 1,
   "mode": "routine",
-  "schema": "al-sem.explain/2.1",
+  "schema": "al-sem.explain/3",
   "selector": "Out Log Mgt::WriteLog"
 }

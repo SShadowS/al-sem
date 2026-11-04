@@ -1,9 +1,19 @@
 Codeunit Calls Post::PreviewPost  ws:src/post.al:36
+  summary: no observed write that may persist; caller-dependent: 1 table; commits: no observed COMMIT; events: 0 (0 raised in workspace code); errors at 1 place; callers: none; tests: none; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  coverage: complete
+  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
+  limits: none
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   rules: none of its own
   inherits via CheckPreview: rejects when Preview: "A preview cannot post."  [Error ws:src/checks.al:23]
   inherits from table trigger OnModify (run by Modify at ws:src/post.al:41): rejects when Blocked: "A blocked order cannot change."  [Error ws:src/order.al:25]
-  caller rules: no known caller
-  writes Calls Order (DB_MODIFY) at ws:src/post.al:41
-  commits: no
+  callers: none
+  commits: none
+  caller-dependent writes (1 table): written only if the caller passes a record that is not temporary; alsem prove names the caller
+    Calls Order: Modify — depends on the caller's record argument at ws:src/post.al:41
+  events: 0 raised in workspace code; 0 more only beyond entry points
+  extension points: none (the routine publishes no event itself)
+  errors at 1 place: ERROR_THROW at ws:src/order.al:25 (error-path)
   tests: none reach it
+  next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

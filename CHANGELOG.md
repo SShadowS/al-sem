@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (MCP output wave 2, W2-2 part 2: the explain card, human and `al-sem.explain/3`)
+
+Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §4.1, §4.2, §5.
+
+- **Explain reads the L4 temp-state join.** `explain_plan` now declares `l4` with its tree, and
+  the card reads the root's digest entry after the join and the literal pass, so every write has
+  the class digest and prove give it (physical, caller-dependent, temporary). Explain now pays the
+  L4 build that `digest` and `query` already pay (measured in the W2-2 commits).
+- **The human card is summary first.** One `summary:` line (tables it may write, owned by the app
+  and by dependencies, and writes on a table not resolved; caller-dependent tables; commits;
+  events; each present kind family; callers and page actions; tests; gaps by where), then
+  `coverage:`, `assumptions:`, `limits:`, `notes:` (when present) and `scope:`, then rules,
+  callers (page actions grouped by caption and page object past 3), commits with their sites and
+  commit-bearing entry points, writes in workspace code (one block per table: kinds, class, the
+  representative witness's anchor and path, the fields each owner assigns), caller-dependent
+  writes, writes beyond dependency entry points (one line per entry point: sites, tables per kind,
+  names folded at 12, other kinds, events), writes with no path kept (by the owner's app, with the
+  owner and location the operation index recovers), literal-dead tables, temporary records (never
+  writes), events by publisher, extension points (never a group), one line per kind family (UI,
+  HTTP, file, background tasks, isolated storage, telemetry, errors), tests, gaps in workspace
+  code, gaps in dependency code as counts and top callees, and `next:`. A group row never prints
+  with an empty name and never becomes an extension point.
+- **`al-sem.explain/3`** (major): `cards[].summary` (`RollupTotals` plus `callers`,
+  `pageActions`, `tests`), `coverage {status, reasons, assumptions, limits, notes}`; each write
+  carries `class`, `classReason`, `opKinds` and its `tempState`; a group row carries `crossing`
+  (listed once in `effects.crossings` with its targets, target ids, sites and prefix),
+  `resourceCount` and every `resources[]` entry instead of `table: ""` / `tableId: ""` and the
+  "enters X" anchor; an event group carries its count (`resourcesListed: false`; the names with
+  `--detail`); a write with no witness carries `noPathKept` and the recovered `owner`;
+  `effects.{http, file, backgroundTasks, isolatedStorage, telemetry, errors}` beside `ui`;
+  `reachedFromSummary`, `gapsInDependencies`; `effects.commits` is `yes`, `may` or `no observed`
+  (was `no`). Folded by default and complete with `--detail`: a page action's `via` and
+  `tooltip`, dependency gaps, event-group names. `fields` and `via` keep their names. No outside
+  reader: the editor extension uses only the call-hierarchy and property requests (plan §4.1).
+- **New flags** `explain --detail` (every list, no fold) and `--max-paths N` (paths per item:
+  default 1, 3 with `--detail`, at most 3); MCP `alsem_explain` takes `detail` and `maxPaths`
+  (passed only when set, so `detail` alone gives 3).
+
 ### Changed (MCP output wave 2, W2-2 part 1: one rollup and one summary for every effects output)
 
 Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.1, §3.6,

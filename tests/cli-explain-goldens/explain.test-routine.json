@@ -1,13 +1,59 @@
 {
   "cards": [
     {
+      "coverage": {
+        "assumptions": [
+          "loaded-program"
+        ],
+        "limits": [
+          "symbol-only-dependency 2"
+        ],
+        "notes": {},
+        "reasons": [
+          "external-target"
+        ],
+        "status": "partial"
+      },
       "effects": {
+        "backgroundTasks": [],
         "commitSites": [],
-        "commits": "no",
+        "commits": "no observed",
+        "crossings": [],
+        "errors": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Order.TestField",
+              "file": "ws:src/post.al",
+              "line": 12,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "type": "ERROR_IMPLICIT",
+            "via": [
+              "PostOrder"
+            ]
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "excerpt": "error-call",
+              "file": "ws:src/post.al",
+              "line": 11,
+              "sourceKind": "source"
+            },
+            "conditionality": "error-path",
+            "type": "ERROR_THROW",
+            "via": [
+              "PostOrder"
+            ]
+          }
+        ],
         "events": [
           {
             "anchor": {
               "column": 8,
+              "excerpt": "OnBeforePostOrder",
               "file": "ws:src/post.al",
               "line": 13,
               "sourceKind": "source"
@@ -21,6 +67,10 @@
             ]
           }
         ],
+        "file": [],
+        "http": [],
+        "isolatedStorage": [],
+        "telemetry": [],
         "ui": [
           {
             "anchor": {
@@ -46,6 +96,8 @@
               "line": 18,
               "sourceKind": "source"
             },
+            "class": "physical",
+            "classReason": "known-persistent",
             "conditionality": "guarded-by-IsHandled",
             "fieldCaptions": {
               "Status": "Order Status"
@@ -55,8 +107,12 @@
               "Status"
             ],
             "op": "DB_MODIFY",
+            "opKinds": [
+              "Modify"
+            ],
             "table": "Explain Order",
             "tableId": "44444444-e491-0000-0000-0000000e4a11/table/50400",
+            "tempState": "known(false)",
             "via": [
               "PostOrder"
             ]
@@ -90,7 +146,20 @@
           "status": "external"
         }
       ],
+      "gapsInDependencies": {
+        "dynamicTarget": 0,
+        "notPlaced": 2,
+        "polymorphic": 0,
+        "topCallees": [],
+        "total": 0
+      },
       "reachedFrom": [],
+      "reachedFromSummary": {
+        "actions": 0,
+        "byCaption": [],
+        "byObject": [],
+        "objects": 0
+      },
       "routine": {
         "anchor": {
           "column": 4,
@@ -111,12 +180,52 @@
         "knownCallers": 0,
         "own": []
       },
+      "summary": {
+        "callerDependentTables": 0,
+        "callers": 0,
+        "commits": {
+          "answer": "no observed",
+          "entryPoints": 0,
+          "ownSites": 0
+        },
+        "entryPoints": {
+          "count": 0,
+          "sites": 0
+        },
+        "events": {
+          "distinct": 1,
+          "inWorkspaceCode": 1
+        },
+        "gaps": {
+          "dependency": 0,
+          "notPlaced": 2,
+          "workspace": 0
+        },
+        "kinds": {
+          "errors": 2,
+          "ui": 1
+        },
+        "literalDeadTables": 0,
+        "mayWriteTables": {
+          "byDependencies": 0,
+          "count": 1,
+          "ownedByApp": 1
+        },
+        "noPathKept": {
+          "operations": 0,
+          "tables": 0
+        },
+        "pageActions": 0,
+        "temporaryOnlyTables": 0,
+        "tests": 0,
+        "unresolvedTableWrites": 0
+      },
       "tests": []
     }
   ],
   "diagnostics": [],
   "lineBase": 1,
   "mode": "routine",
-  "schema": "al-sem.explain/2.1",
+  "schema": "al-sem.explain/3",
   "selector": "PostUnreleasedFails"
 }

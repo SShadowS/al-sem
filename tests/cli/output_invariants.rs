@@ -182,6 +182,59 @@ fn line_tokens(t: &str) -> Vec<String> {
         v.push(op.to_lowercase());
         return v;
     }
+    // W2-2, a crossing's site: `<Object>::<Routine>, entered at <site> ...`:
+    // the call that enters the target (`Run` for an `OnRun`, `Insert` for an
+    // `OnInsert` trigger, else the routine's name).
+    if let Some((head, _)) = t.split_once(", entered at ")
+        && let Some((_, routine)) = head.rsplit_once("::")
+    {
+        let r = routine.trim().to_lowercase();
+        if let Some(rest) = r.strip_prefix("on").filter(|s| !s.is_empty()) {
+            v.push(rest.to_string());
+        }
+        v.push(r);
+        return v;
+    }
+    // W2-2, a workspace write's witness anchor: `<Kind> at <anchor>`; a commit
+    // site: `COMMIT at <anchor>`.
+    if let Some((kind, _)) = t.split_once(" at ")
+        && !kind.contains(' ')
+        && kind.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+    {
+        if kind == "COMMIT" || kind.contains('_') || kind == "HTTP" || kind == "FILE" {
+            v.extend(type_verbs(kind).iter().map(|s| s.to_string()));
+        } else {
+            v.push(kind.to_lowercase());
+        }
+        return v;
+    }
+    // W2-2, a kind family line: `HTTP at 1 place: HTTP at <anchor> (...); …`.
+    if [
+        "UI at ",
+        "HTTP at ",
+        "file at ",
+        "background tasks at ",
+        "isolated storage at ",
+        "telemetry at ",
+        "errors at ",
+    ]
+    .iter()
+    .any(|p| t.starts_with(p))
+    {
+        for w in t.split(|c: char| !(c.is_ascii_uppercase() || c == '_')) {
+            v.extend(type_verbs(w).iter().map(|s| s.to_string()));
+        }
+        return v;
+    }
+    // W2-2, no path kept: `in <App> code (n tables): T (Kind in Owner at <anchor>), …`.
+    if t.starts_with("in ") && t.contains(" code (") {
+        for seg in t.split(" (").skip(2) {
+            if let Some(k) = seg.split(' ').next() {
+                v.push(k.to_lowercase());
+            }
+        }
+        return v;
+    }
     // explain rules: `[TestField ws:...]`, `[Error ws:...]`.
     for (k, w) in [("[TestField ", "testfield"), ("[Error ", "error")] {
         if t.contains(k) {

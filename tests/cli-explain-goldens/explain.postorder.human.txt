@@ -1,14 +1,22 @@
 Codeunit Explain Post::PostOrder  ws:src/post.al:5
+  summary: no observed write that may persist; caller-dependent: 1 table; commits: no observed COMMIT; events: 1 (1 raised in workspace code); UI at 1 place; errors at 2 places; callers: 1, reached from 1 page action; tests: 1; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  coverage: complete
+  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
+  limits: none
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   doc: Posts a released order. / It marks the order posted.
   rejects when Order.Status <> Order.Status::Released: "Order %1 is not released."  [Error ws:src/post.al:11]
   rejects when not (Order.Status <> Order.Status::Released) and Order.Amount is empty: (platform message)  [TestField ws:src/post.al:12]
   inherited rules: none
-  caller rules: none (2 known caller(s))
-  writes Explain Order [Posted, Status] (DB_MODIFY, guarded-by-IsHandled) at ws:src/post.al:18
-  commits: no
-  raises OnBeforePostOrder (unknown) at ws:src/post.al:13
+  callers: 1 — Codeunit Explain Tests::PostUnreleasedFails; reached from 1 page action
+    reached from page action Post on Page Explain Order Card (caption "P&ost") at ws:src/card.al:19
+  commits: none
+  caller-dependent writes (1 table): written only if the caller passes a record that is not temporary; alsem prove names the caller
+    Explain Order: Modify — depends on the caller's record argument at ws:src/post.al:18
+  events: 1 raised in workspace code, by publisher: Codeunit Explain Post 1; 0 more only beyond entry points
   extension point OnBeforePostOrder: 1 subscriber(s), IsHandled
-  UI_MESSAGE at ws:src/post.al:19
-  reached from page action Post on Page Explain Order Card (caption "P&ost") at ws:src/card.al:19
+  UI at 1 place: UI_MESSAGE at ws:src/post.al:19 (guarded-by-IsHandled)
+  errors at 2 places: ERROR_IMPLICIT at ws:src/post.al:12 (unconditional-on-success); ERROR_THROW at ws:src/post.al:11 (error-path)
   test Codeunit Explain Tests::PostUnreleasedFails (3 own assert(s))
+  next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

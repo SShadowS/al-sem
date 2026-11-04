@@ -198,7 +198,7 @@ pub fn tool_list() -> Vec<Value> {
     vec![
         tool(
             "alsem_explain",
-            "Explain AL routines: the evidence card of each (its own rules with their conditions and messages, inherited and caller rules, what it writes, commits and raises, the page actions and tests that reach it, and what the engine could not see). Exactly one mode: `routines` (one or more selectors: display name, `<owner>::<routine>` or stable id), `diff` (a unified diff's text; one card per routine it changes; `diffRoot` is the folder its paths are relative to, default the git top level), or `table` with `field` (every workspace routine that writes the field). Default format is the human card; `format: json` gives schema al-sem.explain/2.1 (larger; for tools that parse it). Lines are 1-based. Size: a few lines for a small routine; 100-200 KB for one that calls into Base Application, which then goes to a file with a summary (each card's header and counts) — read the summary first. Dependency code: summarized per entry point (one row per boundary and effect type), not listed table by table. Returns the exact `alsem explain` stdout.",
+            "Explain AL routines: the evidence card of each (its own rules with their conditions and messages, inherited and caller rules, what it writes, commits and raises, the page actions and tests that reach it, and what the engine could not see). Exactly one mode: `routines` (one or more selectors: display name, `<owner>::<routine>` or stable id), `diff` (a unified diff's text; one card per routine it changes; `diffRoot` is the folder its paths are relative to, default the git top level), or `table` with `field` (every workspace routine that writes the field). Default format is the human card: a summary line first (tables it may write, owned by the app and by dependencies; commits; events; callers; tests; gaps), then coverage, assumptions, limits and scope, then the sections; temporary records are counted apart, never as writes; long lists are folded with the full count (`detail: true` lists everything). `format: json` gives schema al-sem.explain/3 (larger; for tools that parse it). Lines are 1-based. Size: a few lines for a small routine; tens of KB human (hundreds of KB JSON) for one that calls into Base Application, which then goes to a file with a summary (each card's header and counts) — read the summary first. Dependency code: the whole cone, grouped per entry point (tables per kind, names folded). Returns the exact `alsem explain` stdout.",
             schema(
                 vec![
                     ("routines", string_array("Routine selectors (mode 1).")),
@@ -221,6 +221,14 @@ pub fn tool_list() -> Vec<Value> {
                     (
                         "format",
                         json!({"type": "string", "enum": ["human", "json"], "description": "Output format (default human)."}),
+                    ),
+                    (
+                        "detail",
+                        json!({"type": "boolean", "description": "Every list complete, no fold (every table, entry point, page action, dependency gap, event name); up to 3 paths per item."}),
+                    ),
+                    (
+                        "maxPaths",
+                        json!({"type": "integer", "minimum": 0, "description": "Paths per item (default 1; 3 with detail; at most 3)."}),
                     ),
                 ],
                 &[],
@@ -414,6 +422,17 @@ impl<'a> Args<'a> {
 
     fn flag(&self, key: &str) -> Result<bool, Invalid> {
         Ok(self.bool(key)?.unwrap_or(false))
+    }
+
+    /// A non-negative integer, or absent.
+    fn count(&self, key: &str) -> Result<Option<u64>, Invalid> {
+        match self.map.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => v
+                .as_u64()
+                .map(Some)
+                .ok_or_else(|| format!("'{key}' must be a non-negative integer")),
+        }
     }
 
     /// A selector array: absent, or one or more non-empty strings.
@@ -632,6 +651,12 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
                 "format",
                 &a.enumerated("format", &["human", "json"], "human")?,
             );
+            // Design §5: `--max-paths` only when the caller sets it, so
+            // `detail` alone gives the detail cap.
+            v.switch("detail", a.flag("detail")?);
+            if let Some(n) = a.count("maxPaths")? {
+                v.opt("max-paths", &n.to_string());
+            }
             v
         }
         "alsem_prove" => {

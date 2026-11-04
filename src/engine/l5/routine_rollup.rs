@@ -113,6 +113,8 @@ pub struct RollupCx<'m> {
     declaring: DeclaringRows,
     primary: Option<String>,
     objects: HashMap<&'m str, usize>,
+    /// Stable routine id → its first model row.
+    rows: HashMap<&'m str, usize>,
     app_names: HashMap<String, String>,
 }
 
@@ -163,8 +165,81 @@ impl<'m> RollupCx<'m> {
                 .enumerate()
                 .map(|(i, o)| (o.id.as_str(), i))
                 .collect(),
+            rows: {
+                let mut m = HashMap::new();
+                for (i, r) in model.workspace.routines.iter().enumerate() {
+                    m.entry(r.stable_routine_id.as_str()).or_insert(i);
+                }
+                m
+            },
             app_names,
         }
+    }
+
+    /// The `(object, routine)` names of a stable routine id's first row.
+    #[must_use]
+    pub fn names_of(&self, stable_id: &str) -> Option<(String, String)> {
+        let &i = self.rows.get(stable_id)?;
+        let r = &self.model.workspace.routines[i];
+        let object = self
+            .declaring
+            .of(&self.model.workspace.objects, r)
+            .map_or("", |o| o.name.as_str());
+        Some((object.to_string(), r.name.clone()))
+    }
+
+    /// The qualified display of a stable routine id, else the id.
+    #[must_use]
+    pub fn qualified(&self, stable_id: &str) -> String {
+        self.rows
+            .get(stable_id)
+            .map_or_else(|| stable_id.to_string(), |&i| self.qualified_row(i))
+    }
+
+    /// A witness path as one line (design §3.8 rules 6, 7): the root, then
+    /// each hop's `Object::Routine` (the object only when it changes), tagged
+    /// `[run]`, `[event]`, `[trigger]` or `[interface]` by its edge.
+    #[must_use]
+    pub fn path_line(
+        &self,
+        root: &str,
+        hops: &[crate::engine::l5::digest::ProjectedHop],
+    ) -> String {
+        let mut object = self.names_of(root).map(|(o, _)| o).unwrap_or_default();
+        let mut parts = vec![
+            self.names_of(root)
+                .map_or_else(|| root.to_string(), |(_, n)| n),
+        ];
+        for h in hops {
+            let h = &h.inner;
+            let kind = h.edge_kind.as_deref().unwrap_or(h.kind);
+            let tag = if kind.starts_with("object-run") {
+                "[run] "
+            } else if kind == "event-dispatch" {
+                "[event] "
+            } else if kind == "implicit-trigger" {
+                "[trigger] "
+            } else if kind == "interface-dispatch" {
+                "[interface] "
+            } else {
+                ""
+            };
+            let fallback = h
+                .to_display
+                .clone()
+                .or_else(|| h.callee_display.clone())
+                .unwrap_or_default();
+            let name = match h.to_routine_id.as_deref().and_then(|t| self.names_of(t)) {
+                Some((o, n)) if o != object => {
+                    object = o.clone();
+                    format!("{o}::{n}")
+                }
+                Some((_, n)) => n,
+                None => fallback,
+            };
+            parts.push(format!("{tag}{name}"));
+        }
+        parts.join(" → ")
     }
 
     /// The qualified `<Type> <Object>::<Routine>` of model row `i`.
@@ -253,6 +328,22 @@ fn detail<'e>(e: &'e DigestEffectFull, key: &str) -> Option<&'e str> {
         .iter()
         .find(|(k, _)| k == key)
         .map(|(_, v)| v.as_str())
+}
+
+/// A group row's crossing key: its crossing's boundary identity, else (a
+/// hand-built group with no record) its boundary display and site file.
+#[must_use]
+pub fn crossing_key(e: &DigestEffectFull) -> String {
+    e.crossing.as_ref().map_or_else(
+        || {
+            format!(
+                "{}@{}",
+                detail(e, "boundary").unwrap_or(""),
+                e.evidence.file.as_deref().unwrap_or("")
+            )
+        },
+        |c| c.id.clone(),
+    )
 }
 
 /// A row is a boundary group: it names the routine it enters.
@@ -665,16 +756,7 @@ impl RoutineRollup {
         for (i, e) in entry.effects.iter().enumerate() {
             let ty = e.effect_type.as_str();
             if is_group(e) {
-                let key = e.crossing.as_ref().map_or_else(
-                    || {
-                        format!(
-                            "{}@{}",
-                            detail(e, "boundary").unwrap_or(""),
-                            anchor_key(e).0
-                        )
-                    },
-                    |c| c.id.clone(),
-                );
+                let key = crossing_key(e);
                 let ci = *crossing_ix.entry(key.clone()).or_insert_with(|| {
                     let (targets, sites) = match &e.crossing {
                         Some(c) => (
@@ -1043,6 +1125,777 @@ fn gaps_of(entry: &DigestEntryFull) -> GapCounts {
     top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     g.top_callees = top;
     g
+}
+
+// ---------------------------------------------------------------------------
+// The human sections explain and digest share (design §4.1, §4.3): one
+// function per section, so the two outputs print the same lines.
+// ---------------------------------------------------------------------------
+
+/// The most paths a row keeps (the producer keeps up to 3 per effect).
+pub const PATH_CAP_MAX: usize = 3;
+
+/// How much a rendering shows.
+#[derive(Debug, Clone, Copy)]
+pub struct RenderOpts {
+    /// `--detail`: no fold, every name.
+    pub detail: bool,
+    /// Paths per item (design §5: `--max-paths N`, else 3 with `--detail`,
+    /// else 1; at most 3).
+    pub path_cap: usize,
+}
+
+impl RenderOpts {
+    /// The effective path cap of design §5.
+    #[must_use]
+    pub fn new(detail: bool, max_paths: Option<usize>) -> RenderOpts {
+        RenderOpts {
+            detail,
+            path_cap: max_paths
+                .unwrap_or(if detail { 3 } else { 1 })
+                .min(PATH_CAP_MAX),
+        }
+    }
+}
+
+/// `file:line` of a row's evidence (1-based), or why there is none.
+fn row_anchor(e: &DigestEffectFull) -> String {
+    match (&e.evidence.file, e.evidence.line) {
+        (Some(f), Some(l)) => format!("{f}:{}", shown(l)),
+        (Some(f), None) => f.clone(),
+        _ => "no position kept".to_string(),
+    }
+}
+
+/// The `path:` lines of a row: its shortest listed paths, up to `cap`.
+fn path_lines(cx: &RollupCx<'_>, root: &str, e: &DigestEffectFull, cap: usize) -> Vec<String> {
+    let mut paths: Vec<&Vec<crate::engine::l5::digest::ProjectedHop>> =
+        e.via_paths.iter().collect();
+    paths.sort_by_key(|p| p.len());
+    paths
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .take(cap)
+        .map(|p| format!("path: {}", cx.path_line(root, p)))
+        .collect()
+}
+
+/// A crossing's display: its boundary name, else its id.
+fn crossing_name(c: &CrossingView) -> &str {
+    if c.name.is_empty() { &c.id } else { &c.name }
+}
+
+/// The coverage, assumptions, limits and scope lines (design §3.7, §3.8
+/// rule 3). `extra_limits`: the caller's own (explain's gaps).
+#[must_use]
+pub fn header_lines(
+    r: &RoutineRollup,
+    entry: &DigestEntryFull,
+    extra_limits: &[String],
+) -> Vec<String> {
+    let mut out = vec![r.totals.human()];
+    let (mut open, mut dynamic) = (0usize, 0usize);
+    for u in &entry.unresolved {
+        match u.status.as_str() {
+            "polymorphic" => open += 1,
+            "dynamic-target" => dynamic += 1,
+            _ => {}
+        }
+    }
+    let mut cov = format!("coverage: {}", entry.coverage_status);
+    if !entry.coverage_reasons.is_empty() {
+        cov.push_str(&format!(" ({})", entry.coverage_reasons.join(", ")));
+    }
+    let mut counts = Vec::new();
+    if open > 0 {
+        counts.push(format!(
+            "{} open world",
+            plural(open, "interface call", "interface calls")
+        ));
+    }
+    if dynamic > 0 {
+        counts.push(format!(
+            "{} not resolved",
+            plural(dynamic, "dynamic call", "dynamic calls")
+        ));
+    }
+    if !counts.is_empty() {
+        cov.push_str(&format!(" — {}", counts.join(", ")));
+    }
+    out.push(cov);
+    out.push(
+        "assumptions: loaded program; unloaded implementations/subscribers are not enumerated"
+            .to_string(),
+    );
+    let mut limits: Vec<String> = Vec::new();
+    if !r.no_path.is_empty() {
+        limits.push(format!(
+            "no-path-kept {} on {}",
+            plural(r.totals.no_path_operations, "operation", "operations"),
+            plural(r.totals.no_path_tables, "table", "tables")
+        ));
+    }
+    if entry.unresolved_traversal.truncated {
+        limits.push(format!(
+            "cone-truncated at depth {}",
+            entry.unresolved_traversal.max_depth
+        ));
+    }
+    let capped = entry
+        .effects
+        .iter()
+        .flat_map(|e| e.group_resource_paths.iter())
+        .filter(|(_, p)| matches!(p, Err(n) if n.reason == "search-cap"))
+        .count();
+    if capped > 0 {
+        limits.push(format!(
+            "path-search-capped {}",
+            plural(capped, "resource", "resources")
+        ));
+    }
+    limits.extend(extra_limits.iter().cloned());
+    out.push(if limits.is_empty() {
+        "limits: none".to_string()
+    } else {
+        format!("limits: {}", limits.join("; "))
+    });
+    out.push(format!(
+        "scope: dependency code followed through every resolved call, with literal arguments, \
+         grouped per entry point ({} at {}); temporary records are not writes; no lock facts \
+         (alsem query effects lists locks); counts are distinct tables unless a line says \
+         operations; lines are 1-based; --detail lists everything",
+        plural(r.totals.entry_points, "entry point", "entry points"),
+        plural(r.totals.crossing_sites, "site", "sites")
+    ));
+    out
+}
+
+/// An absence is "none" only with complete coverage and no limit (§3.7).
+fn complete(entry: &DigestEntryFull, r: &RoutineRollup) -> bool {
+    entry.coverage_status == "complete"
+        && r.no_path.is_empty()
+        && !entry.unresolved_traversal.truncated
+}
+
+/// `commits:` and its sites (design §4.1 section 9).
+#[must_use]
+pub fn commit_lines(
+    r: &RoutineRollup,
+    entry: &DigestEntryFull,
+    cx: &RollupCx<'_>,
+    o: RenderOpts,
+) -> Vec<String> {
+    let bearing: Vec<&CrossingView> = r.crossings.iter().filter(|c| c.commit).collect();
+    if r.commit_sites.is_empty() && bearing.is_empty() {
+        return vec![if complete(entry, r) {
+            "commits: none".to_string()
+        } else {
+            "commits: no observed COMMIT".to_string()
+        }];
+    }
+    let mut out = vec![format!(
+        "commits: {} — {} in workspace code; {}:",
+        r.totals.commits,
+        if r.commit_sites.is_empty() {
+            "none".to_string()
+        } else {
+            plural(r.commit_sites.len(), "site", "sites")
+        },
+        plural(
+            bearing.len(),
+            "commit-bearing entry point",
+            "commit-bearing entry points"
+        )
+    )];
+    for &i in &r.commit_sites {
+        let e = &entry.effects[i];
+        out.push(format!(
+            "  COMMIT at {} ({})",
+            row_anchor(e),
+            e.conditionality
+        ));
+        for p in path_lines(cx, &entry.routine_id, e, o.path_cap) {
+            out.push(format!("    {p}"));
+        }
+    }
+    for c in bearing {
+        out.push(format!(
+            "  {}, entered at {}",
+            crossing_name(c),
+            c.sites.join("; ")
+        ));
+        if let Some(p) = c.prefix_row {
+            for l in path_lines(cx, &entry.routine_id, &entry.effects[p], o.path_cap.min(1)) {
+                out.push(format!("    prefix {l}"));
+            }
+        }
+    }
+    out
+}
+
+/// `writes in workspace code` (design §4.1 section 10). `fields(t)`: the
+/// fields line of a table, when the caller knows one (explain).
+#[must_use]
+pub fn workspace_write_lines(
+    r: &RoutineRollup,
+    entry: &DigestEntryFull,
+    cx: &RollupCx<'_>,
+    o: RenderOpts,
+    fields: &dyn Fn(&TableWrites) -> Option<String>,
+) -> Vec<String> {
+    if r.workspace_code.is_empty() && r.unresolved_own.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![format!(
+        "writes in workspace code ({}{}):",
+        plural(r.workspace_code.len(), "table", "tables"),
+        if r.unresolved_own.is_empty() {
+            ""
+        } else {
+            " and writes on a table not resolved"
+        }
+    )];
+    let folded = fold(
+        r.workspace_code.iter().collect(),
+        caps::TABLES,
+        "tables",
+        o.detail,
+    );
+    for t in &folded.shown {
+        let rep = &entry.effects[t.rep];
+        out.push(format!(
+            "  {}: {} — {}",
+            t.table,
+            t.kinds.iter().cloned().collect::<Vec<_>>().join(", "),
+            class_note(&t.classes)
+        ));
+        // Path and anchor of one witness (F13): the representative row's.
+        let rep_kind = rep
+            .origin_operation_ids
+            .iter()
+            .find_map(|op| cx.op_kind(op))
+            .unwrap_or(type_kind(&rep.effect_type));
+        out.push(format!("    {rep_kind} at {}", row_anchor(rep)));
+        for p in path_lines(cx, &entry.routine_id, rep, o.path_cap) {
+            out.push(format!("    {p}"));
+        }
+        if let Some(f) = fields(t) {
+            out.push(format!("    {f}"));
+        }
+    }
+    if folded.hidden > 0 {
+        let names: Vec<String> = r.workspace_code[folded.shown.len()..]
+            .iter()
+            .map(|t| t.table.clone())
+            .collect();
+        out.push(format!(
+            "  … +{} in the same form ({}) — --detail lists them",
+            plural(folded.hidden, "table", "tables"),
+            names.join(", ")
+        ));
+    }
+    if !r.unresolved_own.is_empty() {
+        let kinds: BTreeSet<String> = r
+            .unresolved_own
+            .iter()
+            .flat_map(|&i| {
+                let e = &entry.effects[i];
+                let k: Vec<String> = e
+                    .origin_operation_ids
+                    .iter()
+                    .filter_map(|op| cx.op_kind(op).map(str::to_string))
+                    .collect();
+                if k.is_empty() {
+                    vec![type_kind(&e.effect_type).to_string()]
+                } else {
+                    k
+                }
+            })
+            .collect();
+        let at: BTreeSet<String> = r
+            .unresolved_own
+            .iter()
+            .map(|&i| row_anchor(&entry.effects[i]))
+            .collect();
+        out.push(format!(
+            "  table not resolved (determined at run time or not resolved): {} — at {}",
+            kinds.into_iter().collect::<Vec<_>>().join(", "),
+            at.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    out
+}
+
+/// `caller-dependent writes` (design §4.1 section 11).
+#[must_use]
+pub fn caller_dependent_lines(r: &RoutineRollup, entry: &DigestEntryFull) -> Vec<String> {
+    if r.caller_dependent.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![format!(
+        "caller-dependent writes ({}): written only if the caller passes a record that is not \
+         temporary; alsem prove names the caller",
+        plural(r.caller_dependent.len(), "table", "tables")
+    )];
+    for t in &r.caller_dependent {
+        out.push(format!(
+            "  {}: {} — {} at {}",
+            t.table,
+            t.kinds.iter().cloned().collect::<Vec<_>>().join(", "),
+            class_note(&t.classes),
+            row_anchor(&entry.effects[t.rep])
+        ));
+    }
+    out
+}
+
+/// One entry point's lines: crossings to one target are merged; a
+/// multi-target crossing stands alone (design §3.3).
+struct EntryPoint<'r> {
+    name: &'r str,
+    sites: Vec<&'r str>,
+    tables: BTreeMap<&'r str, &'r str>,
+    by_type: BTreeMap<&'r str, BTreeSet<&'r str>>,
+    unresolved: usize,
+    kinds: BTreeSet<&'r str>,
+    events: BTreeSet<&'r str>,
+    commit: bool,
+    prefix: Option<usize>,
+    temp_only: bool,
+}
+
+fn entry_points(r: &RoutineRollup) -> Vec<EntryPoint<'_>> {
+    let mut by_key: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut out: Vec<EntryPoint<'_>> = Vec::new();
+    for c in &r.crossings {
+        let key = match c.target_ids.as_slice() {
+            [one] => one.as_str(),
+            _ => c.id.as_str(),
+        };
+        let i = *by_key.entry(key).or_insert_with(|| {
+            out.push(EntryPoint {
+                name: crossing_name(c),
+                sites: Vec::new(),
+                tables: BTreeMap::new(),
+                by_type: BTreeMap::new(),
+                unresolved: 0,
+                kinds: BTreeSet::new(),
+                events: BTreeSet::new(),
+                commit: false,
+                prefix: None,
+                temp_only: true,
+            });
+            out.len() - 1
+        });
+        let p = &mut out[i];
+        p.sites.extend(c.sites.iter().map(String::as_str));
+        p.tables
+            .extend(c.tables.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        for (t, ids) in &c.by_type {
+            p.by_type
+                .entry(t.as_str())
+                .or_default()
+                .extend(ids.iter().map(String::as_str));
+        }
+        p.unresolved += c.unresolved_writes;
+        p.kinds.extend(c.kinds.iter().map(String::as_str));
+        p.events.extend(c.events.iter().map(String::as_str));
+        p.commit |= c.commit;
+        p.prefix = p.prefix.or(c.prefix_row);
+        p.temp_only &= !c.writes();
+    }
+    for p in &mut out {
+        p.sites.sort_unstable();
+        p.sites.dedup();
+    }
+    out.sort_by(|a, b| {
+        a.temp_only
+            .cmp(&b.temp_only)
+            .then(b.tables.len().cmp(&a.tables.len()))
+            .then(a.name.cmp(b.name))
+    });
+    out
+}
+
+/// `writes beyond dependency entry points` (design §4.1 section 12).
+#[must_use]
+pub fn beyond_lines(
+    r: &RoutineRollup,
+    entry: &DigestEntryFull,
+    cx: &RollupCx<'_>,
+    o: RenderOpts,
+) -> Vec<String> {
+    let points = entry_points(r);
+    if points.is_empty() {
+        return Vec::new();
+    }
+    let writing: Vec<&EntryPoint<'_>> = points.iter().filter(|p| !p.temp_only).collect();
+    let others: Vec<&EntryPoint<'_>> = points.iter().filter(|p| p.temp_only).collect();
+    let tables: BTreeSet<&str> = writing
+        .iter()
+        .flat_map(|p| p.tables.keys().copied())
+        .collect();
+    let sites: usize = writing.iter().map(|p| p.sites.len().max(1)).sum();
+    let mut out = vec![format!(
+        "writes beyond dependency entry points ({} through {} at {}):",
+        plural(tables.len(), "table", "tables"),
+        plural(writing.len(), "entry point", "entry points"),
+        plural(sites, "site", "sites")
+    )];
+    let line = |p: &EntryPoint<'_>| -> String {
+        let kinds: Vec<String> = p
+            .by_type
+            .iter()
+            .map(|(t, ids)| format!("{} on {}", type_kind(t), ids.len()))
+            .collect();
+        let mut names: Vec<String> = p.tables.values().map(|s| (*s).to_string()).collect();
+        names.sort();
+        let names = fold(names, caps::TABLES, "tables", o.detail);
+        let mut s = format!(
+            "  {}, entered at {} — {}",
+            p.name,
+            p.sites.join("; "),
+            plural(p.tables.len(), "table", "tables")
+        );
+        if !kinds.is_empty() {
+            s.push_str(&format!(" ({})", kinds.join(", ")));
+        }
+        if !names.shown.is_empty() {
+            s.push_str(&format!(": {}", names.joined()));
+        }
+        if p.unresolved > 0 {
+            s.push_str(&format!(
+                "; {} on a table not resolved",
+                plural(p.unresolved, "write", "writes")
+            ));
+        }
+        let mut also: Vec<&str> = Vec::new();
+        if p.commit {
+            also.push("COMMIT");
+        }
+        also.extend(p.kinds.iter().copied());
+        if !also.is_empty() {
+            s.push_str(&format!("; also {}", also.join(", ")));
+        }
+        if !p.events.is_empty() {
+            s.push_str(&format!("; {}", plural(p.events.len(), "event", "events")));
+        }
+        s
+    };
+    let shown = fold(
+        writing.clone(),
+        caps::ENTRY_POINTS,
+        "entry points",
+        o.detail,
+    );
+    for p in &shown.shown {
+        out.push(line(p));
+        if let Some(i) = p.prefix {
+            for l in path_lines(cx, &entry.routine_id, &entry.effects[i], 1) {
+                out.push(format!("    prefix {l}"));
+            }
+        }
+    }
+    if shown.hidden > 0 {
+        out.push(format!(
+            "  … +{} with {} — --detail lists them",
+            plural(shown.hidden, "entry point", "entry points"),
+            plural(
+                writing[shown.shown.len()..]
+                    .iter()
+                    .flat_map(|p| p.tables.keys())
+                    .collect::<BTreeSet<_>>()
+                    .len(),
+                "table",
+                "tables"
+            )
+        ));
+    }
+    if !others.is_empty() {
+        if o.detail {
+            out.push(format!(
+                "  {} write only temporary records or no table:",
+                plural(others.len(), "entry point", "entry points")
+            ));
+            for p in others {
+                out.push(format!("  {}", line(p).trim_start()));
+            }
+        } else {
+            out.push(format!(
+                "  {} at {} write only temporary records or no table (--detail lists them)",
+                plural(others.len(), "entry point", "entry points"),
+                plural(
+                    others.iter().map(|p| p.sites.len().max(1)).sum(),
+                    "site",
+                    "sites"
+                )
+            ));
+        }
+    }
+    out
+}
+
+/// `writes with no path kept` (design §4.1 section 13), by the owner's app.
+#[must_use]
+pub fn no_path_lines(
+    r: &RoutineRollup,
+    entry: &DigestEntryFull,
+    cx: &RollupCx<'_>,
+    o: RenderOpts,
+) -> Vec<String> {
+    if r.no_path.is_empty() {
+        return Vec::new();
+    }
+    let root = cx
+        .names_of(&entry.routine_id)
+        .map_or_else(|| entry.routine_display.clone(), |(_, n)| n);
+    let mut out = vec![format!(
+        "writes with no path kept ({}, {}; the witness walk found no path from {root}):",
+        plural(r.totals.no_path_tables, "table", "tables"),
+        plural(r.no_path.len(), "operation", "operations")
+    )];
+    let mut by_app: BTreeMap<String, BTreeMap<&str, Vec<&NoPathWrite>>> = BTreeMap::new();
+    for n in &r.no_path {
+        let app = n.owner.as_ref().map_or_else(
+            || "an unknown owner's".to_string(),
+            |w| cx.app_label(&w.app),
+        );
+        let table = if n.table.is_empty() {
+            "table not resolved"
+        } else {
+            n.table.as_str()
+        };
+        by_app
+            .entry(app)
+            .or_default()
+            .entry(table)
+            .or_default()
+            .push(n);
+    }
+    for (app, tables) in by_app {
+        let items: Vec<String> = tables
+            .iter()
+            .map(|(t, ns)| {
+                let n = ns[0];
+                match &n.owner {
+                    Some(w) => format!(
+                        "{t} ({} in {}{})",
+                        n.kind,
+                        w.display,
+                        w.anchor
+                            .as_ref()
+                            .map(|a| format!(" at {a}"))
+                            .unwrap_or_default()
+                    ),
+                    None => format!("{t} ({})", n.kind),
+                }
+            })
+            .collect();
+        let n = items.len();
+        let f = fold(items, caps::TABLES, "tables", o.detail);
+        out.push(format!(
+            "  in {app} code ({}): {}",
+            plural(n, "table", "tables"),
+            f.joined()
+        ));
+    }
+    out
+}
+
+/// `literal arguments rule out` (design §4.1 section 14).
+#[must_use]
+pub fn literal_dead_lines(r: &RoutineRollup, o: RenderOpts) -> Vec<String> {
+    if r.literal_dead.is_empty() && r.literal_dead_rows.is_empty() {
+        return Vec::new();
+    }
+    let mut s = format!(
+        "literal arguments rule out: {} ({}) the cone lists but the root cannot reach",
+        plural(r.literal_dead.len(), "table", "tables"),
+        plural(r.literal_dead_rows.len(), "effect row", "effect rows")
+    );
+    if o.detail && !r.literal_dead.is_empty() {
+        let names: Vec<&str> = r.literal_dead.values().map(String::as_str).collect();
+        s.push_str(&format!(": {}", names.join(", ")));
+    }
+    vec![s]
+}
+
+/// `temporary records (not writes)` (design §4.1 section 15).
+#[must_use]
+pub fn temporary_lines(r: &RoutineRollup, o: RenderOpts) -> Vec<String> {
+    if r.temporary_ws.is_empty() && r.temporary_beyond.is_empty() && r.temporary_rows.is_empty() {
+        return Vec::new();
+    }
+    let mut names: Vec<String> = r.temporary_ws.values().cloned().collect();
+    names.sort();
+    let names = fold(names, caps::TEMP_NAMES, "tables", o.detail);
+    let mut s = format!(
+        "temporary records (not writes): {} in workspace code ({})",
+        plural(r.temporary_ws.len(), "table", "tables"),
+        plural(r.temporary_rows.len(), "effect row", "effect rows")
+    );
+    if !names.shown.is_empty() {
+        s.push_str(&format!(": {}", names.joined()));
+    }
+    let beyond_only = r
+        .temporary_beyond
+        .keys()
+        .filter(|k| !r.temporary_ws.contains_key(*k))
+        .count();
+    s.push_str(&format!(
+        "; {} only beyond entry points; only temporary: {}",
+        plural(beyond_only, "table", "tables"),
+        plural(r.temporary_only.len(), "table", "tables")
+    ));
+    vec![s]
+}
+
+/// The publisher of an event id `<publisher>/event/<name>`.
+fn publisher_of(event_id: &str) -> &str {
+    event_id.split("/event/").next().unwrap_or(event_id)
+}
+
+/// `events:` (design §4.1 section 16).
+#[must_use]
+pub fn event_lines(r: &RoutineRollup, cx: &RollupCx<'_>, o: RenderOpts) -> Vec<String> {
+    let mut by_publisher: BTreeMap<&str, usize> = BTreeMap::new();
+    for id in r.events_ws.keys() {
+        *by_publisher.entry(publisher_of(id)).or_default() += 1;
+    }
+    let mut ranked: Vec<(&str, usize)> = by_publisher.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    let items: Vec<String> = ranked
+        .iter()
+        .map(|(p, n)| format!("{} {n}", cx.object_display(p)))
+        .collect();
+    let f = fold(items, caps::PUBLISHERS, "publishers", o.detail);
+    let mut s = format!(
+        "events: {} raised in workspace code",
+        thousands(r.events_ws.len())
+    );
+    if !f.shown.is_empty() {
+        s.push_str(&format!(", by publisher: {}", f.joined()));
+    }
+    s.push_str(&format!(
+        "; {} more only beyond entry points",
+        thousands(r.events_beyond.len())
+    ));
+    vec![s]
+}
+
+/// One line per present kind family (design §4.1 section 18).
+#[must_use]
+pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull) -> Vec<String> {
+    let mut out = Vec::new();
+    for (key, label) in FAMILIES {
+        let n = r.totals.kinds.get(key).copied().unwrap_or(0);
+        if n == 0 {
+            continue;
+        }
+        let mut places: Vec<String> = r
+            .kind_sites
+            .get(key)
+            .into_iter()
+            .flatten()
+            .map(|&i| {
+                let e = &entry.effects[i];
+                format!(
+                    "{} at {} ({})",
+                    e.effect_type,
+                    row_anchor(e),
+                    e.conditionality
+                )
+            })
+            .collect();
+        for &ci in r.kind_crossings.get(key).into_iter().flatten() {
+            let c = &r.crossings[ci];
+            let types: Vec<&str> = c
+                .kinds
+                .iter()
+                .map(String::as_str)
+                .filter(|k| family_of(k) == Some(*key) || (*key == "errors" && *k == "UI_ERROR"))
+                .collect();
+            places.push(format!("{} beyond {}", types.join(", "), crossing_name(c)));
+        }
+        out.push(format!(
+            "{label} at {}: {}",
+            plural(n, "place", "places"),
+            places.join("; ")
+        ));
+    }
+    out
+}
+
+/// `gaps in dependency code` (design §4.1 section 21).
+#[must_use]
+pub fn dependency_gap_lines(r: &RoutineRollup, o: RenderOpts) -> Vec<String> {
+    let g = &r.gaps;
+    if g.dependency == 0 && g.not_placed.is_empty() {
+        return Vec::new();
+    }
+    let items: Vec<String> = g
+        .top_callees
+        .iter()
+        .map(|(c, n)| format!("{c} ×{n}"))
+        .collect();
+    let f = fold(items, caps::TOP_CALLEES, "callees", o.detail);
+    let mut s = format!(
+        "gaps in dependency code: {} ({} interface, {} dynamic); not placed: {}",
+        thousands(g.dependency),
+        g.dependency_polymorphic,
+        g.dependency_dynamic,
+        g.not_placed.len()
+    );
+    if !f.shown.is_empty() {
+        s.push_str(&format!("; top callees: {}", f.joined()));
+    }
+    vec![s]
+}
+
+/// `gaps in workspace code` (digest's form: one unresolved call per line;
+/// explain prints its own gap list).
+#[must_use]
+pub fn workspace_gap_lines(
+    r: &RoutineRollup,
+    entry: &DigestEntryFull,
+    o: RenderOpts,
+) -> Vec<String> {
+    let mut idx: Vec<usize> = r.gaps.workspace.clone();
+    if o.detail {
+        idx.extend(r.gaps.not_placed.iter().copied());
+    }
+    if idx.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![format!(
+        "gaps in workspace code ({}):",
+        plural(
+            r.gaps.workspace.len(),
+            "call the engine cannot follow",
+            "calls the engine cannot follow"
+        )
+    )];
+    let lines: Vec<String> = idx
+        .iter()
+        .map(|&i| {
+            let u = &entry.unresolved[i];
+            let at = match (&u.callsite_file, u.callsite_line) {
+                (Some(f), Some(l)) => format!("{f}:{}", shown(l)),
+                (Some(f), None) => f.clone(),
+                (None, _) => "no position kept".to_string(),
+            };
+            format!(
+                "  {} ({}) in {} at {at}",
+                u.callee_display, u.status, u.owning_routine_display
+            )
+        })
+        .collect();
+    let f = fold(lines, caps::WORKSPACE_GAPS, "gaps", o.detail);
+    out.extend(f.shown.iter().cloned());
+    if f.hidden > 0 {
+        out.push(format!("  … +{} gaps — --detail lists them", f.hidden));
+    }
+    out
 }
 
 #[cfg(test)]

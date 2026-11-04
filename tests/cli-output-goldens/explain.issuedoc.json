@@ -1,25 +1,95 @@
 {
   "cards": [
     {
+      "coverage": {
+        "assumptions": [
+          "loaded-program"
+        ],
+        "limits": [],
+        "notes": {},
+        "reasons": [
+          "interface-open-world",
+          "object-run-unresolved"
+        ],
+        "status": "partial"
+      },
       "effects": {
-        "commitSites": [
+        "backgroundTasks": [
           {
             "anchor": {
               "column": 8,
-              "excerpt": "enters Codeunit Base Poster::OnRun",
+              "excerpt": "TaskScheduler.CreateTask",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 15,
+              "line": 19,
               "sourceKind": "source"
             },
-            "conditionality": "unknown",
+            "conditionality": "unconditional-on-success",
+            "type": "BACKGROUND_TASK",
             "via": []
           }
         ],
+        "commitSites": [
+          {
+            "conditionality": "unknown",
+            "crossing": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
+            "type": "COMMIT"
+          }
+        ],
         "commits": "may",
+        "crossings": [
+          {
+            "boundary": "Codeunit Base Poster::OnRun",
+            "key": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
+            "prefix": [],
+            "sites": [
+              "ws:src/OutIssueDocument.Codeunit.al:15"
+            ],
+            "targetIds": [
+              "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
+            ],
+            "targets": [
+              "Codeunit Base Poster::OnRun"
+            ]
+          },
+          {
+            "boundary": "Codeunit Base Calc::OnRun",
+            "key": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs1",
+            "prefix": [],
+            "sites": [
+              "ws:src/OutIssueDocument.Codeunit.al:16"
+            ],
+            "targetIds": [
+              "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70101#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
+            ],
+            "targets": [
+              "Codeunit Base Calc::OnRun"
+            ]
+          }
+        ],
+        "errors": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Doc.TestField",
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 12,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "type": "ERROR_IMPLICIT",
+            "via": []
+          },
+          {
+            "conditionality": "unknown",
+            "crossing": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
+            "type": "ERROR_IMPLICIT"
+          }
+        ],
         "events": [
           {
             "anchor": {
               "column": 8,
+              "excerpt": "OnAfterIssueDoc",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 25,
               "sourceKind": "source"
@@ -32,36 +102,45 @@
             ]
           },
           {
-            "anchor": {
-              "column": 8,
-              "excerpt": "enters Codeunit Base Poster::OnRun",
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 15,
-              "sourceKind": "source"
-            },
-            "conditionality": "unknown",
-            "event": "",
-            "eventId": "",
-            "via": []
+            "crossing": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
+            "resourceCount": 1,
+            "resourcesListed": false
           }
         ],
-        "ui": [],
-        "writes": [
+        "file": [],
+        "http": [
           {
             "anchor": {
               "column": 8,
-              "excerpt": "enters Codeunit Base Poster::OnRun",
+              "excerpt": "Client.Get",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 15,
+              "line": 72,
               "sourceKind": "source"
             },
+            "conditionality": "unconditional-on-success",
+            "type": "HTTP",
+            "via": [
+              "Notify"
+            ]
+          }
+        ],
+        "isolatedStorage": [],
+        "telemetry": [],
+        "ui": [],
+        "writes": [
+          {
+            "class": "physical",
+            "classReason": "not-joined",
             "conditionality": "unknown",
-            "fieldCaptions": {},
-            "fields": [],
+            "crossing": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
             "op": "DB_DELETE",
-            "table": "",
-            "tableId": "",
-            "via": []
+            "resourceCount": 1,
+            "resources": [
+              {
+                "display": "Base Doc Line",
+                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70021"
+              }
+            ]
           },
           {
             "anchor": {
@@ -71,6 +150,8 @@
               "line": 58,
               "sourceKind": "source"
             },
+            "class": "temporary",
+            "classReason": "known-temporary",
             "conditionality": "unconditional-on-success",
             "fieldCaptions": {},
             "fields": [
@@ -78,43 +159,88 @@
               "Message"
             ],
             "op": "DB_DELETE",
+            "opKinds": [
+              "DeleteAll"
+            ],
             "table": "Out Log",
             "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
+            "tempState": "known(true)",
             "via": [
               "WriteLog"
             ]
           },
           {
-            "anchor": {
-              "column": 8,
-              "excerpt": "enters Codeunit Base Poster::OnRun",
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 15,
-              "sourceKind": "source"
-            },
+            "class": "temporary",
+            "classReason": "known-temporary",
             "conditionality": "unknown",
-            "fieldCaptions": {},
-            "fields": [],
+            "crossing": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
             "op": "DB_INSERT",
-            "table": "",
-            "tableId": "",
-            "via": []
+            "resourceCount": 1,
+            "resources": [
+              {
+                "display": "Base Ledger 01",
+                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70001"
+              }
+            ],
+            "tempState": "known(true)"
           },
           {
-            "anchor": {
-              "column": 8,
-              "excerpt": "enters Codeunit Base Poster::OnRun",
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 15,
-              "sourceKind": "source"
-            },
+            "class": "physical",
+            "classReason": "not-joined",
             "conditionality": "unknown",
-            "fieldCaptions": {},
-            "fields": [],
+            "crossing": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
             "op": "DB_INSERT",
-            "table": "",
-            "tableId": "",
-            "via": []
+            "resourceCount": 12,
+            "resources": [
+              {
+                "display": "Base Ledger 01",
+                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70001"
+              },
+              {
+                "display": "Base Ledger 02",
+                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70002"
+              },
+              {
+                "display": "Base Ledger 03",
+                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70003"
+              },
+              {
+                "display": "Base Ledger 04",
+                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70004"
+              },
+              {
+                "display": "Base Ledger 05",
+                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70005"
+              },
+              {
+                "display": "Base Ledger 06",
+                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70006"
+              },
+              {
+                "display": "Base Ledger 07",
+                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70007"
+              },
+              {
+                "display": "Base Ledger 08",
+                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70008"
+              },
+              {
+                "display": "Base Ledger 09",
+                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70009"
+              },
+              {
+                "display": "Base Ledger 10",
+                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70010"
+              },
+              {
+                "display": "Base Ledger 11",
+                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70011"
+              },
+              {
+                "display": "Base Ledger 12",
+                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70012"
+              }
+            ]
           },
           {
             "anchor": {
@@ -124,6 +250,8 @@
               "line": 61,
               "sourceKind": "source"
             },
+            "class": "physical",
+            "classReason": "known-persistent",
             "conditionality": "unconditional-on-success",
             "fieldCaptions": {},
             "fields": [
@@ -131,8 +259,12 @@
               "Message"
             ],
             "op": "DB_INSERT",
+            "opKinds": [
+              "Insert"
+            ],
             "table": "Out Log",
             "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
+            "tempState": "known(false)",
             "via": [
               "WriteLog"
             ]
@@ -145,47 +277,49 @@
               "line": 14,
               "sourceKind": "source"
             },
+            "class": "callerDependent",
+            "classReason": "parameter",
             "conditionality": "unconditional-on-success",
             "fieldCaptions": {},
             "fields": [
               "Status"
             ],
             "op": "DB_MODIFY",
+            "opKinds": [
+              "Modify"
+            ],
             "table": "Out Doc",
             "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50100",
+            "tempState": "parameter-dependent(0)",
             "via": []
           },
           {
-            "anchor": {
-              "column": 8,
-              "excerpt": "enters Codeunit Base Poster::OnRun",
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 15,
-              "sourceKind": "source"
-            },
+            "class": "physical",
+            "classReason": "not-joined",
             "conditionality": "unknown",
-            "fieldCaptions": {},
-            "fields": [],
+            "crossing": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
             "op": "DB_MODIFY",
-            "table": "",
-            "tableId": "",
-            "via": []
+            "resourceCount": 1,
+            "resources": [
+              {
+                "display": "Base Register",
+                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70020"
+              }
+            ]
           },
           {
-            "anchor": {
-              "column": 8,
-              "excerpt": "enters Codeunit Base Calc::OnRun",
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 16,
-              "sourceKind": "source"
-            },
+            "class": "physical",
+            "classReason": "not-joined",
             "conditionality": "unknown",
-            "fieldCaptions": {},
-            "fields": [],
+            "crossing": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs1",
             "op": "DB_MODIFY",
-            "table": "",
-            "tableId": "",
-            "via": []
+            "resourceCount": 1,
+            "resources": [
+              {
+                "display": "Base Price",
+                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70022"
+              }
+            ]
           }
         ]
       },
@@ -193,6 +327,7 @@
         {
           "anchor": {
             "column": 8,
+            "excerpt": "OnAfterIssueDoc",
             "file": "ws:src/OutIssueDocument.Codeunit.al",
             "line": 25,
             "sourceKind": "source"
@@ -211,36 +346,9 @@
             }
           ],
           "subscribers": 1
-        },
-        {
-          "anchor": {
-            "column": 8,
-            "excerpt": "enters Codeunit Base Poster::OnRun",
-            "file": "ws:src/OutIssueDocument.Codeunit.al",
-            "line": 15,
-            "sourceKind": "source"
-          },
-          "conditionalOnAppSet": true,
-          "event": "",
-          "eventId": "",
-          "isHandled": false,
-          "subscriberRoutines": [],
-          "subscribers": 0
         }
       ],
       "gaps": [
-        {
-          "anchor": {
-            "column": 8,
-            "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
-            "line": 45,
-            "sourceKind": "source"
-          },
-          "callee": "Codeunit.Run(<dynamic>)",
-          "in": "PostDocument",
-          "kind": "unresolved-call",
-          "status": "dynamic-target"
-        },
         {
           "anchor": {
             "column": 8,
@@ -266,6 +374,18 @@
           "status": "polymorphic"
         }
       ],
+      "gapsInDependencies": {
+        "dynamicTarget": 1,
+        "notPlaced": 0,
+        "polymorphic": 0,
+        "topCallees": [
+          {
+            "callee": "Codeunit.Run(<dynamic>)",
+            "count": 1
+          }
+        ],
+        "total": 1
+      },
       "reachedFrom": [
         {
           "action": "Issue",
@@ -280,14 +400,25 @@
           "kind": "PageAction",
           "object": "Out Doc Card",
           "objectType": "Page",
-          "runObject": null,
-          "tooltip": null,
-          "via": [
-            "OnAction",
-            "IssueDoc"
-          ]
+          "runObject": null
         }
       ],
+      "reachedFromSummary": {
+        "actions": 1,
+        "byCaption": [
+          {
+            "caption": "Issue",
+            "count": 1
+          }
+        ],
+        "byObject": [
+          {
+            "count": 1,
+            "object": "Page Out Doc Card"
+          }
+        ],
+        "objects": 1
+      },
       "routine": {
         "anchor": {
           "column": 4,
@@ -341,12 +472,53 @@
           }
         ]
       },
+      "summary": {
+        "callerDependentTables": 1,
+        "callers": 0,
+        "commits": {
+          "answer": "may",
+          "entryPoints": 1,
+          "ownSites": 0
+        },
+        "entryPoints": {
+          "count": 2,
+          "sites": 2
+        },
+        "events": {
+          "distinct": 2,
+          "inWorkspaceCode": 1
+        },
+        "gaps": {
+          "dependency": 1,
+          "notPlaced": 0,
+          "workspace": 2
+        },
+        "kinds": {
+          "backgroundTasks": 1,
+          "errors": 2,
+          "http": 1
+        },
+        "literalDeadTables": 0,
+        "mayWriteTables": {
+          "byDependencies": 15,
+          "count": 16,
+          "ownedByApp": 1
+        },
+        "noPathKept": {
+          "operations": 0,
+          "tables": 0
+        },
+        "pageActions": 1,
+        "temporaryOnlyTables": 0,
+        "tests": 0,
+        "unresolvedTableWrites": 0
+      },
       "tests": []
     }
   ],
   "diagnostics": [],
   "lineBase": 1,
   "mode": "routine",
-  "schema": "al-sem.explain/2.1",
+  "schema": "al-sem.explain/3",
   "selector": "Out Issue Document::IssueDoc"
 }

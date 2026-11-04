@@ -824,6 +824,15 @@ struct ExplainCli {
     /// (as `analyze` and `graph` do), at more memory and time.
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
+
+    /// Every list complete, no fold: every table, entry point, page action,
+    /// dependency gap and event-group name; up to 3 paths per item.
+    #[arg(long = "detail", default_value_t = false)]
+    detail: bool,
+
+    /// Paths per item (default 1; 3 with --detail; at most 3; 0: none).
+    #[arg(long = "max-paths")]
+    max_paths: Option<usize>,
 }
 
 /// `FingerprintCli` — arguments for `alsem fingerprint <ws>`.
@@ -2355,7 +2364,10 @@ fn plan_explain(e: ExplainCli, cx: &PlanCx) -> Planned {
                 mode,
                 single_app: e.single_app,
             };
-            Box::new(ExplainJob::new(req, e.format == "human", e.out.as_deref()))
+            Box::new(
+                ExplainJob::new(req, e.format == "human", e.out.as_deref())
+                    .with_render(e.detail, e.max_paths),
+            )
         },
     )
 }

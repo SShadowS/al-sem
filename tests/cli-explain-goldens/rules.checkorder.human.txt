@@ -1,4 +1,9 @@
 Codeunit Rules Checks::CheckOrder  ws:src/checks.al:8
+  summary: no observed write that may persist; caller-dependent: none; commits: no observed COMMIT; events: 0 (0 raised in workspace code); errors at 5 places; callers: none; tests: none; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  coverage: complete
+  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
+  limits: none
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   doc: Checks an order before it is posted.
   rejects when Order.Status <> Order.Status::Released: "You cannot post %1 %2 because it is not released."  [Error ws:src/checks.al:15]
   rejects when not (Order.Status <> Order.Status::Released) and Order.Amount <= 0: "The amount must be positive."  [Error ws:src/checks.al:17]
@@ -6,7 +11,11 @@ Codeunit Rules Checks::CheckOrder  ws:src/checks.al:8
   rejects when not (Order.Status <> Order.Status::Released) and not (Order.Amount <= 0) and Order.Blocked <> false: (platform message)  [TestField ws:src/checks.al:21]
   rejects when not (Order.Status <> Order.Status::Released) and not (Order.Amount <= 0) and not PostingPreview and Order."Posting Date" = 0D: "Order %1 has no posting date."  [Error ws:src/checks.al:25]
   inherited rules: none
-  caller rules: no known caller
-  commits: no
+  callers: none
+  commits: none
+  events: 0 raised in workspace code; 0 more only beyond entry points
+  extension points: none (the routine publishes no event itself)
+  errors at 5 places: ERROR_IMPLICIT at ws:src/checks.al:20 (unconditional-on-success); ERROR_IMPLICIT at ws:src/checks.al:21 (unconditional-on-success); ERROR_THROW at ws:src/checks.al:15 (error-path); ERROR_THROW at ws:src/checks.al:17 (error-path); ERROR_THROW at ws:src/checks.al:25 (error-path)
   tests: none reach it
+  next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

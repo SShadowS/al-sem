@@ -563,12 +563,14 @@ pub fn policy_plan(detectors: Vec<Detector>, rules: bool, pins: bool) -> Plan {
 
 /// `alsem explain` (intent-evidence spec §4.4): one tree over the cards'
 /// routines (stable ids), whose effects keep the test-coverage graph (the
-/// card's `tests`), and nothing else. No detector run and no `l4`: the card
-/// reads the raw per-root effects (types, resources, conditionality, witness
-/// paths), not digest's L4-joined `tempState` or its transaction context, and
-/// no analyzer diagnostics. No routine: no tree (the job answers with exit 2
-/// and no card, or a field with no writer). Either way the command reads its
-/// indexes (plan 2026-11-03 W2: a revision's `ExplainIndexes`).
+/// card's `tests`), and `l4`. No detector run: the card reads no transaction
+/// context and no analyzer diagnostics. `l4` (MCP output wave 2 W2-2, design
+/// §3.1): the card states each write's class (physical, caller-dependent,
+/// temporary) from digest's L4 temp-state join, so explain, digest and prove
+/// give one answer to "does R write T". No routine: no tree and no `l4` (the
+/// job answers with exit 2 and no card, or a field with no writer). Either
+/// way the command reads its indexes (plan 2026-11-03 W2: a revision's
+/// `ExplainIndexes`).
 pub fn explain_plan(roots: BTreeSet<String>) -> Plan {
     if roots.is_empty() {
         return Plan {
@@ -579,7 +581,7 @@ pub fn explain_plan(roots: BTreeSet<String>) -> Plan {
     let witness = WitnessRequest::roots(roots);
     Plan {
         runs: vec![],
-        need_l4: false,
+        need_l4: true,
         after_run: 0,
         own: 0,
         explain_indexes: true,
@@ -2244,14 +2246,14 @@ mod tests {
     /// request and job 0's tree demand over them; a digest with no root
     /// (prove, or none resolved) has neither. A roots request scopes every
     /// row of each stable id.
-    /// `explain_plan` (intent evidence step 4): one effects tree with the
-    /// test-coverage graph over its routines, and no run and no `l4` (the card
-    /// reads neither); no routine, nothing at all.
+    /// `explain_plan` (intent evidence step 4; W2-2): one effects tree with
+    /// the test-coverage graph over its routines, `l4` for the temp-state
+    /// join, and no run; no routine, nothing at all.
     #[test]
-    fn explain_plan_is_one_tests_tree_and_nothing_else() {
+    fn explain_plan_is_one_tests_tree_and_l4() {
         let roots: BTreeSet<String> = ["a:Codeunit:1#x".to_string()].into();
         let p = explain_plan(roots.clone());
-        assert!(p.runs.is_empty() && !p.need_l4 && p.after_run == 0);
+        assert!(p.runs.is_empty() && p.need_l4 && p.after_run == 0);
         assert_eq!(p.witness, WitnessRequest::roots(roots.clone()));
         assert!(
             matches!(&p.trees[..], [(JobId(0), t)] if t.subjects == WitnessRequest::roots(roots)
@@ -2260,7 +2262,7 @@ mod tests {
             "{:?}",
             p.trees
         );
-        assert_eq!(p.fills(), vec![Cell::Rel, Cell::Raw]);
+        assert_eq!(p.fills(), vec![Cell::Rel, Cell::Raw, Cell::L4]);
         let p = explain_plan(BTreeSet::new());
         assert!(p.trees.is_empty() && p.runs.is_empty() && p.fills().is_empty());
     }

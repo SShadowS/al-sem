@@ -3572,12 +3572,14 @@ mod tests {
     /// section counts. Hand-stated: `Shared` written in workspace code AND
     /// listed by a group beyond `Codeunit Base Poster::OnRun`, `Other` listed by
     /// two groups (Insert and Modify) of that one crossing, and a temporary
-    /// `Scratch` insert. Expected by hand: 2 may-persist tables (both owned by
-    /// dependencies), 1 entry point, `Scratch` temporary-only.
+    /// `Scratch` insert, and a caller-dependent `Arg` modify. Expected by hand:
+    /// 2 may-persist tables (both owned by dependencies), 1 entry point,
+    /// `Scratch` temporary-only, `Arg` caller-dependent and not may-persist.
     ///
     /// Discrimination (2026-11-04): computing `may_write_tables` as the sum of
     /// the workspace-code records and every crossing's table count fails (3,
-    /// not 2); restored, it passes.
+    /// not 2); counting a caller-dependent contribution as physical (its arm
+    /// adding to `live_tables`) fails too (3, not 2); each restored, it passes.
     #[test]
     fn rollup_totals_are_unions_by_identity() {
         let mut own = effect(
@@ -3605,10 +3607,21 @@ mod tests {
         let group = |ty: &str, res: &[(&str, &str)]| {
             effect(ty, &[("boundary", "Codeunit Base Poster::OnRun")], res)
         };
+        let mut arg = effect(
+            "DB_MODIFY",
+            &[
+                ("resourceId", "ws/table/5"),
+                ("resourceDisplay", "Arg"),
+                ("tempState", "parameter-dependent(0)"),
+            ],
+            &[],
+        );
+        arg.evidence.source_kind = "source";
         let mut e = entry_with(vec![]);
         e.effects = vec![
             own,
             temp,
+            arg,
             group(
                 "DB_INSERT",
                 &[("dep/table/1", "Shared"), ("dep/table/2", "Other")],
@@ -3630,6 +3643,11 @@ mod tests {
             2,
             "tables per kind"
         );
+        // T-W2-20: the caller-dependent `Arg` write is its own section and
+        // never a may-persist table.
+        assert_eq!(t.caller_dependent_tables, 1, "{t:?}");
+        assert_eq!(r.caller_dependent.len(), 1);
+        assert!(!r.may_write.contains_key("ws/table/5"), "{t:?}");
     }
 
     /// A model whose primary app is `ws`.

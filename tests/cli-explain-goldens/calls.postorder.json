@@ -1,13 +1,55 @@
 {
   "cards": [
     {
+      "coverage": {
+        "assumptions": [
+          "loaded-program"
+        ],
+        "limits": [],
+        "notes": {},
+        "reasons": [],
+        "status": "complete"
+      },
       "effects": {
+        "backgroundTasks": [],
         "commitSites": [],
-        "commits": "no",
+        "commits": "no observed",
+        "crossings": [],
+        "errors": [
+          {
+            "anchor": {
+              "column": 16,
+              "excerpt": "Rec.TestField",
+              "file": "ws:src/order.al",
+              "line": 16,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "type": "ERROR_IMPLICIT",
+            "via": [
+              "OnValidate"
+            ]
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "excerpt": "error-call",
+              "file": "ws:src/order.al",
+              "line": 25,
+              "sourceKind": "source"
+            },
+            "conditionality": "error-path",
+            "type": "ERROR_THROW",
+            "via": [
+              "OnModify"
+            ]
+          }
+        ],
         "events": [
           {
             "anchor": {
               "column": 8,
+              "excerpt": "OnBeforePostOrder",
               "file": "ws:src/post.al",
               "line": 11,
               "sourceKind": "source"
@@ -20,6 +62,10 @@
             ]
           }
         ],
+        "file": [],
+        "http": [],
+        "isolatedStorage": [],
+        "telemetry": [],
         "ui": [],
         "writes": [
           {
@@ -30,6 +76,8 @@
               "line": 14,
               "sourceKind": "source"
             },
+            "class": "callerDependent",
+            "classReason": "parameter",
             "conditionality": "unconditional-on-success",
             "fieldCaptions": {},
             "fields": [
@@ -37,8 +85,12 @@
               "Status"
             ],
             "op": "DB_MODIFY",
+            "opKinds": [
+              "Modify"
+            ],
             "table": "Calls Order",
             "tableId": "55555555-ca11-0000-0000-0000000ca115/table/50450",
+            "tempState": "parameter-dependent(0)",
             "via": []
           }
         ]
@@ -47,6 +99,7 @@
         {
           "anchor": {
             "column": 8,
+            "excerpt": "OnBeforePostOrder",
             "file": "ws:src/post.al",
             "line": 11,
             "sourceKind": "source"
@@ -103,6 +156,13 @@
         }
       ],
       "gaps": [],
+      "gapsInDependencies": {
+        "dynamicTarget": 0,
+        "notPlaced": 0,
+        "polymorphic": 0,
+        "topCallees": [],
+        "total": 0
+      },
       "reachedFrom": [
         {
           "action": "PostIt",
@@ -117,14 +177,25 @@
           "kind": "PageAction",
           "object": "Calls Order Card",
           "objectType": "Page",
-          "runObject": "codeunit \"Calls Post Run\"",
-          "tooltip": "Post the order.",
-          "via": [
-            "OnRun",
-            "PostOrder"
-          ]
+          "runObject": "codeunit \"Calls Post Run\""
         }
       ],
+      "reachedFromSummary": {
+        "actions": 1,
+        "byCaption": [
+          {
+            "caption": "Post",
+            "count": 1
+          }
+        ],
+        "byObject": [
+          {
+            "count": 1,
+            "object": "Page Calls Order Card"
+          }
+        ],
+        "objects": 1
+      },
       "routine": {
         "anchor": {
           "column": 4,
@@ -394,12 +465,51 @@
         "knownCallers": 1,
         "own": []
       },
+      "summary": {
+        "callerDependentTables": 1,
+        "callers": 1,
+        "commits": {
+          "answer": "no observed",
+          "entryPoints": 0,
+          "ownSites": 0
+        },
+        "entryPoints": {
+          "count": 0,
+          "sites": 0
+        },
+        "events": {
+          "distinct": 1,
+          "inWorkspaceCode": 1
+        },
+        "gaps": {
+          "dependency": 0,
+          "notPlaced": 0,
+          "workspace": 0
+        },
+        "kinds": {
+          "errors": 2
+        },
+        "literalDeadTables": 0,
+        "mayWriteTables": {
+          "byDependencies": 0,
+          "count": 0,
+          "ownedByApp": 0
+        },
+        "noPathKept": {
+          "operations": 0,
+          "tables": 0
+        },
+        "pageActions": 1,
+        "temporaryOnlyTables": 0,
+        "tests": 0,
+        "unresolvedTableWrites": 0
+      },
       "tests": []
     }
   ],
   "diagnostics": [],
   "lineBase": 1,
   "mode": "routine",
-  "schema": "al-sem.explain/2.1",
+  "schema": "al-sem.explain/3",
   "selector": "PostOrder"
 }

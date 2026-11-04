@@ -1,10 +1,43 @@
 {
   "cards": [
     {
+      "coverage": {
+        "assumptions": [
+          "loaded-program"
+        ],
+        "limits": [],
+        "notes": {
+          "table-trigger-rules-skipped": 1
+        },
+        "reasons": [],
+        "status": "complete"
+      },
       "effects": {
+        "backgroundTasks": [],
         "commitSites": [],
-        "commits": "no",
+        "commits": "no observed",
+        "crossings": [],
+        "errors": [
+          {
+            "anchor": {
+              "column": 12,
+              "excerpt": "error-call",
+              "file": "ws:src/checks.al",
+              "line": 70,
+              "sourceKind": "source"
+            },
+            "conditionality": "error-path",
+            "type": "ERROR_THROW",
+            "via": [
+              "PingCheck"
+            ]
+          }
+        ],
         "events": [],
+        "file": [],
+        "http": [],
+        "isolatedStorage": [],
+        "telemetry": [],
         "ui": [],
         "writes": [
           {
@@ -15,12 +48,18 @@
               "line": 49,
               "sourceKind": "source"
             },
+            "class": "callerDependent",
+            "classReason": "parameter",
             "conditionality": "unconditional-on-success",
             "fieldCaptions": {},
             "fields": [],
             "op": "DB_MODIFY",
+            "opKinds": [
+              "Modify"
+            ],
             "table": "Calls Order",
             "tableId": "55555555-ca11-0000-0000-0000000ca115/table/50450",
+            "tempState": "parameter-dependent(0)",
             "via": []
           }
         ]
@@ -85,7 +124,20 @@
           "what": "modify on Calls Order"
         }
       ],
+      "gapsInDependencies": {
+        "dynamicTarget": 0,
+        "notPlaced": 0,
+        "polymorphic": 0,
+        "topCallees": [],
+        "total": 0
+      },
       "reachedFrom": [],
+      "reachedFromSummary": {
+        "actions": 0,
+        "byCaption": [],
+        "byObject": [],
+        "objects": 0
+      },
       "routine": {
         "anchor": {
           "column": 4,
@@ -144,12 +196,51 @@
         "knownCallers": 0,
         "own": []
       },
+      "summary": {
+        "callerDependentTables": 1,
+        "callers": 0,
+        "commits": {
+          "answer": "no observed",
+          "entryPoints": 0,
+          "ownSites": 0
+        },
+        "entryPoints": {
+          "count": 0,
+          "sites": 0
+        },
+        "events": {
+          "distinct": 0,
+          "inWorkspaceCode": 0
+        },
+        "gaps": {
+          "dependency": 0,
+          "notPlaced": 0,
+          "workspace": 0
+        },
+        "kinds": {
+          "errors": 1
+        },
+        "literalDeadTables": 0,
+        "mayWriteTables": {
+          "byDependencies": 0,
+          "count": 0,
+          "ownedByApp": 0
+        },
+        "noPathKept": {
+          "operations": 0,
+          "tables": 0
+        },
+        "pageActions": 0,
+        "temporaryOnlyTables": 0,
+        "tests": 0,
+        "unresolvedTableWrites": 0
+      },
       "tests": []
     }
   ],
   "diagnostics": [],
   "lineBase": 1,
   "mode": "routine",
-  "schema": "al-sem.explain/2.1",
+  "schema": "al-sem.explain/3",
   "selector": "RecursivePost"
 }
