@@ -257,15 +257,15 @@ fn policy_fixture(dir: &Path, policy: &str) -> (String, String) {
     )
 }
 
-/// The 0-based line of `procedure <name>()` in `src` (a finding's
-/// `primaryLocation.range.startLine` convention).
+/// The 1-based line of `procedure <name>()` in `src` (a policy finding's
+/// `primaryLocation.range.startLine` convention since #368).
 fn decl_line(src: &str, name: &str) -> u64 {
     let needle = format!("procedure {name}()");
     let hits: Vec<usize> = src
         .lines()
         .enumerate()
         .filter(|(_, l)| l.contains(&needle))
-        .map(|(i, _)| i)
+        .map(|(i, _)| i + 1)
         .collect();
     assert_eq!(hits.len(), 1, "{name}: {hits:?}");
     hits[0] as u64

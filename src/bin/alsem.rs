@@ -704,8 +704,8 @@ struct AnalyzeCli {
 
     /// Opt-in: augment each finding in `--format json` with `evidencePath` (the call
     /// chain) and a POSITION-derived `enclosingMember`/`originatingObject` discriminator
-    /// on its `primaryLocation`, and bump the envelope `schemaVersion` to `1.1.0`.
-    /// OFF by default — the default analyze output is byte-identical to today.
+    /// on its `primaryLocation`, state `lineBase: 1` (every line 1-based), and bump the
+    /// envelope `schemaVersion` to `2.0.0`. OFF by default — the default analyze output is byte-identical to today.
     #[arg(long = "with-evidence", default_value_t = false)]
     with_evidence: bool,
 

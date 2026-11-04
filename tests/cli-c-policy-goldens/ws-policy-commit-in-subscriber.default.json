@@ -19,6 +19,7 @@
     ],
     "mode": "crossApp"
   },
+  "lineBase": 1,
   "policySource": "default",
   "policyVersion": 1,
   "ruleSummaries": [
@@ -110,9 +111,9 @@
       "primaryLocation": {
         "sourceUnitId": "ws:src/Subscriber.al",
         "range": {
-          "startLine": 3,
+          "startLine": 4,
           "startColumn": 4,
-          "endLine": 6,
+          "endLine": 7,
           "endColumn": 8
         },
         "enclosingRoutineId": "4a58af98ed8d6fcc/6d6de6c790dc8fd8e69a94bacef3576c44fb23cab96744fc79ab7028219fa18c",
@@ -124,9 +125,9 @@
           "sourceAnchor": {
             "sourceUnitId": "ws:src/Subscriber.al",
             "range": {
-              "startLine": 3,
+              "startLine": 4,
               "startColumn": 4,
-              "endLine": 6,
+              "endLine": 7,
               "endColumn": 8
             },
             "enclosingRoutineId": "4a58af98ed8d6fcc/6d6de6c790dc8fd8e69a94bacef3576c44fb23cab96744fc79ab7028219fa18c",
@@ -139,9 +140,9 @@
           "sourceAnchor": {
             "sourceUnitId": "ws:src/Subscriber.al",
             "range": {
-              "startLine": 3,
+              "startLine": 4,
               "startColumn": 4,
-              "endLine": 6,
+              "endLine": 7,
               "endColumn": 8
             },
             "enclosingRoutineId": "4a58af98ed8d6fcc/6d6de6c790dc8fd8e69a94bacef3576c44fb23cab96744fc79ab7028219fa18c",
