@@ -50,6 +50,81 @@ Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision
   group resource of IR and RR (16,776) the cache built 30 suffix trees, peak 48,840 states,
   nothing evicted.
 
+### Fixed (the context-server store refilled a key that was already published)
+
+- **`Store::ensure_prepared` no longer fills a published key a second time.** A request read
+  the published snapshot BEFORE it took the registry lock, then claimed every key that
+  snapshot lacked. A key another request published in between was `Published` in the
+  registry (so nothing to join) but missing from the stale snapshot, so the request claimed
+  it and filled it again: a duplicate L4 solve or fold for nothing, and the same stale read
+  behind b41a3b01's witness failure. Now the snapshot is read under the registry lock. Every
+  writer of the snapshot (publish, evict, tombstone) holds that lock, so there a `Published`
+  key is always in the snapshot read. Test:
+  `a_request_never_claims_a_key_published_after_it_read_the_snapshot`: a test-only hook
+  (`Store::before_claim`, absent outside `cfg(test)`) holds request 1 at the top of its claim
+  section while request 2 fills and publishes `X`; request 1 must fill nothing. The window is
+  between two of the store's own statements with no callback in it, so only a hook can hold a
+  request there. Discrimination: the snapshot read moved back above the hook fails it (2
+  fills of `X`); reverted, it passes. `a_request_publishes_its_claims_before_it_waits_for_a_joined_key`
+  now asserts `X` is filled once (it allowed two): under the break it fails 6 of 60 runs; with
+  the fix 0 of 200. Stress: 200 runs of the `engine::resident` tests with every core busy
+  (22 busy loops, machine load average ~150): 200 passed, none hung.
+- **Checked, not changed: the `TreeBase` fill builds a fresh `big_stack_pool()` each time.**
+  Building the 22-worker pool costs ~0.9 ms against a ~1.5 s `tree.base` on CDO (~0.06%),
+  and a dropped pool's threads end within 50 ms, so an idle engine holds none. A
+  process-wide pool would keep 22 big-stack threads for the process's life for a saving
+  below the noise. The reason is now written on `big_stack_pool`.
+
+### Changed (#368: `analyze --with-evidence` and `policy check` lines are 1-based)
+
+The rest of the engine-query surface became 1-based with `lineBase: 1` in wave 1a; these two
+analyze-side documents still printed the model's 0-based rows. Both now convert once, where a
+line leaves the engine (`src/engine/line_base.rs`, after every sort and hash). Columns stay
+0-based, except in SARIF, which is 1-based by its own standard.
+
+- **`alsem analyze --with-evidence`**: every `evidencePath[].sourceAnchor.range.startLine` /
+  `endLine` is 1-based (it was one line early), the payload states `lineBase: 1`, and the
+  envelope `schemaVersion` moves `1.1.0` → `2.0.0` (a value's meaning changed: major). It now
+  agrees with the finding's own `primaryLocation.line` and with the fingerprint inventory's
+  `rootClassifications[].sourceAnchor`. The default document (no flag) is unchanged: still
+  `1.0.0`, no `lineBase`, and its `primaryLocation.line` was already 1-based. SARIF, the HTML
+  report, the PR summary and the terminal output already printed 1-based lines and do not move
+  (checked, not converted twice).
+- **`alsem policy check`**: the JSON's `primaryLocation` and `evidencePath[].sourceAnchor`
+  lines are 1-based and the document states `lineBase: 1` (it has no schema version to move).
+  Its SARIF wrote the region's `startLine` and `startColumn` 0-based, which SARIF forbids
+  (both start at 1); now both are 1-based, as `analyze`'s SARIF writes them.
+- Golden diff, checked mechanically (a value-by-value walk of every moved golden against HEAD;
+  allowed: a line value exactly +1, an added `lineBase: 1`, a version string, a SARIF region
+  `startColumn` exactly +1). Result over 24 files (`tests/cli-c-policy-goldens/` and
+  `tests/gate-goldens/batch/one-job/policy.stdout.golden`): 127 line values +1, 14 `lineBase`
+  keys added, 17 SARIF `startColumn` values +1, zero other differences. No golden holds
+  `analyze --with-evidence` output, so the same walk compared it before and after (the HEAD
+  binary against this one, `--scope all --deterministic`) on all 220 `tests/r0-corpus/`
+  workspaces plus the `tests/fixtures/mcp-output/` workspace (113 with findings): 1278
+  evidence line values +1, 221 `lineBase` keys added, 221 `schemaVersion` 1.1.0 → 2.0.0,
+  373 `primaryLocation`/`terminalLocation` lines unchanged (already 1-based), zero other
+  differences; every exit code equal.
+- Test: `output_invariants::evidence_anchors_open_to_what_they_describe` opens every evidence
+  anchor of `analyze --with-evidence` (the cross-app fixture with `dep:` anchors, five corpus
+  workspaces covering every loop kind and call, member and identifier steps) and of
+  `policy check` at its line, and checks that both documents state `lineBase: 1` (149 anchors
+  matched). Discrimination: printing the raw row again in
+  `format_json::evidence_path_to_value` fails it (143 of 146 analyze anchors one line early);
+  doing so in `format_policy::anchor_to_jv` fails it at the policy run (3 of 3); each passes
+  restored. Tests whose 0-based expectations moved with the base: `cli_a_with_evidence`
+  (schema 2.0.0, `lineBase`), `cli_events_policy_dependencies`, `cli_implicit_trigger_cone`,
+  `cli_policy_pins` (compares policy check with d65's r4 projection, which keeps 0-based rows,
+  through each document's base), `cli_split_object_readers`, `cli_step5_coverage_fold`,
+  `gap_issue100_testfield_capability`.
+- **Readers outside this repo** (not changed here): bc-dev-mcp
+  `src/core/hotspot-explain.ts:171-172` adds 1 to these evidence ranges and must drop the `+ 1`
+  (better: read `payload.lineBase`) when its al-sem pin moves; it should accept analyze
+  evidence `schemaVersion` 2.x then. al-perf `engine-runner.ts:582` passes the evidence
+  `startLine` through raw, so its step lines (`views.ts:558,568`) were one line early; this
+  change fixes them with no edit there (check its schema-version gate, if any, accepts 2.0.0).
+  Any reader of `policy check` JSON or SARIF lines gets 1-based lines now.
+
 ### Added (MCP output wave 2, W2-0a: read-side indexes; no output change)
 
 Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3), §3.3,

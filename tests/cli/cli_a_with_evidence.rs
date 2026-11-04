@@ -12,7 +12,8 @@
 //!       POSITION-derived `enclosingMember` (the member-WRAPPER range containing its
 //!       primaryLocation, smallest-range), proving the discriminator is PER-FINDING and
 //!       wrapper-range-derived — NOT looked up from the routine map (where two field
-//!       triggers' internal ids collapse — RE-1). `evidencePath` present; schema `1.1.0`.
+//!       triggers' internal ids collapse — RE-1). `evidencePath` present; schema `2.0.0`
+//!       (1.1.0 until #368 made the evidence lines 1-based), `payload.lineBase: 1`.
 //!       (Two SAME-named field triggers collapse to one model routine and so cannot yield
 //!       two findings via the native detector; distinct trigger kinds keep both routines,
 //!       giving two findings in two disjoint field wrappers — the observable per-finding
@@ -148,11 +149,16 @@ fn two_field_with_evidence_distinct_member_per_finding() {
     let (_tmp, ws) = write_workspace("twofield-we", "twofield.al", TWO_FIELD_TABLE);
     let doc = parse(&run_json(&ws, true));
 
-    // schemaVersion bumps to 1.1.0 under the flag (RE-8).
+    // schemaVersion bumps under the flag (RE-8): 2.0.0 since #368 (1-based evidence).
     assert_eq!(
         doc["schemaVersion"].as_str(),
-        Some("1.1.0"),
-        "with-evidence envelope schemaVersion must be 1.1.0"
+        Some("2.0.0"),
+        "with-evidence envelope schemaVersion must be 2.0.0"
+    );
+    assert_eq!(
+        doc["payload"]["lineBase"].as_u64(),
+        Some(1),
+        "with-evidence payload states lineBase 1"
     );
 
     let findings = d1_findings(&doc);
@@ -237,6 +243,10 @@ fn default_output_byte_identical_minus_evidence_keys() {
         !plain.contains("originatingObject"),
         "default output must not contain originatingObject"
     );
+    assert!(
+        !plain.contains("lineBase"),
+        "default output must not contain lineBase (its 1.0.0 shape is unchanged)"
+    );
 
     // Stronger: the with-evidence doc, with every additive key recursively stripped and
     // schemaVersion reset to 1.0.0, must be BYTE-identical to the default doc. This proves
@@ -258,6 +268,7 @@ fn strip_evidence_keys(v: &mut serde_json::Value) {
             map.remove("evidencePath");
             map.remove("enclosingMember");
             map.remove("originatingObject");
+            map.remove("lineBase");
             for (_, child) in map.iter_mut() {
                 strip_evidence_keys(child);
             }
