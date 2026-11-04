@@ -108,6 +108,9 @@ pub struct QueryRunResult {
     /// `0` = answered; `2` = a selector did not resolve to exactly one target
     /// (mirrors `alsem prove`'s unresolved-routine contract).
     pub exit_code: u8,
+    /// The answer's summary for a file answer (MCP output plan 1e); `null` on a
+    /// selector failure.
+    pub summary: Value,
 }
 
 // ---------------------------------------------------------------------------
@@ -331,11 +334,11 @@ impl Job for QueryJob<'_> {
         let r = doc
             .one::<Result<QueryRunResult, String>>()
             .unwrap_or_else(|f| unreachable!("query fails no side: {f:?}"));
-        JobOutput::text(
+        JobOutput::text_with_summary(
             self.out,
             r.map(|r| {
                 let text = if self.json { r.json_text } else { r.human_text };
-                (text, r.exit_code)
+                (text, r.exit_code, r.summary)
             }),
         )
     }
@@ -809,6 +812,79 @@ fn touch_json(
     Value::Object(m)
 }
 
+/// `query touches`'s summary for a file answer (MCP output plan 1e): the
+/// payload's headlines (the table, `down`'s and `up`'s verdicts and counts)
+/// with every list replaced by its length.
+fn touches_summary(payload: &Map<String, Value>) -> Value {
+    fn counts_only(v: &Value) -> Value {
+        match v {
+            Value::Object(m) => {
+                let mut out = Map::new();
+                for (k, x) in m {
+                    match x {
+                        Value::Array(a) if a.iter().any(Value::is_object) => {
+                            out.insert(format!("{k}Count"), a.len().into());
+                        }
+                        Value::Object(_) => {
+                            out.insert(k.clone(), counts_only(x));
+                        }
+                        _ => {
+                            out.insert(k.clone(), x.clone());
+                        }
+                    }
+                }
+                Value::Object(out)
+            }
+            other => other.clone(),
+        }
+    }
+    let mut s = counts_only(&Value::Object(payload.clone()));
+    if let Some(m) = s.as_object_mut() {
+        m.insert("kind".into(), "query.touches".into());
+    }
+    crate::engine::batch::output::capped_summary(s, "")
+}
+
+/// `query effects`'s summary for a file answer (MCP output plan 1e): the
+/// effects counted by operation, by temp state and by table, and the
+/// physical (not known-temporary) writes.
+fn effects_summary(routine: &str, effects: &[TableTouch<'_>], tables: &TableNames<'_>) -> Value {
+    use std::collections::BTreeMap;
+    let mut by_op: BTreeMap<&str, u64> = BTreeMap::new();
+    let mut by_temp: BTreeMap<String, u64> = BTreeMap::new();
+    let mut table_set = std::collections::BTreeSet::new();
+    let (mut unknown, mut physical_writes) = (0u64, 0u64);
+    for e in effects {
+        *by_op.entry(e.op).or_default() += 1;
+        *by_temp.entry(temp_state_str(e.temp_state)).or_default() += 1;
+        if is_unknown_table(e.table_id) {
+            unknown += 1;
+        } else {
+            table_set.insert(tables.get(e.table_id).unwrap_or(e.table_id));
+        }
+        let write = matches!(
+            e.op,
+            "Insert" | "Modify" | "ModifyAll" | "Delete" | "DeleteAll" | "Rename"
+        );
+        if write && !matches!(e.temp_state, TempStateKind::Known(true)) {
+            physical_writes += 1;
+        }
+    }
+    crate::engine::batch::output::capped_summary(
+        json!({
+            "kind": "query.effects",
+            "routine": routine,
+            "effectCount": effects.len(),
+            "byOp": by_op,
+            "byTempState": by_temp,
+            "notKnownTemporaryWrites": physical_writes,
+            "tableCount": table_set.len(),
+            "unknownTable": unknown,
+        }),
+        "",
+    )
+}
+
 /// The document envelope. Every payload states how dependencies were loaded
 /// (`payload.dependencies`, #66), the selector-failure documents included.
 fn envelope(
@@ -870,6 +946,7 @@ fn selector_failure_doc<T>(
         json_text: envelope(kind, payload, deps, alsem_ver, deterministic),
         human_text: human,
         exit_code: 2,
+        summary: Value::Null,
     }
 }
 
@@ -972,6 +1049,7 @@ fn render_query_touches_body(
             json_text: envelope("query.touches", payload, deps, alsem_ver, deterministic),
             human_text: "query.touches: --direction down requires --from <routine>\n".to_string(),
             exit_code: 2,
+            summary: Value::Null,
         };
     }
     let table = match resolve_table_selector(substrate.resolved(), table_selector) {
@@ -1107,6 +1185,7 @@ fn render_query_touches_body(
                     "--- {} vs {table_label} ---\n  not answerable: routine has no db-effect row\n",
                     rr.qualified()
                 ));
+                let summary = touches_summary(&payload);
                 return QueryRunResult {
                     json_text: envelope(
                         "query.touches",
@@ -1117,6 +1196,7 @@ fn render_query_touches_body(
                     ),
                     human_text: human,
                     exit_code: 0,
+                    summary,
                 };
             };
 
@@ -1237,6 +1317,7 @@ fn render_query_touches_body(
         }
     }
 
+    let summary = touches_summary(&payload);
     QueryRunResult {
         json_text: envelope(
             "query.touches",
@@ -1247,6 +1328,7 @@ fn render_query_touches_body(
         ),
         human_text: human,
         exit_code: 0,
+        summary,
     }
 }
 
@@ -1342,6 +1424,7 @@ fn render_query_effects_body(
             json_text: envelope("query.effects", payload, deps, alsem_ver, deterministic),
             human_text: human,
             exit_code: 0,
+            summary: Value::Null,
         };
     };
     let effects: Vec<TableTouch<'_>> = query.all_effects(rix);
@@ -1386,10 +1469,12 @@ fn render_query_effects_body(
         ));
     }
 
+    let summary = effects_summary(&rr.qualified(), &effects, &tables);
     QueryRunResult {
         json_text: envelope("query.effects", payload, deps, alsem_ver, deterministic),
         human_text: human,
         exit_code: 0,
+        summary,
     }
 }
 

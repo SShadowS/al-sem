@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (MCP output plan 1e: a summary on every spilled answer)
+
+- **An explain, query or prove answer that goes to a file carries a summary** (plan item 1e;
+  review E2). Only digest had one; an 80 KB explain card arrived as `{path, bytes, sha256}`. The
+  renderer builds it from its own data (`ExplainRunResult`, `QueryRunResult`, `ProveRunResult`
+  gain `summary`): explain, each card's header line and the length of its lists (own rules,
+  writes, events, UI, callers, tests, gaps) and its commit verdict; query effects, the effects
+  by operation, by temp state, the tables and the not-known-temporary writes; query touches, the
+  `down`/`up` headlines with every list as a count; prove, the answer, the evidence and blocker
+  counts and the obligations. Capped at 8 KiB (`capped_summary`), sent only beside a file.
+
 ### Fixed (MCP output plan 1d: boundary groups)
 
 - **A dependency boundary group names its boundary owner-qualified, lists every resource, and

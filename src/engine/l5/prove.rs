@@ -1369,6 +1369,9 @@ pub struct ProveRunResult {
     pub human_text: String,
     /// Exit code: 0 = answered, 2 = routine not resolved (dummy-doc)
     pub exit_code: u8,
+    /// The answer line and obligations, for a file answer (MCP output plan
+    /// 1e); `null` for the dummy document.
+    pub summary: serde_json::Value,
 }
 
 /// Run the full prove pipeline for a workspace + routine selector + question text.
@@ -1536,7 +1539,7 @@ impl Job for ProveJob<'_> {
         let r = doc
             .one::<Result<ProveRunResult, String>>()
             .unwrap_or_else(|f| unreachable!("prove fails no side: {f:?}"));
-        JobOutput::text(
+        JobOutput::text_with_summary(
             self.out,
             r.map(|r| {
                 let text = if self.human {
@@ -1544,7 +1547,7 @@ impl Job for ProveJob<'_> {
                 } else {
                     r.json_text
                 };
-                (text, r.exit_code)
+                (text, r.exit_code, r.summary)
             }),
         )
     }
@@ -1643,6 +1646,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             json_text,
             human_text,
             exit_code: 2,
+            summary: serde_json::Value::Null,
         });
     }
 
@@ -1780,10 +1784,20 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         &entry.effects,
     );
 
+    let summary = serde_json::json!({
+        "kind": "prove",
+        "routine": owner_qualified(&entry.object_display, &entry.routine_display),
+        "question": question_text,
+        "answer": prove_result.answer.as_str(),
+        "evidence": prove_result.evidence.as_ref().map_or(0, Vec::len),
+        "blockedBy": prove_result.blocked_by.as_ref().map_or(0, Vec::len),
+        "obligations": obligations_to_value(&prove_result.obligations),
+    });
     Ok(ProveRunResult {
         json_text,
         human_text,
         exit_code: 0,
+        summary,
     })
 }
 

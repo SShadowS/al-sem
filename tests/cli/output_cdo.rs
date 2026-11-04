@@ -346,3 +346,35 @@ fn cdo_boundary_groups_name_their_owner_and_every_resource() {
     );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Item T, "a summary on every spill" on CDO (plan 1e, E2): every one of the 30
+/// answers that went to a file (IssueReminder's 80 KB explain card, its query
+/// answers, RunReportID's 194 KB card, ...) carries the renderer's summary, at
+/// most 8 KiB, in a `tools/call` result under 40,000 characters. The fixture
+/// test `output_invariants::every_spilled_answer_carries_a_summary` carries the
+/// discrimination proof.
+#[test]
+fn cdo_every_spilled_answer_carries_a_small_summary() {
+    let Some(a) = cdo_answers() else { return };
+    let mut failures = Vec::new();
+    let mut spilled = 0;
+    for (key, ans) in &a.answers {
+        if !ans.envelope["stdoutFile"].is_object() {
+            continue;
+        }
+        spilled += 1;
+        let s = &ans.envelope["summary"];
+        let bytes = s.to_string().len();
+        if !s.is_object() || bytes > al_sem::engine::batch::output::SUMMARY_CAP_BYTES {
+            failures.push(format!("{key}: summary of {bytes} bytes: {s}"));
+        }
+        if ans.result_text.len() > 40_000 {
+            failures.push(format!("{key}: result of {} chars", ans.result_text.len()));
+        }
+    }
+    assert!(
+        spilled >= 10,
+        "precondition: CDO's large answers spill ({spilled})"
+    );
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

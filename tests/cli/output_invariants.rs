@@ -695,3 +695,68 @@ fn boundary_groups_name_their_owner_and_every_resource() {
     ));
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Item T, "every `summary` <= 8 KB" and "a summary on every spill" (plan 1e,
+/// E2): an explain, query effects, query touches or prove answer that goes to a
+/// file (forced here with `maxInlineBytes: 0`) carries the renderer's summary
+/// (each card's header line and list lengths; effects by operation and temp
+/// state; the touches headlines; the answer and obligations), at most 8 KiB,
+/// inside a result under 40,000 characters; the same answer inline carries none.
+///
+/// Discrimination (2026-11-04): dropping the summary in `ExplainJob::serialize`
+/// (back to `JobOutput::text`) fails at "explain: a summary"; restored, it passes.
+#[test]
+fn every_spilled_answer_carries_a_summary() {
+    let mut s = crate::mcp_server::Server::ready(&workspace(), None);
+    let calls = [
+        (
+            "explain",
+            "alsem_explain",
+            serde_json::json!({"routines": [ISSUE_DOC]}),
+            "/cards/0/card",
+        ),
+        (
+            "query effects",
+            "alsem_query_effects",
+            serde_json::json!({"routine": ISSUE_DOC_Q}),
+            "/byOp/Insert",
+        ),
+        (
+            "query touches",
+            "alsem_query_touches",
+            serde_json::json!({"table": "Out Log", "from": ISSUE_DOC_Q}),
+            "/down",
+        ),
+        (
+            "prove",
+            "alsem_prove",
+            serde_json::json!({"routine": ISSUE_DOC, "question": "may-commit"}),
+            "/obligations",
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (i, (label, tool, args, probe)) in calls.into_iter().enumerate() {
+        let mut spilled = args.clone();
+        spilled["maxInlineBytes"] = 0.into();
+        let result = s.call(2 * i as i64 + 1, tool, spilled);
+        let text = result.to_string();
+        let env = crate::mcp_server::envelope(&result);
+        let summary = &env["summary"];
+        if !env["stdoutFile"].is_object() || !summary.is_object() {
+            failures.push(format!("{label}: a summary beside the file: {env}"));
+            continue;
+        }
+        if summary.to_string().len() > al_sem::engine::batch::output::SUMMARY_CAP_BYTES
+            || summary.pointer(probe).is_none()
+            || text.len() > 40_000
+        {
+            failures.push(format!("{label}: summary {summary} ({} chars)", text.len()));
+        }
+        let inline = crate::mcp_server::envelope(&s.call(2 * i as i64 + 2, tool, args));
+        if inline.get("summary").is_some() {
+            failures.push(format!("{label}: no summary inline"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(s.finish().success());
+}

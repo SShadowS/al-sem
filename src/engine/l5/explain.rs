@@ -120,6 +120,8 @@ pub struct ExplainRunResult {
     /// 0: an answer (cards, or a resolved field with no writer); 2: no routine
     /// resolved, or an unknown table or field.
     pub exit_code: u8,
+    /// The cards' summary for a file answer (MCP output plan 1e).
+    pub summary: Value,
 }
 
 impl<'a> ExplainJob<'a> {
@@ -279,7 +281,7 @@ impl Job for ExplainJob<'_> {
     fn serialize(&self, doc: Doc) -> JobOutput {
         match doc.one::<Result<ExplainRunResult, String>>() {
             Err(f) => f,
-            Ok(r) => JobOutput::text(
+            Ok(r) => JobOutput::text_with_summary(
                 self.out,
                 r.map(|r| {
                     let text = if self.human {
@@ -287,7 +289,7 @@ impl Job for ExplainJob<'_> {
                     } else {
                         r.json_text
                     };
-                    (text, r.exit_code)
+                    (text, r.exit_code, r.summary)
                 }),
             ),
         }
@@ -908,11 +910,48 @@ fn render(
         human.push_str(&d.human);
         human.push('\n');
     }
+    let summary = explain_summary(&cards, resolved.diagnostics.len());
     ExplainRunResult {
         json_text,
         human_text: human,
         exit_code: if resolved.unresolved { 2 } else { 0 },
+        summary,
     }
+}
+
+/// One rendered card: (sort key, routine id, JSON, human).
+type RenderedCard = (Option<(String, u32, u32)>, String, Value, String);
+
+/// What the cards say, for a front end that delivers them as a file (MCP output
+/// plan 1e): each card's header line and the length of its lists, read off the
+/// card's own JSON. Capped (`capped_summary`): cards are dropped from the end.
+fn explain_summary(cards: &[RenderedCard], diagnostics: usize) -> Value {
+    let len = |v: &Value, ptr: &str| v.pointer(ptr).and_then(Value::as_array).map_or(0, Vec::len);
+    let listed: Vec<Value> = cards
+        .iter()
+        .map(|(_, _, j, h)| {
+            json!({
+                "card": h.lines().next().unwrap_or(""),
+                "ownRules": len(j, "/rules/own"),
+                "writes": len(j, "/effects/writes"),
+                "commits": j.pointer("/effects/commits").cloned().unwrap_or(Value::Null),
+                "events": len(j, "/effects/events"),
+                "ui": len(j, "/effects/ui"),
+                "reachedFrom": len(j, "/reachedFrom"),
+                "tests": len(j, "/tests"),
+                "gaps": len(j, "/gaps"),
+            })
+        })
+        .collect();
+    crate::engine::batch::output::capped_summary(
+        json!({
+            "kind": "explain",
+            "cardCount": cards.len(),
+            "diagnostics": diagnostics,
+            "cards": listed,
+        }),
+        "cards",
+    )
 }
 
 /// The writers in anchor order (of each one's first write site, then id), as
