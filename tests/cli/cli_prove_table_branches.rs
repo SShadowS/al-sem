@@ -241,6 +241,80 @@ table 12 "Dep Batch"
     assert_eq!(dead["answer"], "no", "{dead}");
 }
 
+/// MCP output wave 2, W2-0c (design §3.1, raw versus refined): a group
+/// whose refined membership drops a resource describes the refined list it
+/// prints. The dependency's `Outer` inserts a `Dep Batch` (live) and, only
+/// for a `Dep Batch` argument, a `Customer`; passed a Customer, the group
+/// lists one resource, so `detail.resourceCount` is 1, `detail.resources`
+/// names only `Dep Batch`, and `detail.resourcesOriginalCount` keeps the raw
+/// 2. Break: leaving `resourceCount` at the raw count.
+#[test]
+fn a_refined_group_counts_the_list_it_prints() {
+    let lib = r#"codeunit 10 "Dep Lib"
+{
+    procedure Outer()
+    var
+        Cust: Record Customer;
+        Other: Record "Dep Batch";
+    begin
+        Other.Insert();
+        Prevent(Cust);
+    end;
+
+    procedure Prevent(Variant: Variant)
+    var
+        RecRef: RecordRef;
+    begin
+        RecRef.GetTable(Variant);
+        case RecRef.Number of
+            Database::"Dep Batch":
+                WriteCust();
+        end;
+    end;
+
+    local procedure WriteCust()
+    var
+        Cust: Record Customer;
+    begin
+        Cust.Insert();
+    end;
+
+    [IntegrationEvent(false, false)]
+    procedure OnDepEvent()
+    begin
+    end;
+}
+
+table 12 "Dep Batch"
+{
+    fields { field(1; Code; Code[20]) { } }
+}
+"#;
+    let t = tempfile::tempdir().unwrap();
+    crate::dep_dispatch_fixture::write_own_lib(t.path(), "", lib);
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("prove")
+        .arg(t.path())
+        .args(["CallChain", "writes-table:Dep Batch", "--deterministic"])
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    let r: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)));
+    let r = &r["payload"]["result"];
+    assert_eq!(r["answer"], "yes", "{r}");
+    let ev = &r["evidence"][0];
+    assert!(
+        ev["detail"]["boundary"].is_string(),
+        "precondition: a group: {r}"
+    );
+    let listed = ev["resources"].as_array().expect("the refined list").len();
+    assert_eq!(listed, 1, "Customer is not reached: {ev}");
+    assert_eq!(ev["detail"]["resourceCount"], listed.to_string(), "{ev}");
+    assert_eq!(ev["detail"]["resources"], "Dep Batch", "{ev}");
+    assert_eq!(ev["detail"]["resourcesOriginalCount"], "2", "{ev}");
+}
+
 /// G48/G46/G44: a boundary group whose crossing into the dependency cannot
 /// run is dropped whole, its event and COMMIT facts included, not only its
 /// table resources. The workspace calls `Dep Lib.Outer()` (which raises

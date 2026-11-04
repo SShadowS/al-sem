@@ -237,3 +237,57 @@ fn a_write_behind_a_literal_false_guard_is_not_a_write() {
         "no listed path starts at the dead call (0-based line {dead_line}): {first_hop_lines:?}"
     );
 }
+
+/// MCP output wave 2, W2-1 (design §3.1): digest reads its effects after
+/// the same literal pass as prove, and keeps a literal-dead row (raw) marked
+/// `literalUnreachable` (refined): the `G23 Queue` insert of
+/// `DocSaveRecursive` (prove: `no`) is listed, marked, and is no table its
+/// 1b summary counts; `DocQueueRecursive`'s live one is unmarked.
+/// Break: dropping the pass from digest's read (the row loses its mark).
+#[test]
+fn digest_marks_a_literal_dead_write_as_prove_judges_it() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"23232323-0000-4000-8000-000000000023","name":"G23","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(ws.join("src/Shapes.al"), SOURCE).unwrap();
+    let digest = |routine: &str| -> serde_json::Value {
+        alsem(
+            t.path(),
+            &[
+                "digest",
+                "ws",
+                "--routine",
+                routine,
+                "--format",
+                "json",
+                "--deterministic",
+            ],
+        )
+    };
+    let queue_inserts = |d: &serde_json::Value| -> Vec<serde_json::Value> {
+        d["payload"]["entries"][0]["effects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["type"] == "DB_INSERT" && e["detail"]["resourceDisplay"] == "G23 Queue")
+            .cloned()
+            .collect()
+    };
+    let dead = queue_inserts(&digest("DocSaveRecursive"));
+    assert!(!dead.is_empty(), "precondition: the cone lists the insert");
+    assert!(
+        dead.iter().all(|e| e["literalUnreachable"] == true),
+        "every listed insert is marked: {dead:?}"
+    );
+    let live = queue_inserts(&digest("DocQueueRecursive"));
+    assert!(!live.is_empty(), "precondition");
+    assert!(
+        live.iter().all(|e| e.get("literalUnreachable").is_none()),
+        "{live:?}"
+    );
+}

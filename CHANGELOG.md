@@ -50,6 +50,83 @@ Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision
 - Not yet (they wait on W2-2): the `through <first hop>` on an inherited touch (the shared
   `firstHop` rule of §4.5) and moving the `dependencies:` line into the scope line.
 
+### Changed (MCP output wave 2, W2-1: one classifier and one literal pass for every reader)
+
+Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.1, §3.2,
+§3.2.1, §11.8.
+
+- **One write classifier** (`engine::l5::rollup::classify`): `Physical` (known persistent, temp
+  state unknown, or not joined), `CallerDependent` (a record parameter, or the implicit `Rec`) or
+  `Temporary`, from a row's joined `tempState`. Prove's G17/G17b tests call it; every prove
+  verdict is byte-stable.
+- **`evaluate_writes_table`** (`engine::l5::prove`) is the one implementation of "does the root
+  write table T": the classification plus field-guarded matches, caller resolution and the
+  obligation rules. Prove's `writes-table` calls it; explain and digest are to call it when they
+  state a table answer (W2-2).
+- **Digest and explain read their effects after prove's literal pass** (literal reach, G33 and
+  W2-0c's crossing-local status), so the three tools judge the same facts. Raw versus refined: a
+  row the root cannot reach under literal arguments stays, marked — digest JSON
+  `literalUnreachable: true`, digest human `(ruled out by literal arguments)`, explain JSON
+  `literalUnreachable: true` and explain human `, ruled out by literal arguments`; a literal-dead
+  COMMIT no longer makes explain's commit unconditional; a group's refined list and counts follow
+  W2-0c's rules; a listed path that cannot run is dropped, as prove already did. Only table
+  writes are judged beyond a crossing (`DB_READ` and event groups are never pruned).
+- **The digest MCP summary (1b) uses the three classes**: a caller-dependent table is no longer a
+  `physicalTablesWritten` table and is counted as `callerDependentTablesWritten` (present only
+  when non-zero); a literal-dead write counts nowhere. On the MCP fixture `Out Doc` (a `Modify`
+  on `IssueDoc`'s `var` record parameter) moves out of `physicalTablesWritten.workspaceNames`.
+- No golden file moved: no fixture has a literal-dead row, a dead path or a disproved resource.
+  One test expectation moved (`output_invariants::digest_summary_through_mcp_on_the_fixture`, the
+  1b change above).
+
+### Fixed (MCP output wave 2, W2-0c step 2: prove drops a group resource its crossing cannot reach)
+
+Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.3.1, §11.7.
+
+- **A dependency group no longer lists, for prove, a table its own crossing cannot write.** A
+  resource whose status is `Disproved` (step 1) leaves the group's refined list; the raw list is
+  kept, and the group prints `resourcesOriginalCount`. A resource not established is never
+  dropped. Before, the literal pass judged a resource at the root only: a write live through one
+  crossing (or any other route) kept it in every group that listed it.
+- **One CDO verdict moves**, checked by hand: `prove "CDO Issue Document::IssueReminder"
+  writes-table:"Email Connector Logo"` goes from `yes` to `unknown`. Its only evidence was the
+  `DB_INSERT` group beyond `Codeunit Email Account::IsAnyAccountRegistered` (called at
+  `ws:src/Features/Email/Sending/CDOEMail.Codeunit.al:254`); System Application's
+  `IsAnyAccountRegistered` calls `GetAllAccounts(false, …)`, which inserts the logo only `if
+  LoadLogos then`, so the write cannot run there. With no evidence left, prove's open-world
+  obligations (interface calls in that code) block an absence proof, so the answer is `unknown`,
+  not `no`. RunReportID `writes-table:"CDO E-Mail Log"`, IssueReminder `writes-table:"Issued
+  Reminder Header"` and `may-commit`, and both digests are byte-identical to step 1. No fixture
+  golden moved.
+
+### Added (MCP output wave 2, W2-0c step 1: a group resource's status beyond its own crossing)
+
+Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.3.1, §11.6.
+
+- **Prove's read now judges every table resource of a dependency group from that group's own
+  crossing** (`LiteralReach::resource_status`): from each entry state of the crossing (the W2-0b
+  prefix phase), the suffix search either reaches a live state of an operation that could write
+  the table (`Reachable`), or completes having reached a candidate's owner with guards ignored
+  and no state where it can run (`Disproved`), or concludes nothing (`NotEstablished`, with its
+  reason: no entry, no operation, a search stopped early, an owner not reached even with guards
+  ignored, or not a table write). The candidates are every direct fact of the table and kind in
+  the group's class (the terminal-fact index), parameter-dependent producers always included, not
+  only the group's representative operations. Recorded on `DigestEffectResult::
+  group_resource_status`; this step drops nothing.
+- **The group path reads the same candidates** (W2-0b used the representatives only). On CDO,
+  RunReportID's `CDO E-Mail Log` group beyond `Codeunit Sales-Calc. Discount::OnRun` had
+  `groupPathUnavailable: "no-witness"`; it now has a 27-hop path that passes the crossing: `…
+  Sales-Calc. Discount.CalculateInvoiceDiscount → Sales Line.OnDelete → … Workflow Response
+  Handling.PostDocument → Sales-Post.OnRun → … event-dispatch → CDO Subscribers.
+  OnRunOnBeforeFinalizePostingSalesPost → MoveLogsForSalesDocs → MoveEmailLog` (checked in the
+  CDO source: the subscriber of `Sales-Post`'s `OnRunOnBeforeFinalizePosting` moves the log
+  entries). Verdicts and evidence rows are unchanged.
+- **Raw versus refined (design §3.1).** A prove group whose refined membership is shorter than its
+  raw one (today: G33's literal-dead resources) now describes the list it prints:
+  `detail.resourceCount` counts it, `detail.resources` names its first ten, and
+  `detail.resourcesOriginalCount` keeps the raw count. Before, the count was the raw one beside a
+  shorter list.
+
 ### Fixed (MCP output wave 2, W2-0b: G1, a group's path now passes its entry point)
 
 Design: `docs/superpowers/specs/2026-11-04-mcp-output-wave2-design.md` (revision 3) §3.4.3, §11.5.

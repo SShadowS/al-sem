@@ -29,7 +29,9 @@ use crate::engine::batch::job::{
 };
 use crate::engine::batch::output::JobOutput;
 use crate::engine::gate::format_json::serialize_document_value;
-use crate::engine::l4::effect_query_cli::{OwnerIndex, RECEIVER_TEMP_STATE, owner_qualified};
+#[cfg(doc)]
+use crate::engine::l4::effect_query_cli::RECEIVER_TEMP_STATE;
+use crate::engine::l4::effect_query_cli::{OwnerIndex, owner_qualified};
 use crate::engine::l5::conditionality::UNCONDITIONAL;
 use crate::engine::l5::digest_cli::{
     ChangedInput, DbTempStates, DigestEffectFull, DigestEntryFull, FullAnchor, finish_default_run,
@@ -540,29 +542,26 @@ fn effect_resource_matches(eff: &DigestEffectFull, query: &str) -> bool {
 /// its originating operations disagree), e.g. `["known(true)"]`; empty when the
 /// detail is absent.
 fn temp_states(eff: &DigestEffectFull) -> Vec<&str> {
-    eff.detail
-        .iter()
-        .find(|(k, _)| k == "tempState")
-        .map(|(_, v)| v.split(',').map(str::trim).collect())
-        .unwrap_or_default()
+    crate::engine::l5::rollup::temp_states(&eff.detail)
 }
 
-/// G17: the write is to a temporary record on every path: no table is written.
+/// G17: the write is to a temporary record on every path: no table is
+/// written. W2-1: the shared classifier's `Temporary` class.
 fn writes_only_temporary(eff: &DigestEffectFull) -> bool {
-    let states = temp_states(eff);
-    !states.is_empty() && states.iter().all(|s| *s == "known(true)")
+    crate::engine::l5::rollup::classify(&temp_states(eff))
+        == crate::engine::l5::rollup::WriteClass::Temporary
 }
 
 /// G17b: the write is to a record parameter whose temporariness is the
 /// caller's (`parameter-dependent(i)`), and to nothing known to be persistent.
 /// Asked of the routine itself the answer depends on its callers; a caller's
-/// own frame resolves it (known(true) for a temporary argument).
+/// own frame resolves it (known(true) for a temporary argument). W2-1: the
+/// shared classifier's `CallerDependent` class.
 fn writes_caller_dependent(eff: &DigestEffectFull) -> bool {
-    let states = temp_states(eff);
-    states.iter().any(|s| s.starts_with("parameter-dependent"))
-        && states
-            .iter()
-            .all(|s| *s == "known(true)" || s.starts_with("parameter-dependent"))
+    matches!(
+        crate::engine::l5::rollup::classify(&temp_states(eff)),
+        crate::engine::l5::rollup::WriteClass::CallerDependent(_)
+    )
 }
 
 /// The `temp-state-depends-on-caller` blocker's text. A write whose every
@@ -570,10 +569,10 @@ fn writes_caller_dependent(eff: &DigestEffectFull) -> bool {
 /// ([`RECEIVER_TEMP_STATE`], G49) names that record: the routine has no
 /// parameter a reader could look up.
 fn caller_dependent_detail(eff: &DigestEffectFull) -> String {
-    let receiver_only = temp_states(eff)
-        .iter()
-        .filter(|s| s.starts_with("parameter-dependent"))
-        .all(|s| *s == RECEIVER_TEMP_STATE);
+    let receiver_only = crate::engine::l5::rollup::classify(&temp_states(eff))
+        == crate::engine::l5::rollup::WriteClass::CallerDependent(
+            crate::engine::l5::rollup::CallerReason::ImplicitRec,
+        );
     if receiver_only {
         format!(
             "{} on the implicit Rec: a table write only if the record the routine runs \
@@ -1035,8 +1034,30 @@ fn prove_in_world(
                 .any(|e| e.effect_type == "COMMIT" && e.via_paths_truncated);
             evaluate_must_question(entry, oblg, commit_paths_truncated)
         }
+        ProveQuestion::WritesTable { table } => {
+            evaluate_writes_table(entry, oblg, table, via_callers, field_guarded)
+        }
         _ => evaluate_may_question(entry, oblg, question, false, via_callers, field_guarded),
     }
+}
+
+/// MCP output wave 2, W2-1 (design §3.2.1): THE answer to "does the root
+/// write table `table`", shared by every reader that states a table-specific
+/// answer: the write classification (`rollup::classify`) plus field-guarded
+/// matches (G36), caller resolution (`via_callers`, G25) and the complete
+/// obligation rules. A field-guarded write on a table not resolved can make it
+/// `yes`; an absent match can be `unknown` on ordinary obligations alone.
+pub(crate) fn evaluate_writes_table(
+    entry: &DigestEntryFull,
+    oblg: ProveObligations,
+    table: &str,
+    via_callers: &HashMap<usize, CallerRef>,
+    field_guarded: &HashMap<usize, bool>,
+) -> ProveResult {
+    let question = ProveQuestion::WritesTable {
+        table: table.to_string(),
+    };
+    evaluate_may_question(entry, oblg, &question, false, via_callers, field_guarded)
 }
 
 // ---------------------------------------------------------------------------

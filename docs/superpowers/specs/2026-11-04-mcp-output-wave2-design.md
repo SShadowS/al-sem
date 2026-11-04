@@ -1681,6 +1681,132 @@ The census over all 16,776 group resources of IR and RR (CDO-gated test, `cdo` p
 trees built, peak 48,840 states held, 0 evicted. The first version scanned each suffix tree per
 resource and cost far more; the per-tree routine index fixed it before landing.
 
+### 11.6 W2-0c as built (crossing-local resource status)
+
+Two commits, so the one that can move a verdict is reviewed on its own.
+
+**Step 1 (status recorded, nothing dropped).** `LiteralReach::resource_status(entries, ops)`, over
+the W2-0b machinery: for each of the crossing's entry states (its incoming binding states), the
+cached suffix tree; `Reachable` at the first live state of a candidate's owner; else `Disproved`
+when every suffix search completed AND some candidate's owner is reached from an entry target with
+guards ignored (the module's existing rule: a graph or id mismatch never drops anything); else
+`NotEstablished(reason)`: `NoEntry` (the root's search never takes the crossing's edges, e.g. a
+crossing G48 already judges dead), `NoOperation`, `SearchStopped` (cap or cancellation; a capped
+search never deletes), `OwnerNotReached`, `KindNotJudged` (events: only table writes are judged).
+Candidates (`LiteralReach::candidate_ops`): every terminal record of `(effect type, table)` whose
+class can be the group's (`kt` group: known-temporary records; `nt` group: every other record;
+a parameter-dependent producer in both), with the group's representatives; a candidate with no
+operation id makes the status `NoOperation`. The group path (W2-0b) reads the same candidates,
+so a path and a status never disagree. Raw versus refined (§3.1): a prove group whose refined list
+is shorter than its raw one prints `resourceCount` of the refined list, `resources` of its first
+ten, and `resourcesOriginalCount`. Digest has no literal pass until W2-1, so its output is
+unchanged.
+
+CDO census (`cdo_crossing_census`, prove's pass on IR and RR):
+
+| Root | Kind | Reachable | Disproved | Not established |
+|---|---|---|---|---|
+| IR | DB_INSERT | 157 | 1 | 325 (NoEntry) |
+| IR | DB_MODIFY | 58 | 0 | 192 (NoEntry) |
+| IR | DB_DELETE | 82 | 0 | 229 (NoEntry) |
+| IR | EVENT_PUBLISH | — | — | 7,366 (KindNotJudged) |
+| RR | DB_INSERT / MODIFY / DELETE | 482 / 266 / 293 | 0 | 0 |
+| RR | EVENT_PUBLISH | — | — | 7,325 (KindNotJudged) |
+
+IR's `NoEntry` resources sit on crossings the root's search never takes (G48 drops those rows
+whole already, e.g. `Sales-Calc. Discount::OnRun` behind `if RecRef.Number <> Database::"Sales
+Header" then exit;`). The pass costs 0.58 s for IR and 3.28 s for RR (`cdo` profile, census).
+The one disproved resource: IR's `DB_INSERT` `Email Connector Logo` beyond `Codeunit Email
+Account::IsAnyAccountRegistered` (call site `ws:src/Features/Email/Sending/CDOEMail.Codeunit.al:
+254`); the only candidate is `Email Account Impl.::ImportLogo`. Checked in System Application's
+source: `IsAnyAccountRegistered` calls `GetAllAccounts(false, EmailAccount)`, and
+`GetAllAccounts` calls `ImportLogo` only `if LoadLogos then`; so that insert cannot run beyond
+this crossing. No other row of IR writes the table, so dropping it moves prove's
+`writes-table:"Email Connector Logo"` answer (step 2).
+
+**Step 2 (the refinement):** §11.7.
+
+### 11.7 W2-0c step 2 (the refinement, its own commit)
+
+The literal pass merges each `Disproved` resource into `dead_group_resources` (beside G33's
+root-level ones); prove's refined list and counts follow (§11.6). `NotEstablished` never drops.
+
+**Verdicts.** Fixtures: no golden moved (`check-goldens`, no regen). CDO, step 1 → step 2 (one
+`alsem batch` per binary; prove IR `writes-table:"Email Connector Logo"`, RR `writes-table:"CDO
+E-Mail Log"`, IR `writes-table:"Issued Reminder Header"`, IR `may-commit`, digest IR and RR):
+everything byte-identical except IR / `Email Connector Logo`: `yes` → `unknown`. Its one evidence
+row was the group beyond `Codeunit Email Account::IsAnyAccountRegistered`, disproved by the source
+reading of §11.6; with no evidence left, prove's open-world obligations (the `Email Connector`
+interface calls in `ImportLogo`, `GetAllAccounts`, …) block an absence proof. That is the census's
+only disproved resource on IR and RR, and the only table it leaves without another live row, so
+no other writes-table answer of these roots can move. Both digests equal the wave-1 documents
+byte for byte (digest has no literal pass until W2-1).
+
+**Cost:** the same pass as step 1 (merging is a list union); batch of six jobs 29.95 s / 3.10 GB
+(step 1) vs 29.44 s / 3.10 GB (step 2).
+
+### 11.8 W2-1 as built
+
+- **Classifier** `src/engine/l5/rollup.rs` (`classify`, `classify_detail`, `temp_states`): the
+  §3.2 table; prove's `writes_only_temporary`, `writes_caller_dependent` and the blocker text's
+  implicit-`Rec` test call it. Prove verdicts byte-stable: no prove golden moved; CDO IR
+  `may-commit` byte-identical.
+- **`prove::evaluate_writes_table`**: prove's `writes-table` dispatch goes through it (§3.2.1).
+  No other reader states a table answer yet; W2-2's rollup calls it.
+- **The literal pass runs for every effects read** (digest, explain, prove: `TreeRead::Effects`
+  is read only by them), on the read's own entries. Raw versus refined: literal-dead rows stay,
+  marked (`literalUnreachable` in digest and explain JSON, a note in their human output); refined
+  group lists and counts per §11.6; dead listed paths dropped; only table writes are judged beyond
+  a crossing (`DB_READ` groups of `--include-reads` are never pruned).
+- **1b summary**: `classify_detail` decides physical / caller-dependent / temporary;
+  `callerDependentTablesWritten` when non-zero; literal-dead writes count nowhere.
+- **Not done, deliberately: explain's L4 temp-state join.** Explain renders no class in W2-1, so a
+  declared L4 store would be built and never read (declared-needs rule 4), and adding a class to
+  explain's JSON now would move every explain golden, which the owner limited to the pass's own
+  removals. W2-2 declares it together with its reader (the class lines), and its cost is measured
+  there; the L4 build cost on CDO is the existing `query effects` one (§3.1: ~13.6 s build +
+  2.5 s cold solve, 0.3 s seeded; nothing after any query on the resident engine).
+
+**Goldens:** none moved (no fixture has a literal-dead row, a dead listed path or a disproved
+resource). Two test expectations moved: `output_invariants::digest_summary_through_mcp_on_the_fixture`
+(`Out Doc`, a `Modify` on `IssueDoc`'s `var` parameter, is caller-dependent, not physical), and
+`resident::revision::tests::a_digest_after_a_prove_reads_the_unpruned_witness`, whose precondition
+was "the digest lists the dead path": the digest now prunes it as prove does. That test's old
+discrimination (memoizing the entry after prove's pass) is no longer observable through these
+outputs, because every reader runs the idempotent pass on its own copy; the clone rule stays.
+
+**CDO (release-fast; W2-0c step 2 → W2-1):**
+- Digest IR (2.1.0 shape): 275 rows either way; 21 group rows now `literalUnreachable` (G48:
+  crossings that cannot run: 13 beyond `Sales-Calc. Discount::OnRun`, 8 beyond `Incoming Document
+  Attachment` / `Import Attachment - Inc. Doc.` routines); listed paths 553 → 542; one group
+  refined (`DB_INSERT` beyond `Email Account::IsAnyAccountRegistered`: `resourceCount 0`,
+  `resourcesOriginalCount 1`, §11.6); one `EVENT_PUBLISH` row (`OnServerFileDelete`) loses its
+  evidence anchor, because its only listed path, which the anchor came from, cannot run (it then
+  reports `evidence-unavailable`, as prove's read did). Digest RR: no literal-dead row; paths
+  400 → 395; the same `OnServerFileDelete` anchor. Explain IR: 15 `literalUnreachable` marks;
+  explain RR: none (fewer `via` names where paths were dropped). Prove IR `may-commit`:
+  byte-identical.
+- Cost, cold CLI explain IR: 21.46 s / 3.155 GB → 22.56 s / 3.168 GB (+1.1 s, +13 MB). Spans of
+  the pass in that run: `prove.literal_reach` (model-wide `LiteralReach::new`) 0.37 s,
+  `prove.group_paths` 0.05 s, `prove.reach_effects` (per root: G33, statuses, paths) 0.35 s.
+- Warm, one `alsem batch` per binary (six jobs on one build: explain IR, explain RR, digest IR,
+  digest RR, digest IR+RR, prove IR `may-commit`): before 62.3 s / 3.12 GB, after 50.5 s /
+  3.14 GB (wall dominated by outside load during the before run). The after run reads three
+  effect trees; per tree `literal_reach` 0.30 / 0.30 / 0.34 s and `reach_effects` 3.08 /
+  3.60 / 0.23 s: the multi-root digest (IR + RR) pays the per-root parts of both roots, about
+  3.6 s, of which RR's is ~3.3 s (its 91 groups' suffix searches). The +1 s warm review trigger
+  (§3.1) is met for IR (~0.6 s) and exceeded for RR (~3.6 s): the owner's call (§11.9).
+- On the resident engine `LiteralReach` is still built per read, not kept per revision: that
+  cache (§3.1, R3h) is the remedy if RR's cost is too high.
+
+### 11.9 For the owner after W2-1
+
+- RR's pass costs ~3.6 s per read (IR ~0.6 s), above the +1 s review trigger; the remedy is a
+  per-revision `LiteralReach` and suffix cache on the resident engine, not skipping the pass.
+- Explain's L4 join is deferred to W2-2 (with its reader), as stated above.
+- Digest JSON gained `literalUnreachable` (and W2-0c's `resourcesOriginalCount`) without a schema
+  bump: both appear only on refined rows; W2-2's 3.0.0 formalizes `status`.
+
 Not covered: the dual cap where the prefix (root) tree itself caps; `live_tree` returns `None`
 then and no group path is computed, exactly as before W2-0b (no fixture reaches 400,000 states).
 

@@ -86,6 +86,12 @@ fn routines_of<'a>(start: &'a str, steps: &[Step<'a>]) -> Vec<&'a str> {
 pub(crate) struct CrossingEntries<'a>(Vec<(State<'a>, Step<'a>, Bindings)>);
 
 impl CrossingEntries<'_> {
+    /// No entry (a crossing the root's search never takes). Tests only.
+    #[cfg(test)]
+    pub(crate) fn empty() -> Self {
+        CrossingEntries(Vec::new())
+    }
+
     /// How many distinct entry states the crossing has. Tests only.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn len(&self) -> usize {
@@ -142,6 +148,9 @@ pub(crate) struct SuffixCache<'a> {
     held: usize,
     per_tree: usize,
     budget: usize,
+    /// W2-0c: per entry target, the routines reached with guards ignored (a
+    /// set per distinct target routine, so few and small next to the trees).
+    plain: HashMap<&'a str, Rc<HashSet<&'a str>>>,
     /// Trees built and evicted (the cost the commit message measures).
     pub(crate) built: usize,
     pub(crate) evicted: usize,
@@ -164,6 +173,7 @@ impl<'a> SuffixCache<'a> {
             held: 0,
             per_tree,
             budget: budget.max(per_tree),
+            plain: HashMap::new(),
             built: 0,
             evicted: 0,
             peak_held: 0,
@@ -209,6 +219,47 @@ impl<'a> SuffixCache<'a> {
         self.peak_held = self.peak_held.max(self.held);
         built
     }
+
+    /// The routines `from` reaches with guards ignored, built on first use.
+    fn plain(&mut self, reach: &LiteralReach<'a>, from: &'a str) -> Rc<HashSet<&'a str>> {
+        Rc::clone(
+            self.plain
+                .entry(from)
+                .or_insert_with(|| Rc::new(reach.plain_reach(from))),
+        )
+    }
+}
+
+/// W2-0c (design §3.3.1): whether a crossing reaches one of its group's
+/// resources, judged from the crossing's own entry states, not the root's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceStatus {
+    /// A live state of a candidate operation's owner is reached beyond the
+    /// crossing.
+    Reachable,
+    /// Every suffix search completed, a candidate's owner is reached with
+    /// guards ignored, and no state of it lets the operation run: the
+    /// resource is not written beyond this crossing.
+    Disproved,
+    /// Nothing concluded, for the reason given. Never deletes the resource.
+    NotEstablished(Undecided),
+}
+
+/// Why a [`ResourceStatus`] is not established.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Undecided {
+    /// The root's search never takes the crossing's edges.
+    NoEntry,
+    /// No candidate operation, or one that names none.
+    NoOperation,
+    /// A suffix search stopped early (cap or cancellation).
+    SearchStopped,
+    /// No candidate's owner is reached even with guards ignored: the cone
+    /// followed a graph this search does not, so nothing is concluded.
+    OwnerNotReached,
+    /// Not a table write: W2-0c judges table writes only (an event's or a
+    /// read's resources are never dropped).
+    KindNotJudged,
 }
 
 /// A table requirement in one routine's frame: (parameter index, whether its
@@ -1206,6 +1257,100 @@ impl<'a> LiteralReach<'a> {
             }
         }
         CrossingEntries(entries)
+    }
+
+    /// The routines `from` reaches over this search's edges with guards
+    /// ignored.
+    fn plain_reach(&self, from: &'a str) -> HashSet<&'a str> {
+        let mut seen: HashSet<&'a str> = HashSet::from([from]);
+        let mut q = VecDeque::from([from]);
+        while let Some(f) = q.pop_front() {
+            for &(to, _, _, _) in self.out.get(f).into_iter().flatten() {
+                if seen.insert(to) {
+                    q.push_back(to);
+                }
+            }
+        }
+        seen
+    }
+
+    /// W2-0c: the operations that could write `resource` as an effect of
+    /// type `effect_type` in a group of class `kt` (known temporary or not):
+    /// EVERY direct fact of that kind (the terminal records), not only the
+    /// group's representatives, whose class can be the group's — a producer
+    /// (parameter-dependent) record could be either at a caller, so it is
+    /// always a candidate. `None` when a candidate names no operation (it
+    /// cannot be judged).
+    pub(crate) fn candidate_ops(
+        &self,
+        effect_type: &str,
+        resource: &str,
+        kt: bool,
+        representatives: &[String],
+    ) -> Option<Vec<String>> {
+        use crate::engine::l5::terminal_facts::{TerminalSite, TerminalTemp};
+        let mut out: Vec<String> = representatives.to_vec();
+        for r in self.terminals.of_kind((effect_type, Some(resource))) {
+            let class_fits = match r.temp {
+                TerminalTemp::ParameterDependent(_) => true,
+                TerminalTemp::Known(true) => kt,
+                _ => !kt,
+            };
+            if !class_fits {
+                continue;
+            }
+            match r.terminal {
+                TerminalSite::None => return None,
+                t => out.push(t.id().to_string()),
+            }
+        }
+        out.sort();
+        out.dedup();
+        Some(out)
+    }
+
+    /// W2-0c (design §3.3.1): `ops`' status beyond a crossing, from its
+    /// entry states (`entries`, the incoming binding states).
+    pub(crate) fn resource_status(
+        &self,
+        entries: &CrossingEntries<'a>,
+        ops: &[String],
+        cache: &mut SuffixCache<'a>,
+        cancel: &dyn Fn() -> bool,
+    ) -> ResourceStatus {
+        if entries.0.is_empty() {
+            return ResourceStatus::NotEstablished(Undecided::NoEntry);
+        }
+        if ops.is_empty() {
+            return ResourceStatus::NotEstablished(Undecided::NoOperation);
+        }
+        let mut stopped = false;
+        let mut owner_reached = false;
+        for (_, step, nb) in &entries.0 {
+            match cache.get(self, (step.to, nb.clone()), cancel) {
+                Ok(tree) => {
+                    if self.first_live_owner(&tree, ops).is_some() {
+                        return ResourceStatus::Reachable;
+                    }
+                }
+                Err(_) => stopped = true,
+            }
+            if !owner_reached {
+                let plain = cache.plain(self, step.to);
+                owner_reached = ops.iter().any(|o| {
+                    self.op_owner
+                        .get(o.as_str())
+                        .is_some_and(|w| plain.contains(w))
+                });
+            }
+        }
+        if stopped {
+            ResourceStatus::NotEstablished(Undecided::SearchStopped)
+        } else if !owner_reached {
+            ResourceStatus::NotEstablished(Undecided::OwnerNotReached)
+        } else {
+            ResourceStatus::Disproved
+        }
     }
 
     /// Whether a listed witness path can run: replayed from the root with no

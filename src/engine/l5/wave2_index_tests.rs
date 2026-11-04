@@ -893,7 +893,15 @@ fn g1_a_group_witness_traverses_its_crossing_with_its_bindings() {
         let c = row.crossing.clone().unwrap();
         let entries = reach.crossing_entries(&tree, &c);
         assert_eq!(entries.len(), 1, "precondition: one entry state per call");
-        paths.paths(&reach, &tree, &entries, &row, cache, &|| false)
+        paths.paths(
+            &reach,
+            &tree,
+            &entries,
+            &row,
+            &row.group_resource_ops,
+            cache,
+            &|| false,
+        )
     };
     let got = run(&g.true_site, &mut cache);
     assert_eq!(got.len(), 1, "a witness through the true crossing: {got:?}");
@@ -960,7 +968,15 @@ fn g1_a_capped_suffix_falls_back_to_a_checked_root_path() {
         let entries = reach.crossing_entries(&tree, &c);
         let mut cache =
             crate::engine::l5::literal_reach::SuffixCache::with_limits(per_tree, per_tree);
-        paths.paths(&reach, &tree, &entries, &row, &mut cache, cancel)
+        paths.paths(
+            &reach,
+            &tree,
+            &entries,
+            &row,
+            &row.group_resource_ops,
+            &mut cache,
+            cancel,
+        )
     };
     // Capped (a 0-state suffix budget): the workspace route, labelled.
     let one = |got: Vec<(String, crate::engine::l5::group_path::GroupPathOutcome)>| {
@@ -1018,7 +1034,15 @@ fn g1_the_suffix_cache_evicts_oldest_first_and_is_order_free() {
         let row = g.group_row(site, &g.ws_op);
         let c = row.crossing.clone().unwrap();
         let entries = reach.crossing_entries(&tree, &c);
-        paths.paths(&reach, &tree, &entries, &row, cache, &|| false)
+        paths.paths(
+            &reach,
+            &tree,
+            &entries,
+            &row,
+            &row.group_resource_ops,
+            cache,
+            &|| false,
+        )
     };
     // Each suffix tree's size, alone.
     let size = |site: &str| {
@@ -1051,6 +1075,152 @@ fn g1_the_suffix_cache_evicts_oldest_first_and_is_order_free() {
     let b2 = ask(&g.false_site, &mut fresh);
     let a3 = ask(&g.true_site, &mut fresh);
     assert_eq!((a1, b1), (a3, b2), "the asking order changes nothing");
+}
+
+/// W2-0c (design §3.3.1): a resource's status beyond ONE crossing, from its
+/// own entry states. On the G1 fixture, over every non-temporary `Dep Ledger`
+/// insert (the terminal records): the `true` crossing reaches it
+/// (`Reachable`); the `false` crossing reaches `PostWith`'s owner with guards
+/// ignored but no state lets an insert run (`Disproved`). Nothing concluded
+/// (`NotEstablished`) when the suffix search caps, when no candidate's owner
+/// is reached even with guards ignored (Dep Writer's `Modify`: a graph the
+/// search does not follow), or when the crossing has no entry.
+/// Breaks: `Disproved` on a capped search; `Disproved` without the
+/// guards-ignored reach (graph mismatch).
+#[test]
+fn w2_0c_a_resource_is_judged_from_its_own_crossing() {
+    use crate::engine::l5::literal_reach::{ResourceStatus as S, SuffixCache, Undecided as U};
+    let g = g1();
+    let model = &g.base.resolved;
+    let reach = g.reach();
+    let tree = reach.live_tree(&g.root).expect("the root's search");
+    let ledger = format!("{DEP_GUID}/table/19");
+    let ops = reach
+        .candidate_ops("DB_INSERT", &ledger, false, &[])
+        .expect("every candidate names its operation");
+    assert!(
+        ops.contains(&g.ws_op) && ops.contains(&g.dep_op),
+        "precondition: both persistent inserts are candidates: {ops:?}"
+    );
+    let status = |site: &str, ops: &[String], per_tree: usize| {
+        let row = g.group_row(site, &g.ws_op);
+        let entries = reach.crossing_entries(&tree, row.crossing.as_ref().unwrap());
+        let mut cache = SuffixCache::with_limits(per_tree, per_tree);
+        reach.resource_status(&entries, ops, &mut cache, &|| false)
+    };
+    let cap = crate::engine::l5::literal_reach::STATE_CAP;
+    assert_eq!(status(&g.true_site, &ops, cap), S::Reachable);
+    assert_eq!(status(&g.false_site, &ops, cap), S::Disproved);
+    // A 0-state budget caps the `true` suffix (it has a second state); the
+    // `false` suffix completes in its one state, so it stays `Disproved`.
+    assert_eq!(
+        status(&g.true_site, &ops, 0),
+        S::NotEstablished(U::SearchStopped),
+        "a capped search deletes nothing"
+    );
+    assert_eq!(
+        status(&g.false_site, &ops, 0),
+        S::Disproved,
+        "a completed search may"
+    );
+    let dep_write = model
+        .workspace
+        .routines
+        .iter()
+        .find(|r| r.name == "Write" && r.app_guid == DEP_GUID)
+        .and_then(|r| r.record_operations.first())
+        .map(|o| o.id.clone())
+        .unwrap();
+    assert_eq!(
+        status(&g.false_site, &[dep_write], cap),
+        S::NotEstablished(U::OwnerNotReached),
+        "an owner not reached even with guards ignored concludes nothing"
+    );
+    let none = crate::engine::l5::literal_reach::CrossingEntries::empty();
+    let mut cache = SuffixCache::default();
+    assert_eq!(
+        reach.resource_status(&none, &ops, &mut cache, &|| false),
+        S::NotEstablished(U::NoEntry)
+    );
+    // The temporary class: only the known-temporary insert and the producers.
+    let kt = reach
+        .candidate_ops("DB_INSERT", &ledger, true, &[])
+        .unwrap();
+    assert!(!kt.contains(&g.ws_op) && !kt.contains(&g.dep_op), "{kt:?}");
+}
+
+/// W2-0c through prove's pass: a group row on the `false` crossing that
+/// lists `Dep Ledger` (hand-stated: the `TwoCallsOnly` group given its
+/// `false` crossing, the shape root-level liveness cannot judge) is judged
+/// `Disproved` by the pass, and the root-level check (G33) alone keeps it,
+/// because the `true` crossing keeps the kind live. Step 2: the disproved
+/// resource leaves the refined list (`dead_group_resources`) and stays in the
+/// raw one (`group_resources`).
+/// Break: skipping the merge into `dead_group_resources`.
+#[test]
+fn w2_0c_prove_pass_drops_a_disproved_resource_from_the_refined_list() {
+    use crate::engine::l5::literal_reach::ResourceStatus as S;
+    let (_tmp, base, tree) = fixture();
+    let model = &base.resolved;
+    let root = stable(model, "Ws W2", "TwoCallsOnly");
+    let (sites, crossings) = post_with_crossings(&tree, model, &root);
+    let false_ix = sites
+        .iter()
+        .position(|s| {
+            model.workspace.routines.iter().any(|r| {
+                r.call_sites.iter().any(|cs| {
+                    &cs.id == s
+                        && cs
+                            .argument_texts
+                            .first()
+                            .is_some_and(|t| t.trim() == "false")
+                })
+            })
+        })
+        .unwrap();
+    let mut effects = effects_of(&tree, model, &root);
+    let row = effects
+        .iter_mut()
+        .find(|e| e.boundary_group && e.effect_type == "DB_INSERT")
+        .expect("precondition: the true crossing's insert group");
+    row.crossing = Some(Arc::clone(&crossings[false_ix]));
+    let ledger = format!("{DEP_GUID}/table/19");
+    assert!(
+        row.group_resources.iter().any(|(r, _)| *r == ledger),
+        "precondition"
+    );
+    // Root-level liveness alone keeps it.
+    let reach = LiteralReach::new(&tree.typed_edges, &tree.capability_facts, model);
+    let (_, g33) = reach.unreachable_effects(&root, &effects);
+    assert!(
+        g33.values().all(|d| !d.contains(&ledger)),
+        "G33 alone keeps it: {g33:?}"
+    );
+    let mut entries = vec![DigestEntryResult {
+        routine_id: root.clone(),
+        effects,
+    }];
+    crate::engine::l5::digest_cli::literal_reach_pass(&tree, model, &mut entries);
+    let row = entries[0]
+        .effects
+        .iter()
+        .find(|e| e.boundary_group && e.effect_type == "DB_INSERT")
+        .unwrap();
+    assert_eq!(
+        row.group_resource_status
+            .iter()
+            .find(|(r, _)| *r == ledger)
+            .map(|(_, s)| *s),
+        Some(S::Disproved)
+    );
+    assert!(
+        row.dead_group_resources.contains(&ledger),
+        "dropped from the refined list"
+    );
+    assert!(
+        row.group_resources.iter().any(|(r, _)| *r == ledger),
+        "the raw list keeps it"
+    );
 }
 
 /// W2-0b (§3.4.3 item 1, astra 2): the prefix phase enters a crossing only
@@ -1156,7 +1326,9 @@ fn cdo_crossing_census() {
             let c = e.crossing.as_ref().unwrap();
             let entries = reach.crossing_entries(&root_tree, c);
             resources += e.group_resource_ops.len();
-            for (_, p) in paths.paths(&reach, &root_tree, &entries, e, &mut cache, &|| false) {
+            let reps = &e.group_resource_ops;
+            for (_, p) in paths.paths(&reach, &root_tree, &entries, e, reps, &mut cache, &|| false)
+            {
                 match p {
                     Ok(p) if p.through_entry_point => through += 1,
                     Ok(_) => outside += 1,
@@ -1176,4 +1348,105 @@ fn cdo_crossing_census() {
         "cdo_crossing_census: crossings by site kind {by_kind:?}; (group rows, ev rows) IR {:?} RR {:?}",
         rows[0], rows[1]
     );
+
+    // W2-0c through prove's own pass, per root: resource statuses, the
+    // groups they touch, and every DB table whose ONLY writes in the refined
+    // rows were a disproved group resource (a writes-table answer that could
+    // move).
+    use crate::engine::l5::literal_reach::ResourceStatus as S;
+    for (name, root) in ["IR", "RR"].iter().zip(&roots) {
+        let mut entries = vec![DigestEntryResult {
+            routine_id: root.clone(),
+            effects: effects_of(&tree, model, root),
+        }];
+        let started = std::time::Instant::now();
+        crate::engine::l5::digest_cli::literal_reach_pass(&tree, model, &mut entries);
+        let took = started.elapsed();
+        let effects = &entries[0].effects;
+        let mut by: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+        let mut groups_touched = 0usize;
+        let mut disproved_db: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for e in effects.iter().filter(|e| e.boundary_group) {
+            let mut touched = false;
+            for (r, s) in &e.group_resource_status {
+                let k = match s {
+                    S::Reachable => "reachable".to_string(),
+                    S::Disproved => "disproved".to_string(),
+                    S::NotEstablished(u) => format!("not-established:{u:?}"),
+                };
+                *by.entry(e.effect_type.clone())
+                    .or_default()
+                    .entry(k)
+                    .or_default() += 1;
+                if *s == S::Disproved {
+                    touched = true;
+                    if e.effect_type.starts_with("DB_") {
+                        let display = e
+                            .group_resources
+                            .iter()
+                            .find(|(id, _)| id == r)
+                            .map_or(r.as_str(), |(_, d)| d.as_str());
+                        let kt = is_known_temp_state(e.temp_state.as_ref());
+                        let owners: BTreeSet<String> = reach
+                            .candidate_ops(&e.effect_type, r, kt, &[])
+                            .unwrap_or_default()
+                            .iter()
+                            .filter_map(|o| reach.op_owner(o))
+                            .map(|w| {
+                                let r = reach.routine(w).unwrap();
+                                let obj = model
+                                    .workspace
+                                    .objects
+                                    .iter()
+                                    .find(|o| o.id == r.object_id)
+                                    .map_or("?", |o| o.name.as_str());
+                                format!("{obj}::{}", r.name)
+                            })
+                            .collect();
+                        let c = e.crossing.as_ref().unwrap();
+                        let targets: Vec<String> = c
+                            .targets
+                            .iter()
+                            .map(|t| boundary_display(t, &build_fingerprint_indexes(&tree)))
+                            .collect();
+                        disproved_db.entry(r.clone()).or_default().push(format!(
+                            "{} {} beyond {targets:?} at {:?} (crossing {}); candidate owners {owners:?}",
+                            e.effect_type, display, c.sites, c.id
+                        ));
+                    }
+                }
+            }
+            groups_touched += usize::from(touched);
+        }
+        // Tables still written by a live row (own row naming it, or a group
+        // whose refined list keeps it).
+        let still: BTreeSet<String> = effects
+            .iter()
+            .filter(|e| e.effect_type.starts_with("DB_") && e.effect_type != "DB_READ")
+            .filter(|e| !e.literal_unreachable)
+            .flat_map(|e| {
+                let own = e
+                    .detail
+                    .iter()
+                    .filter(|(k, _)| k == "resourceId")
+                    .map(|(_, v)| v.clone());
+                let grp = e
+                    .group_resources
+                    .iter()
+                    .filter(|(r, _)| !e.dead_group_resources.contains(r))
+                    .map(|(r, _)| r.clone());
+                own.chain(grp).collect::<Vec<_>>()
+            })
+            .collect();
+        let only: Vec<&Vec<String>> = disproved_db
+            .iter()
+            .filter(|(r, _)| !still.contains(*r))
+            .map(|(_, v)| v)
+            .collect();
+        eprintln!(
+            "cdo_crossing_census: W2-0c {name}: {by:?}; {groups_touched} group rows lose a resource; {} DB tables disproved somewhere, {} of them written by no other live row: {only:?}; pass {took:?}",
+            disproved_db.len(),
+            only.len()
+        );
+    }
 }

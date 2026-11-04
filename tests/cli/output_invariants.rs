@@ -710,11 +710,15 @@ fn digest_summary_through_mcp_on_the_fixture() {
         "{summary}"
     );
     let t = &r["physicalTablesWritten"];
+    // W2-1 (design §3.2): the three classes. `Out Doc`'s `Modify` is on
+    // IssueDoc's `var` record parameter, so it is caller-dependent, not a
+    // table the routine may persist itself.
     assert_eq!(
         t["workspaceNames"],
-        serde_json::json!(["Out Doc", "Out Log"]),
+        serde_json::json!(["Out Log"]),
         "{summary}"
     );
+    assert_eq!(r["callerDependentTablesWritten"], 1, "{summary}");
     // Base Doc Line, twelve ledgers, Base Register, Base Price: the group's
     // whole set, not the ten its `detail` names.
     assert_eq!(t["dependency"], 15, "{summary}");
