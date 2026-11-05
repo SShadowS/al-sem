@@ -716,3 +716,99 @@ fn a_changed_dependency_declaration_is_named() {
     assert_eq!(changed.len(), 1, "{:#}", v["base"]);
     assert!(changed[0].as_str().unwrap().starts_with("added Dep"));
 }
+
+/// B2's CDO acceptance (`scripts/cdo-gate`, via `output_cdo`): `--base
+/// bc3ccb18~5` on the pinned baseline (git is only read; the base copy and
+/// the cache go to a temporary folder). Hand-checked against both commits'
+/// source (2026-11-05):
+/// - `CDO Ver. 2.0 Convert::ConvertTemplate`: base line 158
+///   `EMailTemplateLine.Insert()` became line 160
+///   `DocumentTemplateLine.Insert(true)`: a count-preserving table swap,
+///   both tables shown;
+/// - `CDO Azure Blob Storage::FileExists`: line 30 now calls `ResolvePath`;
+/// - `Table CDO E-Mail Log::InitNewEntry`: its body moved into
+///   `InitNewEntryCore` (added call) and no longer calls `SetTo`/`SetCc`/
+///   `SetBcc` itself (removed calls);
+/// - the base: 11 package files, the same on both sides, and app.json's
+///   dependency versions 29 → 30 named.
+pub(crate) fn cdo_impact_base_ratchets() {
+    let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
+        return;
+    };
+    let cache = tempfile::tempdir().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("impact")
+        .arg(&ws)
+        .args(["--base", "bc3ccb18~5", "--no-tests", "--format", "json"])
+        .env("AL_SEM_IMPACT_BASE_CACHE", cache.path())
+        .output()
+        .unwrap();
+    let v: Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)));
+    assert!(v["base"]["notComputed"].is_null(), "{:#}", v["base"]);
+    assert_eq!(
+        v["base"]["environment"]["packages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        11
+    );
+    assert_eq!(v["base"]["packagesRead"]["same"], true);
+    assert_eq!(
+        v["base"]["dependencyDeclarationChanged"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+    // Every root of that name (an overloaded name has one per overload).
+    let changes = |name: &str| -> Vec<(String, String)> {
+        v["roots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| {
+                r["display"]
+                    .as_str()
+                    .is_some_and(|d| d.ends_with(&format!("::{name}")))
+                    && r["delta"]["own"].is_array()
+            })
+            .flat_map(own)
+            .collect()
+    };
+    let convert = changes("ConvertTemplate");
+    for want in [
+        (
+            "removed",
+            "write CDO E-Mail Template Line Insert (physical)",
+        ),
+        (
+            "added",
+            "write CDO Document Template Line Insert (physical)",
+        ),
+    ] {
+        assert!(
+            convert.contains(&(want.0.to_string(), want.1.to_string())),
+            "{convert:?}"
+        );
+    }
+    assert_eq!(
+        changes("FileExists"),
+        pairs(&[(
+            "added",
+            "calls Codeunit CDO Azure Blob Storage::ResolvePath"
+        )])
+    );
+    let init = changes("InitNewEntry");
+    for want in [
+        ("added", "calls Table CDO E-Mail Log::InitNewEntryCore"),
+        ("removed", "calls Table CDO E-Mail Log::SetTo"),
+        ("removed", "calls Table CDO E-Mail Log::SetCc"),
+        ("removed", "calls Table CDO E-Mail Log::SetBcc"),
+    ] {
+        assert!(
+            init.contains(&(want.0.to_string(), want.1.to_string())),
+            "{init:?}"
+        );
+    }
+}

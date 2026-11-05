@@ -1632,6 +1632,19 @@ same with `--low-mem` on the resident child.
   its share of `--total-budget`.
 - **`--base` alone now builds the base by default** (`--no-delta`, MCP `delta: false`, keeps
   B1's current-only answer).
+- **Measured on CDO** (2026-11-05, `--base bc3ccb18~5`, `--no-tests`, release-fast; the machine
+  was shared with other builds, load average 115-430 on 22 cores, so every time is an upper
+  bound): CLI cold 6:12 wall, peak 6.37 GB (the same run with `--no-delta` 5:10, 6.35 GB: the
+  base side's model is dropped before the next part); base part 132 s, materialize 0.27 s;
+  cached second run 4:16 (no base build; the rest is B1's parts). MCP: cold 340 s = main 232 s
+  (first build) + up 40 s + base child 64 s at a sampled peak of 4.81 GB, admitted at once
+  (`admitWaitMs` 0) beside the resident child (4.23 GB RSS idle after, 6.5 GB seen during the
+  main part); cached 141.5 s (main 104 s, up 35 s, base from the cache). Cache entry 6.2 MB
+  compressed. Result: 699 roots = 221 paired (175 with a behavior change before the call rule,
+  168 after), 478 added, 19 deleted (13 still called in the base); schema/contract findings
+  table-field-added 123, procedure-added 88, object-added 21, table-key-added 9; the five
+  dependency version bumps (29 → 30) named. The all-routine base table was not built (lazy
+  summaries for the change's roots are what is measured).
 
 ---
 
