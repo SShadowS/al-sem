@@ -1182,10 +1182,12 @@ fn key_join<'a>(
     let graph = ctx.graph();
     let primary = view.primary_app_ref;
     let apps = model_apps(graph, primary, ws);
-    let commit_fp = callee_fp("Commit");
+    // A commit is an operation site on the model side (#155: `Database.Commit()`
+    // as well as `Commit()`), so the resolver's own verdict decides, not the
+    // callee's text.
     let is_operation = |ce: &ClassifiedEdge| {
         ce.edge.kind == EdgeKind::ImplicitTrigger
-            || (ce.edge.kind == EdgeKind::Call && ce.edge.site.callee_fingerprint == commit_fp)
+            || (ce.edge.kind == EdgeKind::Call && ce.site.is_some_and(|s| s.commit))
     };
     let mut misses: Vec<UnmatchedSite> = Vec::new();
     let mut unmatched = |reason: &'static str, k: SiteKey, text: &str| {

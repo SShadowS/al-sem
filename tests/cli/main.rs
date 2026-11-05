@@ -104,6 +104,7 @@ mod cli_d35_unknown_commit;
 mod cli_d39_dependency_page;
 mod cli_d39_helper_persists;
 mod cli_d65_guard_bypass;
+mod cli_database_commit;
 mod cli_dataitem_name_arg;
 mod cli_dataitem_record_ops;
 mod cli_decision7_precedence;

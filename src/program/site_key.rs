@@ -29,6 +29,12 @@ pub struct ProgramSite {
     /// The site is a record op whose operation can fire a table trigger
     /// (`can_fire_trigger` of the extractor's op name).
     pub fires: bool,
+    /// #155: the site commits the transaction — the extractor's `Commit`
+    /// shape, or a call resolved to a commit builtin
+    /// ([`crate::program::resolve::member_catalog::is_commit_builtin`]:
+    /// `Database.Commit()` too). The body walk makes such a site an operation
+    /// site, not a call site, so the key join pairs it as one.
+    pub commit: bool,
 }
 
 /// The model's expression indices, parallel to `call_sites`,
