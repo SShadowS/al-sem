@@ -32,6 +32,47 @@ Which tests to run first for a change, as a first-class answer. Spec:
   package found under an injected package root); both are refresh class `Package`.
   `ResidentSession::with_injected` / `with_universe_label` (the descriptor's universe is
   `tests:<key>`); `WorkspaceReader::read_scoped`.
+- **`alsem tests <ws> (--routine R… | --file F… | --diff P [--diff-root D]) [--test-app DIR…]
+  [--tier local|dependency|all] [--max-tests N] [--format human|json]`**: the test scope first
+  (the workspace's own `[Test]` procedures and the sibling test apps, with how each was found and
+  what was skipped), each changed routine's status (`reached`, `no-known-path`,
+  `analysis-incomplete`, `not-loaded`, `not-in-projection`), the tests to run first ranked by tier
+  (local, through dependency code, over open sites), then hops, then codeunit, grouped per
+  codeunit with the first test's path, `selection complete: yes|no` with every reason the whole
+  suite must run as well (`requiredFallback`), and a codeunit filter. JSON schema
+  `al-sem.tests/1` (`runFirst`, `requiredFallback`, `selectionComplete`, `byTier`, `hidden`,
+  `next`). The answer is made of parts: `tests --part roots` (digest's root resolution in the
+  production universe, the production stamp, the scope) and `tests --part select` per test
+  universe (the reverse walk over its sited graph); `test_select::run::orchestrate` runs them,
+  retries once when the production stamps differ and then refuses that test app, and renders.
+- **Scope discovery** (`engine::test_select::scope`): `--test-app`, else `testApps` in
+  `.al-sem.json` (`"testApps": []` turns sibling discovery off), else auto-discovery under the git
+  top level (the workspace's parent when there is none): sorted, 3 levels deep, at most 64
+  `app.json` files, skipping hidden folders, `node_modules`, `target`, `target-*` and the
+  workspace itself. An app qualifies when it depends on the workspace app and holds a `Subtype =
+  Test` codeunit; one with no `.al` is skipped `no-source`, one with no test codeunit
+  `no-test-codeunit`. A cap that fires is "discovery incomplete", never "no app depends on this
+  one". The test-codeunit scan is cached by every file's stat.
+- **Honesty rules**: a selection-relevant hidden channel in a cone keeps the selection incomplete
+  (an unreached root is then `analysis-incomplete`, never `no-known-path`). A platform-raised
+  table event would be covered when every write of its table is an edge into it; the sited graph
+  has no such edge, so it is never shown covered and counts. When a root's through-dependency
+  tests come only via dependency nodes that may execute over half of the graph, the answer says
+  they are "effectively the suite's posting tests, not specific to this change". When the test
+  app declares Microsoft test libraries that are not loaded, a `next:` line says how to get their
+  symbols. Static reachability is not coverage, said once at the end.
+- **The sited graph names local routines** in their source spelling (`SitedGraph::local_name`:
+  object, routine, file) and lists the platform table-event publishers
+  (`is_platform_publisher`); `SitedGraph::apps`.
+- Measured on CDO 2026-11-05 (release-fast; the machine was under heavy load from other builds,
+  so wall times are upper bounds): `tests Cloud --routine "CDO Telemetry::UpdateLastUpload"` lists
+  exactly the 3 `CDO Telemetry Tests` tests at 1 hop, local; RunReportID: 68 local-path tests in
+  7 codeunits at 3-7 hops, 301 through dependency code with the sameness line, 253 over open sites;
+  IssueReminder: 0 local, nearest `CDO Setup Tests::HideStandardMailActions_WhenDisabled_…` at 6
+  hops through dependency code. `selectionComplete: false` on CDO: 48 selection-relevant hidden
+  nodes (47 platform table events, 1 unbound subscriber) and 4,702 unresolved test calls. One-shot
+  cost: the roots part 15.1 s / 3.10 GB peak, the select part 10.2-10.4 s / 2.53 GB, the whole
+  command 20.7-30.5 s / 3.13 GB peak (the parts run one after the other in one process).
 
 ### Added (agent tasks, milestone R0: the reverse cone)
 

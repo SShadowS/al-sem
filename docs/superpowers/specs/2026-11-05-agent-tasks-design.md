@@ -1724,3 +1724,32 @@ revert). Measurement: explain card size on CDO `RunReportID` before and after I-
   revision).
 - Call-site counts: the `histogram` in the `meta` line of `graph-cdo.out` (`wholeProgram`
   resolvedSource 11,639 + conditionalResolved 266; `dependencyBodies` resolvedSource 191,084).
+
+### Milestone C's probe (C1, measured 2026-11-05)
+
+With `alsem tests` itself (branch `m-c-tests`, release-fast; the real `DO-cdo-baseline/Test`,
+auto-discovered, the production app injected, nothing written into it):
+
+- **Hidden channels in RunReportID's resolved cone: 48** (R0 counted 48, one more than the 47
+  above: `Check Dimensions::OnErrorMessageDrillDown`). By class: **47 `platform-table-event`**
+  (synthetic `OnAfter*Event`/`OnBefore*Event` publishers a subscriber binds to) and **1
+  `unbound-subscriber`**. None of the 47 can be shown covered: a record write routes to the
+  table's declared triggers only (`resolve_implicit_trigger`), so no write is an edge into a
+  platform publisher; they are reached through the record hub alone. By the owner's rule (one
+  that cannot be shown covered counts), all 48 are selection-relevant and the CDO selection stays
+  `selectionComplete: false`. Making them coverable needs a resolver fact (each record write's
+  table as a route into its platform events), not a weaker rule.
+- **The 16 tests** between "1,860 `[Test]` lines" and 1,844 loaded nodes: `grep '\[Test\]'` finds
+  1,847 occurrences in `Test/`; 3 are commented out (`// [Test]`, in `CDOOpenDocumentsTests` and
+  twice in `CDOSendCustStatementTests`); the other 1,844 are attribute lines, and the loaded
+  graph has 1,844 test nodes with the same count in every file. No test is lost; the 1,860
+  figure did not reproduce.
+- **Dependency-tier sameness**: RunReportID's 301 through-dependency tests reach it via 7
+  dependency nodes (`Page 42` 160 tests, `Page 144` 109, `Table 60::onbeforesend` 22, …). Their
+  *reverse* cones are 23,567 of 137,196 nodes (17 %); their *forward* (may-execute) cones are
+  91,684 (67 %). C reads §4.5's "own cone" as the forward one: a node that may execute two
+  thirds of the program is why the same tests reach unrelated routines.
+- **Unresolved test calls: 4,702** (sites, by call-site anchor, from test-app code); the test
+  app declares 6 Microsoft libraries that are not loaded (`Tests-TestLibraries`, `Test Runner`,
+  `Library Assert`, `Permissions Mock`, `Any`, `System Application Test Library`) and
+  `Continia Core Internal Activation App`.
