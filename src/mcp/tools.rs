@@ -424,12 +424,16 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_query_touches",
-            "Is a table touched by any record operation, transitively? `table`: a number, a name, an internal table id, or unknown (operations whose table is decided at run time). Without `from`: every workspace routine that touches it, by the per-operation index. With `from` (a routine selector), `direction`: down (does it touch the table, and through which operations; when no indexed operation does, the answer is `unknown` with its reasons, such as operations on a RecordRef, calls not resolved or dependency code deeper than one routine, and `no` only when none applies), up (its transitive callers: how many touch it, do not, or are unknown), or both (the default). Touches are counted on persistent records, on possibly persistent records and on temporary records (a temporary-record touch persists nothing but uses the table's schema and runs its triggers); when the routine touches the table itself its callers inherit the touch and are counted, not listed. Default (`format: human`): a few lines to about 10 KB, lists folded. Ask for more: `callers: true` (every caller by name, depth and location, without witnesses), `all: true` (every witness, the callers' included, no fold; tens of megabytes on a hub routine), `showSource: true` (the cited source line ±2), `format: json` (every down witness, about 200 KB on a hub routine; over the cap a file with a summary of the down and up headlines). Lines are 1-based. Dependency code: per operation one routine deep; with `from` asked down, the dependency entry points beyond which the whole cone may write the table are listed too (`down.beyond`). Next: alsem_query_effects for the routine's other tables. Returns the exact `alsem query touches` stdout.",
+            "Is a table touched by any record operation, transitively? `table`: a number, a name, an internal table id, or unknown (operations whose table is decided at run time). Without `from`: every workspace routine that touches it, by the per-operation index. With `from` (a routine selector), `direction`: down (does it touch the table, and through which operations; when no indexed operation does, the answer is `unknown` with its reasons, such as operations on a RecordRef, calls not resolved or dependency code deeper than one routine, and `no` only when none applies), up (its transitive callers: how many touch it, do not, or are unknown), or both (the default). Touches are counted on persistent records, on possibly persistent records and on temporary records (a temporary-record touch persists nothing but uses the table's schema and runs its triggers); when the routine touches the table itself its callers inherit the touch and are counted, not listed. With `field` (a field name or number of `table`): every code consumer of that one field instead, by use kind (read, write, validate, filter, key-use, load, calc, rule, metadata, copy-candidate for TransferFields, by-number for RecordRef.Field of a literal), each site once with its uses (`F += 1` is one site, read and write), temporary records counted with persistent ones, a record of an unresolved table as a candidate, the table's keys holding it, and what was searched: every workspace body and the dependency bodies loaded, never declaration-level consumers (CalcFormula, TableRelation, page and report columns); with no site the answer is \"no indexed consumer observed\", never no; with `from`, only the routine's cone (down) and its callers (up, by the reverse walk alsem_tests uses, each with its tier: local, through dependency code, only through an open site). Default (`format: human`): a few lines to about 10 KB, lists folded. Ask for more: `callers: true` (every caller by name, depth and location, without witnesses), `all: true` (every witness, the callers' included, no fold; tens of megabytes on a hub routine), `showSource: true` (the cited source line ±2), `format: json` (every down witness, about 200 KB on a hub routine; over the cap a file with a summary of the down and up headlines). Lines are 1-based. Dependency code: per operation one routine deep; with `from` asked down, the dependency entry points beyond which the whole cone may write the table are listed too (`down.beyond`). Next: alsem_query_effects for the routine's other tables. Returns the exact `alsem query touches` stdout.",
             schema(
                 vec![
                     (
                         "table",
                         json!({"type": "string", "description": "A table number or name, an internal table id, or `unknown`."}),
+                    ),
+                    (
+                        "field",
+                        json!({"type": "string", "description": "A field of `table` (its name or number): the field's code consumers by use kind instead of the table's record operations (`--field`)."}),
                     ),
                     (
                         "from",
@@ -916,6 +920,9 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
         "alsem_query_touches" => {
             let mut v = Argv::new(&["query", "touches"], &workspace);
             v.opt("table", a.required("table")?);
+            if let Some(field) = a.string("field")? {
+                v.opt("field", field);
+            }
             if let Some(from) = a.string("from")? {
                 v.opt("from", from);
             }

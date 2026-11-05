@@ -2700,9 +2700,9 @@ pub(crate) fn callers_answer(
     String,
 > {
     use crate::engine::l5::callers_context::{CallersCx, answer};
-    let g = cx.sited().ok_or_else(|| {
-        "prove: internal error — a callers' context question without its sited graph".to_string()
-    })?;
+    let g = cx
+        .sited()
+        .ok_or_else(|| "prove: the sited graph's build did not finish (cancelled)".to_string())?;
     let nodes = g.nodes_with_stable_id(root);
     if nodes.is_empty() {
         return Err(format!(

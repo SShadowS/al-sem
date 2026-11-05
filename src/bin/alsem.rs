@@ -476,6 +476,14 @@ struct QueryTouchesCli {
     #[arg(long = "table")]
     table: String,
 
+    /// A field of `--table` (a name or a number): every code consumer of the
+    /// field by use kind (read, write, validate, filter, key-use, load, calc,
+    /// rule, metadata, copy-candidate, by-number), instead of the table's
+    /// record operations. With `--from`, only the routine's cone (down) and
+    /// its callers (up).
+    #[arg(long = "field")]
+    field: Option<String>,
+
     /// Scope the answer to one routine: internal id, StableRoutineId,
     /// `Object.Routine`, or a bare routine name. Omit for the workspace-global
     /// list (count reported first; the list is complete, never truncated).
@@ -1772,21 +1780,30 @@ fn write_run_stdout(out: Vec<u8>, whole: bool) -> ExitCode {
     ExitCode::from(code)
 }
 
-/// A job's kind for the peak table (D12): its command and its view's
-/// universe. `None`: `batch`, `policy explain`, `cache prune` (no job).
-/// Whether `command` walks the sited graph beside the model (agent-tasks
-/// design §6): a callers' context prove question, or explain with
-/// `--callers-context`. A resident engine then pins with `pin_sited`.
+/// Whether `command` walks the sited graph beside the model
+/// (`ViewNeeds::MODEL_SITED`): a callers' context prove question or explain
+/// with `--callers-context` (agent-tasks design §6), and `query touches
+/// --field --from` asked up (`up` or the default `both`, either universe:
+/// R0's reverse walk names the callers; design §7). Each job's demand states
+/// the same rule. A resident engine then pins with `pin_sited`.
 fn reads_sited(command: &Commands) -> bool {
     match command {
         Commands::Prove(p) => {
             al_sem::engine::l5::callers_context::CallersQuestion::parse(&p.question).is_some()
         }
         Commands::Explain(e) => e.callers_context,
+        Commands::Query(q) => match &q.command {
+            QueryCommands::Touches(t) => {
+                t.field.is_some() && t.from.is_some() && t.direction != "down"
+            }
+            QueryCommands::Effects(_) => false,
+        },
         _ => false,
     }
 }
 
+/// A job's kind for the peak table (D12): its command and its view's
+/// universe. `None`: `batch`, `policy explain`, `cache prune` (no job).
 fn job_kind(command: &Commands) -> Option<JobKind> {
     let universe = |single_app: bool| match single_app {
         true => ViewUniverse::SingleApp,
@@ -2119,6 +2136,7 @@ fn plan_query_touches(t: QueryTouchesCli) -> Planned {
                     t.single_app,
                 )
                 .list_callers(t.callers)
+                .field(t.field.as_deref())
                 .show_source(t.show_source)
                 .written(t.format == "json", t.out.as_deref()),
             )
@@ -3819,11 +3837,12 @@ mod engine {
         (cx.progress)("pin");
         // A tests select part on a model engine (the workspace's own tests)
         // reads the sited graph: the revision must have it (M0's pin_sited,
-        // which turns the graph on once). So does a question that walks the
-        // callers (agent-tasks design §6: callers' context prove questions,
-        // explain --callers-context).
-        let reads_sited = (ask.argv.first().is_some_and(|c| c == "tests")
-            && ask.argv.iter().any(|a| a == "--part=select")
+        // which turns the graph on once). So does every command that walks
+        // the sited graph beside the model (`reads_sited`: the callers'
+        // context questions, explain --callers-context, query touches
+        // --field --from).
+        let reads_sited = ((ask.argv.first().is_some_and(|c| c == "tests")
+            && ask.argv.iter().any(|a| a == "--part=select"))
             || wants_sited)
             && !open.session.is_graph_only();
         let pin = if reads_sited {

@@ -367,7 +367,8 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
     };
     let mut results: Vec<Option<Side>> = on_view.iter().map(|_| None).collect();
     // The sited graph a model demand walks (`ViewNeeds::MODEL_SITED`), kept
-    // past the lent program for its compute.
+    // past the lent program for its compute (`ViewCx::sited`; `None` there
+    // when its build did not finish).
     let mut kept_sited: Option<crate::program::impact_graph::SitedGraph> = None;
     // (1) The one builder; graph demands are done off its program.
     let built = build_view_model(&first.inputs, &first.key, needs, |program| {
@@ -486,7 +487,7 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
             later: last_reads.after(k),
             carry: carries[k].take(),
             handed: &mut handed,
-            sited: kept_sited.as_ref().filter(|_| d.needs.sited),
+            sited: d.needs.sited.then_some(kept_sited.as_ref()),
         };
         let _s = job_span(*j, jobs[*j], "compute");
         let (side, own) = capture(|| jobs[*j].compute(d.side, &mut cx));

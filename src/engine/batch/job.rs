@@ -118,7 +118,10 @@ impl ViewNeeds {
         ..ViewNeeds::GRAPH
     };
     /// A model job that also walks the sited graph ([`ViewCx::sited`]): the
-    /// callers' context questions (agent-tasks design §6). One-shot, the
+    /// callers' context questions and explain --callers-context (agent-tasks
+    /// design §6), `query touches --field --from` asked up (§7: R0 names the
+    /// field's callers). Single-app, the workspace program is lent for the
+    /// graph (`build_view_model`). One-shot, the
     /// graph is built off the lent program and kept for the compute; a
     /// resident revision serves its kept `ArtifactKey::Sited`.
     pub const MODEL_SITED: ViewNeeds = ViewNeeds {
@@ -578,16 +581,18 @@ pub struct ViewCx<'a> {
     /// only (D11): `Weak`, so the allocation's address stays unique while the
     /// view's census counts each distinct one once.
     pub(crate) handed: &'a mut Vec<HandedRun>,
-    /// The view's sited graph, for a model demand that also sets
-    /// [`ViewNeeds::sited`] (agent-tasks design §6: the callers' context
-    /// questions walk it and read the model). `None` otherwise.
-    pub(crate) sited: Option<&'a crate::program::impact_graph::SitedGraph>,
+    /// The view's sited graph, for a model demand that also declares
+    /// [`ViewNeeds::sited`] ([`ViewNeeds::MODEL_SITED`]: the callers' context
+    /// questions and explain --callers-context, agent-tasks design §6; `query
+    /// touches --field --from`'s callers, §7): `Some(None)` when its build
+    /// did not finish. `None` for every other demand (not declared).
+    pub(crate) sited: Option<Option<&'a crate::program::impact_graph::SitedGraph>>,
 }
 
 /// One run handed to a job (D11): the job, the allocation, its bytes.
 pub(crate) type HandedRun = (JobId, Weak<RunOutput>, usize);
 
-impl ViewCx<'_> {
+impl<'a> ViewCx<'a> {
     pub fn view(&self) -> &View {
         self.view
     }
@@ -597,15 +602,20 @@ impl ViewCx<'_> {
         self.inputs
     }
 
+    /// The sited graph a model demand declared with [`ViewNeeds::sited`]:
+    /// `None` only when its build did not finish (cancelled). Reading it
+    /// without the declaration panics: "not built" never reads as "no
+    /// graph". The reference outlives this borrow of the context, so a job
+    /// can walk it while it releases cells.
+    pub fn sited(&self) -> Option<&'a crate::program::impact_graph::SitedGraph> {
+        self.sited.expect(
+            "the sited graph was read without its declaration: set ViewNeeds::sited on the demand",
+        )
+    }
+
     /// The program coverage of an analyze view.
     pub fn fresh(&self) -> &Result<FreshCoverage, String> {
         self.fresh.expect("the analyze builder's view")
-    }
-
-    /// The view's sited graph: `Some` exactly when this model demand set
-    /// [`ViewNeeds::sited`].
-    pub fn sited(&self) -> Option<&crate::program::impact_graph::SitedGraph> {
-        self.sited
     }
 
     /// This demand's run keys, in its plan's order.

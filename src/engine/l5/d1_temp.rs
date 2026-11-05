@@ -288,6 +288,7 @@ mod tests {
             record_variables: Vec::new(),
             record_operations: Vec::new(),
             field_accesses: Vec::new(),
+            implicit_field_accesses: Vec::new(),
             variables: RoutineVariables::default(),
             parameters: Vec::new(),
             access_modifier: None,
@@ -392,6 +393,7 @@ mod tests {
             in_statement_position: false,
             run_trigger: None,
             modify_all_field: None,
+            transfer_fields_source: None,
             receiver_is_record_ref: false,
         }
     }

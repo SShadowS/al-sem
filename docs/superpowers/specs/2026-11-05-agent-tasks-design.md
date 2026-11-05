@@ -1159,6 +1159,73 @@ Each finding is a scope decision recorded in the D1 commit: the fact is added in
 or body fact, measured, through the `add-al-construct` or `declared-needs` skill), or the kind
 is printed under `not searched`. r1's "no new IR in v1" is withdrawn.
 
+### 7.3a D1 result (measured 2026-11-05, branch `m-d-fields`)
+
+Probe: a fixture with every kind (`aldump --l2` on it), and `aldump --field-census <ws>`
+(`engine::l4::field_touches::census`, new) on the CDO baseline, cross-app (the model `query`
+reads), `cdo` profile. The census counts the model's field facts by role.
+
+| # | Question | Finding | v1 decision |
+|---|---|---|---|
+| 1 | Bare field in a table / page trigger | **Not captured.** `Amount := Amount + 1` in a field's `OnValidate` gave no `PFieldAccess`; only `X.F` member forms are recorded. A bare `TestField("No.")` was a record op on `Rec` | **Added**: `ModelRoutine::implicit_field_accesses` (body walk, `IrSpine::implicit_field_accesses`): a bare identifier in an implicit-record frame (`Rec`, a `with` record) that no parameter, local, global, dataitem or procedure takes, with its access kind; a record method's field-naming argument is not one. Kept apart from `field_accesses`, so no detector input or serialized feature moves. CDO: 3,966 workspace + 18,741 dependency rows (2,478 + 15,823 name a field of the record's table), **5.3 MB** against 16.9 MB for `field_accesses` and a 2.96 GB peak build: a plain fact, no gate |
+| 2 | `FieldNo(F)` / `FieldCaption(F)` | **Captured** as call sites with every argument text (also `FieldError`, `SetAutoCalcFields`, `CopyFilter`, `GetFilter`). CDO workspace: 504 metadata calls, 177 filter readers, 15 `SetAutoCalcFields` | No new fact. New kind `metadata` (`FieldNo`, `FieldCaption`, `FieldName`, `FieldActive`): a rename or removal breaks them. `FieldError` is `rule` from its call site, not from the rules-gated fact |
+| 3 | TransferFields' argument | **Not kept** (`TransferFields` is not in `FIELD_ARGS_OPS`; no call site either) | **Added**: `ModelRecordOperation::transfer_fields_source`, read at assembly from the IR beside `modify_all_field`. CDO: 57 + 303 TransferFields, every source captured and its table resolved |
+| 4 | RecordRef `Field(<literal>)` | **Already a call site** with its argument text (Fable f8 looked for a record op); `FieldIndex(n)` too | No new fact. A literal counts only when the routine alone decides the RecordRef's table (a local, every `Open`/`GetTable` naming one table, never assigned or passed): CDO workspace 25 literal sites, 0 decided; dependency 273, 13 decided. The rest are candidates; 64 + 119 non-literal numbers are counted as "any field", never matched |
+| 5 | Dependency rows with `field_accesses` | Under `FULL` (cross-app) every dependency routine the model holds has a body: 27,808, 8,554 with field accesses (60,868 accesses). Code the workspace does not demand is not in the model at all. `--low-mem` (context server only) drops dependency syntax trees between revisions, not model rows; that the answer is the same is checked with the feature (measurement below) | The `searched` line counts bodies by role and states that undemanded dependency code is not loaded |
+
+Cost: the census over every fact took 278 ms on CDO (the build 22 s); `--field` scans the same
+facts for one field. The query schema is 3.2.0 on master already (output step 1b), so
+`--field` ships as **3.3.0** (additive), not 3.2.0.
+
+**As built (commit 2 of D).** `engine::l4::field_touches` (extraction and census) and
+`effect_query_cli::render_field_touches`. Differences from §7.2-7.4:
+
+- A `metadata` kind (`FieldNo`, `FieldCaption`, `FieldName`, `FieldActive`), and the filter
+  readers (`GetFilter`, `GetRangeMin/Max`, `CopyFilter`'s first argument) count as `filter`.
+  `Validate` is `validate` only (as §7.2), not also `write`.
+- `TransferFields` is listed only when the other table has a field with F's number (it copies
+  by number); with the other table not resolved it is a candidate (`copy-table-not-resolved`).
+  `copySide` says `receiver` (F may be written) or `source` (F may be read).
+- `declared-key` is the `declaredKeys[]` list, not a site.
+- Without `--from` the job's plan is `session::field_plan()` (the model alone: no `l4`, no tree);
+  with `--from` it is `query_plan()`. **Down** (R's cone) is the solve graph: R and its
+  transitive callees, dependency code one routine deep, as `query touches` down reads it.
+  **Up** (R's callers) is **R0's reverse walk** (`impact_graph::reverse::walk_one`) over the
+  sited graph, as `alsem tests` and impact read it: through dependency code, each up site with
+  its tier (`local`, `throughDependency`, `onlyOpen`), and the walk's external callers, hidden
+  channels and limit stated as reasons. Its demand declares `ViewNeeds::sited` beside the model
+  (a model demand that also reads the sited graph is new: the one-shot driver keeps the graph it
+  builds off the lent program and hands it to the compute, `ViewCx::sited`; the engine host pins
+  such a request with `pin_sited`, `alsem.rs`' `query_field_reads_sited`). `--single-app` lends
+  its workspace-scoped program for the same graph (`build_view_model`'s single-app arm now lends
+  it to a model demand that declares the sited graph), so both universes walk R0, and with no
+  dependency they answer alike (master's `without_dependencies_cross_app_equals_single_app`
+  failed while single-app still used the solve graph). The solve graph names callers only when
+  the sited graph did not build (stated as `sited-graph-not-built`); on code with no dependency
+  the two agree (`field_callers_agree_with_the_reverse_walk_on_local_code`).
+  Measured on CDO, `WaitForMailLimit`: the solve graph named 967 callers, R0 names 4,827 with a
+  body in the model (local 1,030, through dependency code 2,726, only through an open site
+  1,071) and 20,242 more the model holds no body for (stated as not searched). The sited graph
+  costs ~1.5 s and 58 MB (134,385 nodes, 318,084 sites); the whole answer 15.0 s / 3.19 GB peak.
+- An answer with no site always says `unknown` ("no indexed consumer observed"): in v1 the
+  declaration-level consumers are never searched, so coverage is never complete.
+
+**Measured on CDO** (`cdo` profile, cold one-shot CLI, `/usr/bin/time -v`; hand-checked
+against source): `CDO E-Mail Log` field 22 "Sent with": 4 sites — `SetCurrentKey` (Send Mail
+Management :308), `SetRange` (:312), the implicit write in the table's `InitNewEntryCore`
+(:385), and a by-number candidate in CDN's `GetLineUnitPrice` (`RecRef.GetTable(<Variant>)`
+then `Field(22)`); the `"Sent with"::SMTP` enum values are rightly not sites, the page
+columns are the stated declaration gap. Cross-app 23.2 s / 3.14 GB peak; `--from
+WaitForMailLimit` (cone 1; callers by R0, above) 15.0 s / 3.19 GB on a quieter machine;
+`--single-app` 7.6 s / 0.74 GB.
+`CDO Merge Table Field` field 10 "Merge Table No.": 11 sites — 3 `Validate` in field
+triggers, `TestField`, the implicit read as `Field.SetRange(TableNo, "Merge Table No.")`'s
+value, implicit read/write in the XML export/import, 3 reads through `MergeTableField."Merge
+Table No."` in another table, 1 by-number candidate; the two CalcFormula uses (:86, :94) are
+the stated gap, and the other tables' same-named fields are not counted. 32.2 s / 3.11 GB.
+The build dominates; the field scan itself is the census's order (278 ms for every fact).
+`--low-mem` exists only on the context server and was not measured here.
+
 ### 7.4 Surface and output
 
 CLI: `alsem query touches <ws> --table T --field F [--from R] [--direction …] [--all]`. MCP:

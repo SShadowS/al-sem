@@ -1506,8 +1506,9 @@ impl Revision {
             };
             return Ok(answer_sited(job, d.side, &g));
         }
-        // A model job that also walks the sited graph (`ViewNeeds::MODEL_SITED`):
-        // the revision's kept graph, or why not.
+        // A model job that also walks the sited graph (`ViewNeeds::MODEL_SITED`:
+        // the callers' context questions, explain --callers-context, query
+        // touches --field --from): the revision's kept graph, or why not.
         let sited = if d.needs.sited && d.needs.model && !universe_differs {
             match self.sited() {
                 Some(g) => Some(g),
@@ -1556,7 +1557,7 @@ impl Revision {
             later: LaterReads::EVERYTHING,
             carry: part.carry,
             handed: &mut handed,
-            sited: sited.as_deref(),
+            sited: sited.as_deref().map(Some),
         };
         let (side, own) = capture(|| job.compute(d.side, &mut cx));
         drop(view);

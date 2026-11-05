@@ -1,0 +1,651 @@
+{
+  "alsemVersion": "cli-query-v1",
+  "deterministic": true,
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "query.touches",
+  "payload": {
+    "declaredKeys": [
+      {
+        "fields": [
+          "Amount",
+          "Unit Price"
+        ],
+        "id": "08080808-0000-4000-8000-000000000081/table/50800/key/1"
+      }
+    ],
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "direction": "both",
+    "field": {
+      "dataType": "Decimal",
+      "fieldClass": "Normal",
+      "id": "08080808-0000-4000-8000-000000000081/table/50800/2",
+      "name": "Amount",
+      "number": 2,
+      "resolution": "resolved",
+      "selector": "Amount"
+    },
+    "fieldSummary": {
+      "byNumberNotLiteral": 0,
+      "candidates": 0,
+      "candidatesByReason": {},
+      "declaredKeys": 1,
+      "fieldIndexSites": 1,
+      "objects": 2,
+      "readWriteSites": 1,
+      "routines": 2,
+      "sites": 19,
+      "sitesByTempState": {
+        "caller-dependent": 17,
+        "temporary": 1,
+        "unknown": 1
+      },
+      "uses": {
+        "by-number": 1,
+        "calc": 1,
+        "copy-candidate": 2,
+        "filter": 2,
+        "key-use": 1,
+        "load": 1,
+        "metadata": 1,
+        "read": 3,
+        "rule": 3,
+        "validate": 1,
+        "write": 4
+      }
+    },
+    "fieldTouches": [
+      {
+        "kind": "read",
+        "object": "Codeunit FT Consumers",
+        "record": "Item",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/FTFields.al",
+            "line": 60
+          },
+          "display": "Kinds",
+          "objectDisplay": "Codeunit FT Consumers",
+          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+        },
+        "scope": "down",
+        "site": {
+          "column": 8,
+          "file": "ws:src/FTFields.al",
+          "line": 68
+        },
+        "source": "access",
+        "tempState": "caller-dependent",
+        "uses": [
+          "read",
+          "write"
+        ]
+      },
+      {
+        "kind": "read",
+        "object": "Codeunit FT Consumers",
+        "record": "Item",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/FTFields.al",
+            "line": 60
+          },
+          "display": "Kinds",
+          "objectDisplay": "Codeunit FT Consumers",
+          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+        },
+        "scope": "down",
+        "site": {
+          "column": 29,
+          "file": "ws:src/FTFields.al",
+          "line": 69
+        },
+        "source": "access",
+        "tempState": "caller-dependent",
+        "uses": [
+          "read"
+        ]
+      },
+      {
+        "kind": "validate",
+        "object": "Codeunit FT Consumers",
+        "record": "Item",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/FTFields.al",
+            "line": 60
+          },
+          "display": "Kinds",
+          "objectDisplay": "Codeunit FT Consumers",
+          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+        },
+        "scope": "down",
+        "site": {
+          "column": 8,
+          "file": "ws:src/FTFields.al",
+          "line": 70
+        },
+        "source": "Validate",
+        "tempState": "caller-dependent",
+        "uses": [
+          "validate"
+        ]
+      },
+      {
+        "kind": "filter",
+        "object": "Codeunit FT Consumers",
+        "record": "Item",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/FTFields.al",
+            "line": 60
+          },
+          "display": "Kinds",
+          "objectDisplay": "Codeunit FT Consumers",
+          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+        },
+        "scope": "down",
+        "site": {
+          "column": 8,
+          "file": "ws:src/FTFields.al",
+          "line": 71
+        },
+        "source": "SetRange",
+        "tempState": "caller-dependent",
+        "uses": [
+          "filter"
+        ]
+      },
+      {
+        "kind": "filter",
+        "object": "Codeunit FT Consumers",
+        "record": "Item",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/FTFields.al",
+            "line": 60
+          },
+          "display": "Kinds",
+          "objectDisplay": "Codeunit FT Consumers",
+          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+        },
+        "scope": "down",
+        "site": {
+          "column": 8,
+          "file": "ws:src/FTFields.al",
+          "line": 72
+        },
+        "source": "SetFilter",
+        "tempState": "caller-dependent",
+        "uses": [
+          "filter"
+        ]
+      },
+      {
+        "kind": "key-use",
+        "object": "Codeunit FT Consumers",
+        "record": "Item",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/FTFields.al",
+            "line": 60
+          },
+          "display": "Kinds",
+          "objectDisplay": "Codeunit FT Consumers",
+          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+        },
+        "scope": "down",
+        "site": {
+          "column": 8,
+          "file": "ws:src/FTFields.al",
+          "line": 73
+        },
+        "source": "SetCurrentKey",
+        "tempState": "caller-dependent",
+        "uses": [
+          "key-use"
+        ]
+      },
+      {
+        "kind": "load",
+        "object": "Codeunit FT Consumers",
+        "record": "Item",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/FTFields.al",
+            "line": 60
+          },
+          "display": "Kinds",
+          "objectDisplay": "Codeunit FT Consumers",
+          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+        },
+        "scope": "down",
+        "site": {
+          "column": 8,
+          "file": "ws:src/FTFields.al",
+          "line": 74
+        },
+        "source": "SetLoadFields",
+        "tempState": "caller-dependent",
+        "uses": [
+          "load"
+        ]
+      },
+      {
+        "kind": "calc",
+        "object": "Codeunit FT Consumers",
+        "record": "Item",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/FTFields.al",
+            "line": 60
+          },
+          "display": "Kinds",
+          "objectDisplay": "Codeunit FT Consumers",
+          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+        },
+        "scope": "down",
+        "site": {
+          "column": 8,
+          "file": "ws:src/FTFields.al",
+          "line": 75
+        },
+        "source": "CalcSums",
+        "tempState": "caller-dependent",
+        "uses": [
+          "calc"
+        ]
+      },
+      {
+        "kind": "rule",
+        "object": "Codeunit FT Consumers",
+        "record": "Item",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/FTFields.al",
+            "line": 60
+          },
+          "display": "Kinds",
+          "objectDisplay": "Codeunit FT Consumers",
+          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+        },
+        "scope": "down",
+        "site": {
+          "column": 8,
+          "file": "ws:src/FTFields.al",
+          "line": 76
+        },
+        "source": "TestField",
+        "tempState": "caller-dependent",
+        "uses": [
+          "rule"
+        ]
+      },
+      {
+        "kind": "rule",
+        "object": "Codeunit FT Consumers",
+        "record": "Item",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/FTFields.al",
+            "line": 60
+          },
+          "display": "Kinds",
+          "objectDisplay": "Codeunit FT Consumers",
+          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+        },
+        "scope": "down",
+        "site": {
+          "column": 8,
+          "file": "ws:src/FTFields.al",
+          "line": 77
+        },
+        "source": "FieldError",
+        "tempState": "caller-dependent",
+        "uses": [
+          "rule"
+        ]
+      },
+      {
+        "kind": "metadata",
+        "object": "Codeunit FT Consumers",
+        "record": "Item",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/FTFields.al",
+            "line": 60
+          },
+          "display": "Kinds",
+          "objectDisplay": "Codeunit FT Consumers",
+          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+        },
+        "scope": "down",
+        "site": {
+          "column": 16,
+          "file": "ws:src/FTFields.al",
+          "line": 78
+        },
+        "source": "FieldCaption",
+        "tempState": "caller-dependent",
+        "uses": [
+          "metadata"
+        ]
+      },
+      {
+        "kind": "write",
+        "object": "Codeunit FT Consumers",
+        "record": "Item",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/FTFields.al",
+            "line": 60
+          },
+          "display": "Kinds",
+          "objectDisplay": "Codeunit FT Consumers",
+          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+        },
+        "scope": "down",
+        "site": {
+          "column": 8,
+          "file": "ws:src/FTFields.al",
+          "line": 79
+        },
+        "source": "ModifyAll",
+        "tempState": "caller-dependent",
+        "uses": [
+          "write"
+        ]
+      },
+      {
+        "kind": "write",
+        "object": "Codeunit FT Consumers",
+        "record": "Tmp",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/FTFields.al",
+            "line": 60
+          },
+          "display": "Kinds",
+          "objectDisplay": "Codeunit FT Consumers",
+          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+        },
+        "scope": "down",
+        "site": {
+          "column": 8,
+          "file": "ws:src/FTFields.al",
+          "line": 82
+        },
+        "source": "access",
+        "tempState": "temporary",
+        "uses": [
+          "write"
+        ]
+      },
+      {
+        "copySide": "source",
+        "kind": "copy-candidate",
+        "object": "Codeunit FT Consumers",
+        "record": "Item",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/FTFields.al",
+            "line": 60
+          },
+          "display": "Kinds",
+          "objectDisplay": "Codeunit FT Consumers",
+          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+        },
+        "scope": "down",
+        "site": {
+          "column": 8,
+          "file": "ws:src/FTFields.al",
+          "line": 83
+        },
+        "source": "TransferFields",
+        "tempState": "caller-dependent",
+        "uses": [
+          "copy-candidate"
+        ]
+      },
+      {
+        "copySide": "receiver",
+        "kind": "copy-candidate",
+        "object": "Codeunit FT Consumers",
+        "record": "Item",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/FTFields.al",
+            "line": 60
+          },
+          "display": "Kinds",
+          "objectDisplay": "Codeunit FT Consumers",
+          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+        },
+        "scope": "down",
+        "site": {
+          "column": 8,
+          "file": "ws:src/FTFields.al",
+          "line": 84
+        },
+        "source": "TransferFields",
+        "tempState": "caller-dependent",
+        "uses": [
+          "copy-candidate"
+        ]
+      },
+      {
+        "kind": "by-number",
+        "object": "Codeunit FT Consumers",
+        "record": "RecRef",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/FTFields.al",
+            "line": 60
+          },
+          "display": "Kinds",
+          "objectDisplay": "Codeunit FT Consumers",
+          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+        },
+        "scope": "down",
+        "site": {
+          "column": 16,
+          "file": "ws:src/FTFields.al",
+          "line": 88
+        },
+        "source": "Field",
+        "tempState": "unknown",
+        "uses": [
+          "by-number"
+        ]
+      },
+      {
+        "kind": "write",
+        "object": "Table FT Item",
+        "record": "Rec",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 12,
+            "file": "ws:src/FTFields.al",
+            "line": 17
+          },
+          "display": "OnValidate",
+          "objectDisplay": "Table FT Item",
+          "stableId": "08080808-0000-4000-8000-000000000081:Table:50800#ae29e2bf6eb7d1d235ab9401b018cedc68aadaa3964f6a0ef131e22006744e91"
+        },
+        "scope": "down",
+        "site": {
+          "column": 16,
+          "file": "ws:src/FTFields.al",
+          "line": 19
+        },
+        "source": "implicit-access",
+        "tempState": "caller-dependent",
+        "uses": [
+          "write"
+        ]
+      },
+      {
+        "kind": "read",
+        "object": "Table FT Item",
+        "record": "Rec",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 12,
+            "file": "ws:src/FTFields.al",
+            "line": 17
+          },
+          "display": "OnValidate",
+          "objectDisplay": "Table FT Item",
+          "stableId": "08080808-0000-4000-8000-000000000081:Table:50800#ae29e2bf6eb7d1d235ab9401b018cedc68aadaa3964f6a0ef131e22006744e91"
+        },
+        "scope": "down",
+        "site": {
+          "column": 26,
+          "file": "ws:src/FTFields.al",
+          "line": 19
+        },
+        "source": "implicit-access",
+        "tempState": "caller-dependent",
+        "uses": [
+          "read"
+        ]
+      },
+      {
+        "kind": "rule",
+        "object": "Table FT Item",
+        "record": "Rec",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 12,
+            "file": "ws:src/FTFields.al",
+            "line": 17
+          },
+          "display": "OnValidate",
+          "objectDisplay": "Table FT Item",
+          "stableId": "08080808-0000-4000-8000-000000000081:Table:50800#ae29e2bf6eb7d1d235ab9401b018cedc68aadaa3964f6a0ef131e22006744e91"
+        },
+        "scope": "down",
+        "site": {
+          "column": 16,
+          "file": "ws:src/FTFields.al",
+          "line": 20
+        },
+        "source": "TestField",
+        "tempState": "caller-dependent",
+        "uses": [
+          "rule"
+        ]
+      }
+    ],
+    "from": {
+      "resolution": "resolved",
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/FTFields.al",
+          "line": 60
+        },
+        "display": "Kinds",
+        "objectDisplay": "Codeunit FT Consumers",
+        "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+      },
+      "selector": "Kinds"
+    },
+    "lineBase": 1,
+    "reasons": [
+      {
+        "kind": "declaration-consumers-not-searched"
+      },
+      {
+        "kind": "resolved-call-graph",
+        "noSolveRow": false
+      },
+      {
+        "kind": "external-callers",
+        "routines": 3
+      }
+    ],
+    "searched": {
+      "dependencyRoutineBodies": 0,
+      "kinds": [
+        "read",
+        "write",
+        "validate",
+        "filter",
+        "key-use",
+        "load",
+        "calc",
+        "rule",
+        "metadata",
+        "copy-candidate",
+        "by-number",
+        "declared-key"
+      ],
+      "notSearched": [
+        {
+          "kind": "calcformula",
+          "what": "CalcFormula of FlowFields (declaration-level, D2)"
+        },
+        {
+          "kind": "tablerelation",
+          "what": "TableRelation properties (declaration-level, D2)"
+        },
+        {
+          "kind": "columns",
+          "what": "page, report, query and XMLport columns and controls (declaration-level, D2)"
+        },
+        {
+          "kind": "dependency-code",
+          "what": "no dependency code is loaded (single-app, or no dependency)"
+        }
+      ],
+      "scope": "Codeunit FT Consumers::Kinds's cone by the solve graph (2 routines) and its callers by the reverse walk (4 routines with a body: local 4, through dependency code 0, only through an open site 0; 0 more without a body in the model)",
+      "workspaceRoutineBodies": 6
+    },
+    "table": {
+      "id": "08080808-0000-4000-8000-000000000081/table/50800",
+      "isUnknownBucket": false,
+      "name": "FT Item",
+      "resolution": "resolved",
+      "selector": "FT Item"
+    }
+  },
+  "schemaVersion": "3.3.0"
+}

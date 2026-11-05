@@ -657,6 +657,21 @@ pub fn query_plan() -> Plan {
     }
 }
 
+/// `alsem query touches --field` without `--from` (agent-tasks design §7):
+/// the model alone. The field scan reads its rows; nothing is computed over
+/// them here, so no other command and no default query pays for it.
+pub fn field_plan() -> Plan {
+    Plan {
+        runs: vec![],
+        need_l4: false,
+        after_run: 0,
+        own: 0,
+        witness: WitnessRequest::empty(),
+        trees: vec![],
+        explain_indexes: false,
+    }
+}
+
 impl Plan {
     #[cfg(test)]
     pub(crate) fn for_test(

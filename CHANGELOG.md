@@ -128,6 +128,41 @@ Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §6 (revision 2;
   out of every tool description, argument description and the instructions.
 - **explain JSON `al-sem.explain/4`** (additive: `callersContext` with `--callers-context`).
 
+### Added (agent tasks, milestone D: field impact)
+
+- **`alsem query touches --table T --field F`: every code consumer of one field** (agent-tasks
+  milestone D, narrowed v1; MCP: `field` on `alsem_query_touches`). Each site is listed once
+  with its uses: read, write (a `R.F += 1` is one site with uses read and write), validate,
+  filter (`SetRange`, `SetFilter`, `GetFilter`, `GetRangeMin/Max`, `CopyFilter`), key-use,
+  load, calc (`CalcFields`, `CalcSums`, `SetAutoCalcFields`), rule (`TestField`,
+  `FieldError`), metadata (`FieldNo`, `FieldCaption`, `FieldName`, `FieldActive`),
+  copy-candidate (`TransferFields`, when the other table has a field with F's number, or its
+  table is not resolved), and by-number (`RecordRef.Field(<literal>)`, a match only when the
+  routine decides the RecordRef's table). Extraction is per operation: `Next(2)`, `Get('X')`
+  and `FieldIndex(n)` never name a field. Temporary consumers are counted beside persistent
+  ones; a record of an unresolved table is a candidate. Workspace and loaded dependency bodies
+  are searched, and the answer says so; CalcFormula, TableRelation and page/report/query/XMLport
+  columns are stated as not searched, so an answer with no site is "no indexed consumer
+  observed", never no. With `--from R`, only R's cone (the solve graph, as `query touches` down)
+  and R's callers, named by R0's reverse walk over the sited graph as `alsem tests` names them
+  (each up site with its tier; `--single-app` walks the workspace program's graph). It reads
+  the graph through milestone A's one mechanism (`ViewNeeds::MODEL_SITED`, `ViewCx::sited`,
+  the engine host's `reads_sited` pin rule), extended for D: single-app, `build_view_model`
+  lends the workspace program for the graph, and `ViewCx::sited` panics when read without
+  the declaration and says when the graph's build did not finish. The query schema is
+  **3.3.0** (additive: `field`, `searched`, `fieldSummary`, `fieldTouches[]`, `declaredKeys[]`,
+  `reasons[]`, `absence`); every other query document changes only its version.
+- **Two field facts for field impact (agent-tasks milestone D, the D1 probe).** A bare field in
+  a table or page trigger (`Amount := Amount + 1`, through the implicit `Rec` or a `with`
+  record) was no field access at all: only the `X.F` member form was recorded. The body walk
+  now records it as `ModelRoutine::implicit_field_accesses`, with its read / write kind, apart
+  from `field_accesses` so no detector input and no serialized feature moves. A record method's
+  field-naming argument (`TestField(F)`, `SetRange(F, …)`'s first) is not one. A
+  `TransferFields`' source record is kept as `ModelRecordOperation::transfer_fields_source`.
+  `aldump --field-census <ws> [--single-app]` counts the field facts by role (on CDO, cross-app:
+  22,707 implicit accesses, 5.3 MB, against 16.9 MB for the existing field accesses). The
+  findings and scope decisions are in the agent-tasks design §7.3a.
+
 ### Added (agent tasks, milestone C: test selection)
 
 Which tests to run first for a change, as a first-class answer. Spec:

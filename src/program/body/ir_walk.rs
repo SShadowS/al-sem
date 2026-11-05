@@ -83,6 +83,18 @@ pub struct IrSpine {
     pub loop_count: u32,
     pub loops: Vec<PLoop>,
     pub field_accesses: Vec<PFieldAccess>,
+    /// Agent-tasks D1: bare identifiers in a routine whose innermost implicit
+    /// receiver is a record (a table or page trigger's `Rec`, a `with Cust do`
+    /// body) that no parameter, local, global, dataitem or procedure of the
+    /// scope takes: `Amount := 0` in a table trigger, `TestField` aside. Each
+    /// names the frame's receiver (`Rec`, `Cust`) as its record variable. The
+    /// names are not checked against the table's fields here (the walk does
+    /// not know them); a reader matches them by name, so `CurrPage` or `Today`
+    /// match no field. A field-naming argument of a record method
+    /// ([`super::record_op::field_method`], `SetRange(F, …)`) is not one: the
+    /// method's own fact carries it. Kept apart from `field_accesses` so no
+    /// detector input and no serialized feature moves.
+    pub implicit_field_accesses: Vec<PFieldAccess>,
     pub var_assignments: Vec<PVarAssignment>,
     pub condition_references: Vec<PConditionReference>,
     pub identifier_references: Vec<String>,
@@ -127,6 +139,9 @@ struct Scope {
     /// call whose method name collides with one of these is a CALL to that procedure,
     /// not a record op (legacy `object_procedure_names` collision check).
     object_procedure_names: HashSet<String>,
+    /// Lowercased names a bare identifier resolves to before a field of the
+    /// implicit record (see [`IrSpine::implicit_field_accesses`]).
+    declared_names: HashSet<String>,
     /// #155: a declaration in lexical scope is named `Database` (a parameter,
     /// local, named return value, global, dataitem or, in a table, a field), so
     /// `Database.Commit()` calls that declaration's member, not the platform's
@@ -345,6 +360,19 @@ fn build_scope(
         frvars.insert("rec".to_string());
     }
     frvars.extend(params_locals);
+    // Every name a bare identifier can resolve to before a field of the
+    // implicit record: parameters, locals, the object's globals of any type,
+    // its dataitems and procedures, and `Rec` / `xRec` themselves.
+    let declared_names: HashSet<String> = routine
+        .params
+        .iter()
+        .map(|p| p.name.to_ascii_lowercase())
+        .chain(routine.locals.iter().map(|v| v.name.to_ascii_lowercase()))
+        .chain(o.globals.iter().map(|v| v.name.to_ascii_lowercase()))
+        .chain(o.dataitems.iter().map(|(n, _)| n.to_ascii_lowercase()))
+        .chain(object_procedure_names.iter().cloned())
+        .chain(["rec".to_string(), "xrec".to_string()])
+        .collect();
     (
         Scope {
             record_ref_vars: record_ref_names(o, routine),
@@ -352,6 +380,7 @@ fn build_scope(
             rvars,
             frvars,
             object_procedure_names,
+            declared_names,
         },
         implicit_rec,
     )
@@ -379,6 +408,10 @@ struct SpineCtx<'a> {
     cs_id_by_expr: HashMap<ExprId, String>,
     loops: Vec<PLoop>,
     field_accesses: Vec<PFieldAccess>,
+    implicit_field_accesses: Vec<PFieldAccess>,
+    /// Arguments that name a field of a record method's receiver
+    /// ([`super::record_op::field_method`]): never an implicit field access.
+    field_arg_exprs: HashSet<ExprId>,
     var_assignments: Vec<PVarAssignment>,
     condition_references: Vec<PConditionReference>,
     identifier_ref_set: HashSet<String>,
@@ -437,6 +470,64 @@ impl<'a> SpineCtx<'a> {
     /// Exact raw source text of an IR node (via its byte span).
     fn raw(&self, origin: &Origin) -> &'a str {
         &self.source[origin.byte.clone()]
+    }
+
+    /// D1: a call's field-naming argument positions, when its function is a
+    /// [`super::record_op::field_method`] called on a record: a member call on
+    /// a record receiver of the scope, or a bare call inside an implicit
+    /// record frame that names no procedure of the object.
+    fn field_naming_args(&self, function: ExprId) -> Option<super::record_op::FieldArgs> {
+        use ExprKind::*;
+        let (method, on_record) = match &self.file.ir.expr(function).kind {
+            Member { object, member, .. } => {
+                let on_record = match &self.file.ir.expr(*object).kind {
+                    Identifier(x) | QuotedIdentifier(x) => {
+                        self.scope.rvars.contains(&x.to_ascii_lowercase())
+                    }
+                    _ => false,
+                };
+                (member.to_ascii_lowercase(), on_record)
+            }
+            Identifier(m) | QuotedIdentifier(m) => {
+                let m = m.to_ascii_lowercase();
+                let on_record = self.implicit.last().is_some_and(|f| f.is_record)
+                    && !self.scope.object_procedure_names.contains(&m);
+                (m, on_record)
+            }
+            _ => return None,
+        };
+        if !on_record {
+            return None;
+        }
+        super::record_op::field_method(&method).map(|(_, at)| at)
+    }
+
+    /// D1: record a bare identifier as a field access of the innermost
+    /// implicit record ([`IrSpine::implicit_field_accesses`]).
+    fn implicit_field_access(&mut self, eid: ExprId, name: &str) {
+        let Some(frame) = self.implicit.last().filter(|f| f.is_record) else {
+            return;
+        };
+        if self.field_arg_exprs.contains(&eid)
+            || self
+                .scope
+                .declared_names
+                .contains(&name.to_ascii_lowercase())
+        {
+            return;
+        }
+        let access = match self.assign_target {
+            Some((t, kind)) if t == eid => kind,
+            _ => crate::program::body::features::FieldAccessKind::Read,
+        };
+        let record_variable_name = frame.text.clone();
+        let source_anchor = self.anchor(&self.file.ir.expr(eid).origin);
+        self.implicit_field_accesses.push(PFieldAccess {
+            record_variable_name,
+            field_name: name.to_string(),
+            source_anchor,
+            access,
+        });
     }
 
     /// Literal text of an rhs value (legacy `literal_text_of`): boolean → lc,
@@ -1309,6 +1400,15 @@ impl<'a> SpineCtx<'a> {
                 Identifier(_) | QuotedIdentifier(_) => {}
                 _ => self.walk_expr(function),
             }
+            // D1: the arguments that name a field of the receiver are the
+            // method's fact, not implicit field reads of `Rec`.
+            if let Some(args_at) = self.field_naming_args(function) {
+                let marked = match args_at {
+                    super::record_op::FieldArgs::First => &args[..args.len().min(1)],
+                    super::record_op::FieldArgs::All => &args[..],
+                };
+                self.field_arg_exprs.extend(marked.iter().copied());
+            }
             for a in args {
                 self.walk_expr(a);
             }
@@ -1395,6 +1495,10 @@ impl<'a> SpineCtx<'a> {
                 if e.origin.kind_text == "identifier" {
                     self.identifier_ref_set.insert(name.to_ascii_lowercase());
                 }
+                self.implicit_field_access(eid, name);
+            }
+            QuotedIdentifier(name) => {
+                self.implicit_field_access(eid, name);
             }
             // `Keyword::Name` (database_reference): the object-type keyword is excluded,
             // but an UNQUOTED table_name identifier is a value ref.
@@ -1450,6 +1554,8 @@ pub fn walk_spine(
         cs_id_by_expr: HashMap::new(),
         loops: Vec::new(),
         field_accesses: Vec::new(),
+        implicit_field_accesses: Vec::new(),
+        field_arg_exprs: HashSet::new(),
         var_assignments: Vec::new(),
         condition_references: Vec::new(),
         identifier_ref_set: HashSet::new(),
@@ -1504,6 +1610,7 @@ pub fn walk_spine(
         loop_count: ctx.loop_count,
         loops: ctx.loops,
         field_accesses: ctx.field_accesses,
+        implicit_field_accesses: ctx.implicit_field_accesses,
         var_assignments,
         condition_references,
         identifier_references,
@@ -2106,6 +2213,8 @@ pub struct IrPartialFeatures {
     pub nesting_depth: u32,
     pub loops: Vec<PLoop>,
     pub field_accesses: Vec<PFieldAccess>,
+    /// [`IrSpine::implicit_field_accesses`].
+    pub implicit_field_accesses: Vec<PFieldAccess>,
     pub var_assignments: Vec<PVarAssignment>,
     pub condition_references: Vec<PConditionReference>,
     pub identifier_references: Vec<String>,
@@ -2276,6 +2385,7 @@ pub fn routine_features_partial(
         nesting_depth,
         loops: spine.loops,
         field_accesses: spine.field_accesses,
+        implicit_field_accesses: spine.implicit_field_accesses,
         var_assignments: spine.var_assignments,
         condition_references: spine.condition_references,
         identifier_references: spine.identifier_references,
@@ -2316,8 +2426,9 @@ pub fn project_routine_features_ir(
 
 /// [`project_routine_features_ir`] with the parens-less value reads the program
 /// resolver kept as calls (`program::resolve::full::ParenlessCalls`), plus each
-/// site's expression index (#160 §4.2), kept apart from `PFeatures` so the L2
-/// snapshot (a `Debug` hash of `PFeatures`) does not see it.
+/// site's expression index (#160 §4.2) and the implicit-record field accesses
+/// ([`IrSpine::implicit_field_accesses`]), both kept apart from `PFeatures` so
+/// the L2 snapshot (a `Debug` hash of `PFeatures`) does not see them.
 #[allow(clippy::too_many_arguments)]
 pub fn project_routine_features_ir_with(
     file: &AlFile,
@@ -2331,6 +2442,7 @@ pub fn project_routine_features_ir_with(
 ) -> (
     super::features::PFeatures,
     crate::program::site_key::SiteExprs,
+    Vec<PFieldAccess>,
 ) {
     let p = routine_features_partial(
         file,
@@ -2362,7 +2474,7 @@ pub fn project_routine_features_ir_with(
         statement_tree: p.statement_tree,
         scope_frames: Vec::new(),
     };
-    (features, p.site_exprs)
+    (features, p.site_exprs, p.implicit_field_accesses)
 }
 
 // ---- record_variables (params + locals + implicit Rec) ----
@@ -3341,6 +3453,85 @@ codeunit 50003 F
                 ("Idx", Read), // an index INSIDE a target is still a read
             ]
         );
+    }
+
+    /// Agent-tasks D1: a bare field in a table trigger is a field access of
+    /// the implicit `Rec` (`implicit_field_accesses`), with its access kind;
+    /// a local, a global, and a record method's field-naming argument
+    /// (`TestField(F)`, `SetRange(F, …)`'s first, `Other.SetRange(F)`,
+    /// `FieldError(F)`) are not. A codeunit routine has no implicit record.
+    #[test]
+    fn implicit_record_field_accesses() {
+        use crate::program::body::features::FieldAccessKind::{Read, ReadWrite, Write};
+        const SRC: &str = r#"
+table 50100 T
+{
+    fields
+    {
+        field(1; Amount; Decimal)
+        {
+            trigger OnValidate()
+            var
+                L: Decimal;
+            begin
+                Amount := Amount + 1;
+                "Unit Price" += 1;
+                L := 0;
+                TestField(Amount);
+                SetRange("Unit Price", Amount);
+                Other.SetRange(Amount);
+                FieldError(Amount);
+                G := 1;
+            end;
+        }
+        field(2; "Unit Price"; Decimal) { }
+    }
+    var
+        Other: Record T;
+        G: Integer;
+}
+
+codeunit 50101 C
+{
+    procedure P()
+    begin
+        Amount := 1;
+    end;
+}
+"#;
+        let implicit = |name: &str| {
+            let f = al_syntax::parse(SRC);
+            for (oi, o) in f.objects.iter().enumerate() {
+                if let Some(r) = o.routines.iter().find(|r| r.name == name) {
+                    return super::project_routine_features_ir_with(
+                        &f,
+                        oi,
+                        r,
+                        "id",
+                        SRC,
+                        "u",
+                        None,
+                        &std::collections::HashSet::new(),
+                    )
+                    .2
+                    .into_iter()
+                    .map(|fa| (fa.record_variable_name, fa.field_name, fa.access))
+                    .collect::<Vec<_>>();
+                }
+            }
+            panic!("no routine {name}")
+        };
+        let rec = |f: &str, a| ("Rec".to_string(), f.to_string(), a);
+        assert_eq!(
+            implicit("OnValidate"),
+            [
+                rec("Amount", Write),
+                rec("Amount", Read),
+                rec("Unit Price", ReadWrite),
+                rec("Amount", Read), // SetRange's VALUE argument is a read
+            ]
+        );
+        assert_eq!(implicit("P"), []);
     }
 
     /// Which condition shapes `condition_references` records (#24, and the

@@ -36,6 +36,9 @@ pub mod effect_query_cli;
 pub mod effect_store;
 pub mod effect_universe;
 pub(crate) mod event_dispatch;
+// Agent-tasks milestone D: `query touches --field`'s consumer sites of one
+// field, read from the model alone, and the D1 field-fact census.
+pub mod field_touches;
 // #160 step 4: the one execution relation a view builds (graph, SCC, the
 // dependency half's uncertainty), from one call split.
 pub mod exec_relation;
