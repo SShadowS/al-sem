@@ -384,3 +384,112 @@ fn cdo_run_report_id_lists_calc_sales_disc_commits() {
         );
     }
 }
+
+const KIND_DEP_GUID: &str = "c0c00005-0000-4000-8000-0000000000c5";
+
+const KIND_DEP_SYMBOLS: &str = r#"{"RuntimeVersion":"13.0","Tables":[{"Id":50500,"Name":"Kind Log","Fields":[{"Id":1,"Name":"K","TypeDefinition":{"Name":"Integer"}}]}],"Codeunits":[{"Id":50501,"Name":"Kind Writer","Methods":[{"Name":"Write","Parameters":[]}]}],"AppId":"c0c00005-0000-4000-8000-0000000000c5","Name":"KindDep","Publisher":"probe","Version":"1.0.0.0"}"#;
+
+const KIND_DEP_SOURCE: &str = r#"table 50500 "Kind Log"
+{
+    fields { field(1; K; Integer) { } }
+    keys { key(PK; K) { } }
+}
+codeunit 50501 "Kind Writer"
+{
+    procedure Write()
+    var
+        Log: Record "Kind Log";
+    begin
+        Log.Insert();
+    end;
+}
+"#;
+
+/// `Root` shows a message through `Near` (line 14) and through `Middle →
+/// Deeper` (line 27), and calls `Kind Writer.Write` itself (line 7) and
+/// through `Middle` (line 21): two crossings into one dependency routine
+/// that inserts one table.
+const KIND_WS: &str = r#"codeunit 50510 "Kind Mgt"
+{
+    procedure Root()
+    var
+        Writer: Codeunit "Kind Writer";
+    begin
+        Writer.Write();
+        Near();
+        Middle();
+    end;
+
+    local procedure Near()
+    begin
+        Message('near');
+    end;
+
+    local procedure Middle()
+    var
+        Writer: Codeunit "Kind Writer";
+    begin
+        Writer.Write();
+        Deeper();
+    end;
+
+    local procedure Deeper()
+    begin
+        Message('deeper');
+    end;
+}
+"#;
+
+fn kind_workspace(root: &Path) -> std::path::PathBuf {
+    let ws = root.join("kind");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        format!(
+            r#"{{"id":"c0c00006-0000-4000-8000-0000000000c6","name":"Kind","publisher":"t","version":"1.0.0.0",
+            "dependencies":[{{"id":"{KIND_DEP_GUID}","name":"KindDep","publisher":"probe","version":"1.0.0.0"}}]}}"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(ws.join("src/KindMgt.Codeunit.al"), KIND_WS).unwrap();
+    crate::symbol_app::write_source_app(
+        &ws.join(".alpackages/probe_KindDep_1.0.0.0.app"),
+        KIND_DEP_GUID,
+        "KindDep",
+        "1.0.0.0",
+        KIND_DEP_SYMBOLS,
+        &[("src/KindDep.al", KIND_DEP_SOURCE)],
+        "",
+    );
+    ws
+}
+
+/// Every resource-less kind is listed per site, like COMMIT: both messages
+/// are places. And the table write keeps one row (at the nearer crossing),
+/// so the second crossing into `Kind Writer.Write` has none: the entry-point
+/// counts say "at least".
+#[test]
+fn every_resource_less_site_is_a_place_and_entry_points_say_at_least() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = kind_workspace(t.path());
+    let (code, stdout) = alsem(&[
+        "explain",
+        ws.to_str().unwrap(),
+        "--routine",
+        "Kind Mgt::Root",
+    ]);
+    assert_eq!(code, Some(0), "{stdout}");
+    assert!(stdout.contains("UI at 2 places:"), "{stdout}");
+    assert!(
+        stdout.contains("UI_MESSAGE at ws:src/KindMgt.Codeunit.al:14"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("UI_MESSAGE at ws:src/KindMgt.Codeunit.al:27"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("grouped per entry point (at least 1 entry point at at least 1 site)"),
+        "{stdout}"
+    );
+}

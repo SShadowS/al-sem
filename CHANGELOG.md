@@ -32,6 +32,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`commits-on-success-path` ignores a COMMIT the root cannot reach under literal arguments**, as
   the MAY questions already did (G23): such a commit made the answer `unknown` (or could make it
   `yes`).
+- **Every other resource-less effect kind is listed per site too, and entry-point totals say when
+  they are a lower bound.** The same one-fact-per-key cone hid UI, error, HTTP, file, background
+  task, isolated storage and telemetry sites behind the nearest one: on CDO `explain RunReportID`
+  printed "UI at 5 places", "HTTP at 2 places", "errors at 5 places"; it now prints 16, 20 and 196.
+  These kinds go through the same site search as COMMIT; a row's detail (an HTTP method, a storage
+  or file operation) is the site's own, so two representatives of one kind that reach one site
+  give one row. A table write or an event keeps one row per table or event, so a second crossing
+  that leads only to a table already written nearer had no row and the entry-point counts were
+  silently low: digest now checks every crossing the root can take toward any effect, and when one
+  has no row (or the search stops at its depth bound) explain and digest print "at least N entry
+  points at at least M sites" and `summary.entryPoints.atLeast` is `true`; a kind family's count
+  from a search cut at the depth bound is "at least" too (`summary.kindsAtLeast`). In the
+  `ws-explain-calls` fixture, `PostOrder` now lists 9 error places (was 2), each a real `Error`/
+  `TestField` it reaches; `QuickPost` does not list `CheckOrder`'s `TestField`, which its literal
+  `Strict = false` rules out.
 - **A commit count the search could not finish says "at least".** A site search that stops at its
   depth bound (64 calls) with a commit possibly beyond it records a `sites-partial` entry
   diagnostic; explain and digest then print "at least N sites … at least M commit-bearing entry

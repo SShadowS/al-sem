@@ -1604,6 +1604,9 @@ pub struct CarrierCache<'i>(
     /// and their callers, transitively, over every typed edge
     /// ([`CarrierCache::reaching`]).
     std::sync::Mutex<HashMap<CarrierKey, std::sync::Arc<std::collections::HashSet<&'i str>>>>,
+    /// Per `include_reads`, every routine that may reach ANY effect
+    /// ([`CarrierCache::reaching_any`]).
+    std::sync::Mutex<HashMap<bool, std::sync::Arc<std::collections::HashSet<&'i str>>>>,
 );
 
 impl<'i> CarrierCache<'i> {
@@ -1652,15 +1655,7 @@ impl<'i> CarrierCache<'i> {
             return std::sync::Arc::clone(set);
         }
         let carriers = self.of(fact, idx);
-        let mut seen: std::collections::HashSet<&'i str> = carriers.iter().copied().collect();
-        let mut queue: Vec<&'i str> = seen.iter().copied().collect();
-        while let Some(v) = queue.pop() {
-            for u in idx.incoming_edges.get(v).into_iter().flatten() {
-                if seen.insert(u.as_str()) {
-                    queue.push(u.as_str());
-                }
-            }
-        }
+        let seen = callers_closure(carriers.iter().copied(), idx);
         std::sync::Arc::clone(
             self.1
                 .lock()
@@ -1669,6 +1664,66 @@ impl<'i> CarrierCache<'i> {
                 .or_insert(std::sync::Arc::new(seen)),
         )
     }
+
+    /// Every routine from which a direct fact of ANY effect type may be
+    /// reached (table reads only with `include_reads`): the entry-point check
+    /// of [`digest_one_root`] enters only these. Shared by every root.
+    fn reaching_any(
+        &self,
+        idx: &'i FingerprintIndexes,
+        include_reads: bool,
+    ) -> std::sync::Arc<std::collections::HashSet<&'i str>> {
+        if let Some(set) = self
+            .2
+            .lock()
+            .expect("carrier cache lock")
+            .get(&include_reads)
+        {
+            return std::sync::Arc::clone(set);
+        }
+        let owners = idx
+            .direct_facts_by_routine
+            .iter()
+            .filter(|(_, facts)| {
+                facts.iter().any(|f| {
+                    is_effect_fact(f)
+                        || (include_reads && f.op() == "read" && f.resource_kind() == "table")
+                })
+            })
+            .map(|(r, _)| r.as_str());
+        let seen = callers_closure(owners, idx);
+        std::sync::Arc::clone(
+            self.2
+                .lock()
+                .expect("carrier cache lock")
+                .entry(include_reads)
+                .or_insert(std::sync::Arc::new(seen)),
+        )
+    }
+}
+
+/// Whether direct fact `f` is a digest effect (`digest_one_root`'s filter):
+/// it has an effect type and is no object-run dispatch.
+fn is_effect_fact(f: &Fact) -> bool {
+    !(f.op() == "execute" && matches!(f.extra(), Some(SnapCapabilityExtra::Dispatch { .. })))
+        && effect_type_of(f).is_some()
+}
+
+/// `start` and, transitively, every caller of each (`incoming_edges`).
+fn callers_closure<'i>(
+    start: impl Iterator<Item = &'i str>,
+    idx: &'i FingerprintIndexes,
+) -> std::collections::HashSet<&'i str> {
+    let mut seen: std::collections::HashSet<&'i str> = start.collect();
+    let mut queue: Vec<&'i str> = seen.iter().copied().collect();
+    while let Some(v) = queue.pop() {
+        for u in idx.incoming_edges.get(v).into_iter().flatten() {
+            if seen.insert(u.as_str()) {
+                queue.push(u.as_str());
+            }
+        }
+    }
+    seen
 }
 
 // Test hook (W3, W8): the DAGs built on this thread.
@@ -2654,15 +2709,40 @@ fn walk_marking<'i>(
 /// `CDOFile.Table.al:128` and the COMMIT beyond `Sales-Calc. Discount::OnRun`
 /// that the same root's writes witness through. For these types the rows come
 /// from [`reconstruct_site_witnesses`] instead.
-pub(crate) const SITE_ENUMERATED: &[&str] = &["COMMIT"];
+///
+/// The same holds for every other resource-less kind: `explain`'s "UI at N
+/// places", "errors at N places", … count rows, and from `CreateReportsForRecord`
+/// the UI_MESSAGE and error crossings beyond `Sales-Calc. Discount::OnRun` were
+/// hidden by nearer sites. A table write or an event keeps its one row per
+/// table or event (presence is what those rows claim).
+pub(crate) const SITE_ENUMERATED: &[&str] = &[
+    "COMMIT",
+    "UI_MESSAGE",
+    "UI_CONFIRM",
+    "UI_ERROR",
+    "UI_WINDOW_OPEN",
+    "UI_FILE_DIALOG",
+    "UI_HYPERLINK",
+    "UI_PROGRESS",
+    "ERROR_THROW",
+    "ERROR_IMPLICIT",
+    "HTTP",
+    "FILE",
+    "BACKGROUND_TASK",
+    "ISOLATED_STORAGE",
+    "TELEMETRY",
+];
 
 /// What [`reconstruct_site_witnesses`] found.
-struct SiteWitnesses {
+struct SiteWitnesses<'i> {
     /// One outcome per site in the root's own code (a carrier's direct fact,
     /// its terminal), then one holding every rule-B crossing behind which a
     /// carrier lies (each path ends at its crossing; the digest groups them by
-    /// crossing).
-    outcomes: Vec<WitnessOutcomeExt>,
+    /// crossing). A site's outcome carries its own direct fact: the row's
+    /// detail (an HTTP method, a storage or file operation) is the site's, not
+    /// the representative's, so two representatives of one kind (another
+    /// confidence, another argument source) that reach one site give one row.
+    outcomes: Vec<(WitnessOutcomeExt, Option<&'i Fact>)>,
     /// A routine at the depth bound may reach a carrier beyond it: the sites
     /// listed are not known to be all of them.
     partial: bool,
@@ -2693,7 +2773,7 @@ fn reconstruct_site_witnesses<'i>(
     hop_cache: &mut HopCache<'i>,
     carrier_cache: &CarrierCache<'i>,
     site_dags: &mut HashMap<CarrierKey, Rc<WitDag<'i>>>,
-) -> SiteWitnesses {
+) -> SiteWitnesses<'i> {
     let carriers = carrier_cache.of(fact, idx);
     let dag = Rc::clone(site_dags.entry(CarrierKey::of(fact)).or_insert_with(|| {
         let keep = carrier_cache.reaching(fact, idx);
@@ -2791,7 +2871,7 @@ fn reconstruct_site_witnesses<'i>(
                 })
                 .collect();
             if !candidates.is_empty() {
-                outcomes.push(close(candidates, walk_truncated));
+                outcomes.push((close(candidates, walk_truncated), Some(site)));
             }
         }
     }
@@ -2858,13 +2938,69 @@ fn reconstruct_site_witnesses<'i>(
     }
     for (_, (candidates, truncated)) in groups {
         if !candidates.is_empty() {
-            outcomes.push(close(candidates, truncated));
+            outcomes.push((close(candidates, truncated), None));
         }
     }
     SiteWitnesses {
         outcomes,
         partial: !dag.depth_frontier.is_empty(),
     }
+}
+
+/// The marker [`DigestEntryResult::partial_site_types`] carries when the
+/// root's crossing rows may not be all its entry points (`entry_points_partial`).
+pub(crate) const ENTRY_POINTS: &str = "ENTRY_POINTS";
+
+/// Whether a root's crossing rows (`row_crossings`, boundary ids) may miss an
+/// entry point: under rule B, every crossing the root can take toward any
+/// effect (one DAG over all its first hops, entered only where an effect may
+/// be reached, `CarrierCache::reaching_any`) that has no row, or a routine at
+/// the depth bound with such a callee left. A table write or event behind a
+/// second crossing keeps its one row at the nearer crossing, so that second
+/// crossing has no row: its entry-point count is then a lower bound.
+fn entry_points_partial<'i>(
+    root_id: &str,
+    idx: &'i FingerprintIndexes,
+    carrier_cache: &CarrierCache<'i>,
+    include_reads: bool,
+    row_crossings: &BTreeSet<&str>,
+) -> bool {
+    if idx.boundary.is_none() {
+        return false;
+    }
+    let keep = carrier_cache.reaching_any(idx, include_reads);
+    let seeds: Vec<(&'i str, &'i SnapshotGraphEdge)> = idx
+        .outgoing_edges
+        .get(root_id)
+        .into_iter()
+        .flatten()
+        .filter(|e| edge_has_hop(e))
+        .filter_map(|&e| edge_to(e).map(|to| (to, e)))
+        .collect();
+    let dag = WitDag::build_reach(root_id, seeds, idx, &keep);
+    if !dag.depth_frontier.is_empty() {
+        return true;
+    }
+    let missing =
+        |e: &SnapshotGraphEdge| !row_crossings.contains(boundary_terminal(e, idx).0.id.as_str());
+    if dag
+        .seeds
+        .iter()
+        .any(|&(to, e)| idx.is_dependency(to) && missing(e))
+    {
+        return true;
+    }
+    dag.info.iter().any(|(&u, &(d, _))| {
+        !idx.is_dependency(u)
+            && d < MAX_DEPTH
+            && idx.outgoing_edges.get(u).into_iter().flatten().any(|&e| {
+                edge_has_hop(e)
+                    && edge_to(e).is_some_and(|v| {
+                        v != root_id && idx.is_dependency(v) && dag.info.contains_key(v)
+                    })
+                    && missing(e)
+            })
+    })
 }
 
 /// A [`Candidate`] over the raw path `steps` (+ `terminal`): each step's
@@ -4730,33 +4866,44 @@ fn digest_one_root<'i>(
             }
             // FIX 2: skip expensive witness reconstruction for effect types the
             // ordering engine never grades when called from the ordering-only path.
-            let outcomes: Vec<WitnessOutcomeExt> = if !site_outcomes.is_empty() {
+            let outcomes: Vec<(WitnessOutcomeExt, Option<&Fact>)> = if !site_outcomes.is_empty() {
                 site_outcomes
             } else if ordering_witness_only && !ORDERING_RELEVANT.contains(&effect_type) {
-                vec![WitnessOutcomeExt {
-                    paths: Vec::new(),
-                    truncated: false,
-                    incomplete: false,
-                    limit_hit: false,
-                    diagnostics: Vec::new(),
-                    projected: None,
-                    twins: Vec::new(),
-                    ends: Vec::new(),
-                }]
+                vec![(
+                    WitnessOutcomeExt {
+                        paths: Vec::new(),
+                        truncated: false,
+                        incomplete: false,
+                        limit_hit: false,
+                        diagnostics: Vec::new(),
+                        projected: None,
+                        twins: Vec::new(),
+                        ends: Vec::new(),
+                    },
+                    None,
+                )]
             } else {
-                vec![reconstruct_witness_paths(
-                    rid,
-                    fact,
-                    idx,
-                    HARD_PATH_CAP,
-                    &mut hop_cache,
-                    &mut dag_cache,
-                    carrier_cache,
+                vec![(
+                    reconstruct_witness_paths(
+                        rid,
+                        fact,
+                        idx,
+                        HARD_PATH_CAP,
+                        &mut hop_cache,
+                        &mut dag_cache,
+                        carrier_cache,
+                    ),
+                    None,
                 )]
             };
 
             let mut positions: Vec<usize> = Vec::new();
-            for outcome in outcomes {
+            for (outcome, site) in outcomes {
+                // A site's row carries the site's own detail (`SiteWitnesses`).
+                let detail = match site {
+                    Some(s) => effect_detail_of(s, &idx.stable_id_to_display),
+                    None => detail.clone(),
+                };
                 // Project all paths to QueryWitnessHop[][] AND compute each raw path's
                 // conditionality from its OWN terminal hop (#8 — must be done before
                 // projection, which strips terminals).
@@ -5237,6 +5384,19 @@ fn digest_one_root<'i>(
                 .zip(&scoped)
             {
                 eff.scoped_guarantees = sg.clone();
+            }
+        }
+
+        // The entry-point totals are exact only when every crossing the root
+        // can take toward an effect has a row (the ordering-only read renders
+        // none, so it skips the check).
+        if !ordering_witness_only {
+            let rows: BTreeSet<&str> = effects
+                .iter()
+                .filter_map(|e| e.crossing.as_ref().map(|c| c.id.as_str()))
+                .collect();
+            if entry_points_partial(rid, idx, carrier_cache, include_reads, &rows) {
+                partial_site_types.insert(ENTRY_POINTS);
             }
         }
 

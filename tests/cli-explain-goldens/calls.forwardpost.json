@@ -34,6 +34,35 @@
             "anchor": {
               "column": 12,
               "excerpt": "error-call",
+              "file": "ws:src/checks.al",
+              "line": 6,
+              "sourceKind": "source"
+            },
+            "conditionality": "error-path",
+            "type": "ERROR_THROW",
+            "via": [
+              "CheckOrder"
+            ]
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "excerpt": "error-call",
+              "file": "ws:src/checks.al",
+              "line": 15,
+              "sourceKind": "source"
+            },
+            "conditionality": "error-path",
+            "type": "ERROR_THROW",
+            "via": [
+              "CheckOrder",
+              "CheckCustomer"
+            ]
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "excerpt": "error-call",
               "file": "ws:src/order.al",
               "line": 25,
               "sourceKind": "source"
@@ -310,7 +339,7 @@
           "workspace": 0
         },
         "kinds": {
-          "errors": 2
+          "errors": 4
         },
         "literalDeadTables": 0,
         "mayWriteTables": {

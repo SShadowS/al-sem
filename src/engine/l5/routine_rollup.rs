@@ -743,6 +743,13 @@ pub struct RollupTotals {
     /// ([`crate::engine::l5::digest_cli::SITES_PARTIAL`]): the two counts
     /// above are lower bounds, printed "at least".
     pub commit_sites_partial: bool,
+    /// The kind families ([`FAMILIES`]) whose site search stopped at its
+    /// depth bound: their `kinds` counts are lower bounds ("at least").
+    pub kinds_partial: BTreeSet<&'static str>,
+    /// A crossing the root can take toward an effect has no row
+    /// ([`crate::engine::l5::digest::ENTRY_POINTS`]): the entry-point counts
+    /// are lower bounds ("at least").
+    pub entry_points_partial: bool,
     pub events: usize,
     pub events_in_workspace: usize,
     /// Per kind family ([`FAMILIES`]): places (own sites + crossings).
@@ -807,6 +814,12 @@ impl RollupTotals {
         });
         if self.commit_sites_partial {
             v["commits"]["atLeast"] = json!(true);
+        }
+        if !self.kinds_partial.is_empty() {
+            v["kindsAtLeast"] = json!(self.kinds_partial);
+        }
+        if self.entry_points_partial {
+            v["entryPoints"]["atLeast"] = json!(true);
         }
         if let Some(c) = self.callers {
             v["callers"] = json!(c);
@@ -887,7 +900,11 @@ impl RollupTotals {
         ));
         for (key, label) in FAMILIES {
             if let Some(&n) = self.kinds.get(key).filter(|n| **n > 0) {
-                parts.push(format!("{label} at {}", plural(n, "place", "places")));
+                parts.push(format!(
+                    "{label} at {}{}",
+                    at_least(self.kinds_partial.contains(key)),
+                    plural(n, "place", "places")
+                ));
             }
         }
         if let Some(c) = self.callers {
@@ -924,6 +941,12 @@ impl RollupTotals {
 #[must_use]
 pub fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{} {}", thousands(n), if n == 1 { one } else { many })
+}
+
+/// `"at least "` for a count that is a lower bound, else nothing.
+#[must_use]
+pub fn at_least(partial: bool) -> &'static str {
+    if partial { "at least " } else { "" }
 }
 
 /// `n` with a thousands comma from 1,000 (design §3.8 rule 2).
@@ -1316,6 +1339,20 @@ impl RoutineRollup {
             complete,
             crate::engine::l5::digest_cli::sites_partial(entry, "COMMIT"),
         );
+        r.totals.kinds_partial = FAMILIES
+            .iter()
+            .map(|(key, _)| *key)
+            .filter(|key| {
+                crate::engine::l5::digest::SITE_ENUMERATED.iter().any(|ty| {
+                    (family_of(ty) == Some(*key) || (*key == "errors" && *ty == "UI_ERROR"))
+                        && crate::engine::l5::digest_cli::sites_partial(entry, ty)
+                })
+            })
+            .collect();
+        r.totals.entry_points_partial = crate::engine::l5::digest_cli::sites_partial(
+            entry,
+            crate::engine::l5::digest::ENTRY_POINTS,
+        );
         r
     }
 
@@ -1372,6 +1409,8 @@ impl RoutineRollup {
             commit_sites: self.commit_sites.len(),
             commit_entry_points,
             commit_sites_partial,
+            kinds_partial: BTreeSet::new(),
+            entry_points_partial: false,
             events: self.events_ws.len() + self.events_beyond.len(),
             events_in_workspace: self.events_ws.len(),
             kinds,
@@ -1664,10 +1703,12 @@ pub fn header_lines(
     });
     out.push(format!(
         "scope: dependency code followed through every resolved call, with literal arguments, \
-         grouped per entry point ({} at {}); temporary records are not writes; no lock facts \
+         grouped per entry point ({}{} at {}{}); temporary records are not writes; no lock facts \
          (alsem query effects lists locks); counts are distinct tables unless a line says \
          operations; lines are 1-based; --detail lists everything",
+        at_least(r.totals.entry_points_partial),
         plural(r.totals.entry_points, "entry point", "entry points"),
+        at_least(r.totals.entry_points_partial),
         plural(r.totals.crossing_sites, "site", "sites")
     ));
     out
@@ -2229,9 +2270,11 @@ pub fn beyond_lines(
     // The counts of the one union (EntryPointCounts), as the scope line's.
     let counts = EntryPointCounts::of(r);
     let mut out = vec![format!(
-        "writes beyond dependency entry points ({} through {} at {}):",
+        "writes beyond dependency entry points ({} through {}{} at {}{}):",
         plural(tables.len(), "table", "tables"),
+        at_least(r.totals.entry_points_partial),
         plural(counts.writing.0, "entry point", "entry points"),
+        at_least(r.totals.entry_points_partial),
         plural(counts.writing.1, "site", "sites")
     )];
     let line = |p: &EntryPoint<'_>| -> String {
@@ -2563,7 +2606,8 @@ pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull) -> Vec<String> {
             places.push(format!("{} beyond {}", types.join(", "), crossing_name(c)));
         }
         out.push(format!(
-            "{label} at {}: {}",
+            "{label} at {}{}: {}",
+            at_least(r.totals.kinds_partial.contains(key)),
             plural(n, "place", "places"),
             places.join("; ")
         ));
