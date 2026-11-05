@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (MCP output, the final hands-on CDO review)
+
+- **`prove`'s human `unknown` no longer lists every blocker.** IssueReminder's
+  `writes-table:Data Exch.` on CDO printed `blockedBy: 287 blocker(s)` and one line each: 294 lines
+  and 47,875 bytes, over the 40 KiB inline cap, so the MCP answer went to a file. The blockers are
+  now grouped by kind (in the order the kinds first appear), each kind with its count split by
+  where the call site is (this workspace, dependency code, not placed) and its first 3 items,
+  workspace ones first, since those are the ones the user can act on; the rest are counted on one
+  line. `--detail` (MCP `detail: true`, new on `prove`) lists every blocker. The case is now 22
+  lines and 2,076 bytes. The JSON `blockedBy` is unchanged and always complete. The coverage,
+  assumptions and limits lines stay always visible.
+- **A write in workspace code printed no path and no reason.** IssueReminder's `CDO Queue Entry`
+  Insert (`CDODocumentTemplateLine.Table.al:1713`) printed its anchor and nothing else. Root cause:
+  the cone listed three paths for it, all through `RunReportID → QueueMail`, which IssueReminder's
+  literal arguments rule out; the literal pass dropped all three, while the write stayed live
+  through a route the cone had not listed. The literal pass now searches the root's guarded search
+  for such a row (the first live state owning one of the row's own operations, its evidence
+  operation first) and keeps the witness; the line prints that real path, here one that re-enters
+  workspace code beyond `Codeunit Reminder-Issue::OnRun` (and says so), or `no path kept:
+  <reason>` (search cap reached; none of the row's operations can run in any reached state; no
+  operation id). A write in the routine's own body prints `path: <routine> (in the routine
+  itself)`, the zero-hop witness of design §3.4.2, where it printed nothing. Digest JSON carries
+  the searched witness as `paths[0]` with `searched: true` (or `pathUnavailable`), prove's human
+  evidence prints it, and explain JSON's `via` names it.
+- **explain's entry-point counts disagreed with its sections.** The scope line counted the
+  crossings with a may-persist write and summed their sites ("14 entry points at 14 sites" on
+  IssueReminder), while the sections counted entry points ("12 … at 14 sites" with writes, "15 …
+  at 17 sites" temporary only). Every line now counts entry points (crossings grouped by target, a
+  multi-target crossing its own) at DISTINCT sites, and the scope line is the union of the two
+  sections by identity: IssueReminder 27 entry points at 31 sites. The same counts in digest and
+  query effects. `summary.entryPoints` gains `withWrites` and `withWritesSites`; `count` and
+  `sites` are now every entry point and its distinct sites.
+- **Tests**: the blocker fold (`prove::tests::human_blockers_fold_by_kind_workspace_first`), the
+  searched witness on a hand-stated row whose listed path cannot run
+  (`wave2_index_tests::an_own_row_whose_listed_paths_cannot_run_gets_a_searched_witness`), the
+  entry-point unions (`routine_rollup::tests::entry_point_counts_are_unions_by_identity`), each
+  with a discrimination proof; on the fixture and on CDO, every workspace-code write record has a
+  path or a reason and the scope's entry-point counts equal the sections' union read off the
+  `--detail` card (`output_invariants_w3::write_lines_have_a_path_and_entry_point_counts_agree`,
+  `output_cdo::cdo_write_lines_have_a_path_or_a_reason`, `cdo_entry_point_counts_agree`); a CDO
+  size ratchet and rendering golden for the Data Exch. case.
+
 ### Added (MCP output item T, the remaining output tests)
 
 - **The invariants of item T and spec §8.3 not pinned before**, in the new `cli` member

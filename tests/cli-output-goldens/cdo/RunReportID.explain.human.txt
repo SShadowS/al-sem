@@ -3,7 +3,7 @@ Codeunit CDO E-Mail Handler::RunReportID  ws:src/Features/Email/Sending/CDOEMail
   coverage: partial (interface-open-world, object-run-unresolved) — 267 interface calls open world, 21 dynamic calls not resolved
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (16 entry points at 16 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (29 entry points at 32 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   rules: none of its own; inherited: none
   callers: 2 — Codeunit CDO E-Mail Handler::RunReport, Codeunit CDO E-Mail Handler::RunReportSelection; reached from 647 page actions
     caller rule (applied by Codeunit CDO E-Mail Handler::RunReport; skipped by Codeunit CDO E-Mail Handler::RunReportSelection): rejects when not VariantRec.IsRecord: "You can not call this function with this variable type."  [Error ws:src/Features/Email/Sending/CDOEMailHandler.Codeunit.al:238]

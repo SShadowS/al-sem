@@ -88,8 +88,10 @@
           "ownSites": 0
         },
         "entryPoints": {
-          "count": 14,
-          "sites": 14
+          "count": 27,
+          "sites": 31,
+          "withWrites": 12,
+          "withWritesSites": 14
         },
         "events": {
           "distinct": 524,

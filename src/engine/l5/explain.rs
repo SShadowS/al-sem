@@ -1453,6 +1453,22 @@ fn empty_entry(rid: &str) -> DigestEntryFull {
 /// The routine names of an effect's shortest witness path (its hops'
 /// targets); empty for an effect of the routine's own body.
 fn via_names(e: &DigestEffectFull) -> Vec<String> {
+    // Final CDO review, item 2: a row with no listed path names its
+    // searched witness's routines (by name, as a listed path's hops do).
+    if e.via_paths.iter().all(Vec::is_empty)
+        && let Some(Ok(w)) = &e.own_path
+    {
+        return w
+            .steps
+            .iter()
+            .map(|s| {
+                s.display
+                    .rsplit_once("::")
+                    .map_or(s.display.as_str(), |(_, n)| n)
+                    .to_string()
+            })
+            .collect();
+    }
     e.via_paths
         .iter()
         .min_by_key(|p| p.len())

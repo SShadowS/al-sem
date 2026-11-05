@@ -1967,6 +1967,38 @@ same cells the first explain built before); after one ask of each kind the engin
 Sizes: query effects human IR 4.9 → 20.9 KB (25 → 62 lines), RR 4.5 → 24.7 KB (23 → 70 lines);
 JSON IR 853 → 893 KB, RR 828 → 940 KB.
 
+## 13. The final hands-on CDO review (2026-11-05, branch `mcpout/w3bc`)
+
+Three output bugs, each with its root cause and the rule it now follows.
+
+1. **Prove's human `unknown` listed every blocker** (§4.7). IR `writes-table:Data Exch.`: 287
+   blockers, 294 lines, 47,875 B, over the inline cap. The human block now groups by kind
+   (first-seen order), states each kind's count split by place (this workspace, dependency code,
+   not placed; omitted for a kind with no place, such as `coverage-incomplete`), and lists the
+   first 3 per kind, workspace ones first; `--detail` / MCP `detail` lists all. JSON unchanged.
+   After: 22 lines, 2,076 B.
+2. **A workspace-code write with no `path:` and no reason** (§3.4.2). IR's `CDO Queue Entry`
+   Insert: the cone listed three paths, all through `RunReportID → QueueMail`, which IR's literal
+   arguments rule out; the literal pass dropped them (`via_paths` empty, `pathsProducerTruncated`)
+   while the row stayed live, since row liveness is judged by kind (any live direct fact of the
+   kind and table). The pass now searches the root's guarded tree for the first live state owning
+   one of the row's own operations (`DigestEffectResult::own_path`); the line prints that witness,
+   or `no path kept: <reason>`. On CDO the witness re-enters workspace code beyond
+   `Codeunit Reminder-Issue::OnRun` (33 hops, through Sales-Post and a CDO event subscriber), and
+   the line says so. **Open for the owner:** by §3.4.1's placement rule ("a workspace operation
+   reached only after crossing into dependency code is placed under that crossing") such a row
+   belongs under the crossing, not in "writes in workspace code". The fix does not move it: the
+   shortest live route passing a crossing does not prove that no crossing-free live route exists,
+   and moving own rows into crossings changes the section model every T-W2 invariant reads. A row
+   of the root's own body now prints the zero-hop witness `path: <root> (in the routine itself)`.
+3. **Entry-point counts disagreed** (§3.3, §3.6). The scope line counted the crossings with a
+   may-persist write and summed their sites (IR "14 entry points at 14 sites"); the sections
+   counted entry points (12 at 14 with writes, 15 at 17 temporary only). Every line now counts
+   entry points at distinct sites (`EntryPointCounts`: by `file:line`, a crossing with no anchor
+   by its id); the scope is the union of the two sections: IR 27 at 31, RR 29 at 32.
+   `summary.entryPoints` keeps `count` / `sites` (now every entry point) and adds `withWrites` /
+   `withWritesSites`. `commits`' "commit-bearing entry points" still count crossings (§3.6).
+
 ---
 
 ## Appendix A. How the numbers were produced

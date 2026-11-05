@@ -450,6 +450,7 @@ mod budget {
             single_app: true,
             closed_world: false,
             human: false,
+            detail: false,
             out: None,
         }
     }

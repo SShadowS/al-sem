@@ -220,6 +220,79 @@ impl<'a> GroupPaths<'a> {
         out
     }
 
+    /// An own row's witness when every path the producer listed for it
+    /// cannot run under literal arguments (final CDO output review, item 2):
+    /// the root's guarded search (`tree`; `None` when it hit its cap) to the
+    /// first live state owning one of `ops`, the row's own operations, its
+    /// evidence operation first. The witness ends at one of the row's own
+    /// operations, so its anchor is the row's or another of its merged
+    /// facts', never a different table's. `own-no-witness` when the search
+    /// completed and none of them can run in any state it reached (the row
+    /// stays live by another direct fact of its kind); `search-cap` when the
+    /// search stopped early; `no-operation-id` when the row names none.
+    pub(crate) fn own_path(
+        &self,
+        reach: &LiteralReach<'a>,
+        tree: Option<&LiveTree<'a>>,
+        ops: &[String],
+    ) -> GroupPathOutcome {
+        let none = |reason| {
+            Err(NoGroupPath {
+                reason,
+                crossing: String::new(),
+            })
+        };
+        if ops.is_empty() {
+            return none("no-operation-id");
+        }
+        let Some(tree) = tree else {
+            return none("search-cap");
+        };
+        let Some((steps, op)) = reach.tree_witness(tree, ops) else {
+            return none("own-no-witness");
+        };
+        let mut hops = Vec::with_capacity(steps.len() + 1);
+        if let Some(first) = steps.first() {
+            hops.push(self.name(first.from));
+        }
+        for s in &steps {
+            let kind = self.kind.get(&(s.from, s.to)).copied().unwrap_or("call");
+            hops.push(format!("{kind} → {}", self.name(s.to)));
+        }
+        Ok(GroupPath {
+            hops,
+            through_entry_point: false,
+            reason: None,
+            crossing: String::new(),
+            steps: steps.iter().map(|s| self.step(reach, s)).collect(),
+            terminal: self.terminal(reach, op),
+        })
+    }
+
+    /// [`Self::own_path`]'s zero-hop witness: the first of `ops` that `root`
+    /// owns and can run at its start ([`LiteralReach::live_in_root`]).
+    pub(crate) fn own_path_in_root(
+        &self,
+        reach: &LiteralReach<'a>,
+        root: &str,
+        ops: &[String],
+    ) -> GroupPathOutcome {
+        match ops.iter().find(|op| reach.live_in_root(root, op)) {
+            Some(op) => Ok(GroupPath {
+                hops: vec![self.name(root)],
+                through_entry_point: false,
+                reason: None,
+                crossing: String::new(),
+                steps: Vec::new(),
+                terminal: self.terminal(reach, op),
+            }),
+            None => Err(NoGroupPath {
+                reason: "own-no-witness",
+                crossing: String::new(),
+            }),
+        }
+    }
+
     /// A witness step, structured.
     fn step(&self, reach: &LiteralReach<'a>, s: &Step<'a>) -> WitnessStep {
         let (edge_id, anchor) = match s.site {

@@ -949,6 +949,9 @@ pub struct DigestEffectFull {
     /// W2-6: a resource-less group's terminal witness (`DigestEffectResult`'s
     /// field of the same name).
     pub group_terminal_path: Option<crate::engine::l5::group_path::GroupPathOutcome>,
+    /// Final CDO output review, item 2: an own write row's witness when it
+    /// keeps no listed path (`DigestEffectResult`'s field of the same name).
+    pub own_path: Option<crate::engine::l5::group_path::GroupPathOutcome>,
     /// The operations the effect originates from, and its class's "known
     /// temporary" flag: what [`DbTempStates`] joins on, so `prove` can ask the
     /// same write in a CALLER's frame (G25). Not serialized.
@@ -1502,9 +1505,13 @@ pub(crate) fn literal_reach_pass(
     let mut suffixes = crate::engine::l5::literal_reach::SuffixCache::default();
     let never = || false;
     for entry in entries {
-        if entry.effects.iter().any(|e| e.boundary_group)
-            && let Some(tree) = reach.live_tree(&entry.routine_id)
-        {
+        // The root's guarded search, built once per root on first need
+        // (`None` inside: it hit its cap).
+        let mut root_tree = None;
+        if entry.effects.iter().any(|e| e.boundary_group) {
+            root_tree = Some(reach.live_tree(&entry.routine_id));
+        }
+        if let Some(Some(tree)) = &root_tree {
             // One crossing's entries serve each of its rows.
             let mut by_crossing: HashMap<
                 String,
@@ -1516,7 +1523,7 @@ pub(crate) fn literal_reach_pass(
                 };
                 let entries = by_crossing
                     .entry(c.id.clone())
-                    .or_insert_with(|| reach.crossing_entries(&tree, &c));
+                    .or_insert_with(|| reach.crossing_entries(tree, &c));
                 // W2-0c (design §3.3.1): per resource, the operations that
                 // could write it: every direct fact of its kind in the group's
                 // class, with the group's representatives. The path (G35,
@@ -1552,15 +1559,8 @@ pub(crate) fn literal_reach_pass(
                         (r.clone(), ops)
                     })
                     .collect();
-                e.group_resource_paths = group_paths.paths(
-                    &reach,
-                    &tree,
-                    entries,
-                    e,
-                    &candidates,
-                    &mut suffixes,
-                    &never,
-                );
+                e.group_resource_paths =
+                    group_paths.paths(&reach, tree, entries, e, &candidates, &mut suffixes, &never);
                 // W2-6 (2f): a resource-less group (COMMIT, HTTP, UI, …) gets
                 // its own terminal witness: through the crossing to a live
                 // state owning a direct fact of its type.
@@ -1570,7 +1570,7 @@ pub(crate) fn literal_reach_pass(
                 {
                     let ops = vec![(String::new(), reach.terminal_ops(&e.effect_type))];
                     e.group_terminal_path = group_paths
-                        .paths(&reach, &tree, entries, e, &ops, &mut suffixes, &never)
+                        .paths(&reach, tree, entries, e, &ops, &mut suffixes, &never)
                         .pop()
                         .map(|(_, o)| o);
                 }
@@ -1618,6 +1618,53 @@ pub(crate) fn literal_reach_pass(
             if e.via_paths.len() < before && e.via_paths.is_empty() {
                 e.via_paths_truncated = true;
             }
+        }
+        // Final CDO output review, item 2 (design §3.4.2): an own write row
+        // left with no listed path still has a live route (it is not
+        // literal-dead), so find it: the root's guarded search to the first
+        // live state owning one of the row's own operations, its evidence
+        // operation first. Before, such a row printed its anchor with no
+        // `path:` and no reason (CDO: IssueReminder's `CDO Queue Entry`
+        // Insert, whose three listed paths all pass a call its literal
+        // arguments rule out). A row of the root's own body needs no search.
+        // Rows with no source position (`unavailable`) are the no-path
+        // section's (§4.1 section 13), and known-temporary rows print no
+        // path; neither is searched.
+        for e in entry.effects.iter_mut() {
+            if e.boundary_group
+                || e.literal_unreachable
+                || e.via_paths.iter().any(|p| !p.is_empty())
+                || !matches!(
+                    e.effect_type.as_str(),
+                    "DB_INSERT" | "DB_MODIFY" | "DB_DELETE"
+                )
+                || e.evidence.source_kind == "unavailable"
+                || is_known_temp_state(e.temp_state.as_ref())
+            {
+                continue;
+            }
+            let mut ops: Vec<String> = e.evidence_operation_id.iter().cloned().collect();
+            for op in &e.origin_operation_ids {
+                if !ops.contains(op) {
+                    ops.push(op.clone());
+                }
+            }
+            let tree = match ops
+                .iter()
+                .any(|op| reach.live_in_root(&entry.routine_id, op))
+            {
+                // The zero-hop witness: the root owns a live one.
+                true => None,
+                false => Some(
+                    root_tree
+                        .get_or_insert_with(|| reach.live_tree(&entry.routine_id))
+                        .as_ref(),
+                ),
+            };
+            e.own_path = Some(match tree {
+                None => group_paths.own_path_in_root(&reach, &entry.routine_id, &ops),
+                Some(t) => group_paths.own_path(&reach, t, &ops),
+            });
         }
     }
 }
@@ -1919,6 +1966,7 @@ pub fn run_digest_query_full_from_entries(
                         .filter(|(id, _)| !eff.dead_group_resources.contains(id))
                         .collect(),
                     group_terminal_path: eff.group_terminal_path.take(),
+                    own_path: eff.own_path.take(),
                     origin_operation_ids: eff.origin_operation_ids.clone(),
                     effect_is_kt: is_known_temp_state(eff.temp_state.as_ref()),
                     literal_unreachable: eff.literal_unreachable,
@@ -3632,6 +3680,7 @@ mod tests {
                 .collect(),
             group_resource_paths: vec![],
             group_terminal_path: None,
+            own_path: None,
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,

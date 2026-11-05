@@ -8,6 +8,7 @@
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     D49 Rec: Modify 1 — known persistent
       Modify at ws:src/Sender.Codeunit.al:14
+      path: ModifyThenRunModal (in the routine itself)
   events: 0 raised in workspace code; 0 more only beyond entry points
   UI at 1 place: UI_WINDOW_OPEN at ws:src/Sender.Codeunit.al:15 (unconditional-on-success)
   errors at 1 place: ERROR_IMPLICIT at ws:src/Sender.Codeunit.al:12 (unconditional-on-success)

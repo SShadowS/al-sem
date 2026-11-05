@@ -1037,3 +1037,267 @@ fn every_answer_fits_the_client_and_the_wire() {
     assert!(s.finish().success());
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+// ---------------------------------------------------------------------------
+// The final CDO output review (2026-11-05): items 2 and 3.
+// ---------------------------------------------------------------------------
+
+/// The indentation of a line.
+fn indent(l: &str) -> usize {
+    l.len() - l.trim_start().len()
+}
+
+/// Final CDO review, item 2 (design §3.4.2: path and anchor of one
+/// witness; never invent a path, say why there is none): every table record
+/// under `writes in workspace code` in an explain card or a digest entry
+/// (human) has a `path:` line, or a `no path kept: <reason>` line. Returns
+/// the failures and how many records it checked. A record is a line two
+/// deeper than the section header (not the `table not resolved` line or a
+/// `… +N` fold); its block is the deeper lines after it.
+pub(crate) fn write_path_failures(label: &str, text: &str) -> (Vec<String>, usize) {
+    let lines: Vec<&str> = text.lines().collect();
+    let (mut failures, mut checked) = (Vec::new(), 0);
+    let mut i = 0;
+    while i < lines.len() {
+        if !lines[i]
+            .trim_start()
+            .starts_with("writes in workspace code (")
+        {
+            i += 1;
+            continue;
+        }
+        let h = indent(lines[i]);
+        let mut j = i + 1;
+        while j < lines.len() && indent(lines[j]) > h {
+            let t = lines[j].trim_start();
+            if indent(lines[j]) != h + 2
+                || t.starts_with("table not resolved")
+                || t.starts_with("… +")
+            {
+                j += 1;
+                continue;
+            }
+            checked += 1;
+            let mut k = j + 1;
+            let mut ok = false;
+            while k < lines.len() && indent(lines[k]) > h + 2 {
+                let s = lines[k].trim_start();
+                ok |= s.starts_with("path: ")
+                    || s.starts_with("path (")
+                    || s.starts_with("no path kept: ");
+                k += 1;
+            }
+            if !ok {
+                failures.push(format!("{label}: no path and no reason under {t}"));
+            }
+            j = k;
+        }
+        i = j;
+    }
+    (failures, checked)
+}
+
+/// The entry-point counts a human output states (final CDO review, item 3):
+/// the scope line's `(N entry points at S sites)`, the `writes beyond
+/// dependency entry points (… through K entry points at S sites)` header
+/// and the `M entry points at S sites write only temporary records` line,
+/// each `None` when absent.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EntryPointLines {
+    pub scope: Option<(usize, usize)>,
+    pub writing: Option<(usize, usize)>,
+    pub other: Option<(usize, usize)>,
+}
+
+/// `N entry point(s) at S site(s)` right after `marker` in `line`.
+fn points_at(line: &str, marker: &str) -> Option<(usize, usize)> {
+    let rest = &line[line.find(marker)? + marker.len()..];
+    let num = |s: &str| -> Option<(usize, usize)> {
+        let digits: String = s
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == ',')
+            .filter(char::is_ascii_digit)
+            .collect();
+        let used = s
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == ',')
+            .count();
+        Some((digits.parse().ok()?, used))
+    };
+    let (n, used) = num(rest)?;
+    let rest = rest[used..].strip_prefix(" entry point")?;
+    let rest = rest
+        .strip_prefix('s')
+        .unwrap_or(rest)
+        .strip_prefix(" at ")?;
+    let (s, _) = num(rest)?;
+    Some((n, s))
+}
+
+pub(crate) fn entry_point_lines(text: &str) -> EntryPointLines {
+    let mut out = EntryPointLines::default();
+    for l in text.lines() {
+        let t = l.trim_start();
+        if t.starts_with("scope: ") {
+            out.scope = out.scope.or(points_at(t, "grouped per entry point ("));
+        } else if t.starts_with("writes beyond dependency entry points (") {
+            out.writing = out.writing.or(points_at(t, " through "));
+        } else if t.contains(" write only temporary records or no table") {
+            out.other = out.other.or(points_at(t, ""));
+        }
+    }
+    out
+}
+
+/// The entry-point lines of a `--detail` card's `writes beyond dependency
+/// entry points` section, split into those with may-persist writes and the
+/// rest: each line's sites (`entered at a; b — …`), an anchorless one as
+/// its whole line (so it still counts once).
+pub(crate) fn detail_entry_points(text: &str) -> (Vec<Vec<String>>, Vec<Vec<String>>) {
+    let (mut writing, mut other) = (Vec::new(), Vec::new());
+    let mut section: Option<usize> = None;
+    let mut in_other = false;
+    for l in text.lines() {
+        let t = l.trim_start();
+        if t.starts_with("writes beyond dependency entry points (") {
+            section = Some(indent(l));
+            in_other = false;
+            continue;
+        }
+        let Some(h) = section else { continue };
+        if indent(l) <= h {
+            section = None;
+            continue;
+        }
+        if indent(l) != h + 2 {
+            continue;
+        }
+        if t.contains(" write only temporary records or no table:") {
+            in_other = true;
+            continue;
+        }
+        let Some((_, rest)) = t.split_once(", entered at ") else {
+            continue;
+        };
+        let sites = rest.split(" — ").next().unwrap_or("");
+        let sites: Vec<String> = if sites.is_empty() {
+            vec![t.to_string()]
+        } else {
+            sites.split("; ").map(str::to_string).collect()
+        };
+        if in_other {
+            other.push(sites);
+        } else {
+            writing.push(sites);
+        }
+    }
+    (writing, other)
+}
+
+/// Final CDO review, item 3 (design §3.3, §3.6: a total is a union by
+/// identity): the scope line's entry points are the section's writing ones
+/// plus the temporary-only ones (they partition), and its sites are the
+/// union of both sets' sites, counted from the `--detail` card's own lines
+/// (`detail`); each section's counts are its own lines'. `query` (query
+/// effects' human answer of the same routine) states the same writing and
+/// temporary-only counts as the card.
+pub(crate) fn entry_point_failures(
+    label: &str,
+    card: &str,
+    detail: &str,
+    query: Option<&str>,
+) -> Vec<String> {
+    let mut f = Vec::new();
+    let c = entry_point_lines(card);
+    let (writing, other) = detail_entry_points(detail);
+    let union = |sets: &[&Vec<Vec<String>>]| -> usize {
+        sets.iter()
+            .flat_map(|s| s.iter().flatten())
+            .collect::<BTreeSet<_>>()
+            .len()
+    };
+    let Some(scope) = c.scope else {
+        f.push(format!("{label}: no entry-point count on the scope line"));
+        return f;
+    };
+    let w = c.writing.unwrap_or((0, 0));
+    let o = c.other.unwrap_or((0, 0));
+    if scope.0 != w.0 + o.0 {
+        f.push(format!(
+            "{label}: scope says {} entry points, the sections {} + {}",
+            scope.0, w.0, o.0
+        ));
+    }
+    let checks = [
+        (
+            "scope",
+            scope,
+            writing.len() + other.len(),
+            union(&[&writing, &other]),
+        ),
+        ("writes beyond", w, writing.len(), union(&[&writing])),
+        ("temporary only", o, other.len(), union(&[&other])),
+    ];
+    for (what, (n, s), lines, sites) in checks {
+        if (n, s) != (lines, sites) {
+            f.push(format!(
+                "{label}: {what} says {n} entry points at {s} sites; the --detail lines \
+                 are {lines} at {sites} distinct sites"
+            ));
+        }
+    }
+    if let Some(q) = query {
+        let q = entry_point_lines(q);
+        if (q.writing, q.other) != (c.writing, c.other) {
+            f.push(format!(
+                "{label}: query effects says {:?} / {:?}, explain {:?} / {:?}",
+                q.writing, q.other, c.writing, c.other
+            ));
+        }
+    }
+    f
+}
+
+/// Final CDO review, items 2 and 3 on the fixture: every workspace-code
+/// write record of explain's and digest's cards has a path or a reason, and
+/// the entry-point counts of the scope line and the sections agree (union
+/// by identity, read off the `--detail` card) in explain, digest and query
+/// effects. The CDO twins (`output_cdo::cdo_write_lines_have_a_path_or_a_reason`,
+/// `cdo_entry_point_counts_agree`) carry the discrimination proofs: the
+/// fixture has no row whose listed paths all cannot run and no entry point
+/// that writes only temporary records, so neither break moves it.
+#[test]
+fn write_lines_have_a_path_and_entry_point_counts_agree() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let run = |a: &[&str]| {
+        let (out, err, code) = run_alsem(a);
+        assert_eq!(code, 0, "{a:?}: {err}");
+        out
+    };
+    let mut failures = Vec::new();
+    let mut checked = 0;
+    for root in [ISSUE_DOC, WRITE_LOG] {
+        let card = run(&["explain", &ws, "--routine", root]);
+        let detail = run(&["explain", &ws, "--routine", root, "--detail"]);
+        let digest = run(&["digest", &ws, "--routine", root, "--format", "human"]);
+        for (what, text) in [("explain", &card), ("digest", &digest)] {
+            let (f, n) = write_path_failures(&format!("{root} {what}"), text);
+            failures.extend(f);
+            checked += n;
+        }
+        let q = root.replace("::", ".");
+        let query = run(&["query", "effects", &ws, "--routine", &q]);
+        failures.extend(entry_point_failures(root, &card, &detail, Some(&query)));
+        failures.extend(entry_point_failures(
+            &format!("{root} digest"),
+            &digest,
+            &detail,
+            None,
+        ));
+    }
+    assert!(
+        checked >= 2,
+        "precondition: write records checked ({checked})"
+    );
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

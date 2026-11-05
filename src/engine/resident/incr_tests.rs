@@ -57,6 +57,7 @@ pub(super) fn job<'a>(
             single_app: false,
             closed_world: false,
             human: false,
+            detail: false,
             out: None,
         }),
         Cmd::Digest => Box::new(DigestJob::new(

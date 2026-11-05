@@ -9,5 +9,6 @@ dependencies: Out Base (embedded)
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     Out Log: Insert 1 — known persistent
       Insert at ws:src/OutIssueDocument.Codeunit.al:61
+      path: WriteLog (in the routine itself)
   temporary records (not writes): 1 table in workspace code (1 effect row): Out Log; 0 tables only beyond entry points; only temporary: 0 tables
   events: 0 raised in workspace code; 0 more only beyond entry points

@@ -9,6 +9,7 @@
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     My Setup: Insert 1 — known persistent
       Insert at ws:src/NormalCU.al:34
+      path: DoSetup (in the routine itself)
   events: 0 raised in workspace code; 0 more only beyond entry points
 
 --- Codeunit Normal Handler::RunSetup ---

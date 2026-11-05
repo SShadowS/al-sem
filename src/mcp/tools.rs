@@ -275,7 +275,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_prove",
-            "A yes/no question about one AL routine (`routine`, a selector), answered with its evidence. `question`: may-commit, commits-on-success-path, writes-table:<table>, publishes-event:<event>, reaches-ui, throws-error. Answers: yes (a path to the effect exists; a may-answer), no (proven absent under the stated assumptions), unknown (no matching effect observed, but coverage is incomplete, so not a proof). A temporary-record write is not a write for writes-table. Default (`format: human`): about 10 lines with the answer, each evidence row with its location and one witness path, then coverage (calls not resolved and interface calls open world, with the top callees), assumptions and limits. Ask for more: `closedWorld: true` (interface calls dispatch only to the loaded implementations; it can turn unknown into no, and says so under assumptions), `format: json` (every evidence row, its group path and witness hops; 5-60 KB). Size: 1-5 KB human. Lines are 1-based. Dependency code: the whole call cone is followed with literal arguments. Next: on unknown, alsem_explain lists the workspace gaps behind it. Returns the exact `alsem prove` stdout.",
+            "A yes/no question about one AL routine (`routine`, a selector), answered with its evidence. `question`: may-commit, commits-on-success-path, writes-table:<table>, publishes-event:<event>, reaches-ui, throws-error. Answers: yes (a path to the effect exists; a may-answer), no (proven absent under the stated assumptions), unknown (no matching effect observed, but coverage is incomplete, so not a proof). A temporary-record write is not a write for writes-table. Default (`format: human`): about 10 lines with the answer, each evidence row with its location and one witness path, then the blockers of an unknown grouped by kind with their counts and the first 3 of each (workspace ones first), then coverage (calls not resolved and interface calls open world, with the top callees), assumptions and limits. Ask for more: `detail: true` (every blocker), `closedWorld: true` (interface calls dispatch only to the loaded implementations; it can turn unknown into no, and says so under assumptions), `format: json` (every evidence row, its group path and witness hops; 5-60 KB). Size: 1-5 KB human. Lines are 1-based. Dependency code: the whole call cone is followed with literal arguments. Next: on unknown, alsem_explain lists the workspace gaps behind it. Returns the exact `alsem prove` stdout.",
             schema(
                 vec![
                     (
@@ -293,6 +293,10 @@ pub fn tool_list() -> Vec<Value> {
                     (
                         "closedWorld",
                         json!({"type": "boolean", "description": "Assume the loaded world is all there is: an interface call dispatches only to the loaded implementations."}),
+                    ),
+                    (
+                        "detail",
+                        json!({"type": "boolean", "description": "Human output: every blocker, not the first few of each kind (the JSON always lists every one)."}),
                     ),
                     ("deterministic", deterministic()),
                 ],
@@ -755,6 +759,7 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
                 &a.enumerated("format", &["json", "human"], "human")?,
             );
             v.switch("closed-world", a.flag("closedWorld")?);
+            v.switch("detail", a.flag("detail")?);
             v.switch("deterministic", a.flag("deterministic")?);
             v
         }

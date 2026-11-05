@@ -617,7 +617,9 @@ fn single_app_flag_reaches_prove() {
         // MCP output plan 1a (schema 2.0.0, `lineBase: 1`, the anchor's line + 1),
         // then 1d (schema 2.1.0, no other change on this fixture), then wave 2
         // W2-0b (schema 2.2.0, additive group-witness fields this may-commit
-        // answer does not carry: only the version moved).
+        // answer does not carry: only the version moved), then the final CDO
+        // review's item 1 (the human blockers grouped by kind; the JSON did
+        // not move).
         let path = t8_golden(file);
         let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
         assert_eq!(got, want, "{format}: --single-app != the base's default");

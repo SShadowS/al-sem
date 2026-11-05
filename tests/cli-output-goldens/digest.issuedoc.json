@@ -691,7 +691,9 @@
           },
           "entryPoints": {
             "count": 2,
-            "sites": 2
+            "sites": 2,
+            "withWrites": 2,
+            "withWritesSites": 2
           },
           "events": {
             "distinct": 2,

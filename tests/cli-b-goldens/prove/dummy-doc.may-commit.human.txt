@@ -1,8 +1,9 @@
 --- NonExistentRoutineXYZ ---
   question: may-commit
   answer:   unknown
-  blockedBy: 1 blocker(s)
-    [routine-not-found] no routine of the program has the id or name 'NonExistentRoutineXYZ'
+  blockedBy: 1 blocker in 1 kind
+    routine-not-found: 1
+      no routine of the program has the id or name 'NonExistentRoutineXYZ'
   coverage: incomplete
   assumptions: none (default world; --closed-world assumes the loaded interface implementations)
   limits: none

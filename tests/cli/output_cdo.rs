@@ -128,8 +128,25 @@ fn calls(
             "alsem_prove",
             json!({"routine": sel, "question": format!("writes-table:{LOG_ATTACHMENT}"), "format": "json", "deterministic": true}),
         ),
+        // Final CDO review, item 1: an `unknown` with hundreds of blockers.
+        (
+            "prove writes-table data-exch human",
+            "alsem_prove",
+            json!({"routine": sel, "question": format!("writes-table:{DATA_EXCH}"), "format": "human", "deterministic": true}),
+        ),
+        // Final CDO review, item 3: every entry point's line and sites.
+        (
+            "explain detail",
+            "alsem_explain",
+            json!({"routines": [sel], "detail": true}),
+        ),
     ]
 }
+
+/// Final CDO review, item 1: IssueReminder's `writes-table:Data Exch.` is
+/// `unknown` with 287 blockers (2026-11-05, `bc3ccb18`); one line each was
+/// 294 lines and 47,875 bytes, over the 40 KiB inline cap.
+const DATA_EXCH: &str = "Data Exch.";
 
 /// The table of design §1 item 9: query lists `Modify` operations on it the
 /// capability cone rules out under literal arguments.
@@ -663,6 +680,10 @@ const RENDERED: &[(&str, &str)] = &[
     ("query touches human", "query-touches.human.txt"),
     ("prove may-commit human", "prove-may-commit.human.txt"),
     ("prove writes-table human", "prove-writes-table.human.txt"),
+    (
+        "prove writes-table data-exch human",
+        "prove-writes-table-data-exch.human.txt",
+    ),
     ("digest human", "digest.human.txt"),
 ];
 
@@ -685,6 +706,12 @@ fn ratchet(label: &str, call: &str) -> Budget {
         (_, "prove may-commit human") => (20, 2_000),
         ("RunReportID", "prove writes-table human") => (20, 5_000),
         (_, "prove writes-table human") => (20, 2_500),
+        // Final CDO review, item 1: IssueReminder's 287 blockers fold by
+        // kind (22 lines, 2,061 B on 2026-11-05; before 294 / 47,875).
+        // RunReportID answers `yes` with 5 evidence rows and their paths
+        // (17 lines, 7,366 B).
+        ("RunReportID", "prove writes-table data-exch human") => (20, 8_200),
+        (_, "prove writes-table data-exch human") => (30, 3_000),
         ("IssueReminder", "digest human") => (125, 34_000),
         ("RunReportID", "digest human") => (135, 39_000),
         (_, "digest human") => (30, 2_500),
@@ -1018,5 +1045,101 @@ fn cdo_rendering_goldens() {
             }
         }
     }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Final CDO review, item 2 on CDO: every table record under `writes in
+/// workspace code` in each routine's explain card and digest (human) has a
+/// `path:` line or `no path kept: <reason>`. And IssueReminder's `CDO Queue
+/// Entry` Insert (`CDODocumentTemplateLine.Table.al:1713`), whose three
+/// listed paths all pass `RunReportID → QueueMail`, which IssueReminder's
+/// literal arguments rule out, carries the searched witness: a real path
+/// that re-enters workspace code beyond `Codeunit Reminder-Issue::OnRun`.
+///
+/// Discrimination (2026-11-05, cdo profile): restoring the old record
+/// lines in `routine_rollup::workspace_write_lines` (the anchor, then
+/// `path_lines` only) fails at "IssueReminder explain: no path and no
+/// reason under CDO Queue Entry: Insert 1 — known persistent" (and its
+/// digest twin); restored, passes.
+#[test]
+fn cdo_write_lines_have_a_path_or_a_reason() {
+    let Some(a) = cdo_answers() else { return };
+    let mut failures = Vec::new();
+    let mut checked = 0;
+    for (label, ..) in ROUTINES {
+        for call in ["explain human", "digest human"] {
+            let key = format!("{label} {call}");
+            let (f, n) =
+                crate::output_invariants_w3::write_path_failures(&key, &a.answers[&key].stdout);
+            failures.extend(f);
+            checked += n;
+        }
+    }
+    assert!(
+        checked >= 40,
+        "precondition: write records checked ({checked})"
+    );
+    let card = &a.answers["IssueReminder explain human"].stdout;
+    let lines: Vec<&str> = card.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("CDO Queue Entry: Insert"))
+        .expect("precondition: IssueReminder writes CDO Queue Entry in workspace code");
+    let block = lines[at + 1..]
+        .iter()
+        .take_while(|l| l.starts_with("      "))
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !block.contains("path (re-enters workspace code beyond Codeunit Reminder-Issue::OnRun")
+        || !block.contains("→ QueueMailCombined")
+    {
+        failures.push(format!(
+            "IssueReminder's CDO Queue Entry has no searched witness:\n{block}"
+        ));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Final CDO review, item 3 on CDO: for each routine, the scope line's
+/// entry points are the `writes beyond` section's plus the temporary-only
+/// ones, its sites the union of both sets' sites (read off the `--detail`
+/// card), in explain and digest (human); query effects states the same
+/// section counts. Measured 2026-11-05 on `bc3ccb18`: IssueReminder 27
+/// entry points at 31 sites (12 at 14 with may-persist writes, 15 at 17
+/// temporary-only); before, the scope line said "14 entry points at 14
+/// sites" (the writing crossings, their sites summed).
+///
+/// Discrimination (2026-11-05, cdo profile): restoring the old totals
+/// (`entry_points` = the writing crossings, `crossing_sites` their summed
+/// sites) fails at "IssueReminder: scope says 14 entry points, the sections
+/// 12 + 15"; restored, passes.
+#[test]
+fn cdo_entry_point_counts_agree() {
+    let Some(a) = cdo_answers() else { return };
+    let mut failures = Vec::new();
+    for (label, ..) in ROUTINES {
+        let get = |call: &str| a.answers[&format!("{label} {call}")].stdout.as_str();
+        let detail = get("explain detail");
+        failures.extend(crate::output_invariants_w3::entry_point_failures(
+            label,
+            get("explain human"),
+            detail,
+            Some(get("query effects human")),
+        ));
+        failures.extend(crate::output_invariants_w3::entry_point_failures(
+            &format!("{label} digest"),
+            get("digest human"),
+            detail,
+            None,
+        ));
+    }
+    let ir = crate::output_invariants_w3::entry_point_lines(
+        &a.answers["IssueReminder explain human"].stdout,
+    );
+    assert!(
+        ir.other.is_some_and(|o| o.0 > 0),
+        "precondition: IssueReminder has temporary-only entry points: {ir:?}"
+    );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

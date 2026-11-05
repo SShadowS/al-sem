@@ -1,0 +1,22 @@
+--- Codeunit CDO Issue Document::IssueReminder ---
+  question: writes-table:Data Exch.
+  answer:   unknown — no matching effect observed; coverage incomplete
+  blockedBy: 287 blockers in 4 kinds (at most 3 each, workspace ones first; --detail lists every one)
+    coverage-incomplete: 1
+      coverage status: partial
+    open-world-dispatch: 263 (10 in this workspace, 247 in dependency code, 6 not placed)
+      DispatcherFactory.CreateeDocumentDispatcher in SendElectronicDocument @ ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:80
+      DispatcherFactory.CreateLegacyeDocDispatcher in SendElectronicDocument @ ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:81
+      DocumentDispatcher.DispatchDocument in SendElectronicDocument @ ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:83
+      … +260 blockers (of 263 blockers; --detail lists them)
+    unknown-table-write: 2 (2 in this workspace)
+      DB_INSERT on a table that is not known @ ws:src/Features/EDocuments/CDOeDocumentsDispatcher.Codeunit.al:307
+      DB_MODIFY on a table that is not known @ ws:src/Features/HandledState/CDOHandledFieldsManagement.Codeunit.al:247
+    unresolved-callsite: 21 (6 in this workspace, 14 in dependency code, 1 not placed)
+      Codeunit.Run(<dynamic>) in ValidateDocument @ ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:140
+      Codeunit.Run(<dynamic>) in HandleDelivery @ ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:186
+      Report.RunModal in TryRunReport @ ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:244
+      … +18 blockers (of 21 blockers; --detail lists them)
+  coverage: incomplete — 21 calls not resolved (6 in this workspace), 263 interface calls open world (10 in this workspace); top: CurrLineWithPrice.SetLine ×21, Codeunit.Run(<dynamic>) ×16, CurrLineWithPrice.GetLine ×8; alsem explain lists the workspace ones under gaps
+  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  limits: none

@@ -1,9 +1,11 @@
 --- Codeunit Ws Work::CallChain ---
   question: may-commit
   answer:   unknown — no matching effect observed; coverage incomplete
-  blockedBy: 2 blocker(s)
-    [coverage-incomplete] coverage status: partial
-    [unresolved-callsite] Lib.Outer in CallChain
+  blockedBy: 2 blockers in 2 kinds
+    coverage-incomplete: 1
+      coverage status: partial
+    unresolved-callsite: 1
+      Lib.Outer in CallChain
   coverage: incomplete — 1 call not resolved (0 in this workspace); top: Lib.Outer ×1
   assumptions: none (default world; --closed-world assumes the loaded interface implementations)
   limits: none
