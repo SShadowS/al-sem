@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (caller relations)
+
+- **Two caller relations, named and pinned.** The solve graph (`query touches` up,
+  `DbEffectQuery::ancestors`, the detectors' caller walks) and R0's reverse walk (`alsem tests`,
+  impact, `query touches --field --from` up) disagreed on CDO (`WaitForMailLimit`: 967 transitive
+  callers against 4,827 with a body, 1,030 of them local). Diffed exactly: every local difference
+  (66 routines) is a routine that opens a page whose user-started trigger (an action, a field's
+  `OnDrillDown`/`OnLookup`, a part, a page it opens) reaches the root. The program engine does
+  not follow those on purpose (`run_triggers`: platform entry points are not modelled); R0's
+  may-execute graph does. Not a bug on either side. New in `program::impact_graph::reverse`:
+  `is_code_call_site` (the code-call relation over the sited graph: calls, object runs and the
+  triggers a run runs, record triggers, event dispatch; no user-started lifecycle, rule edge or
+  open site), `object_run_reaches` (the resolver's run rule, page and report extensions
+  included) and the `CodeCalls` visitor adapter. R0 over code-call sites equals the solve graph's
+  local callers exactly on CDO (`WaitForMailLimit` 964 = 964, `RunReportID` 880 = 880).
+  The rest of the gap is the solve graph's documented cut at dependency code (it holds workspace
+  callers' calls only): 86 workspace routines reach `WaitForMailLimit` by code calls only through
+  Base Application code (84 by `Sales-Post`'s `OnAfterFinalizePosting`), plus open sites and
+  bodiless dependency routines.
+- **`query touches` up names its relation**: JSON `up.relation: "code-calls"` and a human
+  `callers:` line saying what it follows and what it does not (a page a caller opens, a path
+  through dependency code). Query schema **3.3.0** (additive).
+- Fixture `tests/fixtures/caller-relations` and the agreement test
+  `reverse::caller_agreement_tests::solve_callers_equal_the_reverse_walk_over_code_call_sites`.
+- `aldump --caller-diff <ws> "<Object>::<Routine>" [--code-calls]`: the probe that measured the
+  above (both caller sets, every local difference with a witness path).
+
+### Fixed (caller relations)
+
+- **R0-3's `select::direct_callers` missed page extensions.** A run of a page runs its
+  extensions' lifecycle triggers too (the resolver's `dispatch_entry_trigger`), so explain counted
+  the page's runners as callers of an extension's `OnOpenPage` while `direct_callers` (which
+  looked up `run_triggers` by the extension's own kind) counted none; and an extension's triggers
+  were counted as routine callers where explain counts them apart as page actions (F16j: an
+  `object_type` starting with `Page`). It now reads `reverse::object_run_reaches`, and a page
+  extension's trigger is a page trigger. `explain_callers_equal_the_cones_direct_callers` runs
+  over `caller-relations` as well (breaks: the old run rule -> `explain 1, cone 0` on the
+  extension's `OnOpenPage`; page triggers only -> `explain 4, cone 6` on `Target`). No shipped
+  output read `direct_callers` on master.
+
 ### Added (agent tasks, milestone C: test selection)
 
 Which tests to run first for a change, as a first-class answer. Spec:

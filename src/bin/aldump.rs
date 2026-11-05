@@ -65,7 +65,8 @@ fn usage() -> ExitCode {
          \x20      aldump --switch-compare <dump-dir-A> <dump-dir-B> [--sample N] [--width N]\n\
          \x20      aldump --snapshot-memory <workspace> [--single-app] [--hash] [--pd-dump <file>]\n\
          \x20      aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--implements <interface>] [--verify] [--low-mem] [--sited]\n\
-         \x20      aldump --reverse-cone <workspace> (--routine <Object::Routine|stableId>)... [--roots-file F] [--multi] [--no-dependents]"
+         \x20      aldump --reverse-cone <workspace> (--routine <Object::Routine|stableId>)... [--roots-file F] [--multi] [--no-dependents]\n\
+         \x20      aldump --caller-diff <workspace> \"<Object Name>::<Routine>\" [--code-calls]"
     );
     ExitCode::FAILURE
 }
@@ -941,6 +942,307 @@ mod erased {
     }
 }
 
+/// `aldump --caller-diff <workspace> "<Object Name>::<Routine>" [--code-calls]`:
+/// the measurement probe of the two caller relations (cross-app). The solve
+/// graph's transitive callers of the routine (`DbEffectQuery::ancestors`, as
+/// `query touches` up reads them) against R0's reverse walk over the sited
+/// graph (`impact_graph::reverse::walk_one`; with `--code-calls`, over
+/// code-call sites only, `reverse::CodeCalls`). Prints, as JSON lines: the
+/// count of workspace routines whose model callers are all dependency code
+/// (`depCalledWs`, `depOnlyCalledWs`); one `wsNonLocal` line per workspace
+/// routine R0 reaches only through dependency code or an open site, with a
+/// witness path; the summary (`solveAll`, `solveLocal`, `r0Local`, `both`,
+/// `onlyR0`, `onlySolve`); one line per local difference, with the witness
+/// path of the side that has it (each hop's `via`, boundary and tier).
+fn caller_diff_cmd(args: &[String]) -> ExitCode {
+    if args.len() < 2 {
+        eprintln!(
+            "usage: aldump --caller-diff <workspace> \"<Object Name>::<Routine>\" [--code-calls]"
+        );
+        return ExitCode::FAILURE;
+    }
+    use al_sem::engine::l4::effect_query_cli::{QuerySubstrate, query_view};
+    use al_sem::program::impact_graph::reverse::{
+        ConeVisitor, Tier, Via, WalkOptions, WalkScratch, WalkState, walk_one,
+    };
+    use serde_json::json;
+    use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+    let ws = std::path::PathBuf::from(&args[0]);
+    let target = args[1].to_lowercase();
+    let (tobj, tname) = target.rsplit_once("::").expect("Obj::Routine");
+    let inputs = std::sync::Arc::new(al_sem::program::inputs::WorkspaceInputs::read(
+        &ws,
+        &Default::default(),
+    ));
+    // --- solve side ---
+    let view = query_view(&inputs, false).expect("view");
+    let sub = QuerySubstrate::of(&view);
+    let model = sub.resolved();
+    let q = sub.query();
+    let primary = std::sync::Arc::clone(view.rel().primary());
+    let obj_name: HashMap<&str, &str> = model
+        .workspace
+        .objects
+        .iter()
+        .map(|o| (o.id.as_str(), o.name.as_str()))
+        .collect();
+    let disp = |r: &al_sem::program::model::workspace::ModelRoutine| {
+        format!(
+            "{} {}::{}",
+            r.object_type,
+            obj_name.get(r.object_id.as_str()).unwrap_or(&"?"),
+            r.name
+        )
+    };
+    let by_id: HashMap<&str, &al_sem::program::model::workspace::ModelRoutine> = model
+        .workspace
+        .routines
+        .iter()
+        .map(|r| (r.id.as_str(), r))
+        .collect();
+    let root = model
+        .workspace
+        .routines
+        .iter()
+        .find(|r| {
+            r.name.to_lowercase() == tname
+                && obj_name
+                    .get(r.object_id.as_str())
+                    .is_some_and(|n| n.to_lowercase() == tobj)
+        })
+        .expect("root routine");
+    let ws_guid = root.app_guid.clone();
+    // Workspace routines whose only direct model callers are dependency
+    // routines (absent from the solve graph, which holds workspace callers).
+    {
+        let mut prim_called: std::collections::HashSet<&str> = Default::default();
+        for es in primary.edges_by_from.values() {
+            for e in es {
+                prim_called.insert(e.to.as_str());
+            }
+        }
+        let mut dep_called: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+        for e in &model.calls.edges {
+            let (Some(to), Some(from)) = (e.to.as_deref(), by_id.get(e.from.as_str())) else {
+                continue;
+            };
+            let Some(t) = by_id.get(to) else { continue };
+            if t.app_guid == ws_guid && from.app_guid != ws_guid {
+                dep_called
+                    .entry(to)
+                    .or_default()
+                    .insert(e.dispatch_kind.as_str());
+            }
+        }
+        let only: Vec<(&str, &BTreeSet<&str>)> = dep_called
+            .iter()
+            .filter(|(t, _)| !prim_called.contains(**t))
+            .map(|(t, k)| (*t, k))
+            .collect();
+        let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
+        for (_, k) in &only {
+            *kinds
+                .entry(k.iter().copied().collect::<Vec<_>>().join("+"))
+                .or_default() += 1;
+        }
+        println!(
+            "{}",
+            json!({"depCalledWs": dep_called.len(), "depOnlyCalledWs": only.len(), "kinds": kinds,
+                   "examples": only.iter().take(8).map(|(t, k)| format!("{} {:?}", disp(by_id[t]), k)).collect::<Vec<_>>()})
+        );
+    }
+    let rix = q.routine_ix(&root.id).expect("solve row");
+    let mut solve: BTreeMap<String, String> = BTreeMap::new(); // stable -> display
+    let mut solve_all = 0usize;
+    for (_, a) in q.ancestors(rix) {
+        solve_all += 1;
+        let id = q.bundle().routine_id(a);
+        if let Some(r) = by_id.get(id)
+            && r.app_guid == ws_guid
+        {
+            solve.insert(r.stable_routine_id.clone(), disp(r));
+        }
+    }
+    // reverse primary graph for solve witness paths
+    let mut rev: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
+    for (from, es) in &primary.edges_by_from {
+        for e in es {
+            rev.entry(e.to.as_str())
+                .or_default()
+                .push((from.as_str(), e.kind.as_str()));
+        }
+    }
+    let mut solve_parent: HashMap<&str, (&str, &str)> = HashMap::new();
+    let mut dq = VecDeque::from([root.id.as_str()]);
+    while let Some(n) = dq.pop_front() {
+        for &(f, k) in rev.get(n).map(Vec::as_slice).unwrap_or(&[]) {
+            if f != root.id.as_str() && !solve_parent.contains_key(f) {
+                solve_parent.insert(f, (n, k));
+                dq.push_back(f);
+            }
+        }
+    }
+    let by_stable: HashMap<&str, &al_sem::program::model::workspace::ModelRoutine> = model
+        .workspace
+        .routines
+        .iter()
+        .map(|r| (r.stable_routine_id.as_str(), r))
+        .collect();
+    let solve_path = |stable: &str| -> Vec<String> {
+        let mut out = Vec::new();
+        let Some(r) = by_stable.get(stable) else {
+            return out;
+        };
+        let mut at = r.id.as_str();
+        while let Some(&(to, k)) = solve_parent.get(at) {
+            out.push(format!(
+                "{} -[{}]->",
+                by_id.get(at).map(|r| disp(r)).unwrap_or_default(),
+                k
+            ));
+            at = to;
+            if out.len() > 40 {
+                break;
+            }
+        }
+        out
+    };
+    // --- R0 side ---
+    let program = al_sem::program::resolved::ResolvedProgram::build(
+        &inputs,
+        al_sem::program::resolved::ProgramScope::CrossApp,
+    )
+    .expect("program");
+    let g = al_sem::program::impact_graph::sited_from_program(&program, &|| false)
+        .unwrap_or_else(|_| panic!("the sited graph build was cancelled"));
+    let roots = g.nodes_with_stable_id(&root.stable_routine_id);
+    #[derive(Default)]
+    struct C {
+        best: HashMap<u32, (Tier, u32, Option<u32>, Option<u32>)>,
+    }
+    impl ConeVisitor for C {
+        fn reach(&mut self, _: u32, s: WalkState, h: u32, via: Via, from: Option<WalkState>) {
+            let site = match via {
+                Via::Site(x) => Some(x),
+                _ => None,
+            };
+            let b = self.best.get(&s.node);
+            if b.is_none_or(|b| (s.tier, h) < (b.0, b.1)) {
+                self.best
+                    .insert(s.node, (s.tier, h, from.map(|f| f.node), site));
+            }
+        }
+    }
+    let mut c = C::default();
+    if args.iter().any(|a| a == "--code-calls") {
+        walk_one(
+            &g,
+            roots[0],
+            &WalkOptions::default(),
+            &mut WalkScratch::default(),
+            &mut al_sem::program::impact_graph::reverse::CodeCalls(&mut c),
+        );
+    } else {
+        walk_one(
+            &g,
+            roots[0],
+            &WalkOptions::default(),
+            &mut WalkScratch::default(),
+            &mut c,
+        );
+    }
+    let mut r0_local: BTreeMap<String, String> = BTreeMap::new();
+    let mut r0_tier: HashMap<String, Tier> = HashMap::new();
+    for (&n, &(t, ..)) in &c.best {
+        if n == roots[0] {
+            continue;
+        }
+        if let Some(sid) = g.stable_id(n) {
+            let e = r0_tier.entry(sid.clone()).or_insert(t);
+            *e = (*e).min(t);
+            if t == Tier::Local
+                && by_stable
+                    .get(sid.as_str())
+                    .is_some_and(|r| r.body_available)
+            {
+                r0_local.insert(sid, g.display(n));
+            }
+        }
+    }
+    let r0_path = |sid: &str| -> Vec<String> {
+        let mut out = Vec::new();
+        let Some(&n0) = g.nodes_with_stable_id(sid).first() else {
+            return out;
+        };
+        let mut at = n0;
+        while let Some(&(t, _, Some(p), site)) = c.best.get(&at) {
+            let s = site.map(|s| g.sites()[s as usize]);
+            out.push(format!(
+                "{} -[{}/{:?}/{}]->",
+                g.display(at),
+                s.map(|s| s.via()).unwrap_or("?"),
+                s.map(|s| s.boundary),
+                t.as_str()
+            ));
+            at = p;
+            if out.len() > 40 {
+                break;
+            }
+        }
+        out
+    };
+    // Workspace routines R0 reaches only through dependency code (or open sites).
+    let mut ws_dep: BTreeMap<String, (String, Tier)> = BTreeMap::new();
+    for (sid, &t) in &r0_tier {
+        if t != Tier::Local
+            && by_stable
+                .get(sid.as_str())
+                .is_some_and(|r| r.app_guid == ws_guid && r.body_available)
+        {
+            let n = g.nodes_with_stable_id(sid)[0];
+            ws_dep.insert(sid.clone(), (g.display(n), t));
+        }
+    }
+    for (sid, (d, t)) in &ws_dep {
+        println!(
+            "{}",
+            json!({"side": "wsNonLocal", "routine": d, "tier": t.as_str(), "stable": sid,
+                   "inSolve": solve.contains_key(sid), "path": r0_path(sid)})
+        );
+    }
+    let only_r0: BTreeSet<&String> = r0_local
+        .keys()
+        .filter(|k| !solve.contains_key(*k))
+        .collect();
+    let only_solve: BTreeSet<&String> = solve
+        .keys()
+        .filter(|k| !r0_local.contains_key(*k))
+        .collect();
+    println!(
+        "{}",
+        json!({"solveAll": solve_all, "solveLocal": solve.len(), "r0Local": r0_local.len(),
+               "both": solve.keys().filter(|k| r0_local.contains_key(*k)).count(),
+               "onlyR0": only_r0.len(), "onlySolve": only_solve.len()})
+    );
+    for k in only_r0 {
+        println!(
+            "{}",
+            json!({"side": "onlyR0", "routine": r0_local[k], "stable": k,
+                   "inSolveGraph": by_stable.get(k.as_str()).is_some_and(|r| q.routine_ix(&r.id).is_some()),
+                   "path": r0_path(k)})
+        );
+    }
+    for k in only_solve {
+        println!(
+            "{}",
+            json!({"side": "onlySolve", "routine": solve[k], "stable": k,
+                   "r0Tier": r0_tier.get(k).map(|t| t.as_str()),
+                   "path": solve_path(k), "r0Path": r0_path(k)})
+        );
+    }
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     let code = run_main();
     // The process-cumulative cone census, once, after every cone the mode
@@ -963,6 +1265,7 @@ fn run_main() -> ExitCode {
         Some("--snapshot-memory") => return snapshot_memory_cmd(&raw[1..]),
         Some("--session-refresh") => return session_refresh_cmd(&raw[1..]),
         Some("--reverse-cone") => return reverse_cone_cmd(&raw[1..]),
+        Some("--caller-diff") => return caller_diff_cmd(&raw[1..]),
         _ => {}
     }
     let mut l2 = false;
