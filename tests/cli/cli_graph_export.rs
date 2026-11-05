@@ -839,7 +839,7 @@ fn graph_export_golden() {
         .join("cli-query-goldens")
         .join("graph.test-selection-graph.jsonl");
     if regen::regen_mode() {
-        std::fs::write(&path, &got).expect("write golden");
+        regen::write_golden(&path, &got).expect("write golden");
         return;
     }
     let want = std::fs::read_to_string(&path)

@@ -142,7 +142,7 @@ fn maybe_regen(name: &str, rust: &str) -> bool {
     let dir = local_json_dir();
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("regen mkdir {}: {e}", dir.display()));
     let golden_path = dir.join(name);
-    std::fs::write(&golden_path, rust)
+    regen::write_golden(&golden_path, rust)
         .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
     eprintln!(
         "REGEN cli-a-json vendored golden: {}",

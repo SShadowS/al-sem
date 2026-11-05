@@ -82,7 +82,7 @@ fn r4f_snapshot_matches_goldens() {
         // engine (al-sem byte-parity retired — see CLAUDE.md). The anti-degenerate
         // oracles below assert the structural contract regardless.
         if regen::regen_mode() {
-            std::fs::write(&golden_path, &rust_text)
+            regen::write_golden(&golden_path, &rust_text)
                 .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
             eprintln!("REGEN r4f snapshot golden: {}", golden_path.display());
             continue;

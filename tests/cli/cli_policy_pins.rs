@@ -94,7 +94,7 @@ fn emit(ws: &Path, args: &[&str]) -> String {
 /// Byte-compare `got` with a golden, or rewrite it under regen.
 fn check_golden(golden: &Path, got: &str) {
     if regen::regen_mode() {
-        std::fs::write(golden, got)
+        regen::write_golden(golden, got)
             .unwrap_or_else(|e| panic!("regen write {}: {e}", golden.display()));
         return;
     }

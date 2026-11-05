@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (test infrastructure: golden regeneration raced its readers)
+
+- **A golden regen no longer rewrites committed files in place.** Under `scripts/check-goldens
+  --regen`, cargo-nextest runs every test in its own process at once, and
+  `output_fixture::fixture_app_matches_its_sources` rewrote
+  `tests/fixtures/mcp-output/ws/.alpackages/probe_Out Base_1.0.0.0.app` with a truncate-then-fill
+  write while other tests read it. One regen run loaded the dependency as symbol-only and wrote a
+  wrong `tests/cli-output-goldens/explain.issuedoc.json`; the same race once failed
+  `output_invariants::a_commit_beyond_an_entry_point_has_its_own_terminal_witness`. Every write
+  into the tree during a test run (about 55 golden, fixture and record writers, including the
+  `r3a*` goldens their `*_oracles` read and the `emit.policy-pins.yaml` golden `cli_policy_pins`
+  uses as a policy) now goes through one helper, `tests/common/regen.rs::write_golden`: it writes
+  nothing when the file already holds the bytes, and otherwise writes a temp file in the same
+  directory and renames it over the target, so a reader sees the old file or the new one, never a
+  part. The two shard regens (`cli_b_snapshot`, `cli_b_fingerprint`) no longer delete their
+  directory before rewriting it; they drop stale files afterwards (`regen::remove_stale`). The
+  dependency `.app` builder gained `symbol_app::source_app_bytes`, so the fixture test builds
+  bytes instead of writing a file. A new `cli` member, `regen_atomic_writes`, pins the helper (a
+  reader thread never sees a partial file while a writer swaps it 200 times; equal bytes keep the
+  file's modification time) and the use: it scans every test source and fails when a function
+  that consults the regen switch writes any other way, directly or through a same-file helper.
+
 ### Fixed (MCP output, step 1b: correctness and wording of agent answers)
 
 - **`query touches` turned an index miss into a whole-cone "no".** `down` printed `no — this

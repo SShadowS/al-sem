@@ -3445,7 +3445,7 @@ fn implicit_trigger_fixture_resolves_exact_target_set() {
         let json = serde_json::to_string_pretty(&golden).expect("golden must serialize to JSON");
         std::fs::create_dir_all(golden_path.parent().unwrap())
             .expect("create goldens/semantic-edges dir");
-        std::fs::write(&golden_path, &json).expect("write implicit-trigger fixture golden");
+        regen::write_golden(&golden_path, &json).expect("write implicit-trigger fixture golden");
         eprintln!(
             "REGEN: wrote {} site(s) to {}",
             golden.entries.len(),
@@ -3526,7 +3526,7 @@ fn same_line_calls_swap_is_caught() {
     if regen::regen_mode() {
         let golden = mint_fresh_golden_for_kind(&fixture, EdgeKind::Run);
         let json = serde_json::to_string_pretty(&golden).expect("golden must serialize to JSON");
-        std::fs::write(&golden_path, &json).expect("write same-line-calls fixture golden");
+        regen::write_golden(&golden_path, &json).expect("write same-line-calls fixture golden");
         return;
     }
 

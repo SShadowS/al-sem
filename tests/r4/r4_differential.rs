@@ -1498,7 +1498,7 @@ fn maybe_regen_r4(golden_path: &std::path::Path, rust: &R4FindingsProjection) ->
     if !regen::regen_mode() {
         return false;
     }
-    std::fs::write(golden_path, pretty_with_newline(rust))
+    regen::write_golden(golden_path, pretty_with_newline(rust))
         .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
     eprintln!("REGEN r4 golden: {}", golden_path.display());
     true
