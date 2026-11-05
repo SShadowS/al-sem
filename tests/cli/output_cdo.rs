@@ -702,6 +702,11 @@ fn ratchet(label: &str, call: &str) -> Budget {
         ("IssueReminder", "query effects human") => (70, 23_000),
         ("RunReportID", "query effects human") => (80, 27_000),
         (_, "query effects human") => (20, 2_000),
+        // Callers through dependency code (design 2026-11-06 r2): RunReportID's
+        // touches now lists its 2 code callers through Document Sending
+        // Profile with folded witnesses, and the configured count (16 lines,
+        // 3,683 B on 2026-11-06; before 11 / 2.2 KB).
+        ("RunReportID", "query touches human") => (20, 4_100),
         (_, "query touches human") => (20, 3_000),
         (_, "prove may-commit human") => (20, 2_000),
         ("RunReportID", "prove writes-table human") => (20, 5_000),

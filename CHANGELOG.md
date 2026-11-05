@@ -58,6 +58,9 @@ Design: `docs/superpowers/specs/2026-11-06-dependency-callers-design.md` (revisi
   `up.relation`, `transitiveCallers` and every other field are unchanged; no detector, summary,
   solver or prove answer reads the walk.
 - The MCP `alsem_query_touches` description says so (no parameter changed).
+- CDO: the three rendering goldens of `query touches` (human) gain the block; RunReportID's lists
+  its 2 code callers, so its size ratchet in `output_cdo` rises from 3,000 to 4,100 bytes (3,683
+  measured; still 16 of 20 lines).
 
 ### Added (callers through dependency code, v1: explain)
 
