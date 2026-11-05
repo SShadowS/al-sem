@@ -430,23 +430,54 @@ fn distinct(selectors: &[String]) -> Vec<&String> {
     selectors.iter().filter(|s| seen.insert(*s)).collect()
 }
 
+/// The `routine-ambiguous` text explain and prove share (G42). Output step
+/// 1b (fable #7): with the candidates' rows known, each is named by the
+/// selector that picks it (its parameter types), its location and stable id,
+/// since an overload's owner and name alone are the same for all of them.
+pub(crate) fn ambiguity_text(
+    prefix: &str,
+    selector: &str,
+    candidates: &[String],
+    routines: &[String],
+) -> String {
+    if routines.is_empty() {
+        return format!(
+            "{prefix}'{selector}' names {} routines ({}); qualify it as <owner>::<routine> or \
+             pass a stable id",
+            candidates.len(),
+            candidates.join(", ")
+        );
+    }
+    format!(
+        "{prefix}'{selector}' names {} routines: {}; pass one as \
+         <owner>::<routine>(<parameter types>) or its stable id",
+        routines.len(),
+        routines.join("; ")
+    )
+}
+
 /// `--routine`'s diagnostic for one changed-roots diagnostic: prove's
 /// `routine-not-found` / `routine-ambiguous` wording (G42).
 fn selector_diagnostic(selector: &str, d: &ChangedRootsDiagnostic) -> Diagnostic {
     match d {
-        ChangedRootsDiagnostic::SelectorAmbiguous { candidates, .. } => Diagnostic {
-            json: json!({
+        ChangedRootsDiagnostic::SelectorAmbiguous {
+            candidates,
+            routines,
+            ..
+        } => {
+            let mut json = json!({
                 "kind": "routine-ambiguous",
                 "selector": selector,
                 "candidates": candidates,
-            }),
-            human: format!(
-                "explain: '{selector}' names {} routines ({}); qualify it as \
-                 <owner>::<routine> or pass a stable id",
-                candidates.len(),
-                candidates.join(", ")
-            ),
-        },
+            });
+            if !routines.is_empty() {
+                json["candidateRoutines"] = json!(routines);
+            }
+            Diagnostic {
+                json,
+                human: ambiguity_text("explain: ", selector, candidates, routines),
+            }
+        }
         ChangedRootsDiagnostic::SelectorUnmatched { .. } => Diagnostic {
             json: json!({ "kind": "routine-not-found", "selector": selector }),
             human: format!("explain: no routine of the program has the id or name '{selector}'"),
@@ -1069,11 +1100,16 @@ fn render(
     // The walk is this run's own: its memo and expansion budget start empty
     // whatever earlier runs over the same indexes did.
     let cross = CrossRules::over(model, &indexes.cross);
+    // With the number of `[Test]` procedures loaded (step 1b): "none reach
+    // it" and "no test code" are different answers.
     let tests_reaching = effects.coverage_graph.as_ref().map(|g| {
         let _s = span("explain", "explain.reaching_tests");
-        crate::engine::l5::test_coverage::reaching_tests(
-            g,
-            &resolved.roots.iter().cloned().collect(),
+        (
+            crate::engine::l5::test_coverage::reaching_tests(
+                g,
+                &resolved.roots.iter().cloned().collect(),
+            ),
+            g.test_procedures(),
         )
     });
     let cards_span = span("explain", "explain.cards");
@@ -1086,7 +1122,15 @@ fn render(
         .iter()
         .map(|rid| {
             let entry = full.iter().find(|e| &e.routine_id == rid);
-            let card = Card::build(&ix, &cross, rid, entry, &rcx, tests_reaching.as_ref(), opts);
+            let card = Card::build(
+                &ix,
+                &cross,
+                rid,
+                entry,
+                &rcx,
+                tests_reaching.as_ref().map(|(t, n)| (t, *n)),
+                opts,
+            );
             let (mut json, mut human) = (card.json(), card.human());
             // `--writes-table` (W2-2 gap (a)): prove's own answer per table,
             // before `next:`.
@@ -1519,6 +1563,9 @@ fn detail<'e>(e: &'e DigestEffectFull, key: &str) -> Option<&'e str> {
         .map(|(_, v)| v.as_str())
 }
 
+/// Per routine, the `[Test]` procedures that reach it (`reaching_tests`).
+type ReachingTests = BTreeMap<String, Vec<(String, bool)>>;
+
 impl Card {
     fn build(
         ix: &Indexes<'_>,
@@ -1526,7 +1573,7 @@ impl Card {
         rid: &str,
         full: Option<&DigestEntryFull>,
         rcx: &RollupCx<'_>,
-        tests_reaching: Option<&BTreeMap<String, Vec<(String, bool)>>>,
+        tests_reaching: Option<(&ReachingTests, usize)>,
         opts: RenderOpts,
     ) -> Card {
         let model = ix.model;
@@ -2099,7 +2146,7 @@ impl Card {
         // Tests.
         let mut tests = Vec::new();
         for (test, via_event) in tests_reaching
-            .and_then(|t| t.get(rid))
+            .and_then(|(t, _)| t.get(rid))
             .into_iter()
             .flatten()
         {
@@ -2286,6 +2333,7 @@ impl Card {
         totals.callers = Some(routine_callers.len());
         totals.page_actions = Some(reached_from.len());
         totals.tests = Some(tests.len());
+        totals.tests_loaded = tests_reaching.map(|(_, n)| n);
         let mut limits: Vec<String> = Vec::new();
         let mut notes: BTreeMap<&str, usize> = BTreeMap::new();
         for g in &gaps {
@@ -2617,8 +2665,19 @@ impl Card {
             line(l);
         }
         // 19: tests.
+        // Output step 1b (astra Task 5, fable fact 2): "none reach it" read
+        // the same with and without test code loaded.
         if self.tests.is_empty() {
-            line("tests: none reach it");
+            line(&match self.totals.tests_loaded {
+                None => "tests: not searched in this answer".to_string(),
+                Some(0) => "tests: no test code loaded (0 [Test] procedures in the workspace \
+                            app); that is not a reason to skip tests"
+                    .to_string(),
+                Some(n) => format!(
+                    "tests: {} loaded; none reaches it (not a reason to skip tests)",
+                    rf_plural(n, "[Test] procedure", "[Test] procedures")
+                ),
+            });
         }
         for (_, h) in &self.tests {
             line(h);
