@@ -99,6 +99,7 @@ mod cli_c_cache_differential;
 mod cli_c_events_differential;
 mod cli_c_policy_differential;
 mod cli_caller_owned_rec;
+mod cli_commit_sites_up_chain;
 mod cli_d35_unknown_commit;
 mod cli_d39_dependency_page;
 mod cli_d39_helper_persists;

@@ -805,11 +805,13 @@ fn evaluate_must_question(
     oblg: ProveObligations,
     witness_truncated: bool,
 ) -> ProveResult {
+    // G23, as for the MAY questions: a COMMIT the root cannot reach under
+    // literal arguments is no commit on any path, successful or not.
     let commit_indices: Vec<usize> = entry
         .effects
         .iter()
         .enumerate()
-        .filter(|(_, e)| e.effect_type == "COMMIT")
+        .filter(|(_, e)| e.effect_type == "COMMIT" && !e.literal_unreachable)
         .map(|(i, _)| i)
         .collect();
 

@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (commit sites dropped up the call chain)
+
+- **A routine's COMMIT rows now list every commit it reaches, not only the nearest.** On CDO,
+  `prove RunReportID writes-table:"Sales Header"` was `yes` through `CDO File::CalcSalesDisc`,
+  yet `prove RunReportID may-commit` and `explain RunReportID` listed only the COMMIT at
+  `CDOEMailTemplateManagement.Codeunit.al:1241` ("1 site in workspace code; 0 commit-bearing entry
+  points"): `CalcSalesDisc`'s own `Commit()` (`CDOFile.Table.al:128`) and the COMMIT beyond
+  `Sales-Calc. Discount::OnRun` were gone. Root cause: the capability cone keeps one inherited fact
+  per key, which for a COMMIT is one per routine, and its witness followed only that fact's first
+  hop to the nearest carriers. For COMMIT the digest now searches every site itself
+  (`digest::reconstruct_site_witnesses`): one shortest-path DAG from the root over all its first
+  hops, entered only where a commit may be reached, one row per site in workspace code and one per
+  crossing into dependency code behind which a commit lies. `explain RunReportID` now reports 6
+  sites in workspace code and 7 commit-bearing entry points (8 sites are reached; the 2 in
+  `CDO E-Mail Log::MoveEMailToFile`/`MoveEmalToAzureBlob` are reached only from the table's
+  `OnInsert`, which passes `OnInsert = true` to their `if OnInsert then exit;`, so the literal pass
+  rules them out). This feeds explain, digest, `prove may-commit`, `commits-on-success-path` and the
+  ordering engine. A site's conditionality is that of its paths from the asked root, so it can
+  differ between roots (`conditional` from `CalcSalesDisc`, `guarded-by-IsHandled` from the
+  callers behind `if IsHandled then exit`).
+- **A commit site is judged by itself under literal arguments.** With one row per site, the literal
+  pass decides a COMMIT row by its own operation, not by "some COMMIT of the routine can run".
+- **`commits-on-success-path` ignores a COMMIT the root cannot reach under literal arguments**, as
+  the MAY questions already did (G23): such a commit made the answer `unknown` (or could make it
+  `yes`).
+- **A commit count the search could not finish says "at least".** A site search that stops at its
+  depth bound (64 calls) with a commit possibly beyond it records a `sites-partial` entry
+  diagnostic; explain and digest then print "at least N sites … at least M commit-bearing entry
+  points", and `summary.commits.atLeast` is `true`.
+
 ### Fixed (MCP output, the final hands-on CDO review)
 
 - **`prove`'s human `unknown` no longer lists every blocker.** IssueReminder's

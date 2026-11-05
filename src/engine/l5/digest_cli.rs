@@ -975,6 +975,21 @@ pub struct FullAnchor {
     pub excerpt: Option<String>,
 }
 
+/// The [`EntryDiagnostic`] kind of an effect type whose site search stopped at
+/// the depth bound (`DigestEntryResult::partial_site_types`): its rows may not
+/// be every site the routine reaches.
+pub const SITES_PARTIAL: &str = "sites-partial";
+
+/// Whether `entry`'s rows of effect type `ty` may miss a site
+/// ([`SITES_PARTIAL`]): a count of them is then "at least".
+#[must_use]
+pub fn sites_partial(entry: &DigestEntryFull, ty: &str) -> bool {
+    entry
+        .entry_diagnostics
+        .iter()
+        .any(|d| d.kind == SITES_PARTIAL && d.effect_type.as_deref() == Some(ty))
+}
+
 pub struct EntryDiagnostic {
     pub kind: &'static str,
     pub effect_type: Option<String>,
@@ -1591,7 +1606,15 @@ pub(crate) fn literal_reach_pass(
                     .collect();
             }
         }
-        let (dead, dead_resources) = reach.unreachable_effects(&entry.routine_id, &entry.effects);
+        // A site-enumerated type's rows are judged one site at a time, unless
+        // its search stopped at the depth bound (a site may be missing).
+        let per_site: Vec<&str> = crate::engine::l5::digest::SITE_ENUMERATED
+            .iter()
+            .copied()
+            .filter(|t| !entry.partial_site_types.iter().any(|p| p == t))
+            .collect();
+        let (dead, dead_resources) =
+            reach.unreachable_effects(&entry.routine_id, &entry.effects, &per_site);
         for i in dead {
             entry.effects[i].literal_unreachable = true;
         }
@@ -1803,6 +1826,18 @@ pub fn run_digest_query_full_from_entries(
         let mut entry_diagnostics: Vec<EntryDiagnostic> = Vec::new();
 
         if let Some(entry) = base_entry {
+            // A site list the search could not finish (the depth bound): its
+            // count is a lower bound, and the renderers say "at least".
+            for ty in &entry.partial_site_types {
+                entry_diagnostics.push(EntryDiagnostic {
+                    kind: SITES_PARTIAL,
+                    effect_type: Some(ty.clone()),
+                    fact_subject: None,
+                    fact_id: None,
+                    operation_id: None,
+                    reason: None,
+                });
+            }
             for eff in &mut entry.effects {
                 // Conditionality — the per-path value computed in digest_query and
                 // stored on the effect (#8 / #17). No recomputation here.

@@ -739,6 +739,10 @@ pub struct RollupTotals {
     pub commits: &'static str,
     pub commit_sites: usize,
     pub commit_entry_points: usize,
+    /// The COMMIT site search stopped at its depth bound
+    /// ([`crate::engine::l5::digest_cli::SITES_PARTIAL`]): the two counts
+    /// above are lower bounds, printed "at least".
+    pub commit_sites_partial: bool,
     pub events: usize,
     pub events_in_workspace: usize,
     /// Per kind family ([`FAMILIES`]): places (own sites + crossings).
@@ -801,6 +805,9 @@ impl RollupTotals {
                 "withWritesSites": self.writing_sites,
             },
         });
+        if self.commit_sites_partial {
+            v["commits"]["atLeast"] = json!(true);
+        }
         if let Some(c) = self.callers {
             v["callers"] = json!(c);
         }
@@ -847,15 +854,26 @@ impl RollupTotals {
             "no observed" => "commits: no observed COMMIT".to_string(),
             "none" => "commits: none".to_string(),
             answer => {
+                let at_least = if self.commit_sites_partial {
+                    "at least "
+                } else {
+                    ""
+                };
                 let mut where_ = Vec::new();
                 if self.commit_sites > 0 {
-                    where_.push(plural(self.commit_sites, "site", "sites"));
+                    where_.push(format!(
+                        "{at_least}{}",
+                        plural(self.commit_sites, "site", "sites")
+                    ));
                 }
                 if self.commit_entry_points > 0 {
-                    where_.push(plural(
-                        self.commit_entry_points,
-                        "commit-bearing entry point",
-                        "commit-bearing entry points",
+                    where_.push(format!(
+                        "{at_least}{}",
+                        plural(
+                            self.commit_entry_points,
+                            "commit-bearing entry point",
+                            "commit-bearing entry points",
+                        )
                     ));
                 }
                 format!("commits: {answer} ({})", where_.join(", "))
@@ -1292,7 +1310,12 @@ impl RoutineRollup {
         let complete = entry.coverage_status == "complete"
             && r.no_path.is_empty()
             && !entry.unresolved_traversal.truncated;
-        r.totals = r.totals_of(cx, &caller_own, complete);
+        r.totals = r.totals_of(
+            cx,
+            &caller_own,
+            complete,
+            crate::engine::l5::digest_cli::sites_partial(entry, "COMMIT"),
+        );
         r
     }
 
@@ -1301,6 +1324,7 @@ impl RoutineRollup {
         cx: &RollupCx<'_>,
         caller_own: &BTreeSet<String>,
         complete: bool,
+        commit_sites_partial: bool,
     ) -> RollupTotals {
         let live = &self.may_write;
         let owned = live.keys().filter(|id| cx.table_is_own(id)).count();
@@ -1347,6 +1371,7 @@ impl RoutineRollup {
             commits,
             commit_sites: self.commit_sites.len(),
             commit_entry_points,
+            commit_sites_partial,
             events: self.events_ws.len() + self.events_beyond.len(),
             events_in_workspace: self.events_ws.len(),
             kinds,
@@ -1699,13 +1724,27 @@ pub fn commit_lines(
             "commits: no observed COMMIT".to_string()
         }];
     }
+    // A site search stopped at its depth bound lists a lower bound.
+    let at_least = if r.totals.commit_sites_partial {
+        "at least "
+    } else {
+        ""
+    };
     let mut out = vec![format!(
-        "commits: {} — {} in workspace code; {}:",
+        "commits: {} — {} in workspace code; {at_least}{}:",
         r.totals.commits,
         if r.commit_sites.is_empty() {
-            "none".to_string()
+            if at_least.is_empty() {
+                "none"
+            } else {
+                "none found"
+            }
+            .to_string()
         } else {
-            plural(r.commit_sites.len(), "site", "sites")
+            format!(
+                "{at_least}{}",
+                plural(r.commit_sites.len(), "site", "sites")
+            )
         },
         plural(
             bearing.len(),
