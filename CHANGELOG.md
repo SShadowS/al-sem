@@ -120,6 +120,10 @@ Which tests to run first for a change, as a first-class answer. Spec:
   **The earlier discovery is invalidated** when the next answer's scope no longer holds a test
   app: its registered test-universe descriptor is dropped and its idle test engine retired, so it
   no longer holds a child slot.
+- **The CDO ratchet pins the sameness wording** (C-12 on CDO): `alsem tests Cloud --routine
+  "CDO E-Mail Handler::RunReportID"` prints exactly `through dependency code: 301 tests —
+  effectively the suite's posting tests, not specific to this change`
+  (`output_cdo::cdo_test_selection_ratchets`, run by `cdo-gate`).
 - **R0-3: explain's callers and the reverse cone agree.** `select::direct_callers` defines a
   direct caller over the sited graph the way the model's calls count it: a call, interface call,
   object run or record operation site (`via` call/interface/run/implicitTrigger, never a rule's
