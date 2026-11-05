@@ -1609,7 +1609,13 @@ same with `--low-mem` on the resident child.
   (`<TYPE>|<resource>`, group rows per resource, literal-dead rows counted, not keyed). A cone
   change an own change explains (`write|T|Modify|…` and `DB_MODIFY|T`) is printed once.
 - **Policy reuse** is the function, not a copy: `policy::loss_kind` was split out of
-  `apply_coverage_policy`'s loose branch and both call it.
+  `apply_coverage_policy`'s loose branch and both call it. One deviation from §10.4's wording,
+  found on CDO: a CALL the analyzed body no longer makes (`callee|`, `event|` own keys) is
+  "removed" whatever the cone's coverage (the call is read off the body; under the coverage rule
+  1,599 of CDO's changes read "no longer observed", 386 of them calls); effect keys keep the rule.
+- **Callees through the pairing**: a base callee id that paired by signature is read as its
+  working-tree id (`root_delta_with`), so a call to a routine whose parameter list changed is the
+  same call, not a removal plus an addition.
 - **Schema/contract findings** run `run_diff_engine` over `contract_snapshot` (header, primary
   app, primary identities, `contractFacts`, `schemaFacts`; no cone), so the preflight, renames
   and the schema and ABI passes run as in `alsem diff`; events, capabilities and permissions need

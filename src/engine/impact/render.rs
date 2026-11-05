@@ -1147,7 +1147,7 @@ fn before_after_tail(out: &mut Vec<String>, d: &super::run::DeltaOutcome, opts: 
                 .and_then(|a| a.first())
                 .map(|f| {
                     format!(
-                        " (first: {} at base:{}:{})",
+                        " (first: {} at {}:{})",
                         s(f, "display"),
                         s(f, "file"),
                         f["line"]
@@ -1155,7 +1155,7 @@ fn before_after_tail(out: &mut Vec<String>, d: &super::run::DeltaOutcome, opts: 
                 })
                 .unwrap_or_default();
             out.push(format!(
-                "  {} (base:{}:{}): called in the base by {}{}{}{}",
+                "  {} (in the base at {}:{}): called in the base by {}{}{}{}",
                 s(x, "display"),
                 s(&x["anchor"], "file"),
                 x["anchor"]["line"],

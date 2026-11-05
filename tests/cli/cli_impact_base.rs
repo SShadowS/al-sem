@@ -348,7 +348,12 @@ fn b4_a_deleted_routine_is_listed_with_its_base_callers() {
 /// `renames.rs` (`signatureChanged`, pairing `signature`); two overloads
 /// changed at once stay unpaired: one deleted, one added, with the reason.
 ///
-/// Break: pair by name alone → the overloads pair too.
+/// A caller of the paired routine keeps the same call (its callee key read
+/// through the pairing).
+///
+/// Breaks: pair by name alone → the overloads pair too; compare callee keys
+/// without the pairing (`root_delta` for `root_delta_with`) → UsesSig shows
+/// a removed and an added call.
 #[test]
 fn b5_signature_change_pairs_and_changed_overloads_do_not() {
     let base = r#"codeunit 50810 "FX Core"
@@ -356,6 +361,11 @@ fn b5_signature_change_pairs_and_changed_overloads_do_not() {
     procedure Sig(A: Integer)
     begin
         Commit();
+    end;
+
+    procedure UsesSig()
+    begin
+        Sig(1);
     end;
 
     procedure Over(A: Integer)
@@ -377,6 +387,11 @@ fn b5_signature_change_pairs_and_changed_overloads_do_not() {
         Commit();
     end;
 
+    procedure UsesSig()
+    begin
+        Sig(1, 2);
+    end;
+
     procedure Over(A: Decimal)
     begin
     end;
@@ -392,6 +407,8 @@ fn b5_signature_change_pairs_and_changed_overloads_do_not() {
     assert_eq!(sig["status"], "signatureChanged");
     assert_eq!(sig["delta"]["pairing"], "signature");
     assert_eq!(own(sig), vec![], "Sig's behavior is unchanged");
+    // The call to Sig is the same call (its callee paired by signature).
+    assert_eq!(own(root(&v, "UsesSig")), vec![], "UsesSig still calls Sig");
     let overs: Vec<&Value> = v["roots"]
         .as_array()
         .unwrap()
@@ -405,7 +422,7 @@ fn b5_signature_change_pairs_and_changed_overloads_do_not() {
             o["delta"]["reason"]
                 .as_str()
                 .unwrap()
-                .contains("not paired")
+                .contains("2 routines of the same object and name only on the other side")
         );
     }
     let deleted = v["deleted"].as_array().unwrap();
@@ -415,6 +432,48 @@ fn b5_signature_change_pairs_and_changed_overloads_do_not() {
             .iter()
             .all(|d| d["display"] == "Codeunit FX Core::Over")
     );
+}
+
+/// A workspace in a subfolder of its repository (as CDO's `Cloud`): the
+/// base copy holds that folder's files at the commit (`git archive` run at
+/// the top; run in the subfolder it keeps nothing of a subfolder tree).
+///
+/// Break: run `git archive` in the workspace folder → the copy is empty and
+/// the base is refused ("holds no app.json").
+#[test]
+fn a_workspace_in_a_subfolder_of_its_repository() {
+    let r = Repo {
+        dir: tempfile::tempdir().unwrap(),
+    };
+    let top = r.dir.path().join("ws");
+    let sub = top.join("Cloud");
+    std::fs::create_dir_all(sub.join("src")).unwrap();
+    std::fs::write(sub.join("app.json"), APP_JSON).unwrap();
+    std::fs::write(sub.join("src/Tables.al"), TABLES).unwrap();
+    std::fs::write(sub.join("src/Core.al"), BASE_POST).unwrap();
+    git(&top, &["init", "-q"]);
+    git(&top, &["add", "."]);
+    git(&top, &["commit", "-qm", "base"]);
+    std::fs::write(
+        sub.join("src/Core.al"),
+        BASE_POST.replace("Commit();", "Commit();\n        Commit();"),
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("impact")
+        .arg(&sub)
+        .args(["--base", "HEAD", "--no-tests", "--format", "json"])
+        .env("AL_SEM_IMPACT_BASE_CACHE", r.cache())
+        .output()
+        .unwrap();
+    let v: Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)));
+    assert!(v["base"]["notComputed"].is_null(), "{:#}", v["base"]);
+    let post = root(&v, "Post");
+    let changes = post["delta"]["own"].as_array().unwrap();
+    assert_eq!(changes.len(), 1, "{post:#}");
+    assert_eq!(changes[0]["change"], "count");
+    assert_eq!(changes[0]["label"], "commit");
 }
 
 /// A routine renamed (its name changed) is not a signature change:

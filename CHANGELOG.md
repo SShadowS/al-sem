@@ -33,7 +33,9 @@ lost. Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §10 (as b
   parameter list pairs; two overloads changed at once stay deleted + added, with the reason);
   the loss wording through the diff policy's `policy::loss_kind` (a key only the base has is
   "no longer observed", not "removed", when the new side's coverage of that routine is
-  incomplete or it writes the table under an undecided class); `run_diff_engine` over both sides'
+  incomplete or it writes the table under an undecided class; a call the analyzed body no longer
+  makes is removed, and a call to a routine paired by signature is the same call);
+  `run_diff_engine` over both sides'
   contract snapshots (`snapshot_full::contract_snapshot`) for the preflight and the schema and
   ABI findings. Deleted routines come with their callers in the base. A `--diff` whose
   pre-images do not match the base is refused with the files named; the current side stands.

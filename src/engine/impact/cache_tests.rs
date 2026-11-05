@@ -99,10 +99,15 @@ fn the_byte_bound_holds() {
         max_total: 3000,
         ..Limits::default()
     });
-    // Incompressible-ish payloads of ~1 KB each.
+    // Hash-chain hex: about 1 KB each after compression (a periodic pattern
+    // compresses to nothing and would never reach the bound).
     for i in 0..8 {
-        let noise: String = (0..1200)
-            .map(|j| char::from(b'a' + ((i * 7919 + j * 104_729) % 26) as u8))
+        let noise: String = (0..20)
+            .map(|j| {
+                blake3::hash(format!("{i}/{j}").as_bytes())
+                    .to_hex()
+                    .to_string()
+            })
             .collect();
         c.write(&format!("k{i}"), &json!({"n": noise})).unwrap();
         assert!(c.usage().1 <= 3000, "after {i}: {:?}", c.usage());

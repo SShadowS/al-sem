@@ -107,11 +107,14 @@ pub fn materialize(
     } else {
         holder.join(rel)
     };
+    // `git archive` run in a subfolder keeps only that subfolder's paths
+    // (of a tree that is already the subfolder: nothing): run it at the top.
+    let top = git(workspace, &["rev-parse", "--show-toplevel"])?;
     let made = (|| {
         std::fs::create_dir_all(&ws).map_err(|e| e.to_string())?;
         let mut archive = Command::new("git")
             .arg("-C")
-            .arg(workspace)
+            .arg(&top)
             .args(["archive", "--format=tar", &tree])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -141,6 +144,11 @@ pub fn materialize(
             return Err(format!(
                 "tar failed: {}",
                 String::from_utf8_lossy(&tar.stderr).trim()
+            ));
+        }
+        if !ws.join("app.json").is_file() {
+            return Err(format!(
+                "the base commit's workspace folder holds no app.json (tree {tree})"
             ));
         }
         // The copy is its own boundary: no folder above it lends a package,

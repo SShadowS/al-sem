@@ -150,3 +150,36 @@ fn an_explained_cone_change_is_dropped() {
         vec!["DB_INSERT|x"]
     );
 }
+
+/// A call the analyzed body no longer makes is removed even when the new
+/// side's cone is incomplete (the call is read off the body, not the cone);
+/// an effect key under the same coverage is only "no longer observed".
+///
+/// Break: drop the early `removed` for `callee|`/`event|` in `loss` → the
+/// call reads "no-longer-observed".
+#[test]
+fn a_dropped_call_is_removed_under_any_cone_coverage() {
+    let incomplete = Coverage {
+        status: "complete".into(),
+        unresolved: 3,
+        ..Coverage::default()
+    };
+    let b = summary(
+        &[
+            ("callee|g:Codeunit:1#cc", &[site(4, "x/0")]),
+            ("commit", &[site(5, "commit")]),
+        ],
+        &[],
+        complete(),
+    );
+    let n = summary(&[], &[], incomplete);
+    let (own, _) = root_delta(&b, &n);
+    let words: Vec<(&str, &str)> = own.iter().map(|c| (c.key.as_str(), c.wording)).collect();
+    assert_eq!(
+        words,
+        vec![
+            ("callee|g:Codeunit:1#cc", "removed"),
+            ("commit", "no-longer-observed")
+        ]
+    );
+}

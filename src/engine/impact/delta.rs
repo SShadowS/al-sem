@@ -242,6 +242,12 @@ fn cone_twin(own: &str) -> Option<String> {
 /// The loss wording of a key only (or less often) on the base side, through
 /// the diff policy's rule.
 fn loss(new: &RootSummary, key: &str) -> (&'static str, Option<String>) {
+    // A call in the routine's own body is read off the body itself: when the
+    // body was analyzed, a call it no longer makes is removed, whatever the
+    // cone beyond it could not see.
+    if (key.starts_with("callee|") || key.starts_with("event|")) && !new.coverage.no_body {
+        return ("removed", None);
+    }
     let mut why = new.coverage.why();
     if let ["write", t, op, _] = key.split('|').collect::<Vec<_>>().as_slice() {
         let undecided = new.own.keys().any(|k| {
@@ -264,6 +270,51 @@ fn loss(new: &RootSummary, key: &str) -> (&'static str, Option<String>) {
 /// The delta of one paired routine.
 #[must_use]
 pub fn root_delta(base: &RootSummary, new: &RootSummary) -> (Vec<KeyChange>, Vec<KeyChange>) {
+    root_delta_with(base, new, &HashMap::new())
+}
+
+/// [`root_delta`], with the base's callee ids that paired by signature
+/// (`renamed`: base id → working-tree id) read as their working-tree ids: a
+/// call to a routine whose parameter list changed is the same call.
+#[must_use]
+pub fn root_delta_with(
+    base: &RootSummary,
+    new: &RootSummary,
+    renamed: &HashMap<String, String>,
+) -> (Vec<KeyChange>, Vec<KeyChange>) {
+    let translated;
+    let base = if renamed.is_empty() {
+        base
+    } else {
+        let mut b = base.clone();
+        b.own = base
+            .own
+            .iter()
+            .map(|(k, v)| {
+                let k = match k.split_once('|') {
+                    Some((fam @ ("callee" | "event"), id)) => match renamed.get(id) {
+                        Some(n) => {
+                            if let Some(l) = base.labels.get(k) {
+                                b.labels.insert(format!("{fam}|{n}"), l.clone());
+                            }
+                            format!("{fam}|{n}")
+                        }
+                        None => k.clone(),
+                    },
+                    _ => k.clone(),
+                };
+                (k, v.clone())
+            })
+            .fold(
+                BTreeMap::new(),
+                |mut m: BTreeMap<String, Vec<Site>>, (k, v)| {
+                    m.entry(k).or_default().extend(v);
+                    m
+                },
+            );
+        translated = b;
+        &translated
+    };
     let label = |k: &str| {
         new.labels
             .get(k)
@@ -356,6 +407,7 @@ pub fn compute(base: &Side<'_>, new: &Side<'_>, dependency_note: Option<&str>) -
     );
     let by_new: HashMap<&str, &str> = auto.iter().map(|(o, n)| (n.as_str(), o.as_str())).collect();
     let by_base: HashMap<&str, &str> = auto.iter().map(|(o, n)| (o.as_str(), n.as_str())).collect();
+    let renamed: HashMap<String, String> = auto.iter().cloned().collect();
     let mut deltas = serde_json::Map::new();
     let mut changed = 0usize;
     let mut paired = 0usize;
@@ -385,7 +437,7 @@ pub fn compute(base: &Side<'_>, new: &Side<'_>, dependency_note: Option<&str>) -
                 paired += 1;
                 match (base.summaries.get(b), new.summaries.get(&id)) {
                     (Some(bs), Some(ns)) => {
-                        let (own, cone) = root_delta(bs, ns);
+                        let (own, cone) = root_delta_with(bs, ns, &renamed);
                         if !own.is_empty() || !cone.is_empty() {
                             changed += 1;
                         }
@@ -490,7 +542,7 @@ fn unpaired_reason(id: &str, this: &Side<'_>, other: &Side<'_>) -> Option<String
         return None;
     }
     Some(format!(
-        "{} of the same object and name only on the other side; not paired (renames.rs pairs one-to-one, same ABI status, member-less routines only)",
+        "{} of the same object and name only on the other side (renames.rs pairs one-to-one, same ABI status, member-less routines only)",
         crate::engine::l5::routine_rollup::plural(others.len(), "routine", "routines")
     ))
 }
