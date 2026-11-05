@@ -1029,6 +1029,96 @@ fn status_checks_the_disk_against_the_published_revision() {
     assert!(s.finish().success());
 }
 
+/// F-8 (agent-tasks design §2.3): the `freshness` description says what
+/// each mode does, and `verify` does it. A rewrite that keeps a file's size
+/// and modification time is trusted by `fresh` (the answer stays at
+/// generation 1, and a cached status says FRESH: the stated residual) and
+/// seen by `verify`: a status with `verify: true` says STALE, and a command
+/// asked `verify` rebuilds first (generation 2) and answers the new text.
+///
+/// DISCRIMINATION (2026-11-05): mapping the tool's `verify` to the
+/// session's `Fresh` in `run_command` (the old description's "answer from
+/// the built revision and report whether it is stale": no hash of every
+/// input) fails at "verify rebuilds"; restored, it passes.
+#[test]
+fn a_stale_verify_rebuilds_as_its_description_says() {
+    let r = s_tools_freshness_description();
+    assert_eq!(r, al_sem::mcp::tools::FRESHNESS_DESCRIPTION);
+    assert!(
+        r.contains("verify: like fresh, but hashes every input instead of trusting size and modification time; rebuilds first when anything changed."),
+        "{r}"
+    );
+
+    let dir = ws_explain_copy();
+    let ws = std::fs::canonicalize(dir.path()).unwrap();
+    let mut s = Server::ready(&ws, None);
+    let q = json!({"routine": "Archive", "format": "json"});
+    let env = envelope(&s.call(1, "alsem_query_effects", q.clone()));
+    assert_eq!(env["revision"]["generation"], 1, "{env}");
+    let post = ws.join("src/post.al");
+    let before = std::fs::metadata(&post).unwrap();
+    let text = std::fs::read_to_string(&post).unwrap();
+    let (old, new) = (
+        "        Order.Modify();\n        Commit();",
+        "        Order.Insert();\n        Commit();",
+    );
+    assert_eq!(
+        text.matches(old).count(),
+        1,
+        "precondition: the edit applies"
+    );
+    std::fs::write(&post, text.replace(old, new)).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&post)
+        .unwrap()
+        .set_modified(before.modified().unwrap())
+        .unwrap();
+    let after = std::fs::metadata(&post).unwrap();
+    assert_eq!(
+        (after.len(), after.modified().unwrap()),
+        (before.len(), before.modified().unwrap()),
+        "precondition: size and modification time kept"
+    );
+    let env = envelope(&s.call(2, "alsem_query_effects", q.clone()));
+    assert_eq!(
+        env["revision"]["generation"], 1,
+        "fresh trusts the stat: {env}"
+    );
+    let st = s.call(3, "alsem_status", json!({}))["structuredContent"].clone();
+    assert_eq!(
+        st["engines"][0]["check"]["fresh"], true,
+        "the residual: {st}"
+    );
+    let st = s.call(4, "alsem_status", json!({"verify": true}))["structuredContent"].clone();
+    let c = &st["engines"][0]["check"];
+    assert_eq!(c["hashing"], "all", "{st}");
+    assert_eq!(c["fresh"], false, "verify sees it: {st}");
+    let mut v = q.clone();
+    v["freshness"] = json!("verify");
+    let env = envelope(&s.call(5, "alsem_query_effects", v));
+    assert_eq!(env["revision"]["generation"], 2, "verify rebuilds: {env}");
+    assert!(
+        env["stdoutText"].as_str().unwrap().contains("Insert"),
+        "the new text answers: {env}"
+    );
+    assert!(s.finish().success());
+}
+
+/// The `freshness` property's description, as `tools/list` gives it.
+fn s_tools_freshness_description() -> String {
+    let tools = al_sem::mcp::tools::tool_list();
+    let explain = tools
+        .iter()
+        .find(|t| t["name"] == "alsem_explain")
+        .unwrap()
+        .clone();
+    explain["inputSchema"]["properties"]["freshness"]["description"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
 #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
 mod faults {
     use super::*;

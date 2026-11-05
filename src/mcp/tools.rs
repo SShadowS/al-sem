@@ -161,6 +161,11 @@ pub const TOOL_NAMES: &[&str] = &[
     "alsem_refresh",
 ];
 
+/// The `freshness` argument's description (agent-tasks design §2.3: what
+/// `pin` does for each mode; `verify` rebuilds when stale, it does not
+/// merely report it).
+pub const FRESHNESS_DESCRIPTION: &str = "fresh (default): the answer reflects the files as they are now (a file whose size and modification time are unchanged is trusted). latest-built: the newest built revision may answer, even if files changed since. verify: like fresh, but hashes every input instead of trusting size and modification time; rebuilds first when anything changed.";
+
 /// The properties every command tool takes (design r7 §8.2).
 fn common_properties() -> Map<String, Value> {
     let mut m = Map::new();
@@ -170,7 +175,7 @@ fn common_properties() -> Map<String, Value> {
     );
     m.insert(
         "freshness".into(),
-        json!({"type": "string", "enum": ["fresh", "latest-built", "verify"], "description": "fresh (default): the answer reflects the files as they are now. latest-built: the newest built revision may answer. verify: answer from the built revision and report whether it is stale."}),
+        json!({"type": "string", "enum": ["fresh", "latest-built", "verify"], "description": FRESHNESS_DESCRIPTION}),
     );
     m.insert(
         "singleApp".into(),

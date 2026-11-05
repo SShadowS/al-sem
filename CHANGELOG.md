@@ -55,6 +55,15 @@ Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §2.
   dependency file and `al-sem.dependencies.json`; before, a source-dependency change gave no path
   at all. It is computed from `Manifest::changes`.
 
+### Fixed (agent tasks, milestone F)
+
+- **The `freshness: verify` description** said "answer from the built revision and report whether
+  it is stale", but `verify` hashes every input and rebuilds first when anything changed. It now
+  says so: "verify: like fresh, but hashes every input instead of trusting size and modification
+  time; rebuilds first when anything changed." `fresh`'s text now says it trusts an unchanged size
+  and modification time. A contract test pins the text and the behavior (a same-size,
+  same-mtime rewrite: `fresh` keeps generation 1, `verify` rebuilds to generation 2).
+
 ### Added (agent tasks, milestone M0: resident groundwork)
 
 Nothing an agent sees changes yet; these are the pieces the later milestones (the reverse cone,
