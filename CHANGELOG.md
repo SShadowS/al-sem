@@ -81,6 +81,47 @@ honesty parts). Multiple routes (E2) are not in this milestone.
   before). An unfiltered document is byte-identical (2.4.0). The MCP instructions' "which tool"
   line names the filters.
 
+### Fixed (F3, the effect side: every background start, named)
+
+- **`CurrPage.EnqueueBackgroundTask` is a `BACKGROUND_TASK` effect.** The `start` capability fact
+  (both extractors: the cone's `direct_facts_for_routine` and the L2 `extract_background`) now reads
+  `program::resolve::background::STARTERS`, the table F3's edges use, instead of its own list of
+  three; the page task had no fact, so explain, digest and prove never saw it.
+- **explain's and digest's `BACKGROUND_TASK` line names what the start starts**: `BACKGROUND_TASK at
+  ws:src/a.al:12 (unconditional-on-success), starts Codeunit BS Job`, and for a task with a failure
+  codeunit `…, starts Codeunit BS Job, on failure Codeunit BS Fail`. A literal is named by the object
+  the program engine resolved it to (a number by its declared name); a codeunit that is not a
+  literal is `a codeunit decided at run time`; a literal the start's edge reaches no routine of (an
+  id no object declares, a codeunit without `OnRun`) keeps its spelling (`Codeunit 59999`); a
+  failure codeunit of `0` is none. The model keeps the names in a side table,
+  `ResolvedCalls::background_starts` (call-site id → `BackgroundStart`), filled by the adapter from
+  each start's `ObligationId::Background` edge; the model's edges still never follow a start. The
+  digest JSON carries it as the effect's `detail.starts` (CLI layer only, like `tempState`: no
+  `factId`, dedupe key or fingerprint moves).
+- **CDO** (release-fast, 2026-11-05): the workspace has no background start; `alsem analyze` findings
+  identical at `--scope primary` (2,240) and `--scope all` (31,313), call-graph statistics as above.
+
+### Fixed (an integer object id runs its object)
+
+- **`Codeunit.Run(50000)` resolves as `Codeunit.Run(Codeunit::50000)` does.** A positive integer
+  literal as a run's first argument is the object's id: `Codeunit.Run(N)` and `Codeunit.Run(N,
+  Rec)`, `Page.Run`/`RunModal(N…)`, `Report.Run`/`RunModal(N…)`, `XmlPort.Run`/`Import`/`Export(N…)`
+  now reach the entry triggers of the object the caller's app sees with that id
+  (`ResolveIndex::object_by_number`, the same app-scoped lookup `Codeunit::N` uses). Before, the
+  extractor read only a `Codeunit::…` reference as static and left an integer `DynamicOpen`
+  (`honestDynamic`). An id no object declares is `ObjectNotInGraph` (unknown, with its reason), as
+  a missing `Codeunit::N` is; `0`, a variable and an expression stay dynamic, and `Page.Run(0, Rec)`
+  still opens the table's lookup page. The body facts' `ObjectRun` target (`ir_walk`) reads the
+  same shapes, so the model names the same object. Transpiled dependency bodies write runs this
+  way. (`Query` has no run method, so these four kinds are every run.)
+- **CDO** (`/home/sshadows/Projects/DO-cdo-baseline/Cloud`, release-fast, 2026-11-05): the workspace
+  has no integer run (`--program-call-graph-stats` unchanged: 46,328 edges, 16 `honestDynamic`, 0
+  unknown). Dependency bodies: `honestDynamic` 263 → 258, `resolvedSource` 191,142 → 191,147, 0
+  unknown before and after; all five are Continia Delivery Network's
+  `CTS-CDN Document Output Mgt.` (`Codeunit.Run(6086250, SalesHeader)` and four more, each now the
+  `OnRun` of the `CTS-CDN … Chk. … Hdr.` codeunit with that id). `alsem analyze`: 2,240 findings at
+  `--scope primary` and 31,313 at `--scope all`, identical before and after.
+
 ### Added (callgraph gap F3: static background starts are edges)
 
 Spec: `docs/superpowers/specs/2026-10-13-callgraph-export-design.md` §9 (F3) and §16.1.

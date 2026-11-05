@@ -578,12 +578,20 @@ impl<'a> SpineCtx<'a> {
         (callee, callee_text)
     }
 
-    /// ObjectRun callee from the first argument (a `database_reference`), legacy
-    /// `classify_object_run_first_arg`.
+    /// ObjectRun callee from the first argument: a `database_reference`
+    /// (legacy `classify_object_run_first_arg`) or a positive integer literal,
+    /// the object's id (`Codeunit.Run(50000)`), as the program engine reads it
+    /// (`resolve::extract::static_database_reference_target`).
     fn object_run_callee(&self, object_kind: &str, args: &[ExprId]) -> PCallee {
         let mut target_ref = None;
         let mut target_is_name = false;
         if let Some(&first) = args.first()
+            && let ExprKind::Literal(al_syntax::ir::Literal::Int(n)) =
+                &self.file.ir.expr(first).kind
+        {
+            target_ref =
+                crate::program::resolve::extract::positive_object_id(n).map(|id| id.to_string());
+        } else if let Some(&first) = args.first()
             && let ExprKind::DatabaseReference(text) = &self.file.ir.expr(first).kind
             && let Some((_, tn)) = text.split_once("::")
         {
@@ -3411,6 +3419,60 @@ codeunit 50001 T
             .count();
         assert_eq!(stmt_count, 1, "sites: {sites:?}");
         assert_eq!(expr_count, 2, "sites: {sites:?}");
+    }
+
+    /// An object run's target, as the program engine reads it
+    /// (`resolve::extract::static_database_reference_target`): a positive
+    /// integer literal is the object's id, `0` and a variable name none.
+    ///
+    /// DISCRIMINATION (2026-11-05): removing the integer-literal arm of
+    /// `object_run_callee` fails `Codeunit.Run(50001)` (target `None`).
+    #[test]
+    fn object_run_target_reads_an_integer_id() {
+        use crate::program::body::features::PCallee;
+        const SRC: &str = r#"
+codeunit 50001 T
+{
+    procedure Caller()
+    var
+        Id: Integer;
+    begin
+        Codeunit.Run(50001);
+        Page.Run(21);
+        Codeunit.Run(Codeunit::"My Cu");
+        Codeunit.Run(Codeunit::50002);
+        Codeunit.Run(0);
+        Codeunit.Run(Id);
+    end;
+}
+"#;
+        let (features, _, _) =
+            ir_features_for_named_routine(SRC, "Caller", "g", "u").expect("routine");
+        let got: Vec<(String, Option<String>, bool)> = features
+            .call_sites
+            .iter()
+            .filter_map(|cs| match &cs.callee {
+                PCallee::ObjectRun {
+                    object_kind,
+                    target_ref,
+                    target_is_name,
+                    ..
+                } => Some((object_kind.clone(), target_ref.clone(), *target_is_name)),
+                _ => None,
+            })
+            .collect();
+        let s = |k: &str, t: Option<&str>, n: bool| (k.to_string(), t.map(str::to_string), n);
+        assert_eq!(
+            got,
+            vec![
+                s("Codeunit", Some("50001"), false),
+                s("Page", Some("21"), false),
+                s("Codeunit", Some("My Cu"), true),
+                s("Codeunit", Some("50002"), false),
+                s("Codeunit", None, false),
+                s("Codeunit", None, false),
+            ]
+        );
     }
 
     /// #14: a field access says whether it reads, writes, or both. A pure write

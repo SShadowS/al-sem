@@ -191,6 +191,7 @@ mod tests {
             upgraded_bindings: all_calls.upgraded_bindings.clone(),
             diagnostics: all_calls.diagnostics.clone(),
             external_targets: all_calls.external_targets.clone(),
+            background_starts: all_calls.background_starts.clone(),
         };
         let mut graph = build_combined_graph(ws, &calls, events);
         let scc = crate::engine::l4::analysis::graph_scc(&graph);
@@ -204,6 +205,7 @@ mod tests {
             upgraded_bindings: all_calls.upgraded_bindings.clone(),
             diagnostics: Vec::new(),
             external_targets: all_calls.external_targets.clone(),
+            background_starts: all_calls.background_starts.clone(),
         };
         let no_events = EventGraph {
             events: Vec::new(),

@@ -1213,6 +1213,10 @@ pub struct DigestEffects {
     /// Agent-tasks E1: a filtered prove's slice of its root, read off the
     /// same tree (`TreeDemand::slice`); `None` for every other reader.
     pub slice: Option<crate::engine::l5::prove_slice::SliceOut>,
+    /// The model's background starts by call-site id
+    /// (`ResolvedCalls::background_starts`): a `BACKGROUND_TASK` row at a start
+    /// names the codeunit it starts (detail `starts`).
+    pub background_starts: Arc<HashMap<String, crate::program::model::calls::BackgroundStart>>,
 }
 
 /// A root's unresolved cone: its items and the traversal block (depth,
@@ -1523,6 +1527,7 @@ pub(crate) fn finish_effects(
             identities: Arc::clone(&tree.identities),
             coverage_graph: coverage_graph.clone(),
             slice: None,
+            background_starts: Arc::clone(&model.calls.background_starts),
         })
         .collect()
 }
@@ -1747,6 +1752,7 @@ pub fn run_digest_query_full_from_entries(
 ) -> DigestQueryFullResult {
     let (spans, touched) = (&changed.spans, &changed.touched);
     let mut query_diagnostics: Vec<DigestQueryDiagnostic> = Vec::new();
+    let background_starts = Arc::clone(&effects.background_starts);
 
     // Coverage map
     let mut coverage_by_id: HashMap<&str, (&str, Vec<&str>)> = HashMap::new();
@@ -2016,6 +2022,17 @@ pub fn run_digest_query_full_from_entries(
                         &eff.fact_id,
                         join.problems,
                     ));
+                }
+                // F3: a background start names what it starts (CLI layer
+                // only, as the temp state). A boundary group has no site.
+                if eff.effect_type == "BACKGROUND_TASK"
+                    && !eff.boundary_group
+                    && let Some(start) = eff
+                        .evidence_callsite_id
+                        .as_deref()
+                        .and_then(|cs| background_starts.get(cs))
+                {
+                    detail.push(("starts".to_string(), start.phrase()));
                 }
 
                 full_effects.push(DigestEffectFull {

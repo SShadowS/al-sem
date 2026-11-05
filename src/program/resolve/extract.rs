@@ -64,8 +64,9 @@ pub enum CalleeShape {
         object_kind: String,
         /// Static first argument: the target object name or numeric id, or `None`
         /// when the first argument is a runtime variable (dynamic dispatch).
-        /// Derived from `ExprKind::DatabaseReference` only; non-DatabaseReference
-        /// arguments produce `None` (mirrors L3's `object_run_callee`).
+        /// Derived from an `ExprKind::DatabaseReference` or a positive integer
+        /// literal ([`static_database_reference_target`]); any other argument
+        /// produces `None`.
         target_ref: Option<String>,
         /// `true` when `target_ref` is a name (quoted or bare identifier),
         /// `false` when it is a decimal integer id.
@@ -291,11 +292,14 @@ fn object_run_kind(text: &str) -> Option<&'static str> {
 }
 
 /// Extract a statically-named target from `args`' first element, when it is
-/// an `ExprKind::DatabaseReference` (`Page::"X"` / `Report::42` / …).
+/// an `ExprKind::DatabaseReference` (`Page::"X"` / `Report::42` / …) or a
+/// positive integer literal (`Codeunit.Run(50000)`, `Page.Run(21, Rec)`: the
+/// object's id, which the transpiled bodies of symbol packages always write).
 /// Returns `Some((target_ref, target_is_name))`; `None` when the first
-/// argument is absent or not a `DatabaseReference` (a runtime
-/// variable/expression — dynamic dispatch, not statically named). Mirrors
-/// L3's `object_run_callee` target extraction.
+/// argument is absent, `0` (`Page.Run(0, Rec)`: the table's lookup page,
+/// `full::zero_page_table`) or anything else (a runtime variable/expression —
+/// dynamic dispatch, not statically named). The body facts' `ObjectRun`
+/// (`ir_walk::object_run_callee`) reads the same shapes.
 ///
 /// Factored out of `classify_call`'s `ObjectRun` check (Check 2 below) so the
 /// SAME extraction backs both that check AND the T0.3 builtin-dispatch audit
@@ -309,8 +313,12 @@ pub(crate) fn static_database_reference_target(
     args: &[ExprId],
 ) -> Option<(String, bool)> {
     let &first_arg = args.first()?;
-    let ExprKind::DatabaseReference(text) = &file.ir.expr(first_arg).kind else {
-        return None;
+    let text = match &file.ir.expr(first_arg).kind {
+        ExprKind::DatabaseReference(text) => text,
+        ExprKind::Literal(al_syntax::ir::Literal::Int(n)) => {
+            return positive_object_id(n).map(|id| (id.to_string(), false));
+        }
+        _ => return None,
     };
     let (_, tn) = text.split_once("::")?;
     let tn = tn.trim();
@@ -324,6 +332,12 @@ pub(crate) fn static_database_reference_target(
         // Bare (unquoted) name.
         Some((tn.to_string(), true))
     }
+}
+
+/// An integer literal's text as an object id: a positive number, else `None`
+/// (`0` names no object; a run with it is not a static target).
+pub(crate) fn positive_object_id(text: &str) -> Option<i64> {
+    text.trim().parse::<i64>().ok().filter(|n| *n > 0)
 }
 
 /// Classify a single call's callee into a [`CalleeShape`].
@@ -387,10 +401,10 @@ fn classify_call(
             // Page/Report — so `object_kind == "Codeunit"` must never take this
             // branch on "runmodal"; see `member_catalog::ENTRY_DISPATCH_BUILTIN_
             // IDS`'s doc for the classifier-gap analysis this closes).
-            // Target extraction: only `ExprKind::DatabaseReference` arguments carry
-            // a static target; all other argument kinds (variables, integer literals
-            // NOT wrapped in DatabaseReference) produce `target_ref = None` (dynamic
-            // dispatch — mirrors L3's behaviour).
+            // Target extraction: a `DatabaseReference` argument or a positive
+            // integer literal (the object's id) carries a static target; any
+            // other argument (a variable, an expression, `0`) produces
+            // `target_ref = None` (dynamic dispatch).
             if obj.origin.kind_text == "keyword_identifier" {
                 let obj_text = &src[obj.origin.byte.clone()];
                 if let Some(okind) = object_run_kind(obj_text)

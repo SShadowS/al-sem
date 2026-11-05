@@ -158,6 +158,66 @@ pub fn start_target(file: &AlFile, args: &[ExprId], arg: usize, failure: bool) -
     }
 }
 
+/// [`start_target`] over a body fact's argument (`PCallSite::argument_infos`,
+/// which carry no IR): the same three answers from the argument's kind and
+/// text.
+#[must_use]
+pub fn start_target_of_info(
+    info: Option<&crate::program::body::features::PExpressionInfo>,
+    failure: bool,
+) -> StartTarget {
+    let Some(info) = info else {
+        return if failure {
+            StartTarget::None
+        } else {
+            StartTarget::Dynamic
+        };
+    };
+    match info.kind.as_str() {
+        "database_reference"
+            if info
+                .qualifier
+                .as_deref()
+                .is_some_and(|q| q.trim().eq_ignore_ascii_case("codeunit")) =>
+        {
+            let Some(name) = info.member.as_deref().map(str::trim) else {
+                return StartTarget::Dynamic;
+            };
+            StartTarget::Literal {
+                target_ref: name.to_string(),
+                is_name: name.parse::<i64>().is_err(),
+            }
+        }
+        "integer" => match info.text.trim().parse::<i64>() {
+            Ok(0) if failure => StartTarget::None,
+            Ok(n) if n > 0 => StartTarget::Literal {
+                target_ref: n.to_string(),
+                is_name: false,
+            },
+            _ => StartTarget::Dynamic,
+        },
+        _ => StartTarget::Dynamic,
+    }
+}
+
+/// [`start_targets`] over a body fact's arguments ([`start_target_of_info`]).
+#[must_use]
+pub fn start_targets_of_infos(
+    s: &Starter,
+    infos: &[crate::program::body::features::PExpressionInfo],
+) -> (Vec<(StartTarget, bool)>, bool) {
+    let mut out = vec![(
+        start_target_of_info(infos.get(s.codeunit_arg), false),
+        false,
+    )];
+    if let Some(f) = s.failure_arg {
+        out.push((start_target_of_info(infos.get(f), true), true));
+    }
+    let dynamic = out.iter().any(|(t, _)| *t == StartTarget::Dynamic);
+    out.retain(|(t, _)| matches!(t, StartTarget::Literal { .. }));
+    (out, dynamic)
+}
+
 /// The literal codeunits a start names (codeunit argument first, then the
 /// failure codeunit), and whether any of its codeunit arguments is dynamic.
 #[must_use]

@@ -5,9 +5,11 @@
 //!   (`Page.RunModal` → modal, `Report.Execute`). One `execute` fact per match;
 //!   the 1st positional arg is the target id `ValueSource`. `resourceId` is L3
 //!   (absent at L2).
-//! - `extract_background` — `TaskScheduler.CreateTask` (codeunit id = arg0),
-//!   `Session.StartSession` / bare `StartSession` (codeunit id = arg1; arg0 is the
-//!   OUT session-id var). One `start` fact per match.
+//! - `extract_background` — every background start in
+//!   `program::resolve::background::STARTERS`: `TaskScheduler.CreateTask`
+//!   (codeunit id = arg0), `Session.StartSession` / bare `StartSession` and
+//!   `CurrPage.EnqueueBackgroundTask` (codeunit id = arg1; arg0 is the OUT
+//!   session/task id var). One `start` fact per match.
 
 use super::super::features::PCallee;
 use super::super::features::PRoutine;
@@ -105,29 +107,17 @@ pub fn extract_background(
     let mut facts = Vec::new();
 
     for cs in &ctx.features.call_sites {
-        let codeunit_arg_idx: Option<usize> = match &cs.callee {
+        let starter = match &cs.callee {
             PCallee::Member { receiver, method } => {
-                let r = receiver.to_lowercase();
-                let m = method.to_lowercase();
-                if r == "taskscheduler" && m == "createtask" {
-                    Some(0)
-                } else if r == "session" && m == "startsession" {
-                    Some(1)
-                } else {
-                    None
-                }
+                crate::program::resolve::background::starter_of_callee(Some(receiver), method)
             }
             PCallee::Bare { name } => {
-                if name.to_lowercase() == "startsession" {
-                    Some(1)
-                } else {
-                    None
-                }
+                crate::program::resolve::background::starter_of_callee(None, name)
             }
             _ => None,
         };
 
-        let Some(idx) = codeunit_arg_idx else {
+        let Some(idx) = starter.map(|s| s.codeunit_arg) else {
             continue;
         };
 
