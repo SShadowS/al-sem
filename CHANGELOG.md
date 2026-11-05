@@ -124,6 +124,15 @@ Which tests to run first for a change, as a first-class answer. Spec:
   "CDO E-Mail Handler::RunReportID"` prints exactly `through dependency code: 301 tests —
   effectively the suite's posting tests, not specific to this change`
   (`output_cdo::cdo_test_selection_ratchets`, run by `cdo-gate`).
+- **Measured on CDO through `alsem mcp`** (release-fast, a scratch copy; load average 25-230, so
+  cold times are upper bounds; spec appendix "Milestone C's open items"): `alsem_tests` for
+  RunReportID cold 23.0 s / 6.0 GB peak (default) and 24.0 s / 4.6 GB (`--low-mem`), warm
+  0.17-0.20 s in both; after a B edit of a production file 13.2-14.3 s (default) and 14.2 s
+  (`--low-mem`): the test universe sees the injected file as a `Package`-class change and
+  rebuilds. Resident after: 3.85 + 2.16 GB (default), 2.80 + 1.21 GB (`--low-mem`). A cancel
+  during the cold build does not interrupt the build (it is one phase): the engine was idle
+  10.0 s later, the call unanswered, no test engine started, and the revision kept. The spec now
+  says `--base` (B1/B2) and "nearest tested caller" (with B1's up-walk) come in later milestones.
 - **R0-3: explain's callers and the reverse cone agree.** `select::direct_callers` defines a
   direct caller over the sited graph the way the model's calls count it: a call, interface call,
   object run or record operation site (`via` call/interface/run/implicitTrigger, never a rule's
