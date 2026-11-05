@@ -56,6 +56,7 @@ pub(super) fn job<'a>(
             deterministic: true,
             single_app: false,
             closed_world: false,
+            assume_no_dependents: false,
             human: false,
             detail: false,
             out: None,

@@ -89,6 +89,7 @@ pub(crate) fn run_on_target(
         later: job::LaterReads::NONE,
         carry: part.carry,
         handed: &mut handed,
+        sited: None,
     };
     job.compute(d.side, &mut cx)
 }
@@ -365,6 +366,9 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
             .collect()
     };
     let mut results: Vec<Option<Side>> = on_view.iter().map(|_| None).collect();
+    // The sited graph a model demand walks (`ViewNeeds::MODEL_SITED`), kept
+    // past the lent program for its compute.
+    let mut kept_sited: Option<crate::program::impact_graph::SitedGraph> = None;
     // (1) The one builder; graph demands are done off its program.
     let built = build_view_model(&first.inputs, &first.key, needs, |program| {
         // The sited graph, built once off the lent program for every sited
@@ -376,7 +380,9 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
             })
         });
         for (i, (j, d)) in on_view.iter().enumerate() {
-            if d.needs.sited {
+            if d.needs.model {
+                // A model demand computes after the build.
+            } else if d.needs.sited {
                 let _s = job_span(*j, jobs[*j], "compute");
                 let g = sited.as_ref().expect("built for a sited demand");
                 results[i] = Some(capture(|| {
@@ -386,6 +392,9 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
                 let _s = job_span(*j, jobs[*j], "compute");
                 results[i] = Some(capture(|| jobs[*j].program(d.side, program)));
             }
+        }
+        if on_view.iter().any(|(_, d)| d.needs.model && d.needs.sited) {
+            kept_sited = sited.and_then(Result::ok);
         }
     });
     let (target, fresh) = match built {
@@ -477,6 +486,7 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
             later: last_reads.after(k),
             carry: carries[k].take(),
             handed: &mut handed,
+            sited: kept_sited.as_ref().filter(|_| d.needs.sited),
         };
         let _s = job_span(*j, jobs[*j], "compute");
         let (side, own) = capture(|| jobs[*j].compute(d.side, &mut cx));

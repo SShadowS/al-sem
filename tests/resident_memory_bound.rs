@@ -128,6 +128,7 @@ fn job<'a>(kind: &str, inputs: &'a Arc<WorkspaceInputs>) -> Box<dyn Job + 'a> {
             deterministic: true,
             single_app: false,
             closed_world: false,
+            assume_no_dependents: false,
             human: false,
             detail: false,
             out: None,

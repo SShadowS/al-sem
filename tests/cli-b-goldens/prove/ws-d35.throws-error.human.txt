@@ -1,5 +1,5 @@
 --- Codeunit D35 Demo::OnBeforePrintSafe ---
-  question: throws-error
+  question: throws-error — existing effects (what the routine and its callees already do)
   answer:   no
   coverage: complete
   assumptions: none (default world; --closed-world assumes the loaded interface implementations)

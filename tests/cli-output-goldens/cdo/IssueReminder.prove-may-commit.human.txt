@@ -1,5 +1,5 @@
 --- Codeunit CDO Issue Document::IssueReminder ---
-  question: may-commit
+  question: may-commit — existing effects (what the routine and its callees already do)
   answer:   yes
   evidence: 12 effects
     [COMMIT] beyond Codeunit Reminder-Issue::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19

@@ -248,7 +248,7 @@ pub fn tool_list() -> Vec<Value> {
     vec![
         tool(
             "alsem_explain",
-            "Use before editing or reviewing AL routines: one evidence card per routine with its own rules (conditions and messages), inherited and caller rules, the physical tables it may write (owned by the app and by dependencies), commits, events, UI, HTTP, file, background tasks and errors, who calls it (routines and page actions), the tests that reach it, and the gaps the engine could not follow. Exactly one mode: `routines` (selectors), `diff` (a unified diff's text: one card per routine it changes; `diffRoot` is the folder its paths are relative to, default the git top level), or `table` with `field` (every workspace routine that writes the field). Default (`format: human`): a summary line first, then coverage, assumptions, limits and scope, then the sections; temporary records counted apart, never as writes; long lists folded with their full count; one path per item. Ask for more: `detail: true` (every list complete, up to 3 paths per item), `maxPaths: 0..3`, `showSource: true` (the cited source line ±2 under each location), `writesTables: [T]` (does it write T? per card, prove's own answer), `format: json` (schema al-sem.explain/3, for parsing; 270-580 KB for a routine that calls Base Application, so a file with a summary of each card's header and counts). Size: a few lines for a small routine, 30-40 KB human for one that calls into Base Application. Lines are 1-based. Dependency code: the whole cone with literal arguments, grouped per entry point (tables per kind, names folded). Next: alsem_prove writes-table:<T> or may-commit for one witness; alsem_query_effects for every operation. Returns the exact `alsem explain` stdout.",
+            "Use before editing or reviewing AL routines: one evidence card per routine with its own rules (conditions and messages), inherited and caller rules, the physical tables it may write (owned by the app and by dependencies), commits, events, UI, HTTP, file, background tasks and errors, who calls it (routines and page actions), the tests that reach it, and the gaps the engine could not follow. Exactly one mode: `routines` (selectors), `diff` (a unified diff's text: one card per routine it changes; `diffRoot` is the folder its paths are relative to, default the git top level), or `table` with `field` (every workspace routine that writes the field). Default (`format: human`): a summary line first, then coverage, assumptions, limits and scope, then the sections; temporary records counted apart, never as writes; long lists folded with their full count; one path per item. Ask for more: `detail: true` (every list complete, up to 3 paths per item), `maxPaths: 0..3`, `showSource: true` (the cited source line ±2 under each location), `writesTables: [T]` (does it write T? per card, prove's own answer), `callersContext: true` (a section with the three callers' context answers for adding a COMMIT, an error or UI: pending writes, intercepted errors, non-interactive entries; it builds the caller graph once, about a second on a large workspace), `format: json` (schema al-sem.explain/4, for parsing; 270-580 KB for a routine that calls Base Application, so a file with a summary of each card's header and counts). Size: a few lines for a small routine, 30-40 KB human for one that calls into Base Application. Lines are 1-based. Dependency code: the whole cone with literal arguments, grouped per entry point (tables per kind, names folded). Next: alsem_prove writes-table:<T> or may-commit for one witness; alsem_query_effects for every operation. Returns the exact `alsem explain` stdout.",
             schema(
                 vec![
                     (
@@ -260,6 +260,10 @@ pub fn tool_list() -> Vec<Value> {
                         string_array(
                             "Mode 1: answer 'does it write table T?' per card, as alsem_prove writes-table:T answers.",
                         ),
+                    ),
+                    (
+                        "callersContext",
+                        json!({"type": "boolean", "description": "Add each card's callers' context section (pending writes, intercepted errors, non-interactive entries), for adding a COMMIT, an error or UI."}),
                     ),
                     (
                         "diff",
@@ -300,7 +304,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_prove",
-            "A yes/no question about one AL routine (`routine`, a selector), answered with its evidence. `question`: may-commit, commits-on-success-path, writes-table:<table>, publishes-event:<event>, reaches-ui, throws-error. Answers: yes (a path to the effect exists; a may-answer), no (proven absent under the stated assumptions), unknown (no matching effect observed, but coverage is incomplete, so not a proof). A temporary-record write is not a write for writes-table. Default (`format: human`): about 10 lines with the answer, each evidence row with its location and one witness path, then the blockers of an unknown grouped by kind with their counts and the first 3 of each (workspace ones first), then coverage (calls not resolved and interface calls open world, with the top callees), assumptions and limits. Ask for more: `detail: true` (every blocker), `closedWorld: true` (interface calls dispatch only to the loaded implementations; it can turn unknown into no, and says so under assumptions), `format: json` (every evidence row, its group path and witness hops; 5-60 KB). Size: 1-5 KB human. Lines are 1-based. Dependency code: the whole call cone is followed with literal arguments. Next: on unknown, alsem_explain lists the workspace gaps behind it. Returns the exact `alsem prove` stdout.",
+            "A yes/no question about one AL routine (`routine`, a selector), answered with its evidence. `question`, about the routine's existing effects (what it and its callees already do): may-commit, commits-on-success-path, writes-table:<table>, publishes-event:<event>, reaches-ui, throws-error. Or about its callers' context, before adding a COMMIT, an error or UI to it: callers-have-pending-writes (may a caller have a database write pending when it runs), callers-intercept-errors (may a caller turn its error into false: a TryFunction whose result is used, a checked Codeunit.Run, asserterror, collectible errors; a TryFunction does not roll back database changes), callers-may-run-noninteractive (may it run where no user answers UI: API pages, job queue and web service roots from roots.config.json, install and upgrade codeunits, background sessions); these walk every caller up to its entry points, and a public routine's callers in apps that are not loaded block a no unless `assumeNoDependents: true`. Answers: yes (a path to the effect exists; a may-answer), no (proven absent under the stated assumptions), unknown (no matching effect observed, but coverage is incomplete, so not a proof). A temporary-record write is not a write for writes-table. Default (`format: human`): about 10 lines with the answer, each evidence row with its location and one witness path, then the blockers of an unknown grouped by kind with their counts and the first 3 of each (workspace ones first), then coverage (calls not resolved and interface calls open world, with the top callees), assumptions and limits. Ask for more: `detail: true` (every blocker), `closedWorld: true` (interface calls dispatch only to the loaded implementations; it can turn unknown into no, and says so under assumptions), `format: json` (every evidence row, its group path and witness hops; 5-60 KB). Size: 1-5 KB human. Lines are 1-based. Dependency code: the whole call cone is followed with literal arguments. Next: on unknown, alsem_explain lists the workspace gaps behind it. Returns the exact `alsem prove` stdout.",
             schema(
                 vec![
                     (
@@ -309,7 +313,11 @@ pub fn tool_list() -> Vec<Value> {
                     ),
                     (
                         "question",
-                        json!({"type": "string", "description": "may-commit | commits-on-success-path | writes-table:<name> | publishes-event:<name> | reaches-ui | throws-error"}),
+                        json!({"type": "string", "description": "Existing effects: may-commit | commits-on-success-path | writes-table:<name> | publishes-event:<name> | reaches-ui | throws-error. Callers' context: callers-have-pending-writes | callers-intercept-errors | callers-may-run-noninteractive"}),
+                    ),
+                    (
+                        "assumeNoDependents",
+                        json!({"type": "boolean", "description": "Callers' context questions: assume no app outside the program calls the workspace's public, protected or friend-visible procedures (it can turn unknown into no, and says so under assumptions). Not the same as closedWorld."}),
                     ),
                     (
                         "format",
@@ -826,6 +834,7 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             for t in a.strings("writesTables")?.unwrap_or_default() {
                 v.opt("writes-table", t);
             }
+            v.switch("callers-context", a.flag("callersContext")?);
             v
         }
         "alsem_prove" => {
@@ -839,6 +848,7 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
                 &a.enumerated("format", &["json", "human"], "human")?,
             );
             v.switch("closed-world", a.flag("closedWorld")?);
+            v.switch("no-dependents", a.flag("assumeNoDependents")?);
             v.switch("detail", a.flag("detail")?);
             v.switch("deterministic", a.flag("deterministic")?);
             v
@@ -1029,6 +1039,59 @@ mod tests {
             ToolCall::Command(c) => Ok(c),
             other => panic!("{other:?}"),
         }
+    }
+
+    /// Agent-tasks §5 (I-1): no tool description, argument description or
+    /// server instruction calls an answer "safe": prove answers about
+    /// existing effects or callers' context, never a safety verdict.
+    #[test]
+    fn no_description_says_safe() {
+        fn texts(v: &Value, out: &mut Vec<String>) {
+            match v {
+                Value::String(s) => out.push(s.clone()),
+                Value::Array(a) => a.iter().for_each(|x| texts(x, out)),
+                Value::Object(o) => o.values().for_each(|x| texts(x, out)),
+                _ => {}
+            }
+        }
+        let mut all = vec![crate::mcp::INSTRUCTIONS.to_string()];
+        for t in tool_list() {
+            texts(&t, &mut all);
+        }
+        let hits: Vec<&String> = all
+            .iter()
+            .filter(|t| t.to_ascii_lowercase().contains("safe"))
+            .collect();
+        assert!(hits.is_empty(), "{hits:#?}");
+        let prove = tool_list()
+            .into_iter()
+            .find(|t| t["name"] == "alsem_prove")
+            .unwrap();
+        let d = prove["description"].as_str().unwrap();
+        assert!(
+            d.contains("existing effects") && d.contains("callers' context"),
+            "{d}"
+        );
+    }
+
+    /// `assumeNoDependents` is prove's `--no-dependents`.
+    #[test]
+    fn prove_assume_no_dependents_is_its_own_switch() {
+        let c = command(
+            "alsem_prove",
+            json!({"routine": "R", "question": "callers-intercept-errors", "assumeNoDependents": true}),
+        )
+        .unwrap();
+        assert!(
+            c.argv.iter().any(|a| a == "--no-dependents"),
+            "{:?}",
+            c.argv
+        );
+        assert!(
+            !c.argv.iter().any(|a| a == "--closed-world"),
+            "{:?}",
+            c.argv
+        );
     }
 
     /// Each command tool builds the argv the CLI takes: options as

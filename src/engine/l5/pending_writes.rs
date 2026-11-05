@@ -98,7 +98,35 @@ pub(crate) fn pending_before(
     whole_body: bool,
     cx: &PendingCtx<'_>,
 ) -> Pending {
+    pending_before_report(r, targets, whole_body, cx).pending
+}
+
+/// [`pending_before`] and how it got there (agent-tasks design §6.3): the
+/// sites it counted, whether it fell back to the whole body, and whether a
+/// `Commit()` statement on the way to a target cleared what came before it.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct PendingReport {
+    pub pending: Pending,
+    /// The sites of `r` that may run before a target (a target itself
+    /// excluded).
+    pub sites: BTreeSet<String>,
+    /// No tree, or a target the tree does not hold: every site counted.
+    pub whole_body: bool,
+    /// A `Commit()` statement runs before a target on its way down: what ran
+    /// before it is committed, so `r`'s own callers have no write pending at
+    /// the target through `r`.
+    pub committed: bool,
+}
+
+/// [`pending_before`], with its [`PendingReport`].
+pub(crate) fn pending_before_report(
+    r: &ModelRoutine,
+    targets: &[&str],
+    whole_body: bool,
+    cx: &PendingCtx<'_>,
+) -> PendingReport {
     let mut sites: BTreeSet<String> = BTreeSet::new();
+    let mut committed = false;
     let mut all = whole_body || r.statement_tree.is_none();
     let commits: BTreeSet<&str> = r
         .operation_sites
@@ -111,7 +139,13 @@ pub(crate) fn pending_before(
     {
         for t in targets {
             let mut before = BTreeSet::new();
-            if !walk_list(std::slice::from_ref(tree), t, &commits, &mut before) {
+            if !walk_list(
+                std::slice::from_ref(tree),
+                t,
+                &commits,
+                &mut before,
+                &mut committed,
+            ) {
                 all = true;
                 break;
             }
@@ -119,6 +153,7 @@ pub(crate) fn pending_before(
         }
     }
     if all {
+        committed = false;
         sites.clear();
         if let Some(tree) = &r.statement_tree {
             collect(tree, &mut sites);
@@ -133,8 +168,14 @@ pub(crate) fn pending_before(
     for t in targets {
         sites.remove(*t);
     }
-    let targets: BTreeSet<&str> = targets.iter().copied().collect();
-    effects(r, &sites, &targets, cx)
+    let target_set: BTreeSet<&str> = targets.iter().copied().collect();
+    let pending = effects(r, &sites, &target_set, cx);
+    PendingReport {
+        pending,
+        sites,
+        whole_body: all,
+        committed,
+    }
 }
 
 /// The effects of `sites` in `r`: its own physical writes and published events
@@ -308,12 +349,14 @@ fn is_commit(n: &PCFNNode, commits: &BTreeSet<&str>) -> bool {
 /// Add to `out` the sites that may run before `t` in the statement list
 /// `nodes`; `false` when `t` is not in it. A `Commit()` statement on the way
 /// ends the earlier transaction: everything collected so far (including what
-/// the enclosing levels added) is committed, so `out` restarts after it.
+/// the enclosing levels added) is committed, so `out` restarts after it, and
+/// `committed` says so.
 fn walk_list(
     nodes: &[PCFNNode],
     t: &str,
     commits: &BTreeSet<&str>,
     out: &mut BTreeSet<String>,
+    committed: &mut bool,
 ) -> bool {
     let Some(k) = nodes.iter().position(|n| contains(n, t)) else {
         return false;
@@ -321,18 +364,25 @@ fn walk_list(
     for n in &nodes[..k] {
         if is_commit(n, commits) {
             out.clear();
+            *committed = true;
             continue;
         }
         collect_reaching(n, out);
     }
-    walk_node(&nodes[k], t, commits, out);
+    walk_node(&nodes[k], t, commits, out, committed);
     true
 }
 
 /// `n` holds `t`: add what runs before `t` inside `n`.
-fn walk_node(n: &PCFNNode, t: &str, commits: &BTreeSet<&str>, out: &mut BTreeSet<String>) {
+fn walk_node(
+    n: &PCFNNode,
+    t: &str,
+    commits: &BTreeSet<&str>,
+    out: &mut BTreeSet<String>,
+    committed: &mut bool,
+) {
     let leaves = kids(&n.condition_leaves);
-    if walk_list(leaves, t, commits, out) {
+    if walk_list(leaves, t, commits, out, committed) {
         return; // `t` is in the condition (or the arguments)
     }
     // A condition (or a call's arguments) runs before the body (or the call).
@@ -352,13 +402,13 @@ fn walk_node(n: &PCFNNode, t: &str, commits: &BTreeSet<&str>, out: &mut BTreeSet
         // A `case` runs ONE branch: only the one that holds `t`.
         "case" => {
             if let Some(b) = kids(&n.children).iter().find(|b| contains(b, t)) {
-                walk_node(b, t, commits, out);
+                walk_node(b, t, commits, out, committed);
             }
         }
         // Only the branch that holds `t` runs before it.
         _ => {
-            if !walk_list(kids(&n.children), t, commits, out) {
-                walk_list(kids(&n.else_children), t, commits, out);
+            if !walk_list(kids(&n.children), t, commits, out, committed) {
+                walk_list(kids(&n.else_children), t, commits, out, committed);
             }
         }
     }
@@ -405,7 +455,8 @@ mod tests {
             std::slice::from_ref(tree),
             t,
             &BTreeSet::new(),
-            &mut out
+            &mut out,
+            &mut false
         ));
         out.into_iter().collect()
     }

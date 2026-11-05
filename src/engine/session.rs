@@ -578,6 +578,16 @@ pub fn policy_plan(detectors: Vec<Detector>, rules: bool, pins: bool) -> Plan {
 /// job answers with exit 2 and no card, or a field with no writer). Either
 /// way the command reads its indexes (plan 2026-11-03 W2: a revision's
 /// `ExplainIndexes`).
+/// `plan` with the default detector run (its summaries and transaction
+/// spans) beside it: explain `--callers-context` (agent-tasks §6.6), whose
+/// callers' walk reads them as prove's callers' questions do.
+#[must_use]
+pub fn with_default_run(mut plan: Plan) -> Plan {
+    plan.runs = vec![(crate::engine::l5::detectors::default_detectors(), true)];
+    plan.after_run = substrate::TRANSACTION_SPANS;
+    plan
+}
+
 pub fn explain_plan(roots: BTreeSet<String>) -> Plan {
     if roots.is_empty() {
         return Plan {

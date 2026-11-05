@@ -1,5 +1,5 @@
 --- Codeunit CDO Issue Document::IssueReminder ---
-  question: writes-table:Data Exch.
+  question: writes-table:Data Exch. — existing effects (what the routine and its callees already do)
   answer:   unknown — no matching effect observed; coverage incomplete
   blockedBy: 287 blockers in 4 kinds (at most 3 each, workspace ones first; --detail lists every one)
     coverage-incomplete: 1
