@@ -391,7 +391,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_query_touches",
-            "Is a table touched by any record operation, transitively? `table`: a number, a name, an internal table id, or unknown (operations whose table is decided at run time). Without `from`: every workspace routine that touches it. With `from` (a routine selector), `direction`: down (does it touch the table, and through which operations), up (its transitive callers: how many touch it, do not, or are unknown), or both (the default). Touches are counted as known persistent, possibly persistent and on temporary records (a temporary-record touch persists nothing but uses the table's schema and runs its triggers); when the routine touches the table itself its callers are counted, not listed. Default (`format: human`): a few lines to about 10 KB, lists folded. Ask for more: `all: true` (every witness, the callers' included, no fold; tens of megabytes on a hub routine), `showSource: true` (the cited source line ±2), `format: json` (every down witness, about 200 KB on a hub routine; over the cap a file with a summary of the down and up headlines). Lines are 1-based. Dependency code: per operation one routine deep; with `from` asked down, the dependency entry points beyond which the whole cone may write the table are listed too (`down.beyond`). Next: alsem_query_effects for the routine's other tables. Returns the exact `alsem query touches` stdout.",
+            "Is a table touched by any record operation, transitively? `table`: a number, a name, an internal table id, or unknown (operations whose table is decided at run time). Without `from`: every workspace routine that touches it, by the per-operation index. With `from` (a routine selector), `direction`: down (does it touch the table, and through which operations; when no indexed operation does, the answer is `unknown` with its reasons, such as operations on a RecordRef, calls not resolved or dependency code deeper than one routine, and `no` only when none applies), up (its transitive callers: how many touch it, do not, or are unknown), or both (the default). Touches are counted on persistent records, on possibly persistent records and on temporary records (a temporary-record touch persists nothing but uses the table's schema and runs its triggers); when the routine touches the table itself its callers inherit the touch and are counted, not listed. Default (`format: human`): a few lines to about 10 KB, lists folded. Ask for more: `callers: true` (every caller by name, depth and location, without witnesses), `all: true` (every witness, the callers' included, no fold; tens of megabytes on a hub routine), `showSource: true` (the cited source line ±2), `format: json` (every down witness, about 200 KB on a hub routine; over the cap a file with a summary of the down and up headlines). Lines are 1-based. Dependency code: per operation one routine deep; with `from` asked down, the dependency entry points beyond which the whole cone may write the table are listed too (`down.beyond`). Next: alsem_query_effects for the routine's other tables. Returns the exact `alsem query touches` stdout.",
             schema(
                 vec![
                     (
@@ -409,6 +409,10 @@ pub fn tool_list() -> Vec<Value> {
                     (
                         "all",
                         json!({"type": "boolean", "description": "Every witness, the callers' included, and no folded list (`--all`). Large on a hub routine."}),
+                    ),
+                    (
+                        "callers",
+                        json!({"type": "boolean", "description": "Name every transitive caller with its depth and location, without their witnesses (`--callers`)."}),
                     ),
                     (
                         "showSource",
@@ -834,6 +838,7 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
                 &a.enumerated("direction", &["down", "up", "both"], "both")?,
             );
             v.switch("all", a.flag("all")?);
+            v.switch("callers", a.flag("callers")?);
             v.switch("show-source", a.flag("showSource")?);
             v.opt(
                 "format",

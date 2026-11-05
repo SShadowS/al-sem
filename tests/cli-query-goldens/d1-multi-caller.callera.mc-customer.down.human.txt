@@ -1,5 +1,5 @@
 --- Codeunit D1 Multi Caller::CallerA vs MC Customer (11111111-0000-0000-0000-00000000d01a/table/50101) ---
   scope: dependency code: full cone for physical writes, grouped per entry point; per-operation detail one routine deep; temporary-record touches persist nothing but use the table's schema and run its triggers; lines are 1-based
-  down: yes — 2 record touches: 2 known persistent, 0 possibly persistent, 0 on temporary records
+  down: yes — 2 record touches: 2 on persistent records, 0 on possibly persistent records, 0 on temporary records
     [FindSet] read at ws:src/D1MultiCaller.al:25 in Codeunit D1 Multi Caller::CallerA
     [Modify] write at ws:src/D1MultiCaller.al:19 in Codeunit D1 Multi Caller::ModifyHelper
