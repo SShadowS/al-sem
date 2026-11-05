@@ -187,6 +187,42 @@ pub(crate) fn human_anchors(text: &str) -> Vec<Anchor> {
     let mut anchors = Vec::new();
     for l in text.lines() {
         let t = l.trim();
+        // MCP output step 2: a folded list of rows on one line — explain's
+        // `and N more (--detail prints their paths): <row>; <row>; …` and
+        // prove's `also [TYPE]: <place>; …` — is checked item by item, each
+        // as the line it stands for (`COMMIT at …`, `<Routine>, entered at
+        // …`, `[TYPE] at …`).
+        let folded: Option<Vec<String>> = if let Some((_, items)) = t
+            .strip_prefix("and ")
+            .and_then(|r| r.split_once(" more (--detail prints their paths): "))
+        {
+            Some(items.split("; ").map(str::to_string).collect())
+        } else if let Some(rest) = t.strip_prefix("also [")
+            && let Some((ty, items)) = rest.split_once("]: ")
+        {
+            Some(
+                items
+                    .split("; ")
+                    .filter(|i| !i.starts_with('…'))
+                    .map(|i| format!("{ty} {i}"))
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        if let Some(items) = folded {
+            for item in &items {
+                for (file, line, _) in re_anchor(item) {
+                    anchors.push(Anchor {
+                        file,
+                        line,
+                        tokens: line_tokens(item),
+                        printed: t.to_string(),
+                    });
+                }
+            }
+            continue;
+        }
         for (file, line, _) in re_anchor(t) {
             let tokens = line_tokens(t);
             anchors.push(Anchor {

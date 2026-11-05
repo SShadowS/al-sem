@@ -1,10 +1,11 @@
 --- Codeunit CDO E-Mail Handler::RunReportID ---
   question: may-commit
   answer:   yes
-  evidence: 1 effect
-    [COMMIT] at ws:src/Features/Email/Templates/CDOEMailTemplateManagement.Codeunit.al:1241
-      conditionality: guarded-by-IsHandled
-      path: RunReportID → CDO Document Template Line::Print → CDO E-Mail Template Management::PrintDoc(EMailTemplateHeader, DocumentTemplateLine, ReportID, FilterRecord, VariantRecord, ShowPrintDialog, PrinterName, ReportSelectionUsage) → PrintDocuments(EMailTemplateHeader, DocumentTemplateLine, ReportID, FilterRecord, VariantRecord, ShowPrintDialog, PrinterName, ReportSelectionUsage, DocumentsToPrint) → PrintDocuments(EMailTemplateHeader, DocumentTemplateLine, ReportID, FilterRecord, VariantRecord, ShowPrintDialog, PrinterName, ReportSelectionUsage, DocumentsToPrint, IsFallback)
+  evidence: 13 effects
+    [COMMIT] beyond Codeunit CSC Core::IsAppActiveOrAskToActivate, entered at ws:src/Features/Email/Templates/CDOEMailTemplateManagement.Codeunit.al:480
+      path: RunReportID → CDO E-Mail Template Management::SaveDocToFile/7[2: Record "CDO Document Template Line"] → CreateReports/8[3: Record "CDO Document Template Line"] → CreateReports/9 → CSC Core::IsAppActiveOrAskToActivate → CSC Core Mgt.::StartActivationWizard2 (COMMIT at dep:Continia Core:src/Source/Core/CoreMgt.Codeunit.al:118)
+    also [COMMIT]: beyond Table Incoming Document Attachment::OnInsert, entered at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:182; at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:229; at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:253; … +9 rows; 13 rows of this type in all (--detail lists every row with its path)
+  (3 overloads named by arity, `Name/n`, or by the parameter types they differ in, `Name/n[position: type]`; --detail prints their signatures)
   coverage: incomplete — 21 calls not resolved (6 in this workspace), 267 interface calls open world (10 in this workspace); top: CurrLineWithPrice.SetLine ×21, Codeunit.Run(<dynamic>) ×16, CurrLineWithPrice.GetLine ×8; alsem explain lists the workspace ones under gaps
   assumptions: none (default world; --closed-world assumes the loaded interface implementations)
   limits: none

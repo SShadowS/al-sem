@@ -1080,7 +1080,7 @@ fn render(
     // W2-2: one rollup context for every card (names, the operation index).
     // Paths name overloads by short handles; each card ends with their
     // signatures (MCP output step 2).
-    let rcx = RollupCx::new(model, apps).with_short_handles();
+    let rcx = RollupCx::new(model, apps);
     // (anchor sort key, routine id, JSON, human text) per card.
     type Rendered = (Option<(String, u32, u32)>, String, Value, String);
     let mut cards: Vec<Rendered> = resolved
@@ -2613,8 +2613,14 @@ impl Card {
             &s.temporary,
             &s.events,
         ] {
-            // A section's shared path start, once (MCP output step 2).
-            for l in &crate::engine::l5::routine_rollup::factor_prefix(section.clone()) {
+            // A section's shared path start, once (MCP output step 2); the
+            // `writes beyond` section does it itself (`beyond_lines`).
+            let lines = if std::ptr::eq(section, &s.beyond) {
+                section.clone()
+            } else {
+                crate::engine::l5::routine_rollup::factor_prefix(section.clone())
+            };
+            for l in &lines {
                 line(l);
             }
         }

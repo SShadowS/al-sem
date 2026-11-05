@@ -1803,8 +1803,13 @@ pub fn format_prove_human(
             }
         }
         for (t, (listed, hidden)) in &folded {
+            // The type's full count beside its fold (T-W2-3).
+            let total = indices
+                .iter()
+                .filter(|&&i| effects[i].effect_type == *t)
+                .count();
             let more = if *hidden > 0 {
-                format!("; … +{hidden} more")
+                format!("; … +{hidden} rows; {total} rows of this type in all")
             } else {
                 String::new()
             };
@@ -2535,8 +2540,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     // loaded apps' names).
     let dependencies = cx.view().target().dependencies();
     let rollup_cx =
-        crate::engine::l5::routine_rollup::RollupCx::new(cx.view().model(), &dependencies.apps)
-            .with_short_handles();
+        crate::engine::l5::routine_rollup::RollupCx::new(cx.view().model(), &dependencies.apps);
     let human_text = format_prove_human(
         &entry.routine_display,
         &entry.object_display,

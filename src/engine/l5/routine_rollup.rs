@@ -136,11 +136,8 @@ pub struct RollupCx<'m> {
     /// Qualified display → the distinct stable ids that share it (T-W2-24:
     /// overloads, and objects of one name in two apps).
     shared: HashMap<String, Vec<&'m str>>,
-    /// Paths name an overload by a short handle ([`Self::handle`]) and
-    /// record its full signature in [`Self::legend`] (MCP output step 2).
-    /// Off, they print the parameter list ([`Self::disambiguator`]).
-    short_handles: std::cell::Cell<bool>,
-    /// The handles printed since the last [`Self::take_legend`]: handle →
+    /// The handles ([`Self::handle`], MCP output step 2) paths printed since
+    /// the last [`Self::take_legend`]: handle →
     /// (numbered: the arity alone does not tell it apart, its full
     /// signature and declaration).
     legend: std::cell::RefCell<BTreeMap<String, (bool, String)>>,
@@ -202,7 +199,6 @@ impl<'m> RollupCx<'m> {
             },
             app_names,
             shared: HashMap::new(),
-            short_handles: std::cell::Cell::new(false),
             legend: std::cell::RefCell::new(BTreeMap::new()),
         };
         let mut shared: HashMap<String, Vec<&'m str>> = HashMap::new();
@@ -286,30 +282,16 @@ impl<'m> RollupCx<'m> {
         out
     }
 
-    /// Paths name overloads by short handles and keep a legend (MCP output
-    /// step 2): for the human outputs that print [`Self::take_legend`].
-    #[must_use]
-    pub fn with_short_handles(self) -> Self {
-        self.short_handles.set(true);
-        self
-    }
-
-    /// [`Self::with_short_handles`] on a shared context, from now on (a
-    /// human renderer over a context the JSON projection also reads).
-    pub fn use_short_handles(&self) {
-        self.short_handles.set(true);
-    }
-
-    /// What a PATH prints after a routine's name: in short-handle mode, an
-    /// overload's arity (`/8`), with its parameter types only when a
-    /// same-app overload has the same arity (`/2(Integer, Text)`), recorded
-    /// with its full signature in the legend; the ` [<app>]` label as
-    /// [`Self::disambiguator`] gives it. Off, the disambiguator itself.
+    /// What a PATH prints after a routine's name (MCP output step 2): an
+    /// overload's short handle, recorded with its full signature in the
+    /// legend ([`Self::take_legend`], which explain, digest and prove print):
+    /// `/n` (its arity), `/n[position: type]` (the types it differs in) when a
+    /// same-app overload has its arity, `/n#k` (source order) when it differs
+    /// in nothing but its place; then the ` [<app>]` label as
+    /// [`Self::disambiguator`] gives it. Every human path names a routine
+    /// this way, so two outputs' shared sections read alike.
     #[must_use]
     pub fn handle(&self, stable_id: &str) -> String {
-        if !self.short_handles.get() {
-            return self.disambiguator(stable_id);
-        }
         let Some(&i) = self.rows.get(stable_id) else {
             return String::new();
         };
@@ -1147,10 +1129,10 @@ pub fn plural(n: usize, one: &str, many: &str) -> String {
 /// One section's `path:` lines with their most-shared start printed once
 /// (MCP output step 2): the start (the root and at least two more hops)
 /// that saves the most text over the `path:` / `prefix path:` lines that
-/// begin with it and go on past it, when two or more do. A line `(below, a
-/// path that begins with `… →` begins with: <prefix>)` follows the
-/// section's first line, and each such path prints as `path: … → <rest>`;
-/// every other line is unchanged.
+/// begin with it and go on past it, when two or more do. A line `(in
+/// <section>, a path that begins with `… →` begins with: <prefix>)` follows
+/// the section's first line, and each such path prints as `path: … →
+/// <rest>`; every other line is unchanged.
 #[must_use]
 pub fn factor_prefix(lines: Vec<String>) -> Vec<String> {
     const SEP: &str = " → ";
@@ -1205,6 +1187,15 @@ pub fn factor_prefix(lines: Vec<String>) -> Vec<String> {
     let n = start.len();
     let prefix = start.join(SEP);
     let indent = paths.iter().map(|(i, _)| *i).min().unwrap_or(2);
+    // The note names its section (its header's words before `:` or `(`),
+    // so two sections with one shared start do not print the same line.
+    let section = lines[0]
+        .trim()
+        .split([':', '('])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let mut out = Vec::with_capacity(lines.len() + 1);
     for (k, l) in lines.into_iter().enumerate() {
         match labelled(&l) {
@@ -1217,7 +1208,7 @@ pub fn factor_prefix(lines: Vec<String>) -> Vec<String> {
         }
         if k == 0 {
             out.push(format!(
-                "{}(below, a path that begins with `… →` begins with: {prefix})",
+                "{}(in {section}, a path that begins with `… →` begins with: {prefix})",
                 " ".repeat(indent)
             ));
         }
@@ -2754,7 +2745,9 @@ pub fn beyond_lines(
             ));
         }
     }
-    out
+    // The section's shared path start, once: here, so every output that
+    // prints this section (explain, digest, query effects) prints it alike.
+    factor_prefix(out)
 }
 
 /// `writes with no path kept` (design §4.1 section 13), by the owner's app.
@@ -2947,7 +2940,7 @@ pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, detail: bool) -> V
             plural(n, "place", "places"),
             places.shown.join("; "),
             if places.hidden > 0 {
-                format!("; … +{} more (--detail lists them)", places.hidden)
+                format!("; … +{} places (--detail lists them)", places.hidden)
             } else {
                 String::new()
             }
@@ -3116,8 +3109,6 @@ mod tests {
     /// arity; `Pick/1[1: Integer]` and `Pick/1[1: Text]` in a type; two
     /// `OnValidate` field triggers differ in nothing but their place, so they
     /// are numbered in source order and their declarations are the legend.
-    /// The handles of a context without short handles stay the
-    /// disambiguator's.
     ///
     /// Discrimination (2026-11-05): numbering every same-arity overload `#1`
     /// (`before + 1` → `1`) fails at "triggers differ"; restored, passes.
@@ -3155,9 +3146,7 @@ mod tests {
         h.source_anchor.source_unit_id = "ws:src/T.al".into();
         h.source_anchor.start_line = 19;
         m.workspace.routines = vec![a, b, e, f, h, g];
-        let off = RollupCx::new(&m, &[]);
-        assert_eq!(off.handle("ws:Note#2"), off.disambiguator("ws:Note#2"));
-        let cx = RollupCx::new(&m, &[]).with_short_handles();
+        let cx = RollupCx::new(&m, &[]);
         let handles: Vec<String> = [
             "ws:Note#1",
             "ws:Note#2",

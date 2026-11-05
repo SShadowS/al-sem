@@ -1112,6 +1112,9 @@ pub(crate) struct EntryPointLines {
 /// `N entry point(s) at S site(s)` right after `marker` in `line`.
 fn points_at(line: &str, marker: &str) -> Option<(usize, usize)> {
     let rest = &line[line.find(marker)? + marker.len()..];
+    // A lower bound (`at least N entry points at at least M sites`) states
+    // the same counts the lines do.
+    let rest = rest.strip_prefix("at least ").unwrap_or(rest);
     let num = |s: &str| -> Option<(usize, usize)> {
         let digits: String = s
             .chars()
@@ -1130,6 +1133,7 @@ fn points_at(line: &str, marker: &str) -> Option<(usize, usize)> {
         .strip_prefix('s')
         .unwrap_or(rest)
         .strip_prefix(" at ")?;
+    let rest = rest.strip_prefix("at least ").unwrap_or(rest);
     let (s, _) = num(rest)?;
     Some((n, s))
 }

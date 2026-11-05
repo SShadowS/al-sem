@@ -16,11 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type]` (the parameter types it differs in) when one does, and `Name/n#k` (k in source order) when
   only the place tells them apart (two field triggers); a `#k` handle's signature and declaration
   are printed once under the card (`overload … = (…) at …`), every handle's with `--detail`.
-  `query effects` keeps the parameter lists (it prints no legend).
+  `query effects` paths use the same handles (its `writes beyond` section is explain's own); it
+  prints no legend.
 - **A section's shared path start prints once.** Within one section, the start (the root and at
   least two more hops) that saves the most text over its `path:`, `prefix path:` and
-  `representative path` lines prints once, `(below, a path that begins with \`… →\` begins with:
-  …)`, and those paths print `… → <rest>`. An entry point's prefix and its representative path now
+  `representative path` lines prints once, `(in <section>, a path that begins with \`… →\` begins
+  with: …)`, and those paths print `… → <rest>`. An entry point's prefix and its representative path now
   print as one line (`--detail` keeps both).
 - **Commit and kind rows print paths for the first few only.** The `commits:` section prints a path
   for the first 3 sites and the first 3 commit-bearing entry points; the others share one `and N
@@ -37,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   most of the tables when one is behind more than half of 10 or more (RunReportID on CDO: "357 of
   them beyond Codeunit Sales-Calc. Discount::OnRun (entered at
   ws:src/Foundation/CDOFile.Table.al:125)"); JSON `summary.mayWriteTables.mostBeyond`.
+- **The CDO output budgets hold at their existing limits** (re-measured on `bc3ccb18` with the
+  commit-site fixes in): explain IssueReminder 136 lines / 31,467 B (limit 140 / 35,500),
+  RunReportID 147 / 34,495 (150 / 39,936; inline with 6.4 KiB to spare); prove may-commit 10–11
+  lines, at most 1,514 B (20 / 2,000); digest JSON IssueReminder 1,224,146 B, core 712,169
+  (1,250,000 / 720,000), RunReportID 1,198,204 / 692,325. The CDO rendering goldens are
+  regenerated. The output checks read the new shapes: a folded `and N more …` / `also [TYPE]: …`
+  line's anchors are checked item by item, and an entry-point count may be "at least".
 - **`alsem_status` says what it does not check.** The answer starts with `diskChecked: false`, a
   `freshnessNote` (a revision names the inputs it was built from, not whether they still match
   the disk) and `next` (with the default freshness `fresh`: nothing, the next command checks the

@@ -2680,9 +2680,8 @@ pub fn format_digest_human_v3(
     changed: &[ChangedRootsDiagnostic],
 ) -> String {
     use crate::engine::l5::routine_rollup as rr;
-    // Paths name overloads by short handles; each root's block ends with
-    // their signatures (MCP output step 2).
-    cx.use_short_handles();
+    // Each root's block ends with the signatures of the overloads its paths
+    // named by short handles (MCP output step 2); none before the first.
     let _ = cx.take_legend(true);
     let mut text = if entries.is_empty() {
         "digest: no changed roots resolved\n".to_string()
@@ -2705,7 +2704,7 @@ pub fn format_digest_human_v3(
                 &|_| None,
             )));
             body.extend(rr::caller_dependent_lines(r, entry));
-            body.extend(rr::factor_prefix(rr::beyond_lines(r, entry, cx, opts)));
+            body.extend(rr::beyond_lines(r, entry, cx, opts));
             body.extend(rr::factor_prefix(rr::no_path_lines(r, entry, cx, opts)));
             body.extend(rr::literal_dead_lines(r, opts));
             body.extend(rr::temporary_lines(r, opts));
