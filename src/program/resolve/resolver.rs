@@ -2398,10 +2398,10 @@ fn dispatch_entry_trigger(
 }
 
 /// The object a static run (`Page.Run(Page::X)`, `Codeunit.Run(Codeunit::50000)`)
-/// names, from the calling app's closure; `None` when it is in no graph. Only a
-/// `DatabaseReference` argument is static: a bare integer (`Codeunit.Run(50000)`)
-/// never reaches here — the extractor leaves its target `None`, a `DynamicOpen`
-/// run (`extract::static_database_reference_target`).
+/// names, from the calling app's closure; `None` when it is in no graph. A
+/// bare positive integer (`Codeunit.Run(50000)`) is the object's id and arrives
+/// here as a number, as `Codeunit::50000` does
+/// (`extract::static_database_reference_target`).
 pub(crate) fn object_run_target<'g>(
     from: AppRef,
     object_kind: ObjectKind,

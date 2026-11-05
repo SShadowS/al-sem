@@ -503,7 +503,7 @@ ws-d8-commit-in-tx/src/posting.al::0::PostSalesDoc	4edf2013c46ad498
 ws-d8-commit-in-tx/src/posting.al::0::OnAfterPostSalesDoc	8c6d596ecbccc7b4
 ws-d8-commit-in-tx/src/subscriber.al::0::HandlePosted	2d90cf565a8f3c97
 ws-diff-coverage-narrowed/a/src/runner.al::0::Run	21d8033b7d431254
-ws-diff-coverage-narrowed/b/src/runner.al::0::Run	24a7006048b5365f
+ws-diff-coverage-narrowed/b/src/runner.al::0::Run	7ec47d42ab3a24e2
 ws-diff-new-capability/a/src/processor.al::0::Compute	ca48134c99644ae2
 ws-diff-new-capability/b/src/processor.al::0::Compute	47591eb902ee5b21
 ws-diff-permission-expanded/a/src/manager.al::0::UpdateItem	0cef07d1d57f5c17

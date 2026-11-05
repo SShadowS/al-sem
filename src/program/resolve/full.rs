@@ -4943,6 +4943,124 @@ mod tests {
         );
     }
 
+    /// A positive integer literal names its object as `Codeunit::50001` does:
+    /// `Codeunit.Run(50001)` (with or without a record), `Page.Run`/`RunModal`,
+    /// `Report.Run`/`RunModal`, `XmlPort.Run`/`Import`/`Export` run the object
+    /// with that id. The transpiled bodies of symbol packages write every run
+    /// this way. An id no object declares is `ObjectNotInGraph` (unknown, with
+    /// its reason, as `Codeunit::59999` is); `0`, a variable and an expression
+    /// stay dynamic, and `Page.Run(0, Rec)` still opens the table's lookup page.
+    ///
+    /// DISCRIMINATION (2026-11-05): returning `None` for an integer literal in
+    /// `extract::static_database_reference_target` (the old behaviour) fails
+    /// every literal tag (`codeunit-int` becomes `DynamicOpen`); letting
+    /// `positive_object_id` accept `0` fails `page-zero-lookup` (`Page.Run(0,
+    /// R)` becomes a run of a missing page 0 instead of the lookup page).
+    #[test]
+    fn an_integer_object_id_runs_the_object_with_that_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        let src = "codeunit 50001 Cu\n{\n    trigger OnRun()\n    begin\n    end;\n}\n\
+             table 50002 Tb\n{\n    LookupPageId = 50003;\n    fields\n    {\n        field(1; K; Integer) { }\n    }\n}\n\
+             page 50003 Pg\n{\n    SourceTable = Tb;\n    trigger OnOpenPage()\n    begin\n    end;\n}\n\
+             report 50004 Rp\n{\n    trigger OnPreReport()\n    begin\n    end;\n}\n\
+             xmlport 50005 Xp\n{\n    trigger OnPreXmlPort()\n    begin\n    end;\n}\n\
+             codeunit 50006 C\n{\n    procedure P()\n    var\n        R: Record Tb;\n        Id: Integer;\n        InS: InStream;\n        OutS: OutStream;\n    begin\n        \
+             Codeunit.Run(50001); // codeunit-int\n        \
+             Codeunit.Run(50001, R); // codeunit-int-rec\n        \
+             Codeunit.Run(Codeunit::Cu); // codeunit-name\n        \
+             Codeunit.Run(59999); // codeunit-missing\n        \
+             Codeunit.Run(Codeunit::59999); // codeunit-missing-ref\n        \
+             Codeunit.Run(0); // codeunit-zero\n        \
+             Codeunit.Run(Id); // codeunit-var\n        \
+             Codeunit.Run(Id + 1); // codeunit-expr\n        \
+             Page.Run(50003); // page-int\n        \
+             Page.RunModal(50003, R); // page-runmodal-int\n        \
+             Page.Run(0, R); // page-zero-lookup\n        \
+             Report.Run(50004); // report-int\n        \
+             Report.RunModal(50004, false); // report-runmodal-int\n        \
+             XmlPort.Run(50005); // xmlport-int\n        \
+             XmlPort.Import(50005, InS); // xmlport-import-int\n        \
+             XmlPort.Export(50005, OutS); // xmlport-export-int\n    end;\n}\n";
+        std::fs::write(dir.path().join("C.al"), src).expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        assert!(coverage_holds(&report.coverage), "{:?}", report.coverage);
+        // Per tag: the run edge's shape and its routes (object id :: trigger, or
+        // the evidence kind and unknown reason of a route with no routine).
+        let run = |tag: &str| -> (DispatchShape, Vec<String>) {
+            let l = src.lines().position(|l| l.contains(tag)).expect("tag") as u32;
+            let runs: Vec<&ClassifiedEdge> = report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.site.span.start.line == l && ce.edge.kind == EdgeKind::Run)
+                .collect();
+            assert_eq!(runs.len(), 1, "{tag}: one run edge");
+            let mut routes: Vec<String> = runs[0]
+                .edge
+                .routes
+                .iter()
+                .map(|r| match &r.target {
+                    RouteTarget::Routine(rid) => format!("{:?}::{}", rid.object.key, rid.name_lc),
+                    other => format!("{other:?} {:?}", r.evidence.kind()),
+                })
+                .collect();
+            routes.sort();
+            (runs[0].edge.shape, routes)
+        };
+        let id = |n: i64, t: &str| format!("{:?}::{t}", ObjKey::Id(n));
+        // A codeunit by number reaches exactly what its name reaches.
+        assert_eq!(run("// codeunit-int"), run("// codeunit-name"));
+        for tag in ["// codeunit-int", "// codeunit-int-rec"] {
+            assert_eq!(
+                run(tag),
+                (DispatchShape::Exact, vec![id(50001, "onrun")]),
+                "{tag}"
+            );
+        }
+        for (tag, n, trigger) in [
+            ("// page-int", 50003, "onopenpage"),
+            ("// page-runmodal-int", 50003, "onopenpage"),
+            ("// page-zero-lookup", 50003, "onopenpage"),
+            ("// report-int", 50004, "onprereport"),
+            ("// report-runmodal-int", 50004, "onprereport"),
+            ("// xmlport-int", 50005, "onprexmlport"),
+            ("// xmlport-import-int", 50005, "onprexmlport"),
+            ("// xmlport-export-int", 50005, "onprexmlport"),
+        ] {
+            let (shape, routes) = run(tag);
+            assert_ne!(shape, DispatchShape::DynamicOpen, "{tag}");
+            assert_eq!(routes, vec![id(n, trigger)], "{tag}");
+        }
+        // A missing id is unresolved with the run's reason, the same as a
+        // missing `Codeunit::59999`.
+        assert_eq!(run("// codeunit-missing"), run("// codeunit-missing-ref"));
+        let missing = report
+            .edges
+            .iter()
+            .find(|ce| {
+                ce.edge.kind == EdgeKind::Run
+                    && ce.edge.site.span.start.line
+                        == src
+                            .lines()
+                            .position(|l| l.contains("// codeunit-missing"))
+                            .expect("tag") as u32
+            })
+            .expect("missing run");
+        assert_eq!(missing.edge.shape, DispatchShape::Exact);
+        assert_eq!(
+            missing
+                .edge
+                .routes
+                .iter()
+                .map(|r| &r.evidence)
+                .collect::<Vec<_>>(),
+            vec![&Evidence::Unknown(UnknownReason::ObjectNotInGraph)]
+        );
+        for tag in ["// codeunit-zero", "// codeunit-var", "// codeunit-expr"] {
+            assert_eq!(run(tag).0, DispatchShape::DynamicOpen, "{tag}");
+        }
+    }
+
     /// #63 (export spec §15): a `Call` never reaches a trigger — AL code cannot
     /// call one. The call-graph export relies on it: it reads a `Call` route to a
     /// trigger as a typed-variable run (`dispatch_entry_trigger`) and turns it

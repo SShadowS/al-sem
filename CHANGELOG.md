@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (an integer object id runs its object)
+
+- **`Codeunit.Run(50000)` resolves as `Codeunit.Run(Codeunit::50000)` does.** A positive integer
+  literal as a run's first argument is the object's id: `Codeunit.Run(N)` and `Codeunit.Run(N,
+  Rec)`, `Page.Run`/`RunModal(N…)`, `Report.Run`/`RunModal(N…)`, `XmlPort.Run`/`Import`/`Export(N…)`
+  now reach the entry triggers of the object the caller's app sees with that id
+  (`ResolveIndex::object_by_number`, the same app-scoped lookup `Codeunit::N` uses). Before, the
+  extractor read only a `Codeunit::…` reference as static and left an integer `DynamicOpen`
+  (`honestDynamic`). An id no object declares is `ObjectNotInGraph` (unknown, with its reason), as
+  a missing `Codeunit::N` is; `0`, a variable and an expression stay dynamic, and `Page.Run(0, Rec)`
+  still opens the table's lookup page. The body facts' `ObjectRun` target (`ir_walk`) reads the
+  same shapes, so the model names the same object. Transpiled dependency bodies write runs this
+  way. (`Query` has no run method, so these four kinds are every run.)
+- **CDO** (`/home/sshadows/Projects/DO-cdo-baseline/Cloud`, release-fast, 2026-11-05): the workspace
+  has no integer run (`--program-call-graph-stats` unchanged: 46,328 edges, 16 `honestDynamic`, 0
+  unknown). Dependency bodies: `honestDynamic` 263 → 258, `resolvedSource` 191,142 → 191,147, 0
+  unknown before and after; all five are Continia Delivery Network's
+  `CTS-CDN Document Output Mgt.` (`Codeunit.Run(6086250, SalesHeader)` and four more, each now the
+  `OnRun` of the `CTS-CDN … Chk. … Hdr.` codeunit with that id). `alsem analyze`: 2,240 findings at
+  `--scope primary` and 31,313 at `--scope all`, identical before and after.
+
 ### Added (callgraph gap F3: static background starts are edges)
 
 Spec: `docs/superpowers/specs/2026-10-13-callgraph-export-design.md` §9 (F3) and §16.1.
