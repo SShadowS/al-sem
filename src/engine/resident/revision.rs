@@ -408,6 +408,18 @@ impl Revision {
         self
     }
 
+    /// The enclosing conditions of site `site` of the revision's sited graph,
+    /// from its pinned inputs ([`crate::engine::resident::guards`]).
+    pub fn site_guards(
+        &self,
+        site: u32,
+    ) -> Result<Vec<crate::engine::resident::guards::Guard>, String> {
+        let g = self
+            .sited()
+            .ok_or_else(|| "this revision has no sited graph".to_string())?;
+        crate::engine::resident::guards::site_guards(&self.inputs, &g, site)
+    }
+
     /// The revision's sited graph, when its build made one.
     #[must_use]
     pub fn sited(&self) -> Option<Arc<crate::program::impact_graph::SitedGraph>> {
@@ -1568,6 +1580,15 @@ pub struct GraphRevision {
 }
 
 impl GraphRevision {
+    /// The enclosing conditions of site `site` of the revision's sited graph,
+    /// from its pinned inputs ([`crate::engine::resident::guards`]).
+    pub fn site_guards(
+        &self,
+        site: u32,
+    ) -> Result<Vec<crate::engine::resident::guards::Guard>, String> {
+        crate::engine::resident::guards::site_guards(&self.inputs, &self.sited, site)
+    }
+
     /// `job` answered off the sited graph, or why this revision cannot.
     pub fn answer(&self, job: &dyn Job) -> Result<JobOutput, PrepareError> {
         let mut demands = job.demands();

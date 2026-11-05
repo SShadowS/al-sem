@@ -221,6 +221,15 @@ impl SitedGraph {
             .collect()
     }
 
+    /// The object of a routine node.
+    #[must_use]
+    pub fn routine_object(&self, ix: u32) -> Option<crate::program::node::ObjectNodeId> {
+        match self.nodes.get(ix as usize)? {
+            Key::Routine(r) => Some(r.object.clone()),
+            _ => None,
+        }
+    }
+
     /// The routine nodes whose (folded) name is `name_lc`.
     #[must_use]
     pub fn routines_named(&self, name_lc: &str) -> Vec<u32> {

@@ -818,3 +818,46 @@ fn a_graph_only_session_answers_sited_jobs_and_refuses_model_jobs() {
     assert_eq!(s.stats().last_build_class.as_deref(), Some("B"));
     assert_eq!(g2.sited.text(), sited_cold(ws));
 }
+
+/// M0-T5 (agent-tasks design §1.3): a site's guards are read from the bytes
+/// the revision was built from. A call under `case` and `if` is built; the
+/// condition is then edited on disk; the guards still name the revision's
+/// condition, outermost first, and the condition of the `if` (not its then
+/// branch) holds no guard of its own.
+///
+/// DISCRIMINATION (2026-11-05): reading the workspace file from disk
+/// (`std::fs::read_to_string(&f.abs_path)` in `guards::pinned_texts`) fails
+/// "the revision's bytes".
+#[test]
+fn site_guards_read_the_pinned_bytes() {
+    let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
+    let ws = dir.path();
+    edit(
+        ws,
+        "        \"Widget Mgt\".Compute(5);",
+        "        \"Widget Mgt\".Compute(5);\n        case 1 + 1 of\n            2:\n                if 3 = 3 then\n                    CallEmbeddedSourceDep();\n        end;",
+    );
+    let s = Arc::new(ResidentSession::graph_only(ws.to_path_buf(), "test".into()));
+    let g = match s.pin(Freshness::Fresh, &never).unwrap().built {
+        Built::Graph(g) => g,
+        _ => panic!("a graph revision"),
+    };
+    let from = g.sited.routines_named("callsymbolonlydep")[0];
+    let to = g.sited.routines_named("callembeddedsourcedep")[0];
+    let sites = g.sited.sites_between(from, to);
+    assert_eq!(sites.len(), 1, "precondition: the guarded call's site");
+    edit(ws, "if 3 = 3 then", "if 4 = 4 then");
+    let guards = g.site_guards(sites[0]).expect("guards");
+    let shown: Vec<(&str, &str)> = guards.iter().map(|x| (x.kind, x.text.as_str())).collect();
+    assert_eq!(
+        shown,
+        vec![("case", "1 + 1 = 2"), ("if", "3 = 3")],
+        "the revision's bytes"
+    );
+    // A site with no anchor (a rule's edge) says so.
+    let unanchored =
+        (0..g.sited.site_count() as u32).find(|i| g.sited.sites()[*i as usize].anchor.is_none());
+    if let Some(i) = unanchored {
+        assert!(g.site_guards(i).is_err());
+    }
+}

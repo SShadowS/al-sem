@@ -47,6 +47,13 @@ test selection, adding an effect, impact) build on. Spec:
   any other command is refused with `this engine is graph-only (…): '<command>' needs a model`. A
   model revision built with its sited graph answers sited jobs too. The test universe and the
   impact base child will be of this kind.
+- **Guard enrichment from pinned inputs** (`engine::resident::guards`, `Revision::site_guards`,
+  `GraphRevision::site_guards`): the enclosing `if`/`else`/`case`/loop conditions of one site of
+  the sited graph, outermost first, with their source text. The site's file is read from the
+  revision's own read (a workspace file's pinned text, a source-folder dependency's, or a
+  package's embedded source when the package's bytes are still the ones the read acquired), parsed
+  again and walked down to the site's anchor, so the text is the revision's even after the disk
+  moved. Nothing is kept per site; it works the same under `--low-mem`.
 - `aldump --session-refresh --sited` builds and keeps the sited graph at every step and prints its
   wall and CPU time, nodes, sites and bytes.
 
