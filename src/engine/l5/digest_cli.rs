@@ -1011,6 +1011,21 @@ pub struct FullAnchor {
     pub excerpt: Option<String>,
 }
 
+/// The [`EntryDiagnostic`] kind of an effect type whose site search stopped at
+/// the depth bound (`DigestEntryResult::partial_site_types`): its rows may not
+/// be every site the routine reaches.
+pub const SITES_PARTIAL: &str = "sites-partial";
+
+/// Whether `entry`'s rows of effect type `ty` may miss a site
+/// ([`SITES_PARTIAL`]): a count of them is then "at least".
+#[must_use]
+pub fn sites_partial(entry: &DigestEntryFull, ty: &str) -> bool {
+    entry
+        .entry_diagnostics
+        .iter()
+        .any(|d| d.kind == SITES_PARTIAL && d.effect_type.as_deref() == Some(ty))
+}
+
 pub struct EntryDiagnostic {
     pub kind: &'static str,
     pub effect_type: Option<String>,
@@ -1627,7 +1642,15 @@ pub(crate) fn literal_reach_pass(
                     .collect();
             }
         }
-        let (dead, dead_resources) = reach.unreachable_effects(&entry.routine_id, &entry.effects);
+        // A site-enumerated type's rows are judged one site at a time, unless
+        // its search stopped at the depth bound (a site may be missing).
+        let per_site: Vec<&str> = crate::engine::l5::digest::SITE_ENUMERATED
+            .iter()
+            .copied()
+            .filter(|t| !entry.partial_site_types.iter().any(|p| p == t))
+            .collect();
+        let (dead, dead_resources) =
+            reach.unreachable_effects(&entry.routine_id, &entry.effects, &per_site);
         for i in dead {
             entry.effects[i].literal_unreachable = true;
         }
@@ -1839,6 +1862,18 @@ pub fn run_digest_query_full_from_entries(
         let mut entry_diagnostics: Vec<EntryDiagnostic> = Vec::new();
 
         if let Some(entry) = base_entry {
+            // A site list the search could not finish (the depth bound): its
+            // count is a lower bound, and the renderers say "at least".
+            for ty in &entry.partial_site_types {
+                entry_diagnostics.push(EntryDiagnostic {
+                    kind: SITES_PARTIAL,
+                    effect_type: Some(ty.clone()),
+                    fact_subject: None,
+                    fact_id: None,
+                    operation_id: None,
+                    reason: None,
+                });
+            }
             for eff in &mut entry.effects {
                 // Conditionality — the per-path value computed in digest_query and
                 // stored on the effect (#8 / #17). No recomputation here.
@@ -2698,6 +2733,9 @@ pub fn format_digest_human_v3(
     changed: &[ChangedRootsDiagnostic],
 ) -> String {
     use crate::engine::l5::routine_rollup as rr;
+    // Each root's block ends with the signatures of the overloads its paths
+    // named by short handles (MCP output step 2); none before the first.
+    let _ = cx.take_legend(true);
     let mut text = if entries.is_empty() {
         "digest: no changed roots resolved\n".to_string()
     } else {
@@ -2709,18 +2747,26 @@ pub fn format_digest_human_v3(
             if entry.effects.is_empty() {
                 body.push("effects: none".to_string());
             }
-            body.extend(rr::commit_lines(r, entry, cx, opts));
-            body.extend(rr::workspace_write_lines(r, entry, cx, opts, &|_| None));
+            // A section's shared path start, once (MCP output step 2).
+            body.extend(rr::factor_prefix(rr::commit_lines(r, entry, cx, opts)));
+            body.extend(rr::factor_prefix(rr::workspace_write_lines(
+                r,
+                entry,
+                cx,
+                opts,
+                &|_| None,
+            )));
             body.extend(rr::caller_dependent_lines(r, entry));
             body.extend(rr::beyond_lines(r, entry, cx, opts));
-            body.extend(rr::no_path_lines(r, entry, cx, opts));
+            body.extend(rr::factor_prefix(rr::no_path_lines(r, entry, cx, opts)));
             body.extend(rr::literal_dead_lines(r, opts));
             body.extend(rr::temporary_lines(r, opts));
             body.extend(rr::event_lines(r, cx, opts));
-            body.extend(rr::kind_lines(r, entry));
+            body.extend(rr::kind_lines(r, entry, opts.detail));
             body.extend(rr::workspace_gap_lines(r, entry, opts));
             body.extend(rr::dependency_gap_lines(r, opts));
             body.extend(diagnostic_lines(entry, opts.detail));
+            body.extend(cx.take_legend(opts.detail));
             lines.extend(body.into_iter().map(|l| format!("  {l}")));
             lines.push(String::new());
         }
@@ -3992,7 +4038,7 @@ mod tests {
             r.kind_sites
         );
         assert_eq!(r.totals.kinds.get(OTHER_KINDS), Some(&2), "{:?}", r.totals);
-        let lines = kind_lines(&r, &e);
+        let lines = kind_lines(&r, &e, false);
         assert_eq!(
             lines,
             vec![
@@ -4182,7 +4228,10 @@ mod tests {
             "digest: no changed roots resolved\n"
         );
         let text = human(&[entry_with(Vec::new())], &[], false);
-        assert!(text.starts_with("--- R ---\n  summary: "), "{text}");
+        assert!(
+            text.starts_with("--- R ---\n  summary — writes: "),
+            "{text}"
+        );
         assert!(text.contains("\n  effects: none\n"), "{text}");
         assert!(text.ends_with('\n') && !text.ends_with("\n\n"), "{text}");
     }

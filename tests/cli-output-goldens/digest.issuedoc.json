@@ -529,39 +529,6 @@
             "type": "DB_MODIFY"
           },
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "Doc.TestField",
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 12,
-              "sourceKind": "source"
-            },
-            "factId": "9e69c25f46bf74ab",
-            "guarantees": [
-              "COMMIT_REACHABLE"
-            ],
-            "paths": [
-              {
-                "hops": [],
-                "terminal": {
-                  "file": "ws:src/OutIssueDocument.Codeunit.al",
-                  "line": 12,
-                  "operationId": "51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/op0"
-                }
-              }
-            ],
-            "pathsKept": 1,
-            "pathsOmitted": 0,
-            "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
-          },
-          {
             "conditionality": "unknown",
             "confidence": "static",
             "crossing": "c:1249372dd091",
@@ -670,6 +637,11 @@
           }
         ],
         "entryDiagnosticCounts": {},
+        "moreSites": {
+          "ERROR_IMPLICIT": {
+            "ws:src/OutIssueDocument.Codeunit.al": "12 unconditional-on-success"
+          }
+        },
         "routine": {
           "anchor": {
             "column": 4,
@@ -713,6 +685,11 @@
           "mayWriteTables": {
             "byDependencies": 15,
             "count": 16,
+            "mostBeyond": {
+              "enteredAt": "ws:src/OutIssueDocument.Codeunit.al:15",
+              "entryPoint": "Codeunit Base Poster::OnRun",
+              "tables": 14
+            },
             "ownedByApp": 1
           },
           "noPathKept": {

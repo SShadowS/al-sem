@@ -20,6 +20,20 @@
             "anchor": {
               "column": 12,
               "excerpt": "error-call",
+              "file": "ws:src/checks.al",
+              "line": 23,
+              "sourceKind": "source"
+            },
+            "conditionality": "error-path",
+            "type": "ERROR_THROW",
+            "via": [
+              "CheckPreview"
+            ]
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "excerpt": "error-call",
               "file": "ws:src/order.al",
               "line": 25,
               "sourceKind": "source"
@@ -211,7 +225,7 @@
           "workspace": 0
         },
         "kinds": {
-          "errors": 1
+          "errors": 2
         },
         "literalDeadTables": 0,
         "mayWriteTables": {

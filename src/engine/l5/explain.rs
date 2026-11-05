@@ -1114,6 +1114,8 @@ fn render(
     });
     let cards_span = span("explain", "explain.cards");
     // W2-2: one rollup context for every card (names, the operation index).
+    // Paths name overloads by short handles; each card ends with their
+    // signatures (MCP output step 2).
     let rcx = RollupCx::new(model, apps);
     // (anchor sort key, routine id, JSON, human text) per card.
     type Rendered = (Option<(String, u32, u32)>, String, Value, String);
@@ -1139,6 +1141,16 @@ fn render(
                 let at = human.find("\n  next:").map_or(human.len(), |i| i + 1);
                 let text: String = lines.iter().map(|l| format!("  {l}\n")).collect();
                 human.insert_str(at, &text);
+            }
+            // The overloads this card's paths named, with their signatures.
+            let legend: String = rcx
+                .take_legend(opts.detail)
+                .iter()
+                .map(|l| format!("  {l}\n"))
+                .collect();
+            if !legend.is_empty() {
+                let at = human.find("\n  next:").map_or(human.len(), |i| i + 1);
+                human.insert_str(at, &legend);
             }
             (card.sort_key.clone(), rid.clone(), json, human)
         })
@@ -2391,7 +2403,7 @@ impl Card {
             dead: literal_dead_lines(&rollup, opts),
             temporary: temporary_lines(&rollup, opts),
             events: event_lines(&rollup, rcx, opts),
-            kinds: kind_lines(&rollup, full),
+            kinds: kind_lines(&rollup, full, opts.detail),
             dependency_gaps: dependency_gap_lines(&rollup, opts),
         };
         let crossings: Vec<Value> = rollup
@@ -2649,7 +2661,14 @@ impl Card {
             &s.temporary,
             &s.events,
         ] {
-            for l in section {
+            // A section's shared path start, once (MCP output step 2); the
+            // `writes beyond` section does it itself (`beyond_lines`).
+            let lines = if std::ptr::eq(section, &s.beyond) {
+                section.clone()
+            } else {
+                crate::engine::l5::routine_rollup::factor_prefix(section.clone())
+            };
+            for l in &lines {
                 line(l);
             }
         }

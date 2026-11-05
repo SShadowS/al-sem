@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (MCP output step 2: shorter, task-shaped output)
+
+- **Paths name overloads by a short handle.** A path printed every overloaded routine with its
+  whole parameter list (`CreateLogEntries(DocumentTemplateLine, FilterRecord, …)`, 20 names, twice
+  per path; 35–48 % of a large explain card). explain, digest (human) and prove now print
+  `Name/n` (its arity) when no other overload of the routine has that arity, `Name/n[position:
+  type]` (the parameter types it differs in) when one does, and `Name/n#k` (k in source order) when
+  only the place tells them apart (two field triggers); a `#k` handle's signature and declaration
+  are printed once under the card (`overload … = (…) at …`), every handle's with `--detail`.
+  `query effects` paths use the same handles (its `writes beyond` section is explain's own); it
+  prints no legend.
+- **A section's shared path start prints once.** Within one section, the start (the root and at
+  least two more hops) that saves the most text over its `path:`, `prefix path:` and
+  `representative path` lines prints once, `(in <section>, a path that begins with \`… →\` begins
+  with: …)`, and those paths print `… → <rest>`. An entry point's prefix and its representative path now
+  print as one line (`--detail` keeps both).
+- **Commit and kind rows print paths for the first few only.** The `commits:` section prints a path
+  for the first 3 sites and the first 3 commit-bearing entry points; the others share one `and N
+  more (--detail prints their paths): …` line with their places. A kind family line lists its first
+  6 places and counts the rest. prove prints one witnessed row per effect type (its shortest path)
+  and lists up to 3 more as places on one `also [TYPE]:` line, then counts the rest; `--detail`
+  prints every row with its path. The digest JSON keeps one row of each site-enumerated type whole
+  (its shortest witness) and lists the type's other rows as places in a new
+  `entries[].moreSites[<type>]` (`file:line conditionality`, `beyond <crossing key> …`,
+  `literal-dead` when it cannot run); `--detail` keeps every row in `effects`.
+- **The summary is a short risk block.** explain's and digest's `summary` line is now `summary —
+  writes: …` followed by `transaction, UI and errors: …`, `other effects: …`, `callers and tests:
+  …` and `uncertainty: …`, the same clauses as before. The writes line names the entry point behind
+  most of the tables when one is behind more than half of 10 or more (RunReportID on CDO: "357 of
+  them beyond Codeunit Sales-Calc. Discount::OnRun (entered at
+  ws:src/Foundation/CDOFile.Table.al:125)"); JSON `summary.mayWriteTables.mostBeyond`.
+- **The CDO output budgets hold at their existing limits** (re-measured on `bc3ccb18` with the
+  commit-site fixes in): explain IssueReminder 136 lines / 31,467 B (limit 140 / 35,500),
+  RunReportID 147 / 34,495 (150 / 39,936; inline with 6.4 KiB to spare); prove may-commit 10–11
+  lines, at most 1,514 B (20 / 2,000); digest JSON IssueReminder 1,224,146 B, core 712,169
+  (1,250,000 / 720,000), RunReportID 1,198,204 / 692,325. The CDO rendering goldens are
+  regenerated. The output checks read the new shapes: a folded `and N more …` / `also [TYPE]: …`
+  line's anchors are checked item by item, and an entry-point count may be "at least".
+
+### Fixed (commit sites dropped up the call chain)
+
+- **A routine's COMMIT rows now list every commit it reaches, not only the nearest.** On CDO,
+  `prove RunReportID writes-table:"Sales Header"` was `yes` through `CDO File::CalcSalesDisc`,
+  yet `prove RunReportID may-commit` and `explain RunReportID` listed only the COMMIT at
+  `CDOEMailTemplateManagement.Codeunit.al:1241` ("1 site in workspace code; 0 commit-bearing entry
+  points"): `CalcSalesDisc`'s own `Commit()` (`CDOFile.Table.al:128`) and the COMMIT beyond
+  `Sales-Calc. Discount::OnRun` were gone. Root cause: the capability cone keeps one inherited fact
+  per key, which for a COMMIT is one per routine, and its witness followed only that fact's first
+  hop to the nearest carriers. For COMMIT the digest now searches every site itself
+  (`digest::reconstruct_site_witnesses`): one shortest-path DAG from the root over all its first
+  hops, entered only where a commit may be reached, one row per site in workspace code and one per
+  crossing into dependency code behind which a commit lies. `explain RunReportID` now reports 6
+  sites in workspace code and 7 commit-bearing entry points (8 sites are reached; the 2 in
+  `CDO E-Mail Log::MoveEMailToFile`/`MoveEmalToAzureBlob` are reached only from the table's
+  `OnInsert`, which passes `OnInsert = true` to their `if OnInsert then exit;`, so the literal pass
+  rules them out). This feeds explain, digest, `prove may-commit`, `commits-on-success-path` and the
+  ordering engine. A site's conditionality is that of its paths from the asked root, so it can
+  differ between roots (`conditional` from `CalcSalesDisc`, `guarded-by-IsHandled` from the
+  callers behind `if IsHandled then exit`).
+- **A commit site is judged by itself under literal arguments.** With one row per site, the literal
+  pass decides a COMMIT row by its own operation, not by "some COMMIT of the routine can run".
+- **`commits-on-success-path` ignores a COMMIT the root cannot reach under literal arguments**, as
+  the MAY questions already did (G23): such a commit made the answer `unknown` (or could make it
+  `yes`).
+- **Every other resource-less effect kind is listed per site too, and entry-point totals say when
+  they are a lower bound.** The same one-fact-per-key cone hid UI, error, HTTP, file, background
+  task, isolated storage and telemetry sites behind the nearest one: on CDO `explain RunReportID`
+  printed "UI at 5 places", "HTTP at 2 places", "errors at 5 places"; it now prints 16, 20 and 196.
+  These kinds go through the same site search as COMMIT; a row's detail (an HTTP method, a storage
+  or file operation) is the site's own, so two representatives of one kind that reach one site
+  give one row. A table write or an event keeps one row per table or event, so a second crossing
+  that leads only to a table already written nearer had no row and the entry-point counts were
+  silently low: digest now checks every crossing the root can take toward any effect, and when one
+  has no row (or the search stops at its depth bound) explain and digest print "at least N entry
+  points at at least M sites" and `summary.entryPoints.atLeast` is `true`; a kind family's count
+  from a search cut at the depth bound is "at least" too (`summary.kindsAtLeast`). In the
+  `ws-explain-calls` fixture, `PostOrder` now lists 9 error places (was 2), each a real `Error`/
+  `TestField` it reaches; `QuickPost` does not list `CheckOrder`'s `TestField`, which its literal
+  `Strict = false` rules out.
+- **A commit count the search could not finish says "at least".** A site search that stops at its
+  depth bound (64 calls) with a commit possibly beyond it records a `sites-partial` entry
+  diagnostic; explain and digest then print "at least N sites … at least M commit-bearing entry
+  points", and `summary.commits.atLeast` is `true`.
+
 ### Added (agent tasks, milestone R0: the reverse cone)
 
 The shared up-walker ("who reaches this routine") that test selection, "what context does R run

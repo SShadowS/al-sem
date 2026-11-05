@@ -10,27 +10,27 @@
         "interface-open-world",
         "object-run-unresolved"
       ],
-      "effects": 206,
+      "effects": 623,
       "effectsByType": {
-        "BACKGROUND_TASK": 2,
-        "COMMIT": 1,
+        "BACKGROUND_TASK": 4,
+        "COMMIT": 15,
         "DB_DELETE": 22,
         "DB_INSERT": 45,
         "DB_MODIFY": 26,
-        "ERROR_IMPLICIT": 4,
-        "ERROR_THROW": 1,
+        "ERROR_IMPLICIT": 106,
+        "ERROR_THROW": 113,
         "EVENT_PUBLISH": 91,
-        "FILE": 2,
-        "HTTP": 2,
-        "ISOLATED_STORAGE": 2,
-        "TELEMETRY": 1,
-        "UI_CONFIRM": 1,
-        "UI_ERROR": 1,
-        "UI_FILE_DIALOG": 1,
+        "FILE": 3,
+        "HTTP": 22,
+        "ISOLATED_STORAGE": 16,
+        "TELEMETRY": 24,
+        "UI_CONFIRM": 5,
+        "UI_ERROR": 113,
+        "UI_FILE_DIALOG": 3,
         "UI_HYPERLINK": 1,
-        "UI_MESSAGE": 1,
+        "UI_MESSAGE": 6,
         "UI_PROGRESS": 1,
-        "UI_WINDOW_OPEN": 1
+        "UI_WINDOW_OPEN": 7
       },
       "names": {
         "entryPoints": [
@@ -84,12 +84,13 @@
         "callerDependentTables": 0,
         "commits": {
           "answer": "may",
-          "entryPoints": 0,
-          "ownSites": 1
+          "entryPoints": 7,
+          "ownSites": 6
         },
         "entryPoints": {
-          "count": 29,
-          "sites": 32,
+          "atLeast": true,
+          "count": 44,
+          "sites": 53,
           "withWrites": 15,
           "withWritesSites": 16
         },
@@ -103,18 +104,23 @@
           "workspace": 16
         },
         "kinds": {
-          "backgroundTasks": 2,
-          "errors": 5,
-          "file": 2,
-          "http": 2,
-          "isolatedStorage": 2,
-          "telemetry": 1,
-          "ui": 5
+          "backgroundTasks": 4,
+          "errors": 196,
+          "file": 3,
+          "http": 20,
+          "isolatedStorage": 16,
+          "telemetry": 22,
+          "ui": 16
         },
         "literalDeadTables": 0,
         "mayWriteTables": {
           "byDependencies": 395,
           "count": 406,
+          "mostBeyond": {
+            "enteredAt": "ws:src/Foundation/CDOFile.Table.al:125",
+            "entryPoint": "Codeunit Sales-Calc. Discount::OnRun",
+            "tables": 357
+          },
           "ownedByApp": 11
         },
         "noPathKept": {
@@ -127,6 +133,6 @@
     }
   ],
   "routinesListed": 1,
-  "totalEffects": 206,
+  "totalEffects": 623,
   "totalUnresolved": 288
 }

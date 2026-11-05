@@ -1437,10 +1437,17 @@ impl<'a> LiteralReach<'a> {
     /// literal arguments (module doc), and per boundary group (G33) the
     /// resources whose every originating operation is: `prove` matches none of
     /// them. A resource with an operation not known is never dropped.
+    ///
+    /// `per_site`: the effect types whose rows are each ONE site and are all
+    /// of the root's sites (`digest::SITE_ENUMERATED`, unless the site search
+    /// stopped at its depth bound): such a row is judged by its own operation
+    /// ([`Self::op_dead`]), not by its kind, because no other site hides
+    /// behind it.
     pub(crate) fn unreachable_effects(
         &self,
         root: &'a str,
         effects: &[DigestEffectResult],
+        per_site: &[&str],
     ) -> (HashSet<usize>, HashMap<usize, Vec<String>>) {
         let mut out = HashSet::new();
         let mut dead_resources: HashMap<usize, Vec<String>> = HashMap::new();
@@ -1489,6 +1496,14 @@ impl<'a> LiteralReach<'a> {
                     .collect();
                 if !dead.is_empty() {
                     dead_resources.insert(i, dead);
+                }
+                continue;
+            }
+            if per_site.contains(&kind)
+                && let Some(op) = e.evidence_operation_id.as_deref()
+            {
+                if self.op_dead(&reached, op) {
+                    out.insert(i);
                 }
                 continue;
             }

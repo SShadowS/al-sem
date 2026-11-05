@@ -160,7 +160,15 @@ fn tests_line_tells_no_test_code_from_no_reaching_test() {
     let ws = workspace().to_string_lossy().into_owned();
     let (human, _, code) = run_alsem(&["explain", &ws, "--routine", ISSUE_DOC]);
     assert_eq!(code, 0, "{human}");
-    assert!(human.contains("; tests: none of 1 loaded;"), "{human}");
+    // Step 2's risk block puts the tests clause on its own "callers and
+    // tests:" line (it was one long summary sentence).
+    assert!(
+        human
+            .lines()
+            .any(|l| l.trim_start().starts_with("callers and tests:")
+                && l.ends_with("; tests: none of 1 loaded")),
+        "{human}"
+    );
     assert!(
         human.contains(
             "  tests: 1 [Test] procedure loaded; none reaches it (not a reason to skip tests)"
@@ -188,7 +196,10 @@ fn tests_line_tells_no_test_code_from_no_reaching_test() {
     let (human, _, code) = run_alsem(&["explain", &w, "--routine", "Run"]);
     assert_eq!(code, 0, "{human}");
     assert!(
-        human.contains("; tests: none (no test code loaded);"),
+        human
+            .lines()
+            .any(|l| l.trim_start().starts_with("callers and tests:")
+                && l.ends_with("; tests: none (no test code loaded)")),
         "{human}"
     );
     assert!(
@@ -1178,6 +1189,9 @@ pub(crate) struct EntryPointLines {
 /// `N entry point(s) at S site(s)` right after `marker` in `line`.
 fn points_at(line: &str, marker: &str) -> Option<(usize, usize)> {
     let rest = &line[line.find(marker)? + marker.len()..];
+    // A lower bound (`at least N entry points at at least M sites`) states
+    // the same counts the lines do.
+    let rest = rest.strip_prefix("at least ").unwrap_or(rest);
     let num = |s: &str| -> Option<(usize, usize)> {
         let digits: String = s
             .chars()
@@ -1196,6 +1210,7 @@ fn points_at(line: &str, marker: &str) -> Option<(usize, usize)> {
         .strip_prefix('s')
         .unwrap_or(rest)
         .strip_prefix(" at ")?;
+    let rest = rest.strip_prefix("at least ").unwrap_or(rest);
     let (s, _) = num(rest)?;
     Some((n, s))
 }

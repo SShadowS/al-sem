@@ -1,5 +1,9 @@
 Codeunit Calls Post::RecursivePost  ws:src/post.al:44
-  summary: no observed write that may persist; caller-dependent: 1 table; commits: none; events: 0 (0 raised in workspace code); errors at 1 place; callers: none; tests: none (no test code loaded); gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  summary — writes: no observed write that may persist; caller-dependent: 1 table
+    transaction, UI and errors: commits: none; errors at 1 place
+    other effects: events: 0 (0 raised in workspace code)
+    callers and tests: callers: none; tests: none (no test code loaded)
+    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none

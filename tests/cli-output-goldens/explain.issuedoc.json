@@ -567,6 +567,11 @@
         "mayWriteTables": {
           "byDependencies": 15,
           "count": 16,
+          "mostBeyond": {
+            "enteredAt": "ws:src/OutIssueDocument.Codeunit.al:15",
+            "entryPoint": "Codeunit Base Poster::OnRun",
+            "tables": 14
+          },
           "ownedByApp": 1
         },
         "noPathKept": {
