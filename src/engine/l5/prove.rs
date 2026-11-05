@@ -96,7 +96,19 @@ pub fn question_ids() -> &'static [&'static str] {
         "publishes-event:<event>",
         "reaches-ui",
         "throws-error",
+        "callers-have-pending-writes",
+        "callers-intercept-errors",
+        "callers-may-run-noninteractive",
     ]
+}
+
+/// Whether `text` is a valid prove question: an existing-effects one
+/// ([`parse_question`]) or a callers' context one
+/// ([`crate::engine::l5::callers_context::CallersQuestion`]).
+#[must_use]
+pub fn is_question(text: &str) -> bool {
+    parse_question(text).is_some()
+        || crate::engine::l5::callers_context::CallersQuestion::parse(text).is_some()
 }
 
 // ---------------------------------------------------------------------------
@@ -1319,7 +1331,7 @@ fn anchor_to_json(
     serde_json::Value::Object(m)
 }
 
-fn blocker_to_value(b: &ProveBlocker) -> serde_json::Value {
+pub(crate) fn blocker_to_value(b: &ProveBlocker) -> serde_json::Value {
     let mut m = serde_json::Map::new();
     if let Some(ref a) = b.anchor {
         let anch = anchor_to_json(
@@ -1414,6 +1426,9 @@ pub(crate) fn group_witness_value(
         },
     })
 }
+
+/// prove's document `schemaVersion`.
+pub const PROVE_SCHEMA_VERSION: &str = "2.4.0";
 
 /// Build the DocumentEnvelope<"prove", ProvePayload> as a serde_json::Value,
 /// then serialize with serialize_document_value (sorted keys, null-drop, trailing \n).
@@ -1594,7 +1609,11 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     // `throughEntryPoint` and the structured `groupWitness` beside it.
     // 2.3.0 (W2-6, additive): a resource-less group's evidence (COMMIT,
     // HTTP, UI, …) carries the same fields for its own terminal witness.
-    env.insert("schemaVersion".into(), "2.3.0".into());
+    // 2.4.0 (agent tasks A, additive): the callers' context questions
+    // (`callers-have-pending-writes`, `callers-intercept-errors`,
+    // `callers-may-run-noninteractive`, `payload.questionScope:
+    // "callers-context"`); the existing-effects questions' JSON is unchanged.
+    env.insert("schemaVersion".into(), PROVE_SCHEMA_VERSION.into());
 
     serialize_document_value(serde_json::Value::Object(env))
 }
@@ -1628,7 +1647,18 @@ pub fn format_prove_human(
     // Routine header
     let routine_header = owner_qualified(object_display, routine_display);
     lines.push(format!("--- {} ---", routine_header));
-    lines.push(format!("  question: {}", question));
+    // Agent-tasks §5: the six older questions are about the routine's
+    // EXISTING effects; the callers' context ones say so on their own line.
+    if crate::engine::l5::callers_context::CallersQuestion::parse(question).is_some() {
+        lines.push(format!(
+            "  question: {question} — callers' context (not about the routine's own effects)"
+        ));
+    } else {
+        lines.push(format!(
+            "  question: {question} — existing effects (what the routine and its callees \
+             already do)"
+        ));
+    }
     // W2-8 (R3e): prove's own answer is authoritative. An `unknown` with no
     // evidence is an absence the obligations block: say so; `yes` and `no`
     // print bare, `no` followed by its coverage and assumptions below.
@@ -2103,6 +2133,7 @@ pub(crate) fn prove_pipeline_with(
         deterministic,
         single_app,
         closed_world: false,
+        assume_no_dependents: false,
         human: false,
         detail: false,
         out: None,
@@ -2191,6 +2222,7 @@ pub(crate) fn prove_on_target(
             crate::engine::gate::run::AnalysisTarget::SingleApp(_)
         ),
         closed_world: false,
+        assume_no_dependents: false,
         human: false,
         detail: false,
         out: None,
@@ -2219,6 +2251,10 @@ pub struct ProveJob<'a> {
     /// `--closed-world` (G24): an interface call dispatches only to the loaded
     /// implementations.
     pub closed_world: bool,
+    /// `--no-dependents` (agent-tasks §3.5): no app outside the program
+    /// calls the workspace, so external callers do not block a callers'
+    /// context `no`. Its own flag, not `closed_world`.
+    pub assume_no_dependents: bool,
     /// `--format human`: the human text, else the JSON.
     pub human: bool,
     /// `--detail`: the human answer lists every blocker (the JSON always
@@ -2227,12 +2263,25 @@ pub struct ProveJob<'a> {
     pub out: Option<&'a str>,
 }
 
+impl ProveJob<'_> {
+    /// The callers' context question asked, if it is one.
+    fn callers_question(&self) -> Option<crate::engine::l5::callers_context::CallersQuestion> {
+        crate::engine::l5::callers_context::CallersQuestion::parse(self.question_text)
+    }
+}
+
 impl Job for ProveJob<'_> {
     fn name(&self) -> &'static str {
         "prove"
     }
     fn demands(&self) -> Vec<ViewDemand> {
-        ViewDemand::one(self.inputs, self.single_app, false, ViewNeeds::MODEL)
+        // A callers' context question walks the sited graph beside the model.
+        let needs = if self.callers_question().is_some() {
+            ViewNeeds::MODEL_SITED
+        } else {
+            ViewNeeds::MODEL
+        };
+        ViewDemand::one(self.inputs, self.single_app, false, needs)
     }
 
     fn resolve(&self, _: SideIx, cx: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
@@ -2256,9 +2305,16 @@ impl Job for ProveJob<'_> {
             &OwnerIndex::build(model),
         );
         // Digest's plan over the one root prove reads (the first resolved);
-        // none resolved: no tree, the run's diagnostics only.
+        // none resolved: no tree, the run's diagnostics only. A callers'
+        // context question reads no tree (its walk goes up, over the sited
+        // graph): the run's detector artifacts only.
+        let tree_root = if self.callers_question().is_some() {
+            None
+        } else {
+            changed_roots.roots.first().cloned()
+        };
         Ok(PlanPart {
-            plan: prove_plan(self.detectors.clone(), changed_roots.roots.first().cloned()),
+            plan: prove_plan(self.detectors.clone(), tree_root),
             reads: vec![Cell::Det, Cell::L4, Cell::Effects],
             carry: Some(Box::new(changed_roots)),
         })
@@ -2307,7 +2363,24 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     let key = cx.keys()[0].clone();
     let workspace_fp =
         crate::engine::l5::snapshot_full::workspace_fingerprint_of(cx.inputs(), alsem_ver);
+    // A callers' context question walks the reverse cone while the detector
+    // artifacts (summaries, cone writes) are alive (agent-tasks §6).
+    let callers = match (job.callers_question(), changed_roots.roots.first()) {
+        (Some(q), Some(root)) => Some(callers_answer(cx, job, q, root)?),
+        _ => None,
+    };
     let (diagnostics_json, tx_ctx_map) = finish_default_run(cx, &key);
+    if let Some((answer, header)) = callers {
+        cx.release(Cell::L4);
+        cx.release(Cell::Effects);
+        return Ok(callers_document(
+            job,
+            &answer,
+            &header,
+            &workspace_fp,
+            diagnostics_json,
+        ));
+    }
 
     // EXIT CODE 2: routine not resolved (zero roots → dummy-doc)
     if changed_roots.roots.is_empty() {
@@ -2576,6 +2649,139 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         exit_code: 0,
         summary,
     })
+}
+
+/// The root of a callers' context answer, as prove's document names it.
+pub(crate) struct RootHeader {
+    stable_id: String,
+    routine_display: String,
+    object_display: String,
+    /// The declaration's unit and 0-based line.
+    anchor: Option<(String, u32)>,
+}
+
+/// The root's header off the model (the routine row with that stable id).
+pub(crate) fn root_header(
+    model: &crate::program::model::workspace::Model,
+    stable_id: &str,
+) -> RootHeader {
+    let row = model
+        .workspace
+        .routines
+        .iter()
+        .find(|r| r.stable_routine_id == stable_id);
+    let object = row.and_then(|r| model.workspace.objects.iter().find(|o| o.id == r.object_id));
+    RootHeader {
+        stable_id: stable_id.to_string(),
+        routine_display: row.map_or_else(|| stable_id.to_string(), |r| r.name.clone()),
+        object_display: object
+            .map_or_else(String::new, |o| format!("{} {}", o.object_type, o.name)),
+        anchor: row.map(|r| {
+            (
+                r.source_anchor.source_unit_id.clone(),
+                r.source_anchor.start_line,
+            )
+        }),
+    }
+}
+
+/// A callers' context question's answer for `root` (agent-tasks §6), off the
+/// view's model, detector artifacts and sited graph.
+pub(crate) fn callers_answer(
+    cx: &ViewCx<'_>,
+    job: &ProveJob<'_>,
+    q: crate::engine::l5::callers_context::CallersQuestion,
+    root: &str,
+) -> Result<
+    (
+        crate::engine::l5::callers_context::CallersAnswer,
+        RootHeader,
+    ),
+    String,
+> {
+    use crate::engine::l5::callers_context::{CallersCx, answer};
+    let g = cx.sited().ok_or_else(|| {
+        "prove: internal error — a callers' context question without its sited graph".to_string()
+    })?;
+    let nodes = g.nodes_with_stable_id(root);
+    if nodes.is_empty() {
+        return Err(format!(
+            "prove: the routine '{root}' is not in the call graph (a symbol-only routine has no \
+             callers the analysis can see)"
+        ));
+    }
+    let model = cx.view().model();
+    let det = cx.view().det();
+    let ccx = CallersCx {
+        model,
+        g,
+        summaries: &det.summaries,
+        cone_derived: &det.cone_derived,
+        inputs: Some(cx.inputs()),
+        assume_no_dependents: job.assume_no_dependents,
+        cancel: None,
+    };
+    Ok((answer(q, &nodes, &ccx), root_header(model, root)))
+}
+
+/// prove's document, human text and summary for a callers' context answer.
+fn callers_document(
+    job: &ProveJob<'_>,
+    a: &crate::engine::l5::callers_context::CallersAnswer,
+    header: &RootHeader,
+    workspace_fp: &str,
+    diagnostics_json: serde_json::Value,
+) -> ProveRunResult {
+    use crate::engine::l5::callers_context::{format_human, result_value};
+    let mut routine_ref = serde_json::Map::new();
+    if let Some((file, line)) = &header.anchor {
+        routine_ref.insert(
+            "anchor".into(),
+            anchor_to_json("source", Some(file), Some(*line), None, None),
+        );
+    }
+    routine_ref.insert("display".into(), header.routine_display.clone().into());
+    routine_ref.insert("objectDisplay".into(), header.object_display.clone().into());
+    routine_ref.insert("stableId".into(), header.stable_id.clone().into());
+    let mut payload = serde_json::Map::new();
+    payload.insert("question".into(), job.question_text.into());
+    payload.insert("questionScope".into(), "callers-context".into());
+    payload.insert(
+        "lineBase".into(),
+        crate::engine::line_base::LINE_BASE.into(),
+    );
+    payload.insert("result".into(), result_value(a));
+    payload.insert("routine".into(), serde_json::Value::Object(routine_ref));
+    payload.insert("workspaceFingerprint".into(), workspace_fp.into());
+    let mut env = serde_json::Map::new();
+    env.insert("alsemVersion".into(), job.alsem_ver.into());
+    env.insert("deterministic".into(), job.deterministic.into());
+    env.insert("diagnostics".into(), diagnostics_json);
+    env.insert(
+        "generatedAt".into(),
+        crate::engine::gate::format_json::pinned_or_now_iso8601(job.deterministic).into(),
+    );
+    env.insert("kind".into(), "prove".into());
+    env.insert("payload".into(), serde_json::Value::Object(payload));
+    env.insert("schemaVersion".into(), PROVE_SCHEMA_VERSION.into());
+    let json_text = serialize_document_value(serde_json::Value::Object(env));
+    let routine = owner_qualified(&header.object_display, &header.routine_display);
+    let human_text = format_human(&routine, a, job.detail);
+    let summary = serde_json::json!({
+        "kind": "prove",
+        "routine": routine,
+        "question": job.question_text,
+        "questionScope": "callers-context",
+        "answer": a.answer.as_str(),
+        "evidence": a.witness_count,
+        "blockedBy": a.blocked_counts.values().sum::<usize>(),
+    });
+    ProveRunResult {
+        json_text,
+        human_text,
+        exit_code: 0,
+        summary,
+    }
 }
 
 // ---------------------------------------------------------------------------

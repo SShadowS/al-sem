@@ -1,5 +1,5 @@
 --- Codeunit Ws Work::CallChain ---
-  question: may-commit
+  question: may-commit — existing effects (what the routine and its callees already do)
   answer:   unknown — no matching effect observed; coverage incomplete
   blockedBy: 2 blockers in 2 kinds
     coverage-incomplete: 1

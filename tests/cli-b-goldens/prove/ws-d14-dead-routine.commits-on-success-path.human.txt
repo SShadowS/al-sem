@@ -1,5 +1,5 @@
 --- Codeunit D14EntryPoints::OnRun ---
-  question: commits-on-success-path
+  question: commits-on-success-path — existing effects (what the routine and its callees already do)
   answer:   no
   coverage: complete
   assumptions: none (default world; --closed-world assumes the loaded interface implementations)

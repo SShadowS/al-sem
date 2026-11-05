@@ -111,6 +111,7 @@ fn job(cmd: Cmd, f: &Fixture) -> Box<dyn Job + '_> {
             deterministic: true,
             single_app: f.single_app,
             closed_world: false,
+            assume_no_dependents: false,
             human: false,
             detail: false,
             out: None,

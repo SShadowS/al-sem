@@ -1,5 +1,5 @@
 --- Codeunit CDO E-Mail Handler::RunReportID ---
-  question: writes-table:Data Exch.
+  question: writes-table:Data Exch. — existing effects (what the routine and its callees already do)
   answer:   yes
   evidence: 5 effects
     [DB_DELETE] beyond Table Incoming Document Attachment::OnInsert, entered at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:182

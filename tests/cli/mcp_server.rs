@@ -439,7 +439,7 @@ fn a_transcript_answers_what_the_cli_answers() {
         json!({"routines": ["Archive"], "format": "json"}),
     );
     assert_eq!(
-        env["structuredContent"]["output"]["schema"], "al-sem.explain/3",
+        env["structuredContent"]["output"]["schema"], "al-sem.explain/4",
         "{env}"
     );
 

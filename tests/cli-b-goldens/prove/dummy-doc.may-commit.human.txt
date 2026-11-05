@@ -1,5 +1,5 @@
 --- NonExistentRoutineXYZ ---
-  question: may-commit
+  question: may-commit — existing effects (what the routine and its callees already do)
   answer:   unknown
   blockedBy: 1 blocker in 1 kind
     routine-not-found: 1

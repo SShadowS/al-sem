@@ -95,7 +95,7 @@ use al_sem::engine::l5::fingerprint_cli::{
     normalize_witness, reads_single_app, reject_illegal_combos, reject_inventory_only_combos,
     reject_shard_without_out, validate_roots,
 };
-use al_sem::engine::l5::prove::{ProveJob, parse_question, question_ids};
+use al_sem::engine::l5::prove::{ProveJob, is_question, question_ids};
 use al_sem::program::inputs::{FileInput, RequestInputs, WorkspaceNeeds};
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
@@ -1035,11 +1035,16 @@ struct ProveCli {
     /// Routine selector: display name or StableRoutineId.
     routine: String,
 
-    /// Prove question: may-commit | commits-on-success-path | writes-table:<name>
-    ///   | publishes-event:<name> | reaches-ui | throws-error. `reaches-ui` is
-    ///   interactive UI (Message, Confirm, StrMenu, Page/Report Run or RunModal,
-    ///   Hyperlink, UploadIntoStream/DownloadFromStream/Upload/Download, a
-    ///   Dialog's Open/Update); an Error is `throws-error`'s.
+    /// Prove question. About the routine's existing effects (what it and its
+    ///   callees already do): may-commit | commits-on-success-path |
+    ///   writes-table:<name> | publishes-event:<name> | reaches-ui |
+    ///   throws-error. `reaches-ui` is interactive UI (Message, Confirm,
+    ///   StrMenu, Page/Report Run or RunModal, Hyperlink,
+    ///   UploadIntoStream/DownloadFromStream/Upload/Download, a Dialog's
+    ///   Open/Update); an Error is `throws-error`'s. About its callers'
+    ///   context (before adding a COMMIT, an error or UI to it):
+    ///   callers-have-pending-writes | callers-intercept-errors |
+    ///   callers-may-run-noninteractive.
     question: String,
 
     /// Output format: json | human. Defaults to json.
@@ -1073,6 +1078,14 @@ struct ProveCli {
     /// only under that carries `assumptions: ["loaded-subscribers"]`.
     #[arg(long = "closed-world", default_value_t = false)]
     closed_world: bool,
+
+    /// Callers' context questions: assume no app outside the program depends
+    /// on the workspace, so its public, protected and friend-visible
+    /// procedures have no callers beyond the loaded ones. Without it such a
+    /// caller blocks a `no`. Its own flag, not `--closed-world`; a result
+    /// that relies on it carries `assumptions: ["assume-no-dependents"]`.
+    #[arg(long = "no-dependents", default_value_t = false)]
+    no_dependents: bool,
 
     /// Human output: list every blocker. The default groups the blockers by
     /// kind with their counts and the first few of each, workspace ones
@@ -1154,6 +1167,15 @@ struct ExplainCli {
     /// answer, blockers and assumptions). May be repeated.
     #[arg(long = "writes-table", action = clap::ArgAction::Append)]
     writes_table: Vec<String>,
+
+    /// Each card gains a "callers' context" section: the three callers'
+    /// context answers (pending writes, intercepted errors, non-interactive
+    /// entries) for an agent about to add a COMMIT, an error or UI. Only
+    /// when asked: it walks the callers over the sited graph (built once;
+    /// about a second on a large workspace) and runs the detectors. Not with
+    /// --single-app.
+    #[arg(long = "callers-context", default_value_t = false)]
+    callers_context: bool,
 }
 
 /// `FingerprintCli` — arguments for `alsem fingerprint <ws>`.
@@ -1919,6 +1941,19 @@ fn write_run_stdout(out: Vec<u8>, whole: bool) -> ExitCode {
 
 /// A job's kind for the peak table (D12): its command and its view's
 /// universe. `None`: `batch`, `policy explain`, `cache prune` (no job).
+/// Whether `command` walks the sited graph beside the model (agent-tasks
+/// design §6): a callers' context prove question, or explain with
+/// `--callers-context`. A resident engine then pins with `pin_sited`.
+fn reads_sited(command: &Commands) -> bool {
+    match command {
+        Commands::Prove(p) => {
+            al_sem::engine::l5::callers_context::CallersQuestion::parse(&p.question).is_some()
+        }
+        Commands::Explain(e) => e.callers_context,
+        _ => false,
+    }
+}
+
 fn job_kind(command: &Commands) -> Option<JobKind> {
     let universe = |single_app: bool| match single_app {
         true => ViewUniverse::SingleApp,
@@ -3096,7 +3131,7 @@ fn plan_prove(p: ProveCli) -> Planned {
     }
 
     // Validate question early (mirrors prove.ts exit 1 for unknown question)
-    if parse_question(&p.question).is_none() {
+    if !is_question(&p.question) {
         let valid: Vec<&str> = question_ids().to_vec();
         return failed(
             format!(
@@ -3108,6 +3143,31 @@ fn plan_prove(p: ProveCli) -> Planned {
                     .collect::<Vec<_>>()
                     .join("\n")
             ),
+            1,
+            1,
+        );
+    }
+    let callers =
+        al_sem::engine::l5::callers_context::CallersQuestion::parse(&p.question).is_some();
+    // The callers' context questions walk the cross-app program's sited graph:
+    // the workspace's callers include dependency code raising its events.
+    if callers && p.single_app {
+        return failed(
+            format!(
+                "prove: '{}' is a callers' context question; it walks the cross-app program \
+                 and does not take --single-app",
+                p.question
+            ),
+            1,
+            1,
+        );
+    }
+    if p.no_dependents && !callers {
+        return failed(
+            "prove: --no-dependents goes with a callers' context question \
+             (callers-have-pending-writes, callers-intercept-errors, \
+             callers-may-run-noninteractive)"
+                .to_string(),
             1,
             1,
         );
@@ -3128,6 +3188,7 @@ fn plan_prove(p: ProveCli) -> Planned {
                 deterministic: p.deterministic,
                 single_app: p.single_app,
                 closed_world: p.closed_world,
+                assume_no_dependents: p.no_dependents,
                 human: p.format == "human",
                 detail: p.detail,
                 out: p.out.as_deref(),
@@ -3178,6 +3239,15 @@ fn plan_explain(e: ExplainCli, cx: &PlanCx) -> Planned {
     if e.diff_root.is_some() && e.diff.is_none() {
         return failed(
             "al-sem: explain: --diff-root needs --diff",
+            exit::CONFIG_ERROR,
+            1,
+        );
+    }
+    // The callers' walk reads the cross-app program's sited graph.
+    if e.callers_context && e.single_app {
+        return failed(
+            "al-sem: explain: --callers-context walks the cross-app program and does not take \
+             --single-app",
             exit::CONFIG_ERROR,
             1,
         );
@@ -3242,7 +3312,8 @@ fn plan_explain(e: ExplainCli, cx: &PlanCx) -> Planned {
                 ExplainJob::new(req, e.format == "human", e.out.as_deref())
                     .with_render(e.detail, e.max_paths)
                     .with_show_source(e.show_source)
-                    .with_writes_tables(e.writes_table.clone()),
+                    .with_writes_tables(e.writes_table.clone())
+                    .with_callers_context(e.callers_context),
             )
         },
     )
@@ -4141,6 +4212,7 @@ mod engine {
             Err(why) => return failed(FailedOutcome::Protocol, &why),
         };
         let universe = job_kind(&command).map(|(_, u)| u);
+        let wants_sited = reads_sited(&command);
         let planned = plan(command, true, &plan_cx);
         let wanted = match &planned {
             Planned::Failed(f) => return cli(&f.output, None, timing),
@@ -4187,14 +4259,17 @@ mod engine {
         (cx.progress)("pin");
         // A tests select part on a model engine (the workspace's own tests)
         // reads the sited graph: the revision must have it (M0's pin_sited,
-        // which turns the graph on once).
-        // So does an impact up part (agent-tasks B1).
+        // which turns the graph on once). So does an impact up part
+        // (agent-tasks B1) and a question that walks the callers (agent-tasks
+        // design §6: callers' context prove questions, explain
+        // --callers-context).
         let part_is = |p: &str| {
             ask.argv.iter().any(|a| *a == format!("--part={p}"))
                 || ask.argv.windows(2).any(|w| w[0] == "--part" && w[1] == p)
         };
         let reads_sited = ((ask.argv.first().is_some_and(|c| c == "tests") && part_is("select"))
-            || (ask.argv.first().is_some_and(|c| c == "impact") && part_is("up")))
+            || (ask.argv.first().is_some_and(|c| c == "impact") && part_is("up"))
+            || wants_sited)
             && !open.session.is_graph_only();
         let pin = if reads_sited {
             open.session.pin_sited(ask.freshness, cx.stop)

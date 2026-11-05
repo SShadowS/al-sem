@@ -42,6 +42,29 @@ pub fn site_guards(
     g: &SitedGraph,
     site: u32,
 ) -> Result<Vec<Guard>, String> {
+    site_guards_cached(inputs, g, site, &mut GuardCache::default())
+}
+
+/// What [`site_guards_cached`] keeps between sites of one answer: each unit's
+/// pinned texts and each text's parse, and the packages' embedded sources
+/// (listed once, never per site). A walk that asks for many sites (the
+/// callers' context GuiAllowed guards, agent-tasks §6.5) reads and parses
+/// each file once.
+#[derive(Default)]
+pub struct GuardCache {
+    /// The packages' embedded sources, `(virtual path, text)`.
+    packages: Option<Vec<(String, std::sync::Arc<str>)>>,
+    texts: std::collections::HashMap<(bool, String), Vec<std::sync::Arc<str>>>,
+    parsed: std::collections::HashMap<(bool, String, usize), AlFile>,
+}
+
+/// [`site_guards`] with `cache` (the same answer).
+pub fn site_guards_cached(
+    inputs: &WorkspaceInputs,
+    g: &SitedGraph,
+    site: u32,
+    cache: &mut GuardCache,
+) -> Result<Vec<Guard>, String> {
     let s = g
         .sites()
         .get(site as usize)
@@ -53,9 +76,18 @@ pub fn site_guards(
         .routine_object(s.from)
         .ok_or_else(|| "the site's caller is not a routine".to_string())?;
     let unit = g.unit(a.unit);
-    let texts = pinned_texts(inputs, g, &object, unit)?;
-    for text in &texts {
-        let file = al_syntax::parse(text);
+    let key = (object.app == g.primary_app(), unit.to_string());
+    if !cache.texts.contains_key(&key) {
+        let texts = pinned_texts(inputs, g, &object, unit, &mut cache.packages)?;
+        cache.texts.insert(key.clone(), texts);
+    }
+    let texts = cache.texts[&key].clone();
+    for (i, text) in texts.iter().enumerate() {
+        let file = cache
+            .parsed
+            .entry((key.0, key.1.clone(), i))
+            .or_insert_with(|| al_syntax::parse(text));
+        let file = &*file;
         let Some(obj) = file.objects.iter().find(|o| declares(o, &object)) else {
             continue;
         };
@@ -70,7 +102,7 @@ pub fn site_guards(
             if let Some(body) = r.body
                 && contains(&file.ir.block(body).origin.byte, start, end)
             {
-                walk(&file, text, body, start, end, &mut out);
+                walk(file, text, body, start, end, &mut out);
                 return Ok(out);
             }
         }
@@ -86,6 +118,7 @@ fn pinned_texts(
     g: &SitedGraph,
     object: &ObjectNodeId,
     unit: &str,
+    packages: &mut Option<Vec<(String, std::sync::Arc<str>)>>,
 ) -> Result<Vec<std::sync::Arc<str>>, String> {
     if object.app == g.primary_app() {
         return inputs
@@ -106,21 +139,26 @@ fn pinned_texts(
             );
         }
     }
-    for i in 0..inputs.closure.files.len() {
-        // A package the read acquired: its bytes, or a refusal when the file
-        // moved since (never the disk's new bytes).
-        let Ok(image) = inputs.closure.image(i) else {
-            continue;
-        };
-        if let Ok((files, _)) = crate::snapshot::cache::cached_source(&image) {
-            out.extend(
-                files
-                    .into_iter()
-                    .filter(|f| f.virtual_path == unit)
-                    .map(|f| f.text),
-            );
+    let packages = packages.get_or_insert_with(|| {
+        let mut all = Vec::new();
+        for i in 0..inputs.closure.files.len() {
+            // A package the read acquired: its bytes, or a refusal when the
+            // file moved since (never the disk's new bytes).
+            let Ok(image) = inputs.closure.image(i) else {
+                continue;
+            };
+            if let Ok((files, _)) = crate::snapshot::cache::cached_source(&image) {
+                all.extend(files.into_iter().map(|f| (f.virtual_path, f.text)));
+            }
         }
-    }
+        all
+    });
+    out.extend(
+        packages
+            .iter()
+            .filter(|(p, _)| p == unit)
+            .map(|(_, t)| t.clone()),
+    );
     Ok(out)
 }
 

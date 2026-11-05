@@ -132,6 +132,127 @@ The blast radius of a change, current effects only. Spec:
   accounting line, the first five routines, the tests line). The LSP front end refuses it, as it
   refuses `alsem_tests`. The server instructions name it for reviewing a diff or a PR.
 
+### Added (agent tasks, milestone A: adding an effect)
+
+Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §6 (revision 2; astra 3/4/5, Fable
+2/14; owner decisions §13.2).
+
+- **Three prove questions about a routine's callers' context** (`engine::l5::callers_context`),
+  for an agent about to ADD a `Commit()`, an `Error(...)` or UI to routine R. Each walks R's reverse
+  cone over the sited graph (R0's `walk_multi`) with its own visitor, whose `step` evaluates every
+  reverse edge `caller C --site s--> R'` against C's body facts in the model (the site found by its
+  anchor). Answers are `yes` (a path exists), `no` (the whole cone seen, nothing blocks it) or
+  `unknown` with the blocking reasons; never "safe".
+  - `callers-have-pending-writes`: may a caller have a database write pending (written, not yet
+    committed) when R runs? Per edge, `pending_writes::pending_before_report` (the same tree walk
+    the transaction spans use, now also reporting whether it fell back to the whole body and
+    whether a `Commit()` statement on the way cleared what came before) gives the sites of C that
+    may run before s: earlier statements, conditions, only the branch holding s, a loop's whole
+    body. A physical write among them (its own, or a callee's cone write, a `Codeunit.Run` target's
+    lifecycle routines included) is a `pending-write` witness. A `Commit()` before s, a checked
+    `Codeunit.Run` (its own transaction) and a background start (a new session) stop the walk
+    above C. A trigger of a write on a physical record is an `inside-write` witness; on a temporary
+    record it proves nothing. Above a publisher, the other subscribers' cone writes count (they run
+    in an unknown order). A commit inside a callee does not clear. A TryFunction caller blocks `no`
+    on its own row (`tryfunction-caller`; owner decision). A caller whose order is not known (no
+    tree, s not found, no body facts in the model) blocks `no` (`order-unknown`); an unresolved
+    call before s gives `effects-incomplete`. `CommitBehavior` attributes and
+    `InherentCommitBehavior` objects on the paths are printed.
+  - `callers-intercept-errors`: may a caller turn an error raised in R into something else? The
+    edge into a TryFunction whose result is used, or a checked `Codeunit.Run`, is
+    `catch-and-return-false` (the text says a TryFunction does not roll back database changes,
+    and that a checked run's own transaction is rolled back); a TryFunction called as a statement
+    is an ordinary call and is listed as not intercepted; an error raised in a call's arguments is
+    the caller's (a different edge). `asserterror` intercepts; `[ErrorBehavior(ErrorBehavior::
+    Collect)]` is `collectible` (collectible errors only; the walk goes on). A background start
+    ends a path. The entries reached with no trap are counted by kind.
+  - `callers-may-run-noninteractive`: may R run where no user answers UI, whatever the UI kind?
+    Witnesses are entries no user answers: API pages, web-service and job-queue roots
+    (`roots.config.json`), install and upgrade codeunits, and the OnRun of a codeunit a literal
+    `StartSession`/`TaskScheduler.CreateTask`/`CurrPage.EnqueueBackgroundTask` starts (the
+    capability `start` facts' call sites, not an edge; the run below a start is non-interactive
+    whatever started it). A call in the then-branch of `if GuiAllowed` (or a conjunction with it)
+    is not followed, the else branch is; any other condition that mentions GuiAllowed keeps the
+    witness and is listed (`unrecognized-guard`). Guards come from M0-3's guard enrichment
+    (re-parsing the revision's pinned bytes, only for callers that mention GuiAllowed), so the
+    model gains no per-site fact (A-15: 0 bytes). A missing `roots.config.json`
+    (`publication-unknown`), a `WebServicePublish.xml` in the workspace (`unread-publication-
+    file`) and any background start with a non-literal codeunit (`unresolved-background-target`)
+    block `no`. Tests are counted apart, never witnesses.
+  - Every question: hidden callers, `OnlyOpen` ancestors (hubs), external ancestors (public,
+    protected, or internal with `internalsVisibleTo` friends) and a walk limit block `no`. **A
+    witness whose path uses an open site** (a hub's stand-in for "any page run", "any call of this
+    name") is listed (`evidenceThroughOpenSites`) but makes no `yes` alone: the answer is then
+    `unknown — witnesses only through open sites`. **The walk stops at a page's lifecycle edge**
+    (`stopped: page-event`): an open page runs its actions and triggers on later user events,
+    after the code that opened it finished, so the opener's pending writes and error traps are not
+    around them (found on CDO: `IssueReminder`'s first witness was a write before
+    `Contact::ShowResultForCustomer` opened the Customer Card that holds the reminder action).
+  - Known limit: the sited graph has no edge from a `StartSession`/`CreateTask` site to its
+    target yet (callgraph F3), so the walk's stop at a background start is not reachable on
+    today's graphs; its discrimination proof stayed green and the fixture pins the outcome
+    instead (no trap above the start; the target is a `background-start` entry).
+    `--no-dependents` (MCP `assumeNoDependents`) turns external callers off and says so under
+    `assumptions`; it is its own flag, not `--closed-world`. The questions read the cross-app
+    program and refuse `--single-app`.
+- **`alsem explain --callers-context`** (MCP `callersContext: true`): each card gains a "callers'
+  context" section with the three answers in one line each (before `next:`), and its JSON a
+  `callersContext` object. **Only when asked**: the section needs the sited graph, which M0 made
+  lazy (about a second per refresh on CDO cross-app), and the detector run's summaries, which a
+  default explain does not run; printing it whenever a resident revision happens to hold the graph
+  would make a resident answer differ from the CLI's.
+- `engine::resident::guards::site_guards_cached` with a `GuardCache`: the units' pinned texts and
+  parses, and the packages' embedded sources listed once per answer, not once per site. Before
+  it, `callers-may-run-noninteractive` on CDO `RunReportID` took 229 s (every Base Application
+  caller that mentions GuiAllowed re-listed every package's sources); after, 20.5 s cold CLI.
+- A model job can now walk the sited graph beside the model (`ViewNeeds::MODEL_SITED`,
+  `ViewCx::sited`): one-shot, the graph is built off the lent program and kept for the compute;
+  resident, the revision's `ArtifactKey::Sited` is served, and the engine host pins with
+  `pin_sited` for a command that reads it.
+
+- **Measured on the CDO baseline** (`bc3ccb18`, cross-app, `release-fast`, 2026-11-05; the
+  machine was shared, so upper bounds).
+  - Cold CLI, each question alone: 18.8-20.7 s and 3.16-3.21 GB peak for `RunReportID`,
+    `IssueReminder`, `UpdateLastUpload`, `TryRunReport`, `RunEMailJobs` (one outlier, 32 s), against
+    28.3 s / 3.14 GB for `prove RunReportID may-commit` (the callers' questions run no digest
+    tree; they add the sited graph and the walk). `explain RunReportID`: 27.2 s; with
+    `--callers-context` 32.2 s (+5 s: the detector run, the sited graph, three walks).
+  - Resident (`alsem mcp`, one session): `may-commit` cold 29.9 s; the first callers' question
+    8.2 s (`pin_sited` rebuilds the revision once with its sited graph); then 0.09-0.14 s for
+    pending writes and intercepted errors, 1.26 s for non-interactive (its GuiAllowed guards parse
+    the callers' files); `explain --callers-context` 4.3 s after a plain explain. Under
+    `--low-mem`: 34.3 s for the first callers' question (the rebuild parses the dependency trees
+    again), then 0.18-0.29 s, and 2.45 s for non-interactive.
+  - Answers, hand-checked against source: `RunReportID callers-have-pending-writes` **yes** (local,
+    1 hop: `RunReport` calls `Core.IsAppActiveOrAskToActivate`, which may write Continia Core table
+    6192807, at `CDOEMailHandler.Codeunit.al:240`, before its calls at :251/:268); `RunReportID
+    callers-intercept-errors` **yes** (`RunDocHandleIsolated`'s `exit(AutoSendRunner.Run())` at
+    `CDOSubscribers.Codeunit.al:1239`, a checked run, 5 hops); `UpdateLastUpload
+    callers-have-pending-writes` **yes** with `QueueUpload` as the witness (its unchecked
+    `Codeunit.Run(Codeunit::"Job Queue - Enqueue", …)` at `CDOTelemetry.Codeunit.al:41` inserts a
+    Job Queue Entry before the call at :42); `TryRunReport callers-intercept-errors` **yes** (`if not
+    TryRunReport(…) then` at `CDOLegacyeDocDispatcher.Codeunit.al:231`); `IssueReminder` all three
+    **unknown**, blocked only by its public access for pending writes (its one caller, the
+    `Issue and send/print` action at `CDOReminderActions.Page.al:142`, writes nothing before the
+    call). Non-interactive is `unknown` on CDO for every routine: no `roots.config.json`, an unread
+    `WebServicePublish.xml`, two background starts with a variable codeunit, and the background
+    entries found are reached only through hubs.
+
+### Changed (agent tasks, milestone A)
+
+- **prove 2.4.0** (additive): the callers' context questions' documents carry
+  `payload.questionScope: "callers-context"` and a `result` with `answer`, `evidence[]` (`kind`,
+  `detail`, `evidence.{file,line}`, `entry`, `hops`, `tier`, `path[]`), `blockedBy[]` (at most 5
+  per kind) with `blockedByCounts`, `assumptions`, `entries`, `stopped`, `commitBehavior`,
+  `tryFunctionCallers`, `notIntercepted`, `testEntries`, `unrecognizedGuards` and `cone`. The six
+  existing questions' JSON is unchanged except `schemaVersion`.
+- **The six existing prove questions say "existing effects"**: their human `question:` line ends
+  `— existing effects (what the routine and its callees already do)`; the new ones end `— callers'
+  context (not about the routine's own effects)`. The prove tool's description, its `question`
+  argument and the server instructions say which is which; a contract test keeps the word "safe"
+  out of every tool description, argument description and the instructions.
+- **explain JSON `al-sem.explain/4`** (additive: `callersContext` with `--callers-context`).
+
 ### Added (agent tasks, milestone C: test selection)
 
 Which tests to run first for a change, as a first-class answer. Spec:
