@@ -1223,6 +1223,7 @@ impl Revision {
             };
             lines.extend(base_lines.iter().cloned());
             lines.extend(artifact.lines.iter().cloned());
+            let stopped = || (ctl.stop)().is_some();
             let ((), read_lines) = capture(|| {
                 read_tree_shared(
                     tree,
@@ -1232,8 +1233,14 @@ impl Revision {
                     &mut effects,
                     &mut tree_reads,
                     entries,
+                    &stopped,
                 );
             });
+            // Agent-tasks E2: a prove slice's route enumeration stops early
+            // when the request is cancelled; such a read is never answered.
+            if let Some(stop) = (ctl.stop)() {
+                return Err(stop.into());
+            }
             lines.extend(read_lines);
         }
         Ok(((effects, tree_reads), lines))

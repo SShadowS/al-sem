@@ -1619,6 +1619,37 @@ walk the parent tree), E-10 (a cap gives `limit`; break: stop silently). Commits
 `feat(prove): --routes`. Measurement: state-graph memory for RunReportID and IssueReminder on
 CDO, routes 1/3/10, warm.
 
+### 11.1 As built (E2, 2026-11-05)
+
+- `--routes` goes only with a filter (`--match`/`--site`/`--op`/`--table`); `--routes 1` is E1's
+  answer byte for byte (E1's route off the search tree, no `routes` key, no `filter.routes`).
+  Above 1, routes are enumerated for the first 20 matching sites (E1's `MAX_ROUTES`), each with
+  its own 50,000-edge budget. E1's `route` stays on each row; an enumeration that lists none
+  falls back to it, labelled.
+- The state graph is the literal search itself run once with a recorder
+  (`LiteralReach::state_graph`, module `literal_reach::routes`): same states, same order, same
+  first parents, so the rest of the slice reads its tree unchanged. Transitions are kept as
+  (target state, edge index) pairs, plus their live reverse and the reversed routine graph of
+  the root's guard-free reach.
+- A route ends at its FIRST state where the site can run (a longer one passes the site first).
+  Enumeration is best-first over partial routes ranked by (hops + exact hops left, site-id
+  sequence), so routes come out in the spec's order without a sort.
+- Rejected edges are split four ways: literal arguments at the edge's own site; literal
+  arguments further on (no live way on, but the callee reaches the site's routine with guards
+  ignored); back to a state on the route; callee cannot reach the site at all. Counts are of
+  edges, each time a partial route reaches them.
+- Cancellation: the request's stop reaches the slice through `read_tree_shared`; the resident
+  tree read checks it again after the read. Checked at the first edge and every 1,024.
+- Equal-length routes are ordered by site ids, so `--routes 3`'s first route can differ from
+  `--routes 1`'s (E1's is the search tree's first). Both are shortest.
+- CDO (pinned baseline, `release-fast`, cold CLI; the machine had a load average near 380, so
+  times are relative only): `RunReportID throws-error --op Error --routes 10`: state graph
+  21,556 states, 40,178 transitions, 3.2 MB beyond the tree; 20 sites enumerated in 8.6 ms with
+  153,211 candidate edges examined in all. `IssueReminder --match issued --routes 3`: 21,818
+  states, 40,626 transitions, 3.2 MB, 58 edges. Peak RSS 3.09-3.15 GB at routes 1, 3 and 10 (no
+  measurable change). The `prove.slice` span with routes is no longer than without (the graph
+  replaces the tree: the same search).
+
 ---
 
 ## 12. Surface, consumers and versions

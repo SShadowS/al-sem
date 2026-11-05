@@ -960,6 +960,17 @@ struct ProveCli {
     /// table raises (TestField, FieldError, an unguarded Get, …).
     #[arg(long, value_name = "TABLE")]
     table: Option<String>,
+
+    /// With --match, --site, --op or --table: up to N distinct routes per
+    /// matching site (1 to 10; default 1, one route), fewest hops first, each
+    /// with its guards. A route is a simple path over (routine, known
+    /// argument values) states, so recursion is followed only while it
+    /// changes the known values; the answer says whether the enumeration
+    /// completed (then every route is listed) or which cap fired (the routes
+    /// asked, or 50,000 candidate edges per site), and how many candidate
+    /// edges it examined and rejected.
+    #[arg(long, value_name = "N")]
+    routes: Option<usize>,
 }
 
 /// `ExplainCli` — arguments for `alsem explain <ws>` (intent-evidence spec
@@ -2765,6 +2776,7 @@ fn plan_prove(p: ProveCli) -> Planned {
         p.site.as_deref(),
         p.op.as_deref(),
         p.table.as_deref(),
+        p.routes,
     ) {
         Ok(s) => s,
         Err(e) => return failed(e, 1, 1),

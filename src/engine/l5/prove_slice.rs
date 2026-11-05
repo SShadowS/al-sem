@@ -43,7 +43,9 @@
 //! filter is given.
 
 use crate::engine::l5::group_path::{GroupPath, GroupPaths};
-use crate::engine::l5::literal_reach::LiteralReach;
+pub use crate::engine::l5::literal_reach::routes::{ROUTE_CAP, ROUTE_EDGE_BUDGET};
+use crate::engine::l5::literal_reach::routes::{RouteCounts, RouteLimit, StateGraph};
+use crate::engine::l5::literal_reach::{LiteralReach, LiveTree};
 use crate::engine::l5::prove::{ProveQuestion, UI_TYPES, name_or_id_matches};
 use crate::engine::l5::snapshot::CapabilitySnapshot;
 use crate::engine::l5::terminal_facts::{TerminalSite, TerminalTemp};
@@ -126,6 +128,15 @@ pub struct SliceRequest {
     pub site: Option<SiteFilter>,
     pub op: Option<String>,
     pub table: Option<String>,
+    /// `--routes N` (agent-tasks E2, design §11): up to N distinct routes
+    /// per matching site, 1..=[`ROUTE_CAP`]. 1 (the default) is E1's one
+    /// route off the search tree, byte for byte; above 1 the routes are
+    /// enumerated over the state-transition graph
+    /// ([`crate::engine::l5::literal_reach::routes`]).
+    pub routes: usize,
+    /// The candidate edges one site's enumeration examines at most
+    /// ([`ROUTE_EDGE_BUDGET`]; a fixture sets it lower to reach the cap).
+    pub route_budget: usize,
 }
 
 impl SliceRequest {
@@ -139,14 +150,30 @@ impl SliceRequest {
     /// | `--table` | `throws-error` |
     /// | `--op` | `throws-error`, `writes-table:` |
     /// | `--site` | `throws-error`, `writes-table:`, `may-commit`, `reaches-ui` |
+    /// | `--routes` | with one of the filters above |
     pub fn of(
         question_text: &str,
         match_text: Option<&str>,
         site: Option<&str>,
         op: Option<&str>,
         table: Option<&str>,
+        routes: Option<usize>,
     ) -> Result<Option<SliceRequest>, String> {
+        if let Some(n) = routes
+            && !(1..=ROUTE_CAP).contains(&n)
+        {
+            return Err(format!(
+                "prove: --routes takes 1 to {ROUTE_CAP} (routes per matching site), not {n}"
+            ));
+        }
         if match_text.is_none() && site.is_none() && op.is_none() && table.is_none() {
+            if routes.is_some() {
+                return Err(
+                    "prove: --routes goes with --match, --site, --op or --table (the \
+                            routes of the sites they keep)"
+                        .to_string(),
+                );
+            }
             return Ok(None);
         }
         let parsed = crate::engine::l5::prove::parse_question(question_text);
@@ -195,6 +222,8 @@ impl SliceRequest {
             site: site.map(SiteFilter::parse).transpose()?,
             op: nonempty("--op", op)?,
             table: nonempty("--table", table)?,
+            routes: routes.unwrap_or(1),
+            route_budget: ROUTE_EDGE_BUDGET,
         }))
     }
 
@@ -214,6 +243,10 @@ impl SliceRequest {
         }
         if let Some(t) = &self.table {
             parts.push(format!("on table {t}"));
+        }
+        // E2: only above E1's one route, so `--routes 1` is byte-identical.
+        if self.routes > 1 {
+            parts.push(format!("(up to {} routes per site)", self.routes));
         }
         parts.join(" ")
     }
@@ -236,6 +269,9 @@ impl SliceRequest {
         }
         if let Some(v) = &self.table {
             m.insert("table".into(), v.clone().into());
+        }
+        if self.routes > 1 {
+            m.insert("routes".into(), self.routes.into());
         }
         serde_json::Value::Object(m)
     }
@@ -394,6 +430,22 @@ pub struct SliceSite {
     pub outcome: Outcome,
     /// For a matching site among the first [`MAX_ROUTES`]: its route.
     pub route: Option<Result<SliceRoute, &'static str>>,
+    /// E2 (`--routes N`, N > 1): for a matching site among the first
+    /// [`MAX_ROUTES`], its enumerated routes. `route` stays E1's.
+    pub routes: Option<RouteSet>,
+}
+
+/// One site's enumerated routes (agent-tasks E2, design §11): shortest
+/// first, each with its guards, and what the enumeration examined
+/// ([`crate::engine::l5::literal_reach::routes`] has the definitions).
+#[derive(Debug, Clone)]
+pub struct RouteSet {
+    pub routes: Vec<SliceRoute>,
+    pub requested: usize,
+    pub budget: usize,
+    pub counts: RouteCounts,
+    /// `None`: the enumeration completed, so `routes` is every route.
+    pub limit: Option<RouteLimit>,
 }
 
 /// The slice of one root (module doc).
@@ -753,12 +805,15 @@ fn route_sites<'a>(
     out
 }
 
-/// The slice of `root` over `tree` for `req` (module doc).
+/// The slice of `root` over `tree` for `req` (module doc). `cancel` stops a
+/// route enumeration (`--routes` above 1) and the state graph it reads; E1's
+/// one route is read off the search tree, which is not cancelled.
 pub(crate) fn compute_slice(
     tree: &CapabilitySnapshot,
     model: &Model,
     root: &str,
     req: &SliceRequest,
+    cancel: &dyn Fn() -> bool,
 ) -> SliceOut {
     let _s = crate::engine::perf_trace::span("prove", "prove.slice");
     // The guard arms' cost (agent-tasks E1's measurement): every row's arms,
@@ -784,8 +839,37 @@ pub(crate) fn compute_slice(
         literal_dead: 0,
         temporary: 0,
     };
-    let Some(live) = reach.live_tree(root) else {
-        return out;
+    // E2: above one route, the state-transition graph, whose tree is the
+    // search tree E1 reads (the same search, every transition kept).
+    let graph: Option<StateGraph> = if req.routes > 1 {
+        let _g = crate::engine::perf_trace::span("prove", "prove.route_graph");
+        let Ok(g) = reach.state_graph(root, cancel) else {
+            return out;
+        };
+        crate::engine::perf_trace::counter_delta("prove.route_graph_states", g.states() as u64);
+        crate::engine::perf_trace::counter_delta(
+            "prove.route_graph_transitions",
+            g.transitions() as u64,
+        );
+        crate::engine::perf_trace::counter_delta(
+            "prove.route_graph_extra_bytes",
+            g.extra_bytes() as u64,
+        );
+        Some(g)
+    } else {
+        None
+    };
+    let tree_only: Option<LiveTree> = match &graph {
+        Some(_) => None,
+        None => match reach.live_tree(root) {
+            Some(t) => Some(t),
+            None => return out,
+        },
+    };
+    let live: &LiveTree = match (&graph, &tree_only) {
+        (Some(g), _) => &g.tree,
+        (None, Some(t)) => t,
+        (None, None) => unreachable!("one of the two was built"),
     };
     out.complete = true;
     let table_names: HashMap<&str, &str> = model
@@ -809,7 +893,7 @@ pub(crate) fn compute_slice(
     // Per site: the site, and whether its write is caller-dependent.
     let mut sites: Vec<(SliceSite, Option<Vec<String>>)> = Vec::new();
     for rec in reach.terminals().records() {
-        if !fits(rec.effect_type, rec.resource) || !reach.reaches(&live, rec.owner) {
+        if !fits(rec.effect_type, rec.resource) || !reach.reaches(live, rec.owner) {
             continue;
         }
         if !seen.insert((rec.effect_type, rec.owner, rec.terminal.id())) {
@@ -831,12 +915,13 @@ pub(crate) fn compute_slice(
                 message: errors.then_some(MessageText::Unknown { reason: "platform" }),
                 outcome: Outcome::Undecided("no-site"),
                 route: None,
+                routes: None,
             };
             sites.push((site, None));
             continue;
         }
         let ops = vec![rec.terminal.id().to_string()];
-        if reach.tree_witness(&live, &ops).is_none() {
+        if reach.tree_witness(live, &ops).is_none() {
             out.literal_dead += 1;
             continue;
         }
@@ -879,6 +964,7 @@ pub(crate) fn compute_slice(
             message,
             outcome: Outcome::NoMatch,
             route: None,
+            routes: None,
         };
         site.outcome = outcome(req, &site, caller_dependent);
         sites.push((site, Some(ops)));
@@ -892,7 +978,7 @@ pub(crate) fn compute_slice(
     let mut lengths: HashMap<usize, usize> = HashMap::new();
     for &i in &matching {
         if let Some(ops) = &sites[i].1
-            && let Some((steps, _)) = reach.tree_witness(&live, ops)
+            && let Some((steps, _)) = reach.tree_witness(live, ops)
         {
             lengths.insert(i, steps.len());
         }
@@ -908,16 +994,41 @@ pub(crate) fn compute_slice(
         let Some(ops) = sites[i].1.clone() else {
             continue;
         };
-        let route = match group_paths.own_path(&reach, Some(&live), &ops) {
+        let owner = sites[i].0.owner.clone();
+        let anchor = reach.routine(&owner).and_then(|r| anchor_in(r, &ops[0]));
+        let route = match group_paths.own_path(&reach, Some(live), &ops) {
             Ok(path) => {
-                let owner = sites[i].0.owner.clone();
-                let anchor = reach.routine(&owner).and_then(|r| anchor_in(r, &ops[0]));
                 let rs = route_sites(&reach, root, &path, (&owner, anchor));
                 Ok(SliceRoute { path, sites: rs })
             }
             Err(n) => Err(n.reason),
         };
         sites[i].0.route = Some(route);
+        // E2: the site's distinct routes over the state graph.
+        if let Some(g) = &graph {
+            let _r = crate::engine::perf_trace::span("prove", "prove.routes");
+            let found = reach.routes(g, &ops[0], req.routes, req.route_budget, cancel);
+            crate::engine::perf_trace::counter_delta(
+                "prove.route_edges_examined",
+                found.counts.examined as u64,
+            );
+            let routes = found
+                .routes
+                .iter()
+                .map(|steps| {
+                    let path = group_paths.path_of(&reach, steps, &ops[0]);
+                    let rs = route_sites(&reach, root, &path, (&owner, anchor));
+                    SliceRoute { path, sites: rs }
+                })
+                .collect();
+            sites[i].0.routes = Some(RouteSet {
+                routes,
+                requested: req.routes,
+                budget: req.route_budget,
+                counts: found.counts,
+                limit: found.limit,
+            });
+        }
     }
     let rank: HashMap<usize, usize> = matching.iter().enumerate().map(|(k, &i)| (i, k)).collect();
     let mut order: Vec<usize> = (0..sites.len()).collect();
@@ -1010,6 +1121,114 @@ pub fn undecided_detail(reason: &str, count: usize) -> String {
     }
 }
 
+/// One route's human lines: `{indent}{title} (N hops): <path>`, then its
+/// guards (module doc, rules 2 and 3). E1's one route is `title` "route".
+fn route_lines(
+    r: &SliceRoute,
+    cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
+    root: &str,
+    title: &str,
+    indent: &str,
+) -> Vec<String> {
+    use crate::engine::l5::routine_rollup::plural;
+    let mut lines = vec![format!(
+        "{indent}{title} ({}): {}",
+        plural(r.path.steps.len(), "hop", "hops"),
+        cx.own_path_line(root, &r.path)
+    )];
+    let (k, n) = r.guard_counts();
+    if n == 0 {
+        lines.push(format!(
+            "{indent}guards: none enclose the route's sites (other conditions may still apply: \
+             earlier exits, callee results, checks)"
+        ));
+        return lines;
+    }
+    lines.push(format!(
+        "{indent}guards shown ({k} of {n} enclosing conditions; selected context, not all \
+         necessary conditions; innermost first, per site):"
+    ));
+    // One line per route site that has a guard: the site, then its
+    // conditions with the line each statement starts on.
+    for rs in r.sites.iter().filter(|rs| !rs.shown.is_empty()) {
+        let gs: Vec<String> = rs
+            .shown
+            .iter()
+            .map(|g| {
+                format!(
+                    "{} (line {})",
+                    g.describe(),
+                    crate::engine::line_base::shown(g.line)
+                )
+            })
+            .collect();
+        let more = if rs.total > rs.shown.len() {
+            format!("; +{} outer", rs.total - rs.shown.len())
+        } else {
+            String::new()
+        };
+        lines.push(format!(
+            "{indent}  at {}: {}{more}",
+            location(rs.file.as_deref(), rs.line),
+            gs.join("; ")
+        ));
+    }
+    lines
+}
+
+/// What a route enumeration says before its routes (E2, design §11):
+/// how many, the definition, whether it completed or which cap fired, and
+/// the candidate edges it examined and rejected (never a count of routes it
+/// did not list).
+fn route_set_lines(set: &RouteSet) -> Vec<String> {
+    use crate::engine::l5::routine_rollup::plural;
+    let c = &set.counts;
+    let mut lines = vec![format!(
+        "    routes: {} listed (up to {} asked), fewest hops first; a route is a simple path \
+         over (routine, known argument values) states, told apart by its sequence of sites",
+        set.routes.len(),
+        set.requested
+    )];
+    let left = plural(c.unexplored, "partial route", "partial routes");
+    lines.push(match set.limit {
+        None => "    enumeration complete: these are every route to this site under that \
+                 definition"
+            .to_string(),
+        Some(RouteLimit::RouteCap) => format!(
+            "    limit: the {} asked were listed with {left} left; more routes may exist",
+            plural(set.requested, "route", "routes")
+        ),
+        Some(RouteLimit::EdgeBudget) => format!(
+            "    limit: the edge budget ({}) was spent with {left} left; routes may be missing",
+            set.budget
+        ),
+        Some(RouteLimit::Cancelled) => {
+            format!("    limit: cancelled with {left} left; routes may be missing")
+        }
+    });
+    let mut search = format!(
+        "    search: {} examined (budget {}); rejected: {} by literal arguments ({} at the \
+         edge's own site, {} further on: every way on from it is ruled out), {} back to a \
+         state already on the route (recursion), {} whose callee cannot reach the site at all",
+        plural(c.examined, "candidate edge", "candidate edges"),
+        set.budget,
+        c.literal_dead + c.literal_blocked,
+        c.literal_dead,
+        c.literal_blocked,
+        c.repeats,
+        c.no_way
+    );
+    if c.duplicates > 0 {
+        search.push_str(&format!(
+            "; {} with the sites of a listed route",
+            plural(c.duplicates, "path", "paths")
+        ));
+    }
+    search.push_str(" (counts of edges, not of routes)");
+    lines.push(search);
+    lines
+}
+
 /// The human lines of a slice, after the answer line. `cx` renders routes
 /// and locations.
 #[must_use]
@@ -1054,55 +1273,35 @@ pub fn human_lines(
             row.push_str(" (matched by its kind word only)");
         }
         lines.push(row);
-        match &s.route {
-            Some(Ok(r)) => {
-                lines.push(format!(
-                    "    route ({}): {}",
-                    plural(r.path.steps.len(), "hop", "hops"),
-                    cx.own_path_line(root, &r.path)
-                ));
-                let (k, n) = r.guard_counts();
-                if n == 0 {
-                    lines.push(
-                        "    guards: none enclose the route's sites (other conditions may still \
-                         apply: earlier exits, callee results, checks)"
-                            .to_string(),
-                    );
-                } else {
-                    lines.push(format!(
-                        "    guards shown ({k} of {n} enclosing conditions; selected context, \
-                         not all necessary conditions; innermost first, per site):"
+        match (&s.routes, &s.route) {
+            // E2: the enumerated routes (an enumeration that listed none
+            // falls back to E1's route below its summary).
+            (Some(set), route) => {
+                lines.extend(route_set_lines(set));
+                for (k, r) in set.routes.iter().enumerate() {
+                    lines.extend(route_lines(
+                        r,
+                        cx,
+                        root,
+                        &format!("route {}", k + 1),
+                        "    ",
                     ));
-                    // One line per route site that has a guard: the site,
-                    // then its conditions with the line each statement
-                    // starts on.
-                    for rs in r.sites.iter().filter(|rs| !rs.shown.is_empty()) {
-                        let gs: Vec<String> = rs
-                            .shown
-                            .iter()
-                            .map(|g| {
-                                format!(
-                                    "{} (line {})",
-                                    g.describe(),
-                                    crate::engine::line_base::shown(g.line)
-                                )
-                            })
-                            .collect();
-                        let more = if rs.total > rs.shown.len() {
-                            format!("; +{} outer", rs.total - rs.shown.len())
-                        } else {
-                            String::new()
-                        };
-                        lines.push(format!(
-                            "      at {}: {}{more}",
-                            location(rs.file.as_deref(), rs.line),
-                            gs.join("; ")
-                        ));
-                    }
+                }
+                if set.routes.is_empty()
+                    && let Some(Ok(r)) = route
+                {
+                    lines.extend(route_lines(
+                        r,
+                        cx,
+                        root,
+                        "route off the search tree (the enumeration listed none)",
+                        "    ",
+                    ));
                 }
             }
-            Some(Err(reason)) => lines.push(format!("    no route kept: {reason}")),
-            None => lines.push(format!(
+            (None, Some(Ok(r))) => lines.extend(route_lines(r, cx, root, "route", "    ")),
+            (None, Some(Err(reason))) => lines.push(format!("    no route kept: {reason}")),
+            (None, None) => lines.push(format!(
                 "    route not computed (only the first {MAX_ROUTES} matching sites get one)"
             )),
         }
@@ -1204,6 +1403,33 @@ fn route_value(r: &SliceRoute) -> serde_json::Value {
     })
 }
 
+/// A route enumeration's JSON (`routeSearch`, E2): `complete` true only
+/// when no partial route was left, else `limit` names the cap; the counts
+/// are of candidate edges, never of routes.
+fn route_search_value(set: &RouteSet) -> serde_json::Value {
+    let c = &set.counts;
+    serde_json::json!({
+        "requested": set.requested,
+        "listed": set.routes.len(),
+        "complete": set.limit.is_none(),
+        "limit": set.limit.map(RouteLimit::as_str),
+        "edgeBudget": set.budget,
+        "edgesExamined": c.examined,
+        "edgesRejected": {
+            "literalArgumentsAtSite": c.literal_dead,
+            "literalArgumentsFurtherOn": c.literal_blocked,
+            "repeatsState": c.repeats,
+            "cannotReachSite": c.no_way,
+        },
+        "duplicatePaths": c.duplicates,
+        "partialRoutesLeft": c.unexplored,
+        "route": "a simple path over (routine, known argument values) states from the routine \
+                  to the first state where the site can run",
+        "distinctBy": "the sequence of (site, callee)",
+        "order": "fewest hops, then the sequence of site ids",
+    })
+}
+
 /// One site as JSON: the `evidence` row shape `verify.py` reads
 /// (`evidence.{file, line}`), with the slice's fields beside it.
 #[must_use]
@@ -1251,6 +1477,18 @@ pub fn site_value(s: &SliceSite) -> serde_json::Value {
             m.insert("routeUnavailable".into(), (*reason).into());
         }
         None => {}
+    }
+    // E2: the enumerated routes and what the enumeration examined.
+    if let Some(set) = &s.routes {
+        m.insert(
+            "routes".into(),
+            set.routes
+                .iter()
+                .map(route_value)
+                .collect::<Vec<_>>()
+                .into(),
+        );
+        m.insert("routeSearch".into(), route_search_value(set));
     }
     m.insert("confidence".into(), "static".into());
     serde_json::Value::Object(m)
