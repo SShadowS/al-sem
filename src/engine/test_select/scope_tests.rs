@@ -168,3 +168,69 @@ fn the_app_json_cap_makes_discovery_incomplete() {
     );
     assert!(!s.sibling_summary().contains("depends on this one"));
 }
+
+/// A project-collection marker (`.al-sem-projects`) bounds the search to the
+/// project that holds the workspace, nearer than the git top level: with a
+/// corpus of more than [`MAX_APP_JSON`] other apps beside it (which caps the
+/// search from the git top level), the fixture's own test app is found, the
+/// sibling fixture's dependent test app is not, and the search is complete.
+/// A workspace that is the project itself searches nothing and says
+/// "under the project folder".
+///
+/// DISCRIMINATION (2026-11-05): ignoring the marker in `search_root` (only
+/// `.git` counts) fails at `complete` ("the cap of 64 app.json files was
+/// reached before the search ended", searched from the git top level);
+/// restored, passes.
+#[test]
+fn a_projects_marker_bounds_the_search_to_the_project() {
+    let t = tempfile::tempdir().unwrap();
+    let r = t.path();
+    std::fs::create_dir(r.join(".git")).unwrap();
+    let corpus = r.join("corpus");
+    std::fs::create_dir_all(&corpus).unwrap();
+    std::fs::write(corpus.join(PROJECTS_MARKER), "").unwrap();
+    // Fixture A: a production app and its test app, side by side.
+    app(&corpus.join("a/App"), PROD, "Prod", &[]);
+    app(
+        &corpus.join("a/Test"),
+        "22222222-2222-2222-2222-222222222222",
+        "Fixture A Tests",
+        &[PROD],
+    );
+    al(&corpus.join("a/Test/src"), "T.Codeunit.al", TEST_CU);
+    // Fixture B: another test app of the same production id.
+    app(
+        &corpus.join("b/Test"),
+        "33333333-3333-3333-3333-333333333333",
+        "Fixture B Tests",
+        &[PROD],
+    );
+    al(&corpus.join("b/Test/src"), "T.Codeunit.al", TEST_CU);
+    // Enough other fixtures to cap a search from the git top level.
+    for i in 0..(MAX_APP_JSON + 3) {
+        app(
+            &corpus.join(format!("n{i:03}")),
+            &format!("{i:08}-0000-0000-0000-000000000000"),
+            "n",
+            &[],
+        );
+    }
+    let s = discover(&corpus.join("a/App"), &ScopeRequest::default());
+    assert!(s.complete, "{:?}", s.incomplete);
+    let names: Vec<&str> = s.apps.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["Fixture A Tests"]);
+    assert_eq!(s.searched, 1, "only fixture a's Test");
+    let root = s.search_root.clone().expect("a search root");
+    assert_eq!(root, (corpus.join("a"), false));
+
+    // The workspace is the project itself: nothing else to search.
+    app(&corpus.join("solo"), PROD, "Solo", &[]);
+    let s = discover(&corpus.join("solo"), &ScopeRequest::default());
+    assert!(s.complete, "{:?}", s.incomplete);
+    assert_eq!(s.searched, 0);
+    assert_eq!(
+        s.sibling_summary(),
+        "no app under the project folder (its parent holds .al-sem-projects) depends on this one \
+         with a test codeunit (searched 0 app.json files)"
+    );
+}

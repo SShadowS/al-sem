@@ -90,17 +90,26 @@ Which tests to run first for a change, as a first-class answer. Spec:
   tests (MCP: alsem_tests) selects them", or "no test code found (0 [Test] procedures in the
   workspace app; <why no sibling was found>)", and with workspace tests an `also …` line. JSON
   cards carry `testScope` (`analyzed: false`). Explain never builds a test universe. **Explain
-  goldens move**: a fixture inside this repository reads "test app discovery incomplete (the cap
-  of 64 app.json files was reached …)", which is the honest answer there. A workspace with no git
-  top level searches no sibling and says so.
+  goldens move** by that line. A workspace with no git top level searches no sibling and says so.
+- **A project-collection marker bounds discovery** (`.al-sem-projects`,
+  `scope::PROJECTS_MARKER`): a folder holding that file says each of its subfolders is a project
+  of its own, so for a workspace under it the search root is the subfolder that holds the
+  workspace, when that is nearer than the git top level; the "none found" wording then says
+  "under the project folder". This repository marks `tests/r0-corpus/` and `tests/fixtures/`.
+  Before, a fixture searched from the repository's git top level, met the 64-`app.json` cap among
+  the other fixtures and read "test app discovery incomplete", so every explain golden depended on
+  how many `app.json` files the repository held. The fixture goldens (cli-explain, cli-output,
+  `tests/selection-graph.applydecay`) now show each fixture's own scope: searched 0 `app.json`
+  files, complete. The cap's "incomplete" wording is unchanged and still tested on a hand-built
+  tree over the cap (`the_app_json_cap_makes_discovery_incomplete`); the marker by
+  `a_projects_marker_bounds_the_search_to_the_project`.
 - **explain's summary agrees with that line.** Its `callers and tests:` clause said `tests: none
   (no test code loaded)` while the `tests:` line below named the discovered test app. It now
   reads the same scope: `tests: none in the workspace; 1 test app discovered (not analyzed here;
   alsem tests)`, `tests: none in the workspace; test app discovery incomplete`, or (with
   workspace tests) `tests: none of N loaded; also …`; "no test code loaded" stays only when the
   discovery finished and found none (or `testApps: []`). JSON cards: `summary.testApps
-  {discovered, discoveryComplete}`. The explain goldens and the three CDO explain rendering
-  goldens move by that clause.
+  {discovered, discoveryComplete}`. The three CDO explain rendering goldens move by that clause.
 - **A client's cancel of `alsem_tests` reaches every part.** Its parts are sub-requests with ids
   of their own, so `notifications/cancelled` for the call's id found no flag: the running part ran
   to its end and the next parts still ran. `Pool::run_tests` now registers the call's cancel flag

@@ -640,6 +640,13 @@ ship with those milestones; C takes `--routine`, `--file` and `--diff` only.
 On CDO this finds `Test`, skips `TestFR` (no source) and lists `FR`, `OnPrem`, `DemoApp` as
 "depends on the workspace, no test codeunit".
 
+**As built: a project-collection marker.** A folder holding a file `.al-sem-projects` says each
+of its subfolders is a separate project; for a workspace under it, auto-discovery's search root
+is the subfolder that holds the workspace when that is nearer than the git top level. This
+repository marks `tests/r0-corpus/` and `tests/fixtures/`: without it every fixture searched the
+repository, hit the 64-file cap among 270-odd fixture `app.json` files, and its goldens depended
+on the repository's layout.
+
 ### 4.3 Test universes
 
 **Descriptor.** Each sibling test app is one test universe, described by an immutable

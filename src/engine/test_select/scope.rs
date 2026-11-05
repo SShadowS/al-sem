@@ -20,6 +20,16 @@
 //!    is one app: its subfolders are its own (the engine's `NestedApps::Walk`),
 //!    so the walk does not enter it.
 //!
+//!    **A project-collection marker** ([`PROJECTS_MARKER`]) stops the search
+//!    sooner: a folder holding a file named `.al-sem-projects` says each of
+//!    its subfolders is a project of its own (a corpus of fixtures, a folder
+//!    of unrelated apps). For a workspace under it the search root is the
+//!    subfolder of the marked folder that holds the workspace, when that is
+//!    nearer than the git top level. This repository marks `tests/r0-corpus/`
+//!    and `tests/fixtures/`, so a fixture's scope is the fixture's own, not
+//!    the 200-odd other fixtures' `app.json` files (which hit the cap and
+//!    made every fixture's answer depend on the repository's layout).
+//!
 //! An app **qualifies** when its `app.json` lists the workspace app's `id` in
 //! `dependencies` AND one of its `.al` files declares a codeunit with
 //! `Subtype = Test`. A dependent with no `.al` file is skipped `no-source`
@@ -48,6 +58,28 @@ use crate::source_text::{NestedApps, discover_al_files, parse_app_json, read_al_
 pub const MAX_DEPTH: usize = 3;
 /// The most `app.json` files auto-discovery reads.
 pub const MAX_APP_JSON: usize = 64;
+/// The file that marks a folder whose subfolders are separate projects (see
+/// the module doc).
+pub const PROJECTS_MARKER: &str = ".al-sem-projects";
+
+/// Auto-discovery's search root for the (absolute) workspace `abs`: walking
+/// up from it, the first folder that holds `.git` (`true`: the git top
+/// level) or whose parent holds [`PROJECTS_MARKER`] (`false`: the project
+/// folder). `None`: neither.
+fn search_root(abs: &Path) -> Option<(PathBuf, bool)> {
+    abs.ancestors().find_map(|a| {
+        if a.join(".git").exists() {
+            Some((a.to_path_buf(), true))
+        } else if a
+            .parent()
+            .is_some_and(|p| p.join(PROJECTS_MARKER).is_file())
+        {
+            Some((a.to_path_buf(), false))
+        } else {
+            None
+        }
+    })
+}
 
 /// Which rule chose the sibling test apps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -263,7 +295,7 @@ pub fn discover(workspace: &Path, req: &ScopeRequest) -> Scope {
     // No git top level: the folders around the workspace are no project of
     // its own (a temporary folder, a home folder), so nothing is searched,
     // and the scope says so rather than "none depends on it".
-    let Some(root) = abs.ancestors().find(|a| a.join(".git").exists()) else {
+    let Some((root, git_top)) = search_root(&abs) else {
         scope.complete = false;
         scope.incomplete.push(
             "no git top level above the workspace, so sibling apps were not searched; name them \
@@ -272,8 +304,8 @@ pub fn discover(workspace: &Path, req: &ScopeRequest) -> Scope {
         );
         return scope;
     };
-    scope.search_root = Some((root.to_path_buf(), true));
-    walk(&mut scope, root, &abs, 0);
+    walk(&mut scope, &root, &abs, 0);
+    scope.search_root = Some((root, git_top));
     scope
 }
 
@@ -544,7 +576,12 @@ impl Scope {
                 self.incomplete.join("; ")
             ),
             (None, Origin::Auto) => format!(
-                "no app under the git top level depends on this one with a test codeunit (searched {} app.json {})",
+                "no app under the {} depends on this one with a test codeunit (searched {} app.json {})",
+                if self.search_root.as_ref().is_none_or(|r| r.1) {
+                    "git top level"
+                } else {
+                    "project folder (its parent holds .al-sem-projects)"
+                },
                 self.searched,
                 if self.searched == 1 { "file" } else { "files" }
             ),

@@ -141,7 +141,7 @@
         "temporaryOnlyTables": 0,
         "testApps": {
           "discovered": 0,
-          "discoveryComplete": false
+          "discoveryComplete": true
         },
         "tests": 0,
         "testsLoaded": 1,
@@ -150,10 +150,10 @@
       "testScope": {
         "analyzed": false,
         "apps": [],
-        "complete": false,
+        "complete": true,
         "discovery": "auto",
         "skipped": 0,
-        "summary": "test app discovery incomplete (the cap of 64 app.json files was reached before the search ended), so test apps may exist that were not found"
+        "summary": "no app under the project folder (its parent holds .al-sem-projects) depends on this one with a test codeunit (searched 0 app.json files)"
       },
       "tests": []
     }

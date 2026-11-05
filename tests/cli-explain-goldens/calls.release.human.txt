@@ -2,7 +2,7 @@ Codeunit Calls Post::Release  ws:src/post.al:52
   summary — writes: no observed write that may persist; caller-dependent: 1 table
     transaction, UI and errors: commits: none; UI and errors: none observed
     other effects: events: 0 (0 raised in workspace code)
-    callers and tests: callers: 6; tests: none in the workspace; test app discovery incomplete
+    callers and tests: callers: 6; tests: none (no test code loaded)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
@@ -23,7 +23,7 @@ Codeunit Calls Post::Release  ws:src/post.al:52
     Calls Order: Modify — depends on the caller's record argument at ws:src/post.al:55
   events: 0 raised in workspace code; 0 more only beyond entry points
   extension points: none (the routine publishes no event itself)
-  tests: no test code found (0 [Test] procedures in the workspace app; test app discovery incomplete (the cap of 64 app.json files was reached before the search ended), so test apps may exist that were not found); that is not a reason to skip tests
+  tests: no test code found (0 [Test] procedures in the workspace app; no app under the project folder (its parent holds .al-sem-projects) depends on this one with a test codeunit (searched 0 app.json files)); that is not a reason to skip tests
   gaps in workspace code (1 gap):
     gap: table-trigger-rules-skipped (what modify on Calls Order, table Calls Order) at ws:src/post.al:55
       skips Table Calls Order::OnModify: rejects when Blocked  [Error ws:src/order.al:25]
