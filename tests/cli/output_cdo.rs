@@ -1152,3 +1152,10 @@ fn cdo_entry_point_counts_agree() {
 fn cdo_test_selection_ratchets() {
     crate::cli_tests_selection::cdo_selection_ratchets();
 }
+
+/// Agent-tasks B1's CDO acceptance (`cli_impact::cdo_impact_ratchets`),
+/// here so `cdo-gate` runs it.
+#[test]
+fn cdo_impact_ratchets() {
+    crate::cli_impact::cdo_impact_ratchets();
+}

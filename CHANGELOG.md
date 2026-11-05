@@ -370,6 +370,74 @@ Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §6 (revision 2;
 - The code-call relation (`is_code_call_site`) leaves out F3's background-start sites, as the
   model's calls do (integration of the two branches).
 
+### Added (agent tasks, milestone B1: impact on the current revision)
+
+The blast radius of a change, current effects only. Spec:
+`docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §8.
+
+- **Every changed line accounted** (`engine::impact::accounting`, B-1b): each added or removed
+  line of a diff lands in exactly one bucket: a routine's body or signature (split at the body's
+  first `var` or `begin` line; the attributes and header above are the signature), an
+  object-level declaration by kind (field, key, field group, global variable, property, action,
+  layout, trigger declaration, enum value, object header, comment or blank, other), outside any
+  object, removed routine text (removed lines that held a routine no new-side span holds: named
+  from their header lines, never called deleted without a base), routine text the model holds no
+  span for, or unmapped with the reason (not in the workspace, two workspace files, not AL, a
+  deleted file, a rejected hunk header, a line past the end of the analyzed file). Per file the
+  buckets sum to the file's changed lines, and a hunk that touches a global and a routine reports
+  both (digest's `hunk-outside-routines` names only hunks that hit no routine). The declaration
+  kinds come from a line scanner (`engine::impact::scan`) over the analyzed text: braces outside
+  comments and strings, the head before each `{`, `var` sections and routine headers; a removed
+  run is scanned from the scanner's state at its gap, so it is classified by what it was.
+- **The diff is checked against the analyzed text**: each new-side line a hunk shows (context and
+  added) must be the analyzed file's line at that number; a file that fails is reported with its
+  first differing line, and its routines' positions are uncertain.
+- The unified-diff parser keeps each deletion run's text (`DiffHunk::deleted`) and the new-side
+  lines a hunk shows (`DiffHunk::new_side`); digest's output does not change.
+- **The comparison tuple** (`engine::impact::compare`, B-3): `requestedRef`, `resolvedCommit`,
+  `mergeBase`, `comparisonBase`, `head` (commit and the revision's `inputsStamp`) and `diffHash`
+  (blake3 of the diff text used), resolved once and printed. `--base REV` alone compares the
+  MERGE BASE of `REV` and `HEAD` with the working tree: committed, staged and unstaged changes
+  (each layer's files listed) and every untracked `.al` file under the workspace (listed, and read
+  as a new file so its routines resolve). Git is only read; a diff alone names no base, and says
+  so.
+- **`alsem impact <ws> (--routine R… | --file F… | --diff P [--diff-root D] | --base REV)`**
+  (`engine::impact::{jobs,up,run,render}`, B-1, B-2, B-3b): the input accounting first (the
+  tuple, every bucket with counts, the hunks outside routines with what each touched, unmapped
+  files, removed routine headers, diff/working-tree mismatches, every root diagnostic), then per
+  changed routine, ranked "reached from a user or a job first, then by ancestors": its CURRENT
+  effects (digest's own plan and the per-routine rollup: writes, caller-dependent tables, commits,
+  UI, errors, events), who reaches it (R0's reverse walk over the sited graph, one streaming walk
+  per root with one reused scratch and a counting visitor, never a cone per root: direct callers
+  by explain's definition with each first call site, ancestors by tier, entries by kind with page
+  actions by caption, event publishers, external callers by reason), and its tests (milestone C's
+  select parts, unchanged, with the production-stamp retry). Then the whole change's reach (one
+  `walk_multi` over every root), schema lines, the tests line (`selectionComplete` and its
+  reasons, the codeunit filter), and the walks' limits. "Current effects; no before/after" is
+  said plainly; nothing is called added or deleted. **Nearest tested caller** (C left it null): a
+  root no test universe has is answered with the nearest production ancestor a test universe has
+  and a test reaches (the up walk's nearest ancestors, probed in each test universe with
+  `tests --part select --probe-id`, which never joins the selection). Human by default, the first
+  20 routines (`--max-roots`), more per list with `--detail`; `--format json` is
+  `al-sem.impact/1` (`comparison`, `input`, `roots[]` with `up`, `effects`, `tests`, `delta:
+  null`; `union`, `tests`, `assumptions`, `limits`, `base: null`). `--no-tests` skips the test
+  universes, `--no-dependents` the external callers. Spec §12.1's refusals: exactly one mode;
+  `--base` with `--diff` is B2's delta; `--diff-root` goes with `--diff`. Goldens:
+  `tests/cli-output-goldens/impact/`.
+- The diff check ignores a byte-order mark (found on CDO: 54 files of the 94-file range added
+  one, and read as mismatched before).
+- **MCP tool `alsem_impact`** (B-8, B-10): `routines` | `files` | `diff` (+ `diffRoot`) | `base`,
+  with `testApps`, `tests` (default true), `maxRoots`, `detail`, `assumeNoDependents`, `format`
+  (human by default). The front end resolves the comparison tuple (`base`: git, read only) before
+  it sends anything, then runs the parts as a composite request, one at a time (the main and up
+  parts on the production engine, which builds its sited graph on the first up part; the select
+  parts on the test engines, as `alsem_tests`). The stdout is `alsem impact`'s bytes except the
+  tuple's inputs stamp, which is the main part's revision (a one-shot CLI run has none); the
+  envelope's `revisions` names every part's revision, wall time (`ms`) and engine timing. Over the inline cap (40 KiB) or the client's
+  50,000-character budget the answer goes to a file with a `summary` (the comparison, the
+  accounting line, the first five routines, the tests line). The LSP front end refuses it, as it
+  refuses `alsem_tests`. The server instructions name it for reviewing a diff or a PR.
+
 ### Added (agent tasks, milestone C: test selection)
 
 Which tests to run first for a change, as a first-class answer. Spec:

@@ -1419,6 +1419,31 @@ peak during the 699-root `walk_multi` and the accounting.
 3. `feat(impact): alsem impact, al-sem.impact/1, current effects and up` (B-1, B-2).
 4. `feat(mcp): alsem_impact through a composite request with tests` (B-8, B-10).
 
+### 8.10 As built in B1 (2026-11-05)
+
+- **Parts.** `impact --part main` (production model: roots, accounting, digest's plan and the
+  per-routine `RollupTotals`, the tests scope), `impact --part up` (production sited graph:
+  `walk_one` per root with one reused scratch and a counting visitor, plus one `walk_multi` for
+  the union), then C's select parts unchanged (`test_select::run::select_parts`, split out of
+  C's `orchestrate`). The CLI runs each part in-process (a one-shot run builds the production
+  program twice: once for the model, once for the sited graph); the MCP tool runs them on the
+  resident engines.
+- **Tests default on** (`--no-tests` / `tests: false`), not opt-in as §8.2's `[--tests]` reads:
+  an agent reviewing a PR wants them, and a resident test universe answers in 0.2 s warm.
+- **Nearest tested caller** (§4.4, left `null` by C): the up part keeps each root's first 32
+  ancestors with a stable id in reach order; for a root every test universe reports
+  `not-in-projection` / `not-loaded`, they are probed there (`tests --part select --probe-id`,
+  status walk only, never joining the selection) and the nearest reached one is reported.
+- **Accounting kinds** come from a line scanner over the analyzed text (§8.3's "IR declaration
+  spans": the IR carries no origin for keys, field groups or layout), with three buckets §8.3 did
+  not list: `object-header`, `comment-or-blank`, and `removed-routine-text` (removed lines that
+  held a routine no new-side span holds, named from their header lines, never called deleted).
+- **The diff check** compares each hunk's new-side lines (context and added) with the analyzed
+  text, a byte-order mark ignored; the `index` blob ids are not used (no SHA-1 in the build).
+- **inputsStamp.** A one-shot CLI run has none (printed "one-shot run"); the MCP answer prints the
+  main part's revision stamp, so its bytes differ from the CLI's in that one clause.
+- **`--base` with `--diff`** is refused (B2).
+
 ---
 
 ## 9. E1. Debugging slice, narrow

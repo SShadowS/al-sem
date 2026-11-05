@@ -121,6 +121,24 @@ fn normalize_input(p: &str) -> String {
     clean_segments(&strip_scheme(p)).to_lowercase()
 }
 
+/// The workspace-file keys a changed path may name under `root` (#77), as
+/// written then below the git top level: [`normalize_input`]'s spelling, the
+/// key of a workspace `.al` file's `rel_posix` ([`file_key`]). `alsem
+/// impact`'s accounting reads paths exactly as the changed roots are read.
+pub(crate) fn path_keys(root: &DiffRoot, path: &str) -> Vec<String> {
+    path_readings(root, path).collect()
+}
+
+/// The key a workspace file (`rel_posix`) or a span's unit is read by.
+pub(crate) fn file_key(path: &str) -> String {
+    normalize_input(path)
+}
+
+/// Whether a diff path looks like an AL file (#353).
+pub(crate) fn is_al_path(path: &str) -> bool {
+    al_looking(path)
+}
+
 /// [`normalize_input`]'s lexical clean-up of a `/`-separated path, case kept
 /// and with no scheme stripping: a file-system folder may be named `ws:Cloud`
 /// (#77), so a [`DiffRoot`] prefix and the folders compared with it use this.
@@ -552,7 +570,7 @@ impl RoutineSpan {
     /// `DeletedAttributesAfter(l)`: also the gap RIGHT ABOVE the span (`l + 1 ==
     /// first`), since deleted attribute lines there were the routine's own
     /// (deleting its first or only attribute).
-    fn touched_by(&self, c: &HunkChange) -> bool {
+    pub(crate) fn touched_by(&self, c: &HunkChange) -> bool {
         let (first, last) = (i64::from(self.start) + 1, i64::from(self.end) + 1);
         match *c {
             HunkChange::Added(n) => (first..=last).contains(&i64::from(n)),
@@ -575,6 +593,16 @@ impl RoutineSpan {
 }
 
 impl RoutineSpanIndex {
+    /// An index over `spans` as given (already in document order per unit):
+    /// a test's hand-stated spans.
+    #[cfg(test)]
+    pub(crate) fn from_spans(spans: Vec<RoutineSpan>) -> RoutineSpanIndex {
+        RoutineSpanIndex {
+            spans,
+            ..RoutineSpanIndex::default()
+        }
+    }
+
     fn of_file(&self, normalized: &str) -> &[usize] {
         self.by_file.get(normalized).map_or(&[], Vec::as_slice)
     }

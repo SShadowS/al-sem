@@ -63,6 +63,14 @@ impl TestsRequest {
 /// A select part's command line over `u` for `roots`.
 #[must_use]
 pub fn select_argv(u: &TestUniverse, roots: &[String]) -> Vec<String> {
+    select_argv_with(u, roots, &[])
+}
+
+/// [`select_argv`] with `probes`: production routines whose presence and
+/// nearest test the part reports apart (impact's nearest tested caller),
+/// never adding to the selection.
+#[must_use]
+pub fn select_argv_with(u: &TestUniverse, roots: &[String], probes: &[String]) -> Vec<String> {
     let mut a: Vec<String> = vec!["tests".into(), "--part".into(), "select".into()];
     if !u.is_workspace() {
         a.push(format!(
@@ -75,6 +83,9 @@ pub fn select_argv(u: &TestUniverse, roots: &[String]) -> Vec<String> {
     a.push(format!("--found={}", u.config));
     for r in roots {
         a.push(format!("--root-id={r}"));
+    }
+    for p in probes {
+        a.push(format!("--probe-id={p}"));
     }
     a.push("--".into());
     a.push(u.test_root.to_string_lossy().to_string());
@@ -106,15 +117,24 @@ pub fn orchestrate(
         .flatten()
         .filter_map(|r| r["stableId"].as_str().map(str::to_string))
         .collect();
-    let app_id = roots["appId"].as_str().unwrap_or("").to_string();
-    let mut universes: Vec<(Value, TestUniverse)> = Vec::new();
     if ids.is_empty() {
         return Ok(render(&roots, &[], opts));
     }
+    let us = universes(&roots, &req.workspace);
+    let parts = select_parts(&mut roots, &ids, &us, run, &req.roots_argv())?;
+    Ok(render(&roots, &parts, opts))
+}
+
+/// The test universes a roots part names: the workspace's own tests (when
+/// it has any), then each sibling test app of its scope.
+#[must_use]
+pub fn universes(roots: &Value, workspace: &str) -> Vec<(Value, TestUniverse)> {
+    let app_id = roots["appId"].as_str().unwrap_or("").to_string();
+    let mut universes: Vec<(Value, TestUniverse)> = Vec::new();
     if roots["workspaceTests"].as_u64().unwrap_or(0) > 0 {
         universes.push((
-            serde_json::json!({"name": "workspace", "root": req.workspace, "found": "workspace"}),
-            TestUniverse::workspace(std::path::Path::new(&req.workspace), &app_id),
+            serde_json::json!({"name": "workspace", "root": workspace, "found": "workspace"}),
+            TestUniverse::workspace(std::path::Path::new(workspace), &app_id),
         ));
     }
     for a in roots["scope"]["apps"]
@@ -125,15 +145,29 @@ pub fn orchestrate(
         let u = TestUniverse::new(
             std::path::Path::new(a["root"].as_str().unwrap_or("")),
             a["appId"].as_str().unwrap_or(""),
-            std::path::Path::new(&req.workspace),
+            std::path::Path::new(workspace),
             &app_id,
             a["found"].as_str().unwrap_or("auto"),
         );
         universes.push((a, u));
     }
+    universes
+}
+
+/// One select part per universe over `ids`, with the consistency rule
+/// (§4.3): a part built from other production bytes than `roots` is asked
+/// once more together with the production part (`roots_argv`, whose answer
+/// replaces `roots`); if the stamps still differ, that app is not analyzed.
+pub fn select_parts(
+    roots: &mut Value,
+    ids: &[String],
+    universes: &[(Value, TestUniverse)],
+    run: &mut RunPart<'_>,
+    roots_argv: &[String],
+) -> Result<Vec<Part>, String> {
     let mut parts: Vec<Part> = Vec::new();
     for (app, u) in universes {
-        let mut result = run(Target::Tests(&u), select_argv(&u, &ids));
+        let mut result = run(Target::Tests(u), select_argv(u, ids));
         let mut retried = false;
         loop {
             match &result {
@@ -146,15 +180,18 @@ pub fn orchestrate(
                         break;
                     }
                     retried = true;
-                    roots = run(Target::Production, req.roots_argv())?;
-                    result = run(Target::Tests(&u), select_argv(&u, &ids));
+                    *roots = run(Target::Production, roots_argv.to_vec())?;
+                    result = run(Target::Tests(u), select_argv(u, ids));
                 }
                 _ => break,
             }
         }
-        parts.push(Part { app, result });
+        parts.push(Part {
+            app: app.clone(),
+            result,
+        });
     }
-    Ok(render(&roots, &parts, opts))
+    Ok(parts)
 }
 
 #[cfg(test)]
