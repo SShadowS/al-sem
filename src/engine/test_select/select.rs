@@ -264,7 +264,9 @@ pub struct SelectArgs<'a> {
 /// object node). Only call sites the model has count (`via` call,
 /// interface, run, implicitTrigger): a rule's edge (`declaredRunnable`, a
 /// test's TestPage variable) is no call. Not callers: an event's publisher (a subscriber is
-/// dispatched, not called), a test's handler list, open sites, `r` itself,
+/// dispatched, not called), a background start (a `Background` site, F3: the
+/// target runs in its own session, and the model's calls do not carry it;
+/// the walks over the graph still reach the starter), a test's handler list, open sites, `r` itself,
 /// hubs, and a page's triggers (page actions are counted apart, explain's
 /// F16j).
 #[must_use]

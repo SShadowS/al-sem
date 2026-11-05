@@ -491,9 +491,9 @@ arrives with Stage C.
 | `caller`, `callee` | string | node ids |
 | `kind` | `Direct` \| `Event` \| `Interface` \| `Run` \| `Trigger` | 4.3 |
 | `confidence` | `Resolved` \| `OverApprox` \| `Open` | 4.3 |
-| `via` | string | provenance: `call`, `run`, `implicitTrigger`, `eventFlow`, `interface`, `lifecycle`, `declaredRunnable`, `testHandler`, `testRunner`, `opaqueBody`, `unresolved`, `dynamic`, `dispatchingBuiltin`, `parseRecovered`, `hubExpansion` |
+| `via` | string | provenance: `call`, `run`, `implicitTrigger`, `eventFlow`, `interface`, `lifecycle`, `declaredRunnable`, `testHandler`, `testRunner`, `opaqueBody`, `unresolved`, `dynamic`, `dispatchingBuiltin`, `parseRecovered`, `hubExpansion`, `backgroundStart` (additive, F3: a `Run` edge from a static background start to the started codeunit's object; the target runs in a new session or task) |
 | `line` | number | first call-site line in the caller's file, for engine edges |
-| `conditions` | string[] | `manualBinding`, `ambiguousDispatch`, `runTriggerGuarded`, ...; omitted when empty |
+| `conditions` | string[] | `manualBinding`, `ambiguousDispatch`, `runTriggerGuarded`, `onTaskFailure` (additive, F3: `TaskScheduler.CreateTask`'s failure codeunit, which runs only when the task fails; the edge is `OverApprox`), ...; omitted when empty |
 
 **Example**, the D4 chain (ids shortened):
 
@@ -667,7 +667,7 @@ sound without them; each one only makes selection more precise.
 | Id | Gap | Effect today | v1 signal | Closes when |
 |---|---|---|---|---|
 | F1 | Record operations do not raise platform table events (fact 9) | LSP, detectors and the export miss `OnAfter*Event` subscribers | `unraisedPublisher` on every synthetic table publisher | the resolver adds routes from each record operation on T to T's synthetic publishers for that op (the resolver knows T at `full.rs:700-723`); then rule (a) of `unraisedPublisher` is deleted |
-| F3 | Dispatching builtins with a static target (`Report.SaveAsPdf(Report::X, …)`, `Session.StartSession(…, Codeunit::X)`) are catalog calls | selection is coarse (every object of the kind) | `Run{kind}` hubs | the resolver emits `Run` routes for a static first argument (the T0.3 audit already proves such targets) |
+| F3 | Dispatching builtins with a static target (`Report.SaveAsPdf(Report::X, …)`, `Session.StartSession(…, Codeunit::X)`) are catalog calls | selection is coarse (every object of the kind) | `Run{kind}` hubs | the resolver emits `Run` routes for a static first argument (the T0.3 audit already proves such targets). **Background starts closed 2026-11-05** (see 16.1); `Report.*`/`Page.*` instance builtins with a static target are still open |
 | F5 | Table-extension `OnBefore<Op>`/`OnAfter<Op>` and field `OnBefore/OnAfterValidate` are never reached (fact 9) | silent miss in LSP and detectors | `unmodeledRecordTrigger` | `resolve_implicit_trigger` looks them up too |
 | F6 | Trigger methodIds are unknown (fact 7) | no coverage history for triggers | `methodId: null` | a rule is derived from compiler vectors (altool node ids carry trigger methodIds; `compiler_oracle.rs` already reads altool graphs) and reproduces 100% of them |
 | F7 | Tests in a separate test app (section 6) | pointed at the test app, the changed code is a dependency the join ignores; pointed at the main app, no test node exists | the consumer falls back to the whole suite with a reason (no `test: true` node, or changed files outside the workspace) | scheduled right after Stage B: the engine loads sibling local apps' source (local source providers, `SnapshotBuilder::local_providers`) so `alsem graph <test app>` has the main app's source nodes with their own `sourcePath`; `meta.apps` gains each local app's source root; the consumer discovers across those roots and joins on `(appId, sourcePath)` |
@@ -931,3 +931,34 @@ Answers to section 15 and the decisions the build took:
   pruning; no universal-hub caller; coverage contract holds. Dependency bodies: 431,321
   call sites, 0 `unknown`, 1,059 `honestDynamic`. The unpruned counts were not
   measured.
+
+### 16.1 F3: static background starts (as built, 2026-11-05)
+
+- **Which starts.** `StartSession` (catalog `startsession`), `Session.StartSession`,
+  `TaskScheduler.CreateTask` (codeunit argument 0, failure codeunit 1) and
+  `CurrPage.EnqueueBackgroundTask` (`program::resolve::background::STARTERS`). A site is
+  classified by the catalog id its call resolved to, never by spelling alone.
+- **Literal.** `Codeunit::X`, `Codeunit::"X"`, or a positive integer (unlike `Codeunit.Run(50000)`,
+  fact 3: the transpiled bodies of symbol packages spell every start with a number). A failure
+  codeunit of `0` is none.
+- **Engine.** The site keeps its catalog `Call` edge (its obligation `CallSite`) and gets a second
+  edge, `EdgeKind::BackgroundStart`, under `ObligationId::Background` with no site key, routed as
+  `Codeunit.Run(Codeunit::X)` is. The failure codeunit's route carries `Condition::OnTaskFailure`
+  (not fire-by-default). It is a new resolved edge in the histogram, never a reclassified one.
+- **Open bound.** A site with a non-literal codeunit keeps `Run{codeunit}`; a literal-only site
+  drops it. The bare `StartSession` had no bound before (its id was not a dispatching builtin).
+- **Export.** `Run` to the codeunit's object, `via: "backgroundStart"` (`OverApprox` with
+  `conditions: ["onTaskFailure"]` for a failure codeunit); sited boundary `Background`.
+- **Consumers that do not follow it** (another session, no shared transaction, no UI, errors do not
+  come back): the model's calls, hence the cone, prove's existing-effect questions, explain, digest
+  and the detectors (the start stays one `BACKGROUND_TASK` effect); cross-app demand; explain's
+  `callers:` count; the compiler-graph oracle. **Consumers that do:** R0 (the target is a
+  `background-start` entry), test selection, the LSP call hierarchy, and milestone A's walks, which
+  stop at the start site.
+- **Still open in F3:** `Report.SaveAsPdf(Report::X, …)` and the other report/page/xmlport/query
+  instance builtins with a static target; `RecordRef.Insert(true)` after `Open(Database::T)`.
+- **Follow-ups found:** the capability `start` fact (explain/digest `BACKGROUND_TASK`) does not
+  cover `CurrPage.EnqueueBackgroundTask`, and its line does not name the started codeunit.
+- **Measured on CDO** (`DO-cdo-baseline/Cloud`, 2026-11-05): no background start in the workspace
+  (workspace histogram unchanged); dependency bodies +58 edges, all `resolvedSource`; `alsem graph`
+  callers of `h:run:codeunit` 125 → 82, 21 `backgroundStart` edges after pruning.

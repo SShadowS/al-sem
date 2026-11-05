@@ -370,7 +370,10 @@ impl ResolvedProgram {
         // graph's `dependencyBodies` histogram reads the slice as is).
         debug_assert!(dependency_body_edges.iter().all(|ce| {
             ce.edge.from.object.app != ctx.primary_app_ref
-                && matches!(ce.obligation_id, ObligationId::CallSite { .. })
+                && matches!(
+                    ce.obligation_id,
+                    ObligationId::CallSite { .. } | ObligationId::Background { .. }
+                )
         }));
         // Nothing reads the dispatch audit or the alias-skip count of this
         // build: they drop here. Nothing reads its ABI integrity either, so

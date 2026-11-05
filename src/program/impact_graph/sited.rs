@@ -15,11 +15,12 @@
 //! (`ArtifactKey::Sited`).
 //!
 //! **Execution boundary.** Each site carries the boundary the graph alone can
-//! state ([`Boundary`]). The finer boundaries the design names (a checked
-//! against an unchecked `Codeunit.Run`, a background session or task, a
-//! trigger's temporary-record state) come from body facts the program edges do
-//! not carry; their consumers (R0, A) refine a [`Boundary::Run`] or
-//! [`Boundary::TriggerOf`] site by its [`Anchor`].
+//! state ([`Boundary`]); a static background start is its own,
+//! [`Boundary::Background`] (F3). The finer boundaries the design names (a
+//! checked against an unchecked `Codeunit.Run`, a trigger's temporary-record
+//! state) come from body facts the program edges do not carry; their
+//! consumers (R0, A) refine a [`Boundary::Run`] or [`Boundary::TriggerOf`]
+//! site by its [`Anchor`].
 
 use std::collections::HashMap;
 
@@ -45,6 +46,7 @@ pub(crate) const VIAS: &[&str] = &[
     "dynamic",
     "unresolved",
     "dispatchingBuiltin",
+    "backgroundStart",
 ];
 
 /// Every route condition, in name order: a condition mask's bits, read low
@@ -52,6 +54,7 @@ pub(crate) const VIAS: &[&str] = &[
 pub(crate) const CONDITIONS: &[&str] = &[
     "ambiguousDispatch",
     "manualBinding",
+    "onTaskFailure",
     "runTriggerGuarded",
     "skipOnMissingLicense",
     "skipOnMissingPermission",
@@ -97,6 +100,13 @@ pub enum Boundary {
     /// A run of an object (`Codeunit.Run`, `Page.RunModal`, a typed-variable
     /// run, a declared runnable): checked or not is a body fact.
     Run,
+    /// A static background start (`StartSession`, `TaskScheduler.CreateTask`,
+    /// `CurrPage.EnqueueBackgroundTask` with a literal codeunit; F3): the
+    /// target codeunit's object runs in a new session or task. No transaction
+    /// is shared, the target has no UI, and its errors do not propagate back
+    /// to the caller. A dynamic codeunit stays an `Open` site into the
+    /// `run:codeunit` hub, whose anchor is the same call.
+    Background,
     /// A publisher raising its subscribers.
     EventDispatch,
     /// A record operation firing a table trigger or a platform table event:
@@ -277,6 +287,15 @@ impl SitedGraph {
             self.rev_off[ix as usize + 1] as usize,
         );
         &self.rev_sites[a..b]
+    }
+
+    /// `true` when a [`Boundary::Background`] site enters `ix`: a static
+    /// background start's target (F3).
+    #[must_use]
+    pub fn is_background_target(&self, ix: u32) -> bool {
+        self.sites_into(ix)
+            .iter()
+            .any(|&s| self.sites[s as usize].boundary == Boundary::Background)
     }
 
     /// `true` when site `s` is a page action's `RunObject` run.

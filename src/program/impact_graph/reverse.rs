@@ -62,9 +62,13 @@
 //! The roots.config overlay kinds (`web-service-exposed`,
 //! `job-queue-entrypoint`) are not in the source; a consumer with a model
 //! passes them as [`WalkOptions::extra_entries`] ([`config_entries`]).
-//! `background-start` (a static `StartSession`/`CreateTask` target) is a body
-//! fact (the capability `start` fact): A supplies it the same way. A
-//! symbol-only routine has no source, so no entry kinds and no stable id.
+//! `background-start` comes from the graph (F3): the node a
+//! [`Boundary::Background`] site enters (the codeunit object a static
+//! `StartSession`/`TaskScheduler.CreateTask`/`CurrPage.EnqueueBackgroundTask`
+//! starts) is that entry. The walk still goes on over the start site (R0
+//! does not stop at a boundary; a consumer's [`ConeVisitor::step`] does). A
+//! start whose codeunit is not a literal has no such site. A symbol-only
+//! routine has no source, so no entry kinds and no stable id.
 
 use std::collections::{HashMap, HashSet};
 
@@ -526,7 +530,14 @@ fn report(
             .and_then(|m| m.get(&s.node))
             .copied()
             .unwrap_or(0);
-    let kinds = EntryKind::of_root_kinds(mask);
+    let mut kinds = EntryKind::of_root_kinds(mask);
+    // F3: the target of a static background start (a `Background` site) is
+    // a `background-start` entry: a run starts there, in its own session.
+    if g.is_background_target(s.node) {
+        kinds.push(EntryKind::BackgroundStart);
+        kinds.sort();
+        kinds.dedup();
+    }
     if !kinds.is_empty() {
         v.entry(root, s.node, &kinds, s, hops);
     }
