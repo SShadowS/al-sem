@@ -4347,7 +4347,7 @@ fn edges_for_caller<'a>(
         .iter()
         .filter(|ce| match &ce.obligation_id {
             ObligationId::CallSite { caller, .. } => caller.name_lc == caller_name_lc,
-            ObligationId::Publisher(_) => false,
+            ObligationId::Publisher(_) | ObligationId::Background { .. } => false,
         })
         .collect()
 }
@@ -7354,7 +7354,7 @@ fn edges_for_object_routine<'a>(
                 caller.object.id_equals_number(object_id_number)
                     && caller.name_lc == routine_name_lc
             }
-            ObligationId::Publisher(_) => false,
+            ObligationId::Publisher(_) | ObligationId::Background { .. } => false,
         })
         .collect()
 }

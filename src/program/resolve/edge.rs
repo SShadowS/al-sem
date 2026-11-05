@@ -106,6 +106,18 @@ pub enum EdgeKind {
     Run,
     ImplicitTrigger,
     EventFlow,
+    /// A static background start (callgraph gap F3): `StartSession(S,
+    /// Codeunit::X)`, `TaskScheduler.CreateTask(Codeunit::X, Codeunit::F)`,
+    /// `CurrPage.EnqueueBackgroundTask(T, Codeunit::X)`
+    /// ([`crate::program::resolve::background`]). The routes are the started
+    /// codeunits' `OnRun` triggers. **An execution boundary**: the target runs
+    /// in a new session or task, so it shares no transaction with the caller,
+    /// has no UI, and its errors do not propagate back. A second edge at the
+    /// call site, beside the site's own catalog `Call` edge, under its own
+    /// obligation ([`crate::program::resolve::full::ObligationId::Background`]),
+    /// so a consumer that follows the caller's own execution (the model's
+    /// calls, the cone, demand) never mistakes it for a call.
+    BackgroundStart,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -376,6 +388,10 @@ pub enum Condition {
     /// `ManualBinding` (a factual runtime-binding claim) — see
     /// [`ObligationOutcome::AmbiguousResolved`].
     AmbiguousDispatch,
+    /// A [`EdgeKind::BackgroundStart`] route to `TaskScheduler.CreateTask`'s
+    /// failure codeunit: it runs only when the task fails. Does NOT fire by
+    /// default ([`Route::fires_by_default`]); a may-traversal follows it.
+    OnTaskFailure,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -477,10 +493,13 @@ impl Route {
     ///
     /// `SkipOnMissingLicense` and `SkipOnMissingPermission` fire by default (they are
     /// bound; they may runtime-skip but are NOT deferred by a caller binding step).
-    /// Only `ManualBinding`/`AmbiguousDispatch` cause the route to not fire by default.
+    /// Only `ManualBinding`/`AmbiguousDispatch`/`OnTaskFailure` cause the route to
+    /// not fire by default (`OnTaskFailure`: a failure codeunit runs only when its
+    /// task fails).
     pub fn fires_by_default(&self) -> bool {
         !self.conditions.contains(&Condition::ManualBinding)
             && !self.conditions.contains(&Condition::AmbiguousDispatch)
+            && !self.conditions.contains(&Condition::OnTaskFailure)
     }
 
     /// The program object this route's target routine belongs to: its own

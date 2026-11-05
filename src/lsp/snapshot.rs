@@ -179,13 +179,22 @@ impl LspEdge {
         if self.kind == EdgeKind::EventFlow {
             return ObligationId::Publisher(self.from.clone());
         }
+        let span = crate::program::resolve::edge::CanonicalSpan {
+            unit: self.span.unit.to_string(),
+            start: self.span.start,
+            end: self.span.end,
+        };
+        // F3: a background start's own edge, beside its catalog call.
+        if self.kind == EdgeKind::BackgroundStart {
+            return ObligationId::Background {
+                caller: self.from.clone(),
+                span,
+                callee_fp: self.callee_fp,
+            };
+        }
         ObligationId::CallSite {
             caller: self.from.clone(),
-            span: crate::program::resolve::edge::CanonicalSpan {
-                unit: self.span.unit.to_string(),
-                start: self.span.start,
-                end: self.span.end,
-            },
+            span,
             callee_fp: self.callee_fp,
         }
     }
@@ -1416,6 +1425,48 @@ mod tests {
         let edges = |s: &LspSnapshot| s.edges_by_file.values().map(|v| v.len()).sum::<usize>();
         assert!(edges(&plain) > 0);
         assert_eq!(edges(&bom), edges(&plain));
+    }
+
+    /// F3: a static background start's own edge is a call-hierarchy edge
+    /// (the started `OnRun`'s incoming caller is the starter), under the
+    /// resolver's `Background` identity.
+    ///
+    /// DISCRIMINATION (2026-11-05): dropping the `BackgroundStart` branch of
+    /// `LspEdge::obligation_id` fails `project_classified`'s identity check
+    /// (debug builds) while this snapshot is built.
+    #[test]
+    fn a_background_start_is_an_incoming_call_of_the_started_on_run() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"id":"33333333-0000-0000-0000-0000000000f3","name":"F3","publisher":"probe","version":"1.0.0.0"}"#,
+        )
+        .expect("write app.json");
+        std::fs::write(
+            dir.path().join("S.al"),
+            "codeunit 50100 Starter\n{\n    procedure Go()\n    var\n        S: Integer;\n    begin\n        \
+             StartSession(S, Codeunit::Bg);\n    end;\n}\n\
+             codeunit 50101 Bg\n{\n    trigger OnRun()\n    begin\n    end;\n}\n",
+        )
+        .expect("write S.al");
+        let snap = LspSnapshot::build_full(dir.path()).expect("build_full");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let start = report
+            .edges
+            .iter()
+            .find(|ce| ce.edge.kind == EdgeKind::BackgroundStart)
+            .expect("a background-start edge");
+        let RouteTarget::Routine(on_run) = &start.edge.routes[0].target else {
+            panic!("a routine route: {:?}", start.edge.routes);
+        };
+        let callers: Vec<(String, EdgeKind)> = snap
+            .incoming(on_run)
+            .map(|r| {
+                let e = snap.edge(r);
+                (e.from.name_lc.to_string(), e.kind)
+            })
+            .collect();
+        assert_eq!(callers, vec![("go".to_string(), EdgeKind::BackgroundStart)]);
     }
 
     // ── build_full: union equals a direct resolve_full_program run ────────

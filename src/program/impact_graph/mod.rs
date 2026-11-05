@@ -71,7 +71,9 @@
 
 pub mod cone_probe;
 pub(crate) mod facts;
-mod project;
+// `pub(crate)` for the hand-built test world (`project::tests::World`), which
+// the resolver's own tests (`resolve::demand`) reuse.
+pub(crate) mod project;
 pub mod reverse;
 pub mod sited;
 

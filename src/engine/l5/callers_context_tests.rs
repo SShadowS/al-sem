@@ -454,13 +454,12 @@ fn asserterror_intercepts() {
 #[test]
 fn a_trap_above_a_background_start_does_not_intercept() {
     // A-7: C runs `Pw Starter` checked; Starter starts `Pw Bg` in a new
-    // session; Bg's OnRun calls R. LIMIT (discrimination proof, 2026-11-05):
-    // breaking the walk's background-start stop leaves this test green,
-    // because today's sited graph has no edge from a `StartSession` site to
-    // its target (callgraph F3 will add one), so the trap above is never
-    // reached at all. The test pins the outcome (no trap; Bg is a
-    // background-start entry, which the start-facts break does fail); the
-    // stop is the guard for when that edge exists.
+    // session; Bg's OnRun calls R. Since callgraph F3 the sited graph has
+    // the `StartSession` site's edge to Bg (a `Background` site), so the
+    // walk reaches the starter and the stop is what keeps C's trap out.
+    // Discrimination proof (2026-11-05, F3): with the stop disabled this
+    // test fails (a `catch-and-return-false` witness from C); restored, it
+    // passes. Bg's `background-start` entry is R0's, from that site.
     let starter = "codeunit 50115 \"Pw Starter\"\n{\n    Access = Internal;\n    trigger OnRun()\n    var\n        \
                    S: Integer;\n    begin\n        StartSession(S, Codeunit::\"Pw Bg\");\n    end;\n}\n";
     let bg = "codeunit 50116 \"Pw Bg\"\n{\n    Access = Internal;\n    trigger OnRun()\n    var\n        \
@@ -707,4 +706,28 @@ fn a_witness_only_through_a_hub_is_listed_but_not_a_yes() {
         "precondition: the witness goes through the run hub: {v:#}"
     );
     assert_eq!(answer(&v), "unknown", "{v:#}");
+}
+
+#[test]
+fn a_started_codeunits_commit_ui_and_error_are_not_the_starters() {
+    // F3 decision: effects beyond a background start run in another session,
+    // so they are never the starter's own commits, UI or errors (the start
+    // itself stays a BACKGROUND_TASK effect). The model's calls do not carry
+    // the start's edge. LIMIT (discrimination proof, 2026-11-05): no
+    // single-line break leaks it, because three independent layers keep the
+    // edge out of the model's calls: its `Background` obligation (the join
+    // reads `CallSite` ones only), no site key, and the first program edge
+    // per key wins (the catalog call comes first). The test pins the answer.
+    let starter = "codeunit 50115 \"Pw Starter\"\n{\n    Access = Internal;\n    local procedure Go()\n    \
+                   var\n        S: Integer;\n    begin\n        StartSession(S, Codeunit::\"Pw Bg\");\n    \
+                   end;\n}\n";
+    let bg = "codeunit 50116 \"Pw Bg\"\n{\n    Access = Internal;\n    trigger OnRun()\n    begin\n        \
+              Commit();\n        Message('x');\n        Error('y');\n    end;\n}\n";
+    let w = ws(&[("S.al", starter), ("Bg.al", bg)]);
+    for q in ["may-commit", "reaches-ui", "throws-error"] {
+        let v = prove_json(w.path(), "Pw Starter::Go", q, true);
+        assert_eq!(answer(&v), "no", "{q}: {v:#}");
+        let v = prove_json(w.path(), "Pw Bg::OnRun", q, true);
+        assert_eq!(answer(&v), "yes", "precondition: Bg itself does it ({q})");
+    }
 }

@@ -81,6 +81,54 @@ honesty parts). Multiple routes (E2) are not in this milestone.
   before). An unfiltered document is byte-identical (2.4.0). The MCP instructions' "which tool"
   line names the filters.
 
+### Added (callgraph gap F3: static background starts are edges)
+
+Spec: `docs/superpowers/specs/2026-10-13-callgraph-export-design.md` §9 (F3) and §16.1.
+
+- **A static background start gets its own engine edge.** `StartSession(S, Codeunit::X)`,
+  `Session.StartSession(S, 50100)`, `TaskScheduler.CreateTask(Codeunit::X, Codeunit::F)` and
+  `CurrPage.EnqueueBackgroundTask(T, Codeunit::X)` keep their catalog `Call` edge and get an
+  `EdgeKind::BackgroundStart` edge (own obligation, `ObligationId::Background`) to each literal
+  codeunit's `OnRun`, resolved as `Codeunit.Run(Codeunit::X)` is. A literal is `Codeunit::X`,
+  `Codeunit::"X"` or a positive integer (the transpiled bodies of symbol packages spell every start
+  that way). The site is classified by the catalog id its call resolved to
+  (`program::resolve::background`), so a procedure named `StartSession` is no start. The failure
+  codeunit's route carries the new `Condition::OnTaskFailure` (does not fire by default; a failure
+  codeunit of `0` is none). A non-literal codeunit gets no edge and keeps the open `Run{codeunit}`
+  bound with its reason; a literal-only site drops that bound. The bare `StartSession(S, Id)` had
+  no bound at all (its catalog id was not a dispatching builtin) and now has one.
+- **An execution boundary in the sited graph and the export.** The edge projects to a `Run` of the
+  started codeunit's object with the additive `via: "backgroundStart"` (and `conditions:
+  ["onTaskFailure"]`, `OverApprox`, for a failure codeunit), at a new `Boundary::Background` site:
+  a new session or task, no shared transaction, no UI, errors do not come back. Schema stays
+  `al-sem.callgraph` v1 (new `via` and condition values are additive, spec §4.2).
+- **R0: the started codeunit is a `background-start` entry, from the graph** (the node a
+  `Background` site enters). The walk itself does not stop there; consumers decide.
+- **Milestone A's background-start stop is now reachable.** `callers-*` questions get the
+  `background-start` entry from R0 (placed at the start site) instead of their own body-fact
+  lookup; a start whose codeunit is not a literal still blocks `no`
+  (`unresolved-background-target`). The stop's discrimination proof now fails when the stop is
+  removed (`a_trap_above_a_background_start_does_not_intercept`).
+- **LSP**: the started `OnRun`'s incoming calls list the starter.
+
+### Changed (F3)
+
+- **Effects beyond a background start are never the starter's.** The model's calls (and so the
+  cone, `prove`, `explain`, `digest` and every detector) do not carry the start's edge: the start
+  stays one `BACKGROUND_TASK` effect at its site, and the started codeunit's commits, UI and errors
+  are not counted as the caller's (pinned by
+  `a_started_codeunits_commit_ui_and_error_are_not_the_starters`). Cross-app demand does not follow
+  the edge either. explain's `callers:` line does not count a starter (`direct_callers`); the
+  reverse walks (tests and page actions that reach a routine) do pass through it.
+- The compiler-graph oracle leaves the start's edge out (altool has none, holes doc A21).
+- **CDO** (`/home/sshadows/Projects/DO-cdo-baseline/Cloud`, release-fast, 2026-11-05): the workspace
+  has no background start, so `--program-call-graph-stats` is unchanged (46,328 edges, 0 unknown,
+  coverage holds). Dependency bodies: 431,321 → 431,379 edges (+58, all `resolvedSource`), 0
+  unknown before and after. `alsem analyze`: 2,240 findings at `--scope primary` and 31,313 at
+  `--scope all`, the same fingerprints before and after. `alsem graph`: 125 → 82 callers of
+  `h:run:codeunit`, 21 `backgroundStart` edges after pruning; 31,265 → 31,095 nodes and 78,936 →
+  78,665 edges (the hub no longer keeps every codeunit on a path).
+
 ### Added (agent tasks, milestone A: adding an effect)
 
 Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §6 (revision 2; astra 3/4/5, Fable

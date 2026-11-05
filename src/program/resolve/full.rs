@@ -50,11 +50,12 @@ use crate::program::resolve::abi_check::{
     AbiIntegrity, AbiIntegrityReport, abi_ingestion_integrity, build_raw_abi_index_from_snapshot,
 };
 use crate::program::resolve::arg_dispatch::{self, ArgDispatchInfo};
+use crate::program::resolve::background;
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{
-    CanonicalSpan, DispatchShape, Edge, EdgeKind, Evidence, EvidenceKind, Histogram, OpenBound,
-    OpenWorldReason, Route, RouteTarget, SetCompleteness, SiteId, UnknownReason, Witness,
-    callee_fp, classify_obligation, record_trigger_op,
+    CanonicalSpan, Condition, DispatchShape, Edge, EdgeKind, Evidence, EvidenceKind, Histogram,
+    OpenBound, OpenWorldReason, Route, RouteTarget, SetCompleteness, SiteId, UnknownReason,
+    Witness, callee_fp, classify_obligation, record_trigger_op,
 };
 use crate::program::resolve::extract::{
     CalleeShape, WithState, extract_sites_for_routine, static_database_reference_target,
@@ -86,6 +87,11 @@ use std::sync::Arc;
 /// - **`CallSite`** — mirrors [`SiteId`]: `(caller, span, callee_fp)`.
 /// - **`Publisher`** — the publisher routine's node id.
 ///   One `Publisher` obligation per publisher routine in the graph.
+/// - **`Background`** — a static background start's target resolution (F3,
+///   [`EdgeKind::BackgroundStart`]): the same `(caller, span, callee_fp)` as
+///   the start's own `CallSite` obligation (the catalog call), kept apart so
+///   the site has one obligation per edge. Only a site with at least one
+///   literal codeunit argument has one.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ObligationId {
     CallSite {
@@ -94,6 +100,11 @@ pub enum ObligationId {
         callee_fp: u64,
     },
     Publisher(RoutineNodeId),
+    Background {
+        caller: RoutineNodeId,
+        span: CanonicalSpan,
+        callee_fp: u64,
+    },
 }
 
 /// A classified edge annotated with the obligation it was resolved from.
@@ -1185,6 +1196,26 @@ pub(crate) fn resolve_file_obligations(
                 if facts.open.is_empty() {
                     facts.open = site_open_bounds(&site.shape, site.arity, shape, &routes);
                 }
+                // F3: a background start (by the catalog id the call resolved
+                // to). Its literal codeunits get their own edge below; only a
+                // dynamic one keeps the open "any codeunit" bound.
+                let bg_start = routes
+                    .iter()
+                    .find_map(|r| match &r.target {
+                        RouteTarget::Builtin(b) => background::starter_of_builtin(b),
+                        _ => None,
+                    })
+                    .map(|s| background::start_targets(s, &pf.file, &site.args));
+                if let Some((_, dynamic)) = &bg_start {
+                    let any_codeunit = OpenBound::Run {
+                        kind: Some(ObjectKind::Codeunit),
+                    };
+                    facts.open.retain(|b| *b != any_codeunit);
+                    if *dynamic {
+                        facts.open.push(any_codeunit);
+                        facts.open.sort();
+                    }
+                }
                 // G30: the codeunit variables passed to a routine's interface
                 // parameters (`interface_holder::close_holder_sites` reads them).
                 if let [route] = routes.as_slice()
@@ -1264,6 +1295,34 @@ pub(crate) fn resolve_file_obligations(
                         commit,
                     }),
                 });
+                if let Some((targets, _)) = bg_start
+                    && !targets.is_empty()
+                {
+                    let (shape, completeness, routes) =
+                        background_routes(&targets, caller_app, graph, index, surface);
+                    edges.push(ClassifiedEdge {
+                        obligation_id: ObligationId::Background {
+                            caller: caller.clone(),
+                            span: site.span.clone(),
+                            callee_fp: fp,
+                        },
+                        edge: Edge {
+                            from: caller.clone(),
+                            site: SiteId {
+                                caller: caller.clone(),
+                                span: site.span.clone(),
+                                callee_fingerprint: fp,
+                            },
+                            kind: EdgeKind::BackgroundStart,
+                            shape,
+                            completeness,
+                            routes,
+                        },
+                        // No site key: the key is the call's own (the model
+                        // pairs it with the catalog call, never with this).
+                        site: None,
+                    });
+                }
             }
         }
     }
@@ -1275,6 +1334,61 @@ pub(crate) fn resolve_file_obligations(
         site_facts,
         parenless,
     }
+}
+
+/// The routes of a background start's edge (F3): each literal codeunit's run
+/// (`resolve_object_run`, as `Codeunit.Run(Codeunit::X)` resolves), the
+/// failure codeunit's marked [`Condition::OnTaskFailure`]. One target keeps
+/// its run's shape; two make a `Multicast`, `Partial` when either is.
+fn background_routes(
+    targets: &[(background::StartTarget, bool)],
+    caller_app: AppRef,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
+) -> (DispatchShape, SetCompleteness, Vec<Route>) {
+    let mut out: Option<(DispatchShape, SetCompleteness)> = None;
+    let mut routes: Vec<Route> = Vec::new();
+    for (t, failure) in targets {
+        let background::StartTarget::Literal {
+            target_ref,
+            is_name,
+        } = t
+        else {
+            continue;
+        };
+        let (shape, completeness, mut r) = resolve_object_run(
+            caller_app,
+            ObjectKind::Codeunit,
+            Some(target_ref),
+            *is_name,
+            graph,
+            index,
+            surface,
+        );
+        if *failure {
+            for x in &mut r {
+                if x.evidence.kind() != EvidenceKind::Unknown {
+                    x.conditions.push(Condition::OnTaskFailure);
+                }
+            }
+        }
+        routes.extend(r);
+        out = Some(match out {
+            None => (shape, completeness),
+            Some((_, c)) => (
+                DispatchShape::Multicast,
+                if matches!(c, SetCompleteness::Partial { .. }) {
+                    c
+                } else {
+                    completeness
+                },
+            ),
+        });
+    }
+    let (shape, completeness) =
+        out.unwrap_or((DispatchShape::Multicast, SetCompleteness::Complete));
+    (shape, completeness, routes)
 }
 
 /// The table of `Rec` in `Page.Run(0, Rec)` / `Page.RunModal(0, Rec)`: the
@@ -4663,6 +4777,170 @@ mod tests {
             }]
         );
         assert_eq!(at("// missing-bare"), vec![name("missing", 0)]);
+    }
+
+    /// F3: a static background start keeps its catalog `Call` edge and gets a
+    /// `BackgroundStart` edge (its own `Background` obligation) to each literal
+    /// codeunit's `OnRun`: `Codeunit::"X"`, `Codeunit::X` or a number; the
+    /// failure codeunit's route carries `OnTaskFailure`, a failure codeunit
+    /// of `0` is none. A dynamic codeunit gets no such edge and keeps the
+    /// open `Run{codeunit}` bound (the bare `StartSession` too, which had
+    /// none); a literal site drops it. A procedure named `StartSession` is
+    /// no start.
+    ///
+    /// DISCRIMINATION (2026-11-05): removing the `facts.open.retain` in
+    /// `resolve_file_obligations` fails "a literal start is closed"
+    /// (`session-number`); removing the `facts.open.push` fails the
+    /// `dynamic-task` bound; not marking the failure route in
+    /// `background_routes` fails the `task-and-failure` targets; dropping
+    /// `OnTaskFailure` from `Route::fires_by_default` fails the
+    /// `ConditionalResolved` assertion.
+    #[test]
+    fn background_starts_get_an_edge_to_each_literal_codeunit() {
+        use crate::program::resolve::edge::OpenBound as B;
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        let src = "codeunit 50001 Bg\n{\n    trigger OnRun()\n    begin\n    end;\n}\n\
+             codeunit 50002 \"Bg Two\"\n{\n    trigger OnRun()\n    begin\n    end;\n}\n\
+             codeunit 50003 Fail\n{\n    trigger OnRun()\n    begin\n    end;\n}\n\
+             codeunit 50004 Own\n{\n    procedure StartSession(var S: Integer; Id: Integer)\n    begin\n    end;\n\
+             procedure Mine()\n    var\n        S: Integer;\n    begin\n        \
+             StartSession(S, Codeunit::Bg); // own-procedure\n    end;\n}\n\
+             codeunit 50005 C\n{\n    procedure P()\n    var\n        S: Integer;\n        Id: Integer;\n    begin\n        \
+             StartSession(S, Codeunit::Bg); // bare-literal\n        \
+             Session.StartSession(S, 50002); // session-number\n        \
+             TaskScheduler.CreateTask(Codeunit::\"Bg Two\", Codeunit::Fail); // task-and-failure\n        \
+             TaskScheduler.CreateTask(Codeunit::Bg, 0); // task-no-failure\n        \
+             TaskScheduler.CreateTask(Id, Codeunit::Fail); // dynamic-task\n        \
+             StartSession(S, Id); // bare-dynamic\n    end;\n}\n\
+             page 50006 Pg\n{\n    trigger OnOpenPage()\n    var\n        T: Integer;\n    begin\n        \
+             CurrPage.EnqueueBackgroundTask(T, Codeunit::Bg); // page-task\n    end;\n}\n";
+        std::fs::write(dir.path().join("C.al"), src).expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        assert!(coverage_holds(&report.coverage), "{:?}", report.coverage);
+        let line = |tag: &str| src.lines().position(|l| l.contains(tag)).expect("tag") as u32;
+        let at = |tag: &str| -> Vec<&ClassifiedEdge> {
+            let l = line(tag);
+            report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.site.span.start.line == l)
+                .collect()
+        };
+        // Per tag: the background edge's targets (object number, conditions).
+        let started = |tag: &str| -> Option<Vec<(String, Vec<Condition>)>> {
+            let bg: Vec<&ClassifiedEdge> = at(tag)
+                .into_iter()
+                .filter(|ce| ce.edge.kind == EdgeKind::BackgroundStart)
+                .collect();
+            assert!(bg.len() <= 1, "{tag}: one background edge per site");
+            let ce = bg.first()?;
+            assert!(
+                matches!(ce.obligation_id, ObligationId::Background { .. }),
+                "{tag}"
+            );
+            assert!(ce.site.is_none(), "{tag}: the model never pairs it");
+            Some(
+                ce.edge
+                    .routes
+                    .iter()
+                    .map(|r| match &r.target {
+                        RouteTarget::Routine(rid) => (
+                            format!("{:?}::{}", rid.object.key, rid.name_lc),
+                            r.conditions.clone(),
+                        ),
+                        other => (format!("{other:?}"), r.conditions.clone()),
+                    })
+                    .collect(),
+            )
+        };
+        let open = |tag: &str| -> Vec<B> {
+            at(tag)
+                .iter()
+                .filter(|ce| ce.edge.kind == EdgeKind::Call)
+                .flat_map(|ce| {
+                    report
+                        .site_facts
+                        .get(&ce.obligation_id)
+                        .map(|f| f.open.clone())
+                        .unwrap_or_default()
+                })
+                .collect()
+        };
+        let any_codeunit = || {
+            vec![B::Run {
+                kind: Some(ObjectKind::Codeunit),
+            }]
+        };
+        let run = |n: i64| (format!("{:?}::onrun", ObjKey::Id(n)), vec![]);
+        // Every start keeps its catalog call.
+        for tag in [
+            "// bare-literal",
+            "// session-number",
+            "// task-and-failure",
+            "// task-no-failure",
+            "// dynamic-task",
+            "// bare-dynamic",
+            "// page-task",
+        ] {
+            assert!(
+                at(tag).iter().any(|ce| ce.edge.kind == EdgeKind::Call
+                    && ce
+                        .edge
+                        .routes
+                        .iter()
+                        .all(|r| matches!(r.target, RouteTarget::Builtin(_)))),
+                "{tag}: the catalog call stays"
+            );
+        }
+        assert_eq!(started("// bare-literal"), Some(vec![run(50001)]));
+        assert_eq!(started("// session-number"), Some(vec![run(50002)]));
+        assert_eq!(
+            started("// task-and-failure"),
+            Some(vec![
+                run(50002),
+                (
+                    format!("{:?}::onrun", ObjKey::Id(50003)),
+                    vec![Condition::OnTaskFailure]
+                )
+            ])
+        );
+        assert_eq!(started("// task-no-failure"), Some(vec![run(50001)]));
+        assert_eq!(
+            started("// dynamic-task"),
+            Some(vec![(
+                format!("{:?}::onrun", ObjKey::Id(50003)),
+                vec![Condition::OnTaskFailure]
+            )])
+        );
+        assert_eq!(started("// bare-dynamic"), None);
+        assert_eq!(started("// page-task"), Some(vec![run(50001)]));
+        assert_eq!(started("// own-procedure"), None, "a procedure is no start");
+        // Literal starts are closed; a dynamic codeunit keeps "any codeunit".
+        for tag in [
+            "// bare-literal",
+            "// session-number",
+            "// task-and-failure",
+            "// task-no-failure",
+            "// page-task",
+        ] {
+            assert_eq!(open(tag), vec![], "{tag}: a literal start is closed");
+        }
+        assert_eq!(open("// dynamic-task"), any_codeunit());
+        assert_eq!(
+            open("// bare-dynamic"),
+            any_codeunit(),
+            "the bare StartSession's dynamic codeunit is open"
+        );
+        // A task whose failure codeunit alone is literal is conditional.
+        let dynamic_task = at("// dynamic-task")
+            .into_iter()
+            .find(|ce| ce.edge.kind == EdgeKind::BackgroundStart)
+            .expect("background edge");
+        assert_eq!(
+            classify_obligation(&dynamic_task.edge),
+            crate::program::resolve::edge::ObligationOutcome::ConditionalResolved
+        );
     }
 
     /// #63 (export spec §15): a `Call` never reaches a trigger — AL code cannot

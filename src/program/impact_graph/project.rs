@@ -133,6 +133,7 @@ fn condition_str(c: Condition) -> &'static str {
         Condition::SkipOnMissingLicense => "skipOnMissingLicense",
         Condition::SkipOnMissingPermission => "skipOnMissingPermission",
         Condition::AmbiguousDispatch => "ambiguousDispatch",
+        Condition::OnTaskFailure => "onTaskFailure",
     }
 }
 
@@ -326,6 +327,7 @@ impl<'a> Builder<'a> {
                 op: trigger_op(r.name_lc.as_str()),
             },
             ("eventFlow", _, _) => Boundary::EventDispatch,
+            ("backgroundStart", _, _) => Boundary::Background,
             ("lifecycle", _, _) => Boundary::Lifecycle,
             ("testRunner", _, _) => Boundary::TestRunner,
             ("testHandler", _, _) => Boundary::TestHandler,
@@ -379,7 +381,7 @@ impl<'a> Builder<'a> {
             let e = &ce.edge;
             let from = Key::Routine(e.from.clone());
             let line = match ce.obligation_id {
-                ObligationId::CallSite { .. } => Some(Anchor {
+                ObligationId::CallSite { .. } | ObligationId::Background { .. } => Some(Anchor {
                     unit: self.sited.unit(&e.site.span.unit),
                     start_line: e.site.span.start.line,
                     start_col: e.site.span.start.col,
@@ -420,10 +422,11 @@ impl<'a> Builder<'a> {
                             // A symbol-only object's entry trigger (no routine node:
                             // the ABI lists no triggers) or another unlisted symbol:
                             // its object stands for it.
-                            let kind = match e.kind {
-                                EdgeKind::Run | EdgeKind::Call => Kind::Run,
-                                EdgeKind::ImplicitTrigger => Kind::Trigger,
-                                EdgeKind::EventFlow => Kind::Event,
+                            let (kind, via) = match e.kind {
+                                EdgeKind::Run | EdgeKind::Call => (Kind::Run, "run"),
+                                EdgeKind::ImplicitTrigger => (Kind::Trigger, "run"),
+                                EdgeKind::EventFlow => (Kind::Event, "run"),
+                                EdgeKind::BackgroundStart => (Kind::Run, "backgroundStart"),
                             };
                             let to = Key::Object(self.run_object(&oid));
                             self.add(
@@ -431,7 +434,7 @@ impl<'a> Builder<'a> {
                                 to,
                                 kind,
                                 Conf::OverApprox,
-                                "run",
+                                via,
                                 line,
                                 conditions,
                             );
@@ -465,7 +468,9 @@ impl<'a> Builder<'a> {
                     .get(&ce.obligation_id)
                     .map(|f| f.open.as_slice())
                     .unwrap_or(&[]),
-                ObligationId::Publisher(_) => &[],
+                // A background start's dynamic codeunits are its catalog
+                // call's open bound (`full::resolve_file_obligations`).
+                ObligationId::Publisher(_) | ObligationId::Background { .. } => &[],
             };
             let via = if e.shape == DispatchShape::DynamicOpen {
                 "dynamic"
@@ -577,6 +582,21 @@ impl<'a> Builder<'a> {
                 line,
                 conditions,
             ),
+            // F3: a run of the codeunit's object, as `Codeunit.Run` (rule 1),
+            // across a background boundary ([`Boundary::Background`]). A
+            // failure codeunit's route carries `onTaskFailure`: `OverApprox`.
+            EdgeKind::BackgroundStart => {
+                let to = Key::Object(self.run_object(&rid.object));
+                self.add(
+                    from.clone(),
+                    to,
+                    Kind::Run,
+                    conf,
+                    "backgroundStart",
+                    line,
+                    conditions,
+                );
+            }
             EdgeKind::Call => {
                 let (k, c, via) = match shape {
                     DispatchShape::Polymorphic => (Kind::Interface, Conf::OverApprox, "interface"),
@@ -857,7 +877,9 @@ impl<'a> Builder<'a> {
         }
         for o in inp.missing_obligations {
             let caller = match o {
-                ObligationId::CallSite { caller, .. } => caller,
+                ObligationId::CallSite { caller, .. } | ObligationId::Background { caller, .. } => {
+                    caller
+                }
                 ObligationId::Publisher(p) => p,
             };
             self.simple(
@@ -1482,6 +1504,31 @@ pub(crate) mod tests {
             ob
         }
 
+        /// A static background start's own edge (F3), under its `Background`
+        /// obligation, as `full::resolve_file_obligations` emits it.
+        pub(crate) fn background(&mut self, from: &RoutineNodeId, routes: Vec<Route>, line: u32) {
+            let ob = self.edge(
+                from,
+                EdgeKind::BackgroundStart,
+                DispatchShape::Multicast,
+                routes,
+                line,
+            );
+            let ObligationId::CallSite {
+                caller,
+                span,
+                callee_fp,
+            } = ob
+            else {
+                unreachable!("`edge` makes a call-site obligation");
+            };
+            self.edges.last_mut().expect("just pushed").obligation_id = ObligationId::Background {
+                caller,
+                span,
+                callee_fp,
+            };
+        }
+
         pub(crate) fn call(&mut self, from: &RoutineNodeId, to: &RoutineNodeId, line: u32) {
             self.edge(
                 from,
@@ -1705,6 +1752,56 @@ pub(crate) mod tests {
             o.edge("Cu.OnEvt", "Impl.Sub"),
             ("Event", "Resolved", "eventFlow")
         );
+    }
+
+    /// F3: a static background start is a `Run` of the started codeunit's
+    /// object (`via: backgroundStart`), its site a `Background` boundary; the
+    /// failure codeunit's route is `OverApprox` with `onTaskFailure`.
+    ///
+    /// DISCRIMINATION (2026-11-05): mapping the `backgroundStart` via to
+    /// `Boundary::Run` in `add` fails the boundary assertion; mapping a
+    /// `BackgroundStart` route like a `Call` in `engine_route` fails the
+    /// first edge assertion (a `Direct` edge to the trigger).
+    #[test]
+    fn background_starts_run_the_codeunit_across_a_background_boundary() {
+        let mut w = World::default();
+        let a = w.app("A");
+        let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
+        let bg = w.obj(a, ObjectKind::Codeunit, 2, "Bg", TrustTier::Workspace);
+        let fail = w.obj(a, ObjectKind::Codeunit, 3, "Fail", TrustTier::Workspace);
+        let caller = w.rtn(&cu, "Caller");
+        let bg_run = w.trigger(&bg, "OnRun");
+        let fail_run = w.trigger(&fail, "OnRun");
+        let mut on_failure = src(&fail_run);
+        on_failure.conditions = vec![Condition::OnTaskFailure];
+        w.background(&caller, vec![src(&bg_run), on_failure], 7);
+        let o = w.project(a);
+        assert_eq!(
+            o.edge("Cu.Caller", "Bg"),
+            ("Run", "Resolved", "backgroundStart")
+        );
+        assert_eq!(o.edges("Cu.Caller", "Bg")[0].line, Some(8), "1-based");
+        assert_eq!(
+            o.edge("Cu.Caller", "Fail"),
+            ("Run", "OverApprox", "backgroundStart")
+        );
+        assert_eq!(
+            o.edges("Cu.Caller", "Fail")[0].conditions,
+            vec!["onTaskFailure"]
+        );
+        assert!(o.edges("Cu.Caller", "Bg.OnRun").is_empty());
+        let g = sited_of(&w, a, &[]);
+        let from = g.routine_node(&caller).expect("caller");
+        let starts: Vec<_> = g.sites().iter().filter(|s| s.from == from).collect();
+        assert_eq!(starts.len(), 2, "{starts:?}");
+        assert!(
+            starts
+                .iter()
+                .all(|s| s.boundary == Boundary::Background && s.via() == "backgroundStart"),
+            "{starts:?}"
+        );
+        assert!(starts.iter().all(|s| g.is_background_target(s.to)));
+        assert!(!g.is_background_target(from));
     }
 
     /// A run reaches every trigger of the object, its extensions' triggers, a
