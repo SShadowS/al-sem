@@ -65,7 +65,7 @@ fn prove(
     op: Option<&str>,
     table: Option<&str>,
 ) -> (serde_json::Value, String) {
-    let slice = SliceRequest::of(question, m, site, op, table).expect("a valid filter");
+    let slice = SliceRequest::of(question, m, site, op, table, None).expect("a valid filter");
     let inputs = inputs_of(ws);
     let j = job(&inputs, routine, question, slice, false);
     let r = crate::engine::batch::run_doc(&j)
@@ -510,7 +510,7 @@ fn e5_without_a_filter_nothing_changes() {
         &inputs,
         "KnownOnly",
         "throws-error",
-        SliceRequest::of("throws-error", Some("x"), None, None, None).unwrap(),
+        SliceRequest::of("throws-error", Some("x"), None, None, None, None).unwrap(),
         false,
     );
     let n = filtered.demands()[0].needs;
@@ -579,23 +579,506 @@ fn reading_site_guards_not_built_panics() {
 /// text, before the workspace is read.
 #[test]
 fn filters_refused_on_other_questions() {
-    let e = SliceRequest::of("writes-table:T", Some("x"), None, None, None).unwrap_err();
+    let e = SliceRequest::of("writes-table:T", Some("x"), None, None, None, None).unwrap_err();
     assert!(e.contains("--match goes with throws-error"), "{e}");
-    let e = SliceRequest::of("may-commit", None, None, Some("Insert"), None).unwrap_err();
+    let e = SliceRequest::of("may-commit", None, None, Some("Insert"), None, None).unwrap_err();
     assert!(
         e.contains("--op goes with throws-error or writes-table"),
         "{e}"
     );
-    let e = SliceRequest::of("writes-table:T", None, None, None, Some("T")).unwrap_err();
+    let e = SliceRequest::of("writes-table:T", None, None, None, Some("T"), None).unwrap_err();
     assert!(e.contains("--table goes with throws-error"), "{e}");
-    let e =
-        SliceRequest::of("callers-intercept-errors", None, Some("a.al:1"), None, None).unwrap_err();
+    let e = SliceRequest::of(
+        "callers-intercept-errors",
+        None,
+        Some("a.al:1"),
+        None,
+        None,
+        None,
+    )
+    .unwrap_err();
     assert!(e.contains("not 'callers-intercept-errors'"), "{e}");
-    let e = SliceRequest::of("throws-error", None, Some("a.al"), None, None).unwrap_err();
+    let e = SliceRequest::of("throws-error", None, Some("a.al"), None, None, None).unwrap_err();
     assert!(e.contains("is not <file>:<line>"), "{e}");
     assert!(
-        SliceRequest::of("throws-error", None, None, None, None)
+        SliceRequest::of("throws-error", None, None, None, None, None)
             .unwrap()
             .is_none()
     );
+    // E2: `--routes` needs a filter and takes 1 to 10.
+    let e = SliceRequest::of("throws-error", None, None, None, None, Some(3)).unwrap_err();
+    assert!(e.contains("--routes goes with --match"), "{e}");
+    for bad in [0, 11] {
+        let e =
+            SliceRequest::of("throws-error", Some("x"), None, None, None, Some(bad)).unwrap_err();
+        assert!(e.contains("--routes takes 1 to 10"), "{e}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// E2: several distinct routes (design §11)
+// ---------------------------------------------------------------------------
+
+/// One root per route rule, each calling only local procedures (every call
+/// resolved, so only the routes vary).
+const ROUTES: &str = r#"codeunit 50102 "Rt Code"
+{
+    Access = Internal;
+
+    procedure Reconverge()
+    begin
+        ViaA();
+        ViaB();
+    end;
+
+    local procedure ViaA()
+    begin
+        Sink();
+    end;
+
+    local procedure ViaB()
+    begin
+        Sink();
+    end;
+
+    local procedure Sink()
+    begin
+        Error('reconverged sink');
+    end;
+
+    procedure Ordered()
+    begin
+        Long1();
+        Short1();
+    end;
+
+    local procedure Long1()
+    begin
+        Long2();
+    end;
+
+    local procedure Long2()
+    begin
+        OrderSink();
+    end;
+
+    local procedure Short1()
+    begin
+        OrderSink();
+    end;
+
+    local procedure OrderSink()
+    begin
+        Error('ordered sink');
+    end;
+
+    procedure Three()
+    begin
+        P1();
+        P2();
+        P3();
+    end;
+
+    local procedure P1()
+    begin
+        ThreeSink();
+    end;
+
+    local procedure P2()
+    begin
+        ThreeSink();
+    end;
+
+    local procedure P3()
+    begin
+        ThreeSink();
+    end;
+
+    local procedure ThreeSink()
+    begin
+        Error('three sink');
+    end;
+
+    procedure Recurse()
+    begin
+        Again(true);
+    end;
+
+    local procedure Again(More: Boolean)
+    begin
+        if More then
+            Again(false);
+        RecSink();
+    end;
+
+    local procedure RecSink()
+    begin
+        Error('recursion sink');
+    end;
+
+    procedure Loop()
+    begin
+        Looper(3);
+    end;
+
+    local procedure Looper(N: Integer)
+    begin
+        if N > 0 then
+            Looper(N - 1);
+        LoopSink();
+    end;
+
+    local procedure LoopSink()
+    begin
+        Error('loop sink');
+    end;
+
+    procedure DeadAlt()
+    begin
+        Gate(false);
+        Open();
+    end;
+
+    local procedure Gate(Go: Boolean)
+    begin
+        if Go then
+            AltSink();
+    end;
+
+    local procedure Open()
+    begin
+        AltSink();
+    end;
+
+    local procedure AltSink()
+    begin
+        Error('alt sink');
+    end;
+
+    procedure InItself()
+    begin
+        Error('in itself');
+    end;
+}
+"#;
+
+fn routes_fixture() -> tempfile::TempDir {
+    ws(&[("Table.al", TABLE), ("Routes.al", ROUTES)])
+}
+
+/// `prove <routine> throws-error --match <text> --routes <n>`, with the
+/// enumeration's edge budget `budget` (the production default when `None`).
+fn routes_of(
+    ws: &std::path::Path,
+    routine: &str,
+    text: &str,
+    n: usize,
+    budget: Option<usize>,
+) -> (serde_json::Value, String) {
+    let mut slice = SliceRequest::of("throws-error", Some(text), None, None, None, Some(n))
+        .expect("a valid filter")
+        .expect("a filter");
+    if let Some(b) = budget {
+        slice.route_budget = b;
+    }
+    let inputs = inputs_of(ws);
+    let j = job(&inputs, routine, "throws-error", Some(slice), false);
+    let r = crate::engine::batch::run_doc(&j)
+        .one::<Result<crate::engine::l5::prove::ProveRunResult, String>>()
+        .unwrap()
+        .unwrap_or_else(|e| panic!("prove failed: {e}"));
+    assert_eq!(r.exit_code, 0, "answered: {}", r.human_text);
+    (serde_json::from_str(&r.json_text).unwrap(), r.human_text)
+}
+
+/// The one matching site's routes, each as its routine stable ids' display
+/// (`hops`), and its `routeSearch` block.
+fn site_routes(v: &serde_json::Value) -> (Vec<Vec<String>>, serde_json::Value) {
+    let ev = evidence(v);
+    assert_eq!(ev.len(), 1, "one matching site: {ev:?}");
+    let routes = ev[0]["routes"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no routes: {}", ev[0]))
+        .iter()
+        .map(|r| {
+            r["hops"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|h| h.as_str().unwrap().to_string())
+                .collect()
+        })
+        .collect();
+    (routes, ev[0]["routeSearch"].clone())
+}
+
+/// The last routine of each route (`Object.Routine` of its final hop).
+fn via(route: &[String]) -> Vec<&str> {
+    route
+        .iter()
+        .map(|h| h.rsplit(['.', ' ']).next().unwrap())
+        .collect()
+}
+
+/// E-9: two paths reconverge on one state (`Sink` with no known values).
+/// The search tree keeps one parent for it, so a walk of the tree finds one
+/// route; the state graph gives both, and says the enumeration completed.
+/// Break: enumerate over the tree (one parent per state): one route.
+#[test]
+fn e9_reconverging_paths_give_two_routes() {
+    let tmp = routes_fixture();
+    let (v, human) = routes_of(tmp.path(), "Reconverge", "reconverged sink", 5, None);
+    assert_eq!(answer(&v), "yes", "{human}");
+    let (routes, search) = site_routes(&v);
+    let mids: Vec<&str> = routes.iter().map(|r| via(r)[1]).collect();
+    assert_eq!(routes.len(), 2, "{routes:?}\n{human}");
+    assert!(
+        mids.contains(&"ViaA") && mids.contains(&"ViaB"),
+        "{routes:?}"
+    );
+    assert_eq!(search["complete"], true, "{search}");
+    assert!(search["limit"].is_null(), "{search}");
+    assert!(
+        human.contains("enumeration complete: these are every route to this site"),
+        "{human}"
+    );
+    assert!(human.contains("route 2 (2 hops)"), "{human}");
+    // The two equal-length routes are ordered by their site ids.
+    let ev = evidence(&v);
+    let ids: Vec<Vec<String>> = ev[0]["routes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            r["witness"]["hops"]
+                .as_array()
+                .map(|hs| {
+                    hs.iter()
+                        .map(|h| h["edgeId"].as_str().unwrap_or("").to_string())
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+        .collect();
+    let mut sorted = ids.clone();
+    sorted.sort();
+    assert_eq!(ids, sorted, "equal hops: by site ids");
+}
+
+/// E-1: `routes: 3` on a site with exactly two routes lists exactly two,
+/// fewest hops first (the 2-hop route although its call is written second),
+/// with distinct site sequences. Break: tell routes apart by their terminal
+/// site only (one route); or order by discovery (the 3-hop route first).
+#[test]
+fn e1_routes_are_distinct_and_shortest_first() {
+    let tmp = routes_fixture();
+    let (v, human) = routes_of(tmp.path(), "Ordered", "ordered sink", 3, None);
+    let (routes, search) = site_routes(&v);
+    assert_eq!(routes.len(), 2, "{routes:?}\n{human}");
+    assert_eq!(
+        via(&routes[0]),
+        ["Ordered", "Short1", "OrderSink"],
+        "{routes:?}"
+    );
+    assert_eq!(
+        via(&routes[1]),
+        ["Ordered", "Long1", "Long2", "OrderSink"],
+        "{routes:?}"
+    );
+    assert_eq!(search["complete"], true, "{search}");
+    assert_eq!(search["listed"], 2);
+    assert_eq!(search["requested"], 3);
+    assert!(human.contains("route 1 (2 hops)"), "{human}");
+    assert!(human.contains("route 2 (3 hops)"), "{human}");
+    // E1's one route is still the evidence row's `route`.
+    assert_eq!(
+        evidence(&v)[0]["route"]["hops"].as_array().unwrap().len(),
+        3
+    );
+}
+
+/// Recursion: a routine may appear twice on a route with different known
+/// values (`Again(true)` then `Again(false)`), but a route never returns to
+/// a state already on it (`Looper` calling itself with nothing known): that
+/// edge is counted as a repeat, not followed, and the enumeration completes
+/// with the one route. Breaks: allow a state to repeat (`Loop` lists 3
+/// routes, each one more `Looper` hop); forbid a routine to repeat at all
+/// (`Recurse` lists 1 route).
+#[test]
+fn recursion_follows_new_values_and_never_repeats_a_state() {
+    let tmp = routes_fixture();
+    let (v, human) = routes_of(tmp.path(), "Recurse", "recursion sink", 3, None);
+    let (routes, search) = site_routes(&v);
+    assert_eq!(routes.len(), 2, "{routes:?}\n{human}");
+    assert_eq!(via(&routes[0]), ["Recurse", "Again", "RecSink"]);
+    assert_eq!(via(&routes[1]), ["Recurse", "Again", "Again", "RecSink"]);
+    assert_eq!(search["complete"], true, "{search}");
+    // `Again(false)` calling `Again(false)`: its site needs `More = true`.
+    assert!(
+        search["edgesRejected"]["literalArgumentsAtSite"]
+            .as_u64()
+            .unwrap()
+            >= 1,
+        "{search}"
+    );
+
+    let (v, human) = routes_of(tmp.path(), "Loop", "loop sink", 3, None);
+    let (routes, search) = site_routes(&v);
+    assert_eq!(routes.len(), 1, "{routes:?}\n{human}");
+    assert_eq!(via(&routes[0]), ["Loop", "Looper", "LoopSink"]);
+    assert_eq!(search["complete"], true, "{search}");
+    assert!(
+        search["edgesRejected"]["repeatsState"].as_u64().unwrap() >= 1,
+        "{search}"
+    );
+    assert!(
+        human.contains("back to a state already on the route (recursion)"),
+        "{human}"
+    );
+}
+
+/// E-3: a route the literal arguments rule out (`Gate(false)` reaching
+/// `if Go then AltSink()`) is not listed; the edge into `Gate(false)` is
+/// counted as rejected by literal arguments further on (its callee reaches
+/// the site's routine, but no live way does), not as a plain dead end, and
+/// no count of ruled-out ROUTES is given. Breaks: enumerate over the graph
+/// with literal arguments ignored (two routes); count every dead end as
+/// `cannotReachSite` (the literal count is 0).
+#[test]
+fn e3_a_literal_dead_alternative_is_counted_not_listed() {
+    let tmp = routes_fixture();
+    let (v, human) = routes_of(tmp.path(), "DeadAlt", "alt sink", 5, None);
+    let (routes, search) = site_routes(&v);
+    assert_eq!(routes.len(), 1, "{routes:?}\n{human}");
+    assert_eq!(via(&routes[0]), ["DeadAlt", "Open", "AltSink"]);
+    assert_eq!(search["complete"], true, "{search}");
+    let rejected = &search["edgesRejected"];
+    assert_eq!(rejected["literalArgumentsFurtherOn"], 1, "{search}");
+    assert_eq!(rejected["cannotReachSite"], 0, "{search}");
+    assert!(
+        human.contains("rejected: 1 by literal arguments (0 at the edge's own site, 1 further on"),
+        "{human}"
+    );
+    assert!(
+        human.contains("(counts of edges, not of routes)"),
+        "{human}"
+    );
+    assert!(!human.contains("routes ruled out"), "{human}");
+}
+
+/// E-10: a cap that fires says so. The route cap: `routes: 2` on a site with
+/// three routes lists two and says more may exist. The edge budget: a
+/// budget of 2 edges stops before any route is complete; the answer names
+/// the cap, says routes may be missing and falls back to E1's route. Break:
+/// stop silently (no limit, `complete: true`).
+#[test]
+fn e10_a_cap_gives_a_limit() {
+    let tmp = routes_fixture();
+    let (v, human) = routes_of(tmp.path(), "Three", "three sink", 2, None);
+    let (routes, search) = site_routes(&v);
+    assert_eq!(routes.len(), 2, "{routes:?}\n{human}");
+    assert_eq!(search["complete"], false, "{search}");
+    assert_eq!(search["limit"], "route-cap", "{search}");
+    assert!(
+        search["partialRoutesLeft"].as_u64().unwrap() >= 1,
+        "{search}"
+    );
+    assert!(human.contains("more routes may exist"), "{human}");
+    assert!(!human.contains("enumeration complete"), "{human}");
+
+    let (v, human) = routes_of(tmp.path(), "Reconverge", "reconverged sink", 5, Some(2));
+    let (routes, search) = site_routes(&v);
+    assert!(routes.is_empty(), "{routes:?}");
+    assert_eq!(search["complete"], false, "{search}");
+    assert_eq!(search["limit"], "edge-budget", "{search}");
+    assert_eq!(search["edgesExamined"], 2, "{search}");
+    assert!(
+        human.contains("limit: the edge budget (2) was spent with"),
+        "{human}"
+    );
+    assert!(human.contains("routes may be missing"), "{human}");
+    assert!(
+        human.contains("route off the search tree (the enumeration listed none) (2 hops)"),
+        "{human}"
+    );
+    // The verdict does not depend on the routes.
+    assert_eq!(answer(&v), "yes");
+}
+
+/// A site in the root itself: one zero-hop route, and no other (a longer
+/// route would pass the site first). `--routes 1` is E1's answer byte for
+/// byte, `--routes` above 1 only adds.
+#[test]
+fn a_site_in_the_root_and_routes_one_is_e1() {
+    let tmp = routes_fixture();
+    let (v, human) = routes_of(tmp.path(), "InItself", "in itself", 4, None);
+    let (routes, search) = site_routes(&v);
+    assert_eq!(routes.len(), 1, "{routes:?}\n{human}");
+    assert_eq!(search["complete"], true);
+    assert!(human.contains("route 1 (0 hops)"), "{human}");
+
+    let (one, one_human) = routes_of(tmp.path(), "Ordered", "ordered sink", 1, None);
+    let (none, none_human) = prove(
+        tmp.path(),
+        "Ordered",
+        "throws-error",
+        Some("ordered sink"),
+        None,
+        None,
+        None,
+    );
+    assert_eq!(one, none, "--routes 1 is E1's JSON");
+    assert_eq!(one_human, none_human, "--routes 1 is E1's human answer");
+    assert!(evidence(&one)[0].get("routes").is_none());
+    assert!(one["payload"]["filter"].get("routes").is_none());
+    let (three, _) = routes_of(tmp.path(), "Ordered", "ordered sink", 3, None);
+    assert_eq!(three["payload"]["filter"]["routes"], 3);
+}
+
+/// The enumeration checks its cancellation at its first edge (and every
+/// 1,024 after): a cancelled one stops with the `cancelled` limit and the
+/// partial routes it left, never claiming completion. Break: drop the check
+/// (it completes with both routes).
+#[test]
+fn a_cancelled_enumeration_stops_with_its_limit() {
+    use crate::engine::l5::literal_reach::LiteralReach;
+    use crate::engine::l5::literal_reach::routes::RouteLimit;
+    let tmp = routes_fixture();
+    let (base, tree) = crate::engine::l5::digest::wave2_index_tests::tree_over(
+        tmp.path(),
+        crate::engine::l4::cone_derived::WitnessScope::All,
+    );
+    let model = &base.resolved;
+    let reach = LiteralReach::new(&tree.typed_edges, &tree.capability_facts, model);
+    let id = |name: &str| {
+        model
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == name)
+            .unwrap()
+            .stable_routine_id
+            .clone()
+    };
+    let (root, sink) = (id("Reconverge"), id("Sink"));
+    let op = model
+        .workspace
+        .routines
+        .iter()
+        .find(|r| r.name == "Sink")
+        .unwrap()
+        .operation_sites
+        .iter()
+        .find(|o| o.kind == "error-call")
+        .expect("Sink's Error")
+        .id
+        .clone();
+    assert_eq!(reach.op_owner(&op), Some(sink.as_str()));
+    let g = reach.state_graph(&root, &|| false).expect("a small graph");
+    let all = reach.routes(&g, &op, 5, 1000, &|| false);
+    assert_eq!((all.routes.len(), all.limit), (2, None), "precondition");
+    let stopped = reach.routes(&g, &op, 5, 1000, &|| true);
+    assert_eq!(stopped.limit, Some(RouteLimit::Cancelled));
+    assert!(stopped.routes.is_empty());
+    assert!(stopped.counts.unexplored >= 1);
 }

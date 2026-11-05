@@ -1028,6 +1028,8 @@ pub(crate) fn read_tree(
         effects,
         tree_reads,
         None,
+        // A one-shot run is never cancelled mid-read.
+        &|| false,
     );
 }
 
@@ -1036,7 +1038,10 @@ pub(crate) fn read_tree(
 /// consumes a tree, reads a copy. `entries`: an effects group's root entries
 /// already in hand (a resident revision's memoized witnesses, owned copies
 /// sorted by routine id, `root_entries` of the group's roots); `None`
-/// computes them off the tree.
+/// computes them off the tree. `stop`: the request's cancellation, read by
+/// a prove slice's route enumeration (agent-tasks E2); the caller checks it
+/// again after the read, so a stopped read is never answered.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn read_tree_shared(
     tree: &CapabilitySnapshot,
     trees: &[(JobId, TreeDemand)],
@@ -1045,6 +1050,7 @@ pub(crate) fn read_tree_shared(
     effects: &mut BTreeMap<JobId, DigestEffects>,
     tree_reads: &mut BTreeMap<JobId, TreeReadOut>,
     entries: Option<Vec<crate::engine::l5::digest::DigestEntryResult>>,
+    stop: &dyn Fn() -> bool,
 ) {
     let model = target.resolved();
     // No tree read asks `primary`: digest, prove and the query ask their
@@ -1089,7 +1095,7 @@ pub(crate) fn read_tree_shared(
                 // read (its first root: prove asks one).
                 if let (Some(req), Some(root)) = (&trees[m].1.slice, own.first()) {
                     out.slice = Some(crate::engine::l5::prove_slice::compute_slice(
-                        t, model, root, req,
+                        t, model, root, req, stop,
                     ));
                 }
                 effects.insert(trees[m].0, out);

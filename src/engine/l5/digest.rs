@@ -10137,7 +10137,7 @@ codeunit 50102 "W10 Merge"
 // MCP output wave 2, W2-0a: the read-side indexes on adversarial workspaces.
 #[cfg(test)]
 #[path = "wave2_index_tests.rs"]
-mod wave2_index_tests;
+pub(crate) mod wave2_index_tests;
 
 // #369: own rows with no witness path, and their fact ids.
 #[cfg(test)]

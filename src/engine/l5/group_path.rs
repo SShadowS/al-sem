@@ -251,22 +251,34 @@ impl<'a> GroupPaths<'a> {
         let Some((steps, op)) = reach.tree_witness(tree, ops) else {
             return none("own-no-witness");
         };
+        Ok(self.path_of(reach, &steps, op))
+    }
+
+    /// The own path of `steps` (from the root) ending at operation `op`: an
+    /// own witness ([`Self::own_path`]) or one enumerated route (agent-tasks
+    /// E2, [`LiteralReach::routes`]).
+    pub(crate) fn path_of(
+        &self,
+        reach: &LiteralReach<'a>,
+        steps: &[Step<'a>],
+        op: &str,
+    ) -> GroupPath {
         let mut hops = Vec::with_capacity(steps.len() + 1);
         if let Some(first) = steps.first() {
             hops.push(self.name(first.from));
         }
-        for s in &steps {
+        for s in steps {
             let kind = self.kind.get(&(s.from, s.to)).copied().unwrap_or("call");
             hops.push(format!("{kind} → {}", self.name(s.to)));
         }
-        Ok(GroupPath {
+        GroupPath {
             hops,
             through_entry_point: false,
             reason: None,
             crossing: String::new(),
             steps: steps.iter().map(|s| self.step(reach, s)).collect(),
             terminal: self.terminal(reach, op),
-        })
+        }
     }
 
     /// [`Self::own_path`]'s zero-hop witness: the first of `ops` that `root`

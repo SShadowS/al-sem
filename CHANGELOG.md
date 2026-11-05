@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (agent tasks, milestone E2: the debugging slice, several routes)
+
+Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §11 (revision 2; review item a15).
+
+- **`alsem prove … --routes N`** (MCP `routes`; 1 to 10, default 1; only with `--match`, `--site`,
+  `--op` or `--table`): up to N distinct routes per matching site (the first 20 matching sites),
+  fewest hops first, each with its selected guards as in E1. `--routes 1` is E1's answer byte
+  for byte. The routes are enumerated over the literal search's **state-transition graph**
+  (`engine::l5::literal_reach::routes`: the same search, the same states, every transition it
+  examined kept), not over its tree, which keeps one parent per `(routine, known values)` state
+  and so loses paths that reconverge. Definitions: a route is a simple path over those states
+  (recursion is followed while it changes the known values; a transition back to a state on the
+  route is counted, not followed), ending at the first state where the site can run; routes are
+  told apart by their sequence of (site, callee); order is fewest hops, then site ids
+  (best-first search with the exact distance to the site as its estimate). Caps: the routes
+  asked, and 50,000 candidate edges examined per site; cancellation is checked at the first
+  edge and every 1,024. Each site says whether the enumeration completed (then every route is
+  listed) or which cap fired (`route-cap`, `edge-budget`, `cancelled`, with the partial routes
+  left), and the candidate edges it examined and rejected: by literal arguments at the edge's
+  own site, by literal arguments further on (no live way on, although the callee reaches the
+  site's routine with guards ignored), back to a state on the route, or with a callee that
+  cannot reach the site at all. These are counts of edges; no count of ruled-out routes is
+  given. An enumeration that listed none falls back to E1's route, labelled so.
+- Prove JSON (2.5.0, additive): per matching site `routes` (E1's route shape each) and
+  `routeSearch` (`requested`, `listed`, `complete`, `limit`, `edgeBudget`, `edgesExamined`,
+  `edgesRejected`, `duplicatePaths`, `partialRoutesLeft`, the definitions); `payload.filter.routes`
+  when above 1. E1's `route` stays.
+- A resident tree read passes the request's cancellation to the slice and is checked again
+  after it, so a stopped enumeration is never answered (`session::read_tree_shared`).
+
 ### Added (agent tasks, milestone E1: the debugging slice, narrow)
 
 Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §9 (revision 2; astra 15's

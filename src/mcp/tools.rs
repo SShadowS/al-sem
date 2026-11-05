@@ -304,7 +304,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_prove",
-            "A yes/no question about one AL routine (`routine`, a selector), answered with its evidence. `question`, about the routine's existing effects (what it and its callees already do): may-commit, commits-on-success-path, writes-table:<table>, publishes-event:<event>, reaches-ui, throws-error. Or about its callers' context, before adding a COMMIT, an error or UI to it: callers-have-pending-writes (may a caller have a database write pending when it runs), callers-intercept-errors (may a caller turn its error into false: a TryFunction whose result is used, a checked Codeunit.Run, asserterror, collectible errors; a TryFunction does not roll back database changes), callers-may-run-noninteractive (may it run where no user answers UI: API pages, job queue and web service roots from roots.config.json, install and upgrade codeunits, background sessions); these walk every caller up to its entry points, and a public routine's callers in apps that are not loaded block a no unless `assumeNoDependents: true`. Answers: yes (a path to the effect exists; a may-answer), no (proven absent under the stated assumptions), unknown (no matching effect observed, but coverage is incomplete, so not a proof). A temporary-record write is not a write for writes-table. Default (`format: human`): about 10 lines with the answer, each evidence row with its location and one witness path, then the blockers of an unknown grouped by kind with their counts and the first 3 of each (workspace ones first), then coverage (calls not resolved and interface calls open world, with the top callees), assumptions and limits. Ask for more: `detail: true` (every blocker), `closedWorld: true` (interface calls dispatch only to the loaded implementations; it can turn unknown into no, and says so under assumptions), `format: json` (every evidence row, its group path and witness hops; 5-60 KB). Why did an error or a write happen: filter to the sites that may explain it with `match: \"<text>\"` (throws-error: the error's static message text, a literal or a Label's or TextConst's value with %1 placeholders kept, or the Label's name), `site: \"<file>:<line>\"` (throws-error, writes-table, may-commit, reaches-ui), `op: \"<kind>\"` (throws-error: Error, TestField, FieldError, Get, …; writes-table: Insert, Modify, ModifyAll, Delete, DeleteAll, Rename) or `table: \"<table>\"` (throws-error: errors a record operation on that table raises); the answer is then about the matching sites, each with its message text, one route from the routine and up to 2 innermost enclosing conditions per site on the route (selected context, not all necessary conditions, with the count left out; a while condition is loop-entry, a repeat-until one continuation). Static candidates, not an observed trace. An error whose message is not static (a variable, an ErrorInfo, the platform's own) never matches and blocks a filtered no; an implicit error matches only by its kind word. Size: 1-5 KB human. Lines are 1-based. Dependency code: the whole call cone is followed with literal arguments. Next: on unknown, alsem_explain lists the workspace gaps behind it. Returns the exact `alsem prove` stdout.",
+            "A yes/no question about one AL routine (`routine`, a selector), answered with its evidence. `question`, about the routine's existing effects (what it and its callees already do): may-commit, commits-on-success-path, writes-table:<table>, publishes-event:<event>, reaches-ui, throws-error. Or about its callers' context, before adding a COMMIT, an error or UI to it: callers-have-pending-writes (may a caller have a database write pending when it runs), callers-intercept-errors (may a caller turn its error into false: a TryFunction whose result is used, a checked Codeunit.Run, asserterror, collectible errors; a TryFunction does not roll back database changes), callers-may-run-noninteractive (may it run where no user answers UI: API pages, job queue and web service roots from roots.config.json, install and upgrade codeunits, background sessions); these walk every caller up to its entry points, and a public routine's callers in apps that are not loaded block a no unless `assumeNoDependents: true`. Answers: yes (a path to the effect exists; a may-answer), no (proven absent under the stated assumptions), unknown (no matching effect observed, but coverage is incomplete, so not a proof). A temporary-record write is not a write for writes-table. Default (`format: human`): about 10 lines with the answer, each evidence row with its location and one witness path, then the blockers of an unknown grouped by kind with their counts and the first 3 of each (workspace ones first), then coverage (calls not resolved and interface calls open world, with the top callees), assumptions and limits. Ask for more: `detail: true` (every blocker), `closedWorld: true` (interface calls dispatch only to the loaded implementations; it can turn unknown into no, and says so under assumptions), `format: json` (every evidence row, its group path and witness hops; 5-60 KB). Why did an error or a write happen: filter to the sites that may explain it with `match: \"<text>\"` (throws-error: the error's static message text, a literal or a Label's or TextConst's value with %1 placeholders kept, or the Label's name), `site: \"<file>:<line>\"` (throws-error, writes-table, may-commit, reaches-ui), `op: \"<kind>\"` (throws-error: Error, TestField, FieldError, Get, …; writes-table: Insert, Modify, ModifyAll, Delete, DeleteAll, Rename) or `table: \"<table>\"` (throws-error: errors a record operation on that table raises); the answer is then about the matching sites, each with its message text, one route from the routine and up to 2 innermost enclosing conditions per site on the route (selected context, not all necessary conditions, with the count left out; a while condition is loop-entry, a repeat-until one continuation). `routes: N` (1-10, with a filter) lists up to N distinct routes per matching site, fewest hops first, each with its guards: a route is a simple path over (routine, known argument values) states, so recursion is followed only while it changes the known values; the answer says whether the enumeration completed (then every route is listed) or which cap fired (the routes asked, or 50,000 candidate edges per site), and the candidate edges it examined and rejected (by literal arguments, by returning to a state on the route), never a count of routes ruled out. Static candidates, not an observed trace. An error whose message is not static (a variable, an ErrorInfo, the platform's own) never matches and blocks a filtered no; an implicit error matches only by its kind word. Size: 1-5 KB human. Lines are 1-based. Dependency code: the whole call cone is followed with literal arguments. Next: on unknown, alsem_explain lists the workspace gaps behind it. Returns the exact `alsem prove` stdout.",
             schema(
                 vec![
                     (
@@ -346,6 +346,10 @@ pub fn tool_list() -> Vec<Value> {
                     (
                         "table",
                         json!({"type": "string", "description": "throws-error only: keep only the errors a record operation on this table raises."}),
+                    ),
+                    (
+                        "routes",
+                        json!({"type": "integer", "minimum": 1, "maximum": 10, "description": "With match, site, op or table: up to this many distinct routes per matching site (default 1), fewest hops first, each with its guards; says whether the enumeration completed (every route listed) or which cap fired, and the candidate edges examined and rejected."}),
                     ),
                     ("deterministic", deterministic()),
                 ],
@@ -882,6 +886,11 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
                     v.opt(flag, x);
                 }
             }
+            // Agent-tasks E2: `--routes` only when set; its range and that it
+            // needs a filter are the CLI's own checks.
+            if let Some(n) = a.count("routes")? {
+                v.opt("routes", &n.to_string());
+            }
             v.switch("deterministic", a.flag("deterministic")?);
             v
         }
@@ -1136,7 +1145,7 @@ mod tests {
     fn prove_filters_become_cli_flags() {
         let c = command(
             "alsem_prove",
-            json!({"routine": "R", "question": "throws-error", "match": "-already issued", "site": "a.al:3", "op": "Error", "table": "T"}),
+            json!({"routine": "R", "question": "throws-error", "match": "-already issued", "site": "a.al:3", "op": "Error", "table": "T", "routes": 3}),
         )
         .unwrap();
         for want in [
@@ -1144,6 +1153,7 @@ mod tests {
             "--site=a.al:3",
             "--op=Error",
             "--table=T",
+            "--routes=3",
         ] {
             assert!(c.argv.iter().any(|a| a == want), "{want}: {:?}", c.argv);
         }
@@ -1155,7 +1165,7 @@ mod tests {
         assert!(
             !c.argv
                 .iter()
-                .any(|a| ["--match", "--site", "--op", "--table"]
+                .any(|a| ["--match", "--site", "--op", "--table", "--routes"]
                     .iter()
                     .any(|f| a.starts_with(f))),
             "{:?}",
