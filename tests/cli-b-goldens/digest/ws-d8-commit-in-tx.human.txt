@@ -13,8 +13,10 @@
       path: PostSalesDoc → OnAfterPostSalesDoc → [event] D8BadSubscriber::HandlePosted
     Sales Header: Modify 2 — known persistent
       Modify at ws:src/posting.al:10
+      path: PostSalesDoc (in the routine itself)
     Sales Line: ModifyAll 1 — known persistent
       ModifyAll at ws:src/posting.al:12
+      path: PostSalesDoc (in the routine itself)
   events: 1 raised in workspace code, by publisher: Codeunit D8PostingChain 1; 0 more only beyond entry points
   errors at 1 place: ERROR_IMPLICIT at ws:src/posting.al:8 (unconditional-on-success)
 
@@ -45,4 +47,5 @@
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     Audit Entry: Insert 1 — known persistent
       Insert at ws:src/subscriber.al:10
+      path: HandlePosted (in the routine itself)
   events: 0 raised in workspace code; 0 more only beyond entry points

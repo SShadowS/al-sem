@@ -1,5 +1,5 @@
 --- Codeunit D1 Multi Caller::ModifyHelper vs MC Customer (11111111-0000-0000-0000-00000000d01a/table/50101) ---
-  scope: per operation, one routine into dependency code; temporary-record touches persist nothing but use the table's schema and run its triggers; lines are 1-based
+  scope: dependency code: full cone for physical writes, grouped per entry point; per-operation detail one routine deep; temporary-record touches persist nothing but use the table's schema and run its triggers; lines are 1-based
   down: yes — 1 record touch: 0 known persistent, 1 possibly persistent (caller-dependent), 0 on temporary records
     [Modify] write at ws:src/D1MultiCaller.al:19 in Codeunit D1 Multi Caller::ModifyHelper (caller-dependent: parameter 1)
   up: 3 transitive callers: 3 touch it, 0 do not, 0 unknown — through this routine; not a finding — --all lists their witnesses

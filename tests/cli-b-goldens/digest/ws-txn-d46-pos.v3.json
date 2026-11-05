@@ -148,7 +148,9 @@
           },
           "entryPoints": {
             "count": 0,
-            "sites": 0
+            "sites": 0,
+            "withWrites": 0,
+            "withWritesSites": 0
           },
           "events": {
             "distinct": 0,
@@ -304,7 +306,9 @@
           },
           "entryPoints": {
             "count": 0,
-            "sites": 0
+            "sites": 0,
+            "withWrites": 0,
+            "withWritesSites": 0
           },
           "events": {
             "distinct": 0,
@@ -460,7 +464,9 @@
           },
           "entryPoints": {
             "count": 0,
-            "sites": 0
+            "sites": 0,
+            "withWrites": 0,
+            "withWritesSites": 0
           },
           "events": {
             "distinct": 0,
@@ -628,7 +634,9 @@
           },
           "entryPoints": {
             "count": 0,
-            "sites": 0
+            "sites": 0,
+            "withWrites": 0,
+            "withWritesSites": 0
           },
           "events": {
             "distinct": 0,

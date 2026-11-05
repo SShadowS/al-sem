@@ -1247,6 +1247,109 @@ fn a_mixed_dispatch_is_entered_only_by_its_dependency_edge() {
     );
 }
 
+/// Final CDO output review, item 2 (design §3.4.2): an own write row whose
+/// listed paths ALL cannot run under literal arguments, while the write
+/// stays live, gets its witness from the root's guarded search, ending at
+/// the row's own operation (CDO: IssueReminder's `CDO Queue Entry` Insert
+/// printed its anchor with no `path:` and no reason). Precondition
+/// hand-stated: `TwoCalls`' own `Dep Ledger` insert (in `WriteLedger`)
+/// gets, in place of its one listed path, a path through `PostWith(false)`
+/// to PostWith's `if Flag then L.Insert()`, which cannot run.
+///
+/// Discrimination (2026-11-05): dropping the `e.own_path = Some(...)`
+/// assignment in `digest_cli::literal_reach_pass` fails at "a searched
+/// witness" (`None`); restored, passes.
+#[test]
+fn an_own_row_whose_listed_paths_cannot_run_gets_a_searched_witness() {
+    let (_tmp, base, tree) = fixture();
+    let model = &base.resolved;
+    let root = stable(model, "Ws W2", "TwoCalls");
+    let post = stable(model, "Dep Rec Lib", "PostWith");
+    let writer = stable(model, "Ws W2", "WriteLedger");
+    let routine = |s: &str| {
+        model
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.stable_routine_id == s)
+            .unwrap()
+    };
+    let false_site = call_sites(&tree, &root, &post)
+        .into_iter()
+        .find(|s| {
+            routine(&root).call_sites.iter().any(|cs| {
+                &cs.id == s
+                    && cs
+                        .argument_texts
+                        .first()
+                        .is_some_and(|t| t.trim() == "false")
+            })
+        })
+        .expect("precondition: the PostWith(false) call");
+    let guarded_insert = routine(&post).record_operations[0].id.clone();
+    let own_insert = routine(&writer).record_operations[0].id.clone();
+    let hop = |from: &str, to: Option<&str>, cs: Option<&str>, op: Option<&str>| ProjectedHop {
+        inner: QueryWitnessHop {
+            kind: if to.is_some() { "call" } else { "terminal" },
+            from_routine_id: from.to_string(),
+            from_display: from.to_string(),
+            to_routine_id: to.map(str::to_string),
+            to_display: to.map(str::to_string),
+            callee_display: None,
+            callsite_id: cs.map(str::to_string),
+            event_id: None,
+            target_app_guid: None,
+            edge_kind: to.map(|_| "variable-typed-call".to_string()),
+            anchor: None,
+            receiver_type: None,
+            interface_name: None,
+            candidate_count: None,
+            operation_id: op.map(str::to_string),
+        },
+    };
+    let mut effects = effects_of(&tree, model, &root);
+    let row = effects
+        .iter_mut()
+        .find(|e| {
+            !e.boundary_group
+                && e.effect_type == "DB_INSERT"
+                && e.origin_operation_ids.contains(&own_insert)
+        })
+        .expect("precondition: WriteLedger's insert is an own row of TwoCalls");
+    row.via_paths = vec![vec![
+        hop(&root, Some(&post), Some(&false_site), None),
+        hop(&post, None, None, Some(&guarded_insert)),
+    ]];
+    let reach = LiteralReach::new(&tree.typed_edges, &tree.capability_facts, model);
+    assert!(
+        !reach.path_live(&row.via_paths[0]),
+        "precondition: the listed path cannot run"
+    );
+    let mut entries = vec![DigestEntryResult {
+        routine_id: root.clone(),
+        effects,
+    }];
+    crate::engine::l5::digest_cli::literal_reach_pass(&tree, model, &mut entries);
+    let row = entries[0]
+        .effects
+        .iter()
+        .find(|e| !e.boundary_group && e.origin_operation_ids.contains(&own_insert))
+        .unwrap();
+    assert!(!row.literal_unreachable, "the write stays live");
+    assert!(row.via_paths.is_empty(), "the dead listed path is dropped");
+    match &row.own_path {
+        Some(Ok(w)) => {
+            assert_eq!(
+                w.steps.iter().map(|s| s.to.as_str()).collect::<Vec<_>>(),
+                [writer.as_str()],
+                "the live route: TwoCalls → WriteLedger"
+            );
+            assert_eq!(w.terminal.operation_id, own_insert, "the row's own insert");
+        }
+        other => panic!("a searched witness: {other:?}"),
+    }
+}
+
 /// W2-0b's census (design §11.4): how many crossings of each site kind the
 /// CDO baseline has, and how many group rows of IssueReminder (IR) and
 /// RunReportID (RR) sit on an `ev:` crossing. Decides whether event crossings

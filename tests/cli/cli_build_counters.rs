@@ -1075,6 +1075,20 @@ fn query_touches_cross_app() {
     assert_row("query touches cross-app", &m, QUERY_CROSS_ROW);
 }
 
+/// MCP output wave 3a: `query effects` (and `touches --from` asked down)
+/// declares a tree over its root (`session::query_cone_plan`), so it builds
+/// the cone, its graph SCC, the producer solve, the snapshot and the
+/// literal pass once each, on top of [`QUERY_CROSS_ROW`]'s L4: the writes
+/// beyond each dependency entry point are the cone's. No detector context.
+const QUERY_CONE_ROW: Row = Row {
+    cone: 1,
+    scc: 2,
+    pd: 1,
+    snap: 1,
+    witness: 1,
+    ..QUERY_CROSS_ROW
+};
+
 #[test]
 fn query_effects_cross_app() {
     let (_d, ws) = ws_dep();
@@ -1087,7 +1101,31 @@ fn query_effects_cross_app() {
         "--format",
         "json",
     ]);
-    assert_row("query effects cross-app", &m, QUERY_CROSS_ROW);
+    assert_row("query effects cross-app", &m, QUERY_CONE_ROW);
+}
+
+/// Wave 3a: `touches --from` asked down reads the cone over `--from`; asked
+/// up only, it reads none ([`QUERY_CROSS_ROW`]).
+#[test]
+fn query_touches_from_reads_the_cone_only_down() {
+    let (_d, ws) = ws_dep();
+    let ask = |direction: &str| {
+        run(&[
+            "query",
+            "touches",
+            &ws,
+            "--table",
+            "18",
+            "--from",
+            "CallLib",
+            "--direction",
+            direction,
+            "--format",
+            "json",
+        ])
+    };
+    assert_row("query touches --from down", &ask("down"), QUERY_CONE_ROW);
+    assert_row("query touches --from up", &ask("up"), QUERY_CROSS_ROW);
 }
 
 #[test]

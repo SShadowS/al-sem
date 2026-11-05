@@ -4,6 +4,7 @@
   evidence: 1 effect
     [DB_MODIFY] at ws:src/OutIssueDocument.Codeunit.al:14
       conditionality: unconditional-on-success
+      path: IssueDoc (in the routine itself)
   coverage: incomplete — 2 calls not resolved (1 in this workspace), 1 interface call open world (1 in this workspace); top: Codeunit.Run(<dynamic>) ×2, Handler.Handle ×1; alsem explain lists the workspace ones under gaps
   assumptions: none (default world; --closed-world assumes the loaded interface implementations)
   limits: none

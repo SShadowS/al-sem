@@ -112,6 +112,7 @@ fn job(cmd: Cmd, f: &Fixture) -> Box<dyn Job + '_> {
             single_app: f.single_app,
             closed_world: false,
             human: false,
+            detail: false,
             out: None,
         }),
     }
@@ -876,10 +877,27 @@ fn a_digest_after_a_prove_answers_as_a_cold_digest() {
     .into_owned();
     // W2-1: the digest is pruned as prove is: every listed path ran through
     // the dead `RunReportRec(false, …)` call, so none is left (the effect
-    // stays, its paths marked truncated).
+    // stays, its paths marked truncated). Since the final CDO review (item
+    // 2) the row carries its searched witness instead: the live route
+    // through `Hop1`, never the dead first call.
+    let doc: serde_json::Value = serde_json::from_str(&text).expect("digest JSON");
+    let row = doc["payload"]["entries"][0]["effects"]
+        .as_array()
+        .and_then(|es| {
+            es.iter()
+                .find(|e| e["type"] == "DB_INSERT" && e.get("crossing").is_none())
+        })
+        .unwrap_or_else(|| panic!("precondition: DocBoth's insert row: {text}"));
+    assert_eq!(row["pathsKept"], 0, "no listed path is left: {row}");
     assert_eq!(
-        text.matches("RunReportRec").count(),
-        0,
+        row["paths"][0]["searched"], true,
+        "the searched witness: {row}"
+    );
+    let first = row["paths"][0]["hops"][0]["to"].as_str().unwrap_or("");
+    assert!(
+        doc["payload"]["routines"][first]["display"]
+            .as_str()
+            .is_some_and(|d| d.ends_with("::Hop1")),
         "precondition: DocBoth's digest lists no dead path: {text}"
     );
     let rev = revision(&f);

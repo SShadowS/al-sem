@@ -19,7 +19,17 @@
     "direction": "both",
     "down": {
       "answerable": true,
-      "beyond": [],
+      "beyond": [
+        {
+          "entryPoint": "Codeunit Base Poster::OnRun",
+          "ops": [
+            "DB_MODIFY"
+          ],
+          "sites": [
+            "ws:src/OutIssueDocument.Codeunit.al:15"
+          ]
+        }
+      ],
       "counts": {
         "byOp": {},
         "knownPersistent": 0,
@@ -28,6 +38,7 @@
           "tempStateUnknown": 0
         },
         "tableNotResolved": 2,
+        "tableNotResolvedRecordRef": 2,
         "temporary": 0
       },
       "touches": false,
@@ -83,5 +94,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }

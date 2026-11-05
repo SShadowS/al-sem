@@ -1,0 +1,10 @@
+--- Codeunit CDO Telemetry::UpdateLastUpload ---
+  question: writes-table:CDO Setup
+  answer:   yes
+  evidence: 1 effect
+    [DB_MODIFY] at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:48
+      conditionality: unconditional-on-success
+      path: UpdateLastUpload (in the routine itself)
+  coverage: complete
+  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  limits: none

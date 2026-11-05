@@ -347,6 +347,11 @@ pub struct ModelRecordOperation {
     /// serialized `fieldArguments` and the input of every detector that
     /// reads them. Never serialized.
     pub modify_all_field: Option<String>,
+    /// MCP output wave 3a (Q4): the receiver is a variable declared
+    /// `RecordRef` (`PRecordOperation::receiver_is_record_ref`, forwarded), so
+    /// the operation's table is decided at run time. Read by `alsem query`'s
+    /// "table not resolved" wording. Never serialized.
+    pub receiver_is_record_ref: bool,
 }
 
 /// A lexical variable (params → locals → globals) carrying its declared type, for
@@ -1689,6 +1694,7 @@ fn project_ir(
                     in_until_condition: op.in_until_condition,
                     in_statement_position: op.in_statement_position,
                     run_trigger: op.run_trigger,
+                    receiver_is_record_ref: op.receiver_is_record_ref,
                 })
                 .collect();
             let field_accesses = std::mem::take(&mut features.field_accesses);

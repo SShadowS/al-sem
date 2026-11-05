@@ -1097,6 +1097,26 @@ impl<'a> LiteralReach<'a> {
         best.map(|(i, o)| (&tree.order[i as usize], o))
     }
 
+    /// A witness over `tree` to the first state (in visit order) of a
+    /// routine owning one of `ops` where that operation can run: the edges
+    /// from the tree's start and the operation (final CDO output review,
+    /// item 2: an own row whose listed paths all cannot run).
+    pub(crate) fn tree_witness<'t>(
+        &self,
+        tree: &'t LiveTree<'a>,
+        ops: &'t [String],
+    ) -> Option<(Vec<Step<'a>>, &'t str)> {
+        let (state, op) = self.first_live_owner(tree, ops)?;
+        Some((tree.steps_to(state), op))
+    }
+
+    /// Whether `root` itself owns operation `op` and it can run at the
+    /// root's start state (no known values): a zero-hop witness.
+    pub(crate) fn live_in_root(&self, root: &str, op: &str) -> bool {
+        self.op_owner.get(op).is_some_and(|o| *o == root)
+            && !self.dead_at(root, op, &Bindings::default())
+    }
+
     /// The ids of the routine owning operation `op` (stable id), if known.
     pub(crate) fn op_owner(&self, op: &str) -> Option<&'a str> {
         self.op_owner.get(op).copied()

@@ -782,6 +782,12 @@ struct ProveCli {
     /// only under that carries `assumptions: ["loaded-subscribers"]`.
     #[arg(long = "closed-world", default_value_t = false)]
     closed_world: bool,
+
+    /// Human output: list every blocker. The default groups the blockers by
+    /// kind with their counts and the first few of each, workspace ones
+    /// first. The JSON always lists every one.
+    #[arg(long, default_value_t = false)]
+    detail: bool,
 }
 
 /// `ExplainCli` — arguments for `alsem explain <ws>` (intent-evidence spec
@@ -2340,6 +2346,7 @@ fn plan_prove(p: ProveCli) -> Planned {
                 single_app: p.single_app,
                 closed_world: p.closed_world,
                 human: p.format == "human",
+                detail: p.detail,
                 out: p.out.as_deref(),
             })
         },

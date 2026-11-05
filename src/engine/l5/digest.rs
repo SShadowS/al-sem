@@ -3615,6 +3615,12 @@ pub struct DigestEffectResult {
     /// direct fact of the group's type, or why there is none. `None` off
     /// such a group. Set by the literal pass; not serialized.
     pub group_terminal_path: Option<crate::engine::l5::group_path::GroupPathOutcome>,
+    /// Final CDO output review, item 2 (design §3.4.2): an own write row
+    /// whose listed paths (`via_paths`) all cannot run under literal
+    /// arguments, or that came with none: its witness from the root's
+    /// guarded search, or why there is none. `None` when `via_paths` keeps a
+    /// path, and off own write rows. Set by the literal pass; not serialized.
+    pub own_path: Option<crate::engine::l5::group_path::GroupPathOutcome>,
     /// W2-0c (design §3.3.1): per group resource, whether the group's
     /// crossing reaches it from its own entry states. A `Disproved` one is
     /// also in `dead_group_resources` (the refined membership drops it;
@@ -4741,6 +4747,7 @@ fn digest_one_root<'i>(
                 dead_group_resources: Vec::new(),
                 group_resource_paths: Vec::new(),
                 group_terminal_path: None,
+                own_path: None,
                 group_resource_status: Vec::new(),
                 crossing,
             });

@@ -129,6 +129,7 @@ fn job<'a>(kind: &str, inputs: &'a Arc<WorkspaceInputs>) -> Box<dyn Job + 'a> {
             single_app: false,
             closed_world: false,
             human: false,
+            detail: false,
             out: None,
         }),
         _ => Box::new(DigestJob::new(

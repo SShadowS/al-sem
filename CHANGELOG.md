@@ -7,6 +7,170 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (MCP output, the final hands-on CDO review)
+
+- **`prove`'s human `unknown` no longer lists every blocker.** IssueReminder's
+  `writes-table:Data Exch.` on CDO printed `blockedBy: 287 blocker(s)` and one line each: 294 lines
+  and 47,875 bytes, over the 40 KiB inline cap, so the MCP answer went to a file. The blockers are
+  now grouped by kind (in the order the kinds first appear), each kind with its count split by
+  where the call site is (this workspace, dependency code, not placed) and its first 3 items,
+  workspace ones first, since those are the ones the user can act on; the rest are counted on one
+  line. `--detail` (MCP `detail: true`, new on `prove`) lists every blocker. The case is now 22
+  lines and 2,076 bytes. The JSON `blockedBy` is unchanged and always complete. The coverage,
+  assumptions and limits lines stay always visible.
+- **A write in workspace code printed no path and no reason.** IssueReminder's `CDO Queue Entry`
+  Insert (`CDODocumentTemplateLine.Table.al:1713`) printed its anchor and nothing else. Root cause:
+  the cone listed three paths for it, all through `RunReportID → QueueMail`, which IssueReminder's
+  literal arguments rule out; the literal pass dropped all three, while the write stayed live
+  through a route the cone had not listed. The literal pass now searches the root's guarded search
+  for such a row (the first live state owning one of the row's own operations, its evidence
+  operation first) and keeps the witness; the line prints that real path, here one that re-enters
+  workspace code beyond `Codeunit Reminder-Issue::OnRun` (and says so), or `no path kept:
+  <reason>` (search cap reached; none of the row's operations can run in any reached state; no
+  operation id). A write in the routine's own body prints `path: <routine> (in the routine
+  itself)`, the zero-hop witness of design §3.4.2, where it printed nothing. Digest JSON carries
+  the searched witness as `paths[0]` with `searched: true` (or `pathUnavailable`), prove's human
+  evidence prints it, and explain JSON's `via` names it.
+- **explain's entry-point counts disagreed with its sections.** The scope line counted the
+  crossings with a may-persist write and summed their sites ("14 entry points at 14 sites" on
+  IssueReminder), while the sections counted entry points ("12 … at 14 sites" with writes, "15 …
+  at 17 sites" temporary only). Every line now counts entry points (crossings grouped by target, a
+  multi-target crossing its own) at DISTINCT sites, and the scope line is the union of the two
+  sections by identity: IssueReminder 27 entry points at 31 sites. The same counts in digest and
+  query effects. `summary.entryPoints` gains `withWrites` and `withWritesSites`; `count` and
+  `sites` are now every entry point and its distinct sites.
+- **Tests**: the blocker fold (`prove::tests::human_blockers_fold_by_kind_workspace_first`), the
+  searched witness on a hand-stated row whose listed path cannot run
+  (`wave2_index_tests::an_own_row_whose_listed_paths_cannot_run_gets_a_searched_witness`), the
+  entry-point unions (`routine_rollup::tests::entry_point_counts_are_unions_by_identity`), each
+  with a discrimination proof; on the fixture and on CDO, every workspace-code write record has a
+  path or a reason and the scope's entry-point counts equal the sections' union read off the
+  `--detail` card (`output_invariants_w3::write_lines_have_a_path_and_entry_point_counts_agree`,
+  `output_cdo::cdo_write_lines_have_a_path_or_a_reason`, `cdo_entry_point_counts_agree`); a CDO
+  size ratchet and rendering golden for the Data Exch. case.
+
+### Added (MCP output item T, the remaining output tests)
+
+- **The invariants of item T and spec §8.3 not pinned before**, in the new `cli` member
+  `output_invariants_w3` (fixture, every `cargo test`) and in `output_cdo` (CDO, `scripts/cdo-gate`):
+  human-output hygiene (no blank name, `(no anchor)` row, `%20` or two identical lines; B1, B5,
+  B6) and size budgets in lines AND bytes of the whole output with every line ≤ 2,000 characters
+  (T-W2-15; on CDO per-routine ratchets pinned to the input stamps); every effect kind digest
+  reports is on its line of explain's card (M2); every prove evidence row names its place or says
+  `unavailable` (T-W2-17); every crossing prints its target's qualified display (T-W2-18);
+  explain's groups list what they count and event groups carry only their count (T-W2-7); the
+  fields the ConTinAI pipeline reads (T-W2-21); page actions folded to at most 3 lines, the
+  grouped counts adding up to the listed actions (T-W2-14); every folded `… +N <unit>` line
+  states its full count (T-W2-3, CDO); two budgets per `tools/call` result, the client's
+  `structuredContent` and the whole wire (T-W2-23), with a hand-stated workspace whose card
+  escapes to more than 50,000 characters while under the 40 KiB byte cap; IssueReminder's and
+  RunReportID's default explain cards stay inline with at least 1 KiB of the cap to spare
+  (RunReportID 37,671 bytes, a 3,289-byte margin, on `bc3ccb18`).
+- **CDO rendering goldens** (`tests/cli-output-goldens/cdo/`, `output_cdo::cdo_rendering_goldens`):
+  the explain card, query effects, query touches, prove may-commit and writes-table (human) and the
+  digest summary of IssueReminder, RunReportID and UpdateLastUpload, byte-compared under
+  `scripts/cdo-gate`, with `STAMP.json` holding the workspace's git sha, dirty flag and dependency
+  closure (drift fails under `ENFORCE_CDO_WS=1`). Regenerate with `REGEN_TEMP_GOLDENS=1` and
+  `CDO_WS` set for that one command.
+
+### Fixed (MCP output item T)
+
+- **An inline MCP answer could exceed the client's limit once escaped.** The 40 KiB inline cap
+  counts raw bytes; a stdout of quotes and backslashes doubles in `structuredContent`, which Claude
+  Code files past 50,000 characters. When the call leaves `maxInlineBytes` to the server, the pool
+  now also sends an answer whose escaped form plus a 4 KiB envelope room exceeds 50,000 UTF-16
+  units to a file, with its summary (`tools::MCP_CLIENT_BUDGET_CHARS`). A call that sets its own
+  `maxInlineBytes` (the LSP front end does) keeps that cap exactly.
+- **Three folded lists did not state their full count** (T-W2-3): the fields an owner assigns on a
+  table (`(not operation-specific; N fields)`), events by publisher (`by publisher (N
+  publishers)`) and the top dependency callees (`top callees (N callees)`) now state it when
+  folded (`Folded::count_note`). Only CDO-sized outputs fold there; no fixture golden moves.
+- **Two entry points into overloads of one routine printed one name** (T-W2-18 with T-W2-24).
+  A crossing's name (explain's and query's `writes beyond dependency entry points` lines, the
+  `crossings` records of explain `/3` and digest 3.x) is now its targets' qualified displays, an
+  overload with its parameters, as the routine table prints it (`Codeunit CTS-CDN Network Doc.
+  Mgt.::SendNetworkDocument(RecordVariant, eDocVariant, XMLDoc)` and its five-parameter twin, on
+  CDO); a group row's raw `detail.boundary` is unchanged.
+
+### Changed (MCP output wave 3b)
+
+- **The MCP tool descriptions and server instructions are written around an agent's decisions**
+  (plan 3b; E7, P6, D7, X10). The instructions say which tool answers which question, the one
+  selector grammar, the line base and location forms (`ws:`, `dep:<app name>:`), the inline cap
+  and the summary beside a file, each tool's dependency depth, the common inputs, and what `yes`,
+  `no`, `unknown`, "no matching effect observed", `coverage`, `assumptions`, `limits`, temporary
+  records and caller-dependent writes mean. Each command tool's description says what its default
+  prints, how to ask for more (every input it takes, in backticks), the line base, typical sizes
+  (measured on CDO: explain human 30-40 KB, query effects human 20-25 KB, digest JSON up to
+  ~1 MB), its dependency depth and one next step; digest names `files`/`diff` as the change modes.
+  `alsem_refresh` says when to use it. A test pins that every input a description names is in the
+  tool's schema and every schema input is named
+  (`output_invariants_w3::descriptions_name_exactly_the_inputs_the_schemas_take`).
+- **One routine selector grammar for every tool.** `explain`, `prove` and `digest` now also take
+  `Object.Routine` (read as `Object::Routine` at the last unquoted dot, only when no other form
+  matched: `selector_index` form 6); `query effects --routine` and `query touches --from` now
+  also take `Owner::Routine` and the owner's type word or AL quotes in either spelling
+  (`selector_index::split_qualified`). No selector that resolved before resolves differently.
+  Pinned by `output_invariants_w3::one_selector_grammar_for_every_tool` (seven spellings, five
+  tools, byte-identical answers).
+
+### Added (MCP output wave 3c)
+
+- **`alsem_status` answers "is this current, and what is the engine doing?"** (plan 3c, S2).
+  Each engine gains a `freshness` block: the answering revision (`generation`, `inputsStamp`,
+  `engineInstanceId`, as every answer's envelope names it), the last build (`class`,
+  `startedAtUnixMs`, `durationMs`, `builds`, `discardedBuilds`), the freshness checks
+  (`freshHits`, `lastCheckUs`), `activity` (`idle`, `asking`, `pin`, `prepare`, `compute`,
+  `refresh`) with `activityMs`, `building` (true in the `pin` phase or a refresh; `null` after an
+  unwaited refresh until the next call), and the child's memory (`rssBytes`, `peakRssBytes`,
+  `rssSource`: `live` from `/proc/<pid>/status` on Linux, else the child's last report) with
+  `countersAgeMs`. The pool now asks every call's progress phases from the engine child (they
+  were sent only for a client's progress token) and reads the child's counters after a waited
+  `alsem_refresh`. The session stamps each build's start (`lastBuildStartedUnixMs`). A new
+  engine test hook, `sleep-in-phase:<phase>:<ms>`, lets a test watch a call mid-phase
+  (`mcp_server::faults::status_shows_a_build_in_progress`).
+
+### Changed (MCP output wave 3a)
+
+- **3a: query reads the whole cone for writes beyond dependency entry points.** `alsem query
+  effects` (and `query touches --from` asked down) now declares a tree over its root
+  (`session::query_cone_plan`) and reads the root's digest entry after the L4 temp-state join and
+  the literal pass, exactly as `alsem explain` does. Its human output gains explain's own `writes
+  beyond dependency entry points` section (the same function, `routine_rollup::beyond_lines`), a
+  summary part `writes beyond dependency entry points on N tables through M entry points (K only
+  there)`, and coverage/scope lines that say `dependency code: full cone for physical writes,
+  grouped per entry point; per-operation detail one routine deep`. `query touches` lists the entry
+  points beyond which the cone may write the table, and says `down: no operation one routine into
+  dependency code touches the table` when only the cone does. Query JSON 3.1.0 (additive): the
+  reserved `summary.byTable[].beyond` and touches' `down.beyond` are filled (`{entryPoint, sites,
+  ops}`), `summary.beyondEntryPoints` and `summary.beyondWrites` are new, `summary.scope` reads
+  `operations-one-routine-deep; writes-beyond-entry-points-full-cone`, and the MCP summary counts
+  the writes beyond. Every per-operation row, `via` and L4 count is unchanged (ConTinAI reads
+  them). On CDO (`bc3ccb18`): IssueReminder 131 tables beyond 12 entry points (was invisible to
+  query), RunReportID 396. Cost: cold CLI `query effects` ~13 s → ~21 s at the same peak RSS
+  (~3.1 GB); on the resident engine the first query builds what the first explain did, and a
+  query and an explain on one root share the root's witness entry. The cross-tool agreement's
+  query leg is per table (design §12.2): every table the cone names is in query's writes, query's
+  beyond equals explain's, and the `CDO Log Attachment` `Modify` operations (literal-dead in the
+  cone) are pinned by id (`output_cdo::cdo_query_effects_writes_agree_with_the_cone`). Goldens:
+  `cli-query-goldens` and `cli-output-goldens` query files and `gate-goldens/batch/one-job` (the
+  new lines and fields); `cli_build_counters::query_effects_cross_app` now expects the cone row.
+- **Q4: "RecordRef" only where the receiver is one.** The body walk now records, per record
+  operation, whether its receiver resolves lexically (parameters and locals before the object's
+  globals) to a variable declared `RecordRef` (`PRecordOperation::receiver_is_record_ref`,
+  forwarded to `ModelRecordOperation`; serde-skipped, read only by `alsem query`, so no detector
+  input moved). `alsem query effects` splits its "table not resolved" bucket: `on a RecordRef
+  (table decided at run time): N operations in M routines` and `table not resolved: …` for the
+  rest, in the summary line, the bucket lines, the locks line and each `--all` row (was one
+  `table not resolved (determined at run time or not resolved)` line for both). `query touches`
+  says how many of the unresolved operations in the cone are on a RecordRef. Query JSON
+  **3.1.0** (additive): such a row carries `receiver: "RecordRef"`;
+  `summary.tableNotResolved.recordRef {operations, routines}` and
+  `down.counts.tableNotResolvedRecordRef` count them. Goldens: `cli-query-goldens`,
+  `cli-output-goldens` and `gate-goldens/batch/one-job` query files (version line, the new
+  counts, the split wording); `ir-l2-goldens/l2_features.snapshot` (its `Debug` digest of every
+  routine with a record operation shows the new field).
+
 ### Changed (MCP output wave 2, W2-4 … W2-8)
 
 - **Digest size budgets decided (owner, 2026-11-04):** the default digest JSON (pretty) of `CDO

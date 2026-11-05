@@ -32,6 +32,7 @@
 //!   - `PRecordOperation.in_until_condition`
 //!   - `PRecordOperation.in_statement_position`
 //!   - `PRecordOperation.run_trigger`
+//!   - `PRecordOperation.receiver_is_record_ref`
 //!   - `PLoop.exhausting_advance`
 //!   - `PRecordVariable.is_receiver`
 //!   - `PVariableSymbol.fixed_local`
@@ -376,6 +377,18 @@ pub struct PRecordOperation {
     /// (`tests/ir-l2-goldens/l2_features.snapshot`) does show it.
     #[serde(skip)]
     pub run_trigger: Option<bool>,
+    /// MCP output wave 3a (Q4): the receiver is a variable declared `RecordRef`
+    /// in the routine's lexical scope (parameters and locals before the
+    /// object's globals), so the operation's table is decided at run time.
+    /// The body walk decides it where it captures the operation, from the
+    /// declaration it already reads for receiver eligibility; an implicit
+    /// receiver (`Rec`, a `with` frame) is never a RecordRef. Read by `alsem
+    /// query` to say "RecordRef" only where the receiver really is one.
+    ///
+    /// INTERNAL-ONLY (`serde(skip)`, excluded from `PartialEq`), like
+    /// `run_trigger`; the `Debug`-printed ir-l2 snapshot shows it.
+    #[serde(skip)]
+    pub receiver_is_record_ref: bool,
 }
 
 /// MANUAL PartialEq: compares exactly the SERIALIZED L2 contract surface.
@@ -911,7 +924,7 @@ mod tests {
                 pending = false;
             }
         }
-        assert_eq!(actual.len(), 17, "scanner found {actual:?}");
+        assert_eq!(actual.len(), 18, "scanner found {actual:?}");
         assert_eq!(documented, actual);
     }
 

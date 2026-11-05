@@ -148,6 +148,32 @@ fn shown_paths(e: &DigestEffectFull, opts: RenderOpts) -> usize {
     }
 }
 
+/// Whether an own row with no listed path shows its searched witness
+/// ([`DigestEffectFull::own_path`]): as a listed path would show.
+fn shows_own_path(e: &DigestEffectFull, opts: RenderOpts) -> bool {
+    (opts.detail || decision(e)) && opts.path_cap > 0 && e.via_paths.iter().all(Vec::is_empty)
+}
+
+/// One structured hop of a witness: `{edge, to, line, file}`, `edgeId`
+/// with `--detail`.
+fn step_value(
+    rt: &RoutineTable,
+    s: &crate::engine::l5::group_path::WitnessStep,
+    detail: bool,
+) -> Value {
+    let mut v = json!({"edge": s.edge, "to": rt.key(&s.to)});
+    if let Some(l) = s.line {
+        v["line"] = json!(shown(l));
+    }
+    if let Some(f) = &s.file {
+        v["file"] = json!(f);
+    }
+    if detail && let Some(id) = &s.edge_id {
+        v["edgeId"] = json!(id);
+    }
+    v
+}
+
 /// The group witnesses a row shows: every one with `--detail`, else the
 /// representative of a decision row.
 fn shown_witnesses(
@@ -203,6 +229,11 @@ pub fn referenced_routines(
             } else {
                 for p in &e.via_paths[..shown_paths(e, opts)] {
                     hops(&mut ids, p);
+                }
+                if shows_own_path(e, opts)
+                    && let Some(Ok(w)) = &e.own_path
+                {
+                    ids.extend(w.steps.iter().map(|s| s.to.clone()));
                 }
             }
         }
@@ -379,24 +410,9 @@ fn effect_v3(
         // group row; every per-resource witness with --detail.
         // The same selection the routine table reads (`shown_witnesses`).
         let witnesses = shown_witnesses(e, opts);
-        let step = |s: &crate::engine::l5::group_path::WitnessStep| {
-            let mut v = json!({"edge": s.edge, "to": rt.key(&s.to)});
-            if let Some(l) = s.line {
-                v["line"] = json!(shown(l));
-            }
-            if let Some(f) = &s.file {
-                v["file"] = json!(f);
-            }
-            if opts.detail
-                && let Some(id) = &s.edge_id
-            {
-                v["edgeId"] = json!(id);
-            }
-            v
-        };
         let witness = |r: Option<&String>, w: &crate::engine::l5::group_path::GroupPath| {
             let mut v = json!({
-                "hops": w.steps.iter().map(step).collect::<Vec<_>>(),
+                "hops": w.steps.iter().map(|s| step_value(rt, s, opts.detail)).collect::<Vec<_>>(),
                 "terminal": {
                     "operationId": w.terminal.operation_id,
                     "file": w.terminal.file,
@@ -432,15 +448,31 @@ fn effect_v3(
             "file": e.evidence.file,
             "line": e.evidence.line.map(shown),
         });
-        m.insert(
-            "paths".into(),
-            Value::Array(
-                e.via_paths[..shown_paths]
-                    .iter()
-                    .map(|p| json!({"hops": rt.hops(root, p, opts.detail), "terminal": terminal}))
-                    .collect(),
-            ),
-        );
+        let mut paths: Vec<Value> = e.via_paths[..shown_paths]
+            .iter()
+            .map(|p| json!({"hops": rt.hops(root, p, opts.detail), "terminal": terminal}))
+            .collect();
+        // Final CDO review, item 2: a write row with no listed path carries
+        // its searched witness (`searched: true`; one through a call: a
+        // zero-hop one adds nothing to `evidence`), or why it has none.
+        if paths.is_empty() && shows_own_path(e, opts) {
+            match &e.own_path {
+                Some(Ok(w)) if !w.steps.is_empty() => paths.push(json!({
+                    "hops": w.steps.iter().map(|s| step_value(rt, s, opts.detail)).collect::<Vec<_>>(),
+                    "terminal": {
+                        "operationId": w.terminal.operation_id,
+                        "file": w.terminal.file,
+                        "line": w.terminal.line.map(shown),
+                    },
+                    "searched": true,
+                })),
+                Some(Err(n)) => {
+                    m.insert("pathUnavailable".into(), n.reason.into());
+                }
+                _ => {}
+            }
+        }
+        m.insert("paths".into(), Value::Array(paths));
         m.insert("pathsKept".into(), e.via_paths.len().into());
         m.insert(
             "pathsOmitted".into(),

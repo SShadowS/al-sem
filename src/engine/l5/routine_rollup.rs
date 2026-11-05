@@ -48,6 +48,18 @@ impl<T> Folded<T> {
     pub fn total(&self) -> usize {
         self.shown.len() + self.hidden
     }
+
+    /// ` (N <unit>)` when the fold hides something, else empty: the full
+    /// count with the fold's unit, for a line that states it nowhere else
+    /// (T-W2-3: every `… +N <unit>` line also carries its full count).
+    #[must_use]
+    pub fn count_note(&self) -> String {
+        if self.hidden > 0 {
+            format!(" ({} {})", thousands(self.total()), self.unit)
+        } else {
+            String::new()
+        }
+    }
 }
 
 impl Folded<String> {
@@ -271,6 +283,18 @@ impl<'m> RollupCx<'m> {
         Some((object.to_string(), r.name.clone()))
     }
 
+    /// Whether a stable routine id's first row is in a loaded dependency
+    /// (an app other than the primary one); `false` when unknown.
+    #[must_use]
+    pub fn in_dependency(&self, stable_id: &str) -> bool {
+        self.rows.get(stable_id).is_some_and(|&i| {
+            let app = self.model.workspace.routines[i]
+                .app_guid
+                .to_ascii_lowercase();
+            self.primary.as_deref().is_some_and(|p| p != app)
+        })
+    }
+
     /// The source unit of a stable routine id's first row.
     #[must_use]
     pub fn default_file(&self, stable_id: &str) -> Option<String> {
@@ -339,20 +363,45 @@ impl<'m> RollupCx<'m> {
         from: Option<usize>,
         what: &str,
     ) -> String {
+        let at = match (&w.terminal.file, w.terminal.line) {
+            (Some(f), Some(l)) => format!(" at {}", self.location(f, l)),
+            _ => String::new(),
+        };
+        let mut line = format!("{} ({what}{at})", self.steps_line(root, &w.steps, from));
+        if !w.through_entry_point {
+            line.push_str(&format!(
+                "; this path does not pass the entry point: {}",
+                no_path_reason(w.reason.unwrap_or("search-cap"))
+            ));
+        }
+        line
+    }
+
+    /// A witness's routines as one `a → b → …` line (design §3.8 rules 6,
+    /// 7): the root, then each step's routine (the object only when it
+    /// changes), tagged by its edge; with `from`, the steps before it print
+    /// as `…`.
+    #[must_use]
+    pub fn steps_line(
+        &self,
+        root: &str,
+        steps: &[crate::engine::l5::group_path::WitnessStep],
+        from: Option<usize>,
+    ) -> String {
         let (mut object, root_name) = self
             .names_of(root)
             .unwrap_or_else(|| (String::new(), root.to_string()));
         let mut parts = vec![root_name];
-        let start = from.unwrap_or(0).min(w.steps.len());
+        let start = from.unwrap_or(0).min(steps.len());
         if start > 0 {
             parts.push("…".to_string());
-            object = w.steps[start - 1]
+            object = steps[start - 1]
                 .display
                 .rsplit_once("::")
                 .map(|(o, _)| o.split_once(' ').map_or(o, |(_, n)| n).to_string())
                 .unwrap_or_default();
         }
-        for s in &w.steps[start..] {
+        for s in &steps[start..] {
             let tag = edge_tag(&s.edge);
             let (o, n) = match self.names_of(&s.to) {
                 Some(on) => on,
@@ -372,18 +421,26 @@ impl<'m> RollupCx<'m> {
             };
             parts.push(format!("{tag}{name}"));
         }
-        let at = match (&w.terminal.file, w.terminal.line) {
-            (Some(f), Some(l)) => format!(" at {}", self.location(f, l)),
-            _ => String::new(),
-        };
-        let mut line = format!("{} ({what}{at})", parts.join(" → "));
-        if !w.through_entry_point {
-            line.push_str(&format!(
-                "; this path does not pass the entry point: {}",
-                no_path_reason(w.reason.unwrap_or("search-cap"))
-            ));
+        parts.join(" → ")
+    }
+
+    /// An own row's searched witness ([`DigestEffectFull::own_path`]) as a
+    /// `path:` line's text; a zero-hop one says the operation is the
+    /// routine's own.
+    #[must_use]
+    pub fn own_path_line(
+        &self,
+        root: &str,
+        w: &crate::engine::l5::group_path::GroupPath,
+    ) -> String {
+        if w.steps.is_empty() {
+            format!(
+                "{} (in the routine itself)",
+                self.steps_line(root, &[], None)
+            )
+        } else {
+            self.steps_line(root, &w.steps, None)
         }
-        line
     }
 
     /// A source location as the human outputs print it (design §3.8 rule 5):
@@ -505,6 +562,11 @@ pub fn edge_tag(kind: &str) -> &'static str {
 pub fn no_path_reason(reason: &str) -> &'static str {
     match reason {
         "no-witness" => "the witness search found no live route through this entry point",
+        "own-no-witness" => {
+            "the listed paths cannot run under literal arguments, and none of this row's \
+             operations can run in any state the search from the routine reaches (another \
+             operation of this kind keeps the write live)"
+        }
         "search-cap" => "search cap reached",
         "cancelled" => "the search was cancelled",
         "no-operation-id" => "no operation id on the fact",
@@ -688,8 +750,17 @@ pub struct RollupTotals {
     pub literal_dead_tables: usize,
     pub no_path_operations: usize,
     pub no_path_tables: usize,
+    /// Every entry point (the presentation of design §3.3: crossings
+    /// grouped by target; a multi-target crossing is its own), and the
+    /// distinct sites they are entered at (by identity: `file:line`, or the
+    /// crossing id for a crossing with no anchor). The scope line's counts.
     pub entry_points: usize,
     pub crossing_sites: usize,
+    /// Those of [`Self::entry_points`] with a may-persist write beyond them,
+    /// and their distinct sites: the `writes beyond dependency entry points`
+    /// header's counts. The rest write only temporary records or no table.
+    pub writing_entry_points: usize,
+    pub writing_sites: usize,
     /// Explain only: known routine callers, page actions, tests.
     pub callers: Option<usize>,
     pub page_actions: Option<usize>,
@@ -723,7 +794,12 @@ impl RollupTotals {
             "temporaryOnlyTables": self.temporary_only_tables,
             "literalDeadTables": self.literal_dead_tables,
             "noPathKept": {"operations": self.no_path_operations, "tables": self.no_path_tables},
-            "entryPoints": {"count": self.entry_points, "sites": self.crossing_sites},
+            "entryPoints": {
+                "count": self.entry_points,
+                "sites": self.crossing_sites,
+                "withWrites": self.writing_entry_points,
+                "withWritesSites": self.writing_sites,
+            },
         });
         if let Some(c) = self.callers {
             v["callers"] = json!(c);
@@ -885,9 +961,17 @@ pub struct RoutineRollup {
     pub totals: RollupTotals,
 }
 
-/// The length of a row's shortest listed path (`usize::MAX` without one).
+/// The length of a row's shortest listed path, else of its searched own
+/// witness (`usize::MAX` without either).
 fn shortest(e: &DigestEffectFull) -> usize {
-    e.via_paths.iter().map(Vec::len).min().unwrap_or(usize::MAX)
+    e.via_paths
+        .iter()
+        .map(Vec::len)
+        .min()
+        .unwrap_or(match &e.own_path {
+            Some(Ok(w)) => w.steps.len(),
+            _ => usize::MAX,
+        })
 }
 
 /// An anchor's `(file, line)` sort key.
@@ -982,9 +1066,23 @@ impl RoutineRollup {
                                 .collect(),
                         ),
                     };
+                    // T-W2-18 with T-W2-24: the entry point prints as its
+                    // targets' qualified displays, an overload with its
+                    // parameters (two crossings into two overloads of one
+                    // routine printed one name on CDO); the row's raw
+                    // `boundary` only when no target is known.
+                    let name = if targets.is_empty() {
+                        detail(e, "boundary").unwrap_or("").to_string()
+                    } else {
+                        targets
+                            .iter()
+                            .map(|t| cx.qualified(t))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
                     crossings.push(CrossingView {
                         id: key.clone(),
-                        name: detail(e, "boundary").unwrap_or("").to_string(),
+                        name,
                         target_ids: targets,
                         sites,
                         ..CrossingView::default()
@@ -1229,7 +1327,7 @@ impl RoutineRollup {
             .map(|n| n.table_id.as_str())
             .filter(|t| !t.is_empty())
             .collect();
-        let writing: Vec<&CrossingView> = self.crossings.iter().filter(|c| c.writes()).collect();
+        let points = EntryPointCounts::of(self);
         RollupTotals {
             may_write_tables: live.len(),
             owned_by_app: owned,
@@ -1259,8 +1357,10 @@ impl RoutineRollup {
             literal_dead_tables: self.literal_dead.len(),
             no_path_operations: self.no_path.len(),
             no_path_tables: no_path_tables.len(),
-            entry_points: writing.len(),
-            crossing_sites: writing.iter().map(|c| c.sites.len().max(1)).sum(),
+            entry_points: points.all.0,
+            crossing_sites: points.all.1,
+            writing_entry_points: points.writing.0,
+            writing_sites: points.writing.1,
             callers: None,
             page_actions: None,
             tests: None,
@@ -1392,6 +1492,70 @@ fn path_lines(cx: &RollupCx<'_>, root: &str, e: &DigestEffectFull, cap: usize) -
         .take(cap)
         .map(|p| format!("path: {}", cx.path_line(root, p)))
         .collect()
+}
+
+/// An own write row's anchor line and its `path:` lines (design §3.4.2:
+/// path and anchor of one witness; never invent a path, say why there is
+/// none). The listed paths when it keeps one; else its searched witness
+/// ([`DigestEffectFull::own_path`]), whose terminal is the anchor; else
+/// `no path kept: <reason>`. `path_cap` 0 (`--max-paths 0`) prints the
+/// anchor only. Final CDO output review, item 2: before, a row whose listed
+/// paths the literal pass had all dropped printed its anchor and nothing
+/// else.
+pub fn own_witness_lines(
+    cx: &RollupCx<'_>,
+    root: &str,
+    e: &DigestEffectFull,
+    kind: &str,
+    path_cap: usize,
+) -> Vec<String> {
+    let listed = path_lines(cx, root, e, path_cap);
+    if !listed.is_empty() {
+        let mut out = vec![format!("{kind} at {}", row_anchor(e))];
+        out.extend(listed);
+        return out;
+    }
+    match &e.own_path {
+        Some(Ok(w)) => {
+            let at = match (&w.terminal.file, w.terminal.line) {
+                (Some(f), Some(l)) => cx.location(f, l),
+                _ => row_anchor(e),
+            };
+            let mut out = vec![format!(
+                "{} at {at}",
+                cx.terminal_kind(&w.terminal.operation_id, kind)
+            )];
+            if path_cap > 0 {
+                // The search may find the write only after the path enters
+                // dependency code and comes back (a re-entry): say so, and
+                // why the listed workspace routes were not used.
+                let reenters = w.steps.iter().find(|s| cx.in_dependency(&s.to));
+                out.push(match reenters {
+                    Some(s) => format!(
+                        "path (re-enters workspace code beyond {}; no listed workspace route \
+                         runs with these literal arguments): {}",
+                        cx.qualified(&s.to),
+                        cx.own_path_line(root, w)
+                    ),
+                    None => format!("path: {}", cx.own_path_line(root, w)),
+                });
+            }
+            out
+        }
+        other => {
+            let mut out = vec![format!("{kind} at {}", row_anchor(e))];
+            if path_cap > 0 {
+                out.push(format!(
+                    "no path kept: {}",
+                    match other {
+                        Some(Err(n)) => no_path_reason(n.reason),
+                        _ => "no witness was searched",
+                    }
+                ));
+            }
+            out
+        }
+    }
 }
 
 /// A crossing's display: its boundary name, else its id.
@@ -1661,10 +1825,11 @@ pub fn workspace_write_lines(
             .iter()
             .find_map(|op| cx.op_kind(op))
             .unwrap_or(type_kind(&rep.effect_type));
-        out.push(format!("    {rep_kind} at {}", row_anchor(rep)));
-        for p in path_lines(cx, &entry.routine_id, rep, o.path_cap) {
-            out.push(format!("    {p}"));
-        }
+        out.extend(
+            own_witness_lines(cx, &entry.routine_id, rep, rep_kind, o.path_cap)
+                .into_iter()
+                .map(|l| format!("    {l}")),
+        );
         if let Some(f) = fields(t) {
             out.push(format!("    {f}"));
         }
@@ -1784,6 +1949,46 @@ struct EntryPoint<'r> {
     temp_only: bool,
     /// Its crossings (indices into `RoutineRollup::crossings`).
     crossings: Vec<usize>,
+    /// Its sites by identity: each `file:line`, or the crossing id of a
+    /// crossing with no anchor (so it still counts once).
+    site_keys: BTreeSet<&'r str>,
+}
+
+/// The entry-point counts every human line states (final CDO output
+/// review, item 3; design §3.6 "a total is a union by identity, never a
+/// sum"): `(entry points, distinct sites)` over every entry point, over
+/// those with a may-persist write beyond them, and over the rest. The
+/// entry points partition (each is one or the other), so `all.0 ==
+/// writing.0 + other.0`; the sites are unions, so `all.1` is the size of the
+/// union of the other two sets (a site entering both kinds counts once).
+/// Before, the scope line counted writing CROSSINGS and summed their sites
+/// (IssueReminder on CDO: "14 entry points at 14 sites") while the sections
+/// counted entry points ("12 … at 14 sites", "15 … at 17 sites").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntryPointCounts {
+    pub all: (usize, usize),
+    pub writing: (usize, usize),
+    pub other: (usize, usize),
+}
+
+impl EntryPointCounts {
+    #[must_use]
+    pub fn of(r: &RoutineRollup) -> EntryPointCounts {
+        let points = entry_points(r);
+        let count = |pred: &dyn Fn(&EntryPoint<'_>) -> bool| {
+            let chosen: Vec<&EntryPoint<'_>> = points.iter().filter(|p| pred(p)).collect();
+            let sites: BTreeSet<&str> = chosen
+                .iter()
+                .flat_map(|p| p.site_keys.iter().copied())
+                .collect();
+            (chosen.len(), sites.len())
+        };
+        EntryPointCounts {
+            all: count(&|_| true),
+            writing: count(&|p| !p.temp_only),
+            other: count(&|p| p.temp_only),
+        }
+    }
 }
 
 /// One may-persist table's witness beyond an entry point (W2-6).
@@ -1872,12 +2077,18 @@ fn entry_points(r: &RoutineRollup) -> Vec<EntryPoint<'_>> {
                 prefix: None,
                 temp_only: true,
                 crossings: Vec::new(),
+                site_keys: BTreeSet::new(),
             });
             out.len() - 1
         });
         let p = &mut out[i];
         p.crossings.push(ci);
         p.sites.extend(c.sites.iter().map(String::as_str));
+        if c.sites.is_empty() {
+            p.site_keys.insert(c.id.as_str());
+        } else {
+            p.site_keys.extend(c.sites.iter().map(String::as_str));
+        }
         p.tables
             .extend(c.tables.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         for (t, ids) in &c.by_type {
@@ -1906,6 +2117,58 @@ fn entry_points(r: &RoutineRollup) -> Vec<EntryPoint<'_>> {
     out
 }
 
+/// One entry point's may-persist writes beyond it (MCP output wave 3a):
+/// what `alsem query`'s `beyond` fields state, from the same entry points
+/// [`beyond_lines`] renders (refined groups, after the literal pass).
+#[derive(Debug, Clone)]
+pub struct BeyondWrites<'r> {
+    /// The boundary display (`Codeunit X::OnRun`).
+    pub name: &'r str,
+    /// The entered dependency routines (stable ids), sorted.
+    pub targets: Vec<&'r str>,
+    /// `file:line` of each site (1-based), sorted.
+    pub sites: Vec<&'r str>,
+    /// May-persist tables, id → display.
+    pub tables: BTreeMap<&'r str, &'r str>,
+    /// Per table id, the digest write types beyond (`DB_INSERT`, …).
+    pub types_of: BTreeMap<&'r str, BTreeSet<&'r str>>,
+    /// Writes on a table not resolved.
+    pub unresolved: usize,
+}
+
+/// Every entry point that carries a may-persist write, in [`beyond_lines`]'
+/// order (most tables first, then by name).
+#[must_use]
+pub fn beyond_writes(r: &RoutineRollup) -> Vec<BeyondWrites<'_>> {
+    entry_points(r)
+        .into_iter()
+        .filter(|p| !p.temp_only)
+        .map(|p| {
+            let mut targets: Vec<&str> = p
+                .crossings
+                .iter()
+                .flat_map(|&ci| r.crossings[ci].target_ids.iter().map(String::as_str))
+                .collect();
+            targets.sort_unstable();
+            targets.dedup();
+            let mut types_of: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+            for (ty, ids) in &p.by_type {
+                for id in ids {
+                    types_of.entry(id).or_default().insert(ty);
+                }
+            }
+            BeyondWrites {
+                name: p.name,
+                targets,
+                sites: p.sites,
+                tables: p.tables,
+                types_of,
+                unresolved: p.unresolved,
+            }
+        })
+        .collect()
+}
+
 /// `writes beyond dependency entry points` (design §4.1 section 12).
 #[must_use]
 pub fn beyond_lines(
@@ -1924,12 +2187,13 @@ pub fn beyond_lines(
         .iter()
         .flat_map(|p| p.tables.keys().copied())
         .collect();
-    let sites: usize = writing.iter().map(|p| p.sites.len().max(1)).sum();
+    // The counts of the one union (EntryPointCounts), as the scope line's.
+    let counts = EntryPointCounts::of(r);
     let mut out = vec![format!(
         "writes beyond dependency entry points ({} through {} at {}):",
         plural(tables.len(), "table", "tables"),
-        plural(writing.len(), "entry point", "entry points"),
-        plural(sites, "site", "sites")
+        plural(counts.writing.0, "entry point", "entry points"),
+        plural(counts.writing.1, "site", "sites")
     )];
     let line = |p: &EntryPoint<'_>| -> String {
         let kinds: Vec<String> = p
@@ -2059,8 +2323,9 @@ pub fn beyond_lines(
     if !others.is_empty() {
         if o.detail {
             out.push(format!(
-                "  {} write only temporary records or no table:",
-                plural(others.len(), "entry point", "entry points")
+                "  {} at {} write only temporary records or no table:",
+                plural(counts.other.0, "entry point", "entry points"),
+                plural(counts.other.1, "site", "sites")
             ));
             for p in others {
                 out.push(format!("  {}", line(p).trim_start()));
@@ -2068,12 +2333,8 @@ pub fn beyond_lines(
         } else {
             out.push(format!(
                 "  {} at {} write only temporary records or no table (--detail lists them)",
-                plural(others.len(), "entry point", "entry points"),
-                plural(
-                    others.iter().map(|p| p.sites.len().max(1)).sum(),
-                    "site",
-                    "sites"
-                )
+                plural(counts.other.0, "entry point", "entry points"),
+                plural(counts.other.1, "site", "sites")
             ));
         }
     }
@@ -2219,7 +2480,7 @@ pub fn event_lines(r: &RoutineRollup, cx: &RollupCx<'_>, o: RenderOpts) -> Vec<S
         thousands(r.events_ws.len())
     );
     if !f.shown.is_empty() {
-        s.push_str(&format!(", by publisher: {}", f.joined()));
+        s.push_str(&format!(", by publisher{}: {}", f.count_note(), f.joined()));
     }
     s.push_str(&format!(
         "; {} more only beyond entry points",
@@ -2292,7 +2553,7 @@ pub fn dependency_gap_lines(r: &RoutineRollup, o: RenderOpts) -> Vec<String> {
         g.not_placed.len()
     );
     if !f.shown.is_empty() {
-        s.push_str(&format!("; top callees: {}", f.joined()));
+        s.push_str(&format!("; top callees{}: {}", f.count_note(), f.joined()));
     }
     vec![s]
 }
@@ -2358,8 +2619,10 @@ mod tests {
             assert_eq!(f.total(), n, "{n}");
             if shown < n {
                 assert!(f.joined().ends_with(&format!("… +{} tables", n - shown)));
+                assert_eq!(f.count_note(), format!(" ({n} tables)"), "{n}");
             } else {
                 assert!(!f.joined().contains('…'));
+                assert_eq!(f.count_note(), "", "{n}");
             }
         }
         assert_eq!(
@@ -2422,6 +2685,57 @@ mod tests {
         assert!(cx.qualified("ws:Alone").ends_with("::Alone"));
         assert!(cx.qualified("ws:Pick#1").ends_with("Pick(X: Integer)"));
         assert!(cx.qualified("ws:Pick#2").ends_with("Pick(X: Text)"));
+    }
+
+    /// Final CDO output review, item 3 (design §3.3, §3.6): the scope line,
+    /// the `writes beyond dependency entry points` header and the "write
+    /// only temporary records" line count ENTRY POINTS (crossings grouped
+    /// by target; a multi-target crossing is its own) and DISTINCT sites,
+    /// and the scope's counts are the union of the two sections' by
+    /// identity. Hand-stated crossings: two crossings into one writing
+    /// target (two sites: one entry point), one temp-only crossing that
+    /// SHARES one of those sites (a site entering both kinds counts once in
+    /// the union), a multi-target crossing with no anchor (counted once by
+    /// its id), and a second temp-only crossing at its own site.
+    ///
+    /// Discrimination (2026-11-05): counting the scope's sites as the sum
+    /// of the per-entry-point counts (`.map(|p| p.site_keys.len()).sum()` in
+    /// `EntryPointCounts::of`) fails at "the union: a shared site counts
+    /// once" (5 sites, not 4); restored, passes. Before the fix the scope
+    /// line printed the writing CROSSINGS (here 2) as entry points.
+    #[test]
+    fn entry_point_counts_are_unions_by_identity() {
+        let crossing = |id: &str, targets: &[&str], sites: &[&str], writes: bool| CrossingView {
+            id: id.to_string(),
+            name: targets.join(", "),
+            target_ids: targets.iter().map(|t| t.to_string()).collect(),
+            sites: sites.iter().map(|s| s.to_string()).collect(),
+            tables: if writes {
+                BTreeMap::from([("dep/table/1".to_string(), "T".to_string())])
+            } else {
+                BTreeMap::new()
+            },
+            ..CrossingView::default()
+        };
+        let r = RoutineRollup {
+            crossings: vec![
+                crossing("cs:1", &["dep:Post"], &["ws:a.al:1"], true),
+                crossing("cs:2", &["dep:Post"], &["ws:b.al:2"], true),
+                crossing("cs:3", &["dep:Temp"], &["ws:b.al:2"], false),
+                crossing("op:4", &["dep:Page::A", "dep:Page::B"], &[], false),
+                crossing("cs:5", &["dep:Other"], &["ws:c.al:3"], false),
+            ],
+            ..RoutineRollup::default()
+        };
+        let c = EntryPointCounts::of(&r);
+        assert_eq!(c.writing, (1, 2), "one entry point at two sites");
+        assert_eq!(c.other, (3, 3), "three temp-only entry points: {c:?}");
+        assert_eq!(
+            c.all.0,
+            c.writing.0 + c.other.0,
+            "entry points partition: {c:?}"
+        );
+        assert_eq!(c.all, (4, 4), "the union: a shared site counts once");
     }
 
     #[test]

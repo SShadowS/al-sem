@@ -1350,7 +1350,9 @@ in the fixture, because a raw 40 KiB cap guarantees neither.
   so never assumed for all)" — or 3a applies the literal pass to query's rows too (to be decided
   in 3a's spec). The `CDO Log Attachment` case (IR, `DB_MODIFY` absent from the digest; prove
   `yes` only through the Insert) is pinned by its exact operation ids in `output_cdo.rs`.
+  **Decided in 3a (§12.2): state the substrate difference; no literal pass on query's rows.**
 - **3a (Q4):** the per-operation RecordRef bit; before it, "table not resolved" is the wording.
+  Built in 3a (§12.3).
 - **3b** rewrites descriptions around these formats.
 - Nothing in explain, digest or prove depends on wave 3.
 
@@ -1850,6 +1852,152 @@ additive fields (`/3` stays the redesign's); goldens moved by the version line o
 
 Not covered: the dual cap where the prefix (root) tree itself caps; `live_tree` returns `None`
 then and no group path is computed, exactly as before W2-0b (no fixture reaches 400,000 states).
+
+---
+
+## 12. Wave 3a as built (branch `mcpout/w3a`)
+
+### 12.1 Query's depth (M3, Q1, X6)
+
+- **Which cone.** The plan named `cone_derived`'s `writes_physical_tables_of`; §7 asks for the
+  explain function. They are one cone at two stages: `cone_derived` folds the capability cone's
+  facts per routine before any literal pass, while explain's `writes beyond dependency entry
+  points` reads the root's digest entry after the L4 temp-state join and the literal pass
+  (refined group lists, G48 dead crossings dropped). Reading the unrefined fold would bring the
+  literal-dead disagreement into query's beyond section, and it has no per-entry-point grouping
+  of its own. So query reads explain's entry: `session::query_cone_plan(root)` declares `l4`
+  (unchanged) plus one tree over the root (`TreeRead::Effects`, no tests, no gap count), and
+  `effect_query_cli::cone_entry` runs `run_digest_query_full_from_entries` as explain does. The
+  rollup is `RoutineRollup::build`; the human section is `routine_rollup::beyond_lines`
+  verbatim; the JSON reads `routine_rollup::beyond_writes` (the same entry points, new and
+  public). On the resident engine the tree and the per-root `Witness` artifact are the ones
+  explain, digest and prove use, so a query and an explain on one root share the entry.
+- **What moved.** Human: the summary part `writes beyond dependency entry points on N tables
+  through M entry points (K only there)` (omitted when there is none), the coverage and scope
+  lines (`dependency code: full cone for physical writes, grouped per entry point; per-operation
+  detail one routine deep`), and explain's section after the per-operation writes. Touches
+  (`--from` asked down): the same scope sentence, one line naming each entry point beyond which
+  the cone may write the table, and `down: no operation one routine into dependency code
+  touches the table` when only the cone writes it. JSON 3.1.0, additive: `byTable[].beyond` and
+  `down.beyond` (`{entryPoint, sites, ops}`), `summary.beyondEntryPoints` (`{entryPoint,
+  targets, sites, tables[{table, tableId, ops}], unresolvedWrites}`), `summary.beyondWrites`
+  (`{tables, entryPoints, sites, tablesOnlyBeyond}`), `summary.scope` =
+  `operations-one-routine-deep; writes-beyond-entry-points-full-cone`, and `beyondWrites` in the
+  MCP summary. **Unchanged:** every row (field for field, IR 652 and RR 629 compared on CDO),
+  `via`, every L4 count, every detector input (no r4/r4f golden moved). Touches without `--from`
+  or asked only up reads no cone (`cli_build_counters::query_touches_from_reads_the_cone_only_down`).
+- **Not done here.** Explain, digest and prove headers keep their own scope sentences (they
+  already state the cone's depth); query's `up` stays L4-only (its callers are judged one
+  routine deep, as the scope line says).
+
+### 12.2 The cross-tool agreement's query leg (decided)
+
+**Decision: state the substrate difference; do not apply the literal pass to query's rows.**
+Query's per-operation rows are L4's, and ConTinAI reads them; marking or dropping rows by a
+second judgement would put a cone fact on a substrate that cannot reproduce it (L4 has no
+literal frames, and the cone's literal handling is both `param_guard` in singleton SCCs and the
+per-root `LiteralReach` pass). Measured first (CDO `bc3ccb18`, before and after 3a): at the
+**table** level the two substrates already agree in both directions for IssueReminder and
+RunReportID: every table explain's physical class names (own 12 / beyond 131 for IR; 12 / 396
+for RR) is in query's writes once beyond is filled, and no table query's per-operation rows write
+may persist is outside the cone. The difference is per **operation kind**: query lists the
+`CDO Log Attachment` `Modify` operations (§1 item 9) and a `Delete` the cone drops, while the
+table stays a physical write of both through its `DeleteAll` and `Insert`. So the leg is:
+
+1. every table the cone's physical class names is in query's writes (per-operation rows or
+   `beyondEntryPoints`);
+2. query's `beyondEntryPoints` tables equal explain's tables beyond entry points, and the human
+   section is explain's lines;
+3. a table query's per-operation rows write that the cone does not name must be accounted for by
+   a stated substrate difference; today there is none (the test asserts the extra set is empty, so
+   one appearing fails until its reason is written down);
+4. per operation kind, query may list more; the stated difference is literal-dead in the cone,
+   pinned by the three `Modify` operation ids, explain's rows on the table (`DB_DELETE`,
+   `DB_INSERT`) and prove's evidence (`yes`, `DB_DELETE` and `DB_INSERT`; §7 said "only through
+   the Insert": the `DeleteAll` row is evidence too).
+
+Tests: `output_invariants::query_effects_writes_agree_with_the_cone_on_the_fixture` (always on;
+discrimination: `cone_root` returning `None` for effects fails at "the cone was read") and
+`output_cdo::cdo_query_effects_writes_agree_with_the_cone` (CDO-gated, the three routines and
+the `CDO Log Attachment` pin).
+
+### 12.3 Q4, the RecordRef receiver bit
+
+The IR knows the receiver's declaration where the body walk captures a record operation
+(`ir_walk`'s receiver scope). It now keeps, per operation, whether the receiver resolves lexically
+(parameters and locals before the object's globals) to a variable declared `RecordRef`:
+`PRecordOperation::receiver_is_record_ref` (serde-skipped, outside `PartialEq`), forwarded to
+`ModelRecordOperation`. Declared needs: a plain field every profile keeps (one bool per
+operation, beside two existing bools; nothing measured to gate). Only `alsem query` reads it:
+`on a RecordRef (table decided at run time)` for those operations, `table not resolved` for the
+rest; JSON `receiver: "RecordRef"` on such a row, `tableNotResolved.recordRef` and
+`down.counts.tableNotResolvedRecordRef`. On CDO every one of IR's 69 and RR's 68 unresolved-table
+operations is on a declared `RecordRef` (`FilterRecord`, `RecRef`, `MergeTableRec`, … checked
+against the declarations); the fixtures show both cases (`OutIssueDocument`'s `RecRef` and
+`OutFieldOps`' RecordRef lock; r2a's undeclared `Missing.Get` stays "table not resolved").
+
+### 12.4 Cost on CDO
+
+`release-fast`, baseline passed as an argument. Cold CLI (`/usr/bin/time -v`; wall / peak RSS):
+
+| Command | Before (`3cc163f0`) | After |
+|---|---|---|
+| `query effects` IR human / JSON | 12.9 / 14.2 s, 3.06 / 3.11 GB | 20.6 / 20.3 s, 3.13 / 3.11 GB |
+| `query effects` RR human / JSON | 14.2 / 13.7 s, 3.12 / 3.10 GB | 22.1 / 22.2 s, 3.10 / 3.15 GB |
+| `query touches` IR vs `CDO File`, human / JSON | 14.6 / 14.5 s, 3.13 / 3.11 GB | 19.9 / 20.5 s, 3.11 / 3.17 GB |
+| `query touches` RR vs `CDO File`, human / JSON | 19.6 / 21.5 s, 3.14 / 3.11 GB | 21.7 / 22.3 s, 3.13 / 3.11 GB |
+| `explain` IR / RR human (reference) | load-skewed | 21.0 / 23.0 s, 3.15 / 3.14 GB |
+
+Resident engine, one long-lived `alsem mcp` session per binary, asks in order (engine child
+VmHWM after each):
+
+| Ask | Before | After | After, `--low-mem` (before) |
+|---|---|---|---|
+| query effects IR, 1st (cold engine) | 13.1 s, 3.71 GB | 25.1 s, 5.58 GB | 23.5 s, 4.41 GB (13.0 s, 2.70 GB) |
+| query effects IR, 2nd | 0.05 s | 0.25 s | 0.25 s |
+| query effects RR, 1st / 2nd | 0.05 / 0.05 s | 5.8 / 0.26 s | 5.9 / 0.26 s |
+| query touches IR / RR vs `CDO File` | 0.04 / 0.05 s | 0.23 / 0.25 s | 0.24 / 0.26 s |
+| explain IR after the queries | 14.0 s | 1.2 s | 1.1 s (11.5 s) |
+| digest RR, last | 7.4 s, 6.06 GB | 1.05 s, 6.19 GB | 1.05 s, 4.98 GB (4.99 GB) |
+
+A query-only session now holds the fold and the root's tree (+1.9 GB at the first query, the
+same cells the first explain built before); after one ask of each kind the engine peak is
+6.19 GB against 6.06 GB (+0.12 GB, inside the 8 GiB cross-app budget) and 4.98 GB under
+`--low-mem` (inside 6 GiB). A warm query costs ~0.2 s more (the rollup and its rendering).
+Sizes: query effects human IR 4.9 → 20.9 KB (25 → 62 lines), RR 4.5 → 24.7 KB (23 → 70 lines);
+JSON IR 853 → 893 KB, RR 828 → 940 KB.
+
+## 13. The final hands-on CDO review (2026-11-05, branch `mcpout/w3bc`)
+
+Three output bugs, each with its root cause and the rule it now follows.
+
+1. **Prove's human `unknown` listed every blocker** (§4.7). IR `writes-table:Data Exch.`: 287
+   blockers, 294 lines, 47,875 B, over the inline cap. The human block now groups by kind
+   (first-seen order), states each kind's count split by place (this workspace, dependency code,
+   not placed; omitted for a kind with no place, such as `coverage-incomplete`), and lists the
+   first 3 per kind, workspace ones first; `--detail` / MCP `detail` lists all. JSON unchanged.
+   After: 22 lines, 2,076 B.
+2. **A workspace-code write with no `path:` and no reason** (§3.4.2). IR's `CDO Queue Entry`
+   Insert: the cone listed three paths, all through `RunReportID → QueueMail`, which IR's literal
+   arguments rule out; the literal pass dropped them (`via_paths` empty, `pathsProducerTruncated`)
+   while the row stayed live, since row liveness is judged by kind (any live direct fact of the
+   kind and table). The pass now searches the root's guarded tree for the first live state owning
+   one of the row's own operations (`DigestEffectResult::own_path`); the line prints that witness,
+   or `no path kept: <reason>`. On CDO the witness re-enters workspace code beyond
+   `Codeunit Reminder-Issue::OnRun` (33 hops, through Sales-Post and a CDO event subscriber), and
+   the line says so. **Open for the owner:** by §3.4.1's placement rule ("a workspace operation
+   reached only after crossing into dependency code is placed under that crossing") such a row
+   belongs under the crossing, not in "writes in workspace code". The fix does not move it: the
+   shortest live route passing a crossing does not prove that no crossing-free live route exists,
+   and moving own rows into crossings changes the section model every T-W2 invariant reads. A row
+   of the root's own body now prints the zero-hop witness `path: <root> (in the routine itself)`.
+3. **Entry-point counts disagreed** (§3.3, §3.6). The scope line counted the crossings with a
+   may-persist write and summed their sites (IR "14 entry points at 14 sites"); the sections
+   counted entry points (12 at 14 with writes, 15 at 17 temporary only). Every line now counts
+   entry points at distinct sites (`EntryPointCounts`: by `file:line`, a crossing with no anchor
+   by its id); the scope is the union of the two sections: IR 27 at 31, RR 29 at 32.
+   `summary.entryPoints` keeps `count` / `sites` (now every entry point) and adds `withWrites` /
+   `withWritesSites`. `commits`' "commit-bearing entry points" still count crossings (§3.6).
 
 ---
 

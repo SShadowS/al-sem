@@ -8,6 +8,7 @@
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     D47 Rec: Modify 1 — known persistent
       Modify at ws:src/Sender.Codeunit.al:16
+      path: SendAfterModify (in the routine itself)
   events: 0 raised in workspace code; 0 more only beyond entry points
   HTTP at 1 place: HTTP at ws:src/Sender.Codeunit.al:17 (unconditional-on-success)
   errors at 1 place: ERROR_IMPLICIT at ws:src/Sender.Codeunit.al:14 (unconditional-on-success)

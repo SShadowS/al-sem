@@ -91,6 +91,12 @@ fn calls(
             "alsem_prove",
             json!({"routine": sel, "question": format!("writes-table:{wtable}"), "format": "json", "deterministic": true}),
         ),
+        // Item T: the CDO rendering goldens read the human writes-table answer.
+        (
+            "prove writes-table human",
+            "alsem_prove",
+            json!({"routine": sel, "question": format!("writes-table:{wtable}"), "format": "human", "deterministic": true}),
+        ),
         (
             "digest json",
             "alsem_digest",
@@ -116,7 +122,149 @@ fn calls(
             "alsem_query_touches",
             json!({"table": table, "from": qsel, "deterministic": true}),
         ),
+        // Wave 3a: the `CDO Log Attachment` case (design §1 item 9, §12).
+        (
+            "prove writes-table log-attachment json",
+            "alsem_prove",
+            json!({"routine": sel, "question": format!("writes-table:{LOG_ATTACHMENT}"), "format": "json", "deterministic": true}),
+        ),
+        // Final CDO review, item 1: an `unknown` with hundreds of blockers.
+        (
+            "prove writes-table data-exch human",
+            "alsem_prove",
+            json!({"routine": sel, "question": format!("writes-table:{DATA_EXCH}"), "format": "human", "deterministic": true}),
+        ),
+        // Final CDO review, item 3: every entry point's line and sites.
+        (
+            "explain detail",
+            "alsem_explain",
+            json!({"routines": [sel], "detail": true}),
+        ),
     ]
+}
+
+/// Final CDO review, item 1: IssueReminder's `writes-table:Data Exch.` is
+/// `unknown` with 287 blockers (2026-11-05, `bc3ccb18`); one line each was
+/// 294 lines and 47,875 bytes, over the 40 KiB inline cap.
+const DATA_EXCH: &str = "Data Exch.";
+
+/// The table of design §1 item 9: query lists `Modify` operations on it the
+/// capability cone rules out under literal arguments.
+const LOG_ATTACHMENT: &str = "CDO Log Attachment";
+
+/// IssueReminder's three `Modify` operations on [`LOG_ATTACHMENT`] (design §1
+/// item 9): `CDO E-Mail Log::DeleteLogAndAttachmentData`
+/// (`CDOEMailLog.Table.al:566`), `CDO Log Attachment::MoveToFilesystem` (`:110`)
+/// and `::MoveToAzureBlob` (`:132`). Every route from IssueReminder passes
+/// `OnInsert = true` into `MoveEMailToFile`, which exits before them; the
+/// cone drops them, query's per-operation rows (L4, no literal pass) list
+/// them.
+const LOG_ATTACHMENT_MODIFIES: &[&str] = &[
+    "98e44272062b13c6/a3c756ee42ea8c1596505540f26e96e75c254da4a710a10e874e7d8436202861/op2",
+    "98e44272062b13c6/ad4dd41f5631121196e1bf00583864d95520cfdfc2b166858cba1c696af4369b/op1",
+    "98e44272062b13c6/fe793a463cda533b7d5b791521249214b63f6696b25b1b5dd00cdf0b4519c6f3/op1",
+];
+
+/// MCP output wave 3a, the cross-tool agreement's query leg on CDO (design
+/// §7 as decided in §12): for each routine, every table the cone's physical
+/// class names (explain's own rows and its rows beyond an entry point) is in
+/// query effects' writes (its per-operation rows or the cone's entry
+/// points); query's writes beyond entry points are explain's, table for
+/// table; and today no table query's per-operation rows write may persist
+/// is outside the cone (measured 2026-11-04 on `bc3ccb18`: IR 15 own, 131
+/// beyond; RR 13 own, 396 beyond). A future extra must name its substrate
+/// difference here. The leg is per table; per operation kind query may
+/// list more, and the `CDO Log Attachment` case pins the one stated
+/// difference (literal-dead in the cone) by its exact operation ids:
+/// query's IR rows hold exactly [`LOG_ATTACHMENT_MODIFIES`] as its `Modify`
+/// rows on the table, explain names no `DB_MODIFY` on it (own or beyond),
+/// the table is still a physical write of both (its `DeleteAll` and
+/// `Insert`), and prove answers `yes` with no `DB_MODIFY` evidence.
+#[test]
+fn cdo_query_effects_writes_agree_with_the_cone() {
+    let Some(a) = cdo_answers() else {
+        return;
+    };
+    let doc = |label: &str, call: &str| -> Value {
+        serde_json::from_str(&a.answers[&format!("{label} {call}")].stdout).expect("JSON")
+    };
+    for (label, ..) in ROUTINES {
+        let explain = doc(label, "explain json");
+        let query = doc(label, "query effects json");
+        assert_eq!(
+            query["payload"]["summary"]["scope"],
+            "operations-one-routine-deep; writes-beyond-entry-points-full-cone",
+            "{label}: the cone was read"
+        );
+        let (e_own, e_beyond) =
+            crate::output_invariants::explain_physical_tables(&explain["cards"][0]);
+        let (q_own, q_beyond) = crate::output_invariants::query_write_tables(&query);
+        assert_eq!(q_beyond, e_beyond, "{label}: query's beyond is explain's");
+        let missing: Vec<&String> = e_own
+            .iter()
+            .chain(&e_beyond)
+            .filter(|t| !q_own.contains(*t) && !q_beyond.contains(*t))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{label}: cone tables query does not name: {missing:?}"
+        );
+        let extra: Vec<&String> = q_own
+            .iter()
+            .filter(|t| !e_own.contains(*t) && !e_beyond.contains(*t))
+            .collect();
+        assert!(
+            extra.is_empty(),
+            "{label}: query tables the cone does not name: {extra:?}"
+        );
+        // The human section is explain's own lines.
+        let block = crate::output_invariants::beyond_block(
+            &a.answers[&format!("{label} query effects human")].stdout,
+        );
+        let e_block = crate::output_invariants::beyond_block(
+            &a.answers[&format!("{label} explain human")].stdout,
+        );
+        assert_eq!(block, e_block, "{label}: the beyond section");
+    }
+    // The CDO Log Attachment case (IssueReminder).
+    let query = doc("IssueReminder", "query effects json");
+    let explain = doc("IssueReminder", "explain json");
+    let mut modifies: Vec<&str> = query["payload"]["effects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["tableName"] == LOG_ATTACHMENT && e["op"] == "Modify")
+        .filter_map(|e| e["operationId"].as_str())
+        .collect();
+    modifies.sort_unstable();
+    assert_eq!(modifies, LOG_ATTACHMENT_MODIFIES, "query's Modify rows");
+    let mut explain_types: Vec<&str> = Vec::new();
+    for w in explain["cards"][0]["effects"]["writes"].as_array().unwrap() {
+        let names_it = w["table"] == LOG_ATTACHMENT
+            || w["resources"]
+                .as_array()
+                .is_some_and(|rs| rs.iter().any(|r| r["display"] == LOG_ATTACHMENT));
+        if names_it && w["class"] != "temporary" && w["literalUnreachable"] != true {
+            explain_types.push(w["op"].as_str().unwrap());
+        }
+    }
+    explain_types.sort_unstable();
+    assert_eq!(
+        explain_types,
+        ["DB_DELETE", "DB_INSERT"],
+        "explain's rows on the table"
+    );
+    let prove = doc("IssueReminder", "prove writes-table log-attachment json");
+    let r = &prove["payload"]["result"];
+    assert_eq!(r["answer"], "yes", "{r}");
+    let mut types: Vec<&str> = r["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["type"].as_str())
+        .collect();
+    types.sort_unstable();
+    assert_eq!(types, ["DB_DELETE", "DB_INSERT"], "prove's evidence");
 }
 
 /// Every routine's answers off one server, once per process; `None` without CDO.
@@ -276,18 +424,19 @@ fn cdo_digest_summary_is_small_and_lists_the_routine() {
 /// Item T, "MCP result against the client's real limit" and "one copy" on CDO
 /// (plan 1c; E4, P3): Claude Code files a result whose `structuredContent` is
 /// over 50,000 characters (measured 2026-11-04: it reads that field alone), so
-/// with the default inline cap every one of the 30 answers keeps
-/// `structuredContent` under it, and holds the stdout at most once (`output`
-/// XOR `stdoutText`).
+/// with the default inline cap every answer keeps `structuredContent` under it
+/// and the whole result under the wire budget (T-W2-23's two budgets), and
+/// holds the stdout at most once (`output` XOR `stdoutText`).
 ///
 /// Discrimination (2026-11-04): restoring the triple copy (pre-1c) is what
 /// this catches: `RunReportID`'s writes-table JSON answer measured 103,764
 /// characters of `structuredContent` then (hands-on run). A STATED LIMIT:
 /// raising the default cap back to 64 KiB does NOT fail it (cdo profile run:
-/// pass), because none of the 30 answers has a stdout between 40 and 64 KiB
-/// (a JSON one is re-serialized compactly as `output`, smaller than its text).
-/// The 40 KiB default rests on arithmetic (stdout escaped plus a ~1 KB
-/// envelope under 50,000 characters), not on this test.
+/// pass), because none of the then 30 answers has a stdout between 40 and 64
+/// KiB (a JSON one is re-serialized compactly as `output`, smaller than its
+/// text). Since item T the pool bounds the escaped answer itself
+/// (`tools::MCP_CLIENT_BUDGET_CHARS`), proven on the fixture by
+/// `output_invariants_w3::every_answer_fits_the_client_and_the_wire`.
 #[test]
 fn cdo_every_answer_fits_the_client_limit() {
     let Some(a) = cdo_answers() else { return };
@@ -295,10 +444,8 @@ fn cdo_every_answer_fits_the_client_limit() {
     for (key, ans) in &a.answers {
         let result: Value = serde_json::from_str(&ans.result_text).unwrap();
         let sc = &result["structuredContent"];
-        let chars = sc.to_string().chars().count();
-        if chars > 50_000 {
-            failures.push(format!("{key}: structuredContent of {chars} characters"));
-        }
+        // T-W2-23's two budgets: what the client reads, and the whole wire.
+        failures.extend(crate::output_invariants_w3::budget_failures(key, &result));
         if sc.get("output").is_some() && sc.get("stdoutText").is_some() {
             failures.push(format!("{key}: two copies"));
         }
@@ -347,8 +494,8 @@ fn cdo_boundary_groups_name_their_owner_and_every_resource() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Item T, "a summary on every spill" on CDO (plan 1e, E2): every one of the 30
-/// answers that went to a file (IssueReminder's 80 KB explain card, its query
+/// Item T, "a summary on every spill" on CDO (plan 1e, E2): every answer that
+/// went to a file (IssueReminder's 80 KB explain card, its query
 /// answers, RunReportID's 194 KB card, ...) carries the renderer's summary, at
 /// most 8 KiB, in a `tools/call` result under 40,000 characters. The fixture
 /// test `output_invariants::every_spilled_answer_carries_a_summary` carries the
@@ -519,4 +666,480 @@ fn cdo_explain_digest_and_prove_give_one_table_answer() {
         }
     }
     assert!(server.finish().success());
+}
+
+// ---------------------------------------------------------------------------
+// Item T on CDO (spec §8.3): the rows wave 3 adds, and the rendering goldens.
+// ---------------------------------------------------------------------------
+
+/// The CDO answers the rendering goldens and the size ratchets read: `(call
+/// label, golden file suffix)`. The digest's is its envelope summary.
+const RENDERED: &[(&str, &str)] = &[
+    ("explain human", "explain.human.txt"),
+    ("query effects human", "query-effects.human.txt"),
+    ("query touches human", "query-touches.human.txt"),
+    ("prove may-commit human", "prove-may-commit.human.txt"),
+    ("prove writes-table human", "prove-writes-table.human.txt"),
+    (
+        "prove writes-table data-exch human",
+        "prove-writes-table-data-exch.human.txt",
+    ),
+    ("digest human", "digest.human.txt"),
+];
+
+/// Per routine and call, the size ratchet (T-W2-15): lines and bytes of the
+/// whole human output, measured 2026-11-05 on `bc3ccb18` with about 10%
+/// headroom (explain IR 127 lines / 32,433 B, RR 139 / 37,671; query
+/// effects IR 62 / 20,901, RR 70 / 24,677; touches 11 / 2.2 KB; digest
+/// human IR 113 / 30,687, RR 123 / 35,392). A number may go down freely; up
+/// only by editing it here with the reason. The plan's targets hold under
+/// every one: explain ≤ 150 lines, query effects ≤ 100, touches ≤ 20.
+fn ratchet(label: &str, call: &str) -> Budget {
+    let (lines, bytes) = match (label, call) {
+        ("IssueReminder", "explain human") => (140, 35_500),
+        ("RunReportID", "explain human") => (150, 39_936),
+        (_, "explain human") => (30, 2_500),
+        ("IssueReminder", "query effects human") => (70, 23_000),
+        ("RunReportID", "query effects human") => (80, 27_000),
+        (_, "query effects human") => (20, 2_000),
+        (_, "query touches human") => (20, 3_000),
+        (_, "prove may-commit human") => (20, 2_000),
+        ("RunReportID", "prove writes-table human") => (20, 5_000),
+        (_, "prove writes-table human") => (20, 2_500),
+        // Final CDO review, item 1: IssueReminder's 287 blockers fold by
+        // kind (22 lines, 2,061 B on 2026-11-05; before 294 / 47,875).
+        // RunReportID answers `yes` with 5 evidence rows and their paths
+        // (17 lines, 7,366 B).
+        ("RunReportID", "prove writes-table data-exch human") => (20, 8_200),
+        (_, "prove writes-table data-exch human") => (30, 3_000),
+        ("IssueReminder", "digest human") => (125, 34_000),
+        ("RunReportID", "digest human") => (135, 39_000),
+        (_, "digest human") => (30, 2_500),
+        _ => (150, 40 * 1024),
+    };
+    Budget { lines, bytes }
+}
+
+use crate::output_invariants_w3::{
+    Budget, crossing_failures, evidence_failures, hygiene_failures, kind_failures, size_failures,
+};
+
+/// The CDO inputs a rendering golden was minted from: `(git sha, dirty,
+/// dependency closure)`, the stamps every CDO golden carries (CLAUDE.md).
+fn cdo_stamp(ws: &std::path::Path) -> Value {
+    let git = |args: &[&str]| -> Option<String> {
+        let o = std::process::Command::new("git")
+            .arg("-C")
+            .arg(ws)
+            .args(args)
+            .output()
+            .ok()?;
+        o.status
+            .success()
+            .then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    json!({
+        "workspace_git_sha": git(&["rev-parse", "HEAD"]),
+        "workspace_dirty": git(&["status", "--porcelain"]).map(|s| !s.is_empty()),
+        "dependency_closure_sha256":
+            al_sem::program::resolve::semantic_golden::dependency_closure_digest(ws).ok(),
+    })
+}
+
+fn goldens_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/cli-output-goldens/cdo")
+}
+
+/// Whether the CDO workspace is the one the goldens and ratchets were
+/// minted from. Under `REGEN_TEMP_GOLDENS=1` the stamp is (re)written; on
+/// drift `ENFORCE_CDO_WS=1` fails and an ungated run warns and skips.
+fn stamp_matches(ws: &std::path::Path) -> bool {
+    let path = goldens_dir().join("STAMP.json");
+    let now = cdo_stamp(ws);
+    if crate::regen::regen_mode() {
+        std::fs::create_dir_all(goldens_dir()).unwrap();
+        std::fs::write(&path, serde_json::to_string_pretty(&now).unwrap() + "\n").unwrap();
+        return true;
+    }
+    let minted: Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(Value::Null);
+    if minted == now {
+        return true;
+    }
+    let why = format!(
+        "the CDO workspace drifted from the rendering goldens' stamp: minted {minted}, now {now}"
+    );
+    assert!(
+        std::env::var("ENFORCE_CDO_WS").as_deref() != Ok("1"),
+        "{why}"
+    );
+    eprintln!("warning: {why}; skipping");
+    false
+}
+
+/// Item T rows 1, 2 and 6 and T-W2-15 on CDO: each routine's human answers
+/// (explain, query effects, touches, prove may-commit and writes-table,
+/// digest human) print no blank name, `(no anchor)` row, escaped space or
+/// two identical lines, and each stays within its ratchet ([`ratchet`]:
+/// lines AND bytes of the whole output; every line ≤ 2,000 characters),
+/// pinned to the CDO input stamps. Formatting checks: no discrimination
+/// proof (the fixture twin is `output_invariants_w3::
+/// human_outputs_are_clean_and_within_budget`).
+#[test]
+fn cdo_human_outputs_are_clean_and_within_their_ratchets() {
+    let Some(a) = cdo_answers() else { return };
+    if !stamp_matches(&a.ws) {
+        return;
+    }
+    let mut failures = Vec::new();
+    for (label, ..) in ROUTINES {
+        for (call, _) in RENDERED {
+            let key = format!("{label} {call}");
+            let text = &a.answers[&key].stdout;
+            eprintln!(
+                "{key}: {} lines, {} bytes",
+                text.lines().count(),
+                text.len()
+            );
+            failures.extend(hygiene_failures(&key, text));
+            failures.extend(size_failures(&key, text, Some(ratchet(label, call))));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The inline cap's margin (MCP output plan item T): IssueReminder's and
+/// RunReportID's default explain card must arrive inline, under the 40 KiB
+/// cap with at least 1 KiB to spare, and under the client's character
+/// budget once escaped. RunReportID's is the largest (37,671 bytes on
+/// 2026-11-05, a 3,289-byte margin; IssueReminder 32,433, 8,527). A card
+/// that grows into the margin fails here: shorten the card, do not raise
+/// the cap without the owner.
+#[test]
+fn cdo_explain_cards_stay_inline_with_a_margin() {
+    let Some(a) = cdo_answers() else { return };
+    const MARGIN: usize = 1024;
+    let cap = al_sem::mcp::tools::MCP_DEFAULT_INLINE_BYTES as usize;
+    let mut failures = Vec::new();
+    for label in ["IssueReminder", "RunReportID"] {
+        let ans = &a.answers[&format!("{label} explain human")];
+        let bytes = ans.stdout.len();
+        eprintln!(
+            "{label}: explain card {bytes} bytes, margin {}",
+            cap - bytes
+        );
+        if !ans.envelope["stdoutText"].is_string() {
+            failures.push(format!("{label}: the card went to a file ({bytes} bytes)"));
+        }
+        if bytes + MARGIN > cap {
+            failures.push(format!(
+                "{label}: {bytes} bytes leaves less than {MARGIN} of the {cap}-byte cap"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Item T row 8 on CDO (M2): every live effect type each routine's digest
+/// reports is on its line of explain's card. The fixture test
+/// `output_invariants_w3::every_effect_kind_digest_reports_is_in_the_card`
+/// carries the discrimination proof.
+#[test]
+fn cdo_every_effect_kind_is_in_the_card() {
+    let Some(a) = cdo_answers() else { return };
+    let mut failures = Vec::new();
+    for (label, ..) in ROUTINES {
+        let d: Value =
+            serde_json::from_str(&a.answers[&format!("{label} digest json")].stdout).unwrap();
+        let effects = d["payload"]["entries"][0]["effects"].as_array().unwrap();
+        let card = &a.answers[&format!("{label} explain human")].stdout;
+        failures.extend(kind_failures(label, effects, card));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// T-W2-17 and T-W2-18 on CDO: every prove evidence row names its place or
+/// says `unavailable`; every digest crossing prints its target's qualified
+/// display or names every target, and every row's crossing is listed. The
+/// fixture tests carry the proofs. Red before item T's fix (2026-11-05, cdo
+/// profile): five crossings per root entered an overload
+/// (`CTS-CDN Network Doc. Mgt.::SendNetworkDocument` twice, `Email
+/// Message::AddAttachment`, `CTS-SYS Telemetry::LogMessage`, `Regex::Match`)
+/// and printed the bare name while the routine table printed the
+/// parameters, so two entry points read alike; the crossing's name now reads
+/// its targets' qualified displays (`RoutineRollup::build`).
+#[test]
+fn cdo_evidence_and_crossings_name_their_places_and_targets() {
+    let Some(a) = cdo_answers() else { return };
+    let mut failures = Vec::new();
+    let mut crossings = 0;
+    for (key, ans) in &a.answers {
+        if key.contains("prove") && key.ends_with(" json") {
+            failures.extend(evidence_failures(
+                key,
+                &serde_json::from_str(&ans.stdout).unwrap(),
+            ));
+        }
+        if key.ends_with("digest json") {
+            let d: Value = serde_json::from_str(&ans.stdout).unwrap();
+            crossings += d["payload"]["entries"][0]["crossings"]
+                .as_object()
+                .map_or(0, |m| m.len());
+            failures.extend(crossing_failures(key, &d));
+        }
+    }
+    assert!(
+        crossings >= 20,
+        "precondition: CDO's crossings ({crossings})"
+    );
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// T-W2-3 on CDO: every folded list (`… +N <unit>`) in a human answer also
+/// states its full count with the same unit on that line (`(M <unit>)` or
+/// `M <unit>` with M > N). Before wave 3 three lines did not: the fields an
+/// owner assigns, events by publisher, top dependency callees.
+///
+/// Discrimination (2026-11-05, cdo profile): `Folded::count_note` returning
+/// "" fails at "IssueReminder digest human: … +2 publishers with no full
+/// count" (and the callees lines); restored, passes. Before the fix this
+/// test also failed on the fields lines (`… +4 fields`), which now state
+/// `(not operation-specific; 10 fields)`.
+#[test]
+fn cdo_folded_lines_state_their_full_count() {
+    let Some(a) = cdo_answers() else { return };
+    let mut failures = Vec::new();
+    let mut folds = 0;
+    for (key, ans) in a.answers.iter().filter(|(k, _)| k.ends_with("human")) {
+        for line in ans.stdout.lines() {
+            let mut rest = line;
+            while let Some(i) = rest.find("… +") {
+                let after = &rest[i + "… +".len()..];
+                let n: String = after.chars().take_while(char::is_ascii_digit).collect();
+                let unit: String = after[n.len()..]
+                    .trim_start()
+                    .chars()
+                    .take_while(|c| c.is_alphabetic())
+                    .collect();
+                let n: usize = n.parse().unwrap_or(0);
+                folds += 1;
+                let total = line.match_indices(&format!(" {unit}")).any(|(j, _)| {
+                    let digits: String = line[..j]
+                        .chars()
+                        .rev()
+                        .take_while(|c| c.is_ascii_digit() || *c == ',')
+                        .collect::<String>()
+                        .chars()
+                        .rev()
+                        .filter(char::is_ascii_digit)
+                        .collect();
+                    digits.parse::<usize>().is_ok_and(|m| m > n)
+                });
+                if !total {
+                    failures.push(format!(
+                        "{key}: … +{n} {unit} with no full count: {}",
+                        line.trim()
+                    ));
+                }
+                rest = after;
+            }
+        }
+    }
+    assert!(folds >= 10, "precondition: CDO's folded lines ({folds})");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// T-W2-14 on CDO: RunReportID is reached from hundreds of page actions;
+/// its card gives them at most 3 lines (the count on the `callers:` line,
+/// `by caption`, `most actions`), and the grouped counts add up to the
+/// actions the JSON lists. The fixture test
+/// `output_invariants_w3::page_actions_fold_to_three_lines` carries the proof.
+#[test]
+fn cdo_page_actions_take_three_lines() {
+    let Some(a) = cdo_answers() else { return };
+    let card = &a.answers["RunReportID explain human"].stdout;
+    let lines: Vec<&str> = card
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            l.starts_with("reached from page action")
+                || l.starts_with("by caption")
+                || l.starts_with("most actions")
+        })
+        .collect();
+    assert!(lines.len() < 3, "{lines:?}");
+    let j: Value = serde_json::from_str(&a.answers["RunReportID explain json"].stdout).unwrap();
+    let s = &j["cards"][0]["reachedFromSummary"];
+    let actions = s["actions"].as_u64().unwrap();
+    assert!(actions > 100, "precondition: a hub ({actions})");
+    let sum = |k: &str| -> u64 {
+        s[k].as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|x| x["count"].as_u64())
+            .sum()
+    };
+    assert_eq!(
+        (sum("byCaption"), sum("byObject")),
+        (actions, actions),
+        "{s}"
+    );
+    assert_eq!(
+        j["cards"][0]["reachedFrom"].as_array().map_or(0, Vec::len) as u64,
+        actions
+    );
+    assert!(
+        card.contains(&format!(
+            "reached from {} page actions",
+            al_sem::engine::l5::routine_rollup::thousands(actions as usize)
+        )),
+        "the count on the callers line"
+    );
+}
+
+/// Item T, the CDO rendering goldens (plan item T; spec §8.2): for each
+/// routine, the explain card, query effects, query touches, prove may-commit
+/// and writes-table (human) and the digest's summary are byte-compared with
+/// `tests/cli-output-goldens/cdo/<routine>.<call>`, pinned to the CDO input
+/// stamps (`STAMP.json`). `REGEN_TEMP_GOLDENS=1` (with `CDO_WS`) rewrites
+/// them: the next blank name, duplicate line or lost section shows up as a
+/// golden diff someone must read.
+#[test]
+fn cdo_rendering_goldens() {
+    let Some(a) = cdo_answers() else { return };
+    if !stamp_matches(&a.ws) {
+        return;
+    }
+    let regen = crate::regen::regen_mode();
+    let mut failures = Vec::new();
+    for (label, ..) in ROUTINES {
+        let mut files: Vec<(String, String)> = RENDERED
+            .iter()
+            .filter(|(call, _)| *call != "digest human")
+            .map(|(call, suffix)| {
+                (
+                    format!("{label}.{suffix}"),
+                    a.answers[&format!("{label} {call}")].stdout.clone(),
+                )
+            })
+            .collect();
+        let summary = &a.answers[&format!("{label} digest json")].envelope["summary"];
+        files.push((
+            format!("{label}.digest-summary.json"),
+            serde_json::to_string_pretty(summary).unwrap() + "\n",
+        ));
+        for (name, text) in files {
+            let path = goldens_dir().join(&name);
+            if regen {
+                std::fs::write(&path, &text).unwrap();
+                continue;
+            }
+            match std::fs::read_to_string(&path) {
+                Ok(g) if g == text => {}
+                Ok(_) => failures.push(format!(
+                    "{name}: differs (REGEN_TEMP_GOLDENS=1 with CDO_WS rewrites it; read the diff)"
+                )),
+                Err(e) => failures.push(format!("{name}: {e}")),
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Final CDO review, item 2 on CDO: every table record under `writes in
+/// workspace code` in each routine's explain card and digest (human) has a
+/// `path:` line or `no path kept: <reason>`. And IssueReminder's `CDO Queue
+/// Entry` Insert (`CDODocumentTemplateLine.Table.al:1713`), whose three
+/// listed paths all pass `RunReportID → QueueMail`, which IssueReminder's
+/// literal arguments rule out, carries the searched witness: a real path
+/// that re-enters workspace code beyond `Codeunit Reminder-Issue::OnRun`.
+///
+/// Discrimination (2026-11-05, cdo profile): restoring the old record
+/// lines in `routine_rollup::workspace_write_lines` (the anchor, then
+/// `path_lines` only) fails at "IssueReminder explain: no path and no
+/// reason under CDO Queue Entry: Insert 1 — known persistent" (and its
+/// digest twin); restored, passes.
+#[test]
+fn cdo_write_lines_have_a_path_or_a_reason() {
+    let Some(a) = cdo_answers() else { return };
+    let mut failures = Vec::new();
+    let mut checked = 0;
+    for (label, ..) in ROUTINES {
+        for call in ["explain human", "digest human"] {
+            let key = format!("{label} {call}");
+            let (f, n) =
+                crate::output_invariants_w3::write_path_failures(&key, &a.answers[&key].stdout);
+            failures.extend(f);
+            checked += n;
+        }
+    }
+    assert!(
+        checked >= 40,
+        "precondition: write records checked ({checked})"
+    );
+    let card = &a.answers["IssueReminder explain human"].stdout;
+    let lines: Vec<&str> = card.lines().collect();
+    let at = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("CDO Queue Entry: Insert"))
+        .expect("precondition: IssueReminder writes CDO Queue Entry in workspace code");
+    let block = lines[at + 1..]
+        .iter()
+        .take_while(|l| l.starts_with("      "))
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !block.contains("path (re-enters workspace code beyond Codeunit Reminder-Issue::OnRun")
+        || !block.contains("→ QueueMailCombined")
+    {
+        failures.push(format!(
+            "IssueReminder's CDO Queue Entry has no searched witness:\n{block}"
+        ));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Final CDO review, item 3 on CDO: for each routine, the scope line's
+/// entry points are the `writes beyond` section's plus the temporary-only
+/// ones, its sites the union of both sets' sites (read off the `--detail`
+/// card), in explain and digest (human); query effects states the same
+/// section counts. Measured 2026-11-05 on `bc3ccb18`: IssueReminder 27
+/// entry points at 31 sites (12 at 14 with may-persist writes, 15 at 17
+/// temporary-only); before, the scope line said "14 entry points at 14
+/// sites" (the writing crossings, their sites summed).
+///
+/// Discrimination (2026-11-05, cdo profile): restoring the old totals
+/// (`entry_points` = the writing crossings, `crossing_sites` their summed
+/// sites) fails at "IssueReminder: scope says 14 entry points, the sections
+/// 12 + 15"; restored, passes.
+#[test]
+fn cdo_entry_point_counts_agree() {
+    let Some(a) = cdo_answers() else { return };
+    let mut failures = Vec::new();
+    for (label, ..) in ROUTINES {
+        let get = |call: &str| a.answers[&format!("{label} {call}")].stdout.as_str();
+        let detail = get("explain detail");
+        failures.extend(crate::output_invariants_w3::entry_point_failures(
+            label,
+            get("explain human"),
+            detail,
+            Some(get("query effects human")),
+        ));
+        failures.extend(crate::output_invariants_w3::entry_point_failures(
+            &format!("{label} digest"),
+            get("digest human"),
+            detail,
+            None,
+        ));
+    }
+    let ir = crate::output_invariants_w3::entry_point_lines(
+        &a.answers["IssueReminder explain human"].stdout,
+    );
+    assert!(
+        ir.other.is_some_and(|o| o.0 > 0),
+        "precondition: IssueReminder has temporary-only entry points: {ir:?}"
+    );
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

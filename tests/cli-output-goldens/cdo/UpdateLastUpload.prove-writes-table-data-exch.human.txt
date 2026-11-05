@@ -1,0 +1,6 @@
+--- Codeunit CDO Telemetry::UpdateLastUpload ---
+  question: writes-table:Data Exch.
+  answer:   no
+  coverage: complete
+  assumptions: loaded-subscribers
+  limits: none

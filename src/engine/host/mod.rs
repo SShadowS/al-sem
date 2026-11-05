@@ -474,6 +474,10 @@ pub mod test_hooks {
         /// Sleep this many milliseconds before answering an ask (then
         /// answer it normally, its cancel flag read at its first phase).
         SleepOnAsk(u64),
+        /// Sleep this many milliseconds right after reporting the named
+        /// progress phase (`pin`, `prepare`, `compute`) of an ask that asked
+        /// for progress: a front end can be observed mid-phase.
+        SleepInPhase(String, u64),
         /// Answer an ask with a line over the frame limit.
         OversizedFrameOnAsk,
         /// Answer an ask with a line that is not JSON.
@@ -520,6 +524,10 @@ pub mod test_hooks {
             "abort-on-ask-once" => Hook::AbortOnAskOnce(arg.into()),
             "panic-on-ask-once" => Hook::PanicOnAskOnce(arg.into()),
             "sleep-on-ask" => Hook::SleepOnAsk(arg.parse().ok()?),
+            "sleep-in-phase" => {
+                let (phase, ms) = arg.split_once(':')?;
+                Hook::SleepInPhase(phase.to_string(), ms.parse().ok()?)
+            }
             "oversized-frame-on-ask" => Hook::OversizedFrameOnAsk,
             "garbage-frame-on-ask" => Hook::GarbageFrameOnAsk,
             "exit-after-open" => Hook::ExitAfterOpen,

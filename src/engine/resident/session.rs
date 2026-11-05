@@ -139,6 +139,9 @@ pub struct SessionStats {
     /// The last build: its change class (`P`, `S`, `B` or `cold`), wall ms.
     pub last_build_class: Option<String>,
     pub last_build_ms: Option<u64>,
+    /// When the last published build began, in milliseconds since the Unix
+    /// epoch (`alsem_status`'s freshness block, MCP output plan 3c).
+    pub last_build_started_unix_ms: Option<u64>,
     /// The last freshness check's wall time, in microseconds.
     pub last_check_us: Option<u64>,
 }
@@ -470,6 +473,9 @@ impl ResidentSession {
         mine: u64,
     ) -> Result<Built, PinError> {
         let start = Instant::now();
+        let started_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64);
         let mut unstable = String::new();
         for attempt in 0..BUILD_ATTEMPTS {
             let dirty = lock(&self.dirty).clone();
@@ -576,6 +582,7 @@ impl ResidentSession {
                 s.builds += 1;
                 s.last_build_class = Some(class);
                 s.last_build_ms = Some(start.elapsed().as_millis() as u64);
+                s.last_build_started_unix_ms = Some(started_unix_ms);
             }
             *lock(&self.current) = Some(Arc::new(Published {
                 built: built.clone(),

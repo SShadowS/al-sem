@@ -1,0 +1,5 @@
+--- Codeunit CDO Telemetry::UpdateLastUpload vs CDO Setup (f4b69b55-c90d-4937-8f53-2742898fa948/table/6175281) ---
+  scope: dependency code: full cone for physical writes, grouped per entry point; per-operation detail one routine deep; temporary-record touches persist nothing but use the table's schema and run its triggers; lines are 1-based; dependencies: 11 apps (--all lists them)
+  down: yes — 1 record touch: 0 known persistent, 1 possibly persistent (caller-dependent), 0 on temporary records
+    [Modify] write at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:48 in Codeunit CDO Telemetry::UpdateLastUpload (caller-dependent: parameter 1)
+  up: 3 transitive callers: 3 touch it, 0 do not, 0 unknown — through this routine; not a finding — --all lists their witnesses

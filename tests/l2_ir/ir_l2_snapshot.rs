@@ -226,6 +226,7 @@ fn debug_digest_catches_serde_skip_drift() {
         in_until_condition: false,
         in_statement_position: false,
         run_trigger: None,
+        receiver_is_record_ref: false,
     };
     let mut flipped = base.clone();
     flipped.in_until_condition = true;

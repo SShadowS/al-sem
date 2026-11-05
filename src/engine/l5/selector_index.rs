@@ -331,7 +331,97 @@ fn cascade(
         }
     }
 
+    // Form 6 (MCP output plan 3b: one selector grammar for every tool):
+    // `Object.Routine`, the spelling `alsem query` takes, read as
+    // `Object::Routine` at the last unquoted `.` (an object name may hold
+    // dots, `Cust. Ledger Entry`; a routine name holds none unless quoted).
+    // Only when nothing above matched, so no selector that resolved before
+    // resolves differently now.
+    if sep.is_none()
+        && let Some(dot) = last_dot(selector)
+        && dot > 0
+        && dot + 1 < selector.len()
+    {
+        let as_qualified = format!("{}::{}", &selector[..dot], &selector[dot + 1..]);
+        let (ids, form, owner) = cascade(&as_qualified, idx);
+        if !ids.is_empty() {
+            let form = if form.is_empty() { form } else { "object-dot" };
+            return (ids, form, owner);
+        }
+    }
+
     (Vec::new(), "", None)
+}
+
+/// An `Owner::Routine` or `Owner.Routine` selector, split (MCP output plan
+/// 3b: one grammar for every tool, so `alsem query` reads the `::` spelling
+/// too).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct QualifiedSelector {
+    /// The owner's object type word, lowercase, when it starts with one.
+    pub(crate) type_word: Option<String>,
+    /// The owner's logical name after the type word (AL quotes removed),
+    /// lowercase.
+    pub(crate) object: String,
+    /// The whole owner part read as a name (`Page Management` names an
+    /// object whose first word is a type word), lowercase.
+    pub(crate) whole: String,
+    /// The routine name (one outer quote pair removed), lowercase.
+    pub(crate) routine: String,
+}
+
+impl QualifiedSelector {
+    /// Whether an object of `object_type` named `object_name` declaring a
+    /// routine named `routine_name` is the one selected (case-insensitive).
+    pub(crate) fn selects(&self, object_type: &str, object_name: &str, routine_name: &str) -> bool {
+        if routine_name.to_lowercase() != self.routine {
+            return false;
+        }
+        let name = object_name.to_lowercase();
+        let typed = self
+            .type_word
+            .as_deref()
+            .is_some_and(|w| w == object_type.to_lowercase() && name == self.object);
+        typed || name == self.whole
+    }
+}
+
+/// `selector` split at its last unquoted `::`, else its last unquoted `.`;
+/// `None` when neither gives two non-empty parts.
+pub(crate) fn split_qualified(selector: &str) -> Option<QualifiedSelector> {
+    let (owner, routine) = match last_separator(selector) {
+        Some(sep) => (&selector[..sep], &selector[sep + 2..]),
+        None => {
+            let dot = last_dot(selector)?;
+            (&selector[..dot], &selector[dot + 1..])
+        }
+    };
+    let (owner, routine) = (owner.trim(), strip_quotes(routine));
+    if owner.is_empty() || routine.is_empty() {
+        return None;
+    }
+    let (word, rest) = owner.split_once(char::is_whitespace).unwrap_or((owner, ""));
+    let typed = OBJECT_TYPE_WORDS.contains(&word.to_lowercase().as_str()) && !rest.is_empty();
+    let name = if typed { rest } else { owner };
+    Some(QualifiedSelector {
+        type_word: typed.then(|| word.to_lowercase()),
+        object: unquote(name).to_lowercase(),
+        whole: unquote(owner).to_lowercase(),
+        routine: routine.to_lowercase(),
+    })
+}
+
+/// The byte offset of the last `.` outside AL quotes.
+fn last_dot(s: &str) -> Option<usize> {
+    let (mut quoted, mut last) = (false, None);
+    for (i, c) in s.char_indices() {
+        if c == '"' {
+            quoted = !quoted;
+        } else if !quoted && c == '.' {
+            last = Some(i);
+        }
+    }
+    last
 }
 
 /// #78/#239: the matches of [`resolve_selector`]. A form-5 match
@@ -571,6 +661,34 @@ mod tests {
             resolve_selector("Codeunit \"X\"::OnRun", &idx).0.ids,
             vec!["app:Codeunit:1#abc".to_string()]
         );
+    }
+
+    /// MCP output plan 3b (one selector grammar): `Object.Routine`, the
+    /// spelling `alsem query` takes, selects what `Object::Routine` does, at
+    /// the last unquoted dot (an object name may hold dots); a selector that
+    /// already resolved keeps its match (form 6 runs only when nothing did).
+    #[test]
+    fn selector_form6_object_dot_reads_as_object_qualified() {
+        // Routine displays are bare names; the owner check reads the owner.
+        let snap = snap_with_identities(&[("a#", "Run"), ("b#", "Run")]);
+        let idx = build_selector_indexes(&snap, None);
+        let owner = |id: &str| {
+            match id {
+                "a#" => "Codeunit Cust. Ledger Mgt",
+                _ => "Codeunit Other",
+            }
+            .to_string()
+        };
+        let sel = |selector: &str| {
+            let (m, form) = resolve_selector(selector, &idx);
+            narrow_to_owner(selector, form, m, owner)
+        };
+        assert_eq!(sel("Cust. Ledger Mgt.Run"), ["a#"]);
+        assert_eq!(sel("Codeunit \"Cust. Ledger Mgt\".Run"), ["a#"]);
+        assert_eq!(sel("Cust. Ledger Mgt::Run"), sel("Cust. Ledger Mgt.Run"));
+        assert!(sel("Nope.Run").is_empty());
+        // A bare-name match (form 2) is not narrowed by form 6.
+        assert_eq!(sel("Run"), ["a#", "b#"]);
     }
 
     #[test]

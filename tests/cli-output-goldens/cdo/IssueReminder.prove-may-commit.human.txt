@@ -1,0 +1,9 @@
+--- Codeunit CDO Issue Document::IssueReminder ---
+  question: may-commit
+  answer:   yes
+  evidence: 1 effect
+    [COMMIT] beyond Codeunit Reminder-Issue::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19
+      path: IssueReminder → [run] Reminder-Issue::OnRun (COMMIT at dep:Base Application:src/Sales/Reminder/ReminderIssue.Codeunit.al:87)
+  coverage: incomplete — 21 calls not resolved (6 in this workspace), 267 interface calls open world (10 in this workspace); top: CurrLineWithPrice.SetLine ×21, Codeunit.Run(<dynamic>) ×16, CurrLineWithPrice.GetLine ×8; alsem explain lists the workspace ones under gaps
+  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  limits: none

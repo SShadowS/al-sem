@@ -106,6 +106,7 @@
             "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#dc74df7bb7bcbc92cfb38268a3daedc82b01192f10c23c33ccb4342d44bb987b"
           }
         },
+        "receiver": "RecordRef",
         "tableId": "unknown",
         "tempState": "unknown",
         "via": "inherited"
@@ -193,6 +194,7 @@
             "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#dc74df7bb7bcbc92cfb38268a3daedc82b01192f10c23c33ccb4342d44bb987b"
           }
         },
+        "receiver": "RecordRef",
         "tableId": "unknown",
         "tempState": "unknown",
         "via": "inherited"
@@ -214,9 +216,156 @@
       "selector": "Out Issue Document.IssueDoc"
     },
     "summary": {
+      "beyondEntryPoints": [
+        {
+          "entryPoint": "Codeunit Base Poster::OnRun",
+          "sites": [
+            "ws:src/OutIssueDocument.Codeunit.al:15"
+          ],
+          "tables": [
+            {
+              "ops": [
+                "DB_INSERT"
+              ],
+              "table": "Base Ledger 01",
+              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70001"
+            },
+            {
+              "ops": [
+                "DB_INSERT"
+              ],
+              "table": "Base Ledger 02",
+              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70002"
+            },
+            {
+              "ops": [
+                "DB_INSERT"
+              ],
+              "table": "Base Ledger 03",
+              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70003"
+            },
+            {
+              "ops": [
+                "DB_INSERT"
+              ],
+              "table": "Base Ledger 04",
+              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70004"
+            },
+            {
+              "ops": [
+                "DB_INSERT"
+              ],
+              "table": "Base Ledger 05",
+              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70005"
+            },
+            {
+              "ops": [
+                "DB_INSERT"
+              ],
+              "table": "Base Ledger 06",
+              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70006"
+            },
+            {
+              "ops": [
+                "DB_INSERT"
+              ],
+              "table": "Base Ledger 07",
+              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70007"
+            },
+            {
+              "ops": [
+                "DB_INSERT"
+              ],
+              "table": "Base Ledger 08",
+              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70008"
+            },
+            {
+              "ops": [
+                "DB_INSERT"
+              ],
+              "table": "Base Ledger 09",
+              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70009"
+            },
+            {
+              "ops": [
+                "DB_INSERT"
+              ],
+              "table": "Base Ledger 10",
+              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70010"
+            },
+            {
+              "ops": [
+                "DB_INSERT"
+              ],
+              "table": "Base Ledger 11",
+              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70011"
+            },
+            {
+              "ops": [
+                "DB_INSERT"
+              ],
+              "table": "Base Ledger 12",
+              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70012"
+            },
+            {
+              "ops": [
+                "DB_MODIFY"
+              ],
+              "table": "Base Register",
+              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70020"
+            },
+            {
+              "ops": [
+                "DB_DELETE"
+              ],
+              "table": "Base Doc Line",
+              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70021"
+            }
+          ],
+          "targets": [
+            "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
+          ],
+          "unresolvedWrites": 0
+        },
+        {
+          "entryPoint": "Codeunit Base Calc::OnRun",
+          "sites": [
+            "ws:src/OutIssueDocument.Codeunit.al:16"
+          ],
+          "tables": [
+            {
+              "ops": [
+                "DB_MODIFY"
+              ],
+              "table": "Base Price",
+              "tableId": "d0d00001-0000-4000-8000-0000000000b1/table/70022"
+            }
+          ],
+          "targets": [
+            "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70101#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
+          ],
+          "unresolvedWrites": 0
+        }
+      ],
+      "beyondWrites": {
+        "entryPoints": 2,
+        "sites": 2,
+        "tables": 15,
+        "tablesOnlyBeyond": 14
+      },
       "byTable": [
         {
-          "beyond": [],
+          "beyond": [
+            {
+              "entryPoint": "Codeunit Base Poster::OnRun",
+              "ops": [
+                "DB_DELETE"
+              ],
+              "sites": [
+                "ws:src/OutIssueDocument.Codeunit.al:15"
+              ]
+            }
+          ],
           "class": "physical",
           "first": {
             "firstHop": "Codeunit Base Poster::OnRun",
@@ -266,9 +415,13 @@
         "operations": 0,
         "tables": 0
       },
-      "scope": "operations-one-routine-deep",
+      "scope": "operations-one-routine-deep; writes-beyond-entry-points-full-cone",
       "tableNotResolved": {
         "operations": 2,
+        "recordRef": {
+          "operations": 2,
+          "routines": 1
+        },
         "routines": 1
       },
       "temporary": {
@@ -292,5 +445,5 @@
       }
     }
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }

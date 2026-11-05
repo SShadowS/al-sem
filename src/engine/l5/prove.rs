@@ -1608,6 +1608,8 @@ pub struct HumanPaths<'c, 'm> {
     pub root: &'c str,
     /// W2-8: where the obligations point.
     pub pointers: &'c ObligationPointers,
+    /// `--detail`: every blocker, not the first few per kind.
+    pub detail: bool,
 }
 
 pub fn format_prove_human(
@@ -1713,6 +1715,27 @@ pub fn format_prove_human(
                         .min_by_key(|v| v.len())
                     {
                         lines.push(format!("      path: {}", p.cx.path_line(p.root, v)));
+                    } else {
+                        // Final CDO review, item 2: the searched witness of
+                        // a row whose listed paths cannot run, or why none.
+                        match &eff.own_path {
+                            Some(Ok(w)) => {
+                                let mut s = p.cx.own_path_line(p.root, w);
+                                // Path and anchor of one witness: say where
+                                // it ends when that is another of the row's
+                                // operations.
+                                if (&w.terminal.file, w.terminal.line)
+                                    != (&eff.evidence.file, eff.evidence.line)
+                                    && let (Some(f), Some(l)) = (&w.terminal.file, w.terminal.line)
+                                {
+                                    s.push_str(&format!(" (ends at {})", p.cx.location(f, l)));
+                                }
+                                lines.push(format!("      path: {s}"));
+                            }
+                            Some(Err(n)) => lines
+                                .push(format!("      no path kept: {}", no_path_reason(n.reason))),
+                            None => {}
+                        }
                     }
                 }
                 None => {}
@@ -1724,24 +1747,7 @@ pub fn format_prove_human(
     if let Some(ref blockers) = prove_result.blocked_by
         && !blockers.is_empty()
     {
-        lines.push(format!("  blockedBy: {} blocker(s)", blockers.len()));
-        for b in blockers {
-            // TS (prove.ts:60-63) gates on `anchor?.file !== undefined` — present
-            // (even if "", which never occurs in practice), NOT on non-empty.
-            let anchor_str = match b.anchor.as_ref().and_then(|a| a.file.as_ref()) {
-                Some(f) => {
-                    let line_str = b
-                        .anchor
-                        .as_ref()
-                        .and_then(|a| a.line)
-                        .map(|l| format!(":{}", shown(l)))
-                        .unwrap_or_default();
-                    format!(" @ {}{}", f, line_str)
-                }
-                None => String::new(),
-            };
-            lines.push(format!("    [{}] {}{}", b.kind, b.detail, anchor_str));
-        }
+        lines.extend(blocker_lines(blockers, paths.is_some_and(|p| p.detail)));
     }
 
     // W2-8 (2h, design §3.7, §4.7): coverage, assumptions and limits, always
@@ -1753,6 +1759,123 @@ pub fn format_prove_human(
 
     lines.push(String::new());
     lines.join("\n")
+}
+
+/// How many blockers of one kind the default prints (the rest are counted).
+pub const BLOCKERS_PER_KIND: usize = 3;
+
+/// Where a blocker's call site is: workspace code, dependency code, or not
+/// placed (no anchor). The order the human answer lists them in: workspace
+/// ones first, since those are the ones the user can act on.
+fn blocker_place(b: &ProveBlocker) -> u8 {
+    match b.anchor.as_ref().and_then(|a| a.file.as_deref()) {
+        Some(f) if f.starts_with("ws:") => 0,
+        Some(_) => 1,
+        None => 2,
+    }
+}
+
+/// One blocker as a line item: its detail and, when it has one, its anchor.
+fn blocker_item(b: &ProveBlocker) -> String {
+    // TS (prove.ts:60-63) gates on `anchor?.file !== undefined` — present
+    // (even if "", which never occurs in practice), NOT on non-empty.
+    match b.anchor.as_ref().and_then(|a| a.file.as_ref()) {
+        Some(f) => {
+            let line_str = b
+                .anchor
+                .as_ref()
+                .and_then(|a| a.line)
+                .map(|l| format!(":{}", shown(l)))
+                .unwrap_or_default();
+            format!("{} @ {}{}", b.detail, f, line_str)
+        }
+        None => b.detail.clone(),
+    }
+}
+
+/// The human `blockedBy:` block (final CDO review, item 1): the blockers
+/// grouped by kind, in the order the kinds first appear, each kind with its
+/// count split by where the call site is (this workspace, dependency code,
+/// not placed) and its first [`BLOCKERS_PER_KIND`] items, workspace ones
+/// first. `detail` (`--detail`) lists every item. IssueReminder's
+/// `writes-table:Data Exch.` on CDO has 287 blockers: one line each was 294
+/// lines and 47,875 bytes, over the 40 KiB inline cap. The JSON
+/// (`blockedBy`) is unchanged and always complete.
+fn blocker_lines(blockers: &[ProveBlocker], detail: bool) -> Vec<String> {
+    use crate::engine::l5::routine_rollup::{fold, plural};
+    let mut kinds: Vec<(&str, Vec<&ProveBlocker>)> = Vec::new();
+    for b in blockers {
+        match kinds.iter_mut().find(|(k, _)| *k == b.kind) {
+            Some((_, v)) => v.push(b),
+            None => kinds.push((b.kind, vec![b])),
+        }
+    }
+    // The header says how the items are cut only when a kind is cut.
+    let folds = !detail
+        && kinds.iter().any(|(_, v)| {
+            crate::engine::l5::routine_rollup::fold_len(v.len(), BLOCKERS_PER_KIND, false) < v.len()
+        });
+    let mut out = vec![format!(
+        "  blockedBy: {} in {}{}",
+        plural(blockers.len(), "blocker", "blockers"),
+        plural(kinds.len(), "kind", "kinds"),
+        if folds {
+            format!(
+                " (at most {BLOCKERS_PER_KIND} each, workspace ones first; --detail lists every one)"
+            )
+        } else {
+            String::new()
+        }
+    )];
+    for (kind, mut items) in kinds {
+        // A stable sort: within a place, the engine's own order.
+        items.sort_by_key(|b| blocker_place(b));
+        let mut at = [0usize; 3];
+        for b in &items {
+            at[usize::from(blocker_place(b))] += 1;
+        }
+        let split: Vec<String> = [
+            (at[0], "in this workspace"),
+            (at[1], "in dependency code"),
+            (at[2], "not placed"),
+        ]
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, w)| format!("{} {w}", crate::engine::l5::routine_rollup::thousands(*n)))
+        .collect();
+        let total = items.len();
+        // Where the call sites are, when any blocker of the kind has one (a
+        // coverage or routine-not-found blocker names no place).
+        out.push(if at[0] + at[1] > 0 {
+            format!(
+                "    {kind}: {} ({})",
+                crate::engine::l5::routine_rollup::thousands(total),
+                split.join(", ")
+            )
+        } else {
+            format!(
+                "    {kind}: {}",
+                crate::engine::l5::routine_rollup::thousands(total)
+            )
+        });
+        let f = fold(
+            items.into_iter().map(blocker_item).collect(),
+            BLOCKERS_PER_KIND,
+            "blockers",
+            detail,
+        );
+        for item in &f.shown {
+            out.push(format!("      {item}"));
+        }
+        if f.hidden > 0 {
+            out.push(format!(
+                "      … +{} (of {}; --detail lists them)",
+                plural(f.hidden, "blocker", "blockers"),
+                plural(total, "blocker", "blockers")
+            ));
+        }
+    }
+    out
 }
 
 /// The always-visible `coverage:`, `assumptions:` and `limits:` lines of a
@@ -1893,6 +2016,7 @@ pub(crate) fn prove_pipeline_with(
         single_app,
         closed_world: false,
         human: false,
+        detail: false,
         out: None,
     };
     crate::engine::batch::run_doc(&job)
@@ -1980,6 +2104,7 @@ pub(crate) fn prove_on_target(
         ),
         closed_world: false,
         human: false,
+        detail: false,
         out: None,
     };
     crate::engine::batch::run_on_target(&job, target)
@@ -2008,6 +2133,9 @@ pub struct ProveJob<'a> {
     pub closed_world: bool,
     /// `--format human`: the human text, else the JSON.
     pub human: bool,
+    /// `--detail`: the human answer lists every blocker (the JSON always
+    /// does).
+    pub detail: bool,
     pub out: Option<&'a str>,
 }
 
@@ -2335,6 +2463,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             cx: &rollup_cx,
             root: root_id,
             pointers: &pointers,
+            detail: job.detail,
         }),
     );
     // W2-7 (2g): readable dependency locations (the JSON keeps the guid).
@@ -2812,6 +2941,7 @@ mod tests {
             group_resources: vec![],
             group_resource_paths: vec![],
             group_terminal_path: None,
+            own_path: None,
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
@@ -2848,6 +2978,7 @@ mod tests {
             group_resources: vec![],
             group_resource_paths: vec![],
             group_terminal_path: None,
+            own_path: None,
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
@@ -2984,6 +3115,7 @@ mod tests {
             group_resources: vec![],
             group_resource_paths: vec![],
             group_terminal_path: None,
+            own_path: None,
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
@@ -3037,6 +3169,7 @@ mod tests {
             group_resources: vec![],
             group_resource_paths: vec![],
             group_terminal_path: None,
+            own_path: None,
             origin_operation_ids: vec![],
             effect_is_kt: false,
             literal_unreachable: false,
@@ -3053,5 +3186,85 @@ mod tests {
             nu.anchor.is_none(),
             "unavailable evidence must drop the blocker anchor"
         );
+    }
+
+    /// Final CDO output review, item 1: the human `blockedBy:` block groups
+    /// the blockers by kind (first-seen order), states each kind's count
+    /// split by where the call site is, and lists at most
+    /// [`BLOCKERS_PER_KIND`] items per kind, workspace ones first; the rest
+    /// are counted on one line that also states the kind's total.
+    /// `--detail` lists every item. Hand-stated blockers: one coverage row
+    /// (no anchor) and five open-world rows whose two workspace ones come
+    /// LAST in the engine's order, so only a workspace-first sort lists them.
+    ///
+    /// Discrimination (2026-11-05): dropping `items.sort_by_key(...)` in
+    /// `blocker_lines` fails at "workspace ones first" (the first dependency
+    /// row is listed); restored, passes.
+    #[test]
+    fn human_blockers_fold_by_kind_workspace_first() {
+        let at = |file: Option<&str>, line: u32| {
+            file.map(|f| BlockerAnchor {
+                source_kind: "source".to_string(),
+                file: Some(f.to_string()),
+                line: Some(line),
+                column: None,
+                excerpt: None,
+            })
+        };
+        let b = |kind, detail: &str, anchor| ProveBlocker {
+            kind,
+            detail: detail.to_string(),
+            anchor,
+        };
+        let blockers = vec![
+            b("coverage-incomplete", "coverage status: partial", None),
+            b(
+                "open-world-dispatch",
+                "D1 in A",
+                at(Some("dep:Base:a.al"), 0),
+            ),
+            b(
+                "open-world-dispatch",
+                "D2 in A",
+                at(Some("dep:Base:a.al"), 1),
+            ),
+            b("open-world-dispatch", "N1 in B", None),
+            b("open-world-dispatch", "W1 in C", at(Some("ws:src/c.al"), 2)),
+            b("open-world-dispatch", "W2 in C", at(Some("ws:src/c.al"), 3)),
+        ];
+        let lines = blocker_lines(&blockers, false);
+        let text = lines.join("\n");
+        assert_eq!(
+            lines[0],
+            "  blockedBy: 6 blockers in 2 kinds (at most 3 each, workspace ones first; \
+             --detail lists every one)",
+            "{text}"
+        );
+        assert_eq!(lines[1], "    coverage-incomplete: 1", "no place: {text}");
+        assert_eq!(lines[2], "      coverage status: partial", "{text}");
+        assert_eq!(
+            lines[3],
+            "    open-world-dispatch: 5 (2 in this workspace, 2 in dependency code, 1 not placed)",
+            "{text}"
+        );
+        assert_eq!(
+            &lines[4..6],
+            [
+                "      W1 in C @ ws:src/c.al:3",
+                "      W2 in C @ ws:src/c.al:4"
+            ],
+            "workspace ones first: {text}"
+        );
+        assert_eq!(lines[6], "      D1 in A @ dep:Base:a.al:1", "{text}");
+        assert_eq!(
+            lines[7], "      … +2 blockers (of 5 blockers; --detail lists them)",
+            "{text}"
+        );
+        assert_eq!(lines.len(), 8, "{text}");
+        // --detail: every item, the same grouping.
+        let all = blocker_lines(&blockers, true);
+        assert_eq!(all[0], "  blockedBy: 6 blockers in 2 kinds", "{all:?}");
+        assert_eq!(all.len(), 1 + 2 + 1 + 5, "{all:?}");
+        assert!(all.iter().all(|l| !l.contains("… +")), "{all:?}");
     }
 }

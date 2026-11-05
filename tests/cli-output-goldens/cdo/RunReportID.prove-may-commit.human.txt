@@ -1,0 +1,10 @@
+--- Codeunit CDO E-Mail Handler::RunReportID ---
+  question: may-commit
+  answer:   yes
+  evidence: 1 effect
+    [COMMIT] at ws:src/Features/Email/Templates/CDOEMailTemplateManagement.Codeunit.al:1241
+      conditionality: guarded-by-IsHandled
+      path: RunReportID → CDO Document Template Line::Print → CDO E-Mail Template Management::PrintDoc(EMailTemplateHeader, DocumentTemplateLine, ReportID, FilterRecord, VariantRecord, ShowPrintDialog, PrinterName, ReportSelectionUsage) → PrintDocuments(EMailTemplateHeader, DocumentTemplateLine, ReportID, FilterRecord, VariantRecord, ShowPrintDialog, PrinterName, ReportSelectionUsage, DocumentsToPrint) → PrintDocuments(EMailTemplateHeader, DocumentTemplateLine, ReportID, FilterRecord, VariantRecord, ShowPrintDialog, PrinterName, ReportSelectionUsage, DocumentsToPrint, IsFallback)
+  coverage: incomplete — 21 calls not resolved (6 in this workspace), 267 interface calls open world (10 in this workspace); top: CurrLineWithPrice.SetLine ×21, Codeunit.Run(<dynamic>) ×16, CurrLineWithPrice.GetLine ×8; alsem explain lists the workspace ones under gaps
+  assumptions: none (default world; --closed-world assumes the loaded interface implementations)
+  limits: none

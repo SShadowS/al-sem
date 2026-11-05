@@ -606,6 +606,34 @@ pub fn explain_plan(roots: BTreeSet<String>) -> Plan {
     }
 }
 
+/// `alsem query effects` / `touches --from` (MCP output wave 3a): `l4` (the
+/// per-operation rows, one routine into dependency code, unchanged) and one
+/// tree over the root (stable id) read as effects, digest's and explain's
+/// own read: the capability cone that states the may-persist writes beyond
+/// each dependency entry point. No run, no test-coverage graph. With no
+/// root (the selector failed, or `touches` without a down question):
+/// [`query_plan`].
+pub fn query_cone_plan(root: Option<String>) -> Plan {
+    let Some(root) = root else {
+        return query_plan();
+    };
+    let witness = WitnessRequest::roots(std::iter::once(root).collect());
+    Plan {
+        trees: vec![(
+            JobId(0),
+            TreeDemand {
+                subjects: witness.clone(),
+                tests: false,
+                gaps_in_cone: false,
+                include_reads: false,
+                read: TreeRead::Effects,
+            },
+        )],
+        witness,
+        ..query_plan()
+    }
+}
+
 /// `alsem query`: no run, `l4` alone.
 pub fn query_plan() -> Plan {
     Plan {

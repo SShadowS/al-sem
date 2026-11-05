@@ -80,6 +80,13 @@
       "selector": "CallerA"
     },
     "summary": {
+      "beyondEntryPoints": [],
+      "beyondWrites": {
+        "entryPoints": 0,
+        "sites": 0,
+        "tables": 0,
+        "tablesOnlyBeyond": 0
+      },
       "byTable": [
         {
           "beyond": [],
@@ -106,9 +113,13 @@
         "operations": 1,
         "tables": 1
       },
-      "scope": "operations-one-routine-deep",
+      "scope": "operations-one-routine-deep; writes-beyond-entry-points-full-cone",
       "tableNotResolved": {
         "operations": 0,
+        "recordRef": {
+          "operations": 0,
+          "routines": 0
+        },
         "routines": 0
       },
       "temporary": {
@@ -132,5 +143,5 @@
       }
     }
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }

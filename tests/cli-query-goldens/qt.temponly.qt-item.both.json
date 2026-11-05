@@ -23,6 +23,7 @@
           "tempStateUnknown": 0
         },
         "tableNotResolved": 0,
+        "tableNotResolvedRecordRef": 0,
         "temporary": 2
       },
       "touches": true,
@@ -112,5 +113,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }
