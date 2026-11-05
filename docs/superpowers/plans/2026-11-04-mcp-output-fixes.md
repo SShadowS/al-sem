@@ -3,6 +3,25 @@
 **Status:** agreed plan, 2026-11-04. Drafted by Claude, reviewed and revised by Fable against
 master `8daaf140`; owner decisions recorded below.
 
+**Progress (2026-11-05): every wave and item T are built.** Where each landed:
+
+| Wave / item | Where |
+|---|---|
+| Wave 0 (0a decision, 0b fixture) and wave 1 (1a-1f) | merged in `769d481a` (`mcpout/wave0-1`) |
+| Wave 2: W2-0a | merged in `cc9365ae` (`mcpout/wave2`) |
+| W2-0b (G1) | merged in `dcf86fae` (`mcpout/w2-0b`) |
+| W2-0c steps 1-2, W2-1 | merged in `22aeaaeb` (`mcpout/w2-1`) |
+| W2-1b | merged in `2c36ffb2` (`mcpout/w2-1b`) |
+| W2-3 (touches) | merged in `cbeb17e3` (`mcpout/w2-3`) |
+| 2a-2c (W2-2) | merged in `24c19e53` (via `fix/369-no-path-writes`) |
+| 2d-2h (W2-4 … W2-8), T-W2-24, digest size ratchets | merged in `3cc163f0` (`mcpout/w2-4`) |
+| 3a | branch `mcpout/w3a`, `d6b5c7c3` (gated, not merged) |
+| 3c | branch `mcpout/w3bc`, `aa6977c7` |
+| 3b | branch `mcpout/w3bc`, `fefcea35` |
+| Item T (the rows not pinned before wave 3; CDO rendering goldens) | branch `mcpout/w3bc`, `87975fad` |
+
+What is left: see "Left after wave 3" at the end of item T.
+
 **Owner decisions (2026-11-04):**
 1. **JSON line base: 1-based everywhere** on the engine-query surface (explain, prove,
    digest, query, fingerprint, snapshots), with `lineBase: 1` stated in every document and
@@ -319,6 +338,15 @@ Structural cause (not a rendering bug):
   change modes, and one suggested next step per tool.
 - **3c. `alsem_status` for freshness** (S2): per engine `revision.generation`, the inputs
   stamp, last build start/duration, RSS, and whether a build is running.
+  **Built** (`aa6977c7`): a `freshness` block per engine (revision `generation` / `inputsStamp`,
+  `lastBuild {class, startedAtUnixMs, durationMs, builds}`, `checks`, `activity` and `building`
+  from the child's progress phases, `rssBytes`/`peakRssBytes` read live from `/proc` on Linux).
+  `building` is `null` after an unwaited refresh until the next call: the child builds on its own
+  then, and its status would wait for the build.
+- **3b built** (`fefcea35`): the instructions and every description as listed above, plus one
+  selector grammar in the code (explain/prove/digest take `Object.Routine`; query takes
+  `Owner::Routine`), pinned by `output_invariants_w3::{descriptions_name_exactly_the_inputs_the_schemas_take,
+  one_selector_grammar_for_every_tool}`.
 
 ### Item T — output tests that would have caught this
 
@@ -354,6 +382,39 @@ anchor source-check reads files, so it skips a `dep:` anchor whose app is not in
 output (and counts the skips; more than 10% skipped is a failure). The size ratchets are
 the one place a legitimate change can trip a test; that is the point, and the number is
 edited in the same commit with the reason.
+
+**Item T status (2026-11-05, branch `mcpout/w3bc`).** Tests are in `tests/cli/output_invariants.rs`
+(waves 0-2), `tests/cli/output_invariants_w3.rs` (wave 3, fixture) and `tests/cli/output_cdo.rs`
+(CDO, under `scripts/cdo-gate`). "Before" = pinned before wave 3; "wave 3" = added on this branch.
+
+| Plan row | Where |
+|---|---|
+| no empty name; `::` on groups | before (JSON: `boundary_groups_name_their_owner_and_every_resource`); wave 3 (human: `human_outputs_are_clean_and_within_budget`, `cdo_human_outputs_are_clean_and_within_their_ratchets`) |
+| no two identical lines | wave 3 (the same two tests) |
+| `resourceCount`, `unresolvedResources`, `groupPath` | before (`boundary_groups_…`, `a_commit_beyond_an_entry_point_…`, the G1 tests) |
+| anchor source-check | before (fixture and CDO) |
+| `lineBase` stated | before (fixture and CDO) |
+| no `(no anchor)` | wave 3 (the hygiene tests) |
+| temp split | before (T-W2-10 in `cli_query_differential`, T-W2-16 leg 1) |
+| every effect kind in explain's card | wave 3 (`every_effect_kind_digest_reports_is_in_the_card`, CDO twin) |
+| cross-tool agreement | before (T-W2-16 legs 1-3, 3a's query leg, fixture and CDO) |
+| size budgets | before (summaries ≤ 8 KiB, digest JSON ratchets); wave 3 (human lines AND bytes, every line ≤ 2,000 characters; CDO per-routine ratchets pinned to the input stamps) |
+| MCP result against the client's limit | before (CDO `structuredContent`); wave 3 (two budgets, the escaped-answer fix, `every_answer_fits_the_client_and_the_wire`); explain cards inline with ≥ 1 KiB margin (`cdo_explain_cards_stay_inline_with_a_margin`: RunReportID 37,901 B, margin 3,059; IssueReminder 32,627 B) |
+| rendering goldens on CDO | wave 3 (`cdo_rendering_goldens`, `tests/cli-output-goldens/cdo/`, `STAMP.json`) |
+| one copy | before |
+| descriptions | before; wave 3 (`descriptions_name_exactly_the_inputs_the_schemas_take`) |
+
+Spec §8.3 rows: T-W2-1, 4, 5 (commit leg), 6, 8, 9 (G1 unit tests), 10, 11, 12, 13, 16, 19 (the
+`temporaryOnlyTables` count and the fixture's golden), 20, 22, 24 and 25 were pinned before;
+T-W2-3 (the CDO full-count leg), 7 (explain's groups), 14, 15 (human), 17, 18, 21 and 23 are wave 3.
+
+**Left after wave 3:**
+- T-W2-2 on records: no test reads the rollup's records for duplicate keys; only the rendered
+  outputs' duplicate-line check covers it.
+- T-W2-18's overload case is pinned on CDO only (the fixture has no dependency overload entered
+  from the workspace).
+- Merge `mcpout/w3a` and `mcpout/w3bc`; then rebuild and copy `~/.al-sem/bin/alsem` and re-run
+  the hands-on review on CDO (plan §4), since the installed binary predates waves 3a-3c.
 
 ## 4. Order and gates
 
