@@ -184,7 +184,7 @@ const OBJECT_WORDS: &[&str] = &[
 /// The line's code: comments removed, the inside of strings and quoted
 /// identifiers blanked (their quotes kept), `in_block` carried across lines.
 fn code_of(line: &str, in_block: &mut bool) -> String {
-    let b = line.as_bytes();
+    let b = line.trim_start_matches('\u{feff}').as_bytes();
     let mut out = String::with_capacity(line.len());
     let mut i = 0;
     while i < b.len() {

@@ -444,7 +444,12 @@ fn account_file(
             let ok = (*n as usize)
                 .checked_sub(1)
                 .and_then(|i| lines.get(i))
-                .is_some_and(|l| l.trim_end_matches('\r') == t.as_str());
+                // A byte-order mark is not text: the analyzed text has it
+                // stripped, the diff keeps it (a commit that adds one).
+                .is_some_and(|l| {
+                    l.trim_end_matches('\r').trim_start_matches('\u{feff}')
+                        == t.trim_start_matches('\u{feff}')
+                });
             if !ok {
                 mismatched.push(*n);
             }

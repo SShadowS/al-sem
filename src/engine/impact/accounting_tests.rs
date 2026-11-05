@@ -246,3 +246,24 @@ fn a_rejected_hunk_header_unmaps_the_file() {
         assert_eq!(f.buckets.total(), f.added + f.removed);
     }
 }
+
+/// A commit that adds a byte-order mark: the diff's new line 1 carries it,
+/// the analyzed text has it stripped. That is no mismatch, and the line is
+/// the object header (found on CDO: 54 files read as mismatched before).
+///
+/// DISCRIMINATION (2026-11-05): comparing without stripping the mark
+/// reports `Mismatch { line: 1, .. }`: fails; restored, passes.
+#[test]
+fn a_byte_order_mark_is_not_a_mismatch() {
+    let d = "--- a/src/Calc.Codeunit.al\n+++ b/src/Calc.Codeunit.al\n@@ -1,2 +1,2 @@\n-codeunit 50101 Calc\n+\u{feff}codeunit 50101 Calc\n {\n";
+    let text = "codeunit 50101 Calc\n{\n}\n";
+    let a = account(
+        &parse_unified_diff(d),
+        &DiffRoot::Workspace,
+        &[ws("src/Calc.Codeunit.al", text)],
+        &RoutineSpanIndex::default(),
+    );
+    let f = file(&a, "src/Calc.Codeunit.al");
+    assert_eq!(f.mismatch, None);
+    assert_eq!(f.buckets.decl.get(&DeclKind::ObjectHeader), Some(&2));
+}

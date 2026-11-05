@@ -251,6 +251,48 @@ pub struct SelectArgs<'a> {
     pub production_stamp: Option<String>,
     /// The test app's declared dependencies `(id, name, publisher)`.
     pub declared: &'a [(String, String, String)],
+    /// Production routines to probe apart (impact's nearest tested caller):
+    /// whether this universe has each and whether a test reaches it. They
+    /// never join the selection.
+    pub probes: &'a [String],
+}
+
+/// One probe's answer: `not-in-projection`, `not-loaded`, `reached` (with
+/// its nearest test) or `not-reached`.
+fn probe(g: &SitedGraph, id: &str, opts: &WalkOptions<'_>) -> Value {
+    let all = g.nodes_with_stable_id(id);
+    let nodes: Vec<NodeIx> = all
+        .iter()
+        .copied()
+        .filter(|&n| g.flags(n) & flag::SYMBOL_ONLY == 0)
+        .collect();
+    if nodes.is_empty() {
+        let st = if all.is_empty() {
+            "not-in-projection"
+        } else {
+            "not-loaded"
+        };
+        return json!({"stableId": id, "status": st});
+    }
+    let mut own = Sel::new(g, true);
+    let found = std::rc::Rc::clone(&own.found_test);
+    let stop = move || found.get();
+    let o = WalkOptions {
+        cancel: Some(&stop),
+        ..*opts
+    };
+    let mut s2 = WalkScratch::default();
+    walk_multi(g, &nodes, &o, &mut s2, &mut own);
+    let best = own
+        .tests
+        .iter()
+        .map(|(&n, &(t, h, _, _))| (t, h, n))
+        .min_by_key(|&(t, h, n)| (t, h, display(g, n)));
+    match best {
+        Some((t, h, n)) => json!({"stableId": id, "status": "reached", "nearest": display(g, n),
+                                  "nearestTier": tier_name(t), "nearestHops": h}),
+        None => json!({"stableId": id, "status": "not-reached"}),
+    }
 }
 
 /// The **direct callers** of routine node `r` in the sited graph, as
@@ -641,5 +683,6 @@ pub fn select(g: &SitedGraph, args: &SelectArgs<'_>) -> Value {
         "unresolvedTestCalls": unresolved.len(),
         "missingDependencies": missing,
         "limits": if stats.limited { vec!["the walk's state budget or cancellation stopped it"] } else { vec![] },
+        "probes": args.probes.iter().map(|p| probe(g, p, &opts)).collect::<Vec<_>>(),
     })
 }

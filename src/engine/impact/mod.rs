@@ -14,4 +14,8 @@
 
 pub mod accounting;
 pub mod compare;
+pub mod jobs;
+pub mod render;
+pub mod run;
 pub mod scan;
+pub mod up;

@@ -38,6 +38,31 @@ The blast radius of a change, current effects only. Spec:
   (each layer's files listed) and every untracked `.al` file under the workspace (listed, and read
   as a new file so its routines resolve). Git is only read; a diff alone names no base, and says
   so.
+- **`alsem impact <ws> (--routine R… | --file F… | --diff P [--diff-root D] | --base REV)`**
+  (`engine::impact::{jobs,up,run,render}`, B-1, B-2, B-3b): the input accounting first (the
+  tuple, every bucket with counts, the hunks outside routines with what each touched, unmapped
+  files, removed routine headers, diff/working-tree mismatches, every root diagnostic), then per
+  changed routine, ranked "reached from a user or a job first, then by ancestors": its CURRENT
+  effects (digest's own plan and the per-routine rollup: writes, caller-dependent tables, commits,
+  UI, errors, events), who reaches it (R0's reverse walk over the sited graph, one streaming walk
+  per root with one reused scratch and a counting visitor, never a cone per root: direct callers
+  by explain's definition with each first call site, ancestors by tier, entries by kind with page
+  actions by caption, event publishers, external callers by reason), and its tests (milestone C's
+  select parts, unchanged, with the production-stamp retry). Then the whole change's reach (one
+  `walk_multi` over every root), schema lines, the tests line (`selectionComplete` and its
+  reasons, the codeunit filter), and the walks' limits. "Current effects; no before/after" is
+  said plainly; nothing is called added or deleted. **Nearest tested caller** (C left it null): a
+  root no test universe has is answered with the nearest production ancestor a test universe has
+  and a test reaches (the up walk's nearest ancestors, probed in each test universe with
+  `tests --part select --probe-id`, which never joins the selection). Human by default, the first
+  20 routines (`--max-roots`), more per list with `--detail`; `--format json` is
+  `al-sem.impact/1` (`comparison`, `input`, `roots[]` with `up`, `effects`, `tests`, `delta:
+  null`; `union`, `tests`, `assumptions`, `limits`, `base: null`). `--no-tests` skips the test
+  universes, `--no-dependents` the external callers. Spec §12.1's refusals: exactly one mode;
+  `--base` with `--diff` is B2's delta; `--diff-root` goes with `--diff`. Goldens:
+  `tests/cli-output-goldens/impact/`.
+- The diff check ignores a byte-order mark (found on CDO: 54 files of the 94-file range added
+  one, and read as mismatched before).
 
 ### Added (agent tasks, milestone C: test selection)
 
