@@ -551,6 +551,67 @@ mod budget {
         assert_eq!(budget.status().impossible, 1);
     }
 
+    /// What a request holds is no room: with every artifact pinned for a
+    /// request's compute, the retained floor is the whole RSS (nothing a
+    /// reclaim could evict), so a reservation that would fit above the floor
+    /// of free artifacts is impossible at once and evicts nothing. (Counted
+    /// as room, a 699-root impact on CDO holding 2.1 GB of its own tree and
+    /// raw facts read a floor of 3.5 GB: its reclaim evicted the session's
+    /// dependency rows and was refused anyway.)
+    ///
+    /// DISCRIMINATION (2026-11-05): the floor from `evictable_bytes` (every
+    /// evictable artifact, held or not) fails "a held artifact is no room"
+    /// (the floor stays below the RSS); restored, passes.
+    #[test]
+    fn held_artifacts_are_no_room_for_a_reclaim() {
+        let dir = copy_fixture("tests/r0-corpus/ws-d37");
+        let meter = Arc::new(FillMeter {
+            base: 100 * UNIT,
+            session: OnceLock::new(),
+        });
+        let budget = Arc::new(Budget::new(
+            u64::MAX / 4,
+            meter.clone(),
+            small_estimates(true, 10),
+        ));
+        let s = Arc::new(
+            ResidentSession::new(dir.path().to_path_buf(), true, "test".into())
+                .with_budget(Arc::clone(&budget)),
+        );
+        let _ = meter.session.set(Arc::downgrade(&s));
+        let pinned = s.pin(Freshness::Fresh, &never).unwrap();
+        let rev = revision(&pinned);
+        answer_budgeted(&s, rev, &prove(rev)).unwrap();
+        let evictable = rev.evictable_bytes();
+        assert!(evictable > 0, "precondition: evictable artifacts");
+        s.update_floor();
+        let free_floor = budget.retained_floor();
+        assert_eq!(free_floor, meter.rss() - evictable, "nothing held");
+        // A request holding every artifact for its compute.
+        let keys = rev.keys_where(|_| true);
+        let held = rev.hold_keys(&keys);
+        s.update_floor();
+        assert_eq!(
+            budget.retained_floor(),
+            meter.rss(),
+            "a held artifact is no room"
+        );
+        // Fits above the free floor, not above the RSS.
+        budget.set_budget(meter.rss());
+        let estimate = evictable / 2 + 1;
+        assert!(free_floor + estimate <= budget.budget(), "precondition");
+        let evictions = rev.stats().evictions;
+        let refusal = s
+            .reserve_or_reclaim(&budget, Case::Trees, estimate, 1, &|| false)
+            .err()
+            .expect("refused");
+        assert!(refusal.impossible, "{refusal:?}");
+        assert_eq!(rev.stats().evictions, evictions, "nothing is evicted");
+        drop(held);
+        s.update_floor();
+        assert_eq!(budget.retained_floor(), free_floor);
+    }
+
     /// A workload whose pre-model estimate exceeds the budget is refused
     /// before anything is read (no acquisition, no model); a size-reducing
     /// edit lowers the estimate and the next request builds.

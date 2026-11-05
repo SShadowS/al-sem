@@ -40,15 +40,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine::l4::capability_cone::{CapabilityExtra, direct_facts_for_routine};
 use crate::engine::l5::digest_cli::{DigestEntryFull, SITES_PARTIAL};
-use crate::engine::l5::routine_rollup::RollupTotals;
+use crate::engine::l5::routine_rollup::{RollupCx, RollupTotals};
 use crate::program::body::features::PCallee;
 use crate::program::model::calls::CallEdge;
 use crate::program::model::taxonomy::DispatchKind;
 use crate::program::model::workspace::{Model, ModelRoutine};
 
 /// The summaries' schema version (a cached base whose summaries carry
-/// another is not read).
-pub const SUMMARY_SCHEMA: u32 = 1;
+/// another is not read). 2: a routine's labels and callers carry its short
+/// handle (`Name/n`), and the summary its `handle`.
+pub const SUMMARY_SCHEMA: u32 = 2;
 
 /// One own site of a key.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,6 +144,10 @@ pub struct RootSummary {
     pub stable_id: String,
     /// `Codeunit X::Name`.
     pub display: String,
+    /// Its short handle on this side ([`Names::handle`]; empty when the
+    /// display is its own).
+    #[serde(default)]
+    pub handle: String,
     pub file: Option<String>,
     pub line: Option<u32>,
     /// Own sites by key.
@@ -187,11 +192,14 @@ pub struct Names<'m> {
     edges_from: HashMap<&'m str, Vec<&'m CallEdge>>,
     /// Internal routine id → the edges that reach it (callers).
     edges_to: HashMap<&'m str, Vec<&'m CallEdge>>,
+    /// The short handles the rest of the output names an overload by
+    /// ([`RollupCx::handle`]: `Name/n`, `Name/n[position: type]`, ` [<app>]`).
+    rollup: &'m RollupCx<'m>,
 }
 
 impl<'m> Names<'m> {
     #[must_use]
-    pub fn new(model: &'m Model) -> Names<'m> {
+    pub fn new(model: &'m Model, rollup: &'m RollupCx<'m>) -> Names<'m> {
         let ws = &model.workspace;
         let mut by_stable = HashMap::new();
         for r in &ws.routines {
@@ -220,6 +228,7 @@ impl<'m> Names<'m> {
             by_stable,
             edges_from,
             edges_to,
+            rollup,
         }
     }
 
@@ -235,6 +244,20 @@ impl<'m> Names<'m> {
                 .unwrap_or(""),
             r.name
         )
+    }
+
+    /// A routine row's short handle: empty when its display is its own, else
+    /// what tells it apart (`/1`, `/2[1: Integer]`, ` [<app>]`).
+    #[must_use]
+    pub fn handle(&self, r: &ModelRoutine) -> String {
+        self.rollup.handle(&r.stable_routine_id)
+    }
+
+    /// [`Self::display`] with [`Self::handle`]: how a label or a caller names
+    /// a routine, so two overloads never print alike.
+    #[must_use]
+    pub fn named(&self, r: &ModelRoutine) -> String {
+        format!("{}{}", self.display(r), self.handle(r))
     }
 
     /// The row of a stable id.
@@ -488,12 +511,12 @@ fn own_keys(
         let (key, label) = if callee.kind == "event-publisher" {
             (
                 format!("event|{}", callee.stable_routine_id),
-                format!("raises {}", names.display(callee)),
+                format!("raises {}", names.named(callee)),
             )
         } else {
             (
                 format!("callee|{}", callee.stable_routine_id),
-                format!("calls {}", names.display(callee)),
+                format!("calls {}", names.named(callee)),
             )
         };
         labels.entry(key.clone()).or_insert(label);
@@ -577,7 +600,7 @@ fn callers(names: &Names<'_>, r: &ModelRoutine) -> Callers {
         if c.first.len() < 10 {
             let site = from.call_sites.iter().find(|s| s.id == e.callsite_id);
             c.first.push(CallerSite {
-                display: names.display(from),
+                display: names.named(from),
                 file: site.map_or_else(
                     || from.source_anchor.source_unit_id.clone(),
                     |s| s.source_anchor.source_unit_id.clone(),
@@ -643,6 +666,7 @@ pub fn summarize(
     Some(RootSummary {
         stable_id: stable_id.to_string(),
         display: names.display(r),
+        handle: names.handle(r),
         file: Some(r.source_anchor.source_unit_id.clone()),
         line: Some(r.source_anchor.start_line + 1),
         own,

@@ -417,12 +417,18 @@ impl ResidentSession {
     }
 
     /// Set the retained floor (`status.retainedBytes`): the RSS less the
-    /// measured bytes of every evictable artifact the published revision
-    /// holds.
+    /// measured bytes of every evictable artifact of the published revision
+    /// a reclaim could evict now ([`Revision::reclaimable_bytes`]). An
+    /// artifact a request holds is no room: counted as evictable, a request
+    /// holding 2.1 GB of its own needs (an impact over 699 roots on CDO, its
+    /// tree and raw facts) read a floor of 3.5 GB, so a reservation that
+    /// could never fit was not called impossible: the reclaim evicted the
+    /// session's dependency rows (10,881 entries, which the next build must
+    /// make again), the RSS fell 0.18 GB, and it refused anyway.
     pub fn update_floor(&self) {
         let Some(b) = &self.budget else { return };
         let evictable = match self.published() {
-            Some(Built::Revision(r)) => r.evictable_bytes(),
+            Some(Built::Revision(r)) => r.reclaimable_bytes(),
             _ => 0,
         };
         b.set_retained_floor(b.meter().rss().saturating_sub(evictable));
@@ -480,6 +486,13 @@ impl ResidentSession {
             _ => None,
         };
         let mut evicted = 0u64;
+        let mut measured = 0u64;
+        let rss_before = budget.meter().rss();
+        // The RSS right after the evictions, before each collect: the record
+        // states what the evictions alone gave back and what the collects
+        // added.
+        let (mut not_collected, mut collect_ms) = (0u64, 0u64);
+        let collect = crate::release_alloc::collect_after_reclaim();
         // The design's order, with the session's dependency rows right after
         // the views' raw facts.
         for kind in Revision::EVICTION_ORDER
@@ -490,16 +503,45 @@ impl ResidentSession {
             if budget.fits(estimate) {
                 break;
             }
-            evicted += match (kind, &rev) {
+            let n = match (kind, &rev) {
                 ("rows", _) => match self.builder.try_lock() {
                     Ok(mut b) => b.workspace.evict_dependency_rows() as u64,
                     Err(_) => 0,
                 },
-                (k, Some(r)) => r.reclaim_kind(k) as u64,
+                (k, Some(r)) => {
+                    let before = r.reclaimable_bytes_of(k);
+                    let n = r.reclaim_kind(k) as u64;
+                    measured += before.saturating_sub(r.reclaimable_bytes_of(k));
+                    n
+                }
                 (_, None) => 0,
             };
+            if n > 0 {
+                evicted += n;
+                // What went is handed back before the next `fits` reads the
+                // RSS: else freed pages still count, and every later kind is
+                // evicted too.
+                let rss = budget.meter().rss();
+                let start = Instant::now();
+                if collect {
+                    crate::release_alloc::collect_freed();
+                }
+                collect_ms += start.elapsed().as_millis() as u64;
+                not_collected += rss.saturating_sub(budget.meter().rss());
+            }
         }
         budget.count_evicted(evicted);
+        if evicted > 0 {
+            let rss_collected = budget.meter().rss();
+            budget.record_reclaim(crate::engine::resident::budget::ReclaimRecord {
+                entries: evicted,
+                measured_bytes: measured,
+                rss_before,
+                rss_evicted: rss_collected + not_collected,
+                rss_collected,
+                collect_ms,
+            });
+        }
         evicted
     }
 

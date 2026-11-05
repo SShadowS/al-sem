@@ -587,7 +587,7 @@ pub fn tool_list() -> Vec<Value> {
                     ),
                     (
                         "maxRoots",
-                        json!({"type": "integer", "minimum": 0, "description": "Routines shown in the human output (default 20); the JSON holds every one."}),
+                        json!({"type": "integer", "minimum": 0, "description": "Routines shown in the human output (default 20, fewer when the answer would pass 38 KiB; given, that budget is off); the JSON holds every one."}),
                     ),
                     (
                         "detail",
@@ -1207,13 +1207,11 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             let format = a.enumerated("format", &["human", "json"], "human")?;
             v.opt("format", &format);
             v.switch("single-app", universe == Universe::SingleApp);
-            let opts = crate::engine::impact::render::RenderOpts {
-                json: format == "json",
-                max_roots: max_roots
-                    .map(|n| n as usize)
-                    .unwrap_or(crate::engine::impact::render::DEFAULT_MAX_ROOTS),
-                detail: req.detail,
-            };
+            let opts = crate::engine::impact::render::RenderOpts::new(
+                format == "json",
+                max_roots.map(|n| n as usize),
+                req.detail,
+            );
             return Ok(ToolCall::Impact(ImpactCall {
                 command: CommandCall {
                     tool,

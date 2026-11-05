@@ -52,6 +52,9 @@ pub struct View {
     /// Each tree job's per-root effects (D7 (5); #277 D5.4), read by its
     /// query after the run.
     effects: BTreeMap<JobId, DigestEffects>,
+    /// Each STREAMED tree job's tree and read ([`TreeDemand::stream`]),
+    /// taken by [`View::take_effects_stream`].
+    streams: BTreeMap<JobId, EffectsStream>,
     /// Each fingerprint tree job's owned read (#160 step 9 D5; #277 D5.4),
     /// read off its tree inside `prepare`; taken by [`View::take_tree_read`].
     tree_reads: BTreeMap<JobId, TreeReadOut>,
@@ -164,6 +167,14 @@ pub struct TreeDemand {
     /// its own request alone, so it does not split a tree group.
     pub slice: Option<crate::engine::l5::prove_slice::SliceRequest>,
     pub read: TreeRead,
+    /// An `Effects` read left to its job to STREAM, in batches of this many
+    /// roots ([`EffectsStream`]): the view keeps the tree and the job reads
+    /// each batch's effects in turn, so no more than one batch's witnesses
+    /// is alive at once. A read over hundreds of roots held every root's
+    /// witnesses (5.6-7.9 MiB each on CDO: an impact over a 94-file range,
+    /// 699 roots, peaked at 4.1 GB). `None`: the read runs in `prepare` and
+    /// the job takes its effects whole.
+    pub stream: Option<usize>,
 }
 
 /// What a job reads off its tree (#277 D5.2; #160 step 9 D5): the read runs
@@ -416,6 +427,7 @@ pub fn digest_plan(detectors: Vec<Detector>, roots: BTreeSet<String>, tests: boo
                 include_reads: false,
                 slice: None,
                 read: TreeRead::Effects,
+                stream: None,
             },
         )]
     } else {
@@ -469,6 +481,18 @@ pub fn prove_slice_plan(
     plan
 }
 
+/// `plan` with every effects tree streamed in batches of `batch` roots
+/// ([`TreeDemand::stream`]); `None` leaves it read whole.
+#[must_use]
+pub fn streaming(mut plan: Plan, batch: Option<usize>) -> Plan {
+    for (_, tree) in &mut plan.trees {
+        if matches!(tree.read, TreeRead::Effects) {
+            tree.stream = batch;
+        }
+    }
+    plan
+}
+
 /// `plan` with every tree counting its cones' analysis gaps and table
 /// events: what a table answer reads (prove; explain's and digest's
 /// `--writes-table`, W2-2 gap (a)).
@@ -508,6 +532,7 @@ fn run_and_tree_plan(detectors: Vec<Detector>, subjects: WitnessRequest, read: T
                 include_reads: false,
                 slice: None,
                 read,
+                stream: None,
             },
         )],
         ..run_only_plan(detectors)
@@ -635,6 +660,7 @@ pub fn explain_plan(roots: BTreeSet<String>) -> Plan {
                 include_reads: false,
                 slice: None,
                 read: TreeRead::Effects,
+                stream: None,
             },
         )],
         witness,
@@ -663,6 +689,7 @@ pub fn query_cone_plan(root: Option<String>) -> Plan {
                 include_reads: false,
                 slice: None,
                 read: TreeRead::Effects,
+                stream: None,
             },
         )],
         witness,
@@ -986,8 +1013,12 @@ pub(crate) fn tree_apps(
 /// (context-server design r3 §6.12): the coverage graph reads only the tree's
 /// whole-program sections, so the group builds it once and shares it.
 pub(crate) fn tree_groups(trees: &[(JobId, TreeDemand)]) -> Vec<Vec<usize>> {
+    // A streamed read keeps its tree to its job (`TreeDemand::stream`), so
+    // it shares none.
     let shares = |a: &TreeDemand, b: &TreeDemand| {
         matches!((&a.read, &b.read), (TreeRead::Effects, TreeRead::Effects))
+            && a.stream.is_none()
+            && b.stream.is_none()
             && a.tests == b.tests
             && a.gaps_in_cone == b.gaps_in_cone
             && a.include_reads == b.include_reads
@@ -1000,6 +1031,59 @@ pub(crate) fn tree_groups(trees: &[(JobId, TreeDemand)]) -> Vec<Vec<usize>> {
         }
     }
     groups
+}
+
+/// A streamed effects read ([`TreeDemand::stream`]): the tree, kept for the
+/// job, and what it reads off it. [`EffectsStream::for_each`] hands the job
+/// each batch's [`DigestEffects`] in root order.
+pub struct EffectsStream {
+    tree: Arc<CapabilitySnapshot>,
+    roots: Vec<String>,
+    chunk: usize,
+    tests: bool,
+    gaps_in_cone: bool,
+    include_reads: bool,
+}
+
+impl EffectsStream {
+    /// The stream of `demand` (a streamed `Effects` read) off `tree`.
+    pub(crate) fn of(tree: Arc<CapabilitySnapshot>, demand: &TreeDemand) -> EffectsStream {
+        EffectsStream {
+            tree,
+            roots: demand.subjects.ids.iter().cloned().collect(),
+            chunk: demand.stream.unwrap_or(usize::MAX),
+            tests: demand.tests,
+            gaps_in_cone: demand.gaps_in_cone,
+            include_reads: demand.include_reads,
+        }
+    }
+
+    /// The roots read (sorted, distinct).
+    #[must_use]
+    pub fn roots(&self) -> &[String] {
+        &self.roots
+    }
+
+    /// The batch size in roots.
+    #[must_use]
+    pub fn chunk(&self) -> usize {
+        self.chunk
+    }
+
+    /// `f` over each batch's roots and effects, in root order (see
+    /// [`crate::engine::l5::digest_cli::digest_effects_chunks`]).
+    pub fn for_each(&self, model: &Model, f: impl FnMut(&[String], DigestEffects)) {
+        crate::engine::l5::digest_cli::digest_effects_chunks(
+            &self.tree,
+            model,
+            &self.roots,
+            self.chunk,
+            self.tests,
+            self.gaps_in_cone,
+            self.include_reads,
+            f,
+        );
+    }
 }
 
 /// The tree-read phase: `group`'s reads off `tree`, filed per job into
@@ -1154,6 +1238,7 @@ impl View {
             raw: None,
             tree: None,
             effects: BTreeMap::new(),
+            streams: BTreeMap::new(),
             tree_reads: BTreeMap::new(),
             l4: None,
             det: None,
@@ -1280,6 +1365,7 @@ impl View {
             raw,
             tree,
             effects,
+            streams,
             tree_reads,
             l4,
             det,
@@ -1427,7 +1513,15 @@ impl View {
                     }
                     dependency_calls = None;
                 }
-                read_tree(tree, &plan.trees, group, target, effects, tree_reads);
+                let (job, demand) = &plan.trees[group[0]];
+                if demand.stream.is_some() {
+                    // A streamed read: the job reads the tree in batches
+                    // (`ViewCx::take_effects_stream`); it lives until then.
+                    let t = tree.take().expect("tree filled above");
+                    streams.insert(*job, EffectsStream::of(Arc::new(t), demand));
+                } else {
+                    read_tree(tree, &plan.trees, group, target, effects, tree_reads);
+                }
                 *tree = None;
                 note_release(released, Cell::Tree);
             }
@@ -1542,7 +1636,10 @@ impl View {
             Cell::Caps => self.caps = None,
             Cell::Raw => self.raw = None,
             Cell::Tree => self.tree = None,
-            Cell::Effects => self.effects.clear(),
+            Cell::Effects => {
+                self.effects.clear();
+                self.streams.clear();
+            }
             Cell::TreeRead => self.tree_reads.clear(),
             // A served view's base is the revision's: its release drops
             // nothing of it.
@@ -1680,6 +1777,14 @@ impl View {
             .unwrap_or_else(|| panic!("effects of {job:?} not filled"))
     }
 
+    /// `job`'s streamed read ([`TreeDemand::stream`]), moved out: its tree
+    /// dies with it.
+    pub fn take_effects_stream(&mut self, job: JobId) -> EffectsStream {
+        self.streams
+            .remove(&job)
+            .unwrap_or_else(|| panic!("the effects stream of {job:?} not filled"))
+    }
+
     /// The stored output of a run `prepare` ran. An `Arc`: a caller may
     /// `release(..)` while it still holds the output.
     pub fn run(&self, key: &RunKey) -> Arc<RunOutput> {
@@ -1768,6 +1873,7 @@ impl View {
         l4: Option<Arc<L4Analysis>>,
         det: Option<Arc<DetectorArtifacts>>,
         effects: BTreeMap<JobId, DigestEffects>,
+        streams: BTreeMap<JobId, EffectsStream>,
         tree_reads: BTreeMap<JobId, TreeReadOut>,
         runs: BTreeMap<RunKey, Arc<RunOutput>>,
         explain_indexes: Option<Arc<crate::engine::l5::explain::ExplainIndexes>>,
@@ -1777,6 +1883,7 @@ impl View {
             l4,
             det,
             effects,
+            streams,
             tree_reads,
             runs,
             explain_indexes,
@@ -2154,6 +2261,7 @@ mod tests {
                 include_reads: false,
                 slice: None,
                 read: TreeRead::Effects,
+                stream: None,
             },
         )]);
         assert!(
@@ -2180,6 +2288,7 @@ mod tests {
             include_reads: false,
             slice: None,
             read: TreeRead::Effects,
+            stream: None,
         }
     }
 
@@ -2822,6 +2931,7 @@ mod tests {
                 include_reads: false,
                 slice: None,
                 read,
+                stream: None,
             },
         )])
     }

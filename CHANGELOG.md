@@ -98,6 +98,54 @@ times are noisy).
   10.3 s, 2.27 GB; 47 cases with at least 12 call-making arms, `ExecuteResponse` the only one
   catalogued.
 
+### Fixed (impact follow-ups: a warm large range, the `--base` answer's size, overload names)
+
+Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §8.12.
+
+- **A warm repeat of a large impact range was refused by the memory budget.** The main part read
+  every root's effects at once: a root's witnesses are 5.6-7.9 MiB on CDO, so the 94-file range
+  (`bc3ccb18~5..bc3ccb18`, 699 roots) peaked at 4.1 GB of trees over a 5.6 GB resident child,
+  past the 8 GiB budget. The main part now STREAMS its effects read (`TreeDemand::stream`,
+  `EffectsStream`, `digest_effects_chunks`) above 64 roots, in batches of 32 (`ROOT_BATCH`): one
+  batch's witnesses alive at a time, each root's totals and summary kept, its entry dropped. The
+  tree's indexes, carrier cache, literal reach with its suffix trees and the finishing sets are
+  built once and shared by every batch (`QueryCx`, `LiteralPass`, `FinishCx`). A resident
+  revision reserves the trees for one batch and holds that reservation through compute, where the
+  batches are read; a one-shot run keeps the tree until compute. Each root's effects equal the
+  whole read's (`streamed_effects_equal_one_read`, every r0 dir and the dependency fixtures). CDO
+  (`release-fast`, load 25-60): before, the warm repeat was refused (`the trees needs about 4123
+  MiB … resident 5549 MiB`); after, cold 238 s, warm 123 s twice (main part 100 s), the window
+  peak during the warm range 6.74-6.78 GB (+0.75 GB over the resident child), RSS after 5.99-6.04
+  GB, nothing evicted, the one-routine impact 1.1 s and a digest 0.25 s after it.
+- **The retained floor counted a request's own artifacts as room.** `update_floor` read every
+  evictable artifact (`evictable_bytes`); now only what a reclaim could evict now
+  (`Revision::reclaimable_bytes`: not pinned by a request, held by no older snapshot). The
+  refused range above held 2.1 GB of its own tree and raw facts, read a floor of 3.5 GB, so the
+  reservation was "possible": the reclaim evicted the session's dependency rows (10,881 entries,
+  unmeasured, which the next build makes again), the RSS fell only 0.18 GB, and it was refused
+  anyway. That was the "eviction does not lower the RSS" of the warm fix: not the allocator, but a
+  reclaim that could reach nothing the request did not hold. Such a reservation is now
+  impossible at once and evicts nothing.
+- **A reclaim hands freed memory back** (`release_alloc::collect_freed`: a forced `mi_collect` on
+  every global rayon thread and the caller's, after each artifact kind it evicts;
+  `ALSEM_RECLAIM_COLLECT=0` turns it off). Measured on CDO under `--memory-budget 6.5G`: a reclaim
+  evicting 871 MB (measured) of unheld artifacts lowered the RSS 0.86 GB by itself and 0.13 GB more
+  with the collect (259 ms); without it 861 MB → 0.856 GB. `status` reports the last reclaim
+  (`lastReclaim`: entries, measured bytes, RSS before, after the evictions, after the collect).
+- **The human answer with `--base` was not bounded** (46.5 KB on CDO with `--no-tests`, over the
+  MCP tool's 40 KiB inline cap; one before/after clause alone listed 7 KB of added sites). A
+  count change lists its first two sites and counts the rest (`… +N`; every one with `--detail`),
+  and the default answer is kept under 38 KiB (`HUMAN_BUDGET`): fewer than `--max-roots`
+  routines are shown when their blocks would pass it, the fold saying `… +N routines (the answer
+  is kept under 38 KiB: …)`. An explicit `--max-roots` or `--detail` turns the budget off. The
+  untracked-file list is capped at five. CDO-gated: the default `--base` answer (tests on) is at
+  most 40 KiB.
+- **Overloaded callees printed only their name** (`+ calls … CreateSkipLogEntries; - calls …
+  CreateSkipLogEntries` on CDO: two overloads). Impact's labels, callers, root lines and deleted
+  routines name a routine by the short handle the rest of the output uses (`Name/n`,
+  `Name/n[position: type]`, ` [<app>]`, `RollupCx::handle`); summaries carry `handle`, and their
+  schema is 2 (a cached base of schema 1 is rebuilt).
+
 ### Added (agent tasks, milestone B2: impact before/after against a base)
 
 `alsem impact --base REV` (and `--base REV --diff P`; MCP `alsem_impact` `base`, `base` with

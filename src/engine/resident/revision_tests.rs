@@ -985,6 +985,94 @@ fn a_requests_witness_batch_reserves_once() {
     assert_eq!(n("trees"), 1, "{kinds:?}");
 }
 
+/// An impact main part over many roots streams its effects off the
+/// revision's published tree (`TreeDemand::stream`; here one root per batch,
+/// `root_batch: Some(1)`): its trees' reservation is ONE batch's (1 root, not
+/// 3), held through compute and finished only once every batch was read,
+/// no witness is filled, and the answer is the bytes of the cold run of the
+/// same ask read whole.
+///
+/// DISCRIMINATION (2026-11-05): finishing the trees' reservation before
+/// compute (`serve_plan_held` never handing it on) fails "finished after
+/// every batch" (0 batches against 3); restored, passes.
+#[test]
+fn a_streamed_impact_reserves_one_batch_and_holds_it_through_compute() {
+    use crate::engine::impact::jobs::{MainAsk, MainJob};
+    use crate::engine::l5::digest_cli::STREAM_BATCHES;
+    use std::sync::Mutex;
+    let f = witness_ws("ReadThenQueue");
+    let rev = revision(&f);
+    fn main(hand: &crate::engine::batch::job::HandOff, root_batch: Option<usize>) -> MainJob<'_> {
+        MainJob {
+            inputs: hand,
+            single_app: true,
+            ask: MainAsk::Routines(
+                ["DocBoth", "QueueTwice", "ReadThenQueue"]
+                    .iter()
+                    .map(|r| r.to_string())
+                    .collect(),
+            ),
+            scope: Default::default(),
+            summaries: false,
+            extra_roots: Vec::new(),
+            root_batch,
+        }
+    }
+    assert!(f.single_app, "precondition: a single-app fixture");
+    let log: Mutex<Vec<(&'static str, usize)>> = Mutex::new(Vec::new());
+    struct Finish<'a>(&'a Mutex<Vec<(&'static str, usize)>>);
+    impl crate::engine::resident::store::Held for Finish<'_> {
+        fn finish(self: Box<Self>) -> u64 {
+            let batches = STREAM_BATCHES.with(|n| n.get());
+            self.0.lock().unwrap().push(("finished", batches));
+            0
+        }
+    }
+    let reserve = |kind: &'static str,
+                   units: usize|
+     -> Result<crate::engine::resident::store::Guard<'_>, String> {
+        log.lock().unwrap().push((kind, units));
+        if kind == "trees" {
+            Ok(Box::new(Finish(&log)))
+        } else {
+            Ok(Box::new(()))
+        }
+    };
+    let ctl = Control {
+        stop: &|| None,
+        reserve: &reserve,
+    };
+    STREAM_BATCHES.with(|n| n.set(0));
+    let hand = crate::engine::batch::job::HandOff::new(Arc::clone(&f.inputs));
+    let warm = rev.answer(&main(&hand, Some(1)), &ctl).unwrap();
+    let log = log.into_inner().unwrap();
+    assert_eq!(warm.exit, 0, "precondition: {}", warm.message());
+    assert_eq!(
+        log.iter()
+            .filter(|(k, _)| *k == "trees")
+            .collect::<Vec<_>>(),
+        vec![&("trees", 1)],
+        "one batch's reservation: {log:?}"
+    );
+    assert_eq!(
+        log.iter()
+            .filter(|(k, _)| *k == "finished")
+            .collect::<Vec<_>>(),
+        vec![&("finished", 3)],
+        "finished after every batch: {log:?}"
+    );
+    assert_eq!(
+        rev.fill_counts().get("witness"),
+        None,
+        "no witness is filled"
+    );
+    let whole = crate::engine::batch::job::HandOff::new(Arc::clone(&f.inputs));
+    assert_eq!(
+        warm,
+        crate::engine::batch::standalone_output(&main(&whole, None))
+    );
+}
+
 /// An effects read over more roots than the memo's cap memoizes none: it
 /// computes its entries itself, publishes no witness, and answers its cold
 /// run's bytes; a read within the cap still memoizes. (CDO: a 699-root
