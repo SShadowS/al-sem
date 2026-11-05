@@ -1141,6 +1141,24 @@ Each finding is a scope decision recorded in the D1 commit: the fact is added in
 or body fact, measured, through the `add-al-construct` or `declared-needs` skill), or the kind
 is printed under `not searched`. r1's "no new IR in v1" is withdrawn.
 
+### 7.3a D1 result (measured 2026-11-05, branch `m-d-fields`)
+
+Probe: a fixture with every kind (`aldump --l2` on it), and `aldump --field-census <ws>`
+(`engine::l4::field_touches::census`, new) on the CDO baseline, cross-app (the model `query`
+reads), `cdo` profile. The census counts the model's field facts by role.
+
+| # | Question | Finding | v1 decision |
+|---|---|---|---|
+| 1 | Bare field in a table / page trigger | **Not captured.** `Amount := Amount + 1` in a field's `OnValidate` gave no `PFieldAccess`; only `X.F` member forms are recorded. A bare `TestField("No.")` was a record op on `Rec` | **Added**: `ModelRoutine::implicit_field_accesses` (body walk, `IrSpine::implicit_field_accesses`): a bare identifier in an implicit-record frame (`Rec`, a `with` record) that no parameter, local, global, dataitem or procedure takes, with its access kind; a record method's field-naming argument is not one. Kept apart from `field_accesses`, so no detector input or serialized feature moves. CDO: 3,966 workspace + 18,741 dependency rows (2,478 + 15,823 name a field of the record's table), **5.3 MB** against 16.9 MB for `field_accesses` and a 2.96 GB peak build: a plain fact, no gate |
+| 2 | `FieldNo(F)` / `FieldCaption(F)` | **Captured** as call sites with every argument text (also `FieldError`, `SetAutoCalcFields`, `CopyFilter`, `GetFilter`). CDO workspace: 504 metadata calls, 177 filter readers, 15 `SetAutoCalcFields` | No new fact. New kind `metadata` (`FieldNo`, `FieldCaption`, `FieldName`, `FieldActive`): a rename or removal breaks them. `FieldError` is `rule` from its call site, not from the rules-gated fact |
+| 3 | TransferFields' argument | **Not kept** (`TransferFields` is not in `FIELD_ARGS_OPS`; no call site either) | **Added**: `ModelRecordOperation::transfer_fields_source`, read at assembly from the IR beside `modify_all_field`. CDO: 57 + 303 TransferFields, every source captured and its table resolved |
+| 4 | RecordRef `Field(<literal>)` | **Already a call site** with its argument text (Fable f8 looked for a record op); `FieldIndex(n)` too | No new fact. A literal counts only when the routine alone decides the RecordRef's table (a local, every `Open`/`GetTable` naming one table, never assigned or passed): CDO workspace 25 literal sites, 0 decided; dependency 273, 13 decided. The rest are candidates; 64 + 119 non-literal numbers are counted as "any field", never matched |
+| 5 | Dependency rows with `field_accesses` | Under `FULL` (cross-app) every dependency routine the model holds has a body: 27,808, 8,554 with field accesses (60,868 accesses). Code the workspace does not demand is not in the model at all. `--low-mem` (context server only) drops dependency syntax trees between revisions, not model rows; that the answer is the same is checked with the feature (measurement below) | The `searched` line counts bodies by role and states that undemanded dependency code is not loaded |
+
+Cost: the census over every fact took 278 ms on CDO (the build 22 s); `--field` scans the same
+facts for one field. The query schema is 3.2.0 on master already (output step 1b), so
+`--field` ships as **3.3.0** (additive), not 3.2.0.
+
 ### 7.4 Surface and output
 
 CLI: `alsem query touches <ws> --table T --field F [--from R] [--direction …] [--all]`. MCP:

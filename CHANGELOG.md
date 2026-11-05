@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Two field facts for field impact (agent-tasks milestone D, the D1 probe).** A bare field in
+  a table or page trigger (`Amount := Amount + 1`, through the implicit `Rec` or a `with`
+  record) was no field access at all: only the `X.F` member form was recorded. The body walk
+  now records it as `ModelRoutine::implicit_field_accesses`, with its read / write kind, apart
+  from `field_accesses` so no detector input and no serialized feature moves. A record method's
+  field-naming argument (`TestField(F)`, `SetRange(F, …)`'s first) is not one. A
+  `TransferFields`' source record is kept as `ModelRecordOperation::transfer_fields_source`.
+  `aldump --field-census <ws> [--single-app]` counts the field facts by role (on CDO, cross-app:
+  22,707 implicit accesses, 5.3 MB, against 16.9 MB for the existing field accesses). The
+  findings and scope decisions are in the agent-tasks design §7.3a.
+
 ### Security
 
 - **The private output folders no longer trust a reused inode number.** The engine child's

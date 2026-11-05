@@ -97,6 +97,7 @@ fn make_routine_for_pass2b(variables: Vec<ModelVariable>) -> ModelRoutine {
         in_statement_position: false,
         run_trigger: None,
         modify_all_field: None,
+        transfer_fields_source: None,
         receiver_is_record_ref: false,
     };
 
@@ -116,6 +117,7 @@ fn make_routine_for_pass2b(variables: Vec<ModelVariable>) -> ModelRoutine {
         record_variables: Vec::new(), // intentionally empty — passes 1/2a do nothing
         record_operations: vec![op],
         field_accesses: Vec::new(),
+        implicit_field_accesses: Vec::new(),
         // `from_own` keeps the injected flat list VERBATIM (including the
         // duplicate name), which is the whole point here: real assembly can never
         // emit a shadowed global, so this stays a synthetic, defensive guard on

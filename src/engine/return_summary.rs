@@ -916,6 +916,7 @@ mod tests {
             record_variables: vec![],
             record_operations: vec![],
             field_accesses: vec![],
+            implicit_field_accesses: vec![],
             variables: RoutineVariables::default(),
             parameters: vec![],
             access_modifier: None,

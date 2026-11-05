@@ -347,6 +347,12 @@ pub struct ModelRecordOperation {
     /// serialized `fieldArguments` and the input of every detector that
     /// reads them. Never serialized.
     pub modify_all_field: Option<String>,
+    /// Agent-tasks D1: for a `TransferFields(From[, InitPrimaryKey])`, its
+    /// first argument as written: the record copied from. Read at assembly
+    /// from the IR, as `modify_all_field` is (`TransferFields` is not in
+    /// `FIELD_ARGS_OPS`, and its argument is a record, not a field). `None`
+    /// for every other operation. Never serialized.
+    pub transfer_fields_source: Option<String>,
     /// MCP output wave 3a (Q4): the receiver is a variable declared
     /// `RecordRef` (`PRecordOperation::receiver_is_record_ref`, forwarded), so
     /// the operation's table is decided at run time. Read by `alsem query`'s
@@ -541,6 +547,12 @@ pub struct ModelRoutine {
     /// Field accesses (from L2 body walk). Required by the R3a-2 summary
     /// engine to derive RecordRoleSummary.readsFields per record parameter.
     pub field_accesses: Vec<crate::program::body::features::PFieldAccess>,
+    /// Agent-tasks D1: bare identifiers read or written through the routine's
+    /// implicit record (`Amount := 0` in a table trigger), not matched against
+    /// the table's fields yet (`ir_walk::IrSpine::implicit_field_accesses`).
+    /// Read by `alsem query touches --field` only; kept apart from
+    /// `field_accesses` so no detector input moves. Empty for a symbol-only row.
+    pub implicit_field_accesses: Vec<crate::program::body::features::PFieldAccess>,
     /// The routine's lexical scope (params → locals → non-shadowed object globals).
     /// Iterate with `.iter()`; see [`RoutineVariables`] for why the globals are shared
     /// rather than replicated per routine.
@@ -1250,7 +1262,9 @@ pub fn rows_population(
 
 /// The first argument of the `ModifyAll(..)` call whose expression index is
 /// `expr` (`SiteExprs::record_ops`), as written: the field it writes
-/// (`ModelRecordOperation::modify_all_field`).
+/// (`ModelRecordOperation::modify_all_field`). Also a `TransferFields(..)`'s
+/// first argument, the record it copies from
+/// (`ModelRecordOperation::transfer_fields_source`).
 fn modify_all_field(
     ir_file: &al_syntax::ir::AlFile,
     source: &str,
@@ -1558,7 +1572,7 @@ fn project_ir(
             // unescapes it.
             let enclosing_member = crate::program::body::ir_walk::ir_enclosing_member(ir_routine);
 
-            let (routine_id, mut features, site_exprs) = {
+            let (routine_id, mut features, site_exprs, implicit_field_accesses) = {
                 let kind_for_id = crate::program::body::ir_walk::ir_routine_kind(ir_routine);
                 let params_for_id = crate::program::body::ir_walk::ir_parameter_symbols(ir_routine);
                 let rid = crate::program::body::scope::compute_routine_id(
@@ -1571,7 +1585,7 @@ fn project_ir(
                     &params_for_id,
                     ir_routine.return_type.as_deref(),
                 );
-                let (feats, site_exprs) =
+                let (feats, site_exprs, implicit) =
                     crate::program::body::ir_walk::project_routine_features_ir_with(
                         ir_file,
                         oi,
@@ -1582,7 +1596,7 @@ fn project_ir(
                         source_table_name.as_deref(),
                         parenless_calls,
                     );
-                (rid, feats, site_exprs)
+                (rid, feats, site_exprs, implicit)
             };
 
             // R1b control-context lattice (the SAME pass `aldump --l2` applies):
@@ -1692,6 +1706,11 @@ fn project_ir(
                 .enumerate()
                 .map(|(i, op)| ModelRecordOperation {
                     modify_all_field: (op.op == "ModifyAll")
+                        .then(|| {
+                            modify_all_field(ir_file, source, site_exprs.record_ops.get(i).copied())
+                        })
+                        .flatten(),
+                    transfer_fields_source: (op.op == "TransferFields")
                         .then(|| {
                             modify_all_field(ir_file, source, site_exprs.record_ops.get(i).copied())
                         })
@@ -2024,6 +2043,7 @@ fn project_ir(
                 record_variables,
                 record_operations,
                 field_accesses,
+                implicit_field_accesses,
                 variables,
                 parameters,
                 access_modifier,

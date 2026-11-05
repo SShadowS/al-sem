@@ -130,6 +130,45 @@ fn reverse_cone_cmd(args: &[String]) -> ExitCode {
     }
 }
 
+/// `aldump --field-census <workspace> [--single-app]`: the D1 probe of the
+/// agent-tasks design (§7.3). Builds the model `alsem query` reads (cross-app
+/// by default) and prints, by role, the field facts it holds
+/// (`engine::l4::field_touches::census`), with the build's time.
+fn field_census_cmd(args: &[String]) -> ExitCode {
+    const USAGE: &str = "usage: aldump --field-census <workspace> [--single-app]";
+    let single_app = args.iter().any(|a| a == "--single-app");
+    let Some(ws) = args.iter().find(|a| !a.starts_with("--")) else {
+        eprintln!("{USAGE}");
+        return ExitCode::FAILURE;
+    };
+    let t0 = std::time::Instant::now();
+    let inputs = std::sync::Arc::new(al_sem::program::inputs::WorkspaceInputs::read(
+        std::path::Path::new(ws),
+        &al_sem::program::inputs::WorkspaceNeeds::default(),
+    ));
+    let target =
+        match al_sem::engine::gate::run::AnalysisTarget::build(&inputs, single_app, "query") {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("aldump --field-census: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+    let built_ms = t0.elapsed().as_millis();
+    let t1 = std::time::Instant::now();
+    let census = al_sem::engine::l4::field_touches::census(target.resolved());
+    let census_ms = t1.elapsed().as_millis();
+    let out = serde_json::json!({
+        "workspace": ws,
+        "singleApp": single_app,
+        "buildMs": built_ms,
+        "censusMs": census_ms,
+        "byRole": census,
+    });
+    println!("{}", serde_json::to_string_pretty(&out).expect("json"));
+    ExitCode::SUCCESS
+}
+
 /// `aldump --session-refresh <workspace-copy> [--file <rel>] [--verify]`:
 /// measure the stage-4 workspace session (context-server design §6,
 /// `program::session::WorkspaceSession`) per change type. It EDITS the
@@ -963,6 +1002,7 @@ fn run_main() -> ExitCode {
         Some("--snapshot-memory") => return snapshot_memory_cmd(&raw[1..]),
         Some("--session-refresh") => return session_refresh_cmd(&raw[1..]),
         Some("--reverse-cone") => return reverse_cone_cmd(&raw[1..]),
+        Some("--field-census") => return field_census_cmd(&raw[1..]),
         _ => {}
     }
     let mut l2 = false;
