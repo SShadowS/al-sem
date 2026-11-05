@@ -682,10 +682,12 @@ impl<'a> Builder<'a> {
             members.extend(exts.iter().copied());
         }
         let mut opens: Vec<Key> = Vec::new();
+        let mut action_runs: HashSet<Key> = HashSet::new();
         let mut tables: Vec<ObjectNodeId> = Vec::new();
         for m in &members {
             if let Some(f) = self.inp.facts.objects.get(*m) {
                 opens.extend(f.opens.iter().map(|t| self.run_target_key(t)));
+                action_runs.extend(f.action_runs.iter().map(|t| self.run_target_key(t)));
                 tables.extend(f.tables.iter().cloned());
             }
             if let Some(mo) = self.obj_by_id.get(*m) {
@@ -708,6 +710,8 @@ impl<'a> Builder<'a> {
             tables.push(table);
         }
         for to in opens {
+            let action = action_runs.contains(&to);
+            let before = self.sited.sites.len();
             self.simple(
                 from.clone(),
                 to,
@@ -715,6 +719,11 @@ impl<'a> Builder<'a> {
                 Conf::OverApprox,
                 "lifecycle",
             );
+            if action && self.sited.sites.len() > before {
+                // A user starts this run from one of the page's actions
+                // (`RunObject`): the reverse walk's page-action entry.
+                self.sited.action_run_sites.push(before as u32);
+            }
         }
         for table in tables {
             let mut targets: Vec<RoutineNodeId> = self
@@ -1089,14 +1098,20 @@ fn build<'a>(
 }
 
 /// The program's sited graph (see [`super::sited`]), or [`Cancelled`] when
-/// `cancel` said stop during the build.
-pub fn sited_graph(inp: &Inputs<'_>, cancel: &dyn Fn() -> bool) -> Result<SitedGraph, Cancelled> {
+/// `cancel` said stop during the build. `friended` holds the apps whose
+/// manifest names an `internalsVisibleTo` friend, loaded or not (their
+/// `internal` routines are callable from outside the program).
+pub fn sited_graph(
+    inp: &Inputs<'_>,
+    friended: &HashSet<AppRef>,
+    cancel: &dyn Fn() -> bool,
+) -> Result<SitedGraph, Cancelled> {
     let (b, hidden) = build(inp, cancel)?;
     let hidden: HashMap<u32, Vec<&'static str>> = hidden
         .into_iter()
         .filter_map(|(r, f)| b.sited.ix(&Key::Routine(r)).map(|i| (i, f)))
         .collect();
-    Ok(b.sited.finish(inp.graph, hidden, inp.edges.primary_app_ref))
+    Ok(b.sited.finish(inp, hidden, friended))
 }
 
 /// Build the export's nodes and edges: the sited graph, collapsed
@@ -1205,7 +1220,7 @@ pub fn project(inp: &Inputs<'_>) -> Projection {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     //! The projection contract over hand-built graphs: every precondition is
     //! stated here, none is produced by the resolver.
 
@@ -1223,19 +1238,32 @@ mod tests {
     use crate::program::topology::DependencyGraph;
     use crate::snapshot::AppId;
 
+    /// A hand-built program (also the reverse walker's test world).
     #[derive(Default)]
-    struct World {
-        apps: AppRegistry,
-        deps: Vec<(AppRef, AppRef)>,
-        objects: Vec<ObjectNode>,
-        routines: Vec<RoutineNode>,
-        edges: Vec<ClassifiedEdge>,
+    pub(crate) struct World {
+        pub(crate) apps: AppRegistry,
+        pub(crate) deps: Vec<(AppRef, AppRef)>,
+        pub(crate) objects: Vec<ObjectNode>,
+        pub(crate) routines: Vec<RoutineNode>,
+        pub(crate) edges: Vec<ClassifiedEdge>,
         /// The second edge set (`EdgeView::dependency_body_edges`): `project`
         /// reads it after `edges`.
-        dependency_body_edges: Vec<ClassifiedEdge>,
-        site_facts: HashMap<ObligationId, SiteFacts>,
-        facts: SourceFacts,
-        missing: Vec<ObligationId>,
+        pub(crate) dependency_body_edges: Vec<ClassifiedEdge>,
+        pub(crate) site_facts: HashMap<ObligationId, SiteFacts>,
+        pub(crate) facts: SourceFacts,
+        pub(crate) missing: Vec<ObligationId>,
+    }
+
+    /// The sited graph of `w` with `primary` as the workspace app.
+    pub(crate) fn sited_of(w: &World, primary: AppRef, friended: &[AppRef]) -> SitedGraph {
+        let friended: HashSet<AppRef> = friended.iter().copied().collect();
+        w.with_inputs(primary, |inp| {
+            sited_graph(inp, &friended, &|| false).expect("not cancelled")
+        })
+    }
+
+    pub(crate) fn unknown_route() -> Route {
+        unknown()
     }
 
     fn src(rid: &RoutineNodeId) -> Route {
@@ -1271,7 +1299,7 @@ mod tests {
     }
 
     impl World {
-        fn app(&mut self, name: &str) -> AppRef {
+        pub(crate) fn app(&mut self, name: &str) -> AppRef {
             self.apps.intern(&AppId {
                 guid: format!("{name}-guid"),
                 name: name.into(),
@@ -1309,7 +1337,7 @@ mod tests {
             oid
         }
 
-        fn obj(
+        pub(crate) fn obj(
             &mut self,
             app: AppRef,
             kind: ObjectKind,
@@ -1325,14 +1353,14 @@ mod tests {
             self.push_obj(oid, name, tier)
         }
 
-        fn object_mut(&mut self, oid: &ObjectNodeId) -> &mut ObjectNode {
+        pub(crate) fn object_mut(&mut self, oid: &ObjectNodeId) -> &mut ObjectNode {
             self.objects
                 .iter_mut()
                 .find(|o| o.id == *oid)
                 .expect("object")
         }
 
-        fn rtn_with(
+        pub(crate) fn rtn_with(
             &mut self,
             o: &ObjectNodeId,
             name: &str,
@@ -1378,15 +1406,15 @@ mod tests {
             id
         }
 
-        fn rtn(&mut self, o: &ObjectNodeId, name: &str) -> RoutineNodeId {
+        pub(crate) fn rtn(&mut self, o: &ObjectNodeId, name: &str) -> RoutineNodeId {
             self.rtn_with(o, name, |_| {})
         }
 
-        fn trigger(&mut self, o: &ObjectNodeId, name: &str) -> RoutineNodeId {
+        pub(crate) fn trigger(&mut self, o: &ObjectNodeId, name: &str) -> RoutineNodeId {
             self.rtn_with(o, name, |r| r.is_trigger = true)
         }
 
-        fn edge(
+        pub(crate) fn edge(
             &mut self,
             from: &RoutineNodeId,
             kind: EdgeKind,
@@ -1427,7 +1455,7 @@ mod tests {
             ob
         }
 
-        fn call(&mut self, from: &RoutineNodeId, to: &RoutineNodeId, line: u32) {
+        pub(crate) fn call(&mut self, from: &RoutineNodeId, to: &RoutineNodeId, line: u32) {
             self.edge(
                 from,
                 EdgeKind::Call,
@@ -1437,7 +1465,7 @@ mod tests {
             );
         }
 
-        fn event(&mut self, publisher: &RoutineNodeId, subscribers: &[&RoutineNodeId]) {
+        pub(crate) fn event(&mut self, publisher: &RoutineNodeId, subscribers: &[&RoutineNodeId]) {
             self.edges.push(ClassifiedEdge {
                 obligation_id: ObligationId::Publisher(publisher.clone()),
                 edge: EngineEdge {
@@ -1467,7 +1495,11 @@ mod tests {
         }
 
         /// The projection's `Inputs` over this world, handed to `f`.
-        fn with_inputs<R>(&self, primary: AppRef, f: impl FnOnce(&Inputs<'_>) -> R) -> R {
+        pub(crate) fn with_inputs<R>(
+            &self,
+            primary: AppRef,
+            f: impl FnOnce(&Inputs<'_>) -> R,
+        ) -> R {
             let mut objects = self.objects.clone();
             objects.sort_by(|a, b| a.id.cmp(&b.id));
             let mut routines = self.routines.clone();
@@ -1749,6 +1781,7 @@ mod tests {
                 test: true,
                 handlers: vec!["modalhandler".into()],
                 runs: vec![RunTarget::Object(page.clone())],
+                ..Default::default()
             },
         );
         let o = w.project(a);
@@ -2144,7 +2177,9 @@ mod tests {
         let es = o.edges("Cu.X", "Cu.Y");
         assert_eq!(es.len(), 1);
         assert_eq!(es[0].line, Some(4), "the minimum line over both sites");
-        let g = w.with_inputs(a, |inp| sited_graph(inp, &|| false).expect("not cancelled"));
+        let g = w.with_inputs(a, |inp| {
+            sited_graph(inp, &HashSet::new(), &|| false).expect("not cancelled")
+        });
         let (fx, fy) = (
             g.routine_node(&x).expect("X"),
             g.routine_node(&y).expect("Y"),
@@ -2180,7 +2215,7 @@ mod tests {
         }
         let polls = std::cell::Cell::new(0u32);
         let out = w.with_inputs(a, |inp| {
-            sited_graph(inp, &|| {
+            sited_graph(inp, &HashSet::new(), &|| {
                 polls.set(polls.get() + 1);
                 polls.get() >= 2
             })
@@ -2188,7 +2223,9 @@ mod tests {
         });
         assert_eq!(out, Err(Cancelled));
         assert_eq!(polls.get(), 2, "stopped at the second check, in the loop");
-        let full = w.with_inputs(a, |inp| sited_graph(inp, &|| false).map(|g| g.site_count()));
+        let full = w.with_inputs(a, |inp| {
+            sited_graph(inp, &HashSet::new(), &|| false).map(|g| g.site_count())
+        });
         assert!(full.is_ok_and(|n| n > CANCEL_EVERY as usize));
     }
 
