@@ -26,6 +26,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `release_alloc::tests::freed_large_blocks_are_released_only_when_on` no longer depends on how
+  the kernel backs the test's heap. It measured residency (`mincore`) on memory that mimalloc
+  marks for transparent huge pages, and wrote only the requested 256 KiB of a block whose usable
+  size (and released interior) is 320 KiB, so its precondition held only while a huge page
+  covered the unwritten tail. On CI (Ubuntu 26.04, kernel 7.0 azure) the old block of the
+  moving `realloc` read as all 79 interior pages resident after its release, 16 of them never
+  written since the first huge-page fault. It is intermittent: reproduced once in two full
+  nextest runs in an Ubuntu 26.04 VM on `7.0.0-1019-azure` (4 vCPUs, 16 GB), never alone (0 of
+  360) nor on `7.0.0-38-generic` or the dev machine. With huge pages off (`never`) the
+  precondition failed instead. The test now turns huge pages off for its
+  process (`PR_SET_THP_DISABLE`), writes every usable byte, checks the precondition before each
+  release, and also pins each release by its counters (one release, exactly the interior's
+  bytes). The allocator itself is unchanged.
 - An unused `mut` in `mcp::freshness::CheckOptions::new` warned in builds without the test hooks
   (the shipped release build; CI's clippy runs with `--all-features`, so it never saw it).
 
