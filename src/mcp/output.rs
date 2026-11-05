@@ -10,10 +10,15 @@
 //! - A client's `out` is a path relative to the instance folder, or an
 //!   absolute path inside it; anything else (outside it, `..`, a root other
 //!   than the folder) is refused (`refusedPath`).
-//! - Every entry the server creates is recorded with its identity (device,
-//!   inode). An existing entry is overwritten only when it is a recorded
-//!   file whose identity still matches, through a temporary leaf and
-//!   `renameat` under the sink's lock; any other existing entry is refused.
+//! - Every file the server creates is pinned by the descriptor it was
+//!   written through (`crate::engine::host::output::Pinned`, at most
+//!   `MAX_PINNED`; the oldest is unpinned). An existing entry is overwritten
+//!   only when its name still holds a pinned file (a regular file, not a
+//!   link, with the pinned descriptor's device and inode, the pinned file
+//!   still linked), through a temporary leaf and `renameat` under the sink's
+//!   lock; any other existing entry is refused. A recorded (device, inode)
+//!   pair alone would not do: a removed file's inode number is reused (ext4
+//!   does it at once), so a planted replacement could carry the same pair.
 //! - At most [`QUOTA_BYTES`] are written per instance.
 //! - At start, instance folders older than [`MAX_AGE`] under the root are
 //!   removed (only names of the instance-id shape).
@@ -240,7 +245,7 @@ impl OutputSink {
 #[cfg(unix)]
 mod imp {
     use super::{QUOTA_BYTES, SinkError};
-    use std::collections::HashMap;
+    use crate::engine::host::output::Pinned;
     use std::ffi::CString;
     use std::io::Write;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -251,9 +256,9 @@ mod imp {
     /// The instance folder's handle and what the sink created in it.
     pub struct Inner {
         dir: OwnedFd,
-        /// Relative path (joined with `/`) → (device, inode) of every entry
-        /// the sink created.
-        recorded: HashMap<String, (u64, u64)>,
+        /// Relative path (joined with `/`) → the descriptor of every file
+        /// the sink created (the newest `MAX_PINNED`).
+        recorded: Pinned,
         pub written: u64,
         pub serial: u64,
         temp: u64,
@@ -308,21 +313,6 @@ mod imp {
         Ok(unsafe { std::fs::File::from_raw_fd(fd) })
     }
 
-    /// (device, inode, is a regular file) of `name` in `parent`, not
-    /// following a link.
-    fn stat_at(parent: RawFd, name: &str) -> std::io::Result<(u64, u64, bool)> {
-        let c = cstr(name)?;
-        // SAFETY: `st` is written by fstatat before it is read.
-        let mut st: libc::stat = unsafe { std::mem::zeroed() };
-        check(unsafe { libc::fstatat(parent, c.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) })?;
-        #[allow(clippy::unnecessary_cast)]
-        Ok((
-            st.st_dev as u64,
-            st.st_ino as u64,
-            (st.st_mode & libc::S_IFMT) == libc::S_IFREG,
-        ))
-    }
-
     fn rename_at(parent: RawFd, from: &str, to: &str) -> std::io::Result<()> {
         let (f, t) = (cstr(from)?, cstr(to)?);
         // SAFETY: a plain renameat within one directory this process owns.
@@ -337,7 +327,7 @@ mod imp {
             let dir = open_dir_at(root_fd.as_raw_fd(), instance_id)?;
             Ok(Inner {
                 dir,
-                recorded: HashMap::new(),
+                recorded: Pinned::default(),
                 written: 0,
                 serial: 0,
                 temp: 0,
@@ -345,9 +335,9 @@ mod imp {
         }
 
         /// Write `bytes` at `parts` below the instance folder: folders made
-        /// as needed (recorded), the leaf created exclusively, or, when
-        /// `overwrite` and the leaf is a recorded file of unchanged
-        /// identity, replaced through a temporary leaf.
+        /// as needed (entered `O_NOFOLLOW`), the leaf created exclusively,
+        /// or, when `overwrite` and the leaf still holds a file the sink
+        /// pinned, replaced through a temporary leaf.
         pub fn write(
             &mut self,
             parts: &[String],
@@ -376,8 +366,6 @@ mod imp {
                     Ok(fd) => fd,
                     Err(e) if e.raw_os_error() == Some(libc::ENOENT) => {
                         mkdir_at(parent, d).map_err(io)?;
-                        let (dev, ino, _) = stat_at(parent, d).map_err(io)?;
-                        self.recorded.insert(rel.clone(), (dev, ino));
                         open_dir_at(parent, d).map_err(io)?
                     }
                     Err(e) => {
@@ -395,13 +383,14 @@ mod imp {
                 Ok(mut f) => {
                     f.write_all(bytes).map_err(io)?;
                     f.flush().map_err(io)?;
-                    let (dev, ino, _) = stat_at(parent, leaf).map_err(io)?;
-                    self.recorded.insert(shown, (dev, ino));
+                    self.recorded.pin(&shown, f.into());
                 }
                 Err(e) if e.raw_os_error() == Some(libc::EEXIST) => {
-                    let current = stat_at(parent, leaf).map_err(io)?;
-                    let ours = self.recorded.get(&shown).copied();
-                    if !overwrite || !current.2 || ours != Some((current.0, current.1)) {
+                    let ours = overwrite
+                        && self
+                            .recorded
+                            .is_current(&shown, parent, &cstr(leaf).map_err(io)?);
+                    if !ours {
                         return Err(SinkError::Refused(format!(
                             "out '{shown}': exists and is not a file this server wrote"
                         )));
@@ -411,9 +400,15 @@ mod imp {
                     let mut f = create_at(parent, &tmp).map_err(io)?;
                     f.write_all(bytes).map_err(io)?;
                     f.flush().map_err(io)?;
-                    let (dev, ino, _) = stat_at(parent, &tmp).map_err(io)?;
-                    rename_at(parent, &tmp, leaf).map_err(io)?;
-                    self.recorded.insert(shown, (dev, ino));
+                    if let Err(e) = rename_at(parent, &tmp, leaf) {
+                        if let Ok(t) = cstr(&tmp) {
+                            // SAFETY: a name relative to a descriptor this
+                            // process owns; a failure leaves a temp leaf.
+                            unsafe { libc::unlinkat(parent, t.as_ptr(), 0) };
+                        }
+                        return Err(io(e));
+                    }
+                    self.recorded.pin(&shown, f.into());
                 }
                 Err(e) => return Err(io(e)),
             }
@@ -503,6 +498,18 @@ mod tests {
             s.write_out("r.json", b"three"),
             Err(SinkError::Refused(_))
         ));
+        assert_eq!(std::fs::read(&p).unwrap(), b"swapped");
+        // A symlink planted under a recorded name: refused, nothing written
+        // through it (on ext4 it gets the removed file's inode number).
+        let q = s.write_out("q.json", b"x").unwrap();
+        std::fs::remove_file(&q).unwrap();
+        let target = s.instance().join("elsewhere");
+        std::os::unix::fs::symlink(&target, &q).unwrap();
+        assert!(matches!(
+            s.write_out("q.json", b"y"),
+            Err(SinkError::Refused(_))
+        ));
+        assert!(!target.exists(), "nothing written through the link");
         let outside = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(outside.path(), s.instance().join("link")).unwrap();
         assert!(matches!(

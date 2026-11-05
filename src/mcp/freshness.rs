@@ -57,7 +57,7 @@ impl CheckOptions {
     /// when one is set.
     #[must_use]
     pub fn new(verify: bool) -> CheckOptions {
-        let mut o = CheckOptions {
+        let o = CheckOptions {
             verify,
             deadline: if verify {
                 VERIFY_DEADLINE
@@ -66,14 +66,19 @@ impl CheckOptions {
             },
             delay: Duration::ZERO,
         };
+        // A shipped build has no test hook, so `o` is returned as it is
+        // (a `let mut o` there would be an unused `mut`).
         #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
         if let Some(crate::engine::host::test_hooks::Hook::StatusCheck {
             delay_ms,
             deadline_ms,
         }) = crate::engine::host::test_hooks::from_env()
         {
-            o.delay = Duration::from_millis(delay_ms);
-            o.deadline = Duration::from_millis(deadline_ms);
+            return CheckOptions {
+                delay: Duration::from_millis(delay_ms),
+                deadline: Duration::from_millis(deadline_ms),
+                ..o
+            };
         }
         o
     }
