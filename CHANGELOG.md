@@ -64,6 +64,18 @@ test selection, adding an effect, impact) build on. Spec:
 - **Admission for the sited graph.** A build that makes the sited graph reserves its estimate
   (`Case::Fill("sited")`, 120 MiB: 46 MiB measured resident on CDO plus its build's working set,
   not measured apart) on top of the build's own.
+- **The input descriptor** (`session/descriptor`, `ResidentSession::descriptor`,
+  `Pool::descriptor`): a published state's generation, inputs stamp, universe and manifest, every
+  file entry with the stat its hash was taken at (`Manifest::descriptor_entries` /
+  `from_descriptor_entries` round-trip it). After each call the pool's worker asks its child for
+  it once per revision and keeps it in its snapshot, so a later freshness check can observe the
+  disk against it without asking a busy engine.
+- **Composite requests** (`Pool::run_composite`): a request that needs several engine children
+  runs as a sequence of plain sub-requests, each part's outcome in order. A part is admitted only
+  after the previous one is answered (its child released), and admission never waits: a part
+  that cannot get a child says why (`the crossApp engine could not start: 2 engine children are
+  running (--max-children) and none is idle (max-children 2)`) and the rest still run. The
+  pool's own `busy` message gains the `(max-children N)` suffix.
 - `aldump --session-refresh --sited` builds and keeps the sited graph at every step and prints its
   wall and CPU time, nodes, sites and bytes.
 

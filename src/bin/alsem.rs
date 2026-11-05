@@ -3112,6 +3112,13 @@ mod engine {
             answer
         }
 
+        fn descriptor(&self) -> serde_json::Value {
+            self.session()
+                .and_then(|o| o.session.descriptor())
+                .and_then(|d| serde_json::to_value(d).ok())
+                .unwrap_or(serde_json::Value::Null)
+        }
+
         fn status(&self) -> ChildStatus {
             let open = self.session();
             let mut status = ChildStatus {

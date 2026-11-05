@@ -50,6 +50,12 @@ pub trait Engine: Sync {
     fn status(&self) -> ChildStatus;
     /// `session/notifyChanged`.
     fn notify_changed(&self, _paths: &[PathBuf]) {}
+    /// `session/descriptor`: the published state's input descriptor
+    /// (`crate::engine::resident::session::InputDescriptor`), `null` before
+    /// the first build.
+    fn descriptor(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
     /// `session/refresh`: the published revision after a `fresh` pin.
     fn refresh(&self, _cx: &AskCx<'_>) -> serde_json::Value {
         serde_json::json!({ "revision": null })
@@ -472,6 +478,7 @@ fn dispatch<W: Write + Send>(
                     .map(|d| d.path().to_path_buf());
                 Message::response(id, serde_json::to_value(status)?)
             }
+            Some("session/descriptor") => Message::response(id, engine.descriptor()),
             Some("session/shutdown") => return Ok(Some(id)),
             Some(_) if notification => continue,
             Some(other) => {

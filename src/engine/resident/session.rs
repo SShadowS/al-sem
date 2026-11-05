@@ -63,6 +63,22 @@ pub enum Freshness {
     Verify,
 }
 
+/// A published state's input descriptor (agent-tasks design §1.2 M0-6): its
+/// generation (`None` for a failed build), the manifest stamp, the universe
+/// and the manifest it was built from, each file entry with the stat its
+/// hash was taken at. A front end observes the disk against it
+/// ([`Manifest::from_descriptor_entries`], `Hashing::Cached`) without asking
+/// the child.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputDescriptor {
+    pub generation: Option<u64>,
+    pub inputs_stamp: String,
+    pub workspace: PathBuf,
+    pub universe: String,
+    pub manifest: Vec<crate::engine::resident::manifest::ManifestEntry>,
+}
+
 /// A build that did not produce a model: its read and its failure.
 pub struct FailedBuild {
     pub inputs: Arc<WorkspaceInputs>,
@@ -472,6 +488,33 @@ impl ResidentSession {
     #[must_use]
     pub fn published(&self) -> Option<Built> {
         lock(&self.current).as_ref().map(|p| p.built.clone())
+    }
+
+    /// The published state's input descriptor (agent-tasks design §1.2
+    /// M0-6): immutable per published state, so a front end that read it
+    /// for one generation never asks again until the generation moves.
+    #[must_use]
+    pub fn descriptor(&self) -> Option<InputDescriptor> {
+        let p = lock(&self.current).clone()?;
+        Some(InputDescriptor {
+            generation: p.built.revision_id().map(|r| r.generation),
+            inputs_stamp: p.manifest.stamp(),
+            workspace: self.workspace.clone(),
+            universe: self.universe_name().to_string(),
+            manifest: p.manifest.descriptor_entries(),
+        })
+    }
+
+    /// The session's universe as the descriptor names it.
+    #[must_use]
+    pub fn universe_name(&self) -> &'static str {
+        if self.graph_only {
+            "graphOnly"
+        } else if self.single_app {
+            "singleApp"
+        } else {
+            "crossApp"
+        }
     }
 
     /// The published state's inputs stamp.

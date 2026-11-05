@@ -814,6 +814,7 @@ fn a_graph_only_session_answers_sited_jobs_and_refuses_model_jobs() {
     );
     let p2 = s.pin(Freshness::Fresh, &never).unwrap();
     let g2 = graph(&p2);
+    assert_eq!(s.descriptor().map(|d| d.universe), Some("graphOnly".into()));
     assert_eq!(g2.id.generation, 2);
     assert_eq!(s.stats().last_build_class.as_deref(), Some("B"));
     assert_eq!(g2.sited.text(), sited_cold(ws));
@@ -906,4 +907,39 @@ fn rows_built_with_fewer_needs_are_rebuilt_for_a_request_that_needs_more() {
     assert_eq!(again.rebuilt_for, None);
     assert_eq!(revision(&again).id, revision(&p).id);
     assert_eq!(s.stats().needs_rebuilds, 1);
+}
+
+/// M0-6's descriptor (agent-tasks design §1.2): the published state's
+/// manifest, with every file entry's stat, round-trips through the
+/// descriptor; a cached observation against the rebuilt manifest finds the
+/// state current, and one after an edit does not; the descriptor follows
+/// the generation.
+///
+/// DISCRIMINATION (2026-11-05): dropping the stats from
+/// `Manifest::descriptor_entries` fails "stats kept".
+#[test]
+fn the_input_descriptor_round_trips_the_published_manifest() {
+    let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
+    let ws = dir.path();
+    let s = session(ws);
+    assert!(s.descriptor().is_none(), "nothing published yet");
+    s.pin(Freshness::Fresh, &never).unwrap();
+    let d = s.descriptor().expect("published");
+    assert_eq!(d.generation, Some(1));
+    assert_eq!(Some(d.inputs_stamp.clone()), s.published_stamp());
+    assert_eq!(d.universe, "crossApp");
+    let m = Manifest::from_descriptor_entries(&d.manifest).expect("round-trips");
+    assert_eq!(m.descriptor_entries(), d.manifest, "stats kept");
+    assert!(
+        d.manifest.iter().any(|e| e.stat_len.is_some()),
+        "stats kept"
+    );
+    let none = BTreeSet::new();
+    let cached =
+        |prev: &Manifest| Manifest::observe(ws, false, Hashing::Cached { prev, dirty: &none });
+    assert_eq!(cached(&m), m, "current");
+    edit(ws, "Compute(5)", "Compute(6)");
+    assert_ne!(cached(&m), m, "an edit is seen");
+    s.pin(Freshness::Fresh, &never).unwrap();
+    assert_eq!(s.descriptor().and_then(|d| d.generation), Some(2));
 }
