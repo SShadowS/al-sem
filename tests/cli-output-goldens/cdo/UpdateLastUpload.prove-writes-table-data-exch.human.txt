@@ -1,5 +1,5 @@
 --- Codeunit CDO Telemetry::UpdateLastUpload ---
-  question: writes-table:Data Exch.
+  question: writes-table:Data Exch. — existing effects (what the routine and its callees already do)
   answer:   no
   coverage: complete
   assumptions: loaded-subscribers

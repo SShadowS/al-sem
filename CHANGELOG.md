@@ -79,11 +79,39 @@ Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §6 (revision 2;
 - `engine::resident::guards::site_guards_cached` with a `GuardCache`: the units' pinned texts and
   parses, and the packages' embedded sources listed once per answer, not once per site. Before
   it, `callers-may-run-noninteractive` on CDO `RunReportID` took 229 s (every Base Application
-  caller that mentions GuiAllowed re-listed every package's sources); after, 31 s cold CLI.
+  caller that mentions GuiAllowed re-listed every package's sources); after, 20.5 s cold CLI.
 - A model job can now walk the sited graph beside the model (`ViewNeeds::MODEL_SITED`,
   `ViewCx::sited`): one-shot, the graph is built off the lent program and kept for the compute;
   resident, the revision's `ArtifactKey::Sited` is served, and the engine host pins with
   `pin_sited` for a command that reads it.
+
+- **Measured on the CDO baseline** (`bc3ccb18`, cross-app, `release-fast`, 2026-11-05; the
+  machine was shared, so upper bounds).
+  - Cold CLI, each question alone: 18.8-20.7 s and 3.16-3.21 GB peak for `RunReportID`,
+    `IssueReminder`, `UpdateLastUpload`, `TryRunReport`, `RunEMailJobs` (one outlier, 32 s), against
+    28.3 s / 3.14 GB for `prove RunReportID may-commit` (the callers' questions run no digest
+    tree; they add the sited graph and the walk). `explain RunReportID`: 27.2 s; with
+    `--callers-context` 32.2 s (+5 s: the detector run, the sited graph, three walks).
+  - Resident (`alsem mcp`, one session): `may-commit` cold 29.9 s; the first callers' question
+    8.2 s (`pin_sited` rebuilds the revision once with its sited graph); then 0.09-0.14 s for
+    pending writes and intercepted errors, 1.26 s for non-interactive (its GuiAllowed guards parse
+    the callers' files); `explain --callers-context` 4.3 s after a plain explain. Under
+    `--low-mem`: 34.3 s for the first callers' question (the rebuild parses the dependency trees
+    again), then 0.18-0.29 s, and 2.45 s for non-interactive.
+  - Answers, hand-checked against source: `RunReportID callers-have-pending-writes` **yes** (local,
+    1 hop: `RunReport` calls `Core.IsAppActiveOrAskToActivate`, which may write Continia Core table
+    6192807, at `CDOEMailHandler.Codeunit.al:240`, before its calls at :251/:268); `RunReportID
+    callers-intercept-errors` **yes** (`RunDocHandleIsolated`'s `exit(AutoSendRunner.Run())` at
+    `CDOSubscribers.Codeunit.al:1239`, a checked run, 5 hops); `UpdateLastUpload
+    callers-have-pending-writes` **yes** with `QueueUpload` as the witness (its unchecked
+    `Codeunit.Run(Codeunit::"Job Queue - Enqueue", …)` at `CDOTelemetry.Codeunit.al:41` inserts a
+    Job Queue Entry before the call at :42); `TryRunReport callers-intercept-errors` **yes** (`if not
+    TryRunReport(…) then` at `CDOLegacyeDocDispatcher.Codeunit.al:231`); `IssueReminder` all three
+    **unknown**, blocked only by its public access for pending writes (its one caller, the
+    `Issue and send/print` action at `CDOReminderActions.Page.al:142`, writes nothing before the
+    call). Non-interactive is `unknown` on CDO for every routine: no `roots.config.json`, an unread
+    `WebServicePublish.xml`, two background starts with a variable codeunit, and the background
+    entries found are reached only through hubs.
 
 ### Changed (agent tasks, milestone A)
 

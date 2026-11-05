@@ -1,5 +1,5 @@
 --- Codeunit CDO Issue Document::IssueReminder ---
-  question: writes-table:Issued Reminder Header
+  question: writes-table:Issued Reminder Header — existing effects (what the routine and its callees already do)
   answer:   yes
   evidence: 2 effects
     [DB_INSERT] beyond Codeunit Reminder-Issue::OnRun, entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19
