@@ -82,6 +82,20 @@ test selection, adding an effect, impact) build on. Spec:
 - `aldump --session-refresh --sited` builds and keeps the sited graph at every step and prints its
   wall and CPU time, nodes, sites and bytes.
 
+### Fixed (test infrastructure: a clock-dependent package fixture)
+
+- **`an_in_place_overwrite_and_restore_during_consumption_is_refused` no longer fails on a
+  slow machine.** The test fixture `write_minimal_app` (`src/snapshot/snapshot.rs`) built its
+  `.app` with the `zip` crate's default entry time, which is the wall clock in 2-second steps.
+  So "restore A" wrote bytes that differed from the first A whenever the two writes fell on
+  different 2-second ticks: same length, another blake3. The test's precondition "the disk
+  reads A both times" then failed. It happened once at a load average of 100–900, where the
+  test's few milliseconds can stretch past a tick. Forcing the clock across a tick between
+  the writes failed it every time; with the fix it passes. The fixture now stamps every entry
+  with a fixed time, so its bytes depend on its arguments alone. Not a product bug: the
+  consistency check compares content hashes only, never times, and still refuses the
+  overwrite-and-restore.
+
 ### Fixed (test infrastructure: golden regeneration raced its readers)
 
 - **A golden regen no longer rewrites committed files in place.** Under `scripts/check-goldens
