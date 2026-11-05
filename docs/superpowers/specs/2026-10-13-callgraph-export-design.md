@@ -493,7 +493,22 @@ arrives with Stage C.
 | `confidence` | `Resolved` \| `OverApprox` \| `Open` | 4.3 |
 | `via` | string | provenance: `call`, `run`, `implicitTrigger`, `eventFlow`, `interface`, `lifecycle`, `declaredRunnable`, `testHandler`, `testRunner`, `opaqueBody`, `unresolved`, `dynamic`, `dispatchingBuiltin`, `parseRecovered`, `hubExpansion`, `backgroundStart` (additive, F3: a `Run` edge from a static background start to the started codeunit's object; the target runs in a new session or task) |
 | `line` | number | first call-site line in the caller's file, for engine edges |
-| `conditions` | string[] | `manualBinding`, `ambiguousDispatch`, `runTriggerGuarded`, `onTaskFailure` (additive, F3: `TaskScheduler.CreateTask`'s failure codeunit, which runs only when the task fails; the edge is `OverApprox`), ...; omitted when empty |
+| `conditions` | string[] | `manualBinding`, `ambiguousDispatch`, `runTriggerGuarded`, `onTaskFailure` (additive, F3: `TaskScheduler.CreateTask`'s failure codeunit, which runs only when the task fails; the edge is `OverApprox`), `configuredDispatch` (additive, 2026-11-06: see below), ...; omitted when empty |
+
+**`configuredDispatch`** (additive; callers-through-dependency design r2 §4,
+`docs/superpowers/specs/2026-11-06-dependency-callers-design.md`). The edge is an arm of a
+catalogued **configured-dispatch** site: a `case` whose arms the engine resolves as ordinary
+static calls, but whose arm runs only when configuration rows select it. The catalog is
+engine-owned and versioned (`impact_graph::configured_dispatch::CATALOG`, version 1); its one
+entry is Base Application's `Workflow Response Handling::ExecuteResponse`, the arm labels, arm
+bodies and `else` body of its `case WorkflowResponse."Function Name"` (which workflow response
+runs after which workflow event is written in `Workflow Step Instance` rows). The edge's `kind`,
+`via` and `confidence` are the site's own and unchanged: the condition is a **label** on a real
+code path, never a statement that it cannot run. Like every condition it is unioned when sites
+of equal confidence collapse onto one `(caller, callee, kind)`, so an edge carries it when any of
+its sites does. A consumer may rank a test found only through such edges below one found by
+other code paths; it must not exclude one for it. A consumer that does not know the name reads it
+as any unknown condition (ignored).
 
 **Example**, the D4 chain (ids shortened):
 

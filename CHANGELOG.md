@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (callers through dependency code, v1: the configured-dispatch label)
+
+Design: `docs/superpowers/specs/2026-11-06-dependency-callers-design.md` (revision 2).
+
+- **Configured dispatch, a site condition.** A catalogued `case` whose arms the engine resolves as
+  ordinary static calls, but whose arm runs only when configuration rows select it, now carries
+  the site condition `configuredDispatch` (`impact_graph::configured_dispatch`, `sited::CONDITIONS`)
+  on the sites of its arm labels, arm bodies and `else` body. The catalog is engine-owned and
+  versioned (version 1); its one entry is Base Application's `Workflow Response
+  Handling::ExecuteResponse` and its `case WorkflowResponse."Function Name"`, matched on the app id,
+  the object, the routine's full signature (each parameter's `var` and type) and the scrutinee
+  folded and unquoted. A matched routine with no such case, two of them, or a case sharing a
+  source line with other code is a mismatch: nothing is labelled (never the whole body) and the
+  reason is reported. The condition is a label: the site's boundary, `via`, confidence and
+  `is_code_call_site` are unchanged, and no R0 walk, detector, summary or prove answer reads it.
+- **`alsem graph`** exports the condition on the catalogued edges' `conditions` (additive under
+  `al-sem.callgraph` v1; documented in the callgraph spec). A consumer may rank a test found only
+  through such edges lower; it must not exclude one.
+- **`aldump --configured-dispatch-candidates <ws> [--min-arms K]`**, the discovery probe for
+  whoever extends the catalog: the catalog's version and status, then every `case` in dependency
+  code with at least K (default 12) arms making a code call, with its scrutinee, arm count,
+  distinct callees and whether the catalog labels it.
+- Fixture `tests/fixtures/dependency-callers` (a dependency carrying Base Application's id, loaded
+  from a source folder; its README states each case).
+
 ### Added (agent tasks, milestone B2: impact before/after against a base)
 
 `alsem impact --base REV` (and `--base REV --diff P`; MCP `alsem_impact` `base`, `base` with

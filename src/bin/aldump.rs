@@ -66,9 +66,74 @@ fn usage() -> ExitCode {
          \x20      aldump --snapshot-memory <workspace> [--single-app] [--hash] [--pd-dump <file>]\n\
          \x20      aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--implements <interface>] [--verify] [--low-mem] [--sited]\n\
          \x20      aldump --reverse-cone <workspace> (--routine <Object::Routine|stableId>)... [--roots-file F] [--multi] [--no-dependents]\n\
-         \x20      aldump --caller-diff <workspace> \"<Object Name>::<Routine>\" [--code-calls]"
+         \x20      aldump --caller-diff <workspace> \"<Object Name>::<Routine>\" [--code-calls]\n\
+         \x20      aldump --configured-dispatch-candidates <workspace> [--min-arms K]"
     );
     ExitCode::FAILURE
+}
+
+/// `aldump --configured-dispatch-candidates <workspace> [--min-arms K]`: the
+/// discovery probe of the configured-dispatch catalog (callers-through-
+/// dependency design r2 §4.2). First the catalog's version and each entry's
+/// status, then every `case` in dependency code with at least K (default 12)
+/// arms that make a code call, most such arms first: its routine, arm count,
+/// call-making arms, distinct callees, scrutinee, and whether the catalog
+/// labels it. Whoever extends the catalog runs it first; a shape rule is never
+/// the catalog (a case on a parameter is ordinary dispatch).
+fn configured_dispatch_candidates_cmd(args: &[String]) -> ExitCode {
+    const USAGE: &str = "usage: aldump --configured-dispatch-candidates <workspace> [--min-arms K]";
+    let Some(ws) = args.first() else {
+        eprintln!("{USAGE}");
+        return ExitCode::FAILURE;
+    };
+    let mut min_arms = 12usize;
+    let mut it = args[1..].iter();
+    while let Some(a) = it.next() {
+        match (a.as_str(), it.next().map(|v| v.parse::<usize>())) {
+            ("--min-arms", Some(Ok(k))) => min_arms = k,
+            _ => {
+                eprintln!("{USAGE}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let inputs = std::sync::Arc::new(al_sem::program::inputs::WorkspaceInputs::read(
+        std::path::Path::new(ws),
+        &Default::default(),
+    ));
+    let program = match al_sem::program::resolved::ResolvedProgram::build(
+        &inputs,
+        al_sem::program::resolved::ProgramScope::CrossApp,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("aldump: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Ok((catalog, found)) =
+        al_sem::program::impact_graph::configured_dispatch::probe(&program, min_arms)
+    else {
+        eprintln!("aldump: the sited graph build was cancelled");
+        return ExitCode::FAILURE;
+    };
+    println!("{}", catalog.human());
+    println!(
+        "candidates (dependency code, a case with >= {min_arms} call-making arms): {}",
+        found.len()
+    );
+    for c in &found {
+        println!(
+            "  {}  arms {}  call-arms {}  callees {}  scrutinee {}{}",
+            c.routine,
+            c.arms,
+            c.call_arms,
+            c.callees,
+            c.scrutinee,
+            if c.catalogued { "  [catalogued]" } else { "" }
+        );
+    }
+    ExitCode::SUCCESS
 }
 
 /// `--reverse-cone`: the reverse walker's measurement probe (agent-tasks
@@ -1306,6 +1371,9 @@ fn run_main() -> ExitCode {
         Some("--reverse-cone") => return reverse_cone_cmd(&raw[1..]),
         Some("--field-census") => return field_census_cmd(&raw[1..]),
         Some("--caller-diff") => return caller_diff_cmd(&raw[1..]),
+        Some("--configured-dispatch-candidates") => {
+            return configured_dispatch_candidates_cmd(&raw[1..]);
+        }
         _ => {}
     }
     let mut l2 = false;

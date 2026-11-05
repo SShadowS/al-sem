@@ -12,8 +12,11 @@
 //! input and engine version.
 //!
 //! `meta.schema` is `"al-sem.callgraph"`, `meta.version` is `1` (a major
-//! version). New optional fields and new values of `via`, `hiddenCallers`,
-//! `hub`, `assumptions` and node `kind` are additive; a consumer must ignore
+//! version). New optional fields and new values of `via`, `conditions`,
+//! `hiddenCallers`, `hub`, `assumptions` and node `kind` are additive (an
+//! edge's `conditions` gained `onTaskFailure` and `configuredDispatch` that
+//! way: a catalogued configured-dispatch arm, labelled, never cut —
+//! [`configured_dispatch`]); a consumer must ignore
 //! unknown fields and read unknown values fail-safe (an unknown edge `kind` as
 //! indirect, an unknown `confidence` as `Open`, an unknown `hiddenCallers` value
 //! as hidden callers). A changed meaning or a removed field bumps `version`.
@@ -70,6 +73,7 @@
 //! workspace routine.
 
 pub mod cone_probe;
+pub mod configured_dispatch;
 pub(crate) mod facts;
 // `pub(crate)` for the hand-built test world (`project::tests::World`), which
 // the resolver's own tests (`resolve::demand`) reuse.
