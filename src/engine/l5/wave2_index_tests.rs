@@ -1191,7 +1191,7 @@ fn w2_0c_prove_pass_drops_a_disproved_resource_from_the_refined_list() {
     );
     // Root-level liveness alone keeps it.
     let reach = LiteralReach::new(&tree.typed_edges, &tree.capability_facts, model);
-    let (_, g33) = reach.unreachable_effects(&root, &effects);
+    let (_, g33) = reach.unreachable_effects(&root, &effects, &[]);
     assert!(
         g33.values().all(|d| !d.contains(&ledger)),
         "G33 alone keeps it: {g33:?}"
@@ -1199,6 +1199,7 @@ fn w2_0c_prove_pass_drops_a_disproved_resource_from_the_refined_list() {
     let mut entries = vec![DigestEntryResult {
         routine_id: root.clone(),
         effects,
+        partial_site_types: Vec::new(),
     }];
     crate::engine::l5::digest_cli::literal_reach_pass(&tree, model, &mut entries);
     let row = entries[0]
@@ -1328,6 +1329,7 @@ fn an_own_row_whose_listed_paths_cannot_run_gets_a_searched_witness() {
     let mut entries = vec![DigestEntryResult {
         routine_id: root.clone(),
         effects,
+        partial_site_types: Vec::new(),
     }];
     crate::engine::l5::digest_cli::literal_reach_pass(&tree, model, &mut entries);
     let row = entries[0]
@@ -1461,6 +1463,7 @@ fn cdo_crossing_census() {
         let mut entries = vec![DigestEntryResult {
             routine_id: root.clone(),
             effects: effects_of(&tree, model, root),
+            partial_site_types: Vec::new(),
         }];
         let started = std::time::Instant::now();
         crate::engine::l5::digest_cli::literal_reach_pass(&tree, model, &mut entries);

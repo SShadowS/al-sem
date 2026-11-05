@@ -139,6 +139,99 @@ fn trivial(sg: &crate::engine::l5::ordering_engine::ScopedGuarantee) -> bool {
         && sg.commit_effectiveness.is_none()
 }
 
+/// The rows of a site-enumerated type the default document keeps whole.
+const WHOLE_ROWS: usize = 1;
+
+/// Each row's render options (MCP output step 2): a site-enumerated type
+/// (`digest::SITE_ENUMERATED`, one row per site) keeps its first
+/// [`WHOLE_ROWS`] row whole (one witness per type, as `prove` prints); the
+/// others are `None`, one place each in `moreSites` ([`more_site`]).
+/// `--detail`: every row whole.
+fn row_opts(entry: &DigestEntryFull, opts: RenderOpts) -> Vec<Option<RenderOpts>> {
+    let site = |e: &DigestEffectFull| {
+        !opts.detail && crate::engine::l5::digest::SITE_ENUMERATED.contains(&e.effect_type.as_str())
+    };
+    // The shortest witness first: a row's shortest listed path, or its
+    // group's terminal witness.
+    let len = |e: &DigestEffectFull| {
+        e.via_paths
+            .iter()
+            .filter(|p| !p.is_empty())
+            .map(Vec::len)
+            .min()
+            .or_else(|| {
+                e.group_terminal_path
+                    .as_ref()?
+                    .as_ref()
+                    .ok()
+                    .map(|w| w.steps.len())
+            })
+            .unwrap_or(usize::MAX)
+    };
+    let mut by_type: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (i, e) in entry.effects.iter().enumerate() {
+        if site(e) {
+            by_type.entry(e.effect_type.as_str()).or_default().push(i);
+        }
+    }
+    let mut whole: BTreeSet<usize> = BTreeSet::new();
+    for ix in by_type.values_mut() {
+        ix.sort_by_key(|&i| len(&entry.effects[i]));
+        whole.extend(ix.iter().take(WHOLE_ROWS));
+    }
+    entry
+        .effects
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (!site(e) || whole.contains(&i)).then_some(opts))
+        .collect()
+}
+
+/// The crossings whose `prefix` (the path to the entry point) the document
+/// prints: those a whole row names. A crossing only folded rows lie beyond
+/// prints its sites and targets; `--detail`, every prefix.
+fn prefixed_crossings(entry: &DigestEntryFull, opts: RenderOpts) -> BTreeSet<String> {
+    entry
+        .effects
+        .iter()
+        .zip(row_opts(entry, opts))
+        .filter(|(e, o)| o.is_some() && is_group(e))
+        .map(|(e, _)| crossing_key(e))
+        .collect()
+}
+
+/// A row [`row_opts`] folds, as one item of `entries[].moreSites[<type>]
+/// [<where>]`, a `; `-joined string: `<where>` is its file (the item
+/// `<line>`), `beyond` for a row beyond a crossing (the item `<crossing
+/// key>`), or `no position kept`; then its conditionality unless it is
+/// `unknown`, and ` literal-dead` when the root cannot reach it.
+fn more_site(e: &DigestEffectFull, crossings: &BTreeMap<String, String>) -> (String, String) {
+    let (place, at) = if is_group(e) {
+        let key = crossing_key(e);
+        (
+            "beyond".to_string(),
+            crossings.get(&key).cloned().unwrap_or(key),
+        )
+    } else {
+        match (&e.evidence.file, e.evidence.line) {
+            (Some(f), Some(l)) => (f.clone(), shown(l).to_string()),
+            (Some(f), None) => (f.clone(), String::new()),
+            _ => ("no position kept".to_string(), String::new()),
+        }
+    };
+    let mut s = at;
+    if e.conditionality != "unknown" {
+        if !s.is_empty() {
+            s.push(' ');
+        }
+        s.push_str(e.conditionality);
+    }
+    if e.literal_unreachable {
+        s.push_str(" literal-dead");
+    }
+    (place, s.trim_start().to_string())
+}
+
 /// How many of an own row's listed paths the document shows (§4.4.2).
 fn shown_paths(e: &DigestEffectFull, opts: RenderOpts) -> usize {
     if opts.detail || decision(e) {
@@ -221,7 +314,12 @@ pub fn referenced_routines(
     };
     for (entry, r) in entries.iter().zip(rollups) {
         ids.insert(entry.routine_id.clone());
-        for e in &entry.effects {
+        for (e, opts) in entry
+            .effects
+            .iter()
+            .zip(row_opts(entry, opts))
+            .filter_map(|(e, o)| o.map(|o| (e, o)))
+        {
             if is_group(e) {
                 for (_, w) in shown_witnesses(e, opts) {
                     ids.extend(w.steps.iter().map(|s| s.to.clone()));
@@ -237,8 +335,12 @@ pub fn referenced_routines(
                 }
             }
         }
+        let prefixed = prefixed_crossings(entry, opts);
         for c in &r.crossings {
             ids.extend(c.target_ids.iter().cloned());
+            if !prefixed.contains(&c.id) {
+                continue;
+            }
             if let Some(p) = c
                 .prefix_row
                 .and_then(|i| entry.effects[i].via_paths.iter().min_by_key(|p| p.len()))
@@ -510,6 +612,7 @@ pub fn entry_v3(
     let ids: BTreeSet<String> = r.crossings.iter().map(|c| c.id.clone()).collect();
     let ckeys = hashed_keys("c:", &ids);
     let mut crossings = Map::new();
+    let prefixed = prefixed_crossings(entry, opts);
     for c in &r.crossings {
         let mut v = json!({
             "id": c.id,
@@ -517,7 +620,11 @@ pub fn entry_v3(
             "targets": c.target_ids.iter().map(|t| rt.key(t)).collect::<Vec<_>>(),
             "sites": c.sites,
         });
-        if let Some(p) = c.prefix_row {
+        if !prefixed.contains(&c.id) {
+            // Only folded rows lie beyond it (`moreSites`): no prefix
+            // path, as they print none (`--detail`: printed).
+            v["prefixOmitted"] = json!(true);
+        } else if let Some(p) = c.prefix_row {
             let e = &entry.effects[p];
             if let Some(path) = e.via_paths.iter().min_by_key(|p| p.len()) {
                 v["prefix"] = json!({"hops": rt.hops(root, path, opts.detail)});
@@ -525,11 +632,23 @@ pub fn entry_v3(
         }
         crossings.insert(ckeys[&c.id].clone(), v);
     }
-    let effects: Vec<Value> = entry
-        .effects
-        .iter()
-        .map(|e| effect_v3(e, root, rt, &ckeys, opts))
-        .collect();
+    // MCP output step 2: past the first rows of a site-enumerated type, a
+    // row is its place in `moreSites` (`--detail`: every row in `effects`).
+    let mut effects: Vec<Value> = Vec::new();
+    let mut more: BTreeMap<&str, BTreeMap<String, Vec<String>>> = BTreeMap::new();
+    for (e, o) in entry.effects.iter().zip(row_opts(entry, opts)) {
+        match o {
+            Some(o) => effects.push(effect_v3(e, root, rt, &ckeys, o)),
+            None => {
+                let (place, item) = more_site(e, &ckeys);
+                more.entry(e.effect_type.as_str())
+                    .or_default()
+                    .entry(place)
+                    .or_default()
+                    .push(item);
+            }
+        }
+    }
     let folded: usize = if opts.detail {
         0
     } else {
@@ -554,6 +673,22 @@ pub fn entry_v3(
     m.insert("summary".into(), r.totals.to_json());
     m.insert("crossings".into(), Value::Object(crossings));
     m.insert("effects".into(), Value::Array(effects));
+    if !more.is_empty() {
+        // Per type and place, the items as one `; `-joined string.
+        let joined: BTreeMap<&str, BTreeMap<String, String>> = more
+            .into_iter()
+            .map(|(t, places)| {
+                (
+                    t,
+                    places
+                        .into_iter()
+                        .map(|(p, items)| (p, items.join("; ")))
+                        .collect(),
+                )
+            })
+            .collect();
+        m.insert("moreSites".into(), json!(joined));
+    }
     m.insert("scopedGuaranteesFolded".into(), folded.into());
     // Unresolved: workspace and not-placed items (candidates as a count);
     // dependency items as counts and top callees. Every item with --detail.

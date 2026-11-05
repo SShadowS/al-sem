@@ -1,5 +1,9 @@
 Codeunit Explain Post::PostOrder  ws:src/post.al:5
-  summary: no observed write that may persist; caller-dependent: 1 table; commits: none; events: 1 (1 raised in workspace code); UI at 1 place; errors at 2 places; callers: 1, reached from 1 page action; tests: 1; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  summary — writes: no observed write that may persist; caller-dependent: 1 table
+    transaction, UI and errors: commits: none; UI at 1 place; errors at 2 places
+    other effects: events: 1 (1 raised in workspace code)
+    callers and tests: callers: 1, reached from 1 page action; tests: 1
+    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none

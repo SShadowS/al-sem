@@ -114,6 +114,11 @@ pub mod caps {
     pub const ENTRY_POINTS: usize = 12;
     pub const TEMP_NAMES: usize = 7;
     pub const WORKSPACE_GAPS: usize = 40;
+    /// Commit sites and commit-bearing entry points printed with a path
+    /// (MCP output step 2).
+    pub const PATHED_ROWS: usize = 3;
+    /// Places listed per kind family line.
+    pub const KIND_PLACES: usize = 6;
 }
 
 /// The model joins the rollup reads: names of routines and objects, the
@@ -131,6 +136,11 @@ pub struct RollupCx<'m> {
     /// Qualified display → the distinct stable ids that share it (T-W2-24:
     /// overloads, and objects of one name in two apps).
     shared: HashMap<String, Vec<&'m str>>,
+    /// The handles ([`Self::handle`], MCP output step 2) paths printed since
+    /// the last [`Self::take_legend`]: handle →
+    /// (numbered: the arity alone does not tell it apart, its full
+    /// signature and declaration).
+    legend: std::cell::RefCell<BTreeMap<String, (bool, String)>>,
 }
 
 /// Who owns an operation (design §3.5): the qualified owner routine, its
@@ -189,6 +199,7 @@ impl<'m> RollupCx<'m> {
             },
             app_names,
             shared: HashMap::new(),
+            legend: std::cell::RefCell::new(BTreeMap::new()),
         };
         let mut shared: HashMap<String, Vec<&'m str>> = HashMap::new();
         for (&stable, &i) in &cx.rows {
@@ -271,6 +282,122 @@ impl<'m> RollupCx<'m> {
         out
     }
 
+    /// What a PATH prints after a routine's name (MCP output step 2): an
+    /// overload's short handle, recorded with its full signature in the
+    /// legend ([`Self::take_legend`], which explain, digest and prove print):
+    /// `/n` (its arity), `/n[position: type]` (the types it differs in) when a
+    /// same-app overload has its arity, `/n#k` (source order) when it differs
+    /// in nothing but its place; then the ` [<app>]` label as
+    /// [`Self::disambiguator`] gives it. Every human path names a routine
+    /// this way, so two outputs' shared sections read alike.
+    #[must_use]
+    pub fn handle(&self, stable_id: &str) -> String {
+        let Some(&i) = self.rows.get(stable_id) else {
+            return String::new();
+        };
+        let Some(ids) = self.shared.get(&self.qualified_row(i)) else {
+            return String::new();
+        };
+        let r = &self.model.workspace.routines[i];
+        let row_of = |s: &str| self.rows.get(s).map(|&j| &self.model.workspace.routines[j]);
+        let others: Vec<&ModelRoutine> = ids
+            .iter()
+            .filter(|s| **s != stable_id)
+            .filter_map(|s| row_of(s))
+            .filter(|o| o.app_guid == r.app_guid)
+            .collect();
+        let mut out = String::new();
+        if !others.is_empty() {
+            let n = r.parameters.len();
+            // Same-arity overloads (two of a table's field triggers, say) are
+            // numbered in source order: `/0#2`; the legend says which is which.
+            let key = |o: &ModelRoutine| {
+                (
+                    o.source_anchor.source_unit_id.clone(),
+                    o.source_anchor.start_line,
+                    o.source_anchor.start_column,
+                )
+            };
+            let siblings: Vec<&&ModelRoutine> =
+                others.iter().filter(|o| o.parameters.len() == n).collect();
+            // A same-arity overload names the parameter types it differs in
+            // (`/7[1: Record "X"]`); one that differs in none (two field
+            // triggers) is numbered in source order (`/0#2`).
+            let differing: Vec<String> = (0..n)
+                .filter(|&p| {
+                    siblings
+                        .iter()
+                        .any(|o| o.parameters[p].type_text != r.parameters[p].type_text)
+                })
+                .map(|p| format!("{}: {}", p + 1, r.parameters[p].type_text))
+                .collect();
+            let numbered = !siblings.is_empty() && differing.is_empty();
+            let short = if siblings.is_empty() {
+                format!("/{n}")
+            } else if !differing.is_empty() {
+                format!("/{n}[{}]", differing.join("; "))
+            } else {
+                let before = siblings.iter().filter(|o| key(o) < key(r)).count();
+                format!("/{n}#{}", before + 1)
+            };
+            let full: Vec<String> = r
+                .parameters
+                .iter()
+                .map(|p| {
+                    format!(
+                        "{}{}: {}",
+                        if p.is_var { "var " } else { "" },
+                        p.name,
+                        p.type_text
+                    )
+                })
+                .collect();
+            let q = self.qualified_row(i);
+            let at = &r.source_anchor;
+            let at = if at.source_unit_id.is_empty() {
+                String::new()
+            } else {
+                format!(" at {}", self.location(&at.source_unit_id, at.start_line))
+            };
+            self.legend.borrow_mut().insert(
+                format!("{q}{short}"),
+                (numbered, format!("({}){at}", full.join("; "))),
+            );
+            out.push_str(&short);
+        }
+        if ids
+            .iter()
+            .any(|s| row_of(s).is_some_and(|o| o.app_guid != r.app_guid))
+        {
+            out.push_str(&format!(" [{}]", self.app_label(&r.app_guid)));
+        }
+        out
+    }
+
+    /// The legend of the handles printed since the last call, and clears it:
+    /// one `overloads: <handle> = (<parameters>) at <declaration>` line per
+    /// numbered handle (`/n#k`, which the arity alone does not tell apart);
+    /// with `all` (`--detail`), every handle's, `/n` ones too, and without,
+    /// a count of those. Empty when no overload was printed.
+    #[must_use]
+    pub fn take_legend(&self, all: bool) -> Vec<String> {
+        let legend = std::mem::take(&mut *self.legend.borrow_mut());
+        let mut out: Vec<String> = legend
+            .iter()
+            .filter(|(_, (numbered, _))| all || *numbered)
+            .map(|(h, (_, s))| format!("overload {h} = {s}"))
+            .collect();
+        let by_arity = legend.values().filter(|(n, _)| !n).count();
+        if !all && by_arity > 0 {
+            out.push(format!(
+                "({} named by arity, `Name/n`, or by the parameter types they differ in, \
+                 `Name/n[position: type]`; --detail prints their signatures)",
+                plural(by_arity, "overload", "overloads")
+            ));
+        }
+        out
+    }
+
     /// The `(object, routine)` names of a stable routine id's first row.
     #[must_use]
     pub fn names_of(&self, stable_id: &str) -> Option<(String, String)> {
@@ -340,9 +467,9 @@ impl<'m> RollupCx<'m> {
             let name = match self.names_of(to) {
                 Some((o, n)) if o != object => {
                     object = o.clone();
-                    format!("{o}::{n}{}", self.disambiguator(to))
+                    format!("{o}::{n}{}", self.handle(to))
                 }
-                Some((_, n)) => format!("{n}{}", self.disambiguator(to)),
+                Some((_, n)) => format!("{n}{}", self.handle(to)),
                 None => fallback,
             };
             parts.push(format!("{tag}{name}"));
@@ -415,9 +542,9 @@ impl<'m> RollupCx<'m> {
             };
             let name = if o != object && !o.is_empty() {
                 object = o.clone();
-                format!("{o}::{n}{}", self.disambiguator(&s.to))
+                format!("{o}::{n}{}", self.handle(&s.to))
             } else {
-                format!("{n}{}", self.disambiguator(&s.to))
+                format!("{n}{}", self.handle(&s.to))
             };
             parts.push(format!("{tag}{name}"));
         }
@@ -727,9 +854,22 @@ pub struct GapCounts {
     pub top_callees: Vec<(String, usize)>,
 }
 
+/// The entry point behind most of a routine's may-persist tables.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DominantEntryPoint {
+    pub name: String,
+    /// Where it is entered (`file:line`, `; `-joined).
+    pub sites: String,
+    /// The may-persist tables beyond it.
+    pub tables: usize,
+}
+
 /// The one summary (design §3.1, F15).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RollupTotals {
+    /// MCP output step 2: the entry point behind more than half of the
+    /// may-persist tables (of 10 or more), named by the summary.
+    pub dominant_entry_point: Option<DominantEntryPoint>,
     pub may_write_tables: usize,
     pub owned_by_app: usize,
     pub by_dependencies: usize,
@@ -739,6 +879,17 @@ pub struct RollupTotals {
     pub commits: &'static str,
     pub commit_sites: usize,
     pub commit_entry_points: usize,
+    /// The COMMIT site search stopped at its depth bound
+    /// ([`crate::engine::l5::digest_cli::SITES_PARTIAL`]): the two counts
+    /// above are lower bounds, printed "at least".
+    pub commit_sites_partial: bool,
+    /// The kind families ([`FAMILIES`]) whose site search stopped at its
+    /// depth bound: their `kinds` counts are lower bounds ("at least").
+    pub kinds_partial: BTreeSet<&'static str>,
+    /// A crossing the root can take toward an effect has no row
+    /// ([`crate::engine::l5::digest::ENTRY_POINTS`]): the entry-point counts
+    /// are lower bounds ("at least").
+    pub entry_points_partial: bool,
     pub events: usize,
     pub events_in_workspace: usize,
     /// Per kind family ([`FAMILIES`]): places (own sites + crossings).
@@ -804,6 +955,22 @@ impl RollupTotals {
                 "withWritesSites": self.writing_sites,
             },
         });
+        if self.commit_sites_partial {
+            v["commits"]["atLeast"] = json!(true);
+        }
+        if let Some(d) = &self.dominant_entry_point {
+            v["mayWriteTables"]["mostBeyond"] = json!({
+                "entryPoint": d.name,
+                "enteredAt": d.sites,
+                "tables": d.tables,
+            });
+        }
+        if !self.kinds_partial.is_empty() {
+            v["kindsAtLeast"] = json!(self.kinds_partial);
+        }
+        if self.entry_points_partial {
+            v["entryPoints"]["atLeast"] = json!(true);
+        }
         if let Some(c) = self.callers {
             v["callers"] = json!(c);
         }
@@ -821,6 +988,11 @@ impl RollupTotals {
 
     /// The human `summary:` line (design §3.8 rule 2).
     #[must_use]
+    /// The summary as a short risk block (MCP output step 2): one line per
+    /// question an editor asks — writes, transaction, UI and errors, the
+    /// other effects, callers and tests, uncertainty — each line the clauses
+    /// the one-line summary had. One string; its lines after the first are
+    /// indented two more than the `summary:` line (`\n    `).
     pub fn human(&self) -> String {
         let mut parts = Vec::new();
         let writes = if self.may_write_tables == 0 && self.unresolved_table_writes == 0 {
@@ -838,6 +1010,14 @@ impl RollupTotals {
                     plural(self.unresolved_table_writes, "write", "writes")
                 ));
             }
+            if let Some(d) = &self.dominant_entry_point {
+                w.push_str(&format!(
+                    "; {} of them beyond {} (entered at {})",
+                    thousands(d.tables),
+                    d.name,
+                    d.sites
+                ));
+            }
             w
         };
         parts.push(writes);
@@ -849,35 +1029,70 @@ impl RollupTotals {
                 plural(self.caller_dependent_tables, "table", "tables")
             }
         ));
+        let mut block = vec![format!("writes: {}", parts.join("; "))];
+        parts = Vec::new();
         let commits = match self.commits {
             "no observed" => "commits: no observed COMMIT".to_string(),
             "none" => "commits: none".to_string(),
             answer => {
+                let at_least = if self.commit_sites_partial {
+                    "at least "
+                } else {
+                    ""
+                };
                 let mut where_ = Vec::new();
                 if self.commit_sites > 0 {
-                    where_.push(plural(self.commit_sites, "site", "sites"));
+                    where_.push(format!(
+                        "{at_least}{}",
+                        plural(self.commit_sites, "site", "sites")
+                    ));
                 }
                 if self.commit_entry_points > 0 {
-                    where_.push(plural(
-                        self.commit_entry_points,
-                        "commit-bearing entry point",
-                        "commit-bearing entry points",
+                    where_.push(format!(
+                        "{at_least}{}",
+                        plural(
+                            self.commit_entry_points,
+                            "commit-bearing entry point",
+                            "commit-bearing entry points",
+                        )
                     ));
                 }
                 format!("commits: {answer} ({})", where_.join(", "))
             }
         };
-        parts.push(commits);
-        parts.push(format!(
+        let family = |key: &str, label: &str| -> Option<String> {
+            let &n = self.kinds.get(key).filter(|n| **n > 0)?;
+            Some(format!(
+                "{label} at {}{}",
+                at_least(self.kinds_partial.contains(key)),
+                plural(n, "place", "places")
+            ))
+        };
+        let risky: Vec<String> = FAMILIES
+            .iter()
+            .filter(|(k, _)| matches!(*k, "ui" | "errors"))
+            .filter_map(|(k, l)| family(k, l))
+            .collect();
+        block.push(format!(
+            "transaction, UI and errors: {commits}; {}",
+            if risky.is_empty() {
+                "UI and errors: none observed".to_string()
+            } else {
+                risky.join("; ")
+            }
+        ));
+        let mut other = vec![format!(
             "events: {} ({} raised in workspace code)",
             thousands(self.events),
             thousands(self.events_in_workspace)
-        ));
-        for (key, label) in FAMILIES {
-            if let Some(&n) = self.kinds.get(key).filter(|n| **n > 0) {
-                parts.push(format!("{label} at {}", plural(n, "place", "places")));
-            }
-        }
+        )];
+        other.extend(
+            FAMILIES
+                .iter()
+                .filter(|(k, _)| !matches!(*k, "ui" | "errors"))
+                .filter_map(|(k, l)| family(k, l)),
+        );
+        block.push(format!("other effects: {}", other.join("; ")));
         if let Some(c) = self.callers {
             let actions = self.page_actions.unwrap_or(0);
             parts.push(match (c, actions) {
@@ -901,11 +1116,14 @@ impl RollupTotals {
                 (t, _) => format!("tests: {t}"),
             });
         }
-        parts.push(format!(
-            "gaps: {} in workspace code, {} in dependency code, {} not placed",
+        if !parts.is_empty() {
+            block.push(format!("callers and tests: {}", parts.join("; ")));
+        }
+        block.push(format!(
+            "uncertainty: gaps: {} in workspace code, {} in dependency code, {} not placed",
             self.gaps_workspace, self.gaps_dependency, self.gaps_not_placed
         ));
-        format!("summary: {}", parts.join("; "))
+        format!("summary — {}", block.join("\n    "))
     }
 }
 
@@ -913,6 +1131,102 @@ impl RollupTotals {
 #[must_use]
 pub fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{} {}", thousands(n), if n == 1 { one } else { many })
+}
+
+/// One section's `path:` lines with their most-shared start printed once
+/// (MCP output step 2): the start (the root and at least two more hops)
+/// that saves the most text over the `path:` / `prefix path:` lines that
+/// begin with it and go on past it, when two or more do. A line `(in
+/// <section>, a path that begins with `… →` begins with: <prefix>)` follows
+/// the section's first line, and each such path prints as `path: … →
+/// <rest>`; every other line is unchanged.
+#[must_use]
+pub fn factor_prefix(lines: Vec<String>) -> Vec<String> {
+    const SEP: &str = " → ";
+    // A path line: a label naming a path (`path: `, `prefix path: `,
+    // `representative path (…): `), then its hops: (indent, label, hops).
+    let labelled = |l: &str| -> Option<(usize, String, Vec<String>)> {
+        let indent = l.len() - l.trim_start().len();
+        let t = l.trim_start();
+        let end = t.find(": ")? + 2;
+        let label = &t[..end];
+        let is_path = label == "path: "
+            || label == "prefix path: "
+            || (label.starts_with("representative path (") && !label.contains(SEP));
+        is_path.then(|| {
+            (
+                indent,
+                label.to_string(),
+                t[end..].split(SEP).map(str::to_string).collect(),
+            )
+        })
+    };
+    let path_of = |l: &str| labelled(l).map(|(i, _, p)| (i, p));
+    let paths: Vec<(usize, Vec<String>)> = lines.iter().filter_map(|l| path_of(l)).collect();
+    if paths.len() < 2 || lines.len() < 2 {
+        return lines;
+    }
+    // Every candidate start: a path's first `n` hops (3 or more, and fewer
+    // than the path has: its terminal is its own), with how many paths
+    // begin with it; the best saves the most characters.
+    let mut best: Option<(usize, &[String])> = None;
+    for (_, p) in &paths {
+        for n in 3..p.len() {
+            let start = &p[..n];
+            let users = paths
+                .iter()
+                .filter(|(_, q)| q.len() > n && q[..n] == *start)
+                .count();
+            if users < 2 {
+                break;
+            }
+            let chars: usize = start.iter().map(String::len).sum::<usize>() + SEP.len() * n;
+            let saving = (users - 1) * chars;
+            if best.is_none_or(|(s, _)| saving > s) {
+                best = Some((saving, start));
+            }
+        }
+    }
+    let Some((_, start)) = best else {
+        return lines;
+    };
+    let start: Vec<String> = start.to_vec();
+    let n = start.len();
+    let prefix = start.join(SEP);
+    let indent = paths.iter().map(|(i, _)| *i).min().unwrap_or(2);
+    // The note names its section (its header's words before `:` or `(`),
+    // so two sections with one shared start do not print the same line.
+    let section = lines[0]
+        .trim()
+        .split([':', '('])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let mut out = Vec::with_capacity(lines.len() + 1);
+    for (k, l) in lines.into_iter().enumerate() {
+        match labelled(&l) {
+            Some((i, label, p)) if p.len() > n && p[..n] == start[..] => out.push(format!(
+                "{}{label}…{SEP}{}",
+                " ".repeat(i),
+                p[n..].join(SEP)
+            )),
+            _ => out.push(l),
+        }
+        if k == 0 {
+            out.push(format!(
+                "{}(in {section}, a path that begins with `… →` begins with: {prefix})",
+                " ".repeat(indent)
+            ));
+        }
+    }
+    out
+}
+
+/// `"at least "` for a count that is a lower bound, else nothing.
+#[must_use]
+pub fn at_least(partial: bool) -> &'static str {
+    if partial { "at least " } else { "" }
 }
 
 /// `n` with a thousands comma from 1,000 (design §3.8 rule 2).
@@ -1299,7 +1613,26 @@ impl RoutineRollup {
         let complete = entry.coverage_status == "complete"
             && r.no_path.is_empty()
             && !entry.unresolved_traversal.truncated;
-        r.totals = r.totals_of(cx, &caller_own, complete);
+        r.totals = r.totals_of(
+            cx,
+            &caller_own,
+            complete,
+            crate::engine::l5::digest_cli::sites_partial(entry, "COMMIT"),
+        );
+        r.totals.kinds_partial = FAMILIES
+            .iter()
+            .map(|(key, _)| *key)
+            .filter(|key| {
+                crate::engine::l5::digest::SITE_ENUMERATED.iter().any(|ty| {
+                    (family_of(ty) == Some(*key) || (*key == "errors" && *ty == "UI_ERROR"))
+                        && crate::engine::l5::digest_cli::sites_partial(entry, ty)
+                })
+            })
+            .collect();
+        r.totals.entry_points_partial = crate::engine::l5::digest_cli::sites_partial(
+            entry,
+            crate::engine::l5::digest::ENTRY_POINTS,
+        );
         r
     }
 
@@ -1308,6 +1641,7 @@ impl RoutineRollup {
         cx: &RollupCx<'_>,
         caller_own: &BTreeSet<String>,
         complete: bool,
+        commit_sites_partial: bool,
     ) -> RollupTotals {
         let live = &self.may_write;
         let owned = live.keys().filter(|id| cx.table_is_own(id)).count();
@@ -1335,7 +1669,23 @@ impl RoutineRollup {
             .filter(|t| !t.is_empty())
             .collect();
         let points = EntryPointCounts::of(self);
+        // MCP output step 2: the entry point behind most of the tables, when
+        // one is (more than half of 10 or more).
+        let dominant = entry_points(self)
+            .iter()
+            .map(|p| {
+                let n = p.tables.keys().filter(|t| live.contains_key(**t)).count();
+                (n, p.name.to_string(), p.sites.join("; "))
+            })
+            .max_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)))
+            .filter(|(n, _, _)| live.len() >= 10 && *n * 2 > live.len())
+            .map(|(n, name, sites)| DominantEntryPoint {
+                name,
+                sites,
+                tables: n,
+            });
         RollupTotals {
+            dominant_entry_point: dominant,
             may_write_tables: live.len(),
             owned_by_app: owned,
             by_dependencies: live.len() - owned,
@@ -1354,6 +1704,9 @@ impl RoutineRollup {
             commits,
             commit_sites: self.commit_sites.len(),
             commit_entry_points,
+            commit_sites_partial,
+            kinds_partial: BTreeSet::new(),
+            entry_points_partial: false,
             events: self.events_ws.len() + self.events_beyond.len(),
             events_in_workspace: self.events_ws.len(),
             kinds,
@@ -1647,10 +2000,12 @@ pub fn header_lines(
     });
     out.push(format!(
         "scope: dependency code followed through every resolved call, with literal arguments, \
-         grouped per entry point ({} at {}); temporary records are not writes; no lock facts \
+         grouped per entry point ({}{} at {}{}); temporary records are not writes; no lock facts \
          (alsem query effects lists locks); counts are distinct tables unless a line says \
          operations; lines are 1-based; --detail lists everything",
+        at_least(r.totals.entry_points_partial),
         plural(r.totals.entry_points, "entry point", "entry points"),
+        at_least(r.totals.entry_points_partial),
         plural(r.totals.crossing_sites, "site", "sites")
     ));
     out
@@ -1707,13 +2062,27 @@ pub fn commit_lines(
             "commits: no observed COMMIT".to_string()
         }];
     }
+    // A site search stopped at its depth bound lists a lower bound.
+    let at_least = if r.totals.commit_sites_partial {
+        "at least "
+    } else {
+        ""
+    };
     let mut out = vec![format!(
-        "commits: {} — {} in workspace code; {}:",
+        "commits: {} — {} in workspace code; {at_least}{}:",
         r.totals.commits,
         if r.commit_sites.is_empty() {
-            "none".to_string()
+            if at_least.is_empty() {
+                "none"
+            } else {
+                "none found"
+            }
+            .to_string()
         } else {
-            plural(r.commit_sites.len(), "site", "sites")
+            format!(
+                "{at_least}{}",
+                plural(r.commit_sites.len(), "site", "sites")
+            )
         },
         plural(
             bearing.len(),
@@ -1721,23 +2090,30 @@ pub fn commit_lines(
             "commit-bearing entry points"
         )
     )];
-    for &i in &r.commit_sites {
+    // MCP output step 2: the first `caps::PATHED_ROWS` sites and crossings
+    // print their paths; the others their place only (`--detail`: all).
+    // The others share one line, each with its place.
+    let pathed = |k: usize| o.detail || k < caps::PATHED_ROWS;
+    let mut rest: Vec<String> = Vec::new();
+    for (k, &i) in r.commit_sites.iter().enumerate() {
         let e = &entry.effects[i];
-        out.push(format!(
-            "  COMMIT at {} ({})",
-            row_anchor(e),
-            e.conditionality
-        ));
+        let row = format!("COMMIT at {} ({})", row_anchor(e), e.conditionality);
+        if !pathed(k) {
+            rest.push(row);
+            continue;
+        }
+        out.push(format!("  {row}"));
         for p in path_lines(cx, &entry.routine_id, e, o.path_cap) {
             out.push(format!("    {p}"));
         }
     }
-    for c in bearing {
-        out.push(format!(
-            "  {}, entered at {}",
-            crossing_name(c),
-            c.sites.join("; ")
-        ));
+    for (k, c) in bearing.into_iter().enumerate() {
+        let row = format!("{}, entered at {}", crossing_name(c), c.sites.join("; "));
+        if !pathed(k) {
+            rest.push(row);
+            continue;
+        }
+        out.push(format!("  {row}"));
         // W2-6 (2f): the COMMIT's own terminal witness through the crossing.
         if o.path_cap > 0 {
             out.extend(
@@ -1746,6 +2122,13 @@ pub fn commit_lines(
                     .map(|l| format!("    {l}")),
             );
         }
+    }
+    if !rest.is_empty() {
+        out.push(format!(
+            "  and {} more (--detail prints their paths): {}",
+            rest.len(),
+            rest.join("; ")
+        ));
     }
     out
 }
@@ -2198,9 +2581,11 @@ pub fn beyond_lines(
     // The counts of the one union (EntryPointCounts), as the scope line's.
     let counts = EntryPointCounts::of(r);
     let mut out = vec![format!(
-        "writes beyond dependency entry points ({} through {} at {}):",
+        "writes beyond dependency entry points ({} through {}{} at {}{}):",
         plural(tables.len(), "table", "tables"),
+        at_least(r.totals.entry_points_partial),
         plural(counts.writing.0, "entry point", "entry points"),
+        at_least(r.totals.entry_points_partial),
         plural(counts.writing.1, "site", "sites")
     )];
     let line = |p: &EntryPoint<'_>| -> String {
@@ -2263,15 +2648,26 @@ pub fn beyond_lines(
         "entry points",
         o.detail,
     );
+    let root_name = cx
+        .names_of(&entry.routine_id)
+        .map_or_else(|| entry.routine_id.clone(), |(_, n)| n);
     for p in &shown.shown {
         out.push(line(p));
         if o.path_cap == 0 {
             continue;
         }
-        if let Some(i) = p.prefix {
-            for l in path_lines(cx, &entry.routine_id, &entry.effects[i], 1) {
-                out.push(format!("    prefix {l}"));
-            }
+        // The prefix: the path to the entry point. By default it is the
+        // representative path's start, so the two print as one line.
+        let prefix: Option<String> = p.prefix.and_then(|i| {
+            path_lines(cx, &entry.routine_id, &entry.effects[i], 1)
+                .into_iter()
+                .next()
+                .and_then(|l| l.strip_prefix("path: ").map(str::to_string))
+        });
+        if o.detail
+            && let Some(pre) = &prefix
+        {
+            out.push(format!("    prefix path: {pre}"));
         }
         // W2-6 (2f, design §3.4.2, §9 q2): one representative terminal
         // witness, labelled as such, to the nearest table; every table's
@@ -2301,16 +2697,27 @@ pub fn beyond_lines(
                 out.push(format!("    {}: {}", t.table, render(t)));
             }
         } else if let Some(t) = witnesses.first() {
+            // `root → … → rest` with the prefix in place of `…`.
+            let mut text = render(t);
+            let elided = format!("{root_name} → … → ");
+            if let Some(pre) = &prefix
+                && let Some(rest) = text.strip_prefix(&elided)
+            {
+                text = format!("{pre} → {rest}");
+            } else if let Some(pre) = &prefix {
+                out.push(format!("    prefix path: {pre}"));
+            }
             out.push(format!(
-                "    representative path ({}{}): {}",
+                "    representative path ({}{}): {text}",
                 t.table,
                 if witnesses.len() > 1 {
                     format!(", the nearest of {} tables", witnesses.len())
                 } else {
                     String::new()
                 },
-                render(t)
             ));
+        } else if let Some(pre) = &prefix {
+            out.push(format!("    prefix path: {pre}"));
         }
     }
     if shown.hidden > 0 {
@@ -2346,7 +2753,9 @@ pub fn beyond_lines(
             ));
         }
     }
-    out
+    // The section's shared path start, once: here, so every output that
+    // prints this section (explain, digest, query effects) prints it alike.
+    factor_prefix(out)
 }
 
 /// `writes with no path kept` (design §4.1 section 13), by the owner's app.
@@ -2499,7 +2908,7 @@ pub fn event_lines(r: &RoutineRollup, cx: &RollupCx<'_>, o: RenderOpts) -> Vec<S
 
 /// One line per present kind family (design §4.1 section 18).
 #[must_use]
-pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull) -> Vec<String> {
+pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, detail: bool) -> Vec<String> {
     let mut out = Vec::new();
     for (key, label) in FAMILIES {
         let n = r.totals.kinds.get(key).copied().unwrap_or(0);
@@ -2531,10 +2940,18 @@ pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull) -> Vec<String> {
                 .collect();
             places.push(format!("{} beyond {}", types.join(", "), crossing_name(c)));
         }
+        // MCP output step 2: the first places, the rest counted.
+        let places = fold(places, caps::KIND_PLACES, "places", detail);
         out.push(format!(
-            "{label} at {}: {}",
+            "{label} at {}{}: {}{}",
+            at_least(r.totals.kinds_partial.contains(key)),
             plural(n, "place", "places"),
-            places.join("; ")
+            places.shown.join("; "),
+            if places.hidden > 0 {
+                format!("; … +{} places (--detail lists them)", places.hidden)
+            } else {
+                String::new()
+            }
         ));
     }
     out
@@ -2693,6 +3110,76 @@ mod tests {
         assert!(cx.qualified("ws:Alone").ends_with("::Alone"));
         assert!(cx.qualified("ws:Pick#1").ends_with("Pick(X: Integer)"));
         assert!(cx.qualified("ws:Pick#2").ends_with("Pick(X: Text)"));
+    }
+
+    /// MCP output step 2: a path's short handle tells every overload apart.
+    /// Hand-stated overloads (by assignment): `Note/1` and `Note/2` differ in
+    /// arity; `Pick/1[1: Integer]` and `Pick/1[1: Text]` in a type; two
+    /// `OnValidate` field triggers differ in nothing but their place, so they
+    /// are numbered in source order and their declarations are the legend.
+    ///
+    /// Discrimination (2026-11-05): numbering every same-arity overload `#1`
+    /// (`before + 1` → `1`) fails at "triggers differ"; restored, passes.
+    #[test]
+    fn short_handles_tell_every_overload_apart() {
+        use crate::engine::l5::test_support::{empty_resolved, routine};
+        use crate::program::model::workspace::ModelParameter;
+        let param = |i: u32, name: &str, ty: &str| ModelParameter {
+            index: i,
+            name: name.to_string(),
+            type_text: ty.to_string(),
+            is_var: false,
+            is_record: false,
+            table_name: None,
+        };
+        let mut m = empty_resolved();
+        let mut a = routine("Note", "procedure");
+        a.stable_routine_id = "ws:Note#1".into();
+        a.parameters = vec![param(0, "Msg", "Text")];
+        let mut b = routine("Note", "procedure");
+        b.stable_routine_id = "ws:Note#2".into();
+        b.parameters = vec![param(0, "Msg", "Text"), param(1, "Level", "Integer")];
+        let mut e = routine("Pick", "procedure");
+        e.stable_routine_id = "ws:Pick#1".into();
+        e.parameters = vec![param(0, "X", "Integer")];
+        let mut f = routine("Pick", "procedure");
+        f.stable_routine_id = "ws:Pick#2".into();
+        f.parameters = vec![param(0, "X", "Text")];
+        let mut g = routine("OnValidate", "trigger");
+        g.stable_routine_id = "ws:OnValidate#1".into();
+        g.source_anchor.source_unit_id = "ws:src/T.al".into();
+        g.source_anchor.start_line = 9;
+        let mut h = routine("OnValidate", "trigger");
+        h.stable_routine_id = "ws:OnValidate#2".into();
+        h.source_anchor.source_unit_id = "ws:src/T.al".into();
+        h.source_anchor.start_line = 19;
+        m.workspace.routines = vec![a, b, e, f, h, g];
+        let cx = RollupCx::new(&m, &[]);
+        let handles: Vec<String> = [
+            "ws:Note#1",
+            "ws:Note#2",
+            "ws:Pick#1",
+            "ws:Pick#2",
+            "ws:OnValidate#1",
+            "ws:OnValidate#2",
+        ]
+        .iter()
+        .map(|id| cx.handle(id))
+        .collect();
+        assert_eq!(handles[0], "/1");
+        assert_eq!(handles[1], "/2");
+        assert_eq!(handles[2], "/1[1: Integer]");
+        assert_eq!(handles[3], "/1[1: Text]");
+        assert_ne!(handles[4], handles[5], "triggers differ");
+        assert_eq!(handles[4], "/0#1", "source order");
+        let legend = cx.take_legend(false);
+        assert!(
+            legend
+                .iter()
+                .any(|l| l.contains("OnValidate/0#2 = () at ws:src/T.al:20")),
+            "{legend:?}"
+        );
+        assert!(cx.take_legend(false).is_empty(), "the legend is taken once");
     }
 
     /// Final CDO output review, item 3 (design §3.3, §3.6): the scope line,

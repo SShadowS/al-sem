@@ -10,27 +10,27 @@
         "interface-open-world",
         "object-run-unresolved"
       ],
-      "effects": 220,
+      "effects": 666,
       "effectsByType": {
-        "BACKGROUND_TASK": 2,
-        "COMMIT": 1,
+        "BACKGROUND_TASK": 4,
+        "COMMIT": 17,
         "DB_DELETE": 28,
         "DB_INSERT": 50,
         "DB_MODIFY": 29,
-        "ERROR_IMPLICIT": 1,
-        "ERROR_THROW": 1,
+        "ERROR_IMPLICIT": 110,
+        "ERROR_THROW": 116,
         "EVENT_PUBLISH": 93,
-        "FILE": 2,
-        "HTTP": 2,
-        "ISOLATED_STORAGE": 2,
-        "TELEMETRY": 2,
-        "UI_CONFIRM": 1,
-        "UI_ERROR": 1,
-        "UI_FILE_DIALOG": 1,
-        "UI_HYPERLINK": 1,
-        "UI_MESSAGE": 1,
-        "UI_PROGRESS": 1,
-        "UI_WINDOW_OPEN": 1
+        "FILE": 5,
+        "HTTP": 23,
+        "ISOLATED_STORAGE": 17,
+        "TELEMETRY": 26,
+        "UI_CONFIRM": 7,
+        "UI_ERROR": 116,
+        "UI_FILE_DIALOG": 4,
+        "UI_HYPERLINK": 2,
+        "UI_MESSAGE": 8,
+        "UI_PROGRESS": 2,
+        "UI_WINDOW_OPEN": 9
       },
       "names": {
         "entryPoints": [
@@ -84,12 +84,13 @@
         "callerDependentTables": 0,
         "commits": {
           "answer": "may",
-          "entryPoints": 1,
-          "ownSites": 0
+          "entryPoints": 7,
+          "ownSites": 5
         },
         "entryPoints": {
-          "count": 27,
-          "sites": 31,
+          "atLeast": true,
+          "count": 43,
+          "sites": 53,
           "withWrites": 12,
           "withWritesSites": 14
         },
@@ -103,18 +104,23 @@
           "workspace": 16
         },
         "kinds": {
-          "backgroundTasks": 1,
-          "errors": 1,
-          "file": 1,
-          "http": 2,
-          "isolatedStorage": 1,
-          "telemetry": 1,
-          "ui": 2
+          "backgroundTasks": 3,
+          "errors": 194,
+          "file": 4,
+          "http": 20,
+          "isolatedStorage": 16,
+          "telemetry": 23,
+          "ui": 17
         },
         "literalDeadTables": 328,
         "mayWriteTables": {
           "byDependencies": 132,
           "count": 143,
+          "mostBeyond": {
+            "enteredAt": "ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19",
+            "entryPoint": "Codeunit Reminder-Issue::OnRun",
+            "tables": 78
+          },
           "ownedByApp": 11
         },
         "noPathKept": {
@@ -127,6 +133,6 @@
     }
   ],
   "routinesListed": 1,
-  "totalEffects": 220,
+  "totalEffects": 666,
   "totalUnresolved": 288
 }

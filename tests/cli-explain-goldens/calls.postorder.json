@@ -18,6 +18,20 @@
         "errors": [
           {
             "anchor": {
+              "column": 12,
+              "excerpt": "Order.TestField",
+              "file": "ws:src/checks.al",
+              "line": 8,
+              "sourceKind": "source"
+            },
+            "conditionality": "conditional",
+            "type": "ERROR_IMPLICIT",
+            "via": [
+              "CheckOrder"
+            ]
+          },
+          {
+            "anchor": {
               "column": 16,
               "excerpt": "Rec.TestField",
               "file": "ws:src/order.al",
@@ -34,6 +48,77 @@
             "anchor": {
               "column": 12,
               "excerpt": "error-call",
+              "file": "ws:src/checks.al",
+              "line": 6,
+              "sourceKind": "source"
+            },
+            "conditionality": "error-path",
+            "type": "ERROR_THROW",
+            "via": [
+              "CheckOrder"
+            ]
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "excerpt": "error-call",
+              "file": "ws:src/checks.al",
+              "line": 15,
+              "sourceKind": "source"
+            },
+            "conditionality": "error-path",
+            "type": "ERROR_THROW",
+            "via": [
+              "CheckOrder",
+              "CheckCustomer"
+            ]
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "excerpt": "error-call",
+              "file": "ws:src/checks.al",
+              "line": 32,
+              "sourceKind": "source"
+            },
+            "conditionality": "error-path",
+            "type": "ERROR_THROW",
+            "via": [
+              "CheckCollectible"
+            ]
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "excerpt": "error-call",
+              "file": "ws:src/checks.al",
+              "line": 39,
+              "sourceKind": "source"
+            },
+            "conditionality": "error-path",
+            "type": "ERROR_THROW",
+            "via": [
+              "CheckBig"
+            ]
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "excerpt": "error-call",
+              "file": "ws:src/checks.al",
+              "line": 45,
+              "sourceKind": "source"
+            },
+            "conditionality": "error-path",
+            "type": "ERROR_THROW",
+            "via": [
+              "CheckLate"
+            ]
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "excerpt": "error-call",
               "file": "ws:src/order.al",
               "line": 25,
               "sourceKind": "source"
@@ -42,6 +127,21 @@
             "type": "ERROR_THROW",
             "via": [
               "OnModify"
+            ]
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "excerpt": "error-call",
+              "file": "ws:src/post.al",
+              "line": 129,
+              "sourceKind": "source"
+            },
+            "conditionality": "unknown",
+            "type": "ERROR_THROW",
+            "via": [
+              "OnBeforePostOrder",
+              "CheckBeforePost"
             ]
           }
         ],
@@ -493,7 +593,7 @@
           "workspace": 0
         },
         "kinds": {
-          "errors": 2
+          "errors": 9
         },
         "literalDeadTables": 0,
         "mayWriteTables": {

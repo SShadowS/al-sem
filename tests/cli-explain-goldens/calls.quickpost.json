@@ -32,6 +32,21 @@
             "via": [
               "CheckOrder"
             ]
+          },
+          {
+            "anchor": {
+              "column": 12,
+              "excerpt": "error-call",
+              "file": "ws:src/checks.al",
+              "line": 15,
+              "sourceKind": "source"
+            },
+            "conditionality": "error-path",
+            "type": "ERROR_THROW",
+            "via": [
+              "CheckOrder",
+              "CheckCustomer"
+            ]
           }
         ],
         "events": [],
@@ -334,7 +349,7 @@
           "workspace": 0
         },
         "kinds": {
-          "errors": 1
+          "errors": 2
         },
         "literalDeadTables": 0,
         "mayWriteTables": {
