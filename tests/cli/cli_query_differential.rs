@@ -318,7 +318,54 @@ pub(crate) const CORPUS: &[Case] = &[
         args: &["--table", "QT Item"],
         exit_code: 0,
     },
+    // ---- Agent-tasks milestone D (design §7): `tests/fixtures/field-touches`.
+    // Every consumer of "FT Item".Amount, by use kind (the fixture's header
+    // holds the hand counts; `cli_query_field` asserts them).
+    Case {
+        slug: "ft.ft-item.amount.global",
+        workspace: FT_WS,
+        sub: "touches",
+        args: &["--table", "FT Item", "--field", "Amount", "--all"],
+        exit_code: 0,
+    },
+    // The same field by number, folded (the default human shape).
+    Case {
+        slug: "ft.ft-item.2.global",
+        workspace: FT_WS,
+        sub: "touches",
+        args: &["--table", "FT Item", "--field", "2"],
+        exit_code: 0,
+    },
+    // `--from`: Kinds' cone (it and the OnValidate its Validate runs) and
+    // its callers (none).
+    Case {
+        slug: "ft.kinds.ft-item.amount.both",
+        workspace: FT_WS,
+        sub: "touches",
+        args: &["--table", "FT Item", "--field", "Amount", "--from", "Kinds"],
+        exit_code: 0,
+    },
+    // A field with no code consumer: the answer says what was not searched,
+    // never "no".
+    Case {
+        slug: "ft.ft-nomatch.unused.global",
+        workspace: FT_WS,
+        sub: "touches",
+        args: &["--table", "FT NoMatch", "--field", "Unused"],
+        exit_code: 0,
+    },
+    // An absent field: a well-formed exit-2 document.
+    Case {
+        slug: "ft.ft-item.absent-field",
+        workspace: FT_WS,
+        sub: "touches",
+        args: &["--table", "FT Item", "--field", "No Such Field"],
+        exit_code: 2,
+    },
 ];
+
+/// The milestone D fixture, beside `QT_WS` (under `ws/` for the same reason).
+pub(crate) const FT_WS: &str = "../fixtures/field-touches/ws";
 
 fn check_case(c: &Case) {
     let ws = fixtures_dir().join(c.workspace);
@@ -417,6 +464,17 @@ fn query_touches_w2_3_fixture_goldens() {
     let qt: Vec<&Case> = CORPUS.iter().filter(|c| c.workspace == QT_WS).collect();
     assert_eq!(qt.len(), 8);
     for c in qt {
+        check_case(c);
+    }
+}
+
+/// Agent-tasks milestone D: every `tests/fixtures/field-touches` golden
+/// (`query touches --field`).
+#[test]
+fn query_touches_field_fixture_goldens() {
+    let ft: Vec<&Case> = CORPUS.iter().filter(|c| c.workspace == FT_WS).collect();
+    assert_eq!(ft.len(), 5);
+    for c in ft {
         check_case(c);
     }
 }

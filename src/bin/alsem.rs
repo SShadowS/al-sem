@@ -476,6 +476,14 @@ struct QueryTouchesCli {
     #[arg(long = "table")]
     table: String,
 
+    /// A field of `--table` (a name or a number): every code consumer of the
+    /// field by use kind (read, write, validate, filter, key-use, load, calc,
+    /// rule, metadata, copy-candidate, by-number), instead of the table's
+    /// record operations. With `--from`, only the routine's cone (down) and
+    /// its callers (up).
+    #[arg(long = "field")]
+    field: Option<String>,
+
     /// Scope the answer to one routine: internal id, StableRoutineId,
     /// `Object.Routine`, or a bare routine name. Omit for the workspace-global
     /// list (count reported first; the list is complete, never truncated).
@@ -2084,6 +2092,7 @@ fn plan_query_touches(t: QueryTouchesCli) -> Planned {
                     t.single_app,
                 )
                 .list_callers(t.callers)
+                .field(t.field.as_deref())
                 .show_source(t.show_source)
                 .written(t.format == "json", t.out.as_deref()),
             )

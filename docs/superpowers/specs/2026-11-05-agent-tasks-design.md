@@ -1177,6 +1177,38 @@ Cost: the census over every fact took 278 ms on CDO (the build 22 s); `--field` 
 facts for one field. The query schema is 3.2.0 on master already (output step 1b), so
 `--field` ships as **3.3.0** (additive), not 3.2.0.
 
+**As built (commit 2 of D).** `engine::l4::field_touches` (extraction and census) and
+`effect_query_cli::render_field_touches`. Differences from §7.2-7.4:
+
+- A `metadata` kind (`FieldNo`, `FieldCaption`, `FieldName`, `FieldActive`), and the filter
+  readers (`GetFilter`, `GetRangeMin/Max`, `CopyFilter`'s first argument) count as `filter`.
+  `Validate` is `validate` only (as §7.2), not also `write`.
+- `TransferFields` is listed only when the other table has a field with F's number (it copies
+  by number); with the other table not resolved it is a candidate (`copy-table-not-resolved`).
+  `copySide` says `receiver` (F may be written) or `source` (F may be read).
+- `declared-key` is the `declaredKeys[]` list, not a site.
+- Without `--from` the job's plan is `session::field_plan()` (the model alone: no `l4`, no tree);
+  with `--from` it is `query_plan()`, and the scope is the solve graph (R and its transitive
+  callees, its transitive callers), stated as "the resolved call graph". R0's reverse walker is
+  not used (R0 is not on master).
+- An answer with no site always says `unknown` ("no indexed consumer observed"): in v1 the
+  declaration-level consumers are never searched, so coverage is never complete.
+
+**Measured on CDO** (`cdo` profile, cold one-shot CLI, `/usr/bin/time -v`; hand-checked
+against source): `CDO E-Mail Log` field 22 "Sent with": 4 sites — `SetCurrentKey` (Send Mail
+Management :308), `SetRange` (:312), the implicit write in the table's `InitNewEntryCore`
+(:385), and a by-number candidate in CDN's `GetLineUnitPrice` (`RecRef.GetTable(<Variant>)`
+then `Field(22)`); the `"Sent with"::SMTP` enum values are rightly not sites, the page
+columns are the stated declaration gap. Cross-app 23.2 s / 3.14 GB peak; `--from
+WaitForMailLimit` (cone 1, callers 967) 25.8 s / 3.11 GB; `--single-app` 7.6 s / 0.74 GB.
+`CDO Merge Table Field` field 10 "Merge Table No.": 11 sites — 3 `Validate` in field
+triggers, `TestField`, the implicit read as `Field.SetRange(TableNo, "Merge Table No.")`'s
+value, implicit read/write in the XML export/import, 3 reads through `MergeTableField."Merge
+Table No."` in another table, 1 by-number candidate; the two CalcFormula uses (:86, :94) are
+the stated gap, and the other tables' same-named fields are not counted. 32.2 s / 3.11 GB.
+The build dominates; the field scan itself is the census's order (278 ms for every fact).
+`--low-mem` exists only on the context server and was not measured here.
+
 ### 7.4 Surface and output
 
 CLI: `alsem query touches <ws> --table T --field F [--from R] [--direction …] [--all]`. MCP:

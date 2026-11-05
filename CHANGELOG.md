@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`alsem query touches --table T --field F`: every code consumer of one field** (agent-tasks
+  milestone D, narrowed v1; MCP: `field` on `alsem_query_touches`). Each site is listed once
+  with its uses: read, write (a `R.F += 1` is one site with uses read and write), validate,
+  filter (`SetRange`, `SetFilter`, `GetFilter`, `GetRangeMin/Max`, `CopyFilter`), key-use,
+  load, calc (`CalcFields`, `CalcSums`, `SetAutoCalcFields`), rule (`TestField`,
+  `FieldError`), metadata (`FieldNo`, `FieldCaption`, `FieldName`, `FieldActive`),
+  copy-candidate (`TransferFields`, when the other table has a field with F's number, or its
+  table is not resolved), and by-number (`RecordRef.Field(<literal>)`, a match only when the
+  routine decides the RecordRef's table). Extraction is per operation: `Next(2)`, `Get('X')`
+  and `FieldIndex(n)` never name a field. Temporary consumers are counted beside persistent
+  ones; a record of an unresolved table is a candidate. Workspace and loaded dependency bodies
+  are searched, and the answer says so; CalcFormula, TableRelation and page/report/query/XMLport
+  columns are stated as not searched, so an answer with no site is "no indexed consumer
+  observed", never no. With `--from R`, only R's cone and callers. The query schema is
+  **3.3.0** (additive: `field`, `searched`, `fieldSummary`, `fieldTouches[]`, `declaredKeys[]`,
+  `reasons[]`, `absence`); every other query document changes only its version.
 - **Two field facts for field impact (agent-tasks milestone D, the D1 probe).** A bare field in
   a table or page trigger (`Amount := Amount + 1`, through the implicit `Rec` or a `with`
   record) was no field access at all: only the `X.F` member form was recorded. The body walk

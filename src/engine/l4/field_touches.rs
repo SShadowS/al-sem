@@ -341,12 +341,16 @@ fn table_of_ref<'m>(
         .map(str::to_string)
 }
 
-/// Every consumer site of `field` of `table` in every routine with a body.
+/// Every consumer site of `field` of `table` in every routine with a body
+/// that `in_scope` admits (by position in `model.workspace.routines`; `--from`
+/// passes the routine's cone and callers). The coverage counts the same
+/// routines.
 #[must_use]
 pub fn field_touches<'m>(
     model: &'m Model,
     table: &'m ModelTable,
     field: &'m ModelField,
+    in_scope: &dyn Fn(usize) -> bool,
 ) -> FieldAnswer<'m> {
     let tables = table_by_id_preferring_real(&model.workspace.tables);
     // Unique table numbers and names (an ambiguity is `None`: unknown).
@@ -375,6 +379,9 @@ pub fn field_touches<'m>(
     let mut sites: Vec<FieldSite<'m>> = Vec::new();
 
     for (ix, r) in model.workspace.routines.iter().enumerate() {
+        if !in_scope(ix) {
+            continue;
+        }
         let role = model.routine_role(r);
         let has_body = r.body_available;
         match (role, has_body) {
