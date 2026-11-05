@@ -421,6 +421,22 @@ impl Refusal {
     }
 }
 
+/// What one reclaim did: the entries it evicted and their measured bytes,
+/// and the RSS before it, after the evictions and after the freed memory
+/// was handed back to the OS ([`crate::release_alloc::collect_freed`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReclaimRecord {
+    pub entries: u64,
+    /// The evicted artifacts' measured bytes (the session's dependency rows
+    /// are not measured: 0 for them).
+    pub measured_bytes: u64,
+    pub rss_before: u64,
+    pub rss_evicted: u64,
+    pub rss_collected: u64,
+    pub collect_ms: u64,
+}
+
 /// The counters `status` reports.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -438,6 +454,8 @@ pub struct BudgetStatus {
     pub overruns: u64,
     pub reclaims: u64,
     pub evicted: u64,
+    /// The last reclaim that evicted anything.
+    pub last_reclaim: Option<ReclaimRecord>,
 }
 
 #[derive(Debug, Default)]
@@ -452,6 +470,7 @@ struct State {
     overruns: u64,
     reclaims: u64,
     evicted: u64,
+    last_reclaim: Option<ReclaimRecord>,
     /// The bytes no eviction can free (see the module doc).
     retained_floor: u64,
 }
@@ -606,6 +625,11 @@ impl Budget {
         self.state().evicted += n;
     }
 
+    /// Record a reclaim that evicted entries (status `lastReclaim`).
+    pub fn record_reclaim(&self, r: ReclaimRecord) {
+        self.state().last_reclaim = Some(r);
+    }
+
     /// The estimate of `case` over inputs of `sizes`.
     #[must_use]
     pub fn estimate(&self, case: Case, sizes: InputSizes) -> u64 {
@@ -749,6 +773,7 @@ impl Budget {
             overruns: s.overruns,
             reclaims: s.reclaims,
             evicted: s.evicted,
+            last_reclaim: s.last_reclaim.clone(),
         }
     }
 }

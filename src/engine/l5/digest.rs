@@ -4308,6 +4308,40 @@ fn digest_query_with<T: Send>(
     boundary: BoundaryMode,
     reduce: impl Fn(DigestEntryResult) -> T + Sync,
 ) -> Vec<T> {
+    with_query_cx(snap, boundary, |cx| {
+        cx.run(
+            roots,
+            return_summaries,
+            isolated_event_ids,
+            ordering_witness_only,
+            include_reads,
+            reduce,
+        )
+    })
+}
+
+/// The per-tree half of a digest query: the tree's indexes and lookups, and
+/// the carrier cache every root's witnesses share. Built once by
+/// [`with_query_cx`]; [`QueryCx::run`] then answers any batch of roots off
+/// it, so a reader that streams its roots in batches
+/// ([`crate::engine::l5::digest_cli::digest_effects_chunks`]) builds them
+/// once, not once per batch.
+pub(crate) struct QueryCx<'a, 'i> {
+    snap: &'a CapabilitySnapshot,
+    idx: &'i FingerprintIndexes<'a>,
+    callsite_by_id_str: &'a HashMap<&'a str, &'a SnapshotCallsiteEvidence>,
+    cs_ctx: &'a HashMap<&'a str, Option<&'a str>>,
+    op_ctx: &'a HashMap<&'a str, Option<&'a str>>,
+    ordering_index: &'a crate::engine::l5::ordering_engine::OrderingIndex<'a>,
+    carrier_cache: &'i CarrierCache<'i>,
+}
+
+/// Build [`QueryCx`] over `snap` under `boundary` and hand it to `f`.
+pub(crate) fn with_query_cx<R>(
+    snap: &CapabilitySnapshot,
+    boundary: BoundaryMode,
+    f: impl FnOnce(&QueryCx<'_, '_>) -> R,
+) -> R {
     let idx = {
         let _s = crate::engine::perf_trace::span("digest", "digest.fingerprint_indexes");
         build_fingerprint_indexes_in(snap, boundary)
@@ -4332,36 +4366,62 @@ fn digest_query_with<T: Send>(
         .collect();
     let ordering_index = crate::engine::l5::ordering_engine::OrderingIndex::new(snap);
     let carrier_cache = CarrierCache::default();
+    f(&QueryCx {
+        snap,
+        idx: &idx,
+        callsite_by_id_str: &callsite_by_id_str,
+        cs_ctx: &cs_ctx,
+        op_ctx: &op_ctx,
+        ordering_index: &ordering_index,
+        carrier_cache: &carrier_cache,
+    })
+}
 
-    // Per-root computation is embarrassingly parallel: every input below is an
-    // immutable `&` reference (snap/idx/maps), each root's witness reconstruction +
-    // ordering pass is independent and internally deterministic, and `roots` is
-    // deduped so `routine_id` keys are unique — the indexed `par_iter` collects in
-    // `roots` order regardless of scheduling order. Runs on
-    // the GLOBAL rayon pool (no AL-source lowering happens here — the big-stack pool
-    // is only for the CST lowerer; witness BFS is heap-based with MAX_DEPTH = 64).
-    use rayon::prelude::*;
-    let _roots_span = crate::engine::perf_trace::span("digest", "digest.roots");
-    roots
-        .par_iter()
-        .filter_map(|rid| {
-            digest_one_root(
-                rid,
-                snap,
-                &idx,
-                &callsite_by_id_str,
-                &cs_ctx,
-                &op_ctx,
-                &ordering_index,
-                &carrier_cache,
-                return_summaries,
-                isolated_event_ids,
-                ordering_witness_only,
-                include_reads,
-            )
-            .map(&reduce)
-        })
-        .collect()
+impl QueryCx<'_, '_> {
+    /// Each root's entry passed through `reduce`, in `roots` order
+    /// (unsorted); a root that yields no entry is left out.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn run<T: Send>(
+        &self,
+        roots: &[String],
+        return_summaries: Option<
+            &HashMap<String, crate::engine::return_summary::RoutineReturnSummary>,
+        >,
+        isolated_event_ids: Option<&std::collections::HashSet<String>>,
+        ordering_witness_only: bool,
+        include_reads: bool,
+        reduce: impl Fn(DigestEntryResult) -> T + Sync,
+    ) -> Vec<T> {
+        // Per-root computation is embarrassingly parallel: every input below is an
+        // immutable `&` reference (snap/idx/maps), each root's witness reconstruction +
+        // ordering pass is independent and internally deterministic, and `roots` is
+        // deduped so `routine_id` keys are unique — the indexed `par_iter` collects in
+        // `roots` order regardless of scheduling order. Runs on
+        // the GLOBAL rayon pool (no AL-source lowering happens here — the big-stack pool
+        // is only for the CST lowerer; witness BFS is heap-based with MAX_DEPTH = 64).
+        use rayon::prelude::*;
+        let _roots_span = crate::engine::perf_trace::span("digest", "digest.roots");
+        roots
+            .par_iter()
+            .filter_map(|rid| {
+                digest_one_root(
+                    rid,
+                    self.snap,
+                    self.idx,
+                    self.callsite_by_id_str,
+                    self.cs_ctx,
+                    self.op_ctx,
+                    self.ordering_index,
+                    self.carrier_cache,
+                    return_summaries,
+                    isolated_event_ids,
+                    ordering_witness_only,
+                    include_reads,
+                )
+                .map(&reduce)
+            })
+            .collect()
+    }
 }
 
 /// tempState of a fact's originating table-write (the physical-write filter's
@@ -5851,6 +5911,29 @@ pub fn compute_digest_effects_cli(
     include_reads: bool,
 ) -> Vec<DigestEntryResult> {
     compute_digest_effects_cli_in(snap, resolved, only, include_reads, BoundaryMode::On)
+}
+
+/// Every routine [`compute_digest_effects_cli_in`] computes an entry for
+/// when named in `only`: the reportable roots, and (G31) a dependency
+/// routine with a body. A streamed read
+/// ([`crate::engine::l5::digest_cli::digest_effects_chunks`]) filters each
+/// batch by it, once per tree instead of once per batch.
+pub(crate) fn root_set(resolved: &Model) -> std::collections::HashSet<String> {
+    let mut set: std::collections::HashSet<String> =
+        reportable_roots(resolved).into_iter().collect();
+    set.extend(
+        resolved
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| {
+                resolved.routine_role(r) == crate::program::model::role::Role::Dependency
+                    && r.body_available
+                    && !r.parse_incomplete
+            })
+            .map(|r| r.stable_routine_id.clone()),
+    );
+    set
 }
 
 /// [`compute_digest_effects_cli`] under `boundary`: the read applies the

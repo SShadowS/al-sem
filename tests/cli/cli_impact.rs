@@ -179,6 +179,57 @@ fn a_diff_is_accounted_first_then_each_routine() {
     golden("diff.json", &j, t.path());
 }
 
+/// The main part streams a large effects read in batches
+/// (`AL_SEM_IMPACT_ROOT_BATCH=1`: one root per batch, so every one of
+/// `Core.al`'s six routines makes a batch, `digest.stream_batches`), and each
+/// root's current effects equal the unstreamed read's, which reads them
+/// whole (no batch).
+///
+/// Break: `stream_batch` never streams → no batch (0 against 6).
+#[test]
+fn a_large_main_part_streams_its_effects_with_the_same_totals() {
+    let t = universe();
+    let ws = t.path().join("App");
+    let ws_s = ws.to_string_lossy().to_string();
+    let args = [
+        "impact",
+        ws_s.as_str(),
+        "--file",
+        "src/Core.al",
+        "--no-tests",
+        "--format",
+        "json",
+    ];
+    let run = |env: &[(&str, &str)]| {
+        let (out, counters) = crate::cli_build_counters::spawn_traced(&args, env);
+        assert!(out.status.success(), "{out:?}");
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        let effects: Vec<(String, Value)> = v["roots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| (r["stableId"].as_str().unwrap().into(), r["effects"].clone()))
+            .collect();
+        (
+            effects,
+            crate::cli_build_counters::count(&counters, "digest.stream_batches"),
+        )
+    };
+    let (whole, none) = run(&[]);
+    assert_eq!(whole.len(), 6, "precondition: six routines in Core.al");
+    // `Post`'s `Item.Modify()` on its `var` parameter.
+    assert!(
+        whole
+            .iter()
+            .any(|(_, e)| e["callerDependentTables"].as_u64() > Some(0)),
+        "precondition: a root writes a table: {whole:?}"
+    );
+    assert_eq!(none, 0, "six roots are read whole by default");
+    let (streamed, batches) = run(&[("AL_SEM_IMPACT_ROOT_BATCH", "1")]);
+    assert_eq!(batches, 6, "one batch per root");
+    assert_eq!(streamed, whole);
+}
+
 /// B-2: a root's direct callers are explain's `callers:` (R0-3's definition,
 /// over the same sited graph).
 ///

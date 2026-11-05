@@ -249,6 +249,44 @@ fn b3d_a_count_preserving_table_swap_shows_both() {
     );
 }
 
+/// A call moved from one overload to another names each by its short
+/// handle (`Note/1`, `Note/2`, MCP output step 2), so the removed call and
+/// the added one never print alike.
+///
+/// Break: label a callee by its display alone (`Names::display` in
+/// `own_keys`) → both read `calls Codeunit FX Core::Note`.
+#[test]
+fn a_call_moved_between_overloads_names_each_overload() {
+    let base = r#"codeunit 50810 "FX Core"
+{
+    procedure Caller()
+    begin
+        Note('x');
+    end;
+
+    procedure Note(Msg: Text)
+    begin
+    end;
+
+    procedure Note(Msg: Text; Level: Integer)
+    begin
+    end;
+}
+"#;
+    let r = repo(base);
+    r.write("src/Core.al", &base.replace("Note('x');", "Note('x', 1);"));
+    let v = impact(&r, &[]);
+    let mut got = own(root(&v, "Caller"));
+    got.sort();
+    assert_eq!(
+        got,
+        pairs(&[
+            ("added", "calls Codeunit FX Core::Note/2"),
+            ("removed", "calls Codeunit FX Core::Note/1"),
+        ])
+    );
+}
+
 /// B-3e (and the incomplete new side): the working tree drops a `Modify`
 /// and adds a call the engine cannot resolve: the lost write is "no longer
 /// observed", with the reason, not "removed".
@@ -730,7 +768,13 @@ fn a_changed_dependency_declaration_is_named() {
 ///   `InitNewEntryCore` (added call) and no longer calls `SetTo`/`SetCc`/
 ///   `SetBcc` itself (removed calls);
 /// - the base: 11 package files, the same on both sides, and app.json's
-///   dependency versions 29 → 30 named.
+///   dependency versions 29 → 30 named;
+/// - no routine's added and removed changes print alike (before the short
+///   handles, `CDO eDocs Sending Profile Subs::ReportSupersededSend` read
+///   `+ calls Codeunit CDO Log Management::CreateSkipLogEntries; - calls
+///   Codeunit CDO Log Management::CreateSkipLogEntries`: two overloads);
+/// - the default human answer (tests on) is at most 40 KiB, its routine
+///   list folded with the hidden count (before: 46.5 KB with `--no-tests`).
 pub(crate) fn cdo_impact_base_ratchets() {
     let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
         return;
@@ -811,4 +855,48 @@ pub(crate) fn cdo_impact_base_ratchets() {
             "{init:?}"
         );
     }
+    // Two overloads never print alike (a label names each by its handle).
+    let mut alike: Vec<String> = Vec::new();
+    for r in v["roots"].as_array().unwrap() {
+        let own = r["delta"]["own"].as_array().cloned().unwrap_or_default();
+        let mut seen = std::collections::BTreeMap::new();
+        for c in &own {
+            let (ch, label) = (c["change"].as_str().unwrap(), c["label"].as_str().unwrap());
+            if let Some(other) = seen.insert(label.to_string(), ch.to_string())
+                && other != ch
+            {
+                alike.push(format!("{}: {label}", r["display"]));
+            }
+        }
+    }
+    assert!(alike.is_empty(), "added and removed print alike: {alike:?}");
+
+    // The default human answer (tests on, as MCP's) fits the MCP tool's
+    // 40 KiB inline cap, folded: the routines it hides counted.
+    let roots = v["roots"].as_array().unwrap().len();
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("impact")
+        .arg(&ws)
+        .args(["--base", "bc3ccb18~5"])
+        .env("AL_SEM_IMPACT_BASE_CACHE", cache.path())
+        .output()
+        .unwrap();
+    let human = String::from_utf8(out.stdout).unwrap();
+    assert!(out.status.success(), "{human}");
+    assert!(human.len() <= 40 * 1024, "{} bytes", human.len());
+    let shown = human
+        .lines()
+        .find_map(|l| {
+            l.rsplit_once("; first ")
+                .and_then(|(_, n)| n.trim_end_matches(':').parse::<usize>().ok())
+        })
+        .unwrap_or_else(|| panic!("a folded routine list: {human}"));
+    assert!(
+        human.contains(&format!("  … +{} routines (", roots - shown)),
+        "{human}"
+    );
+    assert!(
+        human.contains("analyzed under the current dependency environment"),
+        "the base line: {human}"
+    );
 }

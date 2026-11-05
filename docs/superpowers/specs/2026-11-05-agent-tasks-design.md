@@ -1468,6 +1468,31 @@ them. Re-measured on CDO with the store's counters per call, five causes, all fi
    raw facts, tree and witness batch cover): the observed peak of a 699-root request is no
    longer the next one-routine request's estimate.
 
+### 8.12 Impact follow-ups (fix, 2026-11-05)
+
+1. **The main part streams its effects.** Above `WITNESS_MEMO_MAX_ROOTS` (64) roots its tree
+   demand carries `stream: Some(ROOT_BATCH)` (32): the view keeps the tree (one-shot: until
+   compute; served: the published tree's `Arc`) and the job reads it batch by batch
+   (`EffectsStream::for_each` → `digest_effects_chunks`), each batch's query and rollups taken
+   and the entries dropped. The per-tree work is built once (`QueryCx` with the carrier cache,
+   `LiteralPass` with the suffix trees, `FinishCx`); a dependency root is read with rule B off,
+   as `root_entries` does. A served request reserves the trees for one batch and holds the
+   reservation through compute. Within the memo cap the read stays whole, so a warm small ask
+   still reads its memoized witnesses. CDO 94-file range warm: refused before (4.1 GB of trees);
+   123 s after, window peak +0.75 GB over the 6.0 GB child, nothing evicted.
+2. **The retained floor counts only what a reclaim can evict now** (`reclaimable_bytes`: not
+   pinned, held by no older snapshot). The refused range had read a floor of 3.5 GB while
+   holding 2.1 GB of its own needs; its reclaim evicted the session's dependency rows (the RSS
+   fell 0.18 GB) and refused anyway. §8.11's "an eviction does not lower the RSS" was that, not
+   allocator retention: evicting 861-871 MB of measured, unheld artifacts lowers the RSS by
+   0.86 GB. A reclaim now also collects every global rayon thread's heap after each kind it
+   evicts (`release_alloc::collect_freed`): 0.13 GB more, 11-259 ms.
+3. **The human answer is bounded with a base too**: a count change lists two sites and counts
+   the rest; the default answer is kept under `HUMAN_BUDGET` (38 KiB) by showing fewer
+   routines, the fold saying so (off with an explicit `--max-roots` or `--detail`).
+4. **Overloads print alike no more**: labels, callers, root lines and deleted routines carry
+   `RollupCx::handle` (`Name/n`, `Name/n[position: type]`); summary schema 2.
+
 ---
 
 ## 9. E1. Debugging slice, narrow

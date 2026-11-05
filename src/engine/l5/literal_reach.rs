@@ -1018,8 +1018,21 @@ impl<'a> LiteralReach<'a> {
 
     /// G35: the guarded search from `root`, keeping each state's parent and
     /// its order of visit, so [`Self::group_witness`] can read a path that can
-    /// run off it. `None` when the search hit the cap.
+    /// run off it. `None` when the search hit the cap. (A read names its
+    /// roots by [`Self::live_tree_of`].)
     pub(crate) fn live_tree(&self, root: &'a str) -> Option<LiveTree<'a>> {
+        self.tree_from((root, Bindings::default()), STATE_CAP, &|| false)
+            .ok()
+    }
+
+    /// [`Self::live_tree`] of a root named by a string of any lifetime (a
+    /// read's own entry): the search runs from the model's own copy of the
+    /// id, so its states may outlive the entry (a streamed read's suffix
+    /// trees serve every batch). `None` too for an id the model has no row
+    /// for (every entry's root is a model routine), as for a capped search:
+    /// nothing is pruned on it.
+    pub(crate) fn live_tree_of(&self, root: &str) -> Option<LiveTree<'a>> {
+        let (&root, _) = self.by_stable.get_key_value(root)?;
         self.tree_from((root, Bindings::default()), STATE_CAP, &|| false)
             .ok()
     }
