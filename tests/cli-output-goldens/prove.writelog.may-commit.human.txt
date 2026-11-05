@@ -1,5 +1,5 @@
 --- Codeunit Out Log Mgt::WriteLog ---
-  question: may-commit
+  question: may-commit — existing effects (what the routine and its callees already do)
   answer:   no
   coverage: complete
   assumptions: loaded-subscribers

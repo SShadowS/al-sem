@@ -387,6 +387,15 @@ impl SitedGraph {
         }
     }
 
+    /// The object an object node stands for (`None` for a routine or a hub).
+    #[must_use]
+    pub fn object_node(&self, ix: u32) -> Option<crate::program::node::ObjectNodeId> {
+        match self.nodes.get(ix as usize)? {
+            Key::Object(o) => Some(o.clone()),
+            _ => None,
+        }
+    }
+
     /// The routine nodes whose (folded) name is `name_lc`.
     #[must_use]
     pub fn routines_named(&self, name_lc: &str) -> Vec<u32> {

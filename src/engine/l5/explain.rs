@@ -101,7 +101,10 @@ use al_syntax::IdentifierFoldExt;
 /// `noPathKept` and the recovered `owner`; every kind family has its list;
 /// `reachedFromSummary` and `gapsInDependencies`; dependency gaps and a page
 /// action's `via` / `tooltip` only with `--detail`.
-pub const SCHEMA: &str = "al-sem.explain/3";
+/// `/4` (agent-tasks §6.6, additive): with `--callers-context` a card carries
+/// `callersContext`, one object per callers' context question (`answer`,
+/// `evidenceCount`, `entries`, `blockedByCounts`).
+pub const SCHEMA: &str = "al-sem.explain/4";
 
 /// How the command names its routines.
 #[derive(Debug, Clone)]
@@ -136,6 +139,11 @@ pub struct ExplainJob<'a> {
     show_source: bool,
     /// `--writes-table T` (W2-2 gap (a)): prove's answer for each table.
     writes_tables: Vec<String>,
+    /// `--callers-context` (agent-tasks §6.6): each card's "callers'
+    /// context" section. Only when asked: it needs the sited graph, which a
+    /// resident engine builds only once a question reads it (M0-1), and the
+    /// detector run's summaries.
+    callers_context: bool,
 }
 
 /// The command's two renderings and its exit code.
@@ -159,7 +167,15 @@ impl<'a> ExplainJob<'a> {
             opts: RenderOpts::new(false, None),
             show_source: false,
             writes_tables: Vec::new(),
+            callers_context: false,
         }
+    }
+
+    /// `--callers-context` (agent-tasks §6.6).
+    #[must_use]
+    pub fn with_callers_context(mut self, on: bool) -> ExplainJob<'a> {
+        self.callers_context = on;
+        self
     }
 
     /// `--writes-table T`, repeated (W2-2 gap (a)).
@@ -216,12 +232,16 @@ impl Job for ExplainJob<'_> {
     }
 
     fn demands(&self) -> Vec<ViewDemand> {
-        ViewDemand::one(
-            self.req.inputs,
-            self.req.single_app,
-            false,
-            ViewNeeds::EXPLAIN,
-        )
+        let needs = if self.callers_context {
+            ViewNeeds {
+                graph: true,
+                sited: true,
+                ..ViewNeeds::EXPLAIN
+            }
+        } else {
+            ViewNeeds::EXPLAIN
+        };
+        ViewDemand::one(self.req.inputs, self.req.single_app, false, needs)
     }
 
     fn resolve(&self, _: SideIx, cx: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
@@ -304,16 +324,22 @@ impl Job for ExplainJob<'_> {
         } else {
             vec![Cell::Effects, Cell::L4]
         };
+        // `--writes-table` reads the cones' gap counts (declared needs:
+        // only then are they counted).
+        let mut plan = if self.writes_tables.is_empty() {
+            explain_plan(resolved.roots.iter().cloned().collect())
+        } else {
+            crate::engine::session::counting_cone_gaps(explain_plan(
+                resolved.roots.iter().cloned().collect(),
+            ))
+        };
+        // `--callers-context`: the callers' walk reads the detector run's
+        // summaries and cone writes, as prove's callers' questions do.
+        if self.callers_context && !resolved.roots.is_empty() {
+            plan = crate::engine::session::with_default_run(plan);
+        }
         Ok(PlanPart {
-            // `--writes-table` reads the cones' gap counts (declared needs:
-            // only then are they counted).
-            plan: if self.writes_tables.is_empty() {
-                explain_plan(resolved.roots.iter().cloned().collect())
-            } else {
-                crate::engine::session::counting_cone_gaps(explain_plan(
-                    resolved.roots.iter().cloned().collect(),
-                ))
-            },
+            plan,
             reads,
             carry: Some(Box::new(resolved)),
         })
@@ -322,6 +348,30 @@ impl Job for ExplainJob<'_> {
     fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
         let workspace = cx.inputs().workspace.clone();
         let resolved: Resolved = cx.take_carry();
+        // `--callers-context`: each card's three callers' answers, off the
+        // sited graph and the detector run (agent-tasks §6.6).
+        let callers: HashMap<String, (Value, Vec<String>)> = match cx.sited() {
+            Some(g) if self.callers_context && !resolved.roots.is_empty() => {
+                let det = cx.view().det();
+                let ccx = crate::engine::l5::callers_context::CallersCx {
+                    model: cx.view().model(),
+                    g,
+                    summaries: &det.summaries,
+                    cone_derived: &det.cone_derived,
+                    inputs: Some(cx.inputs()),
+                    assume_no_dependents: false,
+                    cancel: None,
+                };
+                resolved
+                    .roots
+                    .iter()
+                    .filter_map(|r| {
+                        crate::engine::l5::callers_context::section(&ccx, r).map(|s| (r.clone(), s))
+                    })
+                    .collect()
+            }
+            _ => HashMap::new(),
+        };
         let has_tree = cx.has_tree();
         let mut effects = if has_tree {
             cx.take_effects()
@@ -390,6 +440,7 @@ impl Job for ExplainJob<'_> {
             self.opts,
             sources.as_ref(),
             &table_answers,
+            &callers,
         );
         drop(full);
         drop(effects);
@@ -1085,6 +1136,7 @@ fn render(
     opts: RenderOpts,
     sources: Option<&crate::engine::source_excerpt::SourceTexts>,
     table_answers: &TableAnswers,
+    callers: &HashMap<String, (Value, Vec<String>)>,
 ) -> ExplainRunResult {
     use crate::engine::perf_trace::span;
     let built;
@@ -1138,6 +1190,14 @@ fn render(
             // before `next:`.
             if let Some((values, lines)) = table_answers.get(rid) {
                 json["tableAnswers"] = json!(values);
+                let at = human.find("\n  next:").map_or(human.len(), |i| i + 1);
+                let text: String = lines.iter().map(|l| format!("  {l}\n")).collect();
+                human.insert_str(at, &text);
+            }
+            // `--callers-context` (agent-tasks §6.6): the callers' context
+            // section, before `next:`.
+            if let Some((value, lines)) = callers.get(rid) {
+                json["callersContext"] = value.clone();
                 let at = human.find("\n  next:").map_or(human.len(), |i| i + 1);
                 let text: String = lines.iter().map(|l| format!("  {l}\n")).collect();
                 human.insert_str(at, &text);

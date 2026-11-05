@@ -1,5 +1,5 @@
 --- Codeunit D8PostingChain::PostSalesDoc ---
-  question: publishes-event:onafterpostsalesdoc
+  question: publishes-event:onafterpostsalesdoc — existing effects (what the routine and its callees already do)
   answer:   yes
   evidence: 1 effect
     [EVENT_PUBLISH] at ws:src/posting.al:13

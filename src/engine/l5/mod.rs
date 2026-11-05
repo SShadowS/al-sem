@@ -159,8 +159,11 @@ pub mod selector_index;
 pub mod test_coverage;
 pub mod unresolved_cone;
 
-// cli-b/b2 — PROVE CLI (tristate absence-safety query + json/human formatters).
+// cli-b/b2 — PROVE CLI (tristate existing-effects query + json/human formatters).
 pub mod prove;
+// Agent-tasks milestone A: prove's callers' context questions (the reverse
+// cone, evaluated per caller edge).
+pub mod callers_context;
 
 // cli-b/b3 — FINGERPRINT QUERY + projection + human renderer.
 // Reuses B1's witness machinery (digest.rs public exports).

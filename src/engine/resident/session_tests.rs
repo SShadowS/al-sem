@@ -450,6 +450,7 @@ mod budget {
             deterministic: true,
             single_app: true,
             closed_world: false,
+            assume_no_dependents: false,
             human: false,
             detail: false,
             out: None,
