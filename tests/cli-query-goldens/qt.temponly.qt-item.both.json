@@ -110,9 +110,13 @@
       "note": "this routine itself touches the table, so its callers inherit the touch through this routine (summaries are transitive-down): they consume it, and no caller adds an operation of its own here; each caller is still probed, and one without a summary row is unknown",
       "relation": "code-calls",
       "scoped": true,
+      "throughDependency": {
+        "notApplicable": "no dependency code loaded",
+        "relation": "code-calls-through-dependency"
+      },
       "transitiveCallers": 2,
       "unknown": []
     }
   },
-  "schemaVersion": "3.4.0"
+  "schemaVersion": "3.5.0"
 }

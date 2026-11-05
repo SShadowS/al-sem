@@ -53,7 +53,7 @@ codeunit 52804 "DC Caller"
     var
         Engine: Codeunit "DC Engine";
     begin
-        Engine.Run();
+        Engine.Process();
     end;
 }
 
@@ -86,6 +86,29 @@ codeunit 52807 "DC Approver"
         V: Variant;
     begin
         Handling.ExecuteResponse(V, StepInstance, V);
+    end;
+}
+
+codeunit 52809 "DC Both"
+{
+    procedure Direct()
+    var
+        T: Codeunit "DC Target";
+        Engine: Codeunit "DC Engine";
+    begin
+        T.Target();
+        Engine.Process();
+    end;
+
+    procedure Mixed()
+    var
+        Engine: Codeunit "DC Engine";
+        Handling: Codeunit "Workflow Response Handling";
+        StepInstance: Record "Workflow Step Instance";
+        V: Variant;
+    begin
+        Handling.ExecuteResponse(V, StepInstance, V);
+        Engine.Process();
     end;
 }
 

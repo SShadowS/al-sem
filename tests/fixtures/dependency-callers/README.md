@@ -20,9 +20,14 @@ The root is `DC Target.Target` (it inserts `DC Log`).
 | `DC Mid.Step` | calls `Target` | ordinary code call |
 | `DC Sub.HandleAfterRun` | subscriber of dep `DC Engine.OnAfterRun`; calls `Mid.Step` | ordinary code call |
 | `DC Sub.HandleAfterPostIt` | subscriber of dep `Workflow Response Handling.OnAfterPostIt`; calls `Target` | ordinary code call |
-| `DC Caller.Start` | calls dep `DC Engine.Run` -> `OnAfterRun` -[event]-> `HandleAfterRun` -> `Step` -> `Target` (5 hops; enters the workspace two hops before the root) | through dependency code, `code` |
+| `DC Caller.Start` | calls dep `DC Engine.Process` -> `OnAfterRun` -[event]-> `HandleAfterRun` -> `Step` -> `Target` (5 hops; enters the workspace two hops before the root) | through dependency code, `code` |
 | `DC Outer.Outer` | calls `DC Caller.Start` (a workspace hop BEFORE the dependency) | through dependency code, `code` (6 hops) |
-| `DC Toucher.Touch` | `Insert(true)` on dep table `DC Dep Entry`, whose `OnInsert` calls `Engine.Run` (first hop: a record trigger) | through dependency code, `code` |
+| `DC Toucher.Touch` | `Insert(true)` on dep table `DC Dep Entry`, whose `OnInsert` calls `Engine.Process` (first hop: a record trigger) | through dependency code, `code` |
+
+(The engine's procedure is not called `Run`: `Engine.Run()` on a codeunit variable is the
+codeunit's own run of its `OnRun`, not a call of a procedure named `Run`.)
+| `DC Both.Direct` | calls `Target`, and also `Engine.Process` (a path through dependency code too) | ordinary code call: a workspace path beats a dependency one |
+| `DC Both.Mixed` | calls `ExecuteResponse` (configured) and `Engine.Process` (code) | through dependency code, `code`: a code path beats a configured one |
 | `DC Approver.Approve` | calls dep `ExecuteResponse`, whose `case WorkflowResponse."Function Name"` arm `PostCode()` calls `PostIt` -> `OnAfterPostIt` -[event]-> `HandleAfterPostIt` -> `Target` | through dependency code, `configured` (listed after the `code` callers) |
 
 `Workflow Response Handling.ExecuteResponse` has the catalogued signature `(var

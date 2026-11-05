@@ -86,8 +86,13 @@ use crate::program::resolve::full::LoadedDependencies;
 /// `declaredKeys[]`, `reasons[]` and, with no site, `absence`; a touches
 /// answer without `--field` keeps its shape. 3.4.0 (additive): a touches
 /// `up` names the caller relation its `transitiveCallers` counts
-/// (`up.relation: "code-calls"`, [`UP_RELATION`]).
-const QUERY_SCHEMA_VERSION: &str = "3.4.0";
+/// (`up.relation: "code-calls"`, [`UP_RELATION`]). 3.5.0 (additive,
+/// callers-through-dependency design r2): a scoped touches `up` adds
+/// `up.throughDependency`, the workspace callers that reach the routine only
+/// by code calls through dependency code, each with its tier and witness
+/// ([`render_through_dependency`]); `transitiveCallers` and the rest of `up`
+/// are unchanged.
+const QUERY_SCHEMA_VERSION: &str = "3.5.0";
 
 /// Which direction(s) a `query touches` run reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -368,8 +373,11 @@ impl<'a> QueryJob<'a> {
     /// up also the sited graph (of the universe asked: cross-app, or the
     /// workspace alone), whose R0 reverse walk names the callers (as `alsem
     /// tests` and impact read them). The solve graph names them only when
-    /// the graph did not build, which the answer states. The engine host's
-    /// pin rule is `alsem.rs`' `reads_sited`.
+    /// the graph did not build, which the answer states. A touches `--from`
+    /// asked up without `--field` reads the cross-app sited graph too, for
+    /// `up.throughDependency` (design r2 §3.2; single-app has no dependency
+    /// code and reads none). The engine host's pin rule is `alsem.rs`'
+    /// `reads_sited`.
     fn needs(&self) -> ViewNeeds {
         match self.ask {
             QueryAsk::Touches {
@@ -378,6 +386,12 @@ impl<'a> QueryJob<'a> {
                 direction,
                 ..
             } if direction.wants_up() => ViewNeeds::MODEL_SITED,
+            QueryAsk::Touches {
+                field: None,
+                from: Some(_),
+                direction,
+                ..
+            } if direction.wants_up() && !self.single_app => ViewNeeds::MODEL_SITED,
             _ => ViewNeeds::MODEL,
         }
     }
@@ -492,6 +506,17 @@ impl Job for QueryJob<'_> {
             Some(root) if cx.has_tree() => cone_entry(cx, root),
             _ => None,
         };
+        // `up.throughDependency` (design r2): declared with the sited graph.
+        // Single-app, and cross-app with no dependency loaded, have no
+        // dependency code and answer alike (the no-dependency contract:
+        // cross-app then reports exactly what single-app does).
+        let no_dependency_code =
+            self.single_app || cx.view().target().dependencies().apps.is_empty();
+        let through = match (no_dependency_code, self.needs().sited) {
+            (true, _) => UpThrough::NoDependencyCode,
+            (false, true) => cx.sited().map_or(UpThrough::NotBuilt, UpThrough::Graph),
+            (false, false) => UpThrough::NotRequested,
+        };
         let substrate = released_substrate(cx);
         let cone = cone.as_ref();
         let body = match self.ask {
@@ -512,6 +537,7 @@ impl Job for QueryJob<'_> {
                 self.alsem_ver,
                 self.deterministic,
                 cone,
+                through,
             ),
             QueryAsk::Effects { routine, all } => render_query_effects_body(
                 &substrate,
@@ -1579,9 +1605,24 @@ pub fn render_query_touches(
             alsem_ver,
             deterministic,
             None,
+            UpThrough::NotRequested,
         ),
         &substrate.dependencies,
     )
+}
+
+/// What `up.throughDependency` reads (design r2 §3.2, §9).
+#[derive(Clone, Copy)]
+enum UpThrough<'g> {
+    /// A library entry that declared no sited graph: no block.
+    NotRequested,
+    /// Single-app, or no dependency loaded: there is no dependency code
+    /// (`notApplicable`).
+    NoDependencyCode,
+    /// Declared, and the graph did not build (`notComputed`).
+    NotBuilt,
+    /// The cross-app sited graph R0 walks.
+    Graph(&'g crate::program::impact_graph::SitedGraph),
 }
 
 /// Human output names the loaded dependency apps on its first line, only when
@@ -1634,6 +1675,7 @@ fn render_query_touches_body(
     alsem_ver: &str,
     deterministic: bool,
     cone: Option<&crate::engine::l5::digest_cli::DigestEntryFull>,
+    through: UpThrough<'_>,
 ) -> QueryRunResult {
     let deps = &substrate.dependencies;
     if from.is_none() && direction == Direction::Down {
@@ -1861,6 +1903,7 @@ fn render_query_touches_body(
                     touches_down,
                     all,
                     callers,
+                    through,
                     &mut payload,
                     &mut human,
                 );
@@ -2375,14 +2418,281 @@ fn render_touches_down(
 /// may-execute walk, which `alsem tests` and impact read. On local code the two
 /// differ only by what a user starts on a page a caller opens (CDO
 /// `WaitForMailLimit`: 964 against 1,030); the solve graph also does not
-/// follow a path through dependency code (86 more workspace callers there).
-/// Pinned by `reverse::caller_agreement_tests`.
+/// follow a path through dependency code: those callers are listed apart, in
+/// `up.throughDependency` ([`render_through_dependency`]). Pinned by
+/// `reverse::caller_agreement_tests` and `dep_callers`' tests.
 const UP_RELATION: &str = "code-calls";
 const UP_RELATION_LINE: &str = "  callers: by code calls of workspace code (calls, object runs and \
      the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a \
-     caller opens, nor a path through dependency code (alsem tests and impact follow both)\n";
+     caller opens (alsem tests and impact follow it); paths through dependency code are listed \
+     apart below\n";
 
-/// `up`: every transitive caller probed ("has a summary row?", then
+/// `up`: the solve graph's callers ([`render_touches_up_solve`]), then the
+/// callers through dependency code ([`render_through_dependency`]).
+#[allow(clippy::too_many_arguments)]
+fn render_touches_up(
+    cx: &TouchCx<'_, '_>,
+    rix: crate::engine::l4::routine_interner::SolveIx,
+    table_id: &str,
+    touches_down: bool,
+    all: bool,
+    list_callers: bool,
+    through: UpThrough<'_>,
+    payload: &mut Map<String, Value>,
+    human: &mut String,
+) {
+    render_touches_up_solve(
+        cx,
+        rix,
+        table_id,
+        touches_down,
+        all,
+        list_callers,
+        payload,
+        human,
+    );
+    if let Some(Value::Object(up)) = payload.get_mut("up") {
+        render_through_dependency(cx, rix, through, all, list_callers, up, human);
+    }
+}
+
+/// `up.throughDependency` (query schema 3.5.0; design r2 §3.2, §6, §9): the
+/// workspace routines that reach the routine only by code calls through
+/// dependency code, from R0's code-call walk over the cross-app sited graph
+/// (`impact_graph::dep_callers`). Disjoint from `up.transitiveCallers` by
+/// construction, and any solve-graph caller is removed before listing. Each
+/// caller has its tier (`code`, or `configured`: reachable only through a
+/// configured-dispatch site, listed after the others), its hop count and its
+/// witness ending at this routine. Potential callers: a witness shows graph
+/// reachability, not a feasible execution, and zero is not absence (open
+/// sites, hubs and what a user starts are outside the walk).
+///
+/// Human: one count line (the configured callers' arms by frequency); the 3
+/// nearest code callers by default; `--callers` every caller with a path of
+/// at most [`dep_callers::HUMAN_HOP_FOLD`] hops, the rest counted; `--all`
+/// every caller and every hop. JSON always has every caller and every hop.
+fn render_through_dependency(
+    cx: &TouchCx<'_, '_>,
+    rix: crate::engine::l4::routine_interner::SolveIx,
+    through: UpThrough<'_>,
+    all: bool,
+    list_callers: bool,
+    up: &mut Map<String, Value>,
+    human: &mut String,
+) {
+    use crate::program::impact_graph::dep_callers::{self, DepCaller, DepTier};
+    let mut block = Map::new();
+    block.insert("relation".into(), dep_callers::RELATION.into());
+    let not = |block: &mut Map<String, Value>, key: &str, why: &str| {
+        block.insert(key.into(), why.into());
+    };
+    let g = match through {
+        UpThrough::NotRequested => return,
+        UpThrough::NoDependencyCode => {
+            not(&mut block, "notApplicable", "no dependency code loaded");
+            up.insert("throughDependency".into(), Value::Object(block));
+            human.push_str(
+                "  through dependency code: not applicable (no dependency code loaded)\n",
+            );
+            return;
+        }
+        UpThrough::NotBuilt => {
+            not(&mut block, "notComputed", "the sited graph did not build");
+            up.insert("throughDependency".into(), Value::Object(block));
+            human.push_str(
+                "  through dependency code: not computed (the sited graph did not build)\n",
+            );
+            return;
+        }
+        UpThrough::Graph(g) => g,
+    };
+    let query = cx.query;
+    let stable_of = |ix: crate::engine::l4::routine_interner::SolveIx| {
+        cx.join
+            .routine(query.bundle().routine_id(ix))
+            .map(|r| r.stable_routine_id.as_str())
+    };
+    let roots = stable_of(rix)
+        .map(|s| g.nodes_with_stable_id(s))
+        .unwrap_or_default();
+    if roots.is_empty() {
+        not(
+            &mut block,
+            "notComputed",
+            "the routine has no node in the sited graph",
+        );
+        up.insert("throughDependency".into(), Value::Object(block));
+        human.push_str("  through dependency code: not computed (the routine has no node in the sited graph)\n");
+        return;
+    }
+    let answer = dep_callers::callers_through_dependency(
+        g,
+        &roots,
+        &crate::program::impact_graph::reverse::WalkOptions::default(),
+    );
+    // Disjoint from `up.transitiveCallers`, enforced (design r2 §3.2). A
+    // stated LIMIT: on the fixture this filter removes nothing (a break that
+    // drops it stays green), because the walk's own split already agrees with
+    // the solve graph (`dep_callers` tests, invariant 1); it is a guard for
+    // the day that agreement breaks, not a tested contribution.
+    let solve: std::collections::HashSet<&str> = query
+        .ancestors(rix)
+        .into_iter()
+        .filter_map(|(_, a)| stable_of(a))
+        .collect();
+    let by_stable: HashMap<&str, &ModelRoutine> = cx
+        .resolved
+        .workspace
+        .routines
+        .iter()
+        .map(|r| (r.stable_routine_id.as_str(), r))
+        .collect();
+    let name = |n: u32| -> String {
+        g.stable_id(n)
+            .and_then(|s| by_stable.get(s.as_str()).copied())
+            .and_then(|r| cx.join.get(&r.id))
+            .map_or_else(|| g.display(n), |x| x.qualified())
+    };
+    let mut listed: Vec<(&DepCaller, String)> = answer
+        .callers
+        .iter()
+        .filter(|c| !solve.contains(c.stable_id.as_str()))
+        .map(|c| (c, name(c.node)))
+        .collect();
+    listed.sort_by(|a, b| (a.0.tier, a.0.hops.len(), &a.1).cmp(&(b.0.tier, b.0.hops.len(), &b.1)));
+    let code: Vec<&(&DepCaller, String)> = listed
+        .iter()
+        .filter(|c| c.0.tier == DepTier::Code)
+        .collect();
+    let configured: Vec<&DepCaller> = listed
+        .iter()
+        .filter(|c| c.0.tier == DepTier::Configured)
+        .map(|c| c.0)
+        .collect();
+    block.insert("engine".into(), "reverse-walk".into());
+    block.insert("follows".into(), dep_callers::FOLLOWS.into());
+    block.insert("feasibility".into(), "notChecked".into());
+    block.insert("callers".into(), code.len().into());
+    block.insert("configured".into(), configured.len().into());
+    block.insert("catalog".into(), g.catalog().json());
+    block.insert(
+        "limited".into(),
+        answer
+            .limited
+            .map_or(Value::Null, |l| dep_callers::limit_str(l).into()),
+    );
+    block.insert(
+        "list".into(),
+        listed
+            .iter()
+            .map(|(c, label)| {
+                let routine = by_stable
+                    .get(c.stable_id.as_str())
+                    .and_then(|r| query.routine_ix(&r.id))
+                    .map_or_else(|| json!({ "display": label }), |ix| cx.routine_json(ix));
+                let mut m = Map::new();
+                m.insert("routine".into(), routine);
+                m.extend(dep_callers::caller_json(g, c, &name));
+                Value::Object(m)
+            })
+            .collect::<Vec<_>>()
+            .into(),
+    );
+    up.insert("throughDependency".into(), Value::Object(block));
+
+    // Human.
+    let limited = answer.limited.map_or(String::new(), |l| {
+        format!(
+            "; the walk stopped at its {} cap, so this is a lower bound",
+            dep_callers::limit_str(l)
+        )
+    });
+    let mismatch = g.catalog().entries.iter().any(|s| {
+        matches!(
+            s,
+            crate::program::impact_graph::configured_dispatch::Status::Mismatch { .. }
+        )
+    });
+    if listed.is_empty() {
+        human.push_str(&format!(
+            "  through dependency code: none by code calls{limited} (open sites, hubs and what a \
+             user starts are outside this list)\n"
+        ));
+    } else {
+        let mut line = format!(
+            "  through dependency code (potential callers by code calls, path feasibility not \
+             checked): {} more workspace {}",
+            code.len(),
+            if code.len() == 1 { "caller" } else { "callers" }
+        );
+        if !configured.is_empty() {
+            let arms: Vec<String> = dep_callers::arm_counts(&configured)
+                .into_iter()
+                .take(3)
+                .map(|(e, a, n)| format!("{e}: {a} {n}"))
+                .collect();
+            line.push_str(&format!(
+                "; {} more only through configured dispatch, configuration-dependent, including \
+                 custom responses ({})",
+                configured.len(),
+                arms.join(", ")
+            ));
+        }
+        line.push_str(&limited);
+        if !list_callers && !all {
+            line.push_str(" — --callers lists them");
+        }
+        human.push_str(&line);
+        human.push('\n');
+    }
+    if !configured.is_empty() || mismatch {
+        human.push_str(&format!("    {}\n", g.catalog().human()));
+    }
+    let row = |c: &DepCaller, label: &str| {
+        format!(
+            "    +{} {}{label}{}\n",
+            c.hops.len(),
+            if c.tier == DepTier::Configured {
+                "[configured] "
+            } else {
+                ""
+            },
+            dep_callers::witness_human(c, &name, all)
+        )
+    };
+    if all {
+        for (c, label) in &listed {
+            human.push_str(&row(c, label));
+        }
+    } else if list_callers {
+        let (short, long): (Vec<_>, Vec<_>) = listed
+            .iter()
+            .partition(|c| c.0.hops.len() <= dep_callers::HUMAN_HOP_FOLD);
+        for (c, label) in short {
+            human.push_str(&row(c, label));
+        }
+        if !long.is_empty() {
+            human.push_str(&format!(
+                "    … +{} with paths over {} hops — --all lists them\n",
+                plural(long.len(), "caller", "callers"),
+                dep_callers::HUMAN_HOP_FOLD
+            ));
+        }
+    } else {
+        let shown = code.len().min(3);
+        for (c, label) in &code[..shown] {
+            human.push_str(&row(c, label));
+        }
+        if shown < code.len() {
+            human.push_str(&format!(
+                "    … +{} — --callers lists them\n",
+                plural(code.len() - shown, "caller", "callers")
+            ));
+        }
+    }
+}
+
+/// The solve graph's half of `up`: every transitive caller probed ("has a summary row?", then
 /// "touches?"). When the routine touches the table itself (the trivial case)
 /// no caller witness is built: one counted line. Otherwise each touching
 /// caller's witnesses are streamed into its first witness and counts. `--all`
@@ -2391,7 +2701,7 @@ const UP_RELATION_LINE: &str = "  callers: by code calls of workspace code (call
 /// and location, without that product; in the trivial case JSON `callers[]`
 /// then holds `{depth, routine, outcome}`.
 #[allow(clippy::too_many_arguments)]
-fn render_touches_up(
+fn render_touches_up_solve(
     cx: &TouchCx<'_, '_>,
     rix: crate::engine::l4::routine_interner::SolveIx,
     table_id: &str,

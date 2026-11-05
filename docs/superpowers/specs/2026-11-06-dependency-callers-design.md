@@ -19,7 +19,7 @@ Inputs: the prototype `proto/dep-callers` (`5cca3e07`) and its report
 | 4 | Evidence | Every listed caller carries the **full witness** from the same walk that found it: the caller, every dependency routine, every event by name, each hop's kind and site, ending at the **queried routine**. Never a bare "X calls W". |
 | 5 | Detectors | **No detector reads the new relation in v1**, and `alsem analyze` does not build the sited graph at all. Transaction spans (d9/d8/d50) are phase 4, as a transaction-aware traversal of their own (§7). d54 through the cone is the next small, separate design; d1 is not planned. |
 | 6 | Cost, refresh, export | No new kept structure: the walk reads the sited graph (on CDO ~1 s and 45 MiB to build, an artifact a resident revision already keeps and rebuilds), and keeps O(states) per root only while it runs. `alsem graph` gains the condition name `configuredDispatch` on the catalogued edges (additive; it already exports `conditions`). |
-| 7 | Honesty | One definition of **dependency code** by app identity (§1), shared with the solve graph's split. The list is labelled "potential callers; path feasibility not checked". Zero listed callers is never a whole-program absence. `up.relation` keeps `"code-calls"`; `up.throughDependency` has its own relation string, with `notApplicable` (single-app), `notComputed` (the graph did not build) and `limited` (a walk budget hit) stated apart. |
+| 7 | Honesty | One definition of **dependency code** by app identity (§1), shared with the solve graph's split. The list is labelled "potential callers; path feasibility not checked". Zero listed callers is never a whole-program absence. `up.relation` keeps `"code-calls"`; `up.throughDependency` has its own relation string, with `notApplicable` (no dependency code loaded), `notComputed` (the graph did not build) and `limited` (a walk budget hit) stated apart. |
 | 8 | Tests | Fixtures: a workspace -> dependency -> workspace callback through an event with **both** a source-folder dependency and a package (`.app`) dependency; a configured-dispatch hub; transitive composition across workspace hops. Invariants: R0's workspace-only code-call callers equal the solve graph's (by the shared predicate), the list is disjoint from `up.transitiveCallers`, every witness is a path of code-call sites ending at the root, a code-tier caller has no configured hop. One discrimination proof per guard. |
 | 9 | v1 | Three commits: the condition with its catalog and the probe; the walk and `query touches` up's block (query schema 3.5.0); explain's callers line under `--callers-context`. No detector, summary, solver, prove verdict or other export change. |
 
@@ -242,7 +242,9 @@ from them, `resolve::demand`.)
 **Declared need**: the jobs that render the block declare `ViewNeeds::sited` (the existing
 M0 path; `query touches` up with `--from`, cross-app; explain with `--callers-context`), and the
 engine host's pin rule (`alsem.rs`' `reads_sited`) names them. Single-app declares nothing and
-answers `notApplicable: "single-app"`.
+answers `notApplicable: "no dependency code loaded"`; so does cross-app with no dependency
+loaded, because the no-dependency contract says cross-app then reports exactly what single-app
+does (`cli_digest_query_dependencies::without_dependencies_cross_app_equals_single_app`).
 
 A **kept all-pairs structure** stays a phase-4 option, decided when transaction spans need it and
 measured then (the one real argument for it is `alsem analyze`, which builds no sited graph
@@ -568,7 +570,8 @@ It can use R0 per seed with consumer bits, since spans are already a per-seed ba
   says so, and the human line for zero says "none by code calls through dependency code".
 - Every count comes with the configured count, the catalog version and each entry's status, so
   "0 callers through dependency code" is never read as "nothing reaches it through Base App".
-- Four states, never a false 0: `notApplicable: "single-app"`; `notComputed` with the reason when
+- Four states, never a false 0: `notApplicable: "no dependency code loaded"` (single-app, or no
+  dependency loaded); `notComputed` with the reason when
   the sited graph did not build; `limited` (`stateBudget` or `cancelled`) when the walk stopped,
   the list then a lower bound; otherwise the counts. An undeclared read panics (the existing
   `ViewCx::sited` rule).
@@ -698,8 +701,8 @@ The shapes are the proposal; the implementation's goldens hold the exact text. T
 }
 ```
 
-Single-app: `"throughDependency": {"relation": "code-calls-through-dependency", "notApplicable":
-"single-app"}`.
+Single-app, or no dependency loaded: `"throughDependency": {"relation":
+"code-calls-through-dependency", "notApplicable": "no dependency code loaded"}`.
 
 ### 11.3 explain card, with `--callers-context`
 

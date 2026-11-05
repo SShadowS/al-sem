@@ -32,6 +32,31 @@ Design: `docs/superpowers/specs/2026-11-06-dependency-callers-design.md` (revisi
 - Fixture `tests/fixtures/dependency-callers` (a dependency carrying Base Application's id, loaded
   from a source folder; its README states each case).
 
+### Added (callers through dependency code, v1: `query touches` up)
+
+- **`query touches --from R --direction up` (or `both`) lists the workspace callers that reach R
+  only through dependency code** (`up.throughDependency`, query schema 3.5.0, additive;
+  `impact_graph::dep_callers`). Not a new structure: R0's reverse walk over the cross-app sited
+  graph restricted to code-call sites (`reverse::CodeCalls`), with a visitor that marks the states
+  whose path passed dependency code (an app other than the workspace's, the line `ExecRelation`
+  draws, not R0's trust tier: a source-folder dependency counts) and records each state's parent.
+  Callers compose across any number of crossings between workspace and dependency code (a caller
+  whose path enters the workspace six hops before the root is still listed). The first hop into
+  dependency code is any code-call site (a call, an object run, a record operation firing a
+  dependency trigger, event dispatch). Each caller has its tier (`code`; or `configured`: reachable
+  only through a configured-dispatch site, listed after the others with the catalog entry and
+  arm), its hop count, where it enters the workspace, and its witness from the caller to R with
+  every dependency routine, every event and each hop's kind and site. The list is disjoint from
+  `up.transitiveCallers` and labelled "potential callers by code calls, path feasibility not
+  checked"; single-app, and cross-app with no dependency loaded (the no-dependency contract),
+  answer `notApplicable: "no dependency code loaded"`; a walk that hits its budget says `limited`. Human
+  output: one count line (configured callers' arms by frequency) and the 3 nearest callers;
+  `--callers` every caller with a path of at most 12 hops (longer ones counted); `--all`
+  everything. The `callers:` line now says "paths through dependency code are listed apart below".
+  The job declares the sited graph for this question (the engine host's `reads_sited` pins it).
+  `up.relation`, `transitiveCallers` and every other field are unchanged; no detector, summary,
+  solver or prove answer reads the walk.
+
 ### Added (agent tasks, milestone B2: impact before/after against a base)
 
 `alsem impact --base REV` (and `--base REV --diff P`; MCP `alsem_impact` `base`, `base` with

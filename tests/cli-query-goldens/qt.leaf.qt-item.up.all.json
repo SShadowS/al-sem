@@ -194,6 +194,10 @@
       "note": "the index holds no touch of the table in this routine's cone (one routine into dependency code; not proof of absence); the touching callers reach it through other branches",
       "relation": "code-calls",
       "scoped": true,
+      "throughDependency": {
+        "notApplicable": "no dependency code loaded",
+        "relation": "code-calls-through-dependency"
+      },
       "transitiveCallers": 4,
       "unknown": [],
       "witnesses": [
@@ -550,5 +554,5 @@
       ]
     }
   },
-  "schemaVersion": "3.4.0"
+  "schemaVersion": "3.5.0"
 }

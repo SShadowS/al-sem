@@ -11,13 +11,13 @@ table 52900 "DC Dep Entry"
     var
         Engine: Codeunit "DC Engine";
     begin
-        Engine.Run();
+        Engine.Process();
     end;
 }
 
 codeunit 52901 "DC Engine"
 {
-    procedure Run()
+    procedure Process()
     begin
         Prepare();
         OnAfterRun();

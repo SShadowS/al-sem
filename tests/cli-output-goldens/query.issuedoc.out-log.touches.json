@@ -118,9 +118,28 @@
       "note": "this routine itself touches the table, so its callers inherit the touch through this routine (summaries are transitive-down): they consume it, and no caller adds an operation of its own here; each caller is still probed, and one without a summary row is unknown",
       "relation": "code-calls",
       "scoped": true,
+      "throughDependency": {
+        "callers": 0,
+        "catalog": {
+          "entries": [
+            {
+              "app": "Base Application",
+              "name": "Workflow Response Handling::ExecuteResponse",
+              "status": "notLoaded"
+            }
+          ],
+          "version": "1"
+        },
+        "configured": 0,
+        "engine": "reverse-walk",
+        "feasibility": "notChecked",
+        "follows": "code calls (calls, object runs and the triggers a run runs, record triggers, event dispatch) that pass dependency code (an app other than the workspace's), any number of times, ending at this routine; not open sites, hubs or what a user starts on a page",
+        "list": [],
+        "relation": "code-calls-through-dependency"
+      },
       "transitiveCallers": 1,
       "unknown": []
     }
   },
-  "schemaVersion": "3.4.0"
+  "schemaVersion": "3.5.0"
 }

@@ -126,3 +126,124 @@ fn the_probe_lists_the_catalogued_case_and_the_catalog_status() {
         "{text}"
     );
 }
+
+/// `alsem query touches <ws> --table "DC Log" --from "DC Target.Target"
+/// --direction up --callers --format json [extra]`, its `payload.up`.
+fn touches_up(extra: &[&str]) -> Value {
+    let mut args = vec![
+        "query",
+        "touches",
+        "--table",
+        "DC Log",
+        "--from",
+        "DC Target.Target",
+        "--direction",
+        "up",
+        "--callers",
+        "--format",
+        "json",
+    ];
+    args.extend_from_slice(extra);
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .args(&args[..2])
+        .arg(fixture().join("ws"))
+        .args(&args[2..])
+        .output()
+        .expect("spawn alsem");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: Value = serde_json::from_slice(&out.stdout).expect("json");
+    assert_eq!(v["schemaVersion"], "3.5.0");
+    v["payload"]["up"].clone()
+}
+
+/// `objectDisplay::display` of a routine row.
+fn routine_name(r: &Value) -> String {
+    format!(
+        "{}::{}",
+        r["objectDisplay"].as_str().unwrap_or("?"),
+        r["display"].as_str().unwrap_or("?")
+    )
+}
+
+#[test]
+fn query_touches_up_lists_the_callers_through_dependency_code() {
+    let up = touches_up(&[]);
+    // The solve graph's answer is unchanged: its own relation and callers.
+    assert_eq!(up["relation"], "code-calls");
+    let solve: BTreeSet<String> = up["callers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| routine_name(&c["routine"]))
+        .collect();
+    let td = &up["throughDependency"];
+    assert_eq!(td["relation"], "code-calls-through-dependency");
+    assert_eq!(td["engine"], "reverse-walk");
+    assert_eq!(td["feasibility"], "notChecked");
+    assert_eq!(td["limited"], Value::Null);
+    assert_eq!(td["catalog"]["version"], "1");
+    assert_eq!(td["catalog"]["entries"][0]["status"], "matched");
+    let list = td["list"].as_array().unwrap();
+    let rows: Vec<(String, String, u64)> = list
+        .iter()
+        .map(|c| {
+            (
+                routine_name(&c["routine"]),
+                c["tier"].as_str().unwrap().to_string(),
+                c["hops"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    // Hand-stated from the fixture (README): by tier, then hops, then name.
+    assert_eq!(
+        rows,
+        vec![
+            ("Codeunit DC Both::Mixed".into(), "code".into(), 5),
+            ("Codeunit DC Caller::Start".into(), "code".into(), 5),
+            ("Codeunit DC Outer::Outer".into(), "code".into(), 6),
+            ("Codeunit DC Toucher::Touch".into(), "code".into(), 6),
+            (
+                "Codeunit DC Approver::Approve".into(),
+                "configured".into(),
+                5
+            ),
+        ]
+    );
+    assert_eq!(td["callers"], 4);
+    assert_eq!(td["configured"], 1);
+    // Disjoint from the solve graph's callers.
+    for (name, ..) in &rows {
+        assert!(!solve.contains(name), "{name} is not also a solve caller");
+    }
+    assert!(solve.contains("Codeunit DC Both::Direct"), "{solve:?}");
+    // The witness ends at the root and names the event and the configured arm.
+    let start = &list[1];
+    assert_eq!(start["entersAt"], "Codeunit DC Sub::HandleAfterRun");
+    let w = start["witness"].as_array().unwrap();
+    assert_eq!(w[2]["kind"], "event");
+    assert_eq!(w[2]["event"], "Codeunit DC Engine::OnAfterRun");
+    assert_eq!(w.last().unwrap()["to"], "Codeunit DC Target::Target");
+    assert_eq!(
+        w[1]["at"]["file"], "dep:437dbf0e-84ff-417a-965d-ed2bb9650972:src/Engine.al",
+        "a dependency hop's site names its app"
+    );
+    let approve = &list[4];
+    assert_eq!(
+        approve["configuredVia"],
+        serde_json::json!([{"entry": "Workflow Response Handling::ExecuteResponse", "arm": "PostCode()"}])
+    );
+    assert_eq!(list[3]["witness"][0]["kind"], "recordTrigger");
+}
+
+#[test]
+fn query_touches_up_single_app_is_not_applicable() {
+    let up = touches_up(&["--single-app"]);
+    assert_eq!(
+        up["throughDependency"],
+        serde_json::json!({"relation": "code-calls-through-dependency", "notApplicable": "no dependency code loaded"})
+    );
+}

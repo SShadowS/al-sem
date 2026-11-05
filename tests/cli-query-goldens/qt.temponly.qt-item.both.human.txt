@@ -2,5 +2,6 @@
   scope: dependency code: full cone for physical writes, grouped per entry point; per-operation detail one routine deep; temporary-record touches persist nothing but use the table's schema and run its triggers; lines are 1-based
   down: yes — 2 record touches: 0 on persistent records, 0 on possibly persistent records, 2 on temporary records
     temporary records: 2 touches in 1 routine (Codeunit QT Touches::TempOnly 2) — --all lists them
-  callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens, nor a path through dependency code (alsem tests and impact follow both)
+  callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens (alsem tests and impact follow it); paths through dependency code are listed apart below
   up: 2 transitive callers inherit this touch through this routine: 2 touch it, 0 do not, 0 unknown — --callers lists them, --all their witnesses
+  through dependency code: not applicable (no dependency code loaded)
