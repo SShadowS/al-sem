@@ -74,7 +74,17 @@ Which tests to run first for a change, as a first-class answer. Spec:
   the revision vector `revisions: {production, tests: [{workspace, universe: "tests:<key>",
   revision}]}`. explain starts no test engine (a test pins the engine count). The LSP front end
   refuses `alsem_tests` with the reason. `tests` and `tests-select` join the commands a resident
-  revision serves.
+  revision serves. Measured on CDO 2026-11-05 through `alsem mcp` (release-fast; load average
+  ~170 on 22 cores from other builds, so cold times are upper bounds): cold (both engines build,
+  one after the other) 24.7-52 s; warm 0.1 s (UpdateLastUpload), 0.2 s (RunReportID,
+  IssueReminder); after a single-app explain (a third universe) the next `alsem_tests` took 11.3 s
+  (one engine rebuilt). After a cold RunReportID call: the production child 3.65 GB RSS, the test
+  child 2.31 GB (each under its 8 GiB budget).
+- **`alsem graph --keep-local-sources[=true|false]`** and **`meta.apps[].sourceRoot`** (§4.8,
+  C-8): every routine of an app loaded from local source (a source-folder dependency, such as a
+  test app's production app) survives pruning, so a consumer can join changed production files on
+  `(appId, sourcePath)`; the default is on exactly when such an app is loaded, so an export with
+  none is byte-identical (the `cli_graph_export` golden). `sourceRoot` names the folder.
 - **explain's `tests:` line reads the test scope** (C-7) without analyzing it: "no [Test]
   procedure in the workspace app; 1 test app discovered (…); not analyzed in this call — alsem
   tests (MCP: alsem_tests) selects them", or "no test code found (0 [Test] procedures in the

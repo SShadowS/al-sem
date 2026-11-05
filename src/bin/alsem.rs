@@ -333,6 +333,12 @@ struct GraphCli {
     /// Write the JSONL to a file instead of stdout.
     #[arg(long = "out")]
     out: Option<String>,
+
+    /// Keep every routine of an app loaded from local source (a source-folder
+    /// dependency) through pruning: true or false. Default: true when such an
+    /// app is loaded (`meta.apps[].sourceRoot` names its folder).
+    #[arg(long = "keep-local-sources")]
+    keep_local_sources: Option<bool>,
 }
 
 /// `TestsCli` — arguments for `alsem tests <ws>` (agent-tasks design §4.2).
@@ -1849,6 +1855,7 @@ fn plan_graph(g: GraphCli) -> Planned {
                 inputs,
                 workspace: Path::new(&g.workspace),
                 out: g.out.as_deref(),
+                keep_local_sources: g.keep_local_sources,
             })
         },
     )

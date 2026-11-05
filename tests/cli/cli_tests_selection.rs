@@ -433,3 +433,60 @@ fn cdo_selection_ratchets() {
     assert!(reasons.contains(&"hidden-callers"), "{reasons:?}");
     assert!(reasons.contains(&"unresolved-test-calls"), "{reasons:?}");
 }
+
+/// C-8 (agent-tasks §4.8): `alsem graph` on a test app naming the production
+/// app as a source dependency keeps every production routine through pruning
+/// by default (`Untested`, which nothing calls, included) and names the
+/// folder in `meta.apps[].sourceRoot`; `--keep-local-sources=false` prunes as
+/// before. (With no local-source app loaded the export is byte-identical:
+/// `cli_graph_export`'s golden.)
+///
+/// DISCRIMINATION (2026-11-05): defaulting `keep_local` to false drops
+/// `Untested` from the default export: fails.
+#[test]
+fn graph_keeps_local_source_routines() {
+    let t = universe_repo();
+    let test = t.path().join("Test");
+    std::fs::write(
+        test.join("al-sem.dependencies.json"),
+        r#"{ "sources": ["../App"] }"#,
+    )
+    .unwrap();
+    let graph = |args: &[&str]| -> Vec<Value> {
+        let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .arg("graph")
+            .arg(&test)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    };
+    let has_untested = |rows: &[Value]| {
+        rows.iter()
+            .any(|r| r["t"] == "node" && r["v"]["memberName"].as_str() == Some("Untested"))
+    };
+    let rows = graph(&[]);
+    let app = rows[0]["v"]["apps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == "TU Production")
+        .unwrap()
+        .clone();
+    assert_eq!(app["source"], "localApproximate");
+    assert!(
+        app["sourceRoot"].as_str().unwrap().ends_with("App"),
+        "{app}"
+    );
+    assert!(has_untested(&rows), "kept by default");
+    assert!(!has_untested(&graph(&["--keep-local-sources=false"])));
+}
