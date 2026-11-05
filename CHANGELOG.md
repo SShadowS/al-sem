@@ -46,6 +46,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regenerated. The output checks read the new shapes: a folded `and N more …` / `also [TYPE]: …`
   line's anchors are checked item by item, and an entry-point count may be "at least".
 
+### Fixed (`Database.Commit()` is a commit, #155)
+
+- **`Database.Commit()` now gives the same commit fact as `Commit()`.** AL's `Commit` is a
+  method of the `Database` type that may be called without its receiver, but the body walk
+  recognised only a bare `Commit` callee. `Database.Commit()` (and `Database.Commit`, in any
+  case) became a call site to the `Database::commit` builtin, so a routine committing that way
+  was invisible to every tool: `prove may-commit` answered `no`, `explain` and `digest` listed no
+  COMMIT, and d34, d35, the transaction spans (d9 and the span detectors) and pending writes
+  missed it. Every spelling is now a `commit` operation site. A declared `Database` (a
+  parameter, local, named return value, global, dataitem or table field) shadows the platform's,
+  as the compiler does, so its `Database.Commit()` stays an ordinary call. The key join now pairs
+  a commit by the resolver's verdict (`ProgramSite::commit`: the `Commit` shape or a route to a
+  commit builtin, `member_catalog::is_commit_builtin`) instead of the callee text `Commit`, so a
+  disagreement between the walk and the resolver (a `Database` field of another object that only
+  the resolver sees) is a census loss, never silent. Tests: `cli_database_commit` and the adapter
+  test `every_commit_spelling_is_an_operation_site_and_a_shadowed_database_is_not`. The CDO
+  baseline has no `Database.Commit` in workspace or dependency source, so no CDO answer moves.
+
 ### Fixed (commit sites dropped up the call chain)
 
 - **A routine's COMMIT rows now list every commit it reaches, not only the nearest.** On CDO,

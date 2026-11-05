@@ -681,6 +681,48 @@ fn dynamic_run_target() {
     assert_eq!(a.bindings(&cs.id), vec![b(0, false, "non-record-arg")]);
 }
 
+/// #155: every spelling of a commit is an operation site of kind `commit`,
+/// never a call site, and the key join pairs each with the program site the
+/// resolver marks as a commit (`ProgramSite::commit`). `Database.Commit()`
+/// used to be a call site to the `Database::commit` builtin: no commit fact.
+/// A declared `Database` (here a codeunit variable with a `Commit` procedure)
+/// shadows the platform's, so its `Database.Commit()` is an ordinary call.
+#[test]
+fn every_commit_spelling_is_an_operation_site_and_a_shadowed_database_is_not() {
+    let cu = "codeunit 50101 \"W\"\n{\n    procedure Spellings()\n    begin\n        Commit();\n        Commit;\n        Database.Commit();\n        Database.Commit;\n        DATABASE.COMMIT();\n    end;\n\n    procedure Shadowed()\n    var\n        Database: Codeunit \"Fake Db\";\n    begin\n        Database.Commit();\n    end;\n}\n";
+    let fake = "codeunit 50102 \"Fake Db\"\n{\n    procedure Commit()\n    begin\n    end;\n}\n";
+    let a = adapt(&[("src/w.al", cu), ("src/f.al", fake)], None);
+    assert_eq!(a.census.losses(), vec![], "{:#?}", a.census);
+    let spellings = a.routine("Spellings");
+    let kinds: Vec<&str> = spellings
+        .operation_sites
+        .iter()
+        .map(|o| o.kind.as_str())
+        .collect();
+    assert_eq!(kinds, vec!["commit"; 5]);
+    assert!(
+        spellings.call_sites.is_empty(),
+        "{:?}",
+        spellings.call_sites
+    );
+    let shadowed = a.routine("Shadowed");
+    assert!(
+        shadowed.operation_sites.is_empty(),
+        "{:?}",
+        shadowed.operation_sites
+    );
+    let cs = a.site("Shadowed", "Database.Commit");
+    let mut want = edge(
+        shadowed,
+        cs,
+        Some(a.routine("Commit")),
+        DispatchKind::Method,
+        Resolution::Resolved,
+    );
+    want.receiver_type = Some("Codeunit \"Fake Db\"".to_string());
+    assert_eq!(a.edges(&cs.id), vec![want]);
+}
+
 /// Row "Catalog route (builtin)": to-less `Builtin`.
 #[test]
 fn builtin() {

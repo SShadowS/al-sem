@@ -1227,6 +1227,14 @@ pub(crate) fn resolve_file_obligations(
                     None => {}
                 }
 
+                // #155: `Commit()` and `Database.Commit()` alike. The routes
+                // decide the member spelling, so a declared `Database` that
+                // shadows the platform's (a variable, a field) is no commit.
+                let commit = matches!(site.shape, CalleeShape::Commit)
+                    || routes.iter().any(|r| {
+                        matches!(&r.target, RouteTarget::Builtin(b)
+                            if crate::program::resolve::member_catalog::is_commit_builtin(b))
+                    });
                 edges.push(ClassifiedEdge {
                     obligation_id: obl_id,
                     edge: Edge {
@@ -1253,6 +1261,7 @@ pub(crate) fn resolve_file_obligations(
                             &site.shape,
                             CalleeShape::RecordOp { op, .. } if can_fire_trigger(&op.fold_identifier())
                         ),
+                        commit,
                     }),
                 });
             }

@@ -16,6 +16,7 @@ use super::features::{
 };
 use super::node_util::Utf16Cols;
 use super::record_op::{FIELD_ARGS_OPS, record_op_type};
+use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::{
     AlFile, BinaryOp, BlockId, BlockItem, ExprId, ExprKind, ObjectKind, Origin, RoutineDecl,
     StmtKind, UnaryOp, VarDecl,
@@ -126,6 +127,53 @@ struct Scope {
     /// call whose method name collides with one of these is a CALL to that procedure,
     /// not a record op (legacy `object_procedure_names` collision check).
     object_procedure_names: HashSet<String>,
+    /// #155: a declaration in lexical scope is named `Database` (a parameter,
+    /// local, named return value, global, dataitem or, in a table, a field), so
+    /// `Database.Commit()` calls that declaration's member, not the platform's
+    /// `Database.Commit`. `database` is not a reserved word: it compiles as a
+    /// variable name and shadows the platform singleton (the compiler probe in
+    /// `program::resolve::receiver`'s Step 3c).
+    database_shadowed: bool,
+}
+
+/// #155: `name` folds to `database` (quotes stripped, as a declared name is).
+fn is_database_name(name: &str) -> bool {
+    strip_quote_chars(name).eq_fold_identifier("database")
+}
+
+/// Whether a declaration `routine` sees lexically is named `Database` (see
+/// [`Scope::database_shadowed`]). A field of ANOTHER object that an implicit
+/// `Rec` brings into scope (a page's source table, a table extension's base
+/// table, a `with` record) is not visible here; the resolver sees it, and the
+/// two then disagree at the key join (`op_shape_mismatch`), never silently.
+fn database_shadowed(o: &al_syntax::ir::ObjectDecl, routine: &RoutineDecl) -> bool {
+    routine.params.iter().any(|p| is_database_name(&p.name))
+        || routine.locals.iter().any(|v| is_database_name(&v.name))
+        || routine.return_name.as_deref().is_some_and(is_database_name)
+        || o.globals.iter().any(|v| is_database_name(&v.name))
+        || o.dataitems.iter().any(|(name, _)| is_database_name(name))
+        || o.fields.iter().any(|f| is_database_name(&f.name))
+}
+
+/// #155: the callee of a call that commits the transaction — `Commit` bare, or
+/// `Database.Commit` with an unshadowed `Database` receiver. The AL compiler
+/// accepts both spellings (Commit is a `Database` method that may be called
+/// without its receiver), with or without the parentheses, in any case. The
+/// resolver's side of the same rule is `resolve::member_catalog::
+/// is_commit_builtin` (both spellings resolve to a commit builtin).
+fn is_commit_callee(file: &AlFile, function: ExprId, database_shadowed: bool) -> bool {
+    match &file.ir.expr(function).kind {
+        ExprKind::Identifier(m) | ExprKind::QuotedIdentifier(m) => m.eq_fold_identifier("commit"),
+        ExprKind::Member { object, member, .. } => {
+            !database_shadowed
+                && strip_quote_chars(member).eq_fold_identifier("commit")
+                && matches!(
+                    &file.ir.expr(*object).kind,
+                    ExprKind::Identifier(r) | ExprKind::QuotedIdentifier(r) if is_database_name(r)
+                )
+        }
+        _ => false,
+    }
 }
 
 /// Record-OP / field-access RECEIVER eligibility (the `rvars`/`frvars` sets): a `X.`
@@ -300,6 +348,7 @@ fn build_scope(
     (
         Scope {
             record_ref_vars: record_ref_names(o, routine),
+            database_shadowed: database_shadowed(o, routine),
             rvars,
             frvars,
             object_procedure_names,
@@ -1095,7 +1144,8 @@ impl<'a> SpineCtx<'a> {
                 Identifier(m) | QuotedIdentifier(m) => Some(m.to_ascii_lowercase()),
                 _ => None,
             };
-            let is_commit = fname.as_deref() == Some("commit");
+            let is_commit = !is_record_op
+                && is_commit_callee(self.file, function, self.scope.database_shadowed);
             let is_error = fname.as_deref() == Some("error");
             // #160 §4.2: the site's key in this file, the resolver's `site.expr`.
             let expr_ix = u32::try_from(eid.index()).expect("an expression index fits u32");

@@ -807,6 +807,16 @@ pub fn dispatching_builtin(id: &BuiltinId) -> Option<DispatchingBuiltin> {
         .map(|(_, d)| *d)
 }
 
+/// #155: `true` when `id` is the transaction commit — the global `Commit`
+/// (`commit`, [`crate::program::resolve::builtins`]) or the same method called
+/// on its declaring type, `Database.Commit` (`Database::commit`). The body
+/// walk's side of the same rule is `program::body::ir_walk`'s
+/// `is_commit_callee`; the key join pairs the two.
+#[must_use]
+pub fn is_commit_builtin(id: &BuiltinId) -> bool {
+    matches!(id.0.as_str(), "commit" | "Database::commit")
+}
+
 /// `true` when `id`'s text is one of [`ENTRY_DISPATCH_BUILTIN_IDS`] — a
 /// `Builtin` route the T0.3 audit must justify (flag or mark indeterminate)
 /// rather than silently accept. Diagnostic-only (see the const's doc).
