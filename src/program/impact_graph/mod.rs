@@ -71,6 +71,7 @@
 
 pub(crate) mod facts;
 mod project;
+pub mod sited;
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -79,8 +80,9 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 pub use facts::{ObjectFacts, RoutineFacts, RunTarget, SourceFacts, extract_source_facts};
+pub use project::{Cancelled, Inputs, Projection, project, sited_graph};
 use project::{Hub, Key};
-pub use project::{Inputs, Projection, project};
+pub use sited::SitedGraph;
 
 use crate::engine::batch::job::{
     Doc, Job, JobFailure, PlanPart, ResolveCx, SideDoc, SideIx, ViewCx, ViewDemand, ViewFailure,
@@ -262,6 +264,50 @@ pub fn export_from_program(program: &ResolvedProgram) -> Result<ImpactGraph, Str
     export_as(program, &program.meta().inputs.workspace)
 }
 
+/// The sited graph of a built program (agent-tasks design §1.2 M0-1), of any
+/// scope: a workspace-scoped program's graph has no dependency call-site
+/// edges, and says so by having none. `cancel` is polled every
+/// [`project::CANCEL_EVERY`] sites.
+pub fn sited_from_program(
+    program: &ResolvedProgram,
+    cancel: &dyn Fn() -> bool,
+) -> Result<SitedGraph, Cancelled> {
+    let _s = crate::engine::perf_trace::span("graph", "graph.sited");
+    let pm = program.meta();
+    let body = program.body();
+    let ctx = &body.ctx;
+    let graph = ctx.graph();
+    let index = crate::program::resolve::index::ResolveIndex::build(graph);
+    // The source facts read every body the program has: under `OnDemand`
+    // (`--low-mem`) the dependency trees are parsed again here, as the model
+    // assembly does when it needs them; a `Summary` program (single-app) has
+    // the workspace's alone.
+    use crate::program::profile::DependencyBodies;
+    let units = match ctx.profile().dependency_bodies {
+        DependencyBodies::Summary => ctx.parsed().iter().collect(),
+        DependencyBodies::OnDemand => {
+            ctx.ensure_dep_bodies();
+            ctx.all_units()
+        }
+        DependencyBodies::Keep => ctx.all_units(),
+    };
+    let facts = extract_source_facts(graph, &index, &units);
+    let surface = ctx.decl_surface();
+    let recovered: HashSet<String> = pm.recovered_files.iter().cloned().collect();
+    sited_graph(
+        &Inputs {
+            graph,
+            index: &index,
+            surface: &surface,
+            edges: body.edge_view(),
+            facts: &facts,
+            missing_obligations: &pm.coverage_contract.missing,
+            recovered_files: &recovered,
+        },
+        cancel,
+    )
+}
+
 /// [`export_from_program`], its errors naming the workspace as `workspace`.
 fn export_as(program: &ResolvedProgram, workspace: &Path) -> Result<ImpactGraph, String> {
     let pm = program.meta();
@@ -380,7 +426,7 @@ fn histogram_json(h: &Histogram) -> Value {
 }
 
 /// The app part of an identity hash: guid and name (the guid can be empty).
-fn app_identity(graph: &ProgramGraph, app: AppRef) -> (String, String) {
+pub(crate) fn app_identity(graph: &ProgramGraph, app: AppRef) -> (String, String) {
     let id = graph.apps.resolve(app);
     (id.guid.to_ascii_lowercase(), id.name.clone())
 }
@@ -398,8 +444,8 @@ fn hash_id(prefix: &str, parts: &[&str]) -> String {
     format!("{prefix}{hex}")
 }
 
-fn object_parts(graph: &ProgramGraph, o: &ObjectNodeId) -> [String; 4] {
-    let (guid, name) = app_identity(graph, o.app);
+fn object_parts(app: &dyn Fn(AppRef) -> (String, String), o: &ObjectNodeId) -> [String; 4] {
+    let (guid, name) = app(o.app);
     let key = match &o.key {
         ObjKey::Id(n) => format!("#{n}"),
         ObjKey::Name(s) => format!("${s}"),
@@ -416,13 +462,19 @@ fn kind_lc(k: Option<al_syntax::ir::ObjectKind>) -> String {
 
 /// A node's wire id (see the module doc).
 pub(crate) fn key_id(key: &Key, graph: &ProgramGraph) -> String {
+    key_id_with(key, &|a| app_identity(graph, a))
+}
+
+/// [`key_id`] with each app's `(guid, name)` from `app` (the sited graph,
+/// which outlives its program, keeps them in a table).
+pub(crate) fn key_id_with(key: &Key, app: &dyn Fn(AppRef) -> (String, String)) -> String {
     match key {
         Key::Object(o) => {
-            let p = object_parts(graph, o);
+            let p = object_parts(app, o);
             hash_id("o:", &[&p[0], &p[1], &p[2], &p[3]])
         }
         Key::Routine(r) => {
-            let p = object_parts(graph, &r.object);
+            let p = object_parts(app, &r.object);
             let member = r.enclosing_member_lc.as_deref().unwrap_or("");
             let params = r.params_count.to_string();
             let sig = r.sig_fp.to_string();
@@ -438,8 +490,8 @@ pub(crate) fn key_id(key: &Key, graph: &ProgramGraph) -> String {
             Hub::Name { name_lc, arity } => format!("h:name:{name_lc}/{arity}"),
             Hub::Run(k) => format!("h:run:{}", kind_lc(*k)),
             Hub::Record(op) => format!("h:record:{op}"),
-            Hub::Callbacks(app) => {
-                let (guid, name) = app_identity(graph, *app);
+            Hub::Callbacks(a) => {
+                let (guid, name) = app(*a);
                 format!("h:callbacks:{}", if guid.is_empty() { name } else { guid })
             }
         },

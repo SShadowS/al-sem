@@ -216,6 +216,9 @@ pub enum Universe {
     CrossApp,
     /// The workspace alone (`--single-app`).
     SingleApp,
+    /// The cross-app program and its sited graph, no model (agent-tasks
+    /// design §1.2 M0-2): it answers only commands that read the sited graph.
+    GraphOnly,
 }
 
 impl Universe {
@@ -225,6 +228,7 @@ impl Universe {
         match self {
             Universe::CrossApp => "crossApp",
             Universe::SingleApp => "singleApp",
+            Universe::GraphOnly => "graphOnly",
         }
     }
 }

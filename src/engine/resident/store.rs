@@ -430,6 +430,36 @@ impl<K: StoreKey, V: StoreValue> Store<K, V> {
         gone.len()
     }
 
+    /// Publish `value` for `key` before any request (an artifact the
+    /// revision's build made, where its inputs existed: the sited graph,
+    /// agent-tasks design §1.2 M0-1). It is `Published` like a filled key,
+    /// with `bytes` as its measured size. Panics if `key` is already present:
+    /// a seeded key is seeded once, before the revision is published.
+    pub fn seed(&self, key: K, value: V, bytes: u64) {
+        let mut reg = self.registry();
+        let e = reg.entry(key.clone()).or_default();
+        assert!(
+            e.state == State::Absent,
+            "{key:?} is seeded once, before any request"
+        );
+        e.state = State::Published;
+        let generation = e.generation;
+        let mut cell = self.cell();
+        let mut entries = cell.entries.clone();
+        entries.insert(
+            key,
+            Published {
+                value: Arc::new(value),
+                generation,
+                bytes,
+            },
+        );
+        *cell = Arc::new(Snapshot { entries });
+        drop(cell);
+        drop(reg);
+        self.count(|s| s.publications += 1);
+    }
+
     /// Pin `keys` for as long as the returned guard lives: a request holds
     /// its needs through its compute (§4.2 step 4, "keep it pinned for the
     /// compute"), so a reclaim never evicts what it reads.

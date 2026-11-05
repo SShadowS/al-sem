@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (agent tasks, milestone M0: resident groundwork)
+
+Nothing an agent sees changes yet; these are the pieces the later milestones (the reverse cone,
+test selection, adding an effect, impact) build on. Spec:
+`docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §1.
+
+- **The sited graph** (`program::impact_graph::sited`). The may-execute graph behind `alsem graph`,
+  with one edge per site instead of one per `(caller, callee, kind)`: each site keeps its own id
+  (its index), its source anchor (unit and span), its kind, confidence, `via`, conditions and an
+  execution boundary (`Sync`, `Run`, `EventDispatch`, `TriggerOf{op}`, `Lifecycle`,
+  `TestHandler`, `TestRunner`, `Open`). Nodes, sites and units are interned to `u32`. `alsem
+  graph`'s edges are now computed by collapsing the sited graph with the old merge rule, folded in
+  site order (strongest confidence wins, equal confidences keep the first `via` and union their
+  conditions, the line is the minimum), so the export is byte-identical. The finer boundaries the
+  spec names (checked against unchecked `Codeunit.Run`, background sessions and tasks, a
+  trigger's temporary state) are body facts the program edges do not carry; R0 and A refine a
+  `Run` or `TriggerOf` site by its anchor. Measured on CDO cross-app: 134,385 nodes, 318,084 sites,
+  48 MB resident.
+- **The sited graph as a revision artifact** (`ArtifactKey::Sited`). It can only be built where the
+  program exists, so it is built inside the revision's build (the workspace session lends the
+  program between its build and the model's, `refresh_lending`; single-app through
+  `build_single_app_model_lending`) and seeded into the store before the revision publishes; it is
+  never filled afterwards and never evicted. Under `--low-mem` its source facts parse the
+  dependency trees again, as the model assembly does. **Built only when a question needs it**
+  (owner decision, agent-tasks §13.3 answer 1): on CDO cross-app its build costs 0.93-1.19 s per
+  body or declaration edit (CPU time equal to wall time: one thread), 0.84 s cold, and 45 MiB
+  resident (`aldump --session-refresh --sited`, 2026-11-05), over the 300 ms bar. Under
+  `--low-mem` it costs 2.1-2.4 s wall (about 26 s of CPU) per B or S edit, because its source facts
+  parse the 10,881 dependency files again. `alsem graph` on CDO is byte-identical before and after
+  (27.4 MB). `ResidentSession::pin_sited` pins as usual; when the revision has no graph it turns
+  the graph on for every later revision and rebuilds once for this request
+  (`Pinned::rebuilt_for: "sited"`). `alsem engine-host --graph` turns it on from the start. The
+  request's cancellation stops that graph's build (polled every 4,096 sites): the revision is then
+  published without it, and the next question builds it. `session/status` counts `sitedBuilds`,
+  `lastSitedMs`, `lastSitedBytes`.
+- **Graph-only sessions** (`ResidentSession::graph_only`, engine universe `graphOnly`): each build
+  makes the cross-app program and its sited graph and no model (no L4, fold or trees), and
+  publishes a `Built::Graph` revision. The workspace session still keeps what its next refresh
+  reuses. It answers only jobs that read the sited graph (`ViewNeeds::sited`, `Job::sited`; the
+  one-shot driver builds the graph off its lent program, so a resident answer equals the CLI's);
+  any other command is refused with `this engine is graph-only (…): '<command>' needs a model`. A
+  model revision built with its sited graph answers sited jobs too. The test universe and the
+  impact base child will be of this kind.
+- **Guard enrichment from pinned inputs** (`engine::resident::guards`, `Revision::site_guards`,
+  `GraphRevision::site_guards`): the enclosing `if`/`else`/`case`/loop conditions of one site of
+  the sited graph, outermost first, with their source text. The site's file is read from the
+  revision's own read (a workspace file's pinned text, a source-folder dependency's, or a
+  package's embedded source when the package's bytes are still the ones the read acquired), parsed
+  again and walked down to the site's anchor, so the text is the revision's even after the disk
+  moved. Nothing is kept per site; it works the same under `--low-mem`.
+- **Needs-aware resident rows** (`ResidentSession::with_needs`, `pin_needs`). A published state
+  records the assembly needs its model's rows were built with. A request that needs more pins with
+  `pin_needs`: the session widens its needs and rebuilds once (`rebuilt_for: "needs"`, class
+  `needs`, `session/status` `needsRebuilds`); the row cache misses every file whose recorded needs
+  differ, so the rows are projected again; a rebuild the budget refuses is a `budget` refusal with
+  its reason. No command needs more than the default (`ViewNeeds::EXPLAIN`) today; this makes the
+  next gated need safe.
+- **Admission for the sited graph.** A build that makes the sited graph reserves its estimate
+  (`Case::Fill("sited")`, 120 MiB: 46 MiB measured resident on CDO plus its build's working set,
+  not measured apart) on top of the build's own.
+- **The input descriptor** (`session/descriptor`, `ResidentSession::descriptor`,
+  `Pool::descriptor`): a published state's generation, inputs stamp, universe and manifest, every
+  file entry with the stat its hash was taken at (`Manifest::descriptor_entries` /
+  `from_descriptor_entries` round-trip it). After each call the pool's worker asks its child for
+  it once per revision and keeps it in its snapshot, so a later freshness check can observe the
+  disk against it without asking a busy engine.
+- **Composite requests** (`Pool::run_composite`): a request that needs several engine children
+  runs as a sequence of plain sub-requests, each part's outcome in order. A part is admitted only
+  after the previous one is answered (its child released), and admission never waits: a part
+  that cannot get a child says why (`the crossApp engine could not start: 2 engine children are
+  running (--max-children) and none is idle (max-children 2)`) and the rest still run. The
+  pool's own `busy` message gains the `(max-children N)` suffix.
+- `aldump --session-refresh --sited` builds and keeps the sited graph at every step and prints its
+  wall and CPU time, nodes, sites and bytes.
+
 ### Fixed (test infrastructure: golden regeneration raced its readers)
 
 - **A golden regen no longer rewrites committed files in place.** Under `scripts/check-goldens

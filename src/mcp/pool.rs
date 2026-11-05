@@ -91,6 +91,22 @@ pub enum Request {
 /// The engines' key.
 type Key = (String, Universe);
 
+/// Why a call was not queued (the children bound, a full queue).
+struct Refused {
+    universe: Universe,
+    message: String,
+}
+
+/// One part of a composite request ([`Pool::run_composite`]).
+#[derive(Debug)]
+pub enum SubOutcome {
+    /// The part's response message, as the transport wrapped it.
+    Answered(Value),
+    /// Why the part was not computed (its engine could not be admitted, or
+    /// it ended unanswered).
+    NotComputed(String),
+}
+
 /// What a status shows of one engine, published by its worker.
 #[derive(Default)]
 struct Snapshot {
@@ -112,6 +128,11 @@ struct Snapshot {
     activity: Option<(&'static str, Instant)>,
     /// When `child` (the child's `session/status`) was last read.
     child_read_at: Option<Instant>,
+    /// The published revision's input descriptor (agent-tasks design §1.2
+    /// M0-6), read once per generation after a call; immutable, so a reader
+    /// holds its `Arc` without asking the child.
+    /// Keyed by `<engineInstanceId>/<generation>`.
+    descriptor: Option<(String, Arc<Value>)>,
 }
 
 /// A running command's bookkeeping: when it was queued, its cancel flag and
@@ -221,6 +242,9 @@ enum Job {
         queued: Instant,
         /// Set by the client's cancellation.
         cancel: Arc<AtomicBool>,
+        /// A composite's part: the answer frame goes here, not to the
+        /// transport (an empty frame: dropped while queued).
+        reply: Option<Sender<Vec<u8>>>,
     },
     Refresh {
         id: Value,
@@ -412,6 +436,72 @@ impl Pool {
     /// Hand `request` (call `id`) to its engine's worker, or answer it here
     /// (`busy`, a stopped worker).
     pub fn submit(&self, id: Value, request: Request) {
+        if let Err(Refused { universe, message }) = self.enqueue(id.clone(), request, None) {
+            let envelope = json!({
+                "kind": "failed",
+                "revision": null,
+                "outcome": FailedOutcome::Busy.as_str(),
+                "message": message,
+                "universe": universe.as_str(),
+            });
+            let shared = &self.shared;
+            shared.send_value(&shared.transport.response(&id, &envelope, true, None));
+        }
+    }
+
+    /// A request that needs several engine children (agent-tasks design
+    /// §1.2 M0-6: impact with tests, tests with the production root
+    /// resolution, the impact base), run as a sequence of plain
+    /// sub-requests, each part's outcome in order. The caller runs it off
+    /// its reader loop (it blocks until the last part ends).
+    ///
+    /// **A part never holds one child while waiting for another child's
+    /// admission**: a part is admitted only after the previous one has been
+    /// answered, so its child is idle (released) by then; admission never
+    /// waits. A part that cannot be admitted (every child busy, at the
+    /// `--max-children` bound) is [`SubOutcome::NotComputed`] with the
+    /// reason, and the remaining parts still run. A part admitted to a busy
+    /// engine waits in that engine's own queue, holding no other.
+    pub fn run_composite(&self, id: &Value, parts: Vec<CommandCall>) -> Vec<SubOutcome> {
+        let mut out = Vec::with_capacity(parts.len());
+        for (i, call) in parts.into_iter().enumerate() {
+            let universe = call.universe;
+            let (tx, rx) = channel::<Vec<u8>>();
+            let sub_id = json!(format!("{}#{i}", id_key(id)));
+            let request = Request::Command {
+                call,
+                progress: None,
+            };
+            if let Err(r) = self.enqueue(sub_id, request, Some(tx)) {
+                out.push(SubOutcome::NotComputed(format!(
+                    "the {} engine could not start: {}",
+                    universe.as_str(),
+                    r.message
+                )));
+                continue;
+            }
+            out.push(match rx.recv() {
+                Ok(frame) if frame.is_empty() => {
+                    SubOutcome::NotComputed("cancelled while queued".into())
+                }
+                Ok(frame) => match serde_json::from_slice(&frame) {
+                    Ok(v) => SubOutcome::Answered(v),
+                    Err(e) => SubOutcome::NotComputed(format!("the answer does not decode: {e}")),
+                },
+                Err(_) => SubOutcome::NotComputed("the engine's worker has stopped".into()),
+            });
+        }
+        out
+    }
+
+    /// Queue `request` on its engine's worker, after the children bound;
+    /// with `reply`, the answer frame goes there instead of the transport.
+    fn enqueue(
+        &self,
+        id: Value,
+        request: Request,
+        reply: Option<Sender<Vec<u8>>>,
+    ) -> Result<(), Refused> {
         let shared = &self.shared;
         let cancel = Arc::new(AtomicBool::new(false));
         let (key, job) = match request {
@@ -434,6 +524,7 @@ impl Pool {
                     progress,
                     queued: Instant::now(),
                     cancel: Arc::clone(&cancel),
+                    reply,
                 },
             ),
         };
@@ -467,18 +558,14 @@ impl Pool {
                         let _ = w.tx.send(Job::Retire);
                     }
                     None => {
-                        let envelope = json!({
-                            "kind": "failed",
-                            "revision": null,
-                            "outcome": FailedOutcome::Busy.as_str(),
-                            "message": format!(
-                                "{} engine children are running (--max-children) and none is idle",
-                                shared.children.max_children
+                        return Err(Refused {
+                            universe: key.1,
+                            message: format!(
+                                "{} engine children are running (--max-children) and none is idle \
+                                 (max-children {})",
+                                shared.children.max_children, shared.children.max_children
                             ),
-                            "universe": key.1.as_str(),
                         });
-                        shared.send_value(&shared.transport.response(&id, &envelope, true, None));
-                        return;
                     }
                 }
             }
@@ -488,15 +575,10 @@ impl Pool {
             .or_insert_with(|| spawn_worker(shared, &key));
         worker.last_used = Instant::now();
         if worker.pending.load(Ordering::SeqCst) >= WORKER_QUEUE_DEPTH {
-            let envelope = json!({
-                "kind": "failed",
-                "revision": null,
-                "outcome": FailedOutcome::Busy.as_str(),
-                "message": format!("{WORKER_QUEUE_DEPTH} requests already queued for this engine"),
-                "universe": key.1.as_str(),
+            return Err(Refused {
+                universe: key.1,
+                message: format!("{WORKER_QUEUE_DEPTH} requests already queued for this engine"),
             });
-            shared.send_value(&shared.transport.response(&id, &envelope, true, None));
-            return;
         }
         shared
             .in_flight
@@ -509,17 +591,35 @@ impl Pool {
             .expect("cancels")
             .insert(id_key(&id), cancel);
         worker.pending.fetch_add(1, Ordering::SeqCst);
-        if worker.tx.send(job).is_err() {
+        if let Err(std::sync::mpsc::SendError(job)) = worker.tx.send(job) {
             worker.pending.fetch_sub(1, Ordering::SeqCst);
-            shared.finish_value(
-                &id,
-                &error(
+            if matches!(job, Job::Command { reply: Some(_), .. }) {
+                // A composite's part: its coordinator hears it from the
+                // dropped reply channel.
+                shared.forget(&id);
+            } else {
+                shared.finish_value(
                     &id,
-                    codes::INTERNAL_ERROR,
-                    "the engine's worker has stopped",
-                ),
-            );
+                    &error(
+                        &id,
+                        codes::INTERNAL_ERROR,
+                        "the engine's worker has stopped",
+                    ),
+                );
+            }
         }
+        Ok(())
+    }
+
+    /// The input descriptor (agent-tasks design §1.2 M0-6) the worker of
+    /// `(workspace, universe)` published for its child's revision, if any:
+    /// read from the worker's snapshot, never through its busy front end.
+    #[must_use]
+    pub fn descriptor(&self, workspace: &str, universe: Universe) -> Option<Arc<Value>> {
+        let workers = self.workers();
+        let w = workers.get(&(workspace.to_string(), universe))?;
+        let s = w.snapshot.lock().expect("snapshot");
+        s.descriptor.as_ref().map(|(_, d)| Arc::clone(d))
     }
 
     /// Every engine (or the one `call` names), from the workers' published
@@ -675,6 +775,16 @@ fn work(
         match job {
             Job::Retire | Job::Notify(_) => unreachable!("handled above"),
             // Cancelled while queued: dropped.
+            Job::Command {
+                id,
+                cancel,
+                reply: Some(reply),
+                ..
+            } if cancel.load(Ordering::SeqCst) => {
+                pending.fetch_sub(1, Ordering::SeqCst);
+                shared.forget(&id);
+                let _ = reply.send(Vec::new());
+            }
             Job::Command { id, cancel, .. } | Job::Refresh { id, cancel, .. }
                 if cancel.load(Ordering::SeqCst) =>
             {
@@ -687,6 +797,7 @@ fn work(
                 progress,
                 queued,
                 cancel,
+                reply,
             } => {
                 {
                     let mut s = snapshot.lock().expect("snapshot");
@@ -726,7 +837,12 @@ fn work(
                     s.activity = None;
                 }
                 pending.fetch_sub(1, Ordering::SeqCst);
-                if cancel.load(Ordering::SeqCst) {
+                if let Some(reply) = reply {
+                    // A composite's part: answered to its coordinator, the
+                    // worker idle (its child released) before it reads it.
+                    shared.forget(&id);
+                    let _ = reply.send(frame);
+                } else if cancel.load(Ordering::SeqCst) {
                     // Cancelled while it ran: the child stopped it.
                     shared.end_cancelled(&id, Some(&frame));
                 } else {
@@ -811,6 +927,26 @@ fn publish(front: &mut EngineFront, snapshot: &Mutex<Snapshot>, ask_status: bool
     } else {
         None
     };
+    // A revision this worker holds no descriptor of (a new generation, or a
+    // new child): its descriptor, asked once.
+    let published = child
+        .as_ref()
+        .and_then(|c| c.revision.as_ref())
+        .map(|r| format!("{}/{}", r.engine_instance_id, r.generation));
+    let held = snapshot
+        .lock()
+        .expect("snapshot")
+        .descriptor
+        .as_ref()
+        .map(|(k, _)| k.clone());
+    let descriptor = match published {
+        Some(k) if held.as_ref() != Some(&k) => front
+            .descriptor()
+            .ok()
+            .filter(|d| !d.is_null())
+            .map(|d| (k, Arc::new(d))),
+        _ => None,
+    };
     let stats = front.stats();
     let tail = front.stderr_tail();
     let keep = tail.len().saturating_sub(4096);
@@ -824,6 +960,9 @@ fn publish(front: &mut EngineFront, snapshot: &Mutex<Snapshot>, ask_status: bool
     if child.is_some() || s.hello.is_none() {
         s.child_read_at = child.as_ref().map(|_| Instant::now());
         s.child = child;
+    }
+    if descriptor.is_some() {
+        s.descriptor = descriptor;
     }
     s.activity = None;
     s.spawns = stats.spawns;

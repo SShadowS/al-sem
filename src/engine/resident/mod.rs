@@ -12,6 +12,7 @@
 //!   stage 3).
 
 pub mod budget;
+pub mod guards;
 pub mod manifest;
 pub mod revision;
 pub mod session;

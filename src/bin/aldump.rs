@@ -64,7 +64,7 @@ fn usage() -> ExitCode {
          \x20      aldump --dump-dependency-source <workspace> <out-dir>\n\
          \x20      aldump --switch-compare <dump-dir-A> <dump-dir-B> [--sample N] [--width N]\n\
          \x20      aldump --snapshot-memory <workspace> [--single-app] [--hash] [--pd-dump <file>]\n\
-         \x20      aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--implements <interface>] [--verify] [--low-mem]"
+         \x20      aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--implements <interface>] [--verify] [--low-mem] [--sited]"
     );
     ExitCode::FAILURE
 }
@@ -94,7 +94,29 @@ fn usage() -> ExitCode {
 /// needs are `AssemblyNeeds::BASE` (what a default command builds).
 /// `--low-mem` measures a session that keeps no dependency tree
 /// (`MemoryMode::LowMem`); each line then also counts the dependency files
-/// parsed by the program build and by the model assembly.
+/// parsed by the program build and by the model assembly. `--sited` also
+/// builds the sited graph off each step's program (agent-tasks design M0-1)
+/// and keeps it until the next step's replaces it; each line then has
+/// `sited: {ms, nodes, sites, bytes}` (its build is inside `refreshMs`).
+/// The process's user plus system CPU time in milliseconds (every thread).
+#[cfg(unix)]
+fn process_cpu_ms() -> Option<u64> {
+    let mut u = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    // SAFETY: `getrusage` fills the struct it is given; RUSAGE_SELF is valid.
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, u.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    // SAFETY: filled by the successful call above.
+    let u = unsafe { u.assume_init() };
+    let ms = |t: libc::timeval| t.tv_sec as u64 * 1000 + t.tv_usec as u64 / 1000;
+    Some(ms(u.ru_utime) + ms(u.ru_stime))
+}
+
+#[cfg(not(unix))]
+fn process_cpu_ms() -> Option<u64> {
+    None
+}
+
 fn session_refresh_cmd(args: &[String]) -> ExitCode {
     use al_sem::program::inputs::WorkspaceInputs;
     use al_sem::program::model::workspace::AssemblyNeeds;
@@ -102,14 +124,16 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
     use serde_json::json;
     use std::path::{Path, PathBuf};
 
-    const USAGE: &str = "usage: aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--implements <interface>] [--verify] [--low-mem]";
+    const USAGE: &str = "usage: aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--implements <interface>] [--verify] [--low-mem] [--sited]";
     let (mut ws, mut file, mut verify) = (None::<PathBuf>, None::<String>, false);
     let mut implements = None::<String>;
     let mut mode = al_sem::program::session::MemoryMode::Default;
+    let mut sited = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--verify" => verify = true,
+            "--sited" => sited = true,
             "--low-mem" => mode = al_sem::program::session::MemoryMode::LowMem,
             "--file" => file = it.next().cloned(),
             "--implements" => implements = it.next().cloned(),
@@ -202,15 +226,43 @@ fn session_refresh_cmd(args: &[String]) -> ExitCode {
 
     let mut session = WorkspaceSession::with_mode(mode);
     let mut failed = false;
+    // `--sited`: the sited graph built off each step's program and kept until
+    // the next one replaces it, as a resident revision keeps it.
+    let mut kept: Option<al_sem::program::impact_graph::SitedGraph> = None;
     let mut step = |name: &str, session: &mut WorkspaceSession| {
         let inputs = WorkspaceInputs::read(&ws, &Default::default());
-        let out = session.refresh(&inputs, false, AssemblyNeeds::BASE);
+        let mut sited_ms = None;
+        let mut sited_cpu_ms = None;
+        let out = session.refresh_lending(&inputs, false, AssemblyNeeds::BASE, &mut |p| {
+            if sited {
+                // The old graph is dropped first, as a revision's build
+                // never holds two (the next revision replaces it).
+                kept = None;
+                let (t, cpu) = (std::time::Instant::now(), process_cpu_ms());
+                let g = al_sem::program::impact_graph::sited_from_program(p, &|| false)
+                    .expect("an uncancellable build finishes");
+                sited_ms = Some(t.elapsed().as_millis() as u64);
+                sited_cpu_ms = process_cpu_ms().zip(cpu).map(|(b, a)| b.saturating_sub(a));
+                kept = Some(g);
+            }
+        });
         let r = session.last_report().cloned();
         let mut row = json!({
             "step": name,
             "rssKiB": status_kib("VmRSS:"),
             "peakRssKiB": status_kib("VmHWM:"),
         });
+        if let (Some(ms), Some(g)) = (sited_ms, &kept) {
+            row["sited"] = json!({
+                "ms": ms,
+                // The process's CPU time over the build (every thread): what
+                // a loaded machine inflates least.
+                "cpuMs": sited_cpu_ms,
+                "nodes": g.node_count(),
+                "sites": g.site_count(),
+                "bytes": g.bytes(),
+            });
+        }
         if let Some(r) = &r {
             row["class"] = json!(format!("{:?}", r.class));
             row["changed"] = json!(r.changed.len());

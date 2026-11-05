@@ -475,6 +475,28 @@ fn build_single_app(
     extras: bool,
     assembly: crate::program::model::workspace::AssemblyNeeds,
 ) -> Result<ViewModel, ViewFailure> {
+    build_single_app_lending(inputs, skip_roots_config, extras, assembly, |_| {})
+}
+
+/// A single-app model view with no analyze extras (the resident revision's
+/// build), lending its workspace-scoped program to `on_program` once it is
+/// built and before the model is (agent-tasks design §1.2 M0-1: the sited
+/// graph is built there). `on_program` is not called when the program fails.
+pub fn build_single_app_model_lending(
+    inputs: &Arc<WorkspaceInputs>,
+    needs: ViewNeeds,
+    on_program: impl FnOnce(&crate::program::resolved::ResolvedProgram),
+) -> Result<AnalysisTarget, ViewFailure> {
+    build_single_app_lending(inputs, false, false, needs.assembly(), on_program).map(|m| m.target)
+}
+
+fn build_single_app_lending(
+    inputs: &Arc<WorkspaceInputs>,
+    skip_roots_config: bool,
+    extras: bool,
+    assembly: crate::program::model::workspace::AssemblyNeeds,
+    on_program: impl FnOnce(&crate::program::resolved::ResolvedProgram),
+) -> Result<ViewModel, ViewFailure> {
     let program = {
         let _s = pt::span("preflight", "preflight.fresh_program");
         crate::program::resolved::ResolvedProgram::build(
@@ -505,6 +527,7 @@ fn build_single_app(
             });
         }
     };
+    on_program(&program);
     // The build's coverage, moved out once the program is done with (#91).
     let failed = |program: crate::program::resolved::ResolvedProgram, model| ViewFailure {
         target: target_failure(),

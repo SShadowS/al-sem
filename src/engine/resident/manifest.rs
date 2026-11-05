@@ -154,7 +154,117 @@ fn path_text(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
+/// A manifest as the input descriptor carries it (agent-tasks design §1.2
+/// M0-6): every entry's identity and, for a file entry, the stat its hash
+/// was taken at. [`Manifest::from_descriptor_entries`] gives back a manifest equal to
+/// the one written, stats included, so a cached observation against it
+/// re-hashes only what moved.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestEntry {
+    pub key: String,
+    /// `absent`, `unreadable`, `bytes`, `list` or `text`.
+    pub kind: String,
+    /// The unreadable reason, the blake3 hex, or the text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub len: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list: Option<Vec<String>>,
+    /// The stat's length and modification time (nanoseconds since the Unix
+    /// epoch), for an entry hashed off a file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stat_len: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stat_mtime_ns: Option<u128>,
+}
+
 impl Manifest {
+    /// Every entry with its stat (the input descriptor's manifest).
+    #[must_use]
+    pub fn descriptor_entries(&self) -> Vec<ManifestEntry> {
+        self.entries
+            .iter()
+            .map(|(k, id)| {
+                let mut e = ManifestEntry {
+                    key: k.clone(),
+                    kind: String::new(),
+                    value: None,
+                    len: None,
+                    list: None,
+                    stat_len: None,
+                    stat_mtime_ns: None,
+                };
+                match id {
+                    Ident::Absent => e.kind = "absent".into(),
+                    Ident::Unreadable(why) => {
+                        e.kind = "unreadable".into();
+                        e.value = Some(why.clone());
+                    }
+                    Ident::Bytes { len, blake3 } => {
+                        e.kind = "bytes".into();
+                        e.len = Some(*len);
+                        e.value = Some(blake3.clone());
+                    }
+                    Ident::List(l) => {
+                        e.kind = "list".into();
+                        e.list = Some(l.clone());
+                    }
+                    Ident::Text(t) => {
+                        e.kind = "text".into();
+                        e.value = Some(t.clone());
+                    }
+                }
+                if let Some(s) = self.stats.get(k) {
+                    e.stat_len = Some(s.len);
+                    e.stat_mtime_ns = s.mtime.and_then(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH)
+                            .ok()
+                            .map(|d| d.as_nanos())
+                    });
+                }
+                e
+            })
+            .collect()
+    }
+
+    /// The manifest [`Manifest::descriptor_entries`] wrote, or why `entries`
+    /// is not one.
+    pub fn from_descriptor_entries(entries: &[ManifestEntry]) -> Result<Manifest, String> {
+        let mut m = Manifest::default();
+        for e in entries {
+            let id = match e.kind.as_str() {
+                "absent" => Ident::Absent,
+                "unreadable" => Ident::Unreadable(e.value.clone().unwrap_or_default()),
+                "bytes" => Ident::Bytes {
+                    len: e
+                        .len
+                        .ok_or_else(|| format!("{}: a bytes entry has no len", e.key))?,
+                    blake3: e
+                        .value
+                        .clone()
+                        .ok_or_else(|| format!("{}: a bytes entry has no hash", e.key))?,
+                },
+                "list" => Ident::List(e.list.clone().unwrap_or_default()),
+                "text" => Ident::Text(e.value.clone().unwrap_or_default()),
+                k => return Err(format!("{}: unknown entry kind {k:?}", e.key)),
+            };
+            m.entries.insert(e.key.clone(), id);
+            if let Some(len) = e.stat_len {
+                let mtime = e.stat_mtime_ns.map(|ns| {
+                    std::time::UNIX_EPOCH
+                        + std::time::Duration::new(
+                            (ns / 1_000_000_000) as u64,
+                            (ns % 1_000_000_000) as u32,
+                        )
+                });
+                m.stats.insert(e.key.clone(), Stat { len, mtime });
+            }
+        }
+        Ok(m)
+    }
+
     /// The `.al` and package bytes this manifest names (the pre-model
     /// estimate's inputs, context-server design §4.5).
     #[must_use]
