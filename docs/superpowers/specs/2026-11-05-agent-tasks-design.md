@@ -1377,6 +1377,28 @@ peak during the 699-root `walk_multi` and the accounting.
   main part's revision stamp, so its bytes differ from the CLI's in that one clause.
 - **`--base` with `--diff`** is refused (B2).
 
+### 8.11 Warm latency on the resident engine (fix, 2026-11-05)
+
+B1 measured warm `alsem_impact` calls of 35-58 s for one routine and a digest of 9-45 s after
+them. Re-measured on CDO with the store's counters per call, five causes, all fixed:
+
+1. **The parts were not served.** `impact` and `impact-up` were missing from
+   `SERVED_COMMANDS`, so the child ran each part through the one-shot job path (a whole
+   program build per part per call). §8.10's "the MCP tool runs them on the resident engines"
+   was true only of the child, not of the artifacts.
+2. **M0-1's "one rebuild on the first ask" lost the store.** The rebuild published a new
+   revision with an empty store. `pin_sited` now ADDS the graph to the published revision:
+   the program is rebuilt from the workspace session's retained parses over the revision's own
+   read (a program refresh, not a model build), its graph seeded into the revision's store.
+   This revises §1.2 M0-1 ("lazy is not possible without keeping the program"): the program is
+   not kept, but the session can remake it cheaply for the revision it built.
+3. **The witness batch reserved per root** at the batch's observed peak; now once.
+4. **Witnesses are memoized only for reads of at most 64 roots** (`WITNESS_MEMO_MAX_ROOTS`):
+   a larger read computes its entries itself and leaves the store as it found it.
+5. **Estimates are per size class** (`budget::size_class`, by the roots a request's trees,
+   raw facts, tree and witness batch cover): the observed peak of a 699-root request is no
+   longer the next one-routine request's estimate.
+
 ---
 
 ## 9. E1. Debugging slice, narrow

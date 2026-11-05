@@ -940,6 +940,86 @@ fn one_pass_computes_a_requests_witnesses_and_another_view_finds_them() {
     assert_eq!(rev.witness_counts(), (1, 3, 1));
 }
 
+/// The witness batch reserves once: a request over three roots computes
+/// their witnesses in its first witness fill, and its two later witness
+/// fills are lookups in the request's scratch that reserve nothing. (Each
+/// reserving again, at the case's estimate, which is the batch's observed
+/// peak once observed, refused a 699-root diff on CDO: 2042 MiB per root
+/// over a 7.4 GB RSS, after the batch itself had fitted.) Every other
+/// fill still reserves, and the answer is its cold run's.
+///
+/// DISCRIMINATION (2026-11-05): `serve_plan` handing the store the
+/// request's own `ctl` (no in-hand check) fails "one witness reservation"
+/// (3 against 1); restored, passes.
+#[test]
+fn a_requests_witness_batch_reserves_once() {
+    use std::sync::Mutex;
+    let f = witness_ws("ReadThenQueue");
+    let roots = ["DocBoth", "QueueTwice", "ReadThenQueue"];
+    let rev = revision(&f);
+    let kinds: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+    let reserve = |kind: &'static str,
+                   _: usize|
+     -> Result<crate::engine::resident::store::Guard<'_>, String> {
+        kinds.lock().unwrap().push(kind);
+        Ok(Box::new(()))
+    };
+    let ctl = Control {
+        stop: &|| None,
+        reserve: &reserve,
+    };
+    let explain = explain_many(&f, &roots);
+    let warm = rev.answer(&*explain, &ctl).unwrap();
+    assert_eq!(warm, crate::engine::batch::standalone_output(&*explain));
+    assert_eq!(
+        rev.fill_counts().get("witness"),
+        Some(&3),
+        "precondition: three witness fills"
+    );
+    let kinds = kinds.into_inner().unwrap();
+    let n = |k: &str| kinds.iter().filter(|x| **x == k).count();
+    assert_eq!(n("witness"), 1, "one witness reservation: {kinds:?}");
+    assert_eq!(n("fold"), 1, "every other fill reserves: {kinds:?}");
+    assert_eq!(n("trees"), 1, "{kinds:?}");
+}
+
+/// An effects read over more roots than the memo's cap memoizes none: it
+/// computes its entries itself, publishes no witness, and answers its cold
+/// run's bytes; a read within the cap still memoizes. (CDO: a 699-root
+/// impact held 2+ GB of witnesses, twice over with its clones, and its
+/// trees' reservation was refused.) The cap is lowered to 2 to reach it on
+/// the fixture's three roots.
+///
+/// DISCRIMINATION (2026-11-05): `witness_groups` without its cap filter (the
+/// tree read's own check kept) fails "no witness is filled" (3 fills);
+/// restored, passes.
+#[test]
+fn a_read_over_more_roots_than_the_cap_memoizes_no_witness() {
+    let f = witness_ws("ReadThenQueue");
+    let rev = revision(&f);
+    rev.set_witness_memo_max(2);
+    let explain = explain_many(&f, &["DocBoth", "QueueTwice", "ReadThenQueue"]);
+    let warm = rev.answer(&*explain, &Control::unreserved()).unwrap();
+    assert_eq!(warm.exit, 0, "precondition: {}", warm.message());
+    assert_eq!(warm, crate::engine::batch::standalone_output(&*explain));
+    assert_eq!(
+        rev.fill_counts().get("witness"),
+        None,
+        "no witness is filled"
+    );
+    assert!(
+        !rev.snapshot()
+            .keys()
+            .any(|k| matches!(k, ArtifactKey::Witness { .. })),
+        "none is published"
+    );
+    // Within the cap the memo serves as before.
+    let two = explain_many(&f, &["DocBoth", "QueueTwice"]);
+    let warm = rev.answer(&*two, &Control::unreserved()).unwrap();
+    assert_eq!(warm, crate::engine::batch::standalone_output(&*two));
+    assert_eq!(rev.fill_counts().get("witness"), Some(&2));
+}
+
 /// Without its tree a witness fill fails loudly, never answers wrong: a
 /// plan's witnesses are filled off the request's own `Tree(scope)`.
 ///

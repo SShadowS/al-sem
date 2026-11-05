@@ -117,6 +117,55 @@ fn finishing_observes_the_peak_and_counts_an_overrun() {
     assert_eq!(b.status().overruns, 1);
 }
 
+/// Estimates by size class: a large request's observed peak (a 699-root
+/// impact's trees, 4174 MiB on CDO) is that class's estimate, never a small
+/// request's (which then refused every later one-routine ask over a 5.7 GB
+/// RSS); a small class keeps its own observations, or the table when it has
+/// none; an unobserved larger class reads the larger of the table and the
+/// smaller classes' peaks. A finished sized reservation observes in its
+/// class.
+///
+/// DISCRIMINATION (2026-11-05): `of_sized` reading every class's peaks (the
+/// class dropped from the lookup, as before) fails "one root still reads the
+/// table" (4174 MiB against 900 MiB); restored, passes.
+#[test]
+fn a_large_requests_peak_is_not_a_small_requests_estimate() {
+    let (b, meter) = budget(8 * GIB, 5 * GIB);
+    let none = InputSizes::default();
+    assert_eq!(size_class(0), 0);
+    assert_eq!(size_class(1), 0);
+    assert_eq!(size_class(4), 1);
+    assert_eq!(size_class(5), 2);
+    assert_eq!(size_class(699), 5);
+    let table = b.estimate(Case::Trees, none);
+    assert_eq!(table, 900 * MIB, "precondition: the table, no routines yet");
+    // A 699-root request's trees peak at 4174 MiB over their start.
+    let r = b.reserve_sized(Case::Trees, 699, table).unwrap();
+    meter.peak.store(5 * GIB + 4174 * MIB, Ordering::SeqCst);
+    r.finish();
+    assert_eq!(b.estimate_sized(Case::Trees, none, 699), 4174 * MIB);
+    assert_eq!(b.estimate_sized(Case::Trees, none, 400), 4174 * MIB);
+    assert_eq!(
+        b.estimate_sized(Case::Trees, none, 1),
+        900 * MIB,
+        "one root still reads the table"
+    );
+    assert_eq!(b.estimate(Case::Trees, none), 900 * MIB);
+    // A one-root request observes in its own class.
+    meter.peak.store(0, Ordering::SeqCst);
+    let r = b.reserve_sized(Case::Trees, 1, table).unwrap();
+    meter.peak.store(5 * GIB + 300 * MIB, Ordering::SeqCst);
+    r.finish();
+    assert_eq!(b.estimate_sized(Case::Trees, none, 1), 300 * MIB);
+    assert_eq!(b.estimate_sized(Case::Trees, none, 699), 4174 * MIB);
+    // An unobserved middle class: the table or a smaller class's peak.
+    assert_eq!(b.estimate_sized(Case::Trees, none, 10), 900 * MIB);
+    let mut e = Estimates::new(false);
+    e.observe_sized(Case::Trees, 3, 1_000 * MIB);
+    assert_eq!(e.of_sized(Case::Trees, none, 10), 1_000 * MIB);
+    assert_eq!(e.of_sized(Case::Trees, none, 1), 900 * MIB);
+}
+
 /// The Windows meter's peak window (only a lifetime peak, never reset): a
 /// window whose lifetime peak rose reports it exactly; one where it did not
 /// reports 0, and a finished reservation then records no observation, so the

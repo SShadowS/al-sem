@@ -614,10 +614,10 @@ fn sited_cold(ws: &Path) -> String {
 }
 
 /// M0-T3 (agent-tasks design §1.3), in the given memory mode: a revision
-/// builds no sited graph until a question reads it; that question rebuilds
-/// once; from then on every revision builds it, and after a body edit that
-/// adds a call the new revision's graph has the new site and equals a cold
-/// build's.
+/// builds no sited graph until a question reads it; that question adds it
+/// to the published revision (the same revision, no second read); from then
+/// on every revision builds it, and after a body edit that adds a call the
+/// new revision's graph has the new site and equals a cold build's.
 ///
 /// DISCRIMINATION (2026-11-05): seeding the new revision with the previous
 /// revision's graph (`rev.with_sited(prev's Arc)` in `build_locked`) fails
@@ -632,8 +632,9 @@ fn sited_graph_follows_a_body_edit(low_mem: bool) {
     assert!(revision(&first).sited().is_none(), "built only when asked");
     let p = s.pin_sited(Freshness::Fresh, &never).unwrap();
     assert_eq!(p.rebuilt_for, Some("sited"));
-    assert_eq!(revision(&p).id.generation, 2);
-    let g = revision(&p).sited().expect("the rebuild made it");
+    assert_eq!(revision(&p).id.generation, 1, "added to the revision");
+    assert_eq!(s.stats().builds, 1, "no second build");
+    let g = revision(&p).sited().expect("the addition made it");
     assert_eq!(g.text(), sited_cold(ws));
     let ends = |g: &crate::program::impact_graph::SitedGraph| {
         (
@@ -681,41 +682,88 @@ fn sited_graph_follows_a_body_edit_low_mem() {
     sited_graph_follows_a_body_edit(true);
 }
 
-/// M0-T8 (agent-tasks design §1.3): a request cancelled while the rebuild
-/// it caused builds the sited graph ends that graph's build; the revision
-/// is published without it (the build completes for later requests), and
-/// the next question builds it.
+/// M0-T8 (agent-tasks design §1.3): a request cancelled while the graph it
+/// asked for is built ends that graph's build and is answered `stopped`; the
+/// revision stays without it, and the next question builds it.
 ///
-/// DISCRIMINATION (2026-11-05): ignoring the cancel (`build_sited(p, &||
-/// false)` in `build_locked`) fails "no graph published".
+/// DISCRIMINATION (2026-11-05): ignoring the cancel (`build_sited(&p, &||
+/// false)` in `add_sited_locked`) fails "the request stopped".
 #[test]
-fn a_cancelled_sited_rebuild_publishes_no_graph() {
+fn a_cancelled_sited_build_publishes_no_graph() {
     let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
     let ws = dir.path();
-    let reads = Arc::new(AtomicUsize::new(0));
     let stop_now = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let (r, f) = (Arc::clone(&reads), Arc::clone(&stop_now));
+    let f = Arc::clone(&stop_now);
     let s = Arc::new(
         ResidentSession::new(ws.to_path_buf(), false, "test".into()).with_hook(Box::new(
             move |point, _| {
-                // The second build (the rebuild for the graph) is cancelled
-                // once its read is in hand.
-                if point == BuildPoint::AfterRead && r.fetch_add(1, Ordering::SeqCst) == 1 {
+                // Cancelled once the graph's program is next.
+                if point == BuildPoint::BeforeSited {
                     f.store(true, Ordering::SeqCst);
                 }
             },
         )),
     );
-    s.pin(Freshness::Fresh, &never).unwrap();
+    let first = s.pin(Freshness::Fresh, &never).unwrap();
     let stop = || stop_now.load(Ordering::SeqCst).then_some(Stop::Cancelled);
-    let p = s.pin_sited(Freshness::Fresh, &stop).unwrap();
-    assert_eq!(revision(&p).id.generation, 2, "the build completed");
-    assert!(revision(&p).sited().is_none(), "no graph published");
+    assert!(
+        matches!(
+            s.pin_sited(Freshness::Fresh, &stop),
+            Err(PinError::Stopped(Stop::Cancelled))
+        ),
+        "the request stopped"
+    );
+    match s.published() {
+        Some(Built::Revision(now)) => assert!(Arc::ptr_eq(revision(&first), &now), "no rebuild"),
+        _ => panic!("a revision stays published"),
+    }
+    assert!(revision(&first).sited().is_none(), "no graph published");
     assert_eq!(s.stats().sited_builds, 0);
     stop_now.store(false, Ordering::SeqCst);
     let p = s.pin_sited(Freshness::Fresh, &never).unwrap();
     assert_eq!(p.rebuilt_for, Some("sited"));
     assert!(revision(&p).sited().is_some());
+}
+
+/// The revision a request asking for the sited graph is answered from keeps
+/// every artifact already filled (CDO: the first impact or tests call made
+/// the next digest fill 9-13 s again): the graph is added to the published
+/// revision, built from a program over that revision's read, never by a
+/// rebuild that publishes a new revision with an empty store. The store's
+/// fold stays published and is not filled again, no workspace read is
+/// made, and the graph equals a cold build's.
+///
+/// DISCRIMINATION (2026-11-05): `pin_sited` rebuilding as first built (the
+/// `add_sited_locked` branch removed) fails "the same revision answers".
+#[test]
+fn the_sited_graph_is_added_to_the_published_revision_keeping_its_artifacts() {
+    let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
+    let ws = dir.path();
+    let s = Arc::new(ResidentSession::new(ws.to_path_buf(), false, "test".into()));
+    let first = s.pin(Freshness::Fresh, &never).unwrap();
+    let rev = Arc::clone(revision(&first));
+    use crate::engine::resident::revision::ArtifactKey;
+    rev.prepare_keys(&[ArtifactKey::Fold], &Control::unreserved())
+        .expect("the fold fills");
+    let fills = rev.stats().fills;
+    assert!(fills > 0, "precondition: the fold was filled");
+    let p = s.pin_sited(Freshness::Fresh, &never).unwrap();
+    assert!(Arc::ptr_eq(revision(&p), &rev), "the same revision answers");
+    assert_eq!(p.rebuilt_for, Some("sited"));
+    assert_eq!(s.stats().builds, 1, "no workspace read, no build");
+    assert_eq!(s.stats().sited_builds, 1);
+    assert!(
+        rev.snapshot().get(&ArtifactKey::Fold).is_some(),
+        "the fold is kept"
+    );
+    rev.prepare_keys(&[ArtifactKey::Fold], &Control::unreserved())
+        .unwrap();
+    assert_eq!(rev.stats().fills, fills, "nothing is filled again");
+    assert_eq!(rev.sited().expect("added").text(), sited_cold(ws));
+    // The next ask finds it.
+    let again = s.pin_sited(Freshness::Fresh, &never).unwrap();
+    assert_eq!(again.rebuilt_for, None);
+    assert!(Arc::ptr_eq(revision(&again), &rev));
 }
 
 /// A job reading the sited graph alone: it prints the graph's text.
