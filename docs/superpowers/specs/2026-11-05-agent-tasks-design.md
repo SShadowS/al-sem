@@ -1705,6 +1705,64 @@ same with `--low-mem` on the resident child.
 5. `feat(diff): table key passes in the shared diff engine` (B-9) — `alsem diff` goldens move.
 6. `feat(impact): bounded impact-base cache` (B-6, B-6b).
 
+### 10.11 As built in B2 (2026-11-05)
+
+- **One base part, both sides.** The base side is B1's main part run over the copy with
+  `--summaries` (`impact --part main --summaries --diff=- --root-id=<the working tree's roots>
+  --package-root=<workspace> -- <copy>`), its stdin the change's REVERSED diff (`base::reverse_diff`:
+  the base's removed lines map to the base's routines). The working tree's main part runs with
+  `--summaries` too, so both sides' summaries, contract snapshots and package lists come from
+  one job. No engine-host `--one-shot` mode was added: the CLI runs the base part in its own
+  process (as every part), the MCP front end runs `alsem impact --part main …` as a plain
+  one-shot child (no resident state, so the `ON_DEMAND` shape by construction).
+- **The copy** sits at the workspace's path below the diff's root inside a fresh folder whose top
+  holds an empty `.git` (the diff root is found there, and the package walk stops there), under
+  the cache namespace's `work/` (or the temporary folder without a cache), and is deleted after
+  the build. A source-dependency config in the archive is moved aside; its folders are resolved
+  against the real workspace, read from disk (`--source-dep`) and hashed into the key.
+- **Keys.** Own sites come from `direct_facts_for_routine` (the cone's own starting facts,
+  unreachable sites dropped) and the model's resolved calls (builtin and implicit-trigger edges
+  left out: the write covers the trigger); the cone set from the digest entry's rows
+  (`<TYPE>|<resource>`, group rows per resource, literal-dead rows counted, not keyed). A cone
+  change an own change explains (`write|T|Modify|…` and `DB_MODIFY|T`) is printed once.
+- **Policy reuse** is the function, not a copy: `policy::loss_kind` was split out of
+  `apply_coverage_policy`'s loose branch and both call it. One deviation from §10.4's wording,
+  found on CDO: a CALL the analyzed body no longer makes (`callee|`, `event|` own keys) is
+  "removed" whatever the cone's coverage (the call is read off the body; under the coverage rule
+  1,599 of CDO's changes read "no longer observed", 386 of them calls); effect keys keep the rule.
+- **Callees through the pairing**: a base callee id that paired by signature is read as its
+  working-tree id (`root_delta_with`), so a call to a routine whose parameter list changed is the
+  same call, not a removal plus an addition.
+- **Schema/contract findings** run `run_diff_engine` over `contract_snapshot` (header, primary
+  app, primary identities, `contractFacts`, `schemaFacts`; no cone), so the preflight, renames
+  and the schema and ABI passes run as in `alsem diff`; events, capabilities and permissions need
+  the cone and are stated as not computed. The key passes identify a key by its position
+  (`#K<n>`), as `derive_schema` does: inserting a key before others reads as fields changed on
+  the later ones (a stated limit).
+- **Pairing reasons.** An unpaired routine with a same-object, same-name routine only on the
+  other side says so (`renames.rs` pairs one-to-one, same ABI status, member-less only); a pure
+  rename is deleted + added.
+- **Admission** counts one-shot children in the children bound (`Shared::oneshots`, also in
+  `enqueue`), so with the default `--max-children 2` the resident production child and the base
+  child can run side by side; a busy bound waits 60 s (`AL_SEM_BASE_ADMIT_WAIT_MS` for tests).
+  The base child itself has no `--memory-budget` (a CLI run has no budget switch); its place is
+  its share of `--total-budget`.
+- **`--base` alone now builds the base by default** (`--no-delta`, MCP `delta: false`, keeps
+  B1's current-only answer).
+- **Measured on CDO** (2026-11-05, `--base bc3ccb18~5`, `--no-tests`, release-fast; the machine
+  was shared with other builds, load average 115-430 on 22 cores, so every time is an upper
+  bound): CLI cold 6:12 wall, peak 6.37 GB (the same run with `--no-delta` 5:10, 6.35 GB: the
+  base side's model is dropped before the next part); base part 132 s, materialize 0.27 s;
+  cached second run 4:16 (no base build; the rest is B1's parts). MCP: cold 340 s = main 232 s
+  (first build) + up 40 s + base child 64 s at a sampled peak of 4.81 GB, admitted at once
+  (`admitWaitMs` 0) beside the resident child (4.23 GB RSS idle after, 6.5 GB seen during the
+  main part); cached 141.5 s (main 104 s, up 35 s, base from the cache). Cache entry 6.2 MB
+  compressed. Result: 699 roots = 221 paired (175 with a behavior change before the call rule,
+  168 after), 478 added, 19 deleted (13 still called in the base); schema/contract findings
+  table-field-added 123, procedure-added 88, object-added 21, table-key-added 9; the five
+  dependency version bumps (29 → 30) named. The all-routine base table was not built (lazy
+  summaries for the change's roots are what is measured).
+
 ---
 
 ## 11. E2. Debugging slice, multiple routes

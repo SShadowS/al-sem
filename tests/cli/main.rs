@@ -132,6 +132,7 @@ mod cli_full_snapshot_split;
 mod cli_graph_export;
 mod cli_ids_and_line_bases;
 mod cli_impact;
+mod cli_impact_base;
 mod cli_implicit_rec_argument;
 mod cli_implicit_rec_bindings;
 mod cli_implicit_trigger_cone;

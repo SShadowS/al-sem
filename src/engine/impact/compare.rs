@@ -81,6 +81,7 @@ impl Comparison {
         Comparison {
             source: match v["source"].as_str() {
                 Some("base") => "base",
+                Some("base+diff") => "base+diff",
                 Some("diff") => "diff",
                 Some("files") => "files",
                 _ => "routines",
@@ -235,6 +236,35 @@ pub fn for_base(workspace: &Path, rev: &str) -> Result<(Comparison, String), Str
         untracked,
     };
     Ok((cmp, text))
+}
+
+/// `--base REV --diff P` (B2): the diff text is the change; the comparison
+/// base is the merge base of REV and HEAD, against whose text the diff's
+/// pre-images are checked (by the base part's accounting) before any delta.
+pub fn for_base_and_diff(workspace: &Path, rev: &str, diff: &str) -> Result<Comparison, String> {
+    let resolved = git(
+        workspace,
+        &["rev-parse", "--verify", "-q", &format!("{rev}^{{commit}}")],
+    )
+    .map_err(|_| format!("impact: --base '{rev}' names no commit"))?;
+    let head = git(workspace, &["rev-parse", "--verify", "-q", "HEAD"])
+        .map_err(|e| format!("impact: the workspace has no HEAD commit: {e}"))?;
+    let base = git(workspace, &["merge-base", &resolved, &head])
+        .map_err(|e| format!("impact: no merge base of '{rev}' and HEAD: {e}"))?;
+    Ok(Comparison {
+        source: "base+diff",
+        requested_ref: Some(rev.to_string()),
+        resolved_commit: Some(resolved),
+        merge_base: Some(base.clone()),
+        comparison_base: Some(base),
+        comparison_base_note:
+            "the merge base of the requested ref and HEAD; the diff's pre-images are checked against it"
+                .into(),
+        head_commit: Some(head),
+        inputs_stamp: None,
+        diff_hash: Some(diff_hash(diff)),
+        ..Comparison::default()
+    })
 }
 
 /// A unified-diff section adding `path` with `body` (an untracked file).

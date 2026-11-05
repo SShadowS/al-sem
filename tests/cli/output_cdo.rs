@@ -1159,3 +1159,9 @@ fn cdo_test_selection_ratchets() {
 fn cdo_impact_ratchets() {
     crate::cli_impact::cdo_impact_ratchets();
 }
+
+/// Agent-tasks B2's CDO acceptance (`cli_impact_base::cdo_impact_base_ratchets`).
+#[test]
+fn cdo_impact_base_ratchets() {
+    crate::cli_impact_base::cdo_impact_base_ratchets();
+}

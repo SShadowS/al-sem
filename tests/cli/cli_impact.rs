@@ -301,14 +301,21 @@ fn base_lists_and_resolves_untracked_and_unstaged() {
     assert!(names.contains(&"Codeunit TU Core::Calc"), "{names:?}");
 }
 
-/// Spec §12.1's refused combinations: `--base` with `--diff` (B2's delta),
-/// two modes, `--diff-root` without `--diff`.
+/// Spec §12.1's refused combinations: two modes, `--diff-root` without
+/// `--diff`, the base-only switches without `--base`, `--no-delta` on a
+/// base-and-diff before/after (`--base` with `--diff` is B2's mode, tested
+/// in `cli_impact_base`).
 #[test]
 fn refused_combinations() {
     let t = universe();
     let ws = t.path().join("App");
     for (args, want) in [
-        (vec!["--base", "HEAD", "--diff", "-"], "milestone B2"),
+        (
+            vec!["--base", "HEAD", "--diff", "-", "--no-delta"],
+            "--no-delta drops it",
+        ),
+        (vec!["--routine", "X", "--no-delta"], "go with --base"),
+        (vec!["--routine", "X", "--diff", "-"], "exactly one of"),
         (vec!["--routine", "X", "--file", "y.al"], "exactly one of"),
         (
             vec!["--routine", "X", "--diff-root", "."],

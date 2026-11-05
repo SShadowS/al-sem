@@ -179,3 +179,86 @@ fn a_composite_with_both_children_busy_returns_the_main_part_and_a_reason() {
     );
     pool.shutdown(true);
 }
+
+/// A pool of `max` children whose every ask sleeps `sleep_ms`.
+fn sleepy_pool(max: usize, sleep_ms: u64) -> (tempfile::TempDir, Arc<Pool>) {
+    let out_root = tempfile::tempdir().unwrap();
+    let sink = OutputSink::create(out_root.path(), "admission-test").unwrap();
+    let pool = Arc::new(Pool::new(
+        PoolConfig {
+            program: PathBuf::from(ALSEM),
+            child_env: vec![(
+                "ALSEM_ENGINE_TEST_HOOK".into(),
+                format!("sleep-on-ask:{sleep_ms}").into(),
+            )],
+            children: ChildConfig {
+                budgets: (6 << 30, 2 << 30),
+                low_mem: false,
+                idle_timeout_secs: 0,
+                max_children: max,
+            },
+            sink,
+            decide: Arc::new(NoDecisions),
+        },
+        Arc::new(Recorder::default()) as Arc<dyn Transport>,
+    ));
+    (out_root, pool)
+}
+
+/// B-11 (agent-tasks §10.6 step 3, owner: no oversubscription): with the
+/// one child busy (max-children 1), an impact base child is not admitted:
+/// after its wait it is refused with the reason, and the bound's count never
+/// passes one. Once the child is idle, the base child takes its place (the
+/// idle child ends), and while the base child holds the place a call for
+/// another engine is refused rather than started beside it.
+///
+/// Break: admit whenever asked (`admit_rule` returning `Now`) → the first
+/// admission succeeds while the child is busy.
+#[test]
+fn b11_a_base_child_is_never_admitted_over_the_bound() {
+    use std::sync::atomic::AtomicBool;
+    let (_out, pool) = sleepy_pool(1, 3000);
+    let a = corpus("ws-explain");
+    pool.submit(
+        json!("busy"),
+        Request::Command {
+            call: call(&a, Universe::CrossApp),
+            progress: None,
+        },
+    );
+    std::thread::sleep(Duration::from_millis(500));
+    let cancel = AtomicBool::new(false);
+    let refused = pool.admit_oneshot(Duration::from_millis(400), &cancel);
+    let why = refused.err().expect("refused while the one child is busy");
+    assert!(
+        why.contains("base not built") && why.contains("max-children 1"),
+        "{why}"
+    );
+    // The busy call ends; the idle child gives its place.
+    let start = Instant::now();
+    let slot = pool
+        .admit_oneshot(Duration::from_secs(60), &cancel)
+        .expect("admitted once the child is idle");
+    assert!(start.elapsed() < Duration::from_secs(60));
+    // While the base child holds the only place, another engine's call
+    // cannot start a child beside it.
+    let c = corpus("ws-api-page");
+    let parts = pool.run_composite(&json!("beside"), vec![call(&c, Universe::CrossApp)]);
+    match &parts[0] {
+        SubOutcome::NotComputed(why) => assert!(why.contains("max-children 1"), "{why}"),
+        o => panic!("refused beside the base child: {o:?}"),
+    }
+    drop(slot);
+    pool.shutdown(true);
+}
+
+/// The admission rule, case by case.
+#[test]
+fn the_admission_rule() {
+    use al_sem::mcp::pool::{Admit, admit_rule};
+    assert_eq!(admit_rule(0, 0, 0, 2), Admit::Now);
+    assert_eq!(admit_rule(1, 1, 0, 2), Admit::Now);
+    assert_eq!(admit_rule(2, 1, 0, 2), Admit::Evict);
+    assert_eq!(admit_rule(1, 0, 1, 2), Admit::Wait);
+    assert_eq!(admit_rule(2, 0, 0, 2), Admit::Wait);
+}

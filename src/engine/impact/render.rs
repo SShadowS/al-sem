@@ -503,6 +503,98 @@ fn rank_key(
     )
 }
 
+/// The changes of one root's delta block, own first, as human clauses.
+fn delta_clauses(d: &Value) -> Vec<String> {
+    ["own", "cone"]
+        .iter()
+        .flat_map(|k| d[*k].as_array().cloned().unwrap_or_default())
+        .map(|c| {
+            let mut s = match s(&c, "change") {
+                "added" => format!("+ {}", s(&c, "label")),
+                "removed" => format!("- {}", s(&c, "label")),
+                "no-longer-observed" => format!(
+                    "- {}: no longer observed ({})",
+                    s(&c, "label"),
+                    s(&c, "reason")
+                ),
+                _ => {
+                    let which = if c["sites"] == "ambiguous" {
+                        " (which site: ambiguous)".to_string()
+                    } else if let Some(a) = c["addedSites"].as_array() {
+                        format!(
+                            " (added at {})",
+                            a.iter()
+                                .filter_map(Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    } else if let Some(r) = c["removedSites"].as_array() {
+                        format!(
+                            " (removed: base {})",
+                            r.iter()
+                                .filter_map(Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    } else {
+                        String::new()
+                    };
+                    format!(
+                        "{}: {} → {} sites{which}",
+                        s(&c, "label"),
+                        c["base"],
+                        c["new"]
+                    )
+                }
+            };
+            if c["dependencyReaching"] == json!(true) && !d["unreliable"].is_null() {
+                s.push_str(" [unreliable: the dependency declaration changed]");
+            }
+            s
+        })
+        .collect()
+}
+
+/// Whether a root's delta block holds a change.
+fn delta_changed(d: &Value) -> bool {
+    ["own", "cone"]
+        .iter()
+        .any(|k| d[*k].as_array().is_some_and(|a| !a.is_empty()))
+}
+
+/// The base line's clause (`base analyzed under …`).
+fn base_clause(b: &Value) -> String {
+    let pk = b["environment"]["packages"].as_array().map_or(0, Vec::len);
+    let same = if b["packagesRead"]["same"] == json!(true) {
+        "the same files on both sides"
+    } else {
+        "the two sides read different package files"
+    };
+    let cache = match s(&b["cache"], "status") {
+        "hit" => "cached base".to_string(),
+        "off" => "built (cache off)".to_string(),
+        st => format!("built (cache {st})"),
+    };
+    let deps = b["dependencyDeclarationChanged"]
+        .as_array()
+        .filter(|a| !a.is_empty())
+        .map(|a| {
+            format!(
+                "; unreliable where a change reaches dependency code: the dependency declaration changed ({})",
+                a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("; ")
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        "base {} analyzed under the current dependency environment (packages: {pk}, {same}; {}); {cache}{deps}",
+        short(s(b, "commit")),
+        s(&b["environment"], "packagesDigest")
+            .chars()
+            .take(21)
+            .collect::<String>()
+    )
+}
+
 /// Render the answer.
 #[must_use]
 pub fn render(
@@ -510,8 +602,10 @@ pub fn render(
     main: &Value,
     up: &Result<Value, String>,
     tests: &Result<TestsOutcome, String>,
+    delta: &Result<super::run::DeltaOutcome, String>,
     opts: RenderOpts,
 ) -> Rendered {
+    let deltas = delta.as_ref().ok().map(|d| &d.delta["deltas"]);
     let acc = &main["accounting"];
     let ups: BTreeMap<&str, &Value> = up
         .as_ref()
@@ -537,11 +631,23 @@ pub fn render(
                 Ok(t) => root_tests(t, &id),
                 Err(_) => Value::Null,
             };
-            r["delta"] = Value::Null;
+            r["delta"] = deltas
+                .and_then(|d| d.get(id.as_str()))
+                .cloned()
+                .unwrap_or(Value::Null);
+            match s(&r["delta"], "pairing") {
+                "added" => r["status"] = json!("added"),
+                "signature" => r["status"] = json!("signatureChanged"),
+                _ => {}
+            }
             r
         })
         .collect();
     roots.sort_by_key(rank_key);
+    // With a base: the routines whose behavior changed first (stable).
+    if deltas.is_some() {
+        roots.sort_by_key(|r| !delta_changed(&r["delta"]));
+    }
     let files =
         acc["files"].as_array().map_or(0, Vec::len) + acc["onlyIn"].as_array().map_or(0, Vec::len);
     let diags: Vec<Value> = main["diagnosticsDetail"]
@@ -588,11 +694,23 @@ pub fn render(
             ));
         }
     }
-    let assumptions = vec![
-        "current effects only: no base was built, so there is no before/after and no routine is called added or deleted".to_string(),
+    let mut assumptions = vec![
+        match delta {
+            Ok(_) => "before/after: the base is analyzed under the current dependency environment (its commit's files, today's packages); effects are compared by semantic keys, never by position".to_string(),
+            Err(_) => "current effects only: no base was built, so there is no before/after and no routine is called added or deleted".to_string(),
+        },
         "callers and entries are static may-paths over the sited graph (R0's reverse walk)".to_string(),
         "tests are static reachability, not coverage".to_string(),
     ];
+    if delta.is_ok() {
+        assumptions.push("a key only the base side has is \"no longer observed\", not removed, when the new side's coverage of that routine is incomplete".into());
+    }
+    if let Err(e) = delta
+        && cmp.comparison_base.is_some()
+        && e != "not asked"
+    {
+        limits.push(format!("before/after not computed: {e}"));
+    }
 
     if opts.json {
         let doc = json!({
@@ -610,7 +728,13 @@ pub fn render(
             },
             "roots": roots,
             "union": up.as_ref().ok().map(|u| u["union"].clone()),
-            "schemaChanges": null,
+            "schemaChanges": delta.as_ref().ok().map(|d| d.delta["schemaChanges"].clone()),
+            "deleted": delta.as_ref().ok().map(|d| d.delta["deleted"].clone()),
+            "behavior": delta.as_ref().ok().map(|d| json!({
+                "paired": d.delta["paired"], "behaviorChanged": d.delta["behaviorChanged"],
+                "added": roots.iter().filter(|r| r["status"] == "added").count(),
+                "deleted": d.delta["deleted"].as_array().map_or(0, Vec::len),
+            })),
             "schemaLines": schema_lines,
             "tests": match tests {
                 Ok(t) => t.doc.clone(),
@@ -621,11 +745,15 @@ pub fn render(
                          "states": up.as_ref().ok().map(|u| json!({"perRoot": u["cost"]["perRootStates"], "union": u["cost"]["unionStates"]}))},
             "assumptions": assumptions,
             "limits": limits,
-            "base": null,
+            "base": match delta {
+                Ok(d) => d.block.clone(),
+                Err(e) if e == "not asked" => Value::Null,
+                Err(e) => json!({"notComputed": e}),
+            },
         });
         let text = serde_json::to_string_pretty(&doc).expect("serializes") + "\n";
         return Rendered {
-            summary: summary_text(cmp, main, &roots, files, tests),
+            summary: summary_text(cmp, main, &roots, files, tests, delta),
             text,
             exit,
         };
@@ -633,11 +761,23 @@ pub fn render(
 
     let mut out: Vec<String> = Vec::new();
     out.push(comparison_line(cmp, files));
+    if let Ok(d) = delta {
+        out.push(base_clause(&d.block));
+    }
     // 1. Input accounting (always first).
-    let mut input = format!(
-        "input: {} resolved (no base given: added or deleted needs a base)",
-        plural(roots.len(), "changed routine", "changed routines")
-    );
+    let mut input = match delta {
+        Ok(d) => format!(
+            "input: {} resolved: {} paired with the base, {} added, {} deleted (complete inventories)",
+            plural(roots.len(), "changed routine", "changed routines"),
+            d.delta["paired"],
+            roots.iter().filter(|r| r["status"] == "added").count(),
+            d.delta["deleted"].as_array().map_or(0, Vec::len)
+        ),
+        Err(_) => format!(
+            "input: {} resolved (no base given: added or deleted needs a base)",
+            plural(roots.len(), "changed routine", "changed routines")
+        ),
+    };
     if !acc.is_null() {
         input.push_str(&format!(
             "; changed lines {} = {}",
@@ -785,6 +925,13 @@ pub fn render(
     }
     if roots.is_empty() {
         out.push("no changed routine resolved, so no caller, effect or test was computed".into());
+        if let Ok(d) = delta {
+            before_after_tail(&mut out, d, opts);
+        } else if let Err(e) = delta
+            && e != "not asked"
+        {
+            out.push(format!("before/after: not computed — {e}"));
+        }
         let text = out.join("\n") + "\n";
         return Rendered {
             summary: text.clone(),
@@ -794,20 +941,38 @@ pub fn render(
     }
     // 2. Per root.
     let shown = roots.len().min(opts.max_roots);
-    out.push(format!(
-        "current effects of the {} (no base given: current effects; no before/after); ranked: reached from a user or a job first, then by ancestors; {}:",
-        plural(roots.len(), "changed routine", "changed routines"),
-        if shown == roots.len() {
-            "all shown".to_string()
-        } else {
-            format!("first {shown}")
+    match delta {
+        Ok(d) => out.push(format!(
+            "behavior changed in {} of the {} paired with the base; ranked: changed behavior first, then reached from a user or a job, then by ancestors; {}:",
+            d.delta["behaviorChanged"],
+            plural(u(&d.delta, "paired"), "routine", "routines"),
+            if shown == roots.len() {
+                "all shown".to_string()
+            } else {
+                format!("first {shown}")
+            }
+        )),
+        Err(e) => {
+            if e != "not asked" {
+                out.push(format!("before/after: not computed — {e}"));
+            }
+            out.push(format!(
+                "current effects of the {} (no base given: current effects; no before/after); ranked: reached from a user or a job first, then by ancestors; {}:",
+                plural(roots.len(), "changed routine", "changed routines"),
+                if shown == roots.len() {
+                    "all shown".to_string()
+                } else {
+                    format!("first {shown}")
+                }
+            ));
         }
-    ));
+    }
     for r in roots.iter().take(shown) {
         let anchor = &r["anchor"];
         let status = match s(r, "status") {
             "signatureChanged" => "signature changed",
             "positionUncertain" => "position uncertain (the diff does not match the working tree)",
+            "added" => "added (new: its current effects are its whole behavior)",
             _ => "changed",
         };
         out.push(format!(
@@ -816,7 +981,48 @@ pub fn render(
             s(anchor, "file"),
             anchor["line"]
         ));
-        out.push(format!("      {}", effects_clause(&r["effects"])));
+        let d = &r["delta"];
+        if !d.is_null() && s(d, "pairing") != "added" {
+            if !d["notComputed"].is_null() {
+                out.push(format!(
+                    "      before/after: not computed — {}",
+                    s(d, "notComputed")
+                ));
+            } else {
+                let clauses = delta_clauses(d);
+                let cap = if opts.detail { usize::MAX } else { 6 };
+                out.push(format!(
+                    "      before/after{}: {}{}",
+                    if s(d, "pairing") == "signature" {
+                        " (paired by signature)"
+                    } else {
+                        ""
+                    },
+                    if clauses.is_empty() {
+                        "no behavior change".to_string()
+                    } else {
+                        clauses
+                            .iter()
+                            .take(cap)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    },
+                    if clauses.len() > cap {
+                        format!("; … +{} (detail or format json)", clauses.len() - cap)
+                    } else {
+                        String::new()
+                    }
+                ));
+            }
+        } else if let Some(reason) = d["reason"].as_str() {
+            out.push(format!("      not paired: {reason}"));
+        }
+        out.push(format!(
+            "      {}{}",
+            if d.is_null() { "" } else { "now: " },
+            effects_clause(&r["effects"])
+        ));
         let up = &r["up"];
         if up.is_null() {
             out.push("      reached from: not computed".into());
@@ -890,7 +1096,9 @@ pub fn render(
             plural(u(&un["ancestors"], "total"), "ancestor", "ancestors")
         ));
     }
-    if schema_lines > 0 {
+    if let Ok(d) = delta {
+        before_after_tail(&mut out, d, opts);
+    } else if schema_lines > 0 {
         out.push(format!(
             "schema: {} field, key or field group lines changed (current revision only; a base gives the schema findings)",
             thousands(schema_lines)
@@ -905,13 +1113,117 @@ pub fn render(
     for l in &limits {
         out.push(format!("limit: {l}"));
     }
-    out.push("these are static may-paths and current effects; tests are static reachability, not coverage".into());
+    out.push(if delta.is_ok() {
+        "these are static may-paths; before/after compares semantic keys of both sides; tests are static reachability, not coverage".into()
+    } else {
+        "these are static may-paths and current effects; tests are static reachability, not coverage".into()
+    });
     let text = out.join("\n") + "\n";
     Rendered {
-        summary: summary_text(cmp, main, &roots, files, tests),
+        summary: summary_text(cmp, main, &roots, files, tests, delta),
         text,
         exit,
     }
+}
+
+/// The deleted routines and the schema findings of a before/after answer.
+fn before_after_tail(out: &mut Vec<String>, d: &super::run::DeltaOutcome, opts: RenderOpts) {
+    let deleted = d.delta["deleted"].as_array().cloned().unwrap_or_default();
+    if !deleted.is_empty() {
+        let called: Vec<&Value> = deleted
+            .iter()
+            .filter(|x| u(&x["baseCallers"], "count") > 0)
+            .collect();
+        out.push(format!(
+            "deleted: {} (in the base, no routine of the working tree has or pairs with them; complete inventories); {} still called in the base",
+            plural(deleted.len(), "routine", "routines"),
+            called.len()
+        ));
+        let show = if opts.detail { usize::MAX } else { 5 };
+        for x in deleted.iter().take(show) {
+            let c = &x["baseCallers"];
+            let first = c["first"]
+                .as_array()
+                .and_then(|a| a.first())
+                .map(|f| {
+                    format!(
+                        " (first: {} at {}:{})",
+                        s(f, "display"),
+                        s(f, "file"),
+                        f["line"]
+                    )
+                })
+                .unwrap_or_default();
+            out.push(format!(
+                "  {} (in the base at {}:{}): called in the base by {}{}{}{}",
+                s(x, "display"),
+                s(&x["anchor"], "file"),
+                x["anchor"]["line"],
+                plural(u(c, "count"), "routine", "routines"),
+                first,
+                if u(c, "pageActions") > 0 {
+                    format!(
+                        ", {}",
+                        plural(u(c, "pageActions"), "page action", "page actions")
+                    )
+                } else {
+                    String::new()
+                },
+                x["reason"]
+                    .as_str()
+                    .map(|r| format!("; not paired: {r}"))
+                    .unwrap_or_default()
+            ));
+        }
+        if deleted.len() > show {
+            out.push(format!(
+                "  … +{} (detail or format json)",
+                deleted.len() - show
+            ));
+        }
+    }
+    let sc = &d.delta["schemaChanges"];
+    let findings = sc["findings"].as_array().cloned().unwrap_or_default();
+    let mut by: BTreeMap<String, usize> = BTreeMap::new();
+    for f in &findings {
+        *by.entry(s(f, "kind").to_string()).or_default() += 1;
+    }
+    let schema: Vec<&Value> = findings
+        .iter()
+        .filter(|f| f["category"] == "schema")
+        .collect();
+    out.push(format!(
+        "schema and contract (alsem diff's engine: abi, schema): {}{}",
+        if by.is_empty() {
+            "no finding".to_string()
+        } else {
+            by.iter()
+                .map(|(k, n)| format!("{k} {n}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        },
+        if sc["fatal"] == json!(true) {
+            " (the preflight stopped the diff)".to_string()
+        } else {
+            String::new()
+        }
+    ));
+    for f in schema.iter().take(if opts.detail { usize::MAX } else { 5 }) {
+        let id = s(&f["subject"], "normalizedStableId");
+        let pointer = match id.split_once('#') {
+            Some((table, field)) if !field.starts_with('K') => format!(
+                "; consumers: alsem_query_touches table:\"{}\" field:{field}",
+                table.rsplit(':').next().unwrap_or(table)
+            ),
+            _ => String::new(),
+        };
+        out.push(format!(
+            "  {} {} ({id}){pointer}",
+            s(f, "kind"),
+            s(&f["subject"], "displayName")
+        ));
+    }
+    out.push(format!("  not computed here: {}", s(sc, "notComputed")));
 }
 
 /// The tests summary line from the al-sem.tests/1 block.
@@ -976,9 +1288,33 @@ fn summary_text(
     roots: &[Value],
     files: usize,
     tests: &Result<TestsOutcome, String>,
+    delta: &Result<super::run::DeltaOutcome, String>,
 ) -> String {
     let acc = &main["accounting"];
     let mut out = vec![comparison_line(cmp, files)];
+    if let Ok(d) = delta {
+        out.push(base_clause(&d.block));
+        out.push(format!(
+            "before/after: behavior changed in {} of {} paired routines; {} added; {} deleted",
+            d.delta["behaviorChanged"],
+            d.delta["paired"],
+            roots.iter().filter(|r| r["status"] == "added").count(),
+            d.delta["deleted"].as_array().map_or(0, Vec::len)
+        ));
+        for r in roots.iter().filter(|r| delta_changed(&r["delta"])).take(5) {
+            let c = delta_clauses(&r["delta"]);
+            out.push(format!(
+                "  {}: {}{}",
+                s(r, "display"),
+                c.iter().take(3).cloned().collect::<Vec<_>>().join("; "),
+                if c.len() > 3 {
+                    format!("; … +{}", c.len() - 3)
+                } else {
+                    String::new()
+                }
+            ));
+        }
+    }
     let mut input = format!(
         "input: {} resolved",
         plural(roots.len(), "changed routine", "changed routines")
@@ -991,7 +1327,11 @@ fn summary_text(
         ));
     }
     out.push(input);
-    out.push("current effects; no before/after (no base given). First by rank:".into());
+    out.push(if delta.is_ok() {
+        "current effects, first by rank:".into()
+    } else {
+        "current effects; no before/after (no base given). First by rank:".into()
+    });
     for r in roots.iter().take(5) {
         out.push(format!(
             "  {} — {}; {} ancestors, {} user or job entries",

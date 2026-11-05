@@ -46,6 +46,12 @@ pub enum DiffKind {
     EnumValueRenumbered,
     TableFieldAdded,
     EnumValueAdded,
+    /// A table key (by its position, `<table>#K<n>`, as the schema facts
+    /// identify keys) only the new side has, only the old side has, or whose
+    /// fields changed.
+    TableKeyAdded,
+    TableKeyRemoved,
+    TableKeyFieldsChanged,
     // Events
     EventPublisherRemoved,
     EventPublisherSignatureChanged,
@@ -97,6 +103,9 @@ impl DiffKind {
             DiffKind::EnumValueRenumbered => "enum-value-renumbered",
             DiffKind::TableFieldAdded => "table-field-added",
             DiffKind::EnumValueAdded => "enum-value-added",
+            DiffKind::TableKeyAdded => "table-key-added",
+            DiffKind::TableKeyRemoved => "table-key-removed",
+            DiffKind::TableKeyFieldsChanged => "table-key-fields-changed",
             DiffKind::EventPublisherRemoved => "event-publisher-removed",
             DiffKind::EventPublisherSignatureChanged => "event-publisher-signature-changed",
             DiffKind::EventPublisherAdded => "event-publisher-added",

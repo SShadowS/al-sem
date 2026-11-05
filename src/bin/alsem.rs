@@ -455,9 +455,21 @@ struct ImpactCli {
     diff_root: Option<String>,
 
     /// Compare the working tree with the merge base of REV and HEAD
-    /// (committed, staged, unstaged and untracked .al files).
+    /// (committed, staged, unstaged and untracked .al files): the base is
+    /// built from that commit's files under the current packages and each
+    /// changed routine's behavior is compared. With --diff, the diff is the
+    /// change and its pre-images must match the merge base.
     #[arg(long = "base")]
     base: Option<String>,
+
+    /// With --base: no base build, current effects only (no before/after).
+    #[arg(long = "no-delta", default_value_t = false)]
+    no_delta: bool,
+
+    /// With --base: neither read nor write the impact-base cache
+    /// (~/.al-sem/cache/impact-base/v1).
+    #[arg(long = "no-base-cache", default_value_t = false)]
+    no_base_cache: bool,
 
     /// A sibling test app's folder (repeatable), as `alsem tests --test-app`.
     #[arg(long = "test-app")]
@@ -498,9 +510,25 @@ struct ImpactCli {
     #[arg(long = "part", hide = true)]
     part: Option<String>,
 
-    /// Internal (`--part up`): a changed root's StableRoutineId.
+    /// Internal (`--part up`): a changed root's StableRoutineId; with
+    /// `--part main --summaries`, a routine summarized as well when present.
     #[arg(long = "root-id", hide = true)]
     root_id: Vec<String>,
+
+    /// Internal (`--part main`): print each root's semantic summary, the
+    /// contract snapshot and the packages read (a side of a before/after).
+    #[arg(long = "summaries", hide = true, default_value_t = false)]
+    summaries: bool,
+
+    /// Internal (`--part main`, the base side): a folder whose package
+    /// discovery is read as well (the current workspace's packages).
+    #[arg(long = "package-root", hide = true)]
+    package_root: Vec<String>,
+
+    /// Internal (`--part main`, the base side): a source dependency read
+    /// from disk.
+    #[arg(long = "source-dep", hide = true)]
+    source_dep: Vec<String>,
 }
 
 impl ImpactCli {
@@ -517,6 +545,7 @@ impl ImpactCli {
             tests: !self.no_tests,
             assume_no_dependents: self.no_dependents,
             detail: self.detail,
+            delta: self.base.is_some() && !self.no_delta,
         }
     }
 }
@@ -524,22 +553,25 @@ impl ImpactCli {
 /// The selector and mode rules of `alsem impact` (spec §12.1), shared with
 /// the MCP front end's wording: exactly one of routines, files, diff, base.
 fn impact_modes(t: &ImpactCli) -> Result<(), String> {
+    // `--base` with `--diff` is one mode: the diff against that base (B2).
     let modes = [
         !t.routine.is_empty(),
         !t.file.is_empty(),
-        t.diff.is_some(),
-        t.base.is_some(),
+        t.diff.is_some() || t.base.is_some(),
     ];
-    if t.base.is_some() && t.diff.is_some() {
-        return Err("al-sem: impact: --base with --diff is a before/after delta (milestone B2), not available yet; give one of them".into());
-    }
     if modes.iter().filter(|m| **m).count() != 1 {
         return Err(
-            "al-sem: impact: give exactly one of --routine, --file, --diff or --base".into(),
+            "al-sem: impact: give exactly one of --routine, --file, --diff or --base (--base with --diff compares the diff against that base)".into(),
         );
     }
     if t.diff_root.is_some() && t.diff.is_none() {
         return Err("al-sem: impact: --diff-root goes with --diff".into());
+    }
+    if (t.no_delta || t.no_base_cache) && t.base.is_none() {
+        return Err("al-sem: impact: --no-delta and --no-base-cache go with --base".into());
+    }
+    if t.no_delta && t.diff.is_some() {
+        return Err("al-sem: impact: --base with --diff is a before/after; --no-delta drops it (give --diff alone)".into());
     }
     Ok(())
 }
@@ -2346,19 +2378,31 @@ fn plan_impact(t: ImpactCli, cx: &PlanCx) -> Planned {
                 }),
             };
             let single_app = t.single_app;
-            ready(
-                &t.workspace.clone(),
-                WorkspaceNeeds::default(),
-                move |slot, inputs| {
-                    let inputs = hold(slot, inputs);
+            let summaries = t.summaries;
+            let extra_roots = t.root_id.clone();
+            // The base side reads the current workspace's packages and the
+            // source dependencies from disk (agent-tasks B2 §10.6).
+            let injected = al_sem::program::inputs::Injected {
+                sources: t.source_dep.iter().map(PathBuf::from).collect(),
+                package_roots: t.package_root.iter().map(PathBuf::from).collect(),
+            };
+            let path = PathBuf::from(&t.workspace);
+            let needs = WorkspaceNeeds::default();
+            Planned::Ready {
+                reads: vec![(path.clone(), needs)],
+                make: Box::new(move |reader, slot| {
+                    let read = reader.read_scoped(&path, needs, &injected);
+                    let inputs = hold(slot, HandOff::new(read));
                     Box::new(MainJob {
                         inputs,
                         single_app,
                         ask,
                         scope,
+                        summaries,
+                        extra_roots,
                     })
-                },
-            )
+                }),
+            }
         }
         Some("up") => {
             let ask = UpAsk {
@@ -2408,8 +2452,34 @@ fn run_impact_cmd(t: ImpactCli) -> ExitCode {
         return ExitCode::from(exit::CONFIG_ERROR);
     }
     let ws = Path::new(&t.workspace);
+    let read_diff = |d: &str| -> Result<String, String> {
+        if d == "-" {
+            let mut s = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)
+                .map_err(|_| "al-sem: impact: failed to read diff from stdin".to_string())?;
+            Ok(s)
+        } else {
+            std::fs::read_to_string(d)
+                .map_err(|e| format!("al-sem: impact: could not read diff file '{d}': {e}"))
+        }
+    };
     // The tuple, and the diff text the main part reads on stdin.
-    let (cmp, diff_text) = if let Some(rev) = &t.base {
+    let (cmp, diff_text) = if let (Some(rev), Some(d)) = (&t.base, &t.diff) {
+        let text = match read_diff(d) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::from(exit::CONFIG_ERROR);
+            }
+        };
+        match compare::for_base_and_diff(ws, rev, &text) {
+            Ok(c) => (c, Some(text)),
+            Err(e) => {
+                eprintln!("al-sem {e}");
+                return ExitCode::from(exit::CONFIG_ERROR);
+            }
+        }
+    } else if let Some(rev) = &t.base {
         match compare::for_base(ws, rev) {
             Ok((c, text)) => (c, Some(text)),
             Err(e) => {
@@ -2418,20 +2488,11 @@ fn run_impact_cmd(t: ImpactCli) -> ExitCode {
             }
         }
     } else if let Some(d) = &t.diff {
-        let text = if d == "-" {
-            let mut s = String::new();
-            if std::io::Read::read_to_string(&mut std::io::stdin(), &mut s).is_err() {
-                eprintln!("al-sem: impact: failed to read diff from stdin");
+        let text = match read_diff(d) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("{e}");
                 return ExitCode::from(exit::CONFIG_ERROR);
-            }
-            s
-        } else {
-            match std::fs::read_to_string(d) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("al-sem: impact: could not read diff file '{d}': {e}");
-                    return ExitCode::from(exit::CONFIG_ERROR);
-                }
             }
         };
         (compare::for_input("diff", ws, Some(&text)), Some(text))
@@ -2455,7 +2516,21 @@ fn run_impact_cmd(t: ImpactCli) -> ExitCode {
             .flatten();
         run_part_with_stdin(&argv, stdin)
     };
-    match al_sem::engine::impact::run::orchestrate(&t.request(), cmp, opts, &mut run) {
+    // The base side (B2): the copy is made under the cache's folder (or the
+    // system's temporary folder without a cache); the base part runs here.
+    let req = t.request();
+    let cache = (!t.no_base_cache)
+        .then(al_sem::engine::impact::cache::Cache::default_dir)
+        .flatten()
+        .map(|d| al_sem::engine::impact::cache::Cache::new(d, Default::default()));
+    let scratch = al_sem::engine::impact::before::scratch_for(cache.as_ref());
+    let mut bcx = req.delta.then(|| al_sem::engine::impact::before::BaseCx {
+        cache,
+        scratch,
+        diff_text: diff_text.clone().unwrap_or_default(),
+        run: Box::new(|argv: Vec<String>, stdin: String| run_part_with_stdin(&argv, Some(stdin))),
+    });
+    match al_sem::engine::impact::run::orchestrate(&req, cmp, opts, &mut run, bcx.as_mut()) {
         Ok(r) => {
             let out = JobOutput::text(t.out.as_deref(), Ok((r.text, r.exit)));
             ExitCode::from(al_sem::engine::batch::output::replay(&out, 1))

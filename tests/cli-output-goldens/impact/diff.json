@@ -5,6 +5,7 @@
     "tests are static reachability, not coverage"
   ],
   "base": null,
+  "behavior": null,
   "comparison": {
     "comparisonBase": null,
     "comparisonBaseNote": "none: a diff alone names no base (no before/after; B2 checks the diff's pre-images against a base)",
@@ -34,6 +35,7 @@
       "union": 2
     }
   },
+  "deleted": null,
   "input": {
     "accounting": {
       "changedLines": 6,
