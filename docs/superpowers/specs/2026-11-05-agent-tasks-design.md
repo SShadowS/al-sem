@@ -618,6 +618,10 @@ Changed-root resolution is digest's (`resolve_changed_roots`) in the production 
 MCP: new tool `alsem_tests` with `routines`, `diff`, `diffRoot`, `files`, `base`, `testApps`,
 `tier`, `maxTests`, `format`, and the common properties.
 
+**As built in C (2026-11-05): `--base REV` / MCP `base` are not part of milestone C.** They need
+B1's comparison tuple and changed-line accounting (§8.2-8.3) and B2's base build (§10.6), so they
+ship with those milestones; C takes `--routine`, `--file` and `--diff` only.
+
 **Test scope** is the union of:
 
 1. `[Test]` procedures in the workspace app itself (a nested test folder is folded into the
@@ -635,6 +639,13 @@ MCP: new tool `alsem_tests` with `routines`, `diff`, `diffRoot`, `files`, `base`
 
 On CDO this finds `Test`, skips `TestFR` (no source) and lists `FR`, `OnPrem`, `DemoApp` as
 "depends on the workspace, no test codeunit".
+
+**As built: a project-collection marker.** A folder holding a file `.al-sem-projects` says each
+of its subfolders is a separate project; for a workspace under it, auto-discovery's search root
+is the subfolder that holds the workspace when that is nearer than the git top level. This
+repository marks `tests/r0-corpus/` and `tests/fixtures/`: without it every fixture searched the
+repository, hit the 64-file cap among 270-odd fixture `app.json` files, and its goldens depended
+on the repository's layout.
 
 ### 4.3 Test universes
 
@@ -692,6 +703,13 @@ selectors keep their primary-app scope.
 
 `not-in-projection` and `not-loaded` are reported with the nearest ancestor (in the production
 universe's cone) that the test universe does have, as "nearest tested caller", when one exists.
+
+**As built in C (2026-11-05): "nearest tested caller" is deferred to a later milestone.** C
+reports `not-in-projection` and `not-loaded` roots with their status and sets
+`requiredFallback`, and `nearestTestedCaller` is `null`. Computing it needs an up-walk in the
+production universe's sited graph that then maps each ancestor into the test universe; the
+production child builds no sited graph today (M0's lazy-graph decision). It belongs with B1
+(`alsem_impact`), which needs the same up-walk.
 
 ### 4.5 Selection, ranking and fallback
 
@@ -1724,3 +1742,70 @@ revert). Measurement: explain card size on CDO `RunReportID` before and after I-
   revision).
 - Call-site counts: the `histogram` in the `meta` line of `graph-cdo.out` (`wholeProgram`
   resolvedSource 11,639 + conditionalResolved 266; `dependencyBodies` resolvedSource 191,084).
+
+### Milestone C's probe (C1, measured 2026-11-05)
+
+With `alsem tests` itself (branch `m-c-tests`, release-fast; the real `DO-cdo-baseline/Test`,
+auto-discovered, the production app injected, nothing written into it):
+
+- **Hidden channels in RunReportID's resolved cone: 48** (R0 counted 48, one more than the 47
+  above: `Check Dimensions::OnErrorMessageDrillDown`). By class: **47 `platform-table-event`**
+  (synthetic `OnAfter*Event`/`OnBefore*Event` publishers a subscriber binds to) and **1
+  `unbound-subscriber`**. None of the 47 can be shown covered: a record write routes to the
+  table's declared triggers only (`resolve_implicit_trigger`), so no write is an edge into a
+  platform publisher; they are reached through the record hub alone. By the owner's rule (one
+  that cannot be shown covered counts), all 48 are selection-relevant and the CDO selection stays
+  `selectionComplete: false`. Making them coverable needs a resolver fact (each record write's
+  table as a route into its platform events), not a weaker rule.
+- **The 16 tests** between "1,860 `[Test]` lines" and 1,844 loaded nodes: `grep '\[Test\]'` finds
+  1,847 occurrences in `Test/`; 3 are commented out (`// [Test]`, in `CDOOpenDocumentsTests` and
+  twice in `CDOSendCustStatementTests`); the other 1,844 are attribute lines, and the loaded
+  graph has 1,844 test nodes with the same count in every file. No test is lost; the 1,860
+  figure did not reproduce.
+- **Dependency-tier sameness**: RunReportID's 301 through-dependency tests reach it via 7
+  dependency nodes (`Page 42` 160 tests, `Page 144` 109, `Table 60::onbeforesend` 22, …). Their
+  *reverse* cones are 23,567 of 137,196 nodes (17 %); their *forward* (may-execute) cones are
+  91,684 (67 %). C reads §4.5's "own cone" as the forward one: a node that may execute two
+  thirds of the program is why the same tests reach unrelated routines.
+- **Unresolved test calls: 4,702** (sites, by call-site anchor, from test-app code); the test
+  app declares 6 Microsoft libraries that are not loaded (`Tests-TestLibraries`, `Test Runner`,
+  `Library Assert`, `Permissions Mock`, `Any`, `System Application Test Library`) and
+  `Continia Core Internal Activation App`.
+
+### Milestone C's open items (measured 2026-11-05)
+
+Binary: `alsem` release-fast at `d6fc10ab` (branch `m-c-tests`). Workspace: a scratch copy of
+`DO-cdo-baseline/Cloud` and `Test` (`bc3ccb18`) under one folder with an empty `.git`, so
+auto-discovery finds `Test` and the B edit never touches the baseline. Driver:
+`target-mc/scratch/tools/mcp_measure.py` (stdio JSON-RPC to `alsem mcp`; peak RSS is the sum
+over the server and its children, sampled every 100 ms). Every call is
+`alsem_tests {routines: ["CDO E-Mail Handler::RunReportID"]}`. The machine ran other builds
+(load average 25-230 on 22 cores), so the cold times are upper bounds; the cold default run was
+measured twice (64.6 s at load ~200, 23.0 s at load ~40).
+
+| Run | default | `--low-mem` |
+|---|---|---|
+| cold (both engines build, one after the other) | 23.0 s, peak 6.0 GB | 24.0 s, peak 4.6 GB |
+| warm | 0.18-0.20 s | 0.18 s |
+| after a B edit of `CDOEMailHandler.Codeunit.al` (a comment in RunReportID's body) | 13.2-14.3 s, peak 6.5 GB; both universes at generation 2 | 14.2 s, peak 5.0 GB |
+| warm after the edit | 0.17-0.19 s | 0.18 s |
+| resident RSS after (production / test universe) | 3.85 / 2.16 GB | 2.80 / 1.21 GB |
+
+- **A B edit costs the test universe a full rebuild.** For the test universe the production file
+  is an injected input, whose refresh class is `Package` (§2.3), so a body-only edit rebuilds it;
+  its cold build alone took 9.9 s (below), so most of the 13-14 s is likely that rebuild (the
+  split between the two engines was not measured). A body-level
+  refresh of injected sources is the next step if this matters.
+- **Cancelling a cold build** (the call cancelled 3 s after it was sent, while the production
+  engine built its first revision): the build is not interrupted (the child reads a cancel
+  between phases, and the build is the `pin` phase). It ran on and the engine was idle 10.0 s
+  after the cancel; the call was not answered, no test engine started (item 2), and the built
+  revision was kept: the next `alsem_tests` took 9.9 s, the test universe's cold build alone.
+- **Item 1** (explain's summary): on CDO the three explain cards' summary now says `tests: none
+  in the workspace; 1 test app discovered (not analyzed here; alsem tests)`, as the `tests:` line
+  below it does.
+- **Item 4**: `alsem tests Cloud --routine "CDO E-Mail Handler::RunReportID"` (human, cdo
+  profile, 33.4 s, 3.12 GB one-shot) prints `through dependency code: 301 tests — effectively the
+  suite's posting tests, not specific to this change`; the CDO ratchet pins the line.
+- Not measured here (still open from §4.11): two test apps side by side, `alsem_tests` during a
+  heavy explain, a test-file B edit, peak RSS during the sited-graph construction alone.

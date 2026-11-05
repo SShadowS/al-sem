@@ -1118,6 +1118,15 @@ pub fn sited_graph(
 /// ([`super::sited::collapse`]), pruned.
 #[must_use]
 pub fn project(inp: &Inputs<'_>) -> Projection {
+    project_keeping(inp, false)
+}
+
+/// [`project`]; with `keep_local_sources`, every routine of an app loaded
+/// from local source (a source-folder dependency) survives pruning too
+/// (agent-tasks design §4.8: a consumer joins changed production files on
+/// `(appId, sourcePath)`, so no routine of such an app may be pruned).
+#[must_use]
+pub fn project_keeping(inp: &Inputs<'_>, keep_local_sources: bool) -> Projection {
     let (b, hidden) = build(inp, &|| false).expect("an uncancellable build finishes");
     let keys = &b.sited.nodes;
     let collapsed = collapse(&b.sited.sites);
@@ -1136,6 +1145,23 @@ pub fn project(inp: &Inputs<'_>) -> Projection {
         .filter(|r| r.id.object.app == inp.edges.primary_app_ref)
         .filter_map(|r| b.sited.ix(&Key::Routine(r.id.clone())))
         .collect();
+    let local_sources: Vec<u32> = if keep_local_sources {
+        inp.graph
+            .routines
+            .iter()
+            .filter(|r| {
+                r.id.object.app != inp.edges.primary_app_ref
+                    && matches!(
+                        r.tier,
+                        crate::snapshot::TrustTier::LocalSourceVerified
+                            | crate::snapshot::TrustTier::LocalSourceApproximate
+                    )
+            })
+            .filter_map(|r| b.sited.ix(&Key::Routine(r.id.clone())))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let any = b.sited.ix(&Key::Hub(Hub::Any));
     let any_used = any.is_some_and(|a| pred.contains_key(&a));
     let walk = |start: &[u32], next: &HashMap<u32, Vec<u32>>| -> HashSet<u32> {
@@ -1169,6 +1195,7 @@ pub fn project(inp: &Inputs<'_>) -> Projection {
         })
         .copied()
         .chain(workspace.iter().copied())
+        .chain(local_sources.iter().copied())
         .collect();
 
     // ── Rows ───────────────────────────────────────────────────────────────

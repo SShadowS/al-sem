@@ -1,0 +1,7 @@
+test scope: workspace 0 [Test] procedures; 1 test app — TU Production Tests (<root>/Test, auto-discovered; 2 tests loaded; production app loaded as local source, tier localApproximate); skipped: TU Production Tests FR (no source)
+production bytes: the same in the production and test universes
+changed: 1 routine (Codeunit TU Core::Audited — analysis-incomplete)
+run first — local path: none
+selection complete: no — run the whole suite as well (requiredFallback): a changed routine's cone is incomplete (a cap, or a way to run no edge shows) and no test reaches it; the cones hold 1 node with a way to run no edge shows (platform-table-event 1); one that cannot be shown covered counts
+next: the test app depends on Microsoft's Library Assert, not loaded here. Put their symbols in the test app's .alpackages (in VS Code: open the test app and run "AL: Download symbols"; or copy Microsoft_<name>_<version>.app from a BC artifact's Applications folder), then ask again: calls into them then resolve
+this is static reachability, not coverage: a reached test may not exercise the changed lines

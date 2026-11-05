@@ -1,0 +1,13 @@
+{
+  "id": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01",
+  "name": "TU Production",
+  "publisher": "al-sem tests",
+  "version": "1.0.0.0",
+  "runtime": "17.0",
+  "idRanges": [
+    {
+      "from": 50800,
+      "to": 50849
+    }
+  ]
+}

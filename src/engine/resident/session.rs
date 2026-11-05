@@ -219,6 +219,12 @@ pub struct ResidentSession {
     sited: std::sync::atomic::AtomicBool,
     /// A graph-only session ([`Self::graph_only`], M0-2).
     graph_only: bool,
+    /// The inputs every read and observation takes besides the workspace's
+    /// own: a test universe's ([`Self::with_injected`], agent-tasks §4.3).
+    injected: crate::program::inputs::Injected,
+    /// The descriptor's universe name, when not the base one (a test
+    /// universe's `tests:<key>`).
+    universe_label: Option<String>,
     /// The model each build makes ([`REVISION_NEEDS`] unless
     /// [`Self::with_needs`] or [`Self::pin_needs`] set it, M0-4).
     needs: Mutex<ViewNeeds>,
@@ -245,6 +251,8 @@ impl ResidentSession {
             low_mem: false,
             sited: std::sync::atomic::AtomicBool::new(false),
             graph_only: false,
+            injected: crate::program::inputs::Injected::default(),
+            universe_label: None,
             needs: Mutex::new(REVISION_NEEDS),
         }
     }
@@ -328,6 +336,15 @@ impl ResidentSession {
     #[must_use]
     pub fn is_graph_only(&self) -> bool {
         self.graph_only
+    }
+
+    /// The session reading `injected`'s inputs too (a test universe:
+    /// the production app as a source folder, its package roots), in every
+    /// build's read and every manifest observation, so a change there is a
+    /// change of this session's inputs.
+    #[must_use]
+    pub fn with_injected(self, injected: crate::program::inputs::Injected) -> ResidentSession {
+        ResidentSession { injected, ..self }
     }
 
     /// The session building the sited graph with every revision when
@@ -500,14 +517,31 @@ impl ResidentSession {
             generation: p.built.revision_id().map(|r| r.generation),
             inputs_stamp: p.manifest.stamp(),
             workspace: self.workspace.clone(),
-            universe: self.universe_name().to_string(),
+            universe: self.universe_name(),
             manifest: p.manifest.descriptor_entries(),
         })
     }
 
-    /// The session's universe as the descriptor names it.
+    /// The session's universe as the descriptor names it: a test universe
+    /// is `tests:<key>` (its descriptor's key, [`Self::with_universe_label`]).
     #[must_use]
-    pub fn universe_name(&self) -> &'static str {
+    pub fn universe_name(&self) -> String {
+        match &self.universe_label {
+            Some(l) => l.clone(),
+            None => self.base_universe_name().to_string(),
+        }
+    }
+
+    /// The session with its universe named `label` in its descriptor.
+    #[must_use]
+    pub fn with_universe_label(self, label: String) -> ResidentSession {
+        ResidentSession {
+            universe_label: Some(label),
+            ..self
+        }
+    }
+
+    fn base_universe_name(&self) -> &'static str {
         if self.graph_only {
             "graphOnly"
         } else if self.single_app {
@@ -554,7 +588,8 @@ impl ResidentSession {
                     dirty: &dirty,
                 },
             };
-            let observed = Manifest::observe(&self.workspace, self.single_app, hashing);
+            let observed =
+                Manifest::observe_scoped(&self.workspace, &self.injected, self.single_app, hashing);
             lock(&self.stats).last_check_us = Some(start.elapsed().as_micros() as u64);
             if observed == p.manifest {
                 lock(&self.stats).fresh_hits += 1;
@@ -701,15 +736,21 @@ impl ResidentSession {
             let m_before = match before.take() {
                 Some(m) => m,
                 None => match &prev {
-                    Some(p) => Manifest::observe(
+                    Some(p) => Manifest::observe_scoped(
                         &self.workspace,
+                        &self.injected,
                         self.single_app,
                         Hashing::Cached {
                             prev: &p.manifest,
                             dirty: &dirty,
                         },
                     ),
-                    None => Manifest::observe(&self.workspace, self.single_app, Hashing::All),
+                    None => Manifest::observe_scoped(
+                        &self.workspace,
+                        &self.injected,
+                        self.single_app,
+                        Hashing::All,
+                    ),
                 },
             };
             // Reserve before anything is read (§4.5): the pre-model estimate
@@ -747,7 +788,8 @@ impl ResidentSession {
                 r.reclaim_kind("tree_base");
             }
             self.hook(BuildPoint::BeforeRead, attempt);
-            let inputs = WorkspaceInputs::read(&self.workspace, &REVISION_READ);
+            let inputs =
+                WorkspaceInputs::read_scoped(&self.workspace, &REVISION_READ, &self.injected);
             self.hook(BuildPoint::AfterRead, attempt);
             let consumed = Manifest::consumed(&inputs, self.single_app);
             let want_sited = self.graph_only || self.sited.load(Ordering::SeqCst);
@@ -785,8 +827,9 @@ impl ResidentSession {
             };
             self.hook(BuildPoint::AfterBuild, attempt);
             let no_dirty = BTreeSet::new();
-            let m_after = Manifest::observe(
+            let m_after = Manifest::observe_scoped(
                 &self.workspace,
+                &self.injected,
                 self.single_app,
                 Hashing::Cached {
                     prev: &m_before,

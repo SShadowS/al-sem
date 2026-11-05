@@ -607,9 +607,21 @@
         },
         "pageActions": 1,
         "temporaryOnlyTables": 0,
+        "testApps": {
+          "discovered": 0,
+          "discoveryComplete": true
+        },
         "tests": 0,
         "testsLoaded": 0,
         "unresolvedTableWrites": 0
+      },
+      "testScope": {
+        "analyzed": false,
+        "apps": [],
+        "complete": true,
+        "discovery": "auto",
+        "skipped": 0,
+        "summary": "no app under the project folder (its parent holds .al-sem-projects) depends on this one with a test codeunit (searched 0 app.json files)"
       },
       "tests": []
     }

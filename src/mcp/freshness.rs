@@ -113,6 +113,8 @@ pub fn refresh_class(categories: &BTreeSet<&str>) -> Option<Value> {
                     | "unreadable-package-folder"
                     | "app-json"
                     | "source-dependency"
+                    | "injected-source"
+                    | "injected-packages"
                     | "meta"
                     | "other"
             )
@@ -188,6 +190,16 @@ fn summary(changes: &[InputChange]) -> String {
             "roots-config" => "roots.config.json".to_string(),
             "coverage-config" => "al-sem.coverage.yaml".to_string(),
             "source-dependency" => plural(n, "source-dependency input", "source-dependency inputs"),
+            "injected-source" => plural(
+                n,
+                "production source input (injected into the test universe)",
+                "production source inputs (injected into the test universe)",
+            ),
+            "injected-packages" => plural(
+                n,
+                "package from the production root",
+                "packages from the production root",
+            ),
             "package" => plural(n, "package", "packages"),
             "package-list" => plural(n, "package added or removed", "packages added or removed"),
             "unreadable-package-folder" => "the unreadable package folders".to_string(),
@@ -292,6 +304,58 @@ pub fn check(descriptor: &InputDescriptor, opts: CheckOptions) -> Value {
             "a rewrite that keeps size and modification time is seen only with verify: true; unsaved editor buffers are not inputs"
         },
     })
+}
+
+/// The `test-config` input (§2.3, milestone C item 3): the `.al-sem.json`
+/// `testApps` a production engine's last `alsem_tests` answer was discovered
+/// under (`recorded`), compared with the file now. It is no input of the
+/// engine's revision (scope discovery runs on every tests answer), so it
+/// never makes the engine stale and implies no refresh class: `fresh` and
+/// `refreshClass` keep the engine's own inputs' verdict, and a change is
+/// listed with category `test-config`, counted in `changeCount`, and said in
+/// `testScope` and the headline ("the next alsem_tests rediscovers").
+pub fn apply_test_config(check: &mut Value, workspace: &str, recorded: &Value) {
+    let now = crate::engine::test_select::scope::read_test_config_identity(std::path::Path::new(
+        workspace,
+    ));
+    let changed = now != *recorded;
+    check["testScope"] = json!({
+        "atLastTestsAnswer": recorded,
+        "now": now,
+        "changed": changed,
+    });
+    if !changed {
+        return;
+    }
+    let spell = |v: &Value| match v {
+        Value::Null => "absent".to_string(),
+        v => v.to_string(),
+    };
+    let change = json!({
+        "category": "test-config",
+        "path": ".al-sem.json",
+        "detail": format!(
+            "testApps was {} at the last alsem_tests answer, now {}: test scope changed; the next alsem_tests rediscovers",
+            spell(recorded),
+            spell(&now)
+        ),
+    });
+    if let Some(list) = check["changes"].as_array_mut() {
+        list.push(change);
+    }
+    if let Some(cats) = check["categories"].as_array_mut() {
+        cats.push(json!("test-config"));
+    }
+    if let Some(n) = check["changeCount"].as_u64() {
+        check["changeCount"] = json!(n + 1);
+    }
+    if check["refreshClass"].is_null() {
+        check["refreshClass"] = json!({
+            "class": Value::Null,
+            "certain": true,
+            "reason": "not a refresh of this engine: test scope changed; the next alsem_tests rediscovers",
+        });
+    }
 }
 
 /// `(.al files, packages, source-dependency files)` an observation names.
@@ -427,7 +491,13 @@ pub fn status_body(
                 sc.spawn(move || match &r.descriptor {
                     None => Err(String::new()),
                     Some(d) => decode_descriptor(d)
-                        .map(|d| check(&d, opts))
+                        .map(|d| {
+                            let mut c = check(&d, opts);
+                            if let Some(recorded) = &r.test_config {
+                                apply_test_config(&mut c, &r.workspace, recorded);
+                            }
+                            c
+                        })
                         .map_err(|e| format!("its published descriptor does not decode ({e})")),
                 })
             })
@@ -481,6 +551,14 @@ pub fn status_body(
             refresh_state: refresh["state"].as_str().unwrap_or("idle"),
             failed,
         });
+        if checked
+            .as_ref()
+            .is_ok_and(|c| c["testScope"]["changed"] == json!(true))
+        {
+            line.push_str(
+                " Test scope changed: .al-sem.json testApps differ from the last alsem_tests answer; the next alsem_tests rediscovers it.",
+            );
+        }
         if checked.is_ok() && !running_child {
             line.push_str(
                 " Its engine child is not running (it ended idle or by the children bound), so the next command builds again.",

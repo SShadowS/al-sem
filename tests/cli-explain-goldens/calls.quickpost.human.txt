@@ -19,7 +19,7 @@ Codeunit Calls Post::QuickPost  ws:src/post.al:18
   events: 0 raised in workspace code; 0 more only beyond entry points
   extension points: none (the routine publishes no event itself)
   errors at 2 places: ERROR_THROW at ws:src/checks.al:6 (error-path); ERROR_THROW at ws:src/checks.al:15 (error-path)
-  tests: no test code loaded (0 [Test] procedures in the workspace app); that is not a reason to skip tests
+  tests: no test code found (0 [Test] procedures in the workspace app; no app under the project folder (its parent holds .al-sem-projects) depends on this one with a test codeunit (searched 0 app.json files)); that is not a reason to skip tests
   gaps in workspace code (3 gaps):
     gap: error-collector (callee Codeunit Error Message Management::LogSimpleError, routine Codeunit Calls Checks::LogIfBlocked) at ws:src/checks.al:53
     gap: table-trigger-rules-skipped (what assign of Calls Order.Amount, table Calls Order) at ws:src/post.al:24

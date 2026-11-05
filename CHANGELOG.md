@@ -7,6 +7,164 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (agent tasks, milestone C: test selection)
+
+Which tests to run first for a change, as a first-class answer. Spec:
+`docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §4.
+
+- **Test universes** (`engine::test_select::universe::TestUniverse`): a sibling test app's
+  program with the workspace (production) app loaded as an **injected** source dependency and the
+  production root's `.alpackages` (and ancestors) as an extra package root. Nothing is written into
+  the user's test app: `WorkspaceInputs::read_scoped` takes the injected inputs
+  (`program::inputs::Injected`), `source_deps::read_with` / `walk_with` read the injected folders
+  after the configured ones (one the configuration already names by app id is left out), and
+  `dependencies::discover_app_files_with` searches the extra roots after the workspace's. The
+  descriptor's key is `tests:<16 hex>`. A **production stamp** (blake3 over the sorted relative
+  path and content hash of the production app's `.al` files and its `app.json`, the same function
+  on both sides) tells whether the two universes were built from the same production bytes. On
+  the fixture every production routine keeps its StableRoutineId and its resolved out-edges in the
+  test universe (C-2, C-2b).
+- **The manifest names a test universe's injected inputs** (`inj:sources`, `inj:pkg-roots`;
+  `Manifest::observe_scoped`, `Manifest::injected`), so a resident test universe sees a production
+  edit as its own change, and the freshness check (`check_against`) observes the injected inputs
+  from the published manifest alone (F-7). `Manifest::changes` names them by category:
+  `injected-source` (an injected folder's files, app.json and listing) and `injected-packages` (a
+  package found under an injected package root); both are refresh class `Package`.
+  `ResidentSession::with_injected` / `with_universe_label` (the descriptor's universe is
+  `tests:<key>`); `WorkspaceReader::read_scoped`.
+- **`alsem tests <ws> (--routine R… | --file F… | --diff P [--diff-root D]) [--test-app DIR…]
+  [--tier local|dependency|all] [--max-tests N] [--format human|json]`**: the test scope first
+  (the workspace's own `[Test]` procedures and the sibling test apps, with how each was found and
+  what was skipped), each changed routine's status (`reached`, `no-known-path`,
+  `analysis-incomplete`, `not-loaded`, `not-in-projection`), the tests to run first ranked by tier
+  (local, through dependency code, over open sites), then hops, then codeunit, grouped per
+  codeunit with the first test's path, `selection complete: yes|no` with every reason the whole
+  suite must run as well (`requiredFallback`), and a codeunit filter. JSON schema
+  `al-sem.tests/1` (`runFirst`, `requiredFallback`, `selectionComplete`, `byTier`, `hidden`,
+  `next`). The answer is made of parts: `tests --part roots` (digest's root resolution in the
+  production universe, the production stamp, the scope) and `tests --part select` per test
+  universe (the reverse walk over its sited graph); `test_select::run::orchestrate` runs them,
+  retries once when the production stamps differ and then refuses that test app, and renders.
+- **Scope discovery** (`engine::test_select::scope`): `--test-app`, else `testApps` in
+  `.al-sem.json` (`"testApps": []` turns sibling discovery off), else auto-discovery under the git
+  top level (the workspace's parent when there is none): sorted, 3 levels deep, at most 64
+  `app.json` files, skipping hidden folders, `node_modules`, `target`, `target-*` and the
+  workspace itself. An app qualifies when it depends on the workspace app and holds a `Subtype =
+  Test` codeunit; one with no `.al` is skipped `no-source`, one with no test codeunit
+  `no-test-codeunit`. A cap that fires is "discovery incomplete", never "no app depends on this
+  one". The test-codeunit scan is cached by every file's stat.
+- **Honesty rules**: a selection-relevant hidden channel in a cone keeps the selection incomplete
+  (an unreached root is then `analysis-incomplete`, never `no-known-path`). A platform-raised
+  table event would be covered when every write of its table is an edge into it; the sited graph
+  has no such edge, so it is never shown covered and counts. When a root's through-dependency
+  tests come only via dependency nodes that may execute over half of the graph, the answer says
+  they are "effectively the suite's posting tests, not specific to this change". When the test
+  app declares Microsoft test libraries that are not loaded, a `next:` line says how to get their
+  symbols. Static reachability is not coverage, said once at the end.
+- **MCP tool `alsem_tests`** (`routines` | `files` | `diff` [`diffRoot`], `testApps`, `tier`,
+  `maxTests`, `format`, and the common properties): a **composite request** (`Pool::run_tests`,
+  on a coordinator thread off the reader loop). The roots part runs on the production engine;
+  each test app's select part on a **test-universe engine** of its own (pool key: the test app's
+  folder, universe `tests`; the child opens a graph-only session with the descriptor's injected
+  inputs, `session/open {universe: "tests", testUniverse}`), started on its first part and kept;
+  the workspace's own tests' part on the production engine (`pin_sited` turns its sited graph
+  on). One part at a time, so a part never holds one child while waiting for another;
+  `--max-children 2` stays (with a third universe the least recently used idle child is evicted).
+  The stdout is `alsem tests`' bytes (the same `orchestrate` and render); the envelope carries
+  the revision vector `revisions: {production, tests: [{workspace, universe: "tests:<key>",
+  revision}]}`. explain starts no test engine (a test pins the engine count). The LSP front end
+  refuses `alsem_tests` with the reason. `tests` and `tests-select` join the commands a resident
+  revision serves. Measured on CDO 2026-11-05 through `alsem mcp` (release-fast; load average
+  ~170 on 22 cores from other builds, so cold times are upper bounds): cold (both engines build,
+  one after the other) 24.7-52 s; warm 0.1 s (UpdateLastUpload), 0.2 s (RunReportID,
+  IssueReminder); after a single-app explain (a third universe) the next `alsem_tests` took 11.3 s
+  (one engine rebuilt). After a cold RunReportID call: the production child 3.65 GB RSS, the test
+  child 2.31 GB (each under its 8 GiB budget).
+- **`alsem graph --keep-local-sources[=true|false]`** and **`meta.apps[].sourceRoot`** (§4.8,
+  C-8): every routine of an app loaded from local source (a source-folder dependency, such as a
+  test app's production app) survives pruning, so a consumer can join changed production files on
+  `(appId, sourcePath)`; the default is on exactly when such an app is loaded, so an export with
+  none is byte-identical (the `cli_graph_export` golden). `sourceRoot` names the folder.
+- **explain's `tests:` line reads the test scope** (C-7) without analyzing it: "no [Test]
+  procedure in the workspace app; 1 test app discovered (…); not analyzed in this call — alsem
+  tests (MCP: alsem_tests) selects them", or "no test code found (0 [Test] procedures in the
+  workspace app; <why no sibling was found>)", and with workspace tests an `also …` line. JSON
+  cards carry `testScope` (`analyzed: false`). Explain never builds a test universe. **Explain
+  goldens move** by that line. A workspace with no git top level searches no sibling and says so.
+- **A project-collection marker bounds discovery** (`.al-sem-projects`,
+  `scope::PROJECTS_MARKER`): a folder holding that file says each of its subfolders is a project
+  of its own, so for a workspace under it the search root is the subfolder that holds the
+  workspace, when that is nearer than the git top level; the "none found" wording then says
+  "under the project folder". This repository marks `tests/r0-corpus/` and `tests/fixtures/`.
+  Before, a fixture searched from the repository's git top level, met the 64-`app.json` cap among
+  the other fixtures and read "test app discovery incomplete", so every explain golden depended on
+  how many `app.json` files the repository held. The fixture goldens (cli-explain, cli-output,
+  `tests/selection-graph.applydecay`) now show each fixture's own scope: searched 0 `app.json`
+  files, complete. The cap's "incomplete" wording is unchanged and still tested on a hand-built
+  tree over the cap (`the_app_json_cap_makes_discovery_incomplete`); the marker by
+  `a_projects_marker_bounds_the_search_to_the_project`.
+- **explain's summary agrees with that line.** Its `callers and tests:` clause said `tests: none
+  (no test code loaded)` while the `tests:` line below named the discovered test app. It now
+  reads the same scope: `tests: none in the workspace; 1 test app discovered (not analyzed here;
+  alsem tests)`, `tests: none in the workspace; test app discovery incomplete`, or (with
+  workspace tests) `tests: none of N loaded; also …`; "no test code loaded" stays only when the
+  discovery finished and found none (or `testApps: []`). JSON cards: `summary.testApps
+  {discovered, discoveryComplete}`. The three CDO explain rendering goldens move by that clause.
+- **A client's cancel of `alsem_tests` reaches every part.** Its parts are sub-requests with ids
+  of their own, so `notifications/cancelled` for the call's id found no flag: the running part ran
+  to its end and the next parts still ran. `Pool::run_tests` now registers the call's cancel flag
+  and `run_composite` queues each part with it: a queued part is dropped, the running one is sent
+  `session/cancel`, no later part runs, and the call is not answered (MCP). Pinned by
+  `mcp_tests::a_cancelled_tests_call_stops_its_parts_and_is_not_answered` (the cancelled roots
+  part publishes no revision; no test engine starts).
+- **`alsem_status` shows a `testApps` change (`test-config`).** The roots part of a tests answer
+  records the `.al-sem.json` `testApps` its scope was discovered under (`scope.testConfig`;
+  `scope::read_test_config_identity`, one function on both sides), and the pool keeps it per
+  production workspace. The status check of that workspace's production engine compares it with
+  the file (`check.testScope {atLastTestsAnswer, now, changed}`); a difference is listed as
+  category `test-config` (`.al-sem.json`, counted in `changeCount`) and the headline adds "Test
+  scope changed: … the next alsem_tests rediscovers it." It is no input of the engine's revision
+  (discovery runs on every tests answer), so `fresh` and the refresh class keep the engine's own
+  verdict (`refreshClass.class: null`, "not a refresh of this engine", when nothing else moved).
+  **The earlier discovery is invalidated** when the next answer's scope no longer holds a test
+  app: its registered test-universe descriptor is dropped and its idle test engine retired, so it
+  no longer holds a child slot.
+- **The CDO ratchet pins the sameness wording** (C-12 on CDO): `alsem tests Cloud --routine
+  "CDO E-Mail Handler::RunReportID"` prints exactly `through dependency code: 301 tests —
+  effectively the suite's posting tests, not specific to this change`
+  (`output_cdo::cdo_test_selection_ratchets`, run by `cdo-gate`).
+- **Measured on CDO through `alsem mcp`** (release-fast, a scratch copy; load average 25-230, so
+  cold times are upper bounds; spec appendix "Milestone C's open items"): `alsem_tests` for
+  RunReportID cold 23.0 s / 6.0 GB peak (default) and 24.0 s / 4.6 GB (`--low-mem`), warm
+  0.17-0.20 s in both; after a B edit of a production file 13.2-14.3 s (default) and 14.2 s
+  (`--low-mem`): the test universe sees the injected file as a `Package`-class change and
+  rebuilds. Resident after: 3.85 + 2.16 GB (default), 2.80 + 1.21 GB (`--low-mem`). A cancel
+  during the cold build does not interrupt the build (it is one phase): the engine was idle
+  10.0 s later, the call unanswered, no test engine started, and the revision kept. The spec now
+  says `--base` (B1/B2) and "nearest tested caller" (with B1's up-walk) come in later milestones.
+- **R0-3: explain's callers and the reverse cone agree.** `select::direct_callers` defines a
+  direct caller over the sited graph the way the model's calls count it: a call, interface call,
+  object run or record operation site (`via` call/interface/run/implicitTrigger, never a rule's
+  edge such as a TestPage variable's `declaredRunnable`), and for a trigger a run of its object
+  runs (the resolver's `run_triggers`: a codeunit's `OnRun`, a page's or report's lifecycle
+  triggers) every routine that runs that object; not an event's publisher, a test's handler list,
+  a hub or a page's triggers. A test checks every workspace routine of `test-selection-graph`:
+  explain's `callers` count equals the cone's. **explain keeps reading the model's adjacency**
+  (M0's lazy-graph decision: the sited graph costs each edit 0.93-1.19 s and 45 MiB on CDO; only
+  `alsem tests` builds a graph, and only in its test universes).
+- **The sited graph names local routines** in their source spelling (`SitedGraph::local_name`:
+  object, routine, file) and lists the platform table-event publishers
+  (`is_platform_publisher`); `SitedGraph::apps`.
+- Measured on CDO 2026-11-05 (release-fast; the machine was under heavy load from other builds,
+  so wall times are upper bounds): `tests Cloud --routine "CDO Telemetry::UpdateLastUpload"` lists
+  exactly the 3 `CDO Telemetry Tests` tests at 1 hop, local; RunReportID: 68 local-path tests in
+  7 codeunits at 3-7 hops, 301 through dependency code with the sameness line, 253 over open sites;
+  IssueReminder: 0 local, nearest `CDO Setup Tests::HideStandardMailActions_WhenDisabled_…` at 6
+  hops through dependency code. `selectionComplete: false` on CDO: 48 selection-relevant hidden
+  nodes (47 platform table events, 1 unbound subscriber) and 4,702 unresolved test calls. One-shot
+  cost: the roots part 15.1 s / 3.10 GB peak, the select part 10.2-10.4 s / 2.53 GB, the whole
+  command 20.7-30.5 s / 3.13 GB peak (the parts run one after the other in one process).
+
 ### Security
 
 - **The private output folders no longer trust a reused inode number.** The engine child's

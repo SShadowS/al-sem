@@ -299,6 +299,32 @@ impl WorkspaceReader {
         self.making.borrow_mut().clear();
     }
 
+    /// `workspace`'s one read with `injected`'s inputs too (a test
+    /// universe's, agent-tasks §4.3). A read given by the caller (a resident
+    /// test universe's pinned read) serves it when it took the same injected
+    /// inputs; any other read of the workspace is not reused.
+    pub fn read_scoped(
+        &self,
+        workspace: &Path,
+        needs: WorkspaceNeeds,
+        injected: &crate::program::inputs::Injected,
+    ) -> Arc<WorkspaceInputs> {
+        if injected.is_empty() {
+            return self.read(workspace, needs);
+        }
+        let key = absolute(workspace);
+        if let Some((_, inputs)) = self.read.borrow().get(&key)
+            && let Some(inputs) = inputs.upgrade()
+            && inputs.injected == *injected
+        {
+            return inputs;
+        }
+        let needs = self.planned.get(&key).map_or(needs, |p| p.union(needs));
+        let inputs = WorkspaceInputs::read_scoped(workspace, &needs, injected);
+        self.making.borrow_mut().push(Arc::clone(&inputs));
+        inputs
+    }
+
     /// `workspace`'s one read, holding at least `needs`.
     pub fn read(&self, workspace: &Path, needs: WorkspaceNeeds) -> Arc<WorkspaceInputs> {
         let key = absolute(workspace);
