@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **The private output folders no longer trust a reused inode number.** The engine child's
+  output namespace (`src/engine/host/output.rs`) and the MCP server's output folder
+  (`src/mcp/output.rs`) allowed an overwrite when the name's (device, inode) equalled the pair
+  recorded at creation. A freed inode number is handed out again, and ext4 does it at once, so
+  a file or a symlink planted after the server's own file was removed carried the same pair and
+  was accepted as the server's file (the rename then replaced the planted entry; nothing was
+  written through a link). Each overwritable file is now **pinned** by the descriptor it was
+  written through, which keeps its inode allocated, and an overwrite needs the name to be a
+  regular file with the pinned descriptor's device and inode while the pinned file still has a
+  link. At most 256 entries are pinned per folder; an older one is unpinned and its overwrite is
+  refused from then on. Spills are never overwritten and take no pin. CI (ubuntu-24.04, ext4)
+  had failed on this since 2026-11-02 (`the_private_namespace_contract`; nextest's fail-fast hid
+  the same failure in `overwrite_only_what_the_server_wrote`); it passed locally because btrfs
+  and tmpfs do not reuse inode numbers at once. Reproduced and verified on a real ext4 mount.
+
+### Fixed
+
+- An unused `mut` in `mcp::freshness::CheckOptions::new` warned in builds without the test hooks
+  (the shipped release build; CI's clippy runs with `--all-features`, so it never saw it).
+
 ### Changed (MCP output step 2: shorter, task-shaped output)
 
 - **Paths name overloads by a short handle.** A path printed every overloaded routine with its

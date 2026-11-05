@@ -8,10 +8,23 @@
 //!   and checked: a directory, owned by this user, no group or other bits.
 //! - Every entry the child creates is created relative to the instance
 //!   handle (`openat` with `O_CREAT | O_EXCL | O_NOFOLLOW`, mode `0600`) and
-//!   **recorded with its identity** (device, inode).
-//! - **Overwrite** is permitted only for a recorded entry whose current
-//!   identity matches the record, through a temp leaf and `renameat`, under
-//!   the directory's lock; anything else is refused.
+//!   recorded. A named entry is also **pinned**: the child keeps the
+//!   descriptor it created the file through ([`Pinned`]).
+//! - **Overwrite** is permitted only for a pinned entry whose name still
+//!   holds that very file ([`is_pinned_entry`]: the name is a regular file,
+//!   not a link, with the pinned descriptor's device and inode, and the
+//!   pinned file still has a link). It goes through a temp leaf and
+//!   `renameat`, under the directory's lock; anything else is refused.
+//!
+//!   Why a descriptor and not the recorded (device, inode) pair: a freed
+//!   inode number is handed out again, and ext4 does it at once, so a file
+//!   or symlink planted after the engine's file was removed can carry the
+//!   very same pair (the CI runner's failure, 2026-11-02 to 2026-11-05). An
+//!   open descriptor keeps the inode allocated, so no other file on the
+//!   device can have its number while it is pinned. At most [`MAX_PINNED`]
+//!   entries are pinned (one descriptor each); an older entry is unpinned,
+//!   and its overwrite is refused from then on (fail closed). Spills are
+//!   never overwritten and are not pinned.
 //! - The child's own create/replace operations are serialized by that lock.
 //!   Quota: [`QUOTA_BYTES`] per instance directory.
 //!
@@ -32,6 +45,85 @@ use crate::wire::{SpillFile, SpillKind};
 /// The most bytes one instance directory holds.
 pub const QUOTA_BYTES: u64 = 1 << 30;
 
+/// The most entries one namespace keeps overwritable, each pinned by one
+/// open descriptor (see the module doc). Shared with the MCP server's
+/// output folder (`crate::mcp::output`).
+pub const MAX_PINNED: usize = 256;
+
+/// What the identity check sees of one inode.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Inode {
+    pub dev: u64,
+    pub ino: u64,
+    /// The number of names the inode has (0: it was removed).
+    pub nlink: u64,
+    /// A regular file (not a symlink, a folder or anything else).
+    pub regular: bool,
+}
+
+/// Whether `current` (the entry's name now, not following a link) is the
+/// pinned file `pinned` (its open descriptor). The device and inode alone
+/// are not enough: an inode number freed by a removal is reused, so the
+/// pinned file must also still have a name, and the name must be a regular
+/// file.
+#[cfg(unix)]
+pub(crate) fn is_pinned_entry(pinned: Inode, current: Inode) -> bool {
+    pinned.nlink > 0 && current.regular && (pinned.dev, pinned.ino) == (current.dev, current.ino)
+}
+
+/// The entries a namespace may overwrite, each pinned by the descriptor it
+/// was created through, at most [`MAX_PINNED`] (the oldest is unpinned).
+#[cfg(unix)]
+#[derive(Default)]
+pub(crate) struct Pinned {
+    held: std::collections::HashMap<String, (std::os::fd::OwnedFd, u64)>,
+    seq: u64,
+}
+
+#[cfg(unix)]
+impl Pinned {
+    /// Pin `key` to `fd` (replacing an earlier pin of the same key).
+    pub(crate) fn pin(&mut self, key: &str, fd: std::os::fd::OwnedFd) {
+        self.seq += 1;
+        self.held.insert(key.to_string(), (fd, self.seq));
+        if self.held.len() > MAX_PINNED {
+            let oldest = self
+                .held
+                .iter()
+                .min_by_key(|(_, (_, n))| *n)
+                .map(|(k, _)| k.clone());
+            if let Some(k) = oldest {
+                self.held.remove(&k);
+            }
+        }
+    }
+
+    /// Whether `key` is pinned.
+    pub(crate) fn holds(&self, key: &str) -> bool {
+        self.held.contains_key(key)
+    }
+
+    /// Whether `leaf` in the directory `parent` is still the file pinned
+    /// under `key` ([`is_pinned_entry`]). False when `key` is not pinned or
+    /// either side cannot be read.
+    pub(crate) fn is_current(
+        &self,
+        key: &str,
+        parent: std::os::fd::RawFd,
+        leaf: &std::ffi::CStr,
+    ) -> bool {
+        use std::os::fd::AsRawFd;
+        let Some((fd, _)) = self.held.get(key) else {
+            return false;
+        };
+        match (sys::inode_of(fd.as_raw_fd()), sys::inode_at(parent, leaf)) {
+            (Ok(p), Ok(c)) => is_pinned_entry(p, c),
+            _ => false,
+        }
+    }
+}
+
 /// One child's private output directory (see the module doc).
 pub struct OutputDir {
     path: PathBuf,
@@ -42,8 +134,11 @@ pub struct OutputDir {
 
 #[derive(Default)]
 struct State {
-    /// Each created entry's identity (device, inode) and size.
-    entries: BTreeMap<String, (u64, u64, u64)>,
+    /// Each created entry's size.
+    entries: BTreeMap<String, u64>,
+    /// The named entries that may be overwritten.
+    #[cfg(unix)]
+    pinned: Pinned,
     bytes: u64,
     next: u64,
 }
@@ -65,7 +160,7 @@ fn leaf(name: &str) -> std::io::Result<std::ffi::CString> {
 #[cfg(unix)]
 mod sys {
     use std::ffi::CStr;
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 
     fn last() -> std::io::Error {
         std::io::Error::last_os_error()
@@ -125,22 +220,34 @@ mod sys {
         ))
     }
 
-    /// (device, inode) of `name` in `dir`, not following a link.
-    pub fn fstatat(dir: &OwnedFd, name: &CStr) -> std::io::Result<(u64, u64)> {
-        // SAFETY: as `fstat`, relative to a valid directory fd.
+    #[allow(clippy::unnecessary_cast)]
+    fn inode(st: &libc::stat) -> super::Inode {
+        super::Inode {
+            dev: st.st_dev as u64,
+            ino: st.st_ino as u64,
+            nlink: st.st_nlink as u64,
+            regular: st.st_mode & libc::S_IFMT == libc::S_IFREG,
+        }
+    }
+
+    /// The inode an open descriptor refers to.
+    pub fn inode_of(fd: RawFd) -> std::io::Result<super::Inode> {
+        // SAFETY: a zeroed stat buffer filled by fstat on a valid fd.
         let mut st: libc::stat = unsafe { std::mem::zeroed() };
-        if unsafe {
-            libc::fstatat(
-                dir.as_raw_fd(),
-                name.as_ptr(),
-                &mut st,
-                libc::AT_SYMLINK_NOFOLLOW,
-            )
-        } < 0
-        {
+        if unsafe { libc::fstat(fd, &mut st) } < 0 {
             return Err(last());
         }
-        Ok((st.st_dev as u64, st.st_ino as u64))
+        Ok(inode(&st))
+    }
+
+    /// The inode `name` in the directory `dir` names, not following a link.
+    pub fn inode_at(dir: RawFd, name: &CStr) -> std::io::Result<super::Inode> {
+        // SAFETY: as `inode_of`, relative to a valid directory fd.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstatat(dir, name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) } < 0 {
+            return Err(last());
+        }
+        Ok(inode(&st))
     }
 
     pub fn renameat(dir: &OwnedFd, from: &CStr, to: &CStr) -> std::io::Result<()> {
@@ -219,55 +326,73 @@ impl OutputDir {
         (s.bytes, s.entries.len())
     }
 
-    /// A new entry `name` holding `bytes` (refused if it exists).
+    /// A new entry `name` holding `bytes` (refused if it exists), pinned so
+    /// [`OutputDir::replace_file`] may overwrite it later.
     #[cfg(unix)]
     pub fn create_file(&self, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+        self.create_entry(name, bytes, true)
+    }
+
+    #[cfg(unix)]
+    fn create_entry(&self, name: &str, bytes: &[u8], pin: bool) -> std::io::Result<PathBuf> {
         let mut s = self.state.lock().unwrap_or_else(|p| p.into_inner());
         self.quota(&s, bytes.len() as u64, 0)?;
         let c = leaf(name)?;
-        let id = self.write_new(&c, bytes)?;
+        let fd = self.write_new(&c, bytes)?;
         s.bytes += bytes.len() as u64;
-        s.entries
-            .insert(name.to_string(), (id.0, id.1, bytes.len() as u64));
+        s.entries.insert(name.to_string(), bytes.len() as u64);
+        if pin {
+            s.pinned.pin(name, fd);
+        }
         Ok(self.path.join(name))
     }
 
-    /// Replace the recorded entry `name` with `bytes`: permitted only while
-    /// its current identity is the recorded one (a temp leaf, then
+    /// Replace the entry `name` with `bytes`: permitted only while it is
+    /// pinned and its name still holds the pinned file (a temp leaf, then
     /// `renameat` over it, under the lock); refused otherwise.
     #[cfg(unix)]
     pub fn replace_file(&self, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+        use std::os::fd::AsRawFd;
         let mut s = self.state.lock().unwrap_or_else(|p| p.into_inner());
         let c = leaf(name)?;
-        let Some(&(dev, ino, old)) = s.entries.get(name) else {
+        let Some(&old) = s.entries.get(name) else {
             return Err(refused(format!(
                 "'{name}' is not an entry this engine created"
             )));
         };
-        match sys::fstatat(&self.dir, &c) {
-            Ok((d, i)) if (d, i) == (dev, ino) => {}
-            _ => {
-                return Err(refused(format!(
-                    "'{name}' was replaced since this engine created it: refused"
-                )));
-            }
+        if !s.pinned.holds(name) {
+            return Err(refused(format!(
+                "'{name}' is no longer overwritable (only the {MAX_PINNED} newest named \
+                 entries are): refused"
+            )));
+        }
+        if !s.pinned.is_current(name, self.dir.as_raw_fd(), &c) {
+            return Err(refused(format!(
+                "'{name}' was replaced since this engine created it: refused"
+            )));
         }
         self.quota(&s, bytes.len() as u64, old)?;
         s.next += 1;
         let tmp = leaf(&format!(".tmp-{}-{name}", s.next))?;
-        let id = self.write_new(&tmp, bytes)?;
+        let fd = self.write_new(&tmp, bytes)?;
         if let Err(e) = sys::renameat(&self.dir, &tmp, &c) {
             sys::unlinkat(&self.dir, &tmp);
             return Err(e);
         }
         s.bytes = s.bytes - old + bytes.len() as u64;
-        s.entries
-            .insert(name.to_string(), (id.0, id.1, bytes.len() as u64));
+        s.entries.insert(name.to_string(), bytes.len() as u64);
+        s.pinned.pin(name, fd);
         Ok(self.path.join(name))
     }
 
+    /// Create `name` exclusively (never through a link) holding `bytes`;
+    /// the descriptor it was written through.
     #[cfg(unix)]
-    fn write_new(&self, name: &std::ffi::CStr, bytes: &[u8]) -> std::io::Result<(u64, u64)> {
+    fn write_new(
+        &self,
+        name: &std::ffi::CStr,
+        bytes: &[u8],
+    ) -> std::io::Result<std::os::fd::OwnedFd> {
         use std::io::Write;
         let fd = sys::openat(
             &self.dir,
@@ -275,11 +400,10 @@ impl OutputDir {
             libc::O_CREAT | libc::O_EXCL | libc::O_WRONLY,
             0o600,
         )?;
-        let (dev, ino, _, _) = sys::fstat(&fd)?;
         let mut f = std::fs::File::from(fd);
         f.write_all(bytes)?;
         f.flush()?;
-        Ok((dev, ino))
+        Ok(f.into())
     }
 
     #[cfg(unix)]
@@ -293,11 +417,12 @@ impl OutputDir {
     }
 
     #[cfg(not(unix))]
-    pub fn create_file(&self, _name: &str, _bytes: &[u8]) -> std::io::Result<PathBuf> {
+    fn create_entry(&self, _name: &str, _bytes: &[u8], _pin: bool) -> std::io::Result<PathBuf> {
         unreachable!("no OutputDir exists on this platform")
     }
 
-    /// Spilled bytes as a new entry with an opaque name.
+    /// Spilled bytes as a new entry with an opaque name (never overwritten,
+    /// so not pinned).
     pub fn spill(&self, kind: SpillKind, bytes: &[u8]) -> std::io::Result<SpillFile> {
         let n = {
             let mut s = self.state.lock().unwrap_or_else(|p| p.into_inner());
@@ -309,7 +434,7 @@ impl OutputDir {
             SpillKind::Stderr => "stderr",
             SpillKind::Diagnostic => "diagnostic",
         };
-        let path = self.create_file(&format!("{n}.{tag}"), bytes)?;
+        let path = self.create_entry(&format!("{n}.{tag}"), bytes, false)?;
         Ok(SpillFile::of(path.to_string_lossy().into_owned(), bytes))
     }
 }
@@ -322,6 +447,13 @@ mod tests {
     /// refused if it exists; a recorded entry is overwritten in place; an
     /// entry replaced behind the engine's back is refused; an entry the
     /// engine did not create, or a name that is not a plain leaf, is refused.
+    ///
+    /// The replaced and symlinked cases do not depend on inode numbers: the
+    /// pinned file was removed, so it has no link left (on ext4 the planted
+    /// entry gets the freed inode number, which made the old (device, inode)
+    /// check pass it on the CI runner; on btrfs and tmpfs it does not, so it
+    /// passed locally). `identity_needs_a_live_pinned_regular_file` states
+    /// that same-number case by hand.
     ///
     /// DISCRIMINATION (2026-11-02): dropping the identity check in
     /// `replace_file` (`if true || (d, i) == (dev, ino)`) fails at the
@@ -364,10 +496,18 @@ mod tests {
         let q = out.create_file("b.json", b"x").unwrap();
         std::fs::remove_file(&q).unwrap();
         std::os::unix::fs::symlink(root.path().join("elsewhere"), &q).unwrap();
-        assert!(out.replace_file("b.json", b"y").is_err());
+        let e = out.replace_file("b.json", b"y").unwrap_err();
+        assert!(e.to_string().contains("was replaced"), "{e}");
         assert!(
             !root.path().join("elsewhere").exists(),
             "nothing written through the link"
+        );
+        assert!(
+            std::fs::symlink_metadata(&q)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the planted link is left as it was"
         );
         // Never created by the engine; not a leaf.
         assert!(out.replace_file("c.json", b"z").is_err());
@@ -377,5 +517,75 @@ mod tests {
         let f = out.spill(SpillKind::Stdout, b"hello\n").unwrap();
         assert!(Path::new(&f.path).starts_with(out.path()));
         assert_eq!(std::fs::read(&f.path).unwrap(), b"hello\n");
+    }
+
+    /// The identity rule with its precondition stated by hand: an entry
+    /// whose name now carries the pinned file's very (device, inode) — an
+    /// inode number reused after a removal, as ext4 does — is NOT the pinned
+    /// file when the pinned file has no link left, nor when the name is not
+    /// a regular file (a symlink). Only a linked pinned file under a regular
+    /// name of the same identity is.
+    ///
+    /// DISCRIMINATION (2026-11-05): replacing `is_pinned_entry`'s body with
+    /// the old rule `(pinned.dev, pinned.ino) == (current.dev, current.ino)`
+    /// fails at "a reused inode number" (true); restored, it passes.
+    #[test]
+    fn identity_needs_a_live_pinned_regular_file() {
+        let file = |nlink, regular| Inode {
+            dev: 7,
+            ino: 42,
+            nlink,
+            regular,
+        };
+        assert!(
+            is_pinned_entry(file(1, true), file(1, true)),
+            "the same file"
+        );
+        assert!(
+            !is_pinned_entry(file(0, true), file(1, true)),
+            "a reused inode number: the pinned file was removed"
+        );
+        assert!(
+            !is_pinned_entry(file(0, true), file(1, false)),
+            "a symlink planted at a reused inode number"
+        );
+        assert!(
+            !is_pinned_entry(file(1, true), file(1, false)),
+            "a name that is not a regular file"
+        );
+        let other = Inode {
+            ino: 43,
+            ..file(1, true)
+        };
+        assert!(!is_pinned_entry(file(1, true), other), "another inode");
+    }
+
+    /// At most `MAX_PINNED` named entries stay overwritable: the oldest is
+    /// unpinned and its overwrite refused (fail closed), the newest still
+    /// overwrites; spills take no pin.
+    #[test]
+    fn only_the_newest_entries_stay_overwritable() {
+        let root = tempfile::tempdir().unwrap();
+        let out = OutputDir::create(root.path(), "inst").unwrap();
+        out.create_file("first.json", b"1").unwrap();
+        for i in 0..MAX_PINNED - 1 {
+            out.create_file(&format!("{i}.json"), b"n").unwrap();
+        }
+        // MAX_PINNED named entries are pinned; spills take no pin, so
+        // "first.json" stays overwritable after them.
+        for _ in 0..MAX_PINNED + 1 {
+            out.spill(SpillKind::Stdout, b"s").unwrap();
+        }
+        out.replace_file("first.json", b"2").unwrap();
+        // ... and that overwrite re-pinned it as the newest: one more named
+        // entry unpins "0.json", the oldest.
+        out.create_file(&format!("{}.json", MAX_PINNED - 1), b"n")
+            .unwrap();
+        out.replace_file("first.json", b"3").unwrap();
+        let e = out.replace_file("0.json", b"2").unwrap_err();
+        assert!(e.to_string().contains("no longer overwritable"), "{e}");
+        let last = format!("{}.json", MAX_PINNED - 1);
+        out.replace_file(&last, b"m").unwrap();
+        assert_eq!(std::fs::read(out.path().join(last)).unwrap(), b"m");
     }
 }
