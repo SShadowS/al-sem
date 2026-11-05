@@ -367,8 +367,22 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
     let mut results: Vec<Option<Side>> = on_view.iter().map(|_| None).collect();
     // (1) The one builder; graph demands are done off its program.
     let built = build_view_model(&first.inputs, &first.key, needs, |program| {
+        // The sited graph, built once off the lent program for every sited
+        // demand on the view.
+        let sited = on_view.iter().any(|(_, d)| d.needs.sited).then(|| {
+            program.and_then(|p| {
+                crate::program::impact_graph::sited_from_program(p, &|| false)
+                    .map_err(|_| "the sited graph's build was cancelled")
+            })
+        });
         for (i, (j, d)) in on_view.iter().enumerate() {
-            if d.needs.graph {
+            if d.needs.sited {
+                let _s = job_span(*j, jobs[*j], "compute");
+                let g = sited.as_ref().expect("built for a sited demand");
+                results[i] = Some(capture(|| {
+                    jobs[*j].sited(d.side, g.as_ref().map_err(|e| *e))
+                }));
+            } else if d.needs.graph {
                 let _s = job_span(*j, jobs[*j], "compute");
                 results[i] = Some(capture(|| jobs[*j].program(d.side, program)));
             }

@@ -39,6 +39,14 @@ test selection, adding an effect, impact) build on. Spec:
   request's cancellation stops that graph's build (polled every 4,096 sites): the revision is then
   published without it, and the next question builds it. `session/status` counts `sitedBuilds`,
   `lastSitedMs`, `lastSitedBytes`.
+- **Graph-only sessions** (`ResidentSession::graph_only`, engine universe `graphOnly`): each build
+  makes the cross-app program and its sited graph and no model (no L4, fold or trees), and
+  publishes a `Built::Graph` revision. The workspace session still keeps what its next refresh
+  reuses. It answers only jobs that read the sited graph (`ViewNeeds::sited`, `Job::sited`; the
+  one-shot driver builds the graph off its lent program, so a resident answer equals the CLI's);
+  any other command is refused with `this engine is graph-only (…): '<command>' needs a model`. A
+  model revision built with its sited graph answers sited jobs too. The test universe and the
+  impact base child will be of this kind.
 - `aldump --session-refresh --sited` builds and keeps the sited graph at every step and prints its
   wall and CPU time, nodes, sites and bytes.
 

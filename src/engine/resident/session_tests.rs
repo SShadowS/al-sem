@@ -22,6 +22,7 @@ fn never() -> Option<Stop> {
 fn revision(p: &Pinned) -> &Arc<Revision> {
     match &p.built {
         Built::Revision(r) => r,
+        Built::Graph(_) => panic!("a model session publishes a model revision"),
         Built::Failed(f) => panic!("the build failed: {:?}", f.failure),
     }
 }
@@ -658,6 +659,16 @@ fn sited_graph_follows_a_body_edit(low_mem: bool) {
     assert_eq!(g2.sites_between(c2, e2).len(), 1, "the new call's site");
     assert_eq!(g2.text(), sited_cold(ws));
     assert_eq!(s.stats().sited_builds, 2);
+    // A sited-graph job answered off the model revision's artifact.
+    let r2 = revision(&p2);
+    let warm = r2
+        .answer(&SitedTextJob { inputs: &r2.inputs }, &Control::unreserved())
+        .unwrap();
+    let cold_inputs = WorkspaceInputs::read(ws, &REVISION_READ);
+    let cold = crate::engine::batch::standalone_output(&SitedTextJob {
+        inputs: &cold_inputs,
+    });
+    assert_eq!(warm, cold);
 }
 
 #[test]
@@ -705,4 +716,105 @@ fn a_cancelled_sited_rebuild_publishes_no_graph() {
     let p = s.pin_sited(Freshness::Fresh, &never).unwrap();
     assert_eq!(p.rebuilt_for, Some("sited"));
     assert!(revision(&p).sited().is_some());
+}
+
+/// A job reading the sited graph alone: it prints the graph's text.
+struct SitedTextJob<'a> {
+    inputs: &'a Arc<WorkspaceInputs>,
+}
+
+impl crate::engine::batch::job::Job for SitedTextJob<'_> {
+    fn name(&self) -> &'static str {
+        "sited-text"
+    }
+    fn demands(&self) -> Vec<crate::engine::batch::job::ViewDemand> {
+        crate::engine::batch::job::ViewDemand::one(self.inputs, false, false, ViewNeeds::SITED)
+    }
+    fn resolve(
+        &self,
+        _: crate::engine::batch::job::SideIx,
+        _: &crate::engine::batch::job::ResolveCx<'_>,
+    ) -> Result<crate::engine::batch::job::PlanPart, crate::engine::batch::job::JobFailure> {
+        unreachable!("reads only the sited graph")
+    }
+    fn compute(
+        &self,
+        _: crate::engine::batch::job::SideIx,
+        _: &mut crate::engine::batch::job::ViewCx<'_>,
+    ) -> Result<crate::engine::batch::job::SideDoc, crate::engine::batch::job::JobFailure> {
+        unreachable!("reads only the sited graph")
+    }
+    fn view_failed(
+        &self,
+        _: crate::engine::batch::job::SideIx,
+        _: &ViewFailure,
+    ) -> Result<crate::engine::batch::job::SideDoc, crate::engine::batch::job::JobFailure> {
+        unreachable!("done off the program")
+    }
+    fn sited(
+        &self,
+        _: crate::engine::batch::job::SideIx,
+        g: Result<&crate::program::impact_graph::SitedGraph, &str>,
+    ) -> Result<crate::engine::batch::job::SideDoc, crate::engine::batch::job::JobFailure> {
+        Ok(crate::engine::batch::job::SideDoc::new(
+            g.map(|g| g.text()).map_err(str::to_string),
+        ))
+    }
+    fn serialize(&self, doc: crate::engine::batch::job::Doc) -> JobOutput {
+        match doc.one::<Result<String, String>>().expect("one side") {
+            Ok(t) => JobOutput::lines(&[t], 0),
+            Err(e) => JobOutput::lines(&[e], 1),
+        }
+    }
+}
+
+/// M0-T4 (agent-tasks design §1.3): a graph-only session publishes a graph
+/// revision; it answers a sited-graph job exactly as the one-shot driver
+/// does (the same text, built from a cold program), refuses a model job with
+/// the reason, and follows a body edit.
+///
+/// DISCRIMINATION (2026-11-05): letting the model job fall through to the
+/// one-shot path (`return Ok(crate::engine::batch::standalone_output(job))`
+/// in `GraphRevision::answer`) fails "a model job is refused".
+#[test]
+fn a_graph_only_session_answers_sited_jobs_and_refuses_model_jobs() {
+    let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
+    let ws = dir.path();
+    let s = Arc::new(ResidentSession::graph_only(ws.to_path_buf(), "test".into()));
+    let graph = |p: &Pinned| match &p.built {
+        Built::Graph(g) => Arc::clone(g),
+        _ => panic!("a graph-only session publishes a graph revision"),
+    };
+    let p = s.pin(Freshness::Fresh, &never).unwrap();
+    let g = graph(&p);
+    let warm = g.answer(&SitedTextJob { inputs: &g.inputs }).unwrap();
+    let cold_inputs = WorkspaceInputs::read(ws, &REVISION_READ);
+    let cold = crate::engine::batch::standalone_output(&SitedTextJob {
+        inputs: &cold_inputs,
+    });
+    assert_eq!(warm, cold, "the one-shot driver's answer");
+    assert_eq!(warm.exit, 0);
+    let model_job = crate::engine::l4::effect_query_cli::QueryJob::effects(
+        &g.inputs, ROUTINE, "test", true, false,
+    );
+    match g.answer(&model_job) {
+        Err(crate::engine::resident::store::PrepareError::Engine(m)) => {
+            assert!(
+                m.contains("graph-only") && m.contains("needs a model"),
+                "{m}"
+            );
+        }
+        Err(e) => panic!("a model job is refused, with the reason: {e:?}"),
+        Ok(_) => panic!("a model job is refused"),
+    }
+    edit(
+        ws,
+        "        \"Widget Mgt\".Compute(5);",
+        "        \"Widget Mgt\".Compute(5);\n        CallEmbeddedSourceDep();",
+    );
+    let p2 = s.pin(Freshness::Fresh, &never).unwrap();
+    let g2 = graph(&p2);
+    assert_eq!(g2.id.generation, 2);
+    assert_eq!(s.stats().last_build_class.as_deref(), Some("B"));
+    assert_eq!(g2.sited.text(), sited_cold(ws));
 }

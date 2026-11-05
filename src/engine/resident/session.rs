@@ -30,7 +30,7 @@ use crate::engine::batch::job::{ViewFailure, ViewKey, ViewNeeds};
 use crate::engine::gate::run::{AnalysisTarget, TargetFailure, build_view_model};
 use crate::engine::resident::budget::{Budget, BudgetStatus, Case, Refusal, Reservation};
 use crate::engine::resident::manifest::{Hashing, Manifest, check_consistent};
-use crate::engine::resident::revision::Revision;
+use crate::engine::resident::revision::{GraphRevision, Revision};
 use crate::engine::resident::store::Stop;
 use crate::program::inputs::{WorkspaceInputs, WorkspaceNeeds};
 use crate::program::session::WorkspaceSession;
@@ -73,6 +73,8 @@ pub struct FailedBuild {
 #[derive(Clone)]
 pub enum Built {
     Revision(Arc<Revision>),
+    /// A graph-only session's revision (M0-2).
+    Graph(Arc<GraphRevision>),
     Failed(Arc<FailedBuild>),
 }
 
@@ -82,6 +84,7 @@ impl Built {
     pub fn revision_id(&self) -> Option<RevisionId> {
         match self {
             Built::Revision(r) => Some(r.id.clone()),
+            Built::Graph(g) => Some(g.id.clone()),
             Built::Failed(_) => None,
         }
     }
@@ -91,6 +94,7 @@ impl Built {
     pub fn inputs(&self) -> &Arc<WorkspaceInputs> {
         match self {
             Built::Revision(r) => &r.inputs,
+            Built::Graph(g) => &g.inputs,
             Built::Failed(f) => &f.inputs,
         }
     }
@@ -192,6 +196,8 @@ pub struct ResidentSession {
     /// Whether each build makes the sited graph ([`Self::with_sited`],
     /// [`Self::builds_sited`]).
     sited: std::sync::atomic::AtomicBool,
+    /// A graph-only session ([`Self::graph_only`], M0-2).
+    graph_only: bool,
 }
 
 impl ResidentSession {
@@ -214,7 +220,27 @@ impl ResidentSession {
             budget: None,
             low_mem: false,
             sited: std::sync::atomic::AtomicBool::new(false),
+            graph_only: false,
         }
+    }
+
+    /// A graph-only session (agent-tasks design §1.2 M0-2) for `workspace`,
+    /// cross-app: each build makes the program and its sited graph and no
+    /// model ([`Built::Graph`]); the workspace session keeps what its next
+    /// refresh reuses (per-file parses and resolutions; under `--low-mem`, no
+    /// dependency trees).
+    #[must_use]
+    pub fn graph_only(workspace: PathBuf, instance_id: String) -> ResidentSession {
+        ResidentSession {
+            graph_only: true,
+            ..ResidentSession::new(workspace, false, instance_id)
+        }
+    }
+
+    /// Whether this session is graph-only.
+    #[must_use]
+    pub fn is_graph_only(&self) -> bool {
+        self.graph_only
     }
 
     /// The session building the sited graph with every revision when
@@ -605,13 +631,32 @@ impl ResidentSession {
             let inputs = WorkspaceInputs::read(&self.workspace, &REVISION_READ);
             self.hook(BuildPoint::AfterRead, attempt);
             let consumed = Manifest::consumed(&inputs, self.single_app);
-            let want_sited = self.sited.load(Ordering::SeqCst);
+            let want_sited = self.graph_only || self.sited.load(Ordering::SeqCst);
             let mut sited: Option<SitedBuild> = None;
-            let target = build_target_with(&mut b.workspace, &inputs, self.single_app, &mut |p| {
-                if want_sited {
-                    sited = build_sited(p, cancel_sited);
+            let target = if self.graph_only {
+                // The program and its sited graph, no model (M0-2): the
+                // workspace session still keeps what its next refresh reuses.
+                match b.workspace.refresh_program(&inputs) {
+                    Ok(p) => {
+                        sited = build_sited(&p, &|| false);
+                        Ok(None)
+                    }
+                    Err(e) => Err(ViewFailure {
+                        target: TargetFailure::CrossApp(
+                            crate::program::model::program_calls::CrossAppFailure::Build(e),
+                        ),
+                        analyze: None,
+                        inputs: Arc::clone(&inputs),
+                    }),
                 }
-            });
+            } else {
+                build_target_with(&mut b.workspace, &inputs, self.single_app, &mut |p| {
+                    if want_sited {
+                        sited = build_sited(p, cancel_sited);
+                    }
+                })
+                .map(Some)
+            };
             self.hook(BuildPoint::AfterBuild, attempt);
             let no_dirty = BTreeSet::new();
             let m_after = Manifest::observe(
@@ -627,14 +672,31 @@ impl ResidentSession {
                 lock(&self.stats).discarded_builds += 1;
                 continue;
             }
+            let next_id = || RevisionId {
+                engine_instance_id: self.instance_id.clone(),
+                generation: self.generation.fetch_add(1, Ordering::SeqCst) + 1,
+                inputs_stamp: consumed.stamp(),
+            };
+            let count_sited = |s: &SitedBuild| {
+                let mut st = lock(&self.stats);
+                st.sited_builds += 1;
+                st.last_sited_ms = Some(s.ms);
+                st.last_sited_bytes = Some(s.graph.bytes());
+            };
             let built = match target {
-                Ok(target) => {
-                    let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-                    let id = RevisionId {
-                        engine_instance_id: self.instance_id.clone(),
-                        generation,
-                        inputs_stamp: consumed.stamp(),
-                    };
+                Ok(None) => match sited.take() {
+                    Some(s) => {
+                        count_sited(&s);
+                        Built::Graph(Arc::new(GraphRevision {
+                            id: next_id(),
+                            inputs,
+                            sited: Arc::new(s.graph),
+                        }))
+                    }
+                    None => unreachable!("an uncancellable sited build finishes"),
+                },
+                Ok(Some(target)) => {
+                    let id = next_id();
                     // The L4 seed of the last published revision (§6.9):
                     // the new revision's solve starts from it when the
                     // seed key matches.
@@ -644,11 +706,7 @@ impl ResidentSession {
                     };
                     let mut rev = Revision::seeded(id, inputs, target, seed_from);
                     if let Some(s) = sited.take() {
-                        let mut st = lock(&self.stats);
-                        st.sited_builds += 1;
-                        st.last_sited_ms = Some(s.ms);
-                        st.last_sited_bytes = Some(s.graph.bytes());
-                        drop(st);
+                        count_sited(&s);
                         rev = rev.with_sited(Arc::new(s.graph));
                     }
                     Built::Revision(Arc::new(rev))

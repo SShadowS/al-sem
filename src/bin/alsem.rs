@@ -3077,11 +3077,15 @@ mod engine {
                 al_sem::engine::resident::budget::default_budget(single, self.low_mem)
             });
             let budget = Arc::new(Budget::new(bytes, Arc::new(ProcMeter), estimates));
-            let session =
+            let session = if params.universe == Universe::GraphOnly {
+                ResidentSession::graph_only(params.workspace.clone(), instance.to_string())
+            } else {
                 ResidentSession::new(params.workspace.clone(), single, instance.to_string())
-                    .with_low_mem(self.low_mem)
-                    .with_sited(self.graph)
-                    .with_budget(Arc::clone(&budget));
+            };
+            let session = session
+                .with_low_mem(self.low_mem)
+                .with_sited(self.graph)
+                .with_budget(Arc::clone(&budget));
             *self.open.lock().unwrap_or_else(|p| p.into_inner()) = Some(Open {
                 workspace: params.workspace.clone(),
                 absolute,
@@ -3457,6 +3461,15 @@ mod engine {
                     }
                 }
             }
+            // A graph-only engine (agent-tasks M0-2) answers a sited-graph
+            // job off its graph and refuses every other with the reason.
+            Built::Graph(g) => match g.answer(job) {
+                Ok(out) => (out, Some(g.id.clone())),
+                Err(PrepareError::Engine(m)) => return failed(FailedOutcome::EngineError, &m),
+                Err(PrepareError::Cancelled) => return stopped(Stop::Cancelled, &["pin"]),
+                Err(PrepareError::Deadline) => return stopped(Stop::Deadline, &["pin"]),
+                Err(PrepareError::Budget(m)) => return failed(FailedOutcome::Budget, &m),
+            },
             Built::Failed(f) if served => (answer_failed_build(job, &f.failure), None),
             // The one-shot job path over the pinned read: the same inputs,
             // its own model (equal to the revision's by the stage-4 contract).

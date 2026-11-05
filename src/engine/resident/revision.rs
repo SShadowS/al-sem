@@ -1472,11 +1472,20 @@ impl Revision {
                 "the job was made over another read than the pinned revision's".into(),
             ));
         }
-        if (d.key.universe == crate::engine::batch::job::ViewUniverse::SingleApp) != self.single_app
-            || d.key.no_roots_config
-            || d.needs.analyze_extras
-            || d.needs.graph
-        {
+        let universe_differs = (d.key.universe
+            == crate::engine::batch::job::ViewUniverse::SingleApp)
+            != self.single_app;
+        if d.needs.sited && !universe_differs && !d.needs.model {
+            let Some(g) = self.sited() else {
+                return Err(PrepareError::Engine(format!(
+                    "'{}' reads the sited graph, which this revision did not build \
+                     (a request that reads it pins with `pin_sited`)",
+                    job.name()
+                )));
+            };
+            return Ok(answer_sited(job, d.side, &g));
+        }
+        if universe_differs || d.key.no_roots_config || d.needs.analyze_extras || d.needs.graph {
             return Err(PrepareError::Engine(format!(
                 "'{}' needs a view this revision did not build",
                 job.name()
@@ -1533,6 +1542,57 @@ pub fn answer_failed_build(
     let (side, lines) = capture(|| job.view_failed(d.side, failure));
     let doc = job.finalize(vec![side]);
     crate::engine::batch::serialize(0, job, doc, lines)
+}
+
+/// A sited-graph job's answer off `g`: what the one-shot driver writes for
+/// it (`Job::sited` over the graph built from the same program).
+fn answer_sited(
+    job: &dyn Job,
+    side: crate::engine::batch::job::SideIx,
+    g: &crate::program::impact_graph::SitedGraph,
+) -> JobOutput {
+    let (side, lines) = capture(|| job.sited(side, Ok(g)));
+    let doc = job.finalize(vec![side]);
+    crate::engine::batch::serialize(0, job, doc, lines)
+}
+
+/// A graph-only revision (agent-tasks design §1.2 M0-2): the program's
+/// sited graph over one acquired read, and no model (no L4, no fold, no
+/// trees). The test universe (§4) and the impact base child (§10) are of
+/// this kind. It answers only jobs that read the sited graph; any other is
+/// refused with the reason.
+pub struct GraphRevision {
+    pub id: RevisionId,
+    pub inputs: Arc<WorkspaceInputs>,
+    pub sited: Arc<crate::program::impact_graph::SitedGraph>,
+}
+
+impl GraphRevision {
+    /// `job` answered off the sited graph, or why this revision cannot.
+    pub fn answer(&self, job: &dyn Job) -> Result<JobOutput, PrepareError> {
+        let mut demands = job.demands();
+        if demands.len() != 1 {
+            return Err(PrepareError::Engine(format!(
+                "'{}' reads {} views; a revision serves one",
+                job.name(),
+                demands.len()
+            )));
+        }
+        let d = demands.pop().expect("one demand");
+        if !Arc::ptr_eq(&d.inputs, &self.inputs) {
+            return Err(PrepareError::Engine(
+                "the job was made over another read than the pinned revision's".into(),
+            ));
+        }
+        if !d.needs.sited || d.needs.model {
+            return Err(PrepareError::Engine(format!(
+                "this engine is graph-only (it builds the program and its sited graph, no \
+                 model): '{}' needs a model",
+                job.name()
+            )));
+        }
+        Ok(answer_sited(job, d.side, &self.sited))
+    }
 }
 
 /// A job whose resolve failed, as the driver writes it.

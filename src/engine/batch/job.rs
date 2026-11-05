@@ -84,6 +84,11 @@ pub struct ViewNeeds {
     /// assembly from the IR. Only `alsem explain` sets it. Out of [`ViewKey`]
     /// for the same reason as `rules`.
     pub card_text: bool,
+    /// The program's sited graph (agent-tasks design §1.2 M0-1/M0-2): a
+    /// one-shot view builds it off the lent program (so `graph` is set with
+    /// it); a resident revision serves its kept `ArtifactKey::Sited`. The
+    /// job's side is [`Job::sited`].
+    pub sited: bool,
 }
 
 impl ViewNeeds {
@@ -93,6 +98,7 @@ impl ViewNeeds {
         model: true,
         rules: false,
         card_text: false,
+        sited: false,
     };
     pub const ANALYZE: ViewNeeds = ViewNeeds {
         analyze_extras: true,
@@ -104,6 +110,12 @@ impl ViewNeeds {
         model: false,
         rules: false,
         card_text: false,
+        sited: false,
+    };
+    /// A job reading the sited graph alone (no model).
+    pub const SITED: ViewNeeds = ViewNeeds {
+        sited: true,
+        ..ViewNeeds::GRAPH
     };
     /// `alsem explain`: the model with its rules and its card text.
     pub const EXPLAIN: ViewNeeds = ViewNeeds {
@@ -131,6 +143,7 @@ impl ViewNeeds {
             model: self.model || other.model,
             rules: self.rules || other.rules,
             card_text: self.card_text || other.card_text,
+            sited: self.sited || other.sited,
         }
     }
 
@@ -638,6 +651,16 @@ pub trait Job {
         _program: Result<&ResolvedProgram, &str>,
     ) -> Result<SideDoc, JobFailure> {
         unreachable!("a job that reads no program")
+    }
+    /// A sited-graph demand ([`ViewNeeds::sited`]): off the program's sited
+    /// graph (built from the lent program one-shot, kept by a resident
+    /// revision), or the program's build error. Its side is done here.
+    fn sited(
+        &self,
+        _side: SideIx,
+        _graph: Result<&crate::program::impact_graph::SitedGraph, &str>,
+    ) -> Result<SideDoc, JobFailure> {
+        unreachable!("a job that reads no sited graph")
     }
     /// After the job's last view. The default: a job of at most one side.
     fn finalize(&self, sides: Vec<Result<SideDoc, JobFailure>>) -> Doc {
