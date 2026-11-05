@@ -4,7 +4,9 @@
 //! For each non-trivial ExplicitCommit transaction span (≥2 routines AND (≥2 PHYSICAL tables
 //! written before the Commit OR !coverage_complete)), emit an info-level finding describing
 //! what the transaction holds when it commits. The tables and events are the span's PENDING
-//! ones (engine-switch S8 gap 3, `pending_writes`), not everything the span can reach.
+//! ones (engine-switch S8 gap 3, `pending_writes`), not everything the span can reach,
+//! and `coverage_complete` reads only what may run before the Commit (a callee called
+//! after it is in the next transaction; `transaction_spans`, "Statement order").
 //! Aimed at code review / agent context, not a bug to fix.
 //!
 //! Within-detector sort by `a.id.cmp(&b.id)` (byte order).

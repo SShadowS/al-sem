@@ -18,11 +18,18 @@
 //! call toward the Commit itself never counts, even inside a loop: what it
 //! reaches is that span member's to count.
 //!
+//! A `Commit()` statement on the way to the target (an earlier statement of a
+//! block that holds it) ends the earlier transaction: what ran before it is
+//! not pending, and the routine's callers are not in the span either
+//! ([`Before::committed`], which `transaction_spans` reads as the span's start).
+//!
 //! Known over-approximations (a write that cannot be pending is counted): an
-//! earlier statement's branch that always exits, and a span member that
-//! commits earlier in its own body. Known under-approximation: the other
-//! subscribers of an event a span member raises (they run in an unknown order
-//! around the one that reaches the Commit) are not counted.
+//! earlier statement's branch that always exits, a Commit inside a branch or a
+//! loop (it may not run, so it ends nothing), and a callee that commits (its
+//! whole cone counts, also what its own Commit already ended). Known
+//! under-approximation: the other subscribers of an event a span member raises
+//! (they run in an unknown order around the one that reaches the Commit) are
+//! not counted.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -79,7 +86,7 @@ pub(crate) fn toward_sites<'a>(
     (sites, unsited)
 }
 
-/// The run-wide lookups [`pending_before`] reads.
+/// The run-wide lookups [`pending_of`] reads.
 #[derive(Clone, Copy)]
 pub(crate) struct PendingCtx<'a> {
     pub fwd: &'a ForwardSites<'a>,
@@ -90,16 +97,29 @@ pub(crate) struct PendingCtx<'a> {
     pub collided: &'a HashSet<&'a str>,
 }
 
-/// What `r` has pending when control reaches any of `targets`. With no tree, a
-/// target the tree does not hold, or `whole_body`, every site of `r` counts.
-pub(crate) fn pending_before(
-    r: &ModelRoutine,
-    targets: &[&str],
-    whole_body: bool,
-    cx: &PendingCtx<'_>,
-) -> Pending {
+/// The sites of a routine that may run, in the open transaction, before any of
+/// its targets ([`sites_before`]).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct Before {
+    /// The sites, without the targets themselves.
+    pub sites: BTreeSet<String>,
+    /// The order is unknown (no tree, a target the tree does not hold, or
+    /// `whole_body`): `sites` is every site of the routine.
+    pub all: bool,
+    /// The order is known and a `Commit()` statement runs on the way to EVERY
+    /// target (an earlier statement of a block that holds it, not in a branch
+    /// or a loop of its own): the transaction open when the routine was
+    /// entered has ended before any target is reached.
+    pub committed: bool,
+}
+
+/// The sites of `r` that may run in the open transaction before control
+/// reaches any of `targets`. With no tree, a target the tree does not hold, or
+/// `whole_body`, every site of `r` counts.
+pub(crate) fn sites_before(r: &ModelRoutine, targets: &[&str], whole_body: bool) -> Before {
     let mut sites: BTreeSet<String> = BTreeSet::new();
     let mut all = whole_body || r.statement_tree.is_none();
+    let mut committed = !targets.is_empty();
     let commits: BTreeSet<&str> = r
         .operation_sites
         .iter()
@@ -111,14 +131,23 @@ pub(crate) fn pending_before(
     {
         for t in targets {
             let mut before = BTreeSet::new();
-            if !walk_list(std::slice::from_ref(tree), t, &commits, &mut before) {
+            let mut cleared = false;
+            if !walk_list(
+                std::slice::from_ref(tree),
+                t,
+                &commits,
+                &mut before,
+                &mut cleared,
+            ) {
                 all = true;
                 break;
             }
+            committed &= cleared;
             sites.extend(before);
         }
     }
     if all {
+        committed = false;
         sites.clear();
         if let Some(tree) = &r.statement_tree {
             collect(tree, &mut sites);
@@ -133,8 +162,23 @@ pub(crate) fn pending_before(
     for t in targets {
         sites.remove(*t);
     }
+    Before {
+        sites,
+        all,
+        committed,
+    }
+}
+
+/// What `r` has pending when control reaches any of `targets`: the effects of
+/// `before`, which [`sites_before`] computed over the same `targets`.
+pub(crate) fn pending_of(
+    r: &ModelRoutine,
+    before: &Before,
+    targets: &[&str],
+    cx: &PendingCtx<'_>,
+) -> Pending {
     let targets: BTreeSet<&str> = targets.iter().copied().collect();
-    effects(r, &sites, &targets, cx)
+    effects(r, &before.sites, &targets, cx)
 }
 
 /// The effects of `sites` in `r`: its own physical writes and published events
@@ -308,12 +352,14 @@ fn is_commit(n: &PCFNNode, commits: &BTreeSet<&str>) -> bool {
 /// Add to `out` the sites that may run before `t` in the statement list
 /// `nodes`; `false` when `t` is not in it. A `Commit()` statement on the way
 /// ends the earlier transaction: everything collected so far (including what
-/// the enclosing levels added) is committed, so `out` restarts after it.
+/// the enclosing levels added) is committed, so `out` restarts after it, and
+/// `cleared` is set.
 fn walk_list(
     nodes: &[PCFNNode],
     t: &str,
     commits: &BTreeSet<&str>,
     out: &mut BTreeSet<String>,
+    cleared: &mut bool,
 ) -> bool {
     let Some(k) = nodes.iter().position(|n| contains(n, t)) else {
         return false;
@@ -321,18 +367,25 @@ fn walk_list(
     for n in &nodes[..k] {
         if is_commit(n, commits) {
             out.clear();
+            *cleared = true;
             continue;
         }
         collect_reaching(n, out);
     }
-    walk_node(&nodes[k], t, commits, out);
+    walk_node(&nodes[k], t, commits, out, cleared);
     true
 }
 
 /// `n` holds `t`: add what runs before `t` inside `n`.
-fn walk_node(n: &PCFNNode, t: &str, commits: &BTreeSet<&str>, out: &mut BTreeSet<String>) {
+fn walk_node(
+    n: &PCFNNode,
+    t: &str,
+    commits: &BTreeSet<&str>,
+    out: &mut BTreeSet<String>,
+    cleared: &mut bool,
+) {
     let leaves = kids(&n.condition_leaves);
-    if walk_list(leaves, t, commits, out) {
+    if walk_list(leaves, t, commits, out, cleared) {
         return; // `t` is in the condition (or the arguments)
     }
     // A condition (or a call's arguments) runs before the body (or the call).
@@ -352,13 +405,13 @@ fn walk_node(n: &PCFNNode, t: &str, commits: &BTreeSet<&str>, out: &mut BTreeSet
         // A `case` runs ONE branch: only the one that holds `t`.
         "case" => {
             if let Some(b) = kids(&n.children).iter().find(|b| contains(b, t)) {
-                walk_node(b, t, commits, out);
+                walk_node(b, t, commits, out, cleared);
             }
         }
         // Only the branch that holds `t` runs before it.
         _ => {
-            if !walk_list(kids(&n.children), t, commits, out) {
-                walk_list(kids(&n.else_children), t, commits, out);
+            if !walk_list(kids(&n.children), t, commits, out, cleared) {
+                walk_list(kids(&n.else_children), t, commits, out, cleared);
             }
         }
     }
@@ -405,7 +458,8 @@ mod tests {
             std::slice::from_ref(tree),
             t,
             &BTreeSet::new(),
-            &mut out
+            &mut out,
+            &mut false
         ));
         out.into_iter().collect()
     }
@@ -434,5 +488,48 @@ mod tests {
             None,
         );
         assert_eq!(before(&looped, "T"), vec!["T", "w"]);
+    }
+
+    /// `(sites before T, cleared)` with `C` the routine's one Commit.
+    fn before_committed(tree: &PCFNNode, t: &str) -> (Vec<String>, bool) {
+        let mut out = BTreeSet::new();
+        let mut cleared = false;
+        let commits: BTreeSet<&str> = ["C"].into_iter().collect();
+        assert!(walk_list(
+            std::slice::from_ref(tree),
+            t,
+            &commits,
+            &mut out,
+            &mut cleared
+        ));
+        (out.into_iter().collect(), cleared)
+    }
+
+    /// A Commit statement on the way to T ends the open transaction (`cleared`)
+    /// also when T is nested deeper; a Commit in a branch, in a loop, or after
+    /// T does not.
+    #[test]
+    fn a_commit_on_the_way_clears_and_a_branch_or_loop_commit_does_not() {
+        let b = |v: Vec<PCFNNode>| with("block", v, None);
+        let on_the_way = b(vec![
+            op("a"),
+            op("C"),
+            op("x"),
+            with("if", vec![b(vec![op("y"), op("T")])], None),
+        ]);
+        assert_eq!(
+            before_committed(&on_the_way, "T"),
+            (vec!["x".into(), "y".into()], true)
+        );
+        let in_branch = b(vec![
+            op("a"),
+            with("if", vec![b(vec![op("C")])], None),
+            op("T"),
+        ]);
+        assert!(!before_committed(&in_branch, "T").1);
+        let in_loop = b(vec![op("a"), with("while", vec![op("C"), op("T")], None)]);
+        assert!(!before_committed(&in_loop, "T").1);
+        let after = b(vec![op("a"), op("T"), op("C")]);
+        assert_eq!(before_committed(&after, "T"), (vec!["a".into()], false));
     }
 }
