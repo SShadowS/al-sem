@@ -402,7 +402,7 @@ pub fn dependency_closure_digest(workspace_root: &Path) -> Result<String, String
 /// golden's stamp).
 #[must_use]
 pub fn workspace_git_info(workspace_root: &Path) -> (Option<String>, Option<bool>) {
-    let sha = std::process::Command::new("git")
+    let sha = crate::git_env::git_command()
         .arg("-C")
         .arg(workspace_root)
         .arg("rev-parse")
@@ -414,7 +414,7 @@ pub fn workspace_git_info(workspace_root: &Path) -> (Option<String>, Option<bool
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
-    let dirty = std::process::Command::new("git")
+    let dirty = crate::git_env::git_command()
         .arg("-C")
         .arg(workspace_root)
         .arg("status")

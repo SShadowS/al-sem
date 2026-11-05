@@ -244,22 +244,10 @@ fn a_diff_that_does_not_match_the_working_tree_marks_its_routines() {
     );
 }
 
+/// `git <args>` in the test's own repository (`tests/common/git.rs`: never a
+/// hook's `GIT_DIR`, never the machine's config).
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args([
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "-c",
-            "commit.gpgsign=false",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "git {args:?}: {out:?}");
+    crate::git::run(dir, args);
 }
 
 /// B-3 through the binary: `--base HEAD` in a real repository: the merge
@@ -345,9 +333,7 @@ pub(crate) fn cdo_impact_ratchets() {
         return;
     };
     let top = ws.parent().unwrap().to_path_buf();
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(&top)
+    let out = crate::git::reader(&top)
         .args([
             "diff",
             "--no-color",

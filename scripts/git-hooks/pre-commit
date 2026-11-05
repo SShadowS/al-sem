@@ -60,6 +60,36 @@ set -uo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 
+# ── Nothing this hook starts may see the committer's repository ──────────────
+# ⟨2026-11-05⟩ Git hands a hook `GIT_DIR`, `GIT_INDEX_FILE` and `GIT_PREFIX`
+# (from a worktree `GIT_DIR` is absolute), and every process the hook starts
+# inherits them. They beat `git -C <dir>`: the impact tests' scratch
+# repositories (`git -C <tmp> init/add/commit`) became the COMMITTER's own —
+# a commit from a worktree recorded the tests' "fixture"/"base" commits on the
+# branch, replaced its index with their files and set `core.bare=true` in the
+# shared `.git/config`, which broke the main checkout.
+#
+# So every command below that is not the hook's own `git` runs through
+# `run_clean`, with every variable `git rev-parse --local-env-vars` names
+# removed (the hook's own `git` calls keep them: `git write-tree` must read the
+# index this commit records). The hook runs at the committing worktree's top,
+# so the scripts still find this repository by the ordinary search. The tests
+# are the second layer: they spawn git only through `al_sem::git_env`, which
+# drops the same variables (`tests/cli/cli_git_env_isolation.rs`). Fails
+# CLOSED: a hook that cannot list the variables blocks the commit.
+if ! git_local_vars="$(git rev-parse --local-env-vars)" || [ -z "$git_local_vars" ]; then
+    echo "pre-commit: 'git rev-parse --local-env-vars' failed — cannot isolate the" >&2
+    echo "  checks from this repository's git variables. Blocking the commit." >&2
+    exit 1
+fi
+git_env_unset=()
+while IFS= read -r var; do
+    [ -n "$var" ] && git_env_unset+=(-u "$var")
+done <<<"$git_local_vars"
+run_clean() {
+    env "${git_env_unset[@]}" "$@"
+}
+
 # ── Formatting, first and cheapest ───────────────────────────────────────────
 # CI's FIRST step is `cargo fmt --check`; when it fails, CI stops there and
 # NOTHING else runs — clippy, gen-syntax, tests, build and perf_bounds are all
@@ -101,7 +131,7 @@ if git diff --cached --name-only | grep -qE '\.rs$'; then
         echo "  or verify formatting manually: rustfmt <each touched file> (never bare" >&2
         echo "  'cargo fmt' — CLAUDE.md). Blocking the commit either way." >&2
         fmt_rc=1
-    elif ! "$repo_root/scripts/ci-steps" fmt; then
+    elif ! run_clean "$repo_root/scripts/ci-steps" fmt; then
         echo "pre-commit: cargo fmt --check FAILED (CI's first step) — fix with:" >&2
         echo "  rustfmt <each touched file>     # never bare 'cargo fmt' (CLAUDE.md)" >&2
         fmt_rc=1
@@ -118,7 +148,7 @@ fi
 # Coverage first, and it is cheap (a directory listing). A golden family that no
 # target runs is invisible to the verification below — the gate passes while never
 # looking at it, which is exactly how 15-of-27 coverage survived two arcs.
-if ! "$repo_root/scripts/check-goldens" --verify-coverage; then
+if ! run_clean "$repo_root/scripts/check-goldens" --verify-coverage; then
     echo "pre-commit: golden COVERAGE check failed (see above) — fix scripts/check-goldens" >&2
     exit 1
 fi
@@ -138,7 +168,7 @@ if [ -f "$stamp_file" ] && [ "$(cat "$stamp_file")" = "$(git write-tree)" ]; the
 fi
 
 echo "pre-commit: engine/fixture/golden change staged — verifying goldens..."
-if ! "$repo_root/scripts/check-goldens"; then
+if ! run_clean "$repo_root/scripts/check-goldens"; then
     echo "pre-commit: golden verification FAILED. Regenerate + inspect:" >&2
     echo "  scripts/check-goldens --regen   # then review the diff and re-stage" >&2
     exit 1

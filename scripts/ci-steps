@@ -26,6 +26,15 @@
 #   all    — exactly what CI runs; with scripts/cdo-gate it is the branch gate
 set -uo pipefail
 
+# ⟨2026-11-05⟩ Drop a git hook's repository variables (`GIT_DIR`,
+# `GIT_INDEX_FILE`, ...) before anything runs: with them, a test's
+# `git -C <tmp> commit` writes into the committer's repository. This script's
+# own git calls (`--show-toplevel`, `diff`, `merge-base`, `tree-stamp`) then
+# find the repository by the ordinary search from the current folder, which is
+# the checkout's top when a hook or a person starts it there.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars 2>/dev/null)
+
 step="${1:-}"
 
 # Effective grammar dir: TREE_SITTER_AL_PATH if set (CI always sets it; a

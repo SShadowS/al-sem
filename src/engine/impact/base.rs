@@ -23,9 +23,10 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 
-/// `git <args>` in `dir`, its stdout.
+/// `git <args>` in `dir`, its stdout. `dir` alone picks the repository: a
+/// hook's `GIT_DIR` and friends are dropped ([`crate::git_env`]).
 fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    let out = crate::git_env::git_command()
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -112,7 +113,7 @@ pub fn materialize(
     let top = git(workspace, &["rev-parse", "--show-toplevel"])?;
     let made = (|| {
         std::fs::create_dir_all(&ws).map_err(|e| e.to_string())?;
-        let mut archive = Command::new("git")
+        let mut archive = crate::git_env::git_command()
             .arg("-C")
             .arg(&top)
             .args(["archive", "--format=tar", &tree])
