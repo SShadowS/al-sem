@@ -186,7 +186,9 @@ enum Commands {
     /// (always a file, with a summary), `alsem_query_effects`,
     /// `alsem_query_touches`, `alsem_tests` (a composite request: the
     /// production engine and one test-universe engine per test app),
-    /// `alsem_status`, `alsem_refresh`.
+    /// `alsem_impact` (a composite request too: the change accounted, its
+    /// routines' callers, current effects and tests), `alsem_status`,
+    /// `alsem_refresh`.
     ///
     /// Files go only into a private folder the server creates under
     /// `--output-root`; a tool's `out` must be inside it. The engine child

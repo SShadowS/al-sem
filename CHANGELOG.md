@@ -63,6 +63,17 @@ The blast radius of a change, current effects only. Spec:
   `tests/cli-output-goldens/impact/`.
 - The diff check ignores a byte-order mark (found on CDO: 54 files of the 94-file range added
   one, and read as mismatched before).
+- **MCP tool `alsem_impact`** (B-8, B-10): `routines` | `files` | `diff` (+ `diffRoot`) | `base`,
+  with `testApps`, `tests` (default true), `maxRoots`, `detail`, `assumeNoDependents`, `format`
+  (human by default). The front end resolves the comparison tuple (`base`: git, read only) before
+  it sends anything, then runs the parts as a composite request, one at a time (the main and up
+  parts on the production engine, which builds its sited graph on the first up part; the select
+  parts on the test engines, as `alsem_tests`). The stdout is `alsem impact`'s bytes except the
+  tuple's inputs stamp, which is the main part's revision (a one-shot CLI run has none); the
+  envelope's `revisions` names every part's revision. Over the inline cap (40 KiB) or the client's
+  50,000-character budget the answer goes to a file with a `summary` (the comparison, the
+  accounting line, the first five routines, the tests line). The LSP front end refuses it, as it
+  refuses `alsem_tests`. The server instructions name it for reviewing a diff or a PR.
 
 ### Added (agent tasks, milestone C: test selection)
 

@@ -120,8 +120,22 @@ pub fn orchestrate(
     opts: RenderOpts,
     run: &mut RunPart<'_>,
 ) -> Result<Rendered, String> {
+    orchestrate_with(req, cmp, opts, run, &|| None)
+}
+
+/// [`orchestrate`], with `inputs_stamp` asked once the main part answered:
+/// the revision's manifest stamp a resident engine answered from (the MCP
+/// front end reads it off the part's envelope), the tuple's `head`.
+pub fn orchestrate_with(
+    req: &ImpactRequest,
+    mut cmp: Comparison,
+    opts: RenderOpts,
+    run: &mut RunPart<'_>,
+    inputs_stamp: &dyn Fn() -> Option<String>,
+) -> Result<Rendered, String> {
     let main_argv = req.main_argv();
     let mut main = run(Target::Production, main_argv.clone())?;
+    cmp.inputs_stamp = inputs_stamp();
     let ids = root_ids(&main);
     let up = if ids.is_empty() {
         Err("no changed routine resolved".to_string())

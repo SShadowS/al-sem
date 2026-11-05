@@ -394,6 +394,18 @@ pub fn serve(
                             Err(e) => log(&format!("a tests call could not start: {e}")),
                         }
                     }
+                    // Impact (agent-tasks §8.4): a composite request too.
+                    ToolCall::Impact(call) => {
+                        checkers.retain(|h| !h.is_finished());
+                        let pool2 = Arc::clone(&pool);
+                        let spawned = std::thread::Builder::new()
+                            .name("alsem-impact".into())
+                            .spawn(move || pool2.run_impact(&id, &call));
+                        match spawned {
+                            Ok(h) => checkers.push(h),
+                            Err(e) => log(&format!("an impact call could not start: {e}")),
+                        }
+                    }
                 }
             }
             other => out.send(&error(

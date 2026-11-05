@@ -483,6 +483,18 @@ impl LspEngines {
                     )),
                 );
             }
+            ToolCall::Impact(_) => {
+                drop(state);
+                return self.reply(
+                    &id,
+                    Err((
+                        codes::INVALID_PARAMS,
+                        "alsem_impact is not served through the LSP front end; use the CLI \
+                         (alsem impact) or the MCP tool"
+                            .into(),
+                    )),
+                );
+            }
         };
         let universe = match &request {
             Request::Command { call, .. } => call.universe,

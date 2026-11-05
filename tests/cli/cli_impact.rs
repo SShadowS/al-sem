@@ -321,3 +321,106 @@ fn refused_combinations() {
         assert!(err.contains(want), "{args:?}: {err}");
     }
 }
+
+/// B1's CDO acceptance (`scripts/cdo-gate`), on the pinned baseline:
+/// - the 94-file range `bc3ccb18~5..bc3ccb18` (the diff made with `git diff`,
+///   read only): 699 routines, 12,395 changed lines in buckets that sum, every
+///   one of digest's 93 `hunk-outside-routines` named among the hunks that
+///   touch no routine, no diff/working-tree mismatch (the range ends at the
+///   checked-out commit; 54 of its files add a byte-order mark), and the
+///   human answer bounded under the 40 KiB inline cap with its fold;
+/// - `CDO Telemetry::UpdateLastUpload`: its caller `QueueUpload` and the 3
+///   `CDO Telemetry Tests` tests, local, 1 hop.
+///
+/// Run by `output_cdo::cdo_impact_ratchets` (the module `cdo-gate` runs).
+pub(crate) fn cdo_impact_ratchets() {
+    let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
+        return;
+    };
+    let top = ws.parent().unwrap().to_path_buf();
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&top)
+        .args([
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "bc3ccb18~5",
+            "bc3ccb18",
+            "--",
+            "Cloud",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let diff = String::from_utf8(out.stdout).unwrap();
+    let root = top.to_string_lossy().to_string();
+    let v = json(&ws, &["--diff", "-", "--diff-root", &root], Some(&diff));
+    let i = &v["input"];
+    assert_eq!(i["rootsResolved"], 699);
+    assert_eq!(i["accounting"]["changedLines"], 12395);
+    assert_eq!(i["accounting"]["totals"]["total"], 12395);
+    for f in i["accounting"]["files"].as_array().unwrap() {
+        assert_eq!(
+            f["buckets"]["total"].as_u64().unwrap(),
+            f["added"].as_u64().unwrap() + f["removed"].as_u64().unwrap(),
+            "{}",
+            f["path"]
+        );
+    }
+    let named: std::collections::BTreeSet<(String, i64, i64)> = i["hunksOutsideRoutines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| {
+            (
+                h["file"].as_str().unwrap().to_string(),
+                h["startLine"].as_i64().unwrap(),
+                h["endLine"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    let digest: Vec<&Value> = i["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["kind"] == "hunk-outside-routines")
+        .collect();
+    assert_eq!(digest.len(), 93);
+    for d in digest {
+        let k = (
+            d["file"].as_str().unwrap().to_string(),
+            d["startLine"].as_i64().unwrap(),
+            d["endLine"].as_i64().unwrap(),
+        );
+        assert!(named.contains(&k), "{k:?} not named");
+    }
+    assert!(
+        i["mismatches"].as_array().unwrap().is_empty(),
+        "{}",
+        i["mismatches"]
+    );
+    let (human, _, code) = impact(&ws, &["--diff", "-", "--diff-root", &root], Some(&diff));
+    assert_eq!(code, 0);
+    assert!(human.len() <= 40 * 1024, "{} bytes", human.len());
+    assert!(human.contains("  … +679 routines"), "{human}");
+
+    let v = json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"], None);
+    let r = &v["roots"][0];
+    assert_eq!(
+        r["up"]["callers"]["first"][0]["display"], "Codeunit CDO Telemetry::QueueUpload",
+        "{r:#}"
+    );
+    assert_eq!(r["tests"]["status"], "reached");
+    assert_eq!(r["tests"]["local"], 3);
+    assert_eq!(r["tests"]["nearest"]["hops"], 1);
+    let names: Vec<&str> = v["tests"]["runFirst"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["codeunit"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["CDO Telemetry Tests"; 3]);
+}

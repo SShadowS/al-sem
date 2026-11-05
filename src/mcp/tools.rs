@@ -133,6 +133,17 @@ pub struct TestsCall {
     pub opts: crate::engine::test_select::render::RenderOpts,
 }
 
+/// A call of `alsem_impact` (agent-tasks §8): `command` is the CLI command
+/// it equals (`alsem impact …`); the pool resolves the comparison tuple
+/// (git, read only) and runs the parts as a composite request
+/// ([`crate::engine::impact::run`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImpactCall {
+    pub command: CommandCall,
+    pub request: crate::engine::impact::run::ImpactRequest,
+    pub opts: crate::engine::impact::render::RenderOpts,
+}
+
 /// A validated tool call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolCall {
@@ -140,6 +151,7 @@ pub enum ToolCall {
     Status(EngineCall),
     Refresh(EngineCall),
     Tests(TestsCall),
+    Impact(ImpactCall),
 }
 
 /// The inline cap when a call names none (MCP output plan 1c, item T's E4):
@@ -174,6 +186,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "alsem_query_effects",
     "alsem_query_touches",
     "alsem_tests",
+    "alsem_impact",
     "alsem_status",
     "alsem_refresh",
 ];
@@ -489,6 +502,64 @@ pub fn tool_list() -> Vec<Value> {
                     (
                         "maxTests",
                         json!({"type": "integer", "minimum": 0, "description": "List at most this many tests in runFirst; the counts stay whole."}),
+                    ),
+                    (
+                        "format",
+                        json!({"type": "string", "enum": ["human", "json"], "description": "Output format (default human)."}),
+                    ),
+                ],
+                &[],
+                true,
+            ),
+        ),
+        tool(
+            "alsem_impact",
+            "Reviewing a diff or a PR: what the change touches and who it reaches, on the current revision. Exactly one of `routines` (selectors), `files` (workspace-relative .al files: every routine in them), `diff` (a unified diff's text; `diffRoot` is the folder its paths are relative to, default the git top level) or `base` (a git ref: the working tree against the merge base of the ref and HEAD, committed, staged, unstaged and untracked .al files; git is only read). The input accounting comes first: the comparison tuple (requested ref, resolved commit, merge base, comparison base, HEAD and the revision's inputs stamp, the diff's hash), then every changed line in one bucket (routine body or signature, object declarations by kind: fields, keys, global vars, properties, actions, layout …, outside objects, removed routine text, unmapped with the reason), the hunks outside routines, files not mapped, diff lines that do not match the working tree. Then per changed routine, ranked reached-from-a-user-or-job first, then by ancestors: its current effects (writes, commits, UI, errors, events), who reaches it (direct callers with their call site, ancestors by tier, page actions by caption, API pages, job queue, event subscribers and publishers, external callers) and its tests (tests reaching it, the nearest; a routine no test universe has gets its nearest tested caller), then the tests line (selection complete and why not, a codeunit filter). Current effects only: no before/after and nothing called added or deleted (that needs a base build, not in this tool yet). Default (`format: human`): the first 20 routines, a few lines each with the first item of each list; 2-5 KB for one routine, about 35 KB for a 94-file change with 699 routines; over the cap a file with a summary (the accounting, the first five routines, the tests line). Ask for more: `maxRoots: N` (routines shown), `detail: true` (up to 10 items per list, every hunk and diagnostic), `format: json` (schema al-sem.impact/1, every routine with `up`, `effects`, `tests` and a null `delta`; megabytes for a large change, so a file). `tests: false` builds no test universe; `testApps` names the sibling test apps (as alsem_tests); `assumeNoDependents: true` reports no external callers. Lines are 1-based. Dependency code: callers and entries follow the whole program (dependency code included, counted in its own tier); effects follow every resolved call with literal arguments, as alsem_digest does. Next: alsem_explain on a top-ranked routine; alsem_tests for the full selection. Returns the exact `alsem impact` stdout.",
+            schema(
+                vec![
+                    (
+                        "routines",
+                        string_array(&format!("Mode 1, the changed routines: {SELECTOR}.")),
+                    ),
+                    (
+                        "files",
+                        string_array(
+                            "Mode 2, the changed .al files, workspace-relative: every routine in them.",
+                        ),
+                    ),
+                    (
+                        "diff",
+                        json!({"type": "string", "description": "Mode 3, a unified diff's text: every changed line accounted."}),
+                    ),
+                    (
+                        "diffRoot",
+                        json!({"type": "string", "description": "With `diff`: the folder its paths are relative to (default: the git top level)."}),
+                    ),
+                    (
+                        "base",
+                        json!({"type": "string", "description": "Mode 4, a git ref: the working tree against the merge base of the ref and HEAD (committed, staged, unstaged, untracked .al)."}),
+                    ),
+                    (
+                        "testApps",
+                        string_array(
+                            "The sibling test apps' folders, instead of .al-sem.json's testApps and discovery.",
+                        ),
+                    ),
+                    (
+                        "tests",
+                        json!({"type": "boolean", "description": "Compute the tests (default true; false builds no test universe)."}),
+                    ),
+                    (
+                        "maxRoots",
+                        json!({"type": "integer", "minimum": 0, "description": "Routines shown in the human output (default 20); the JSON holds every one."}),
+                    ),
+                    (
+                        "detail",
+                        json!({"type": "boolean", "description": "Up to 10 items per list, every hunk outside routines and every diagnostic."}),
+                    ),
+                    (
+                        "assumeNoDependents",
+                        json!({"type": "boolean", "description": "No app outside the program depends on these apps: report no external callers."}),
                     ),
                     (
                         "format",
@@ -979,6 +1050,105 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
                 json: format == "json",
             };
             return Ok(ToolCall::Tests(TestsCall {
+                command: CommandCall {
+                    tool,
+                    workspace,
+                    universe,
+                    freshness,
+                    argv: v.done(),
+                    diff_text,
+                    out,
+                    max_inline_bytes,
+                    always_file,
+                    client_budget_chars,
+                },
+                request: req,
+                opts,
+            }));
+        }
+        "alsem_impact" => {
+            let mut v = Argv::new(&["impact"], &workspace);
+            let routines = a.strings("routines")?;
+            let files = a.strings("files")?;
+            let diff = a.string("diff")?;
+            let base = a.string("base")?;
+            if base.is_some() && diff.is_some() {
+                return Err(
+                    "alsem_impact: 'base' with 'diff' is a before/after delta (milestone B2), not available yet; give one of them"
+                        .into(),
+                );
+            }
+            let modes = [
+                routines.is_some(),
+                files.is_some(),
+                diff.is_some(),
+                base.is_some(),
+            ];
+            if modes.iter().filter(|m| **m).count() != 1 {
+                return Err(
+                    "alsem_impact takes exactly one of 'routines', 'files', 'diff' or 'base'"
+                        .into(),
+                );
+            }
+            if a.string("diffRoot")?.is_some() && diff.is_none() {
+                return Err("'diffRoot' goes with 'diff'".into());
+            }
+            let mut req = crate::engine::impact::run::ImpactRequest {
+                workspace: workspace.clone(),
+                single_app: universe == Universe::SingleApp,
+                tests: match a.map.get("tests") {
+                    None | Some(Value::Null) => true,
+                    Some(Value::Bool(b)) => *b,
+                    Some(_) => return Err("'tests' must be a boolean".into()),
+                },
+                assume_no_dependents: a.flag("assumeNoDependents")?,
+                detail: a.flag("detail")?,
+                ..Default::default()
+            };
+            for r in routines.unwrap_or_default() {
+                v.opt("routine", r);
+                req.routines.push(r.to_string());
+            }
+            for f in files.unwrap_or_default() {
+                v.opt("file", f);
+                req.files.push(f.to_string());
+            }
+            if let Some(d) = diff {
+                v.opt("diff", "-");
+                req.diff = true;
+                diff_text = Some(d.to_string());
+                if let Some(root) = a.string("diffRoot")? {
+                    v.opt("diff-root", root);
+                    req.diff_root = Some(root.to_string());
+                }
+            }
+            if let Some(b) = base {
+                v.opt("base", b);
+                req.base = Some(b.to_string());
+            }
+            for t in a.strings("testApps")?.unwrap_or_default() {
+                let t = absolute(t);
+                v.opt("test-app", &t);
+                req.test_apps.push(t);
+            }
+            v.switch("no-tests", !req.tests);
+            let max_roots = a.count("maxRoots")?;
+            if let Some(n) = max_roots {
+                v.opt("max-roots", &n.to_string());
+            }
+            v.switch("detail", req.detail);
+            v.switch("no-dependents", req.assume_no_dependents);
+            let format = a.enumerated("format", &["human", "json"], "human")?;
+            v.opt("format", &format);
+            v.switch("single-app", universe == Universe::SingleApp);
+            let opts = crate::engine::impact::render::RenderOpts {
+                json: format == "json",
+                max_roots: max_roots
+                    .map(|n| n as usize)
+                    .unwrap_or(crate::engine::impact::render::DEFAULT_MAX_ROOTS),
+                detail: req.detail,
+            };
+            return Ok(ToolCall::Impact(ImpactCall {
                 command: CommandCall {
                     tool,
                     workspace,

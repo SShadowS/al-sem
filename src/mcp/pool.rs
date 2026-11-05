@@ -743,6 +743,186 @@ impl Pool {
         }
     }
 
+    /// `alsem_impact` (agent-tasks design §8.4): the comparison tuple first,
+    /// resolved here (`base`: git, read only; the diff text it yields goes
+    /// to the main part like a call's own diff), then the parts as a
+    /// composite request, one at a time: the main part and the up part on
+    /// the production engine (the up part reads its sited graph), then the
+    /// tests' select parts on the test engines, as `alsem_tests` runs them.
+    /// A part that fails or is not admitted is reported `not computed` in
+    /// the answer (B-10); the rest stands. The answer is rendered by
+    /// `impact::run::orchestrate_with`, the CLI's own function, so its stdout
+    /// is `alsem impact`'s bytes (the tuple's inputs stamp is the main
+    /// part's revision; a one-shot CLI run has none). Over the inline cap or
+    /// the client's budget it goes to a file with its summary.
+    pub fn run_impact(&self, id: &Value, call: &tools::ImpactCall) {
+        use crate::engine::impact::compare;
+        use crate::engine::test_select::run::Target;
+        let shared = &self.shared;
+        shared
+            .in_flight
+            .lock()
+            .expect("in flight")
+            .insert(id_key(id));
+        let cancel = Arc::new(AtomicBool::new(false));
+        shared
+            .cancels
+            .lock()
+            .expect("cancels")
+            .insert(id_key(id), Arc::clone(&cancel));
+        let started = Instant::now();
+        let ws = Path::new(&call.command.workspace);
+        let prepared: Result<(compare::Comparison, Option<String>), String> =
+            match &call.request.base {
+                Some(rev) => compare::for_base(ws, rev).map(|(c, t)| (c, Some(t))),
+                None if call.request.diff => Ok((
+                    compare::for_input("diff", ws, call.command.diff_text.as_deref()),
+                    call.command.diff_text.clone(),
+                )),
+                None if !call.request.files.is_empty() => {
+                    Ok((compare::for_input("files", ws, None), None))
+                }
+                None => Ok((compare::for_input("routines", ws, None), None)),
+            };
+        let main_rev = std::cell::RefCell::new(Value::Null);
+        let mut part_revs: Vec<Value> = Vec::new();
+        let rendered = match prepared {
+            Err(e) => Err(e),
+            Ok((cmp, diff_text)) => {
+                let mut run = |t: Target<'_>, argv: Vec<String>| -> Result<Value, String> {
+                    let base = &call.command;
+                    let main = argv.iter().any(|a| a == "main");
+                    let (workspace, universe, key) = match t {
+                        Target::Production => (base.workspace.clone(), base.universe, None),
+                        Target::Tests(u) if u.is_workspace() => (
+                            base.workspace.clone(),
+                            base.universe,
+                            Some("workspace".to_string()),
+                        ),
+                        Target::Tests(u) => {
+                            let ws = u.test_root.to_string_lossy().into_owned();
+                            shared
+                                .test_universes
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .insert(ws.clone(), u.clone());
+                            (ws, Universe::Tests, Some(u.key()))
+                        }
+                    };
+                    let part = CommandCall {
+                        tool: base.tool,
+                        workspace: workspace.clone(),
+                        universe,
+                        freshness: base.freshness,
+                        argv: argv.clone(),
+                        diff_text: if argv.iter().any(|a| a == "--diff=-") {
+                            diff_text.clone()
+                        } else {
+                            None
+                        },
+                        out: None,
+                        max_inline_bytes: Some(crate::wire::MAX_INLINE_BYTES as u64),
+                        always_file: false,
+                        client_budget_chars: None,
+                    };
+                    let frame = match self.run_composite(id, vec![part]).pop() {
+                        Some(SubOutcome::Answered(f)) => f,
+                        Some(SubOutcome::NotComputed(m)) => return Err(m),
+                        None => return Err("the part was not run".into()),
+                    };
+                    let (head, stdout) = part_answer(&frame)?;
+                    let rev = json!({"workspace": workspace,
+                                     "universe": key.unwrap_or_else(|| universe.as_str().to_string()),
+                                     "part": argv.get(2).cloned().unwrap_or_default(),
+                                     "revision": head.get("revision").cloned().unwrap_or(Value::Null)});
+                    let v: Value = serde_json::from_str(&stdout)
+                        .map_err(|e| format!("an impact part is no JSON: {e}"))?;
+                    if main && matches!(t, Target::Production) {
+                        *main_rev.borrow_mut() = rev.clone();
+                        self.record_test_scope(&workspace, &v["scope"]);
+                    }
+                    part_revs.push(rev);
+                    Ok(v)
+                };
+                let stamp = || {
+                    main_rev.borrow()["revision"]["inputsStamp"]
+                        .as_str()
+                        .map(str::to_string)
+                };
+                crate::engine::impact::run::orchestrate_with(
+                    &call.request,
+                    cmp,
+                    call.opts,
+                    &mut run,
+                    &stamp,
+                )
+            }
+        };
+        let compute_ms = started.elapsed().as_millis() as u64;
+        let mut envelope = match rendered {
+            Ok(r) => {
+                let inline = crate::wire::clamp_inline(call.command.max_inline_bytes);
+                let over_budget = call.command.client_budget_chars.is_some_and(|b| {
+                    client_chars(&r.text, None) + tools::MCP_ENVELOPE_ROOM_CHARS > b
+                });
+                let stdout = if (r.text.len() > inline || over_budget) && shared.sink.writable() {
+                    match shared.sink.write_new(
+                        "impact",
+                        extension(&call.command.argv),
+                        r.text.as_bytes(),
+                    ) {
+                        Ok(p) => Stdout::File(SpillFile::of(
+                            p.to_string_lossy().into_owned(),
+                            r.text.as_bytes(),
+                        )),
+                        Err(_) => Stdout::Text(r.text),
+                    }
+                } else {
+                    Stdout::Text(r.text)
+                };
+                match place_stdout(shared, &call.command, stdout) {
+                    Ok((stdout, _)) => {
+                        let mut e = json!({
+                            "kind": "cli", "exitCode": r.exit, "stderr": [],
+                            "stale": false, "changedPaths": [], "changedPathsTruncated": false,
+                            "lineBase": crate::engine::line_base::LINE_BASE,
+                        });
+                        match stdout {
+                            Stdout::Text(t) => e["stdoutText"] = json!(t),
+                            Stdout::File(f) => {
+                                e["stdoutFile"] = serde_json::to_value(f).unwrap_or(Value::Null);
+                                e["summary"] = bounded_summary(json!({"text": r.summary}));
+                            }
+                        }
+                        e
+                    }
+                    Err((o, m)) => json!({"kind": "failed", "outcome": o, "message": m}),
+                }
+            }
+            Err(m) => {
+                json!({"kind": "failed", "outcome": FailedOutcome::EngineError, "message": m})
+            }
+        };
+        let main_rev = main_rev.into_inner();
+        envelope["revision"] = main_rev["revision"].clone();
+        envelope["revisions"] = json!({"production": main_rev, "parts": part_revs});
+        envelope["universe"] = json!(call.command.universe.as_str());
+        envelope["freshness"] =
+            json!({"requested": call.command.freshness.as_str(), "served": "fresh"});
+        envelope["timing"] = json!({"computeMs": compute_ms});
+        let is_error = envelope["kind"] == "failed";
+        let output = match (&envelope.get("stdoutText"), call.opts.json) {
+            (Some(Value::String(t)), true) => serde_json::from_str(t).ok(),
+            _ => None,
+        };
+        let msg = shared.transport.response(id, &envelope, is_error, output);
+        if cancel.load(Ordering::SeqCst) {
+            shared.end_cancelled(id, Some(&encode_or_log(&msg)));
+        } else {
+            shared.finish(id, &encode_or_log(&msg));
+        }
+    }
+
     /// A tests answer's roots part discovered `scope` for `workspace`
     /// (milestone C item 3): record what `.al-sem.json` `testApps` said, for
     /// `alsem_status`'s `test-config` check, and drop what an earlier
