@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (agent tasks, milestone B2: impact before/after against a base)
+
+`alsem impact --base REV` (and `--base REV --diff P`; MCP `alsem_impact` `base`, `base` with
+`diff`) builds the comparison base and prints, per changed routine, what its behavior gained and
+lost. Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §10 (as built: §10.11).
+
+- **The base, materialized** (`engine::impact::base`): `git archive <merge base>:<workspace
+  folder>` into a private folder (git is only read), analyzed under TODAY's packages (the base
+  part reads the current workspace's package discovery, `--package-root`; a `.git` marker at the
+  copy's top stops the ancestor walk). Every answer says `base … analyzed under the current
+  dependency environment` with each package file's blake3, the package files both sides read and
+  the source dependencies; a change to `app.json`'s dependencies is named and every
+  dependency-reaching change is marked unreliable.
+- **Semantic effect keys** (`engine::impact::keys`): per routine, a multiset of its own sites by
+  key (writes by table, operation and class; commits; errors by label name or static text hash;
+  UI; HTTP; files; background tasks; object runs; calls; raised events) from the engine's direct
+  capability facts and resolved calls, plus the SET of its cone's effect keys from its digest
+  entry, plus its coverage (status, unresolved calls, depth-bounded searches, literal-dead rows,
+  undecided write classes). Never positions: a comment above an unchanged `Commit()` is no
+  change; a count-preserving table swap shows both tables; sites of one key are paired by
+  operation identity in source order, `ambiguous` when that cannot say which.
+- **The delta** (`engine::impact::delta`), reusing `alsem diff`'s engine: routine pairing by id,
+  else `renames::pair_signature_changes` over both sides' complete inventories (a changed
+  parameter list pairs; two overloads changed at once stay deleted + added, with the reason);
+  the loss wording through the diff policy's `policy::loss_kind` (a key only the base has is
+  "no longer observed", not "removed", when the new side's coverage of that routine is
+  incomplete or it writes the table under an undecided class); `run_diff_engine` over both sides'
+  contract snapshots (`snapshot_full::contract_snapshot`) for the preflight and the schema and
+  ABI findings. Deleted routines come with their callers in the base. A `--diff` whose
+  pre-images do not match the base is refused with the files named; the current side stands.
+- **Lazy per-root base summaries and a bounded cache** (`engine::impact::cache`,
+  `engine::impact::before`): the base computes summaries only for the change's roots (both
+  sides'); entries live in `~/.al-sem/cache/impact-base/v1/` (`AL_SEM_IMPACT_BASE_CACHE`
+  overrides), keyed by the base tree id, the package files' digest, source dependencies, options,
+  engine version, grammar commit and summary schema; a header with the payload's blake3, atomic
+  publication by rename, at most 10 entries, 64 MB compressed / 256 MB decoded per entry, 256 MB
+  in all, 30 days, least recently read first; a bad entry is deleted and rebuilt. `cache prune`
+  does not touch it. `--no-base-cache`, `--no-delta` (MCP `delta: false`).
+- **Admission for the base child** (`mcp::pool`): over MCP the base part runs in a one-shot child
+  that takes a place of the children bound (`--max-children`, so `--total-budget` is never
+  oversubscribed): a free place, else the least recently used idle engine child ends (a test
+  universe's first), else it waits up to 60 s and the answer says `base not built: …` with the
+  rest of the answer intact. While it holds the place, a call for another engine is refused.
+- **`al-sem.impact/1`, additive**: `roots[].delta` (pairing, own and cone changes, both sides'
+  coverage, `unreliable`), `deleted`, `behavior`, `schemaChanges` (findings, preflight
+  diagnostics, what is not computed), `base` (commit, tree, environment, packages read, cache
+  status, timings, or `notComputed`). The human answer adds the base line, a `before/after:` line
+  per routine (changed behavior ranked first), the deleted routines and the schema findings.
+
+### Added (diff: table key passes)
+
+- `alsem diff` (and impact's schema findings) gains `table-key-added` (info),
+  `table-key-removed` (high) and `table-key-fields-changed` (medium), from the schema facts' key
+  rows (a key is identified by its position, `<table>#K<n>`, as those rows identify it).
+
 ### Added (agent tasks, milestone B1: impact on the current revision)
 
 The blast radius of a change, current effects only. Spec:

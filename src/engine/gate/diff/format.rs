@@ -179,7 +179,7 @@ fn json_str(s: &str) -> String {
 // ── json (envelope-wrapped) ─────────────────────────────────────────────────
 
 /// Build a finding as a CborValue map (the raw payload finding shape).
-fn finding_to_cbor(f: &DiffFinding) -> CborValue {
+pub(crate) fn finding_to_cbor(f: &DiffFinding) -> CborValue {
     let mut m: IndexMap<String, CborValue> = IndexMap::new();
     m.insert("id".into(), CborValue::Text(f.id.clone()));
     m.insert(
@@ -237,7 +237,7 @@ fn finding_to_cbor(f: &DiffFinding) -> CborValue {
     CborValue::Map(m)
 }
 
-fn diagnostic_to_cbor(d: &DiffDiagnostic) -> CborValue {
+pub(crate) fn diagnostic_to_cbor(d: &DiffDiagnostic) -> CborValue {
     let mut m: IndexMap<String, CborValue> = IndexMap::new();
     for (k, v) in &d.fields {
         m.insert(k.clone(), v.clone());

@@ -13,8 +13,13 @@
 //! sides' complete inventories, milestone B2).
 
 pub mod accounting;
+pub mod base;
+pub mod before;
+pub mod cache;
 pub mod compare;
+pub mod delta;
 pub mod jobs;
+pub mod keys;
 pub mod render;
 pub mod run;
 pub mod scan;

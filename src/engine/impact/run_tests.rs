@@ -90,6 +90,7 @@ fn answer(tests: Vec<Result<Value, String>>, json_out: bool) -> (String, usize) 
             ..RenderOpts::default()
         },
         &mut run,
+        None,
     )
     .unwrap();
     (r.text, calls)
@@ -214,4 +215,46 @@ fn without_a_base_no_root_is_added_or_deleted() {
             .unwrap()
             .contains("no before/after")
     );
+}
+
+/// B-11: the base side not admitted (its runner refuses with the reason):
+/// the answer keeps the current side (accounting, roots, callers, tests)
+/// and says why there is no before/after.
+///
+/// Break: propagate the base side's error out of `orchestrate_with` → no
+/// answer at all.
+#[test]
+fn a_base_not_admitted_keeps_the_current_side_and_says_why() {
+    let mut parts = vec![Ok(main_doc()), Ok(up_doc()), Ok(select("reached", vec![]))].into_iter();
+    let mut run = |_: Target<'_>, _: Vec<String>| -> Result<Value, String> {
+        parts.next().expect("one answer per part")
+    };
+    let mut bcx = super::super::before::BaseCx {
+        cache: None,
+        scratch: std::env::temp_dir(),
+        diff_text: String::new(),
+        run: Box::new(|_, _| Err("base not built: every place is held".into())),
+    };
+    let r = orchestrate(
+        &ImpactRequest {
+            delta: true,
+            ..req()
+        },
+        super::super::compare::Comparison {
+            source: "base",
+            comparison_base: Some("0123456789abcdef".into()),
+            ..Default::default()
+        },
+        RenderOpts::default(),
+        &mut run,
+        Some(&mut bcx),
+    )
+    .unwrap();
+    assert!(
+        r.text.contains("before/after: not computed — "),
+        "{}",
+        r.text
+    );
+    assert!(r.text.contains("Codeunit A::R"), "{}", r.text);
+    assert!(r.text.contains("callers: 1 routine"), "{}", r.text);
 }

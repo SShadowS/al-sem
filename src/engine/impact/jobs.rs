@@ -55,6 +55,14 @@ pub struct MainJob<'a> {
     pub single_app: bool,
     pub ask: MainAsk,
     pub scope: ScopeRequest,
+    /// `--summaries` (agent-tasks B2): also print each root's semantic
+    /// summary ([`super::keys`]), the contract snapshot (the complete routine
+    /// inventory and the schema), the package files and dependency
+    /// declarations this side read. Both sides of a before/after answer.
+    pub summaries: bool,
+    /// `--root-id` with `--summaries`: routines summarized as well when this
+    /// side has them (the base side is asked the working tree's roots).
+    pub extra_roots: Vec<String>,
 }
 
 /// What `resolve` hands `compute`: the roots and the document so far.
@@ -149,7 +157,7 @@ impl Job for MainJob<'_> {
             MainAsk::Files(f) => (Some(f.clone()), None, None, DiffRoot::default()),
             MainAsk::Diff { text, root } => (None, None, Some(text.clone()), root.clone()),
         };
-        let changed = resolve_changed_roots(
+        let mut changed = resolve_changed_roots(
             cx.ids(),
             model,
             &ChangedInput {
@@ -162,6 +170,20 @@ impl Job for MainJob<'_> {
             primary_guid_of(model),
             &owners,
         );
+        if self.summaries {
+            let have: std::collections::HashSet<&str> = model
+                .workspace
+                .routines
+                .iter()
+                .filter(|r| model.routine_role(r) == crate::program::model::role::Role::Primary)
+                .map(|r| r.stable_routine_id.as_str())
+                .collect();
+            for id in &self.extra_roots {
+                if have.contains(id.as_str()) && !changed.roots.contains(id) {
+                    changed.roots.push(id.clone());
+                }
+            }
+        }
         // Every changed line, when the change is a diff.
         let accounting = diff_text.as_deref().map(|t| {
             account(
@@ -257,6 +279,37 @@ impl Job for MainJob<'_> {
             "accounting": accounting.as_ref().map(accounting_json),
             "scope": scope_json(&scope),
         });
+        let mut doc = doc;
+        if self.summaries {
+            let universe = if self.single_app {
+                "single-app"
+            } else {
+                "cross-app"
+            };
+            doc["contract"] = super::delta::cbor_json(
+                &crate::engine::l5::snapshot_full::contract_snapshot(model, universe),
+            );
+            doc["packages"] = json!(
+                inputs
+                    .closure
+                    .files
+                    .iter()
+                    .map(|f| f.path.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+            );
+            doc["appDependencies"] = app.get("dependencies").cloned().unwrap_or(json!([]));
+            doc["sourceDependencies"] = match &inputs.source_dependencies {
+                Ok(d) => json!(
+                    d.iter()
+                        .map(
+                            |s| json!({"spelled": s.spelled, "root": s.root.to_string_lossy(),
+                                        "contentHash": s.content_hash})
+                        )
+                        .collect::<Vec<_>>()
+                ),
+                Err(e) => json!({"error": e}),
+            };
+        }
         // Digest's plan over the roots: their raw facts, the tree and its
         // effects (no root: nothing to compose).
         let plan = crate::engine::session::digest_reads_plan(
@@ -298,10 +351,30 @@ impl Job for MainJob<'_> {
         // One rollup per root, each entry dropped once its totals are taken.
         let mut totals: HashMap<String, Value> = HashMap::new();
         let mut handles: HashMap<String, String> = HashMap::new();
+        let names = self.summaries.then(|| super::keys::Names::new(resolved));
+        let mut summaries = serde_json::Map::new();
         for e in q.entries {
             let r = RoutineRollup::build(&e, &rcx);
             handles.insert(e.routine_id.clone(), rcx.handle(&e.routine_id));
             totals.insert(e.routine_id.clone(), r.totals.to_json());
+            if let Some(names) = &names
+                && let Some(s) =
+                    super::keys::summarize(names, &e.routine_id, Some(&e), Some(&r.totals))
+            {
+                summaries.insert(e.routine_id.clone(), json!(s));
+            }
+        }
+        if let Some(names) = &names {
+            // A root the digest computed no entry for still has its own sites.
+            for id in &changed.roots {
+                if !summaries.contains_key(id)
+                    && let Some(s) = super::keys::summarize(names, id, None, None)
+                {
+                    summaries.insert(id.clone(), json!(s));
+                }
+            }
+            doc["summaries"] = Value::Object(summaries);
+            doc["summarySchema"] = json!(super::keys::SUMMARY_SCHEMA);
         }
         if let Some(roots) = doc["roots"].as_array_mut() {
             for r in roots {

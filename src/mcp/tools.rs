@@ -514,7 +514,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_impact",
-            "Reviewing a diff or a PR: what the change touches and who it reaches, on the current revision. Exactly one of `routines` (selectors), `files` (workspace-relative .al files: every routine in them), `diff` (a unified diff's text; `diffRoot` is the folder its paths are relative to, default the git top level) or `base` (a git ref: the working tree against the merge base of the ref and HEAD, committed, staged, unstaged and untracked .al files; git is only read). The input accounting comes first: the comparison tuple (requested ref, resolved commit, merge base, comparison base, HEAD and the revision's inputs stamp, the diff's hash), then every changed line in one bucket (routine body or signature, object declarations by kind: fields, keys, global vars, properties, actions, layout …, outside objects, removed routine text, unmapped with the reason), the hunks outside routines, files not mapped, diff lines that do not match the working tree. Then per changed routine, ranked reached-from-a-user-or-job first, then by ancestors: its current effects (writes, commits, UI, errors, events), who reaches it (direct callers with their call site, ancestors by tier, page actions by caption, API pages, job queue, event subscribers and publishers, external callers) and its tests (tests reaching it, the nearest; a routine no test universe has gets its nearest tested caller), then the tests line (selection complete and why not, a codeunit filter). Current effects only: no before/after and nothing called added or deleted (that needs a base build, not in this tool yet). Default (`format: human`): the first 20 routines, a few lines each with the first item of each list; 2-5 KB for one routine, about 35 KB for a 94-file change with 699 routines; over the cap a file with a summary (the accounting, the first five routines, the tests line). Ask for more: `maxRoots: N` (routines shown), `detail: true` (up to 10 items per list, every hunk and diagnostic), `format: json` (schema al-sem.impact/1, every routine with `up`, `effects`, `tests` and a null `delta`; megabytes for a large change, so a file). `tests: false` builds no test universe; `testApps` names the sibling test apps (as alsem_tests); `assumeNoDependents: true` reports no external callers. Lines are 1-based. Dependency code: callers and entries follow the whole program (dependency code included, counted in its own tier); effects follow every resolved call with literal arguments, as alsem_digest does. Next: alsem_explain on a top-ranked routine; alsem_tests for the full selection. Returns the exact `alsem impact` stdout.",
+            "Reviewing a diff or a PR: what the change touches, who it reaches, and with `base` how each changed routine's behavior differs from the base. Exactly one of `routines` (selectors), `files` (workspace-relative .al files: every routine in them), `diff` (a unified diff's text; `diffRoot` is the folder its paths are relative to, default the git top level) or `base` (a git ref: the working tree against the merge base of the ref and HEAD, committed, staged, unstaged and untracked .al files; git is only read); `base` with `diff` compares that diff against the merge base, whose files must match the diff's old lines. With `base` the base is built (that commit's files, analyzed under TODAY's packages, labelled so, package hashes recorded on both sides; first time about 40 s and 4 GB on a large app, then cached per base, at most 10 bases) in a one-shot child that takes a place of the engine children (it waits up to 60 s for an idle one, else the answer says why and keeps the rest), and each changed routine gets a before/after: writes by table, operation and class, commits, UI, errors, events, calls and the effects beyond calls, compared by meaning and never by line (a moved line is no change; a table swapped for another shows both); a loss is `no longer observed` (not removed) when the new side's analysis of that routine is incomplete; routines are paired by id, else by signature (a changed parameter list), else are added or deleted (deleted ones with their callers in the base); schema findings (fields, keys, enums) and contract findings as alsem diff finds them; a change to app.json dependencies marks dependency-reaching changes unreliable. `delta: false` skips the base build (current effects only). The input accounting comes first: the comparison tuple (requested ref, resolved commit, merge base, comparison base, HEAD and the revision's inputs stamp, the diff's hash), then every changed line in one bucket (routine body or signature, object declarations by kind: fields, keys, global vars, properties, actions, layout …, outside objects, removed routine text, unmapped with the reason), the hunks outside routines, files not mapped, diff lines that do not match the working tree. Then per changed routine, ranked reached-from-a-user-or-job first, then by ancestors: its current effects (writes, commits, UI, errors, events), who reaches it (direct callers with their call site, ancestors by tier, page actions by caption, API pages, job queue, event subscribers and publishers, external callers) and its tests (tests reaching it, the nearest; a routine no test universe has gets its nearest tested caller), then the tests line (selection complete and why not, a codeunit filter). Without `base`: current effects only, nothing called added or deleted. Default (`format: human`): the first 20 routines, a few lines each with the first item of each list; 2-5 KB for one routine, about 35 KB for a 94-file change with 699 routines; over the cap a file with a summary (the accounting, the first five routines, the tests line). Ask for more: `maxRoots: N` (routines shown), `detail: true` (up to 10 items per list, every hunk and diagnostic), `format: json` (schema al-sem.impact/1, every routine with `up`, `effects`, `tests` and its `delta` (null without a base), the base block, `deleted` and `schemaChanges`; megabytes for a large change, so a file). `tests: false` builds no test universe; `testApps` names the sibling test apps (as alsem_tests); `assumeNoDependents: true` reports no external callers. Lines are 1-based. Dependency code: callers and entries follow the whole program (dependency code included, counted in its own tier); effects follow every resolved call with literal arguments, as alsem_digest does. Next: alsem_explain on a top-ranked routine; alsem_tests for the full selection. Returns the exact `alsem impact` stdout.",
             schema(
                 vec![
                     (
@@ -537,7 +537,11 @@ pub fn tool_list() -> Vec<Value> {
                     ),
                     (
                         "base",
-                        json!({"type": "string", "description": "Mode 4, a git ref: the working tree against the merge base of the ref and HEAD (committed, staged, unstaged, untracked .al)."}),
+                        json!({"type": "string", "description": "Mode 4, a git ref: the working tree against the merge base of the ref and HEAD (committed, staged, unstaged, untracked .al), with a before/after per changed routine. With `diff`: that diff against the merge base."}),
+                    ),
+                    (
+                        "delta",
+                        json!({"type": "boolean", "description": "With `base`: build the base and print the before/after (default true); false gives current effects only."}),
                     ),
                     (
                         "testApps",
@@ -1072,26 +1076,32 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             let files = a.strings("files")?;
             let diff = a.string("diff")?;
             let base = a.string("base")?;
-            if base.is_some() && diff.is_some() {
-                return Err(
-                    "alsem_impact: 'base' with 'diff' is a before/after delta (milestone B2), not available yet; give one of them"
-                        .into(),
-                );
-            }
+            // `base` with `diff` is one mode: the diff against that base (B2).
             let modes = [
                 routines.is_some(),
                 files.is_some(),
-                diff.is_some(),
-                base.is_some(),
+                diff.is_some() || base.is_some(),
             ];
             if modes.iter().filter(|m| **m).count() != 1 {
                 return Err(
-                    "alsem_impact takes exactly one of 'routines', 'files', 'diff' or 'base'"
+                    "alsem_impact takes exactly one of 'routines', 'files', 'diff' or 'base' ('base' with 'diff' compares the diff against that base)"
                         .into(),
                 );
             }
             if a.string("diffRoot")?.is_some() && diff.is_none() {
                 return Err("'diffRoot' goes with 'diff'".into());
+            }
+            let delta = match a.map.get("delta") {
+                None | Some(Value::Null) => base.is_some(),
+                Some(Value::Bool(b)) if base.is_some() => *b,
+                Some(Value::Bool(_)) => return Err("'delta' goes with 'base'".into()),
+                Some(_) => return Err("'delta' must be a boolean".into()),
+            };
+            if !delta && base.is_some() && diff.is_some() {
+                return Err(
+                    "'base' with 'diff' is a before/after; 'delta: false' drops it (give 'diff' alone)"
+                        .into(),
+                );
             }
             let mut req = crate::engine::impact::run::ImpactRequest {
                 workspace: workspace.clone(),
@@ -1126,6 +1136,8 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
                 v.opt("base", b);
                 req.base = Some(b.to_string());
             }
+            req.delta = delta;
+            v.switch("no-delta", base.is_some() && !delta);
             for t in a.strings("testApps")?.unwrap_or_default() {
                 let t = absolute(t);
                 v.opt("test-app", &t);

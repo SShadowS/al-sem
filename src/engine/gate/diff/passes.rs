@@ -411,11 +411,14 @@ fn schema_severity(kind: DiffKind) -> Severity {
         | DiffKind::TableFieldTypeNarrowed
         | DiffKind::EnumValueRemoved
         | DiffKind::EnumValueRenumbered => Severity::Critical,
-        DiffKind::TableFieldDataClassificationTightened => Severity::High,
+        DiffKind::TableFieldDataClassificationTightened | DiffKind::TableKeyRemoved => {
+            Severity::High
+        }
         DiffKind::TableFieldTypeWidened => Severity::Low,
         DiffKind::TableFieldDataClassificationRelaxed
         | DiffKind::TableFieldAdded
-        | DiffKind::EnumValueAdded => Severity::Info,
+        | DiffKind::EnumValueAdded
+        | DiffKind::TableKeyAdded => Severity::Info,
         _ => Severity::Medium,
     }
 }
@@ -448,8 +451,12 @@ pub fn diff_schema(indexes: &DiffIndexes) -> Vec<DiffFinding> {
                     details_kind(kind),
                     indexes,
                 ));
-            } else if old_kind == "enum-value" {
-                let kind = DiffKind::EnumValueRemoved;
+            } else if old_kind == "enum-value" || old_kind == "key" {
+                let kind = if old_kind == "key" {
+                    DiffKind::TableKeyRemoved
+                } else {
+                    DiffKind::EnumValueRemoved
+                };
                 out.push(make_finding(
                     DiffCategory::Schema,
                     kind,
@@ -519,8 +526,13 @@ pub fn diff_schema(indexes: &DiffIndexes) -> Vec<DiffFinding> {
                     ));
                 }
             }
-        } else if old_kind == "enum-value" && old_fp != new_fp {
-            let kind = DiffKind::EnumValueRenumbered;
+        } else if (old_kind == "enum-value" || old_kind == "key") && old_fp != new_fp {
+            // A key's shape is its field set (`derive_schema`).
+            let kind = if old_kind == "key" {
+                DiffKind::TableKeyFieldsChanged
+            } else {
+                DiffKind::EnumValueRenumbered
+            };
             out.push(make_finding(
                 DiffCategory::Schema,
                 kind,
@@ -559,8 +571,12 @@ pub fn diff_schema(indexes: &DiffIndexes) -> Vec<DiffFinding> {
                 details_kind(kind),
                 indexes,
             ));
-        } else if new_kind == "enum-value" {
-            let kind = DiffKind::EnumValueAdded;
+        } else if new_kind == "enum-value" || new_kind == "key" {
+            let kind = if new_kind == "key" {
+                DiffKind::TableKeyAdded
+            } else {
+                DiffKind::EnumValueAdded
+            };
             out.push(make_finding(
                 DiffCategory::Schema,
                 kind,

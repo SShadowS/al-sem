@@ -19,6 +19,7 @@
 
 use serde_json::{Value, json};
 
+use super::before::BaseCx;
 use super::compare::Comparison;
 use super::render::{RenderOpts, Rendered, render};
 use crate::engine::test_select::render::Part;
@@ -41,6 +42,9 @@ pub struct ImpactRequest {
     pub tests: bool,
     pub assume_no_dependents: bool,
     pub detail: bool,
+    /// Build the base and print the before/after delta (B2): `--base`
+    /// unless `--no-delta`.
+    pub delta: bool,
 }
 
 impl ImpactRequest {
@@ -66,6 +70,9 @@ impl ImpactRequest {
         }
         if self.single_app {
             a.push("--single-app".into());
+        }
+        if self.delta {
+            a.push("--summaries".into());
         }
         a.push("--".into());
         a.push(self.workspace.clone());
@@ -119,8 +126,16 @@ pub fn orchestrate(
     cmp: Comparison,
     opts: RenderOpts,
     run: &mut RunPart<'_>,
+    base: Option<&mut BaseCx<'_>>,
 ) -> Result<Rendered, String> {
-    orchestrate_with(req, cmp, opts, run, &|| None)
+    orchestrate_with(req, cmp, opts, run, &|| None, base)
+}
+
+/// The before/after part of an answer (B2): the base side's block and the
+/// delta ([`super::delta::compute`]).
+pub struct DeltaOutcome {
+    pub block: Value,
+    pub delta: Value,
 }
 
 /// [`orchestrate`], with `inputs_stamp` asked once the main part answered:
@@ -132,6 +147,7 @@ pub fn orchestrate_with(
     opts: RenderOpts,
     run: &mut RunPart<'_>,
     inputs_stamp: &dyn Fn() -> Option<String>,
+    base: Option<&mut BaseCx<'_>>,
 ) -> Result<Rendered, String> {
     let main_argv = req.main_argv();
     let mut main = run(Target::Production, main_argv.clone())?;
@@ -149,7 +165,62 @@ pub fn orchestrate_with(
     } else {
         tests_outcome(req, &mut main, &ids, up.as_ref().ok(), &main_argv, run)
     };
-    Ok(render(&cmp, &main, &up, &tests, opts))
+    // The base side last: the production parts hold no child while it is
+    // admitted (a composite request never nests waits).
+    let delta = match (req.delta, base) {
+        (false, _) => Err("not asked".to_string()),
+        (true, None) => Err("no base runner".to_string()),
+        (true, Some(bcx)) => delta_outcome(req, &cmp, &main, bcx),
+    };
+    Ok(render(&cmp, &main, &up, &tests, &delta, opts))
+}
+
+/// The base side and the delta.
+fn delta_outcome(
+    req: &ImpactRequest,
+    cmp: &Comparison,
+    main: &Value,
+    bcx: &mut BaseCx<'_>,
+) -> Result<DeltaOutcome, String> {
+    let diff_text = bcx.diff_text.clone();
+    let b = super::before::base_side(
+        std::path::Path::new(&req.workspace),
+        req.single_app,
+        req.diff_root.as_deref(),
+        cmp,
+        &diff_text,
+        main,
+        bcx,
+    )?;
+    let pre = b.block["preimageMismatches"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if !pre.is_empty() {
+        return Err(format!(
+            "refused: the diff's pre-images do not match the comparison base in {} ({})",
+            crate::engine::l5::routine_rollup::plural(pre.len(), "file", "files"),
+            pre.iter()
+                .filter_map(Value::as_str)
+                .take(5)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    let bs = super::delta::Side::of(&b.doc).map_err(|e| format!("the base side: {e}"))?;
+    let ns = super::delta::Side::of(main).map_err(|e| format!("the working tree: {e}"))?;
+    let changes: Vec<String> = b.block["dependencyDeclarationChanged"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect();
+    let note = (!changes.is_empty()).then(|| changes.join("; "));
+    let delta = super::delta::compute(&bs, &ns, note.as_deref());
+    Ok(DeltaOutcome {
+        block: b.block,
+        delta,
+    })
 }
 
 /// The tests part of the answer (see [`TestsOutcome`]).

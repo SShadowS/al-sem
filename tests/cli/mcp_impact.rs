@@ -175,7 +175,8 @@ fn refused_combinations() {
     let ws = t.path().join("App");
     let mut s = Server::ready(&ws, None);
     for (i, args) in [
-        json!({"base": "HEAD", "diff": "x"}),
+        json!({"base": "HEAD", "diff": "x", "delta": false}),
+        json!({"routines": ["X"], "delta": true}),
         json!({"routines": ["X"], "files": ["y.al"]}),
         json!({"routines": ["X"], "diffRoot": "."}),
     ]
@@ -189,7 +190,8 @@ fn refused_combinations() {
         );
         let text = r.to_string();
         assert!(
-            text.contains("milestone B2")
+            text.contains("'delta: false' drops it")
+                || text.contains("'delta' goes with 'base'")
                 || text.contains("exactly one of")
                 || text.contains("goes with 'diff'"),
             "{text}"
