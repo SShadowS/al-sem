@@ -454,6 +454,7 @@ mod budget {
             human: false,
             detail: false,
             out: None,
+            slice: None,
         }
     }
 

@@ -1110,6 +1110,13 @@ impl<'a> LiteralReach<'a> {
         Some((tree.steps_to(state), op))
     }
 
+    /// Whether `tree` has a state of `routine` (stable id): the guarded
+    /// search reaches it under some bindings (agent-tasks E1: a fact with no
+    /// site of its own is in the root's reach exactly then).
+    pub(crate) fn reaches(&self, tree: &LiveTree<'a>, routine: &str) -> bool {
+        !tree.states_of(routine).is_empty()
+    }
+
     /// Whether `root` itself owns operation `op` and it can run at the
     /// root's start state (no known values): a zero-hop witness.
     pub(crate) fn live_in_root(&self, root: &str, op: &str) -> bool {

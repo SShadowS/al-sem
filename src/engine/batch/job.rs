@@ -89,6 +89,11 @@ pub struct ViewNeeds {
     /// it); a resident revision serves its kept `ArtifactKey::Sited`. The
     /// job's side is [`Job::sited`].
     pub sited: bool,
+    /// Each routine's guard arms (`ModelRoutine::site_guards`: the enclosing
+    /// conditions of its sites, agent-tasks design §9.4), built at assembly
+    /// from the IR. Only `alsem prove` with a filter sets it. Out of
+    /// [`ViewKey`] for the same reason as `rules`.
+    pub site_guards: bool,
 }
 
 impl ViewNeeds {
@@ -99,6 +104,7 @@ impl ViewNeeds {
         rules: false,
         card_text: false,
         sited: false,
+        site_guards: false,
     };
     pub const ANALYZE: ViewNeeds = ViewNeeds {
         analyze_extras: true,
@@ -111,6 +117,14 @@ impl ViewNeeds {
         rules: false,
         card_text: false,
         sited: false,
+        site_guards: false,
+    };
+    /// `alsem prove` with a filter (agent-tasks design §9, E1): the model with
+    /// its rules (the error message texts) and its sites' guard arms.
+    pub const PROVE_SLICE: ViewNeeds = ViewNeeds {
+        rules: true,
+        site_guards: true,
+        ..ViewNeeds::MODEL
     };
     /// A job reading the sited graph alone (no model).
     pub const SITED: ViewNeeds = ViewNeeds {
@@ -156,6 +170,7 @@ impl ViewNeeds {
             rules: self.rules || other.rules,
             card_text: self.card_text || other.card_text,
             sited: self.sited || other.sited,
+            site_guards: self.site_guards || other.site_guards,
         }
     }
 
@@ -165,6 +180,7 @@ impl ViewNeeds {
         crate::program::model::workspace::AssemblyNeeds {
             rules: self.rules,
             card_text: self.card_text,
+            site_guards: self.site_guards,
         }
     }
 }

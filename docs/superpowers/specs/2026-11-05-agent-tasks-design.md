@@ -1486,6 +1486,34 @@ to confirm: set a breakpoint at ReminderIssue:68 and read ReminderHeader."Issued
 Measurement plan: CDO, resident, warm; with a dependency-code error site (re-parse cost of the
 dependency files on the route); `--low-mem`.
 
+### 9.7 As built (E1, 2026-11-05)
+
+- **Guards are a gated assembly fact, not M0-3's re-parse** (coordinator's decision for E1; M0-3
+  is not built). `ModelRoutine::site_guards` holds each routine's `if`/`case`/loop blocks with
+  the condition text (folded, ≤ 120 characters), built only behind `ViewNeeds::site_guards`,
+  which only `alsem prove` with a filter declares (`ViewNeeds::PROVE_SLICE`, with `rules` for the
+  message text). Measured on CDO cross-app (`IssueReminder`, `ALSEM_TRACE`
+  counters `prove.site_guard_arms` / `prove.site_guard_bytes`): **49,428 arms, 5.6 MB**, below
+  r1's 15-130 MB estimate. Peak RSS of `alsem prove IssueReminder throws-error`: 3.14 GB
+  unfiltered, 3.14 GB with `--match` (no measurable change). The slice itself (`prove.slice`
+  span: a second `LiteralReach`, the root's live tree, the terminal records) took 0.45 s.
+- The slice is a level-3 read of prove's tree (`TreeDemand::slice`), so it runs one-shot and
+  resident alike, while the tree is alive. Sites come from the tree's terminal records (every
+  direct fact, dependency code included), kept when the root's guarded search reaches a state
+  where the site can run; a route is `GroupPaths::own_path` over the same search.
+- Filters: `--match` (throws-error), `--table` (throws-error: errors a record operation on that
+  table raises; the coordinator's addition), `--op` (throws-error and writes-table),
+  `--site` (throws-error, writes-table, may-commit, reaches-ui). `publishes-event` and
+  `commits-on-success-path` take none in E1.
+- Two more `no` blockers than §9.3 names: `message-placeholders` (a text with `%1` that did not
+  match: the value may hold the text) and `message-platform-wrapped` (a `FieldError` text). On
+  CDO `IssueReminder` has 5,278 reachable error sites, 4,454 of them with no static text, so a
+  filtered `no` is out of reach there; the `yes` side is what serves debugging.
+- Guards are shown per route site (at most 2 innermost each), so `k` in "k of n" sums over the
+  route's sites. A route through a TryFunction is not marked as trapped
+  (`callers-intercept-errors` answers that question).
+- A filtered document is schema 2.5.0; an unfiltered one stays 2.4.0, byte for byte.
+
 ---
 
 ## 10. B2. Impact before/after

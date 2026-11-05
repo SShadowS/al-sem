@@ -296,6 +296,7 @@ impl ResidentSession {
             let mut n = lock(&self.needs);
             n.rules |= needs.rules;
             n.card_text |= needs.card_text;
+            n.site_guards |= needs.site_guards;
         }
         if covered(self) {
             return Ok(Pinned {

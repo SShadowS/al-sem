@@ -115,6 +115,7 @@ fn job(cmd: Cmd, f: &Fixture) -> Box<dyn Job + '_> {
             human: false,
             detail: false,
             out: None,
+            slice: None,
         }),
     }
 }

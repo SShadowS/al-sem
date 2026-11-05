@@ -1911,6 +1911,7 @@ mod tests {
             rules: None,
             rule_drafts: None,
             card_text: None,
+            site_guards: None,
         }
     }
 

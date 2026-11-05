@@ -304,7 +304,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_prove",
-            "A yes/no question about one AL routine (`routine`, a selector), answered with its evidence. `question`, about the routine's existing effects (what it and its callees already do): may-commit, commits-on-success-path, writes-table:<table>, publishes-event:<event>, reaches-ui, throws-error. Or about its callers' context, before adding a COMMIT, an error or UI to it: callers-have-pending-writes (may a caller have a database write pending when it runs), callers-intercept-errors (may a caller turn its error into false: a TryFunction whose result is used, a checked Codeunit.Run, asserterror, collectible errors; a TryFunction does not roll back database changes), callers-may-run-noninteractive (may it run where no user answers UI: API pages, job queue and web service roots from roots.config.json, install and upgrade codeunits, background sessions); these walk every caller up to its entry points, and a public routine's callers in apps that are not loaded block a no unless `assumeNoDependents: true`. Answers: yes (a path to the effect exists; a may-answer), no (proven absent under the stated assumptions), unknown (no matching effect observed, but coverage is incomplete, so not a proof). A temporary-record write is not a write for writes-table. Default (`format: human`): about 10 lines with the answer, each evidence row with its location and one witness path, then the blockers of an unknown grouped by kind with their counts and the first 3 of each (workspace ones first), then coverage (calls not resolved and interface calls open world, with the top callees), assumptions and limits. Ask for more: `detail: true` (every blocker), `closedWorld: true` (interface calls dispatch only to the loaded implementations; it can turn unknown into no, and says so under assumptions), `format: json` (every evidence row, its group path and witness hops; 5-60 KB). Size: 1-5 KB human. Lines are 1-based. Dependency code: the whole call cone is followed with literal arguments. Next: on unknown, alsem_explain lists the workspace gaps behind it. Returns the exact `alsem prove` stdout.",
+            "A yes/no question about one AL routine (`routine`, a selector), answered with its evidence. `question`, about the routine's existing effects (what it and its callees already do): may-commit, commits-on-success-path, writes-table:<table>, publishes-event:<event>, reaches-ui, throws-error. Or about its callers' context, before adding a COMMIT, an error or UI to it: callers-have-pending-writes (may a caller have a database write pending when it runs), callers-intercept-errors (may a caller turn its error into false: a TryFunction whose result is used, a checked Codeunit.Run, asserterror, collectible errors; a TryFunction does not roll back database changes), callers-may-run-noninteractive (may it run where no user answers UI: API pages, job queue and web service roots from roots.config.json, install and upgrade codeunits, background sessions); these walk every caller up to its entry points, and a public routine's callers in apps that are not loaded block a no unless `assumeNoDependents: true`. Answers: yes (a path to the effect exists; a may-answer), no (proven absent under the stated assumptions), unknown (no matching effect observed, but coverage is incomplete, so not a proof). A temporary-record write is not a write for writes-table. Default (`format: human`): about 10 lines with the answer, each evidence row with its location and one witness path, then the blockers of an unknown grouped by kind with their counts and the first 3 of each (workspace ones first), then coverage (calls not resolved and interface calls open world, with the top callees), assumptions and limits. Ask for more: `detail: true` (every blocker), `closedWorld: true` (interface calls dispatch only to the loaded implementations; it can turn unknown into no, and says so under assumptions), `format: json` (every evidence row, its group path and witness hops; 5-60 KB). Why did an error or a write happen: filter to the sites that may explain it with `match: \"<text>\"` (throws-error: the error's static message text, a literal or a Label's or TextConst's value with %1 placeholders kept, or the Label's name), `site: \"<file>:<line>\"` (throws-error, writes-table, may-commit, reaches-ui), `op: \"<kind>\"` (throws-error: Error, TestField, FieldError, Get, …; writes-table: Insert, Modify, ModifyAll, Delete, DeleteAll, Rename) or `table: \"<table>\"` (throws-error: errors a record operation on that table raises); the answer is then about the matching sites, each with its message text, one route from the routine and up to 2 innermost enclosing conditions per site on the route (selected context, not all necessary conditions, with the count left out; a while condition is loop-entry, a repeat-until one continuation). Static candidates, not an observed trace. An error whose message is not static (a variable, an ErrorInfo, the platform's own) never matches and blocks a filtered no; an implicit error matches only by its kind word. Size: 1-5 KB human. Lines are 1-based. Dependency code: the whole call cone is followed with literal arguments. Next: on unknown, alsem_explain lists the workspace gaps behind it. Returns the exact `alsem prove` stdout.",
             schema(
                 vec![
                     (
@@ -330,6 +330,22 @@ pub fn tool_list() -> Vec<Value> {
                     (
                         "detail",
                         json!({"type": "boolean", "description": "Human output: every blocker, not the first few of each kind (the JSON always lists every one)."}),
+                    ),
+                    (
+                        "match",
+                        json!({"type": "string", "description": "throws-error only: keep the error sites whose static message text or Label/TextConst name contains this text (case-insensitive; %1 placeholders kept). An error whose message is not static never matches and blocks a no."}),
+                    ),
+                    (
+                        "site",
+                        json!({"type": "string", "description": "<file>:<line> (a source path or its tail, 1-based line): keep only the sites there. throws-error, writes-table, may-commit, reaches-ui."}),
+                    ),
+                    (
+                        "op",
+                        json!({"type": "string", "description": "throws-error or writes-table: keep only the sites of this operation (Error, TestField, FieldError, Get, …; Insert, Modify, ModifyAll, Delete, DeleteAll, Rename)."}),
+                    ),
+                    (
+                        "table",
+                        json!({"type": "string", "description": "throws-error only: keep only the errors a record operation on this table raises."}),
                     ),
                     ("deterministic", deterministic()),
                 ],
@@ -854,6 +870,18 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             v.switch("closed-world", a.flag("closedWorld")?);
             v.switch("no-dependents", a.flag("assumeNoDependents")?);
             v.switch("detail", a.flag("detail")?);
+            // Agent-tasks E1: the filters; which question each goes with is
+            // the CLI's own check (one error text).
+            for (key, flag) in [
+                ("match", "match"),
+                ("site", "site"),
+                ("op", "op"),
+                ("table", "table"),
+            ] {
+                if let Some(x) = a.string(key)? {
+                    v.opt(flag, x);
+                }
+            }
             v.switch("deterministic", a.flag("deterministic")?);
             v
         }
@@ -1096,6 +1124,40 @@ mod tests {
         );
         assert!(
             !c.argv.iter().any(|a| a == "--closed-world"),
+            "{:?}",
+            c.argv
+        );
+    }
+
+    /// Agent-tasks E1: prove's filters become the CLI's `--match`, `--site`,
+    /// `--op` and `--table`, value and all; which question each goes with is
+    /// the CLI's own check.
+    #[test]
+    fn prove_filters_become_cli_flags() {
+        let c = command(
+            "alsem_prove",
+            json!({"routine": "R", "question": "throws-error", "match": "-already issued", "site": "a.al:3", "op": "Error", "table": "T"}),
+        )
+        .unwrap();
+        for want in [
+            "--match=-already issued",
+            "--site=a.al:3",
+            "--op=Error",
+            "--table=T",
+        ] {
+            assert!(c.argv.iter().any(|a| a == want), "{want}: {:?}", c.argv);
+        }
+        let c = command(
+            "alsem_prove",
+            json!({"routine": "R", "question": "throws-error"}),
+        )
+        .unwrap();
+        assert!(
+            !c.argv
+                .iter()
+                .any(|a| ["--match", "--site", "--op", "--table"]
+                    .iter()
+                    .any(|f| a.starts_with(f))),
             "{:?}",
             c.argv
         );

@@ -1210,6 +1210,9 @@ pub struct DigestEffects {
     /// `--tests` (#254): the test-coverage graph over the same tree, one per
     /// tree, shared by every reader that asked for it.
     pub coverage_graph: Option<Arc<crate::engine::l5::test_coverage::CoverageGraph>>,
+    /// Agent-tasks E1: a filtered prove's slice of its root, read off the
+    /// same tree (`TreeDemand::slice`); `None` for every other reader.
+    pub slice: Option<crate::engine::l5::prove_slice::SliceOut>,
 }
 
 /// A root's unresolved cone: its items and the traversal block (depth,
@@ -1519,6 +1522,7 @@ pub(crate) fn finish_effects(
             coverage: Arc::clone(&tree.coverage),
             identities: Arc::clone(&tree.identities),
             coverage_graph: coverage_graph.clone(),
+            slice: None,
         })
         .collect()
 }

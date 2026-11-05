@@ -157,6 +157,12 @@ pub struct TreeDemand {
     /// Digest's `--include-reads` (#246): the effects also carry `DB_READ`.
     /// Per job, set by digest after [`digest_plan`].
     pub include_reads: bool,
+    /// Prove's filters (agent-tasks E1, [`crate::engine::l5::prove_slice`]):
+    /// each root's slice is read off the tree with the effects, into
+    /// [`DigestEffects::slice`](crate::engine::l5::digest_cli::DigestEffects).
+    /// Per job, set only by [`prove_slice_plan`]; a reader's slice depends on
+    /// its own request alone, so it does not split a tree group.
+    pub slice: Option<crate::engine::l5::prove_slice::SliceRequest>,
     pub read: TreeRead,
 }
 
@@ -408,6 +414,7 @@ pub fn digest_plan(detectors: Vec<Detector>, roots: BTreeSet<String>, tests: boo
                 tests,
                 gaps_in_cone: false,
                 include_reads: false,
+                slice: None,
                 read: TreeRead::Effects,
             },
         )]
@@ -444,6 +451,22 @@ pub fn digest_reads_plan(
 /// whose unresolved cone also counts the analysis gaps it visits (C1).
 pub fn prove_plan(detectors: Vec<Detector>, root: Option<String>) -> Plan {
     counting_cone_gaps(digest_plan(detectors, root.into_iter().collect(), false))
+}
+
+/// `alsem prove` with a filter (agent-tasks E1): [`prove_plan`] whose tree
+/// also reads the root's slice for `slice`
+/// ([`crate::engine::l5::prove_slice::compute_slice`]). The view must hold
+/// the rules and the guard arms (`ViewNeeds::PROVE_SLICE`).
+pub fn prove_slice_plan(
+    detectors: Vec<Detector>,
+    root: Option<String>,
+    slice: crate::engine::l5::prove_slice::SliceRequest,
+) -> Plan {
+    let mut plan = prove_plan(detectors, root);
+    for (_, tree) in &mut plan.trees {
+        tree.slice = Some(slice.clone());
+    }
+    plan
 }
 
 /// `plan` with every tree counting its cones' analysis gaps and table
@@ -483,6 +506,7 @@ fn run_and_tree_plan(detectors: Vec<Detector>, subjects: WitnessRequest, read: T
                 tests: false,
                 gaps_in_cone: false,
                 include_reads: false,
+                slice: None,
                 read,
             },
         )],
@@ -609,6 +633,7 @@ pub fn explain_plan(roots: BTreeSet<String>) -> Plan {
                 tests: true,
                 gaps_in_cone: false,
                 include_reads: false,
+                slice: None,
                 read: TreeRead::Effects,
             },
         )],
@@ -636,6 +661,7 @@ pub fn query_cone_plan(root: Option<String>) -> Plan {
                 tests: false,
                 gaps_in_cone: false,
                 include_reads: false,
+                slice: None,
                 read: TreeRead::Effects,
             },
         )],
@@ -1058,7 +1084,14 @@ pub(crate) fn read_tree_shared(
                     BoundaryMode::On,
                 ),
             };
-            for (&m, out) in group.iter().zip(outs) {
+            for ((&m, mut out), own) in group.iter().zip(outs).zip(&roots) {
+                // Agent-tasks E1: a filtered prove's slice, off the tree it
+                // read (its first root: prove asks one).
+                if let (Some(req), Some(root)) = (&trees[m].1.slice, own.first()) {
+                    out.slice = Some(crate::engine::l5::prove_slice::compute_slice(
+                        t, model, root, req,
+                    ));
+                }
                 effects.insert(trees[m].0, out);
             }
         }
@@ -2113,6 +2146,7 @@ mod tests {
                 tests: false,
                 gaps_in_cone: false,
                 include_reads: false,
+                slice: None,
                 read: TreeRead::Effects,
             },
         )]);
@@ -2138,6 +2172,7 @@ mod tests {
             tests: false,
             gaps_in_cone: false,
             include_reads: false,
+            slice: None,
             read: TreeRead::Effects,
         }
     }
@@ -2779,6 +2814,7 @@ mod tests {
                 tests: false,
                 gaps_in_cone: false,
                 include_reads: false,
+                slice: None,
                 read,
             },
         )])

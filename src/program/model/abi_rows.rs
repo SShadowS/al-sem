@@ -259,6 +259,8 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
         rule_drafts: None,
         // Likewise the card text (`append_dependency_rows`).
         card_text: None,
+        // Likewise the site guards.
+        site_guards: None,
         entry_temp_guard_receiver: None,
     }
 }

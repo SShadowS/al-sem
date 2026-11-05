@@ -529,7 +529,7 @@ const DB_WRITE_TYPES: &[&str] = &["DB_INSERT", "DB_MODIFY", "DB_DELETE"];
 /// An `Error` is not counted (G18): it is `throws-error`'s question, and as UI
 /// it was wrong where it never surfaces, e.g. an `Error('')` caught by a
 /// `[TryFunction]`. The two questions no longer overlap.
-const UI_TYPES: &[&str] = &[
+pub(crate) const UI_TYPES: &[&str] = &[
     "UI_MESSAGE",
     "UI_CONFIRM",
     "UI_WINDOW_OPEN",
@@ -568,7 +568,7 @@ fn resource_name_matches(detail: &[(String, String)], query: &str) -> bool {
 
 /// [`resource_name_matches`]'s rule over one resource: its display, or the
 /// trailing segment of its id, equals `query` case-insensitively.
-fn name_or_id_matches(
+pub(crate) fn name_or_id_matches(
     resource_display: Option<&str>,
     resource_id: Option<&str>,
     query: &str,
@@ -1393,6 +1393,11 @@ pub struct ProveDocumentArgs<'a> {
     pub deterministic: bool,
     /// W2-8: where the obligations point (`None` for the no-root document).
     pub pointers: Option<&'a ObligationPointers>,
+    /// Agent-tasks E1: a filtered question's slice. Its matching sites are
+    /// the evidence; `payload.filter` and `payload.slice` are added and the
+    /// document is [`PROVE_SLICE_SCHEMA_VERSION`]. `None`: the document is
+    /// byte-identical to an unfiltered one.
+    pub slice: Option<&'a crate::engine::l5::prove_slice::SliceOut>,
 }
 
 /// W2-0b: a group path's structured witness (`groupWitness`): per hop the
@@ -1430,6 +1435,11 @@ pub(crate) fn group_witness_value(
 /// prove's document `schemaVersion`.
 pub const PROVE_SCHEMA_VERSION: &str = "2.4.0";
 
+/// A filtered prove document's `schemaVersion` (agent-tasks E1, additive:
+/// `payload.filter`, `payload.slice`, slice-shaped evidence rows). An
+/// unfiltered document keeps [`PROVE_SCHEMA_VERSION`], byte for byte (E-5).
+pub const PROVE_SLICE_SCHEMA_VERSION: &str = "2.5.0";
+
 /// Build the DocumentEnvelope<"prove", ProvePayload> as a serde_json::Value,
 /// then serialize with serialize_document_value (sorted keys, null-drop, trailing \n).
 pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
@@ -1447,6 +1457,7 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
         alsem_ver,
         deterministic,
         pointers,
+        slice,
     } = args;
 
     // result sub-object
@@ -1536,6 +1547,16 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
             .collect();
         result_obj.insert("evidence".into(), serde_json::Value::Array(ev));
     }
+    // Agent-tasks E1: a filtered answer's evidence is its matching sites.
+    if let Some(s) = slice {
+        let ev: Vec<serde_json::Value> = s
+            .matching()
+            .map(crate::engine::l5::prove_slice::site_value)
+            .collect();
+        if !ev.is_empty() {
+            result_obj.insert("evidence".into(), serde_json::Value::Array(ev));
+        }
+    }
 
     // blockedBy — only when present (and non-empty)
     if let Some(ref blockers) = prove_result.blocked_by
@@ -1589,6 +1610,13 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     payload.insert("result".into(), serde_json::Value::Object(result_obj));
     payload.insert("routine".into(), serde_json::Value::Object(routine_ref));
     payload.insert("workspaceFingerprint".into(), workspace_fp.into());
+    if let Some(s) = slice {
+        payload.insert("filter".into(), s.request.to_value());
+        payload.insert(
+            "slice".into(),
+            crate::engine::l5::prove_slice::slice_value(s),
+        );
+    }
 
     // envelope
     let generated_at = crate::engine::gate::format_json::pinned_or_now_iso8601(deterministic);
@@ -1613,7 +1641,15 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     // (`callers-have-pending-writes`, `callers-intercept-errors`,
     // `callers-may-run-noninteractive`, `payload.questionScope:
     // "callers-context"`); the existing-effects questions' JSON is unchanged.
-    env.insert("schemaVersion".into(), PROVE_SCHEMA_VERSION.into());
+    // 2.5.0 (agent-tasks E1, additive, filtered documents only): `payload.
+    // filter`, `payload.slice`, and evidence rows that are the slice's sites
+    // (`evidence.{file, line}` kept); an unfiltered document stays 2.4.0.
+    let version = if slice.is_some() {
+        PROVE_SLICE_SCHEMA_VERSION
+    } else {
+        PROVE_SCHEMA_VERSION
+    };
+    env.insert("schemaVersion".into(), version.into());
 
     serialize_document_value(serde_json::Value::Object(env))
 }
@@ -2137,6 +2173,7 @@ pub(crate) fn prove_pipeline_with(
         human: false,
         detail: false,
         out: None,
+        slice: None,
     };
     crate::engine::batch::run_doc(&job)
         .one()
@@ -2226,6 +2263,7 @@ pub(crate) fn prove_on_target(
         human: false,
         detail: false,
         out: None,
+        slice: None,
     };
     crate::engine::batch::run_on_target(&job, target)
         .unwrap_or_else(|f| unreachable!("prove fails no side: {f:?}"))
@@ -2261,6 +2299,10 @@ pub struct ProveJob<'a> {
     /// does).
     pub detail: bool,
     pub out: Option<&'a str>,
+    /// Agent-tasks E1: `--match`, `--site`, `--op`, `--table` (validated by
+    /// [`crate::engine::l5::prove_slice::SliceRequest::of`]). `None`: the
+    /// unfiltered answer, byte-identical to before.
+    pub slice: Option<crate::engine::l5::prove_slice::SliceRequest>,
 }
 
 impl ProveJob<'_> {
@@ -2276,8 +2318,12 @@ impl Job for ProveJob<'_> {
     }
     fn demands(&self) -> Vec<ViewDemand> {
         // A callers' context question walks the sited graph beside the model.
+        // A filtered question reads the message texts (rules) and the guard
+        // arms (agent-tasks E1); no other prove builds them.
         let needs = if self.callers_question().is_some() {
             ViewNeeds::MODEL_SITED
+        } else if self.slice.is_some() {
+            ViewNeeds::PROVE_SLICE
         } else {
             ViewNeeds::MODEL
         };
@@ -2313,8 +2359,16 @@ impl Job for ProveJob<'_> {
         } else {
             changed_roots.roots.first().cloned()
         };
+        let plan = match &self.slice {
+            Some(s) => crate::engine::session::prove_slice_plan(
+                self.detectors.clone(),
+                tree_root,
+                s.clone(),
+            ),
+            None => prove_plan(self.detectors.clone(), tree_root),
+        };
         Ok(PlanPart {
-            plan: prove_plan(self.detectors.clone(), tree_root),
+            plan,
             reads: vec![Cell::Det, Cell::L4, Cell::Effects],
             carry: Some(Box::new(changed_roots)),
         })
@@ -2454,6 +2508,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             alsem_ver,
             deterministic,
             pointers: None,
+            slice: None,
         });
 
         let human_text = format_prove_human(
@@ -2479,6 +2534,9 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     // (5) The root's S4 entry, unresolved cone and gap count, read off the
     // view's tree inside `prepare` (the tree is gone).
     let mut effects = cx.take_effects();
+    // Agent-tasks E1: the slice the plan read off the tree (a filtered
+    // question only).
+    let slice = effects.slice.take();
     let cone = effects
         .unresolved
         .get(root_id)
@@ -2594,6 +2652,12 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
 
     // W2-8 (2h): where the obligations point, in the answer's world.
     let pointers = ObligationPointers::of(entry, prove_result.obligations.world);
+    // Agent-tasks E1: a filtered question answers over the slice's sites,
+    // under the unfiltered answer's obligations.
+    let filtered = slice
+        .as_ref()
+        .map(|s| filtered_result(entry, &prove_result, s));
+    let prove_result = filtered.unwrap_or(prove_result);
 
     // Project document
     cx.view().census_output();
@@ -2611,6 +2675,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         alsem_ver,
         deterministic,
         pointers: Some(&pointers),
+        slice: slice.as_ref(),
     });
 
     // W2-6: the human answer's paths read the model's names (and, W2-7, the
@@ -2618,19 +2683,30 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     let dependencies = cx.view().target().dependencies();
     let rollup_cx =
         crate::engine::l5::routine_rollup::RollupCx::new(cx.view().model(), &dependencies.apps);
-    let human_text = format_prove_human(
-        &entry.routine_display,
-        &entry.object_display,
-        question_text,
-        &prove_result,
-        &entry.effects,
-        Some(&HumanPaths {
-            cx: &rollup_cx,
-            root: root_id,
-            pointers: &pointers,
-            detail: job.detail,
-        }),
-    );
+    let paths = HumanPaths {
+        cx: &rollup_cx,
+        root: root_id,
+        pointers: &pointers,
+        detail: job.detail,
+    };
+    let human_text = match &slice {
+        Some(s) => format_prove_slice_human(
+            &entry.routine_display,
+            &entry.object_display,
+            question_text,
+            &prove_result,
+            s,
+            &paths,
+        ),
+        None => format_prove_human(
+            &entry.routine_display,
+            &entry.object_display,
+            question_text,
+            &prove_result,
+            &entry.effects,
+            Some(&paths),
+        ),
+    };
     // W2-7 (2g): readable dependency locations (the JSON keeps the guid).
     let human_text = dependencies.readable_locations(human_text);
 
@@ -2639,7 +2715,10 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         "routine": owner_qualified(&entry.object_display, &entry.routine_display),
         "question": question_text,
         "answer": prove_result.answer.as_str(),
-        "evidence": prove_result.evidence.as_ref().map_or(0, Vec::len),
+        "evidence": match &slice {
+            Some(s) => s.matching().count(),
+            None => prove_result.evidence.as_ref().map_or(0, Vec::len),
+        },
         "blockedBy": prove_result.blocked_by.as_ref().map_or(0, Vec::len),
         "obligations": obligations_to_value(&prove_result.obligations),
     });
@@ -2649,6 +2728,137 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         exit_code: 0,
         summary,
     })
+}
+
+/// Agent-tasks E1 (design §9.3): the answer of a filtered question, from its
+/// slice and the unfiltered answer `unfiltered` (whose obligations it keeps).
+///
+/// - `yes`: a matching site is reachable (its row and route are the slice's).
+/// - `no`: no site matches, every reachable site is decided against the
+///   filter (an unknown message, a placeholder text, a site with no
+///   position, … is not), the root's search completed, and the cone's
+///   obligations are clear.
+/// - `unknown` otherwise, blocked by each undecided site (its reason is the
+///   blocker kind) and the obligations that are not clear.
+///
+/// An unfiltered `yes` whose slice finds no site at all is `unknown`
+/// (`slice-found-no-site`): the two reads disagree, so nothing is concluded.
+pub(crate) fn filtered_result(
+    entry: &DigestEntryFull,
+    unfiltered: &ProveResult,
+    slice: &crate::engine::l5::prove_slice::SliceOut,
+) -> ProveResult {
+    let oblg = unfiltered.obligations.clone();
+    if slice.matching().next().is_some() {
+        return ProveResult {
+            answer: ProveAnswer::Yes,
+            evidence: None,
+            blocked_by: None,
+            obligations: oblg,
+        };
+    }
+    let mut blockers: Vec<ProveBlocker> = Vec::new();
+    if !slice.complete {
+        blockers.push(ProveBlocker {
+            kind: "slice-search-capped",
+            detail: "the root's search over literal arguments stopped at its state cap; no \
+                     site was judged"
+                .to_string(),
+            anchor: None,
+        });
+    }
+    // One blocker per undecided kind, with its count and its first site
+    // (`payload.slice.undecided` lists the first few of each).
+    for (kind, sites) in slice.undecided() {
+        let s = sites[0];
+        blockers.push(ProveBlocker {
+            kind,
+            detail: crate::engine::l5::prove_slice::undecided_detail(kind, sites.len()),
+            anchor: s.file.as_ref().map(|f| BlockerAnchor {
+                source_kind: "source".to_string(),
+                file: Some(f.clone()),
+                line: s.line,
+                column: s.column,
+                excerpt: None,
+            }),
+        });
+    }
+    if unfiltered.answer == ProveAnswer::Yes && slice.complete && slice.sites.is_empty() {
+        blockers.push(ProveBlocker {
+            kind: "slice-found-no-site",
+            detail: "the unfiltered answer has evidence, but the slice found no reachable site \
+                     of the question's kinds"
+                .to_string(),
+            anchor: None,
+        });
+    }
+    if !obligations_clear(&oblg, false) {
+        blockers.extend(build_obligation_blockers(entry, &oblg, false));
+    }
+    ProveResult {
+        answer: if blockers.is_empty() {
+            ProveAnswer::No
+        } else {
+            ProveAnswer::Unknown
+        },
+        evidence: None,
+        blocked_by: (!blockers.is_empty()).then(|| sort_blockers(blockers)),
+        obligations: oblg,
+    }
+}
+
+/// The human answer of a filtered question (agent-tasks E1, design §9.4):
+/// the answer over the slice, each matching site with its message, route and
+/// selected guards, the other sites, then blockers and coverage as for any
+/// question.
+fn format_prove_slice_human(
+    routine_display: &str,
+    object_display: &str,
+    question: &str,
+    result: &ProveResult,
+    slice: &crate::engine::l5::prove_slice::SliceOut,
+    paths: &HumanPaths<'_, '_>,
+) -> String {
+    use crate::engine::l5::prove_slice::{STATIC_LABEL, human_lines};
+    use crate::engine::l5::routine_rollup::plural;
+    let mut lines: Vec<String> = Vec::new();
+    let header = owner_qualified(object_display, routine_display);
+    lines.push(format!("--- {header} ---"));
+    lines.push(format!(
+        "  question: {question} {} — existing effects (what the routine and its callees \
+         already do), filtered",
+        slice.request.label()
+    ));
+    let matching = slice.matching().count();
+    lines.push(match result.answer {
+        ProveAnswer::Yes => format!(
+            "  answer:   yes — {} reachable from {header} ({STATIC_LABEL})",
+            plural(matching, "matching site", "matching sites")
+        ),
+        ProveAnswer::No => format!(
+            "  answer:   no — no reachable site matches, and every one was decided ({STATIC_LABEL})"
+        ),
+        ProveAnswer::Unknown => format!(
+            "  answer:   unknown — no matching site observed, and some sites or the coverage \
+             cannot rule one out ({STATIC_LABEL})"
+        ),
+    });
+    lines.extend(human_lines(slice, paths.cx, paths.root, paths.detail));
+    lines.extend(
+        paths
+            .cx
+            .take_legend(paths.detail)
+            .into_iter()
+            .map(|l| format!("  {l}")),
+    );
+    if let Some(blockers) = &result.blocked_by
+        && !blockers.is_empty()
+    {
+        lines.extend(blocker_lines(blockers, paths.detail));
+    }
+    lines.extend(coverage_lines(&result.obligations, Some(paths.pointers)));
+    lines.push(String::new());
+    lines.join("\n")
 }
 
 /// The root of a callers' context answer, as prove's document names it.

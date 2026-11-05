@@ -942,6 +942,32 @@ struct ProveCli {
     /// first. The JSON always lists every one.
     #[arg(long, default_value_t = false)]
     detail: bool,
+
+    /// throws-error only: keep the error sites whose static message text
+    /// (a literal, a Label's or TextConst's value, `%1` placeholders kept) or
+    /// Label/TextConst name contains TEXT, case-insensitive. A site whose
+    /// message is not static (a variable or expression, an ErrorInfo, the
+    /// platform's own) never matches it, and it blocks a `no`; an implicit
+    /// error (TestField, an unguarded Get, …) matches only by its kind word.
+    #[arg(long = "match", value_name = "TEXT")]
+    match_text: Option<String>,
+
+    /// Keep only the sites at FILE:LINE (a source path or its tail, a
+    /// 1-based line): throws-error, writes-table:<table>, may-commit,
+    /// reaches-ui.
+    #[arg(long, value_name = "FILE:LINE")]
+    site: Option<String>,
+
+    /// throws-error or writes-table:<table>: keep only the sites of this
+    /// operation (Error, TestField, FieldError, Get, …; Insert, Modify,
+    /// ModifyAll, Delete, DeleteAll, Rename).
+    #[arg(long, value_name = "KIND")]
+    op: Option<String>,
+
+    /// throws-error only: keep only the errors a record operation on this
+    /// table raises (TestField, FieldError, an unguarded Get, …).
+    #[arg(long, value_name = "TABLE")]
+    table: Option<String>,
 }
 
 /// `ExplainCli` — arguments for `alsem explain <ws>` (intent-evidence spec
@@ -2750,6 +2776,17 @@ fn plan_prove(p: ProveCli) -> Planned {
             1,
         );
     }
+    // Agent-tasks E1: the filters, and which question each goes with.
+    let slice = match al_sem::engine::l5::prove_slice::SliceRequest::of(
+        &p.question,
+        p.match_text.as_deref(),
+        p.site.as_deref(),
+        p.op.as_deref(),
+        p.table.as_deref(),
+    ) {
+        Ok(s) => s,
+        Err(e) => return failed(e, 1, 1),
+    };
 
     ready(
         &p.workspace.clone(),
@@ -2757,6 +2794,7 @@ fn plan_prove(p: ProveCli) -> Planned {
         move |slot, inputs| {
             let version = inputs.get().driver_version.clone();
             let (p, inputs, version) = hold(slot, (p, inputs, version));
+            let slice = slice.clone();
             Box::new(ProveJob {
                 detectors: al_sem::engine::l5::detectors::default_detectors(),
                 inputs,
@@ -2770,6 +2808,7 @@ fn plan_prove(p: ProveCli) -> Planned {
                 human: p.format == "human",
                 detail: p.detail,
                 out: p.out.as_deref(),
+                slice,
             })
         },
     )
