@@ -232,8 +232,9 @@ pub struct Control<'a> {
     /// `Some` once the request must stop.
     pub stop: &'a (dyn Fn() -> Option<Stop> + Sync),
     /// The reservation before a fill, or before a request's trees (§4.5):
-    /// the key's kind (`"trees"` for trees) and the store's estimate (0 when
-    /// the reserver estimates itself); `Err(why)` refuses it.
+    /// the key's kind (`"trees"` for trees) and the work's size in roots (0
+    /// when unsized: a revision-wide artifact), by which the reserver sizes
+    /// its estimate (`budget::size_class`); `Err(why)` refuses it.
     pub reserve: &'a (dyn Fn(&'static str, usize) -> Result<Guard<'a>, String> + Sync),
 }
 
@@ -430,17 +431,19 @@ impl<K: StoreKey, V: StoreValue> Store<K, V> {
         gone.len()
     }
 
-    /// Publish `value` for `key` before any request (an artifact the
-    /// revision's build made, where its inputs existed: the sited graph,
-    /// agent-tasks design §1.2 M0-1). It is `Published` like a filled key,
-    /// with `bytes` as its measured size. Panics if `key` is already present:
-    /// a seeded key is seeded once, before the revision is published.
+    /// Publish `value` for `key` outside a fill (an artifact made where its
+    /// inputs existed: the sited graph, agent-tasks design §1.2 M0-1, seeded
+    /// by the revision's build or added later from a program over the
+    /// revision's own read). It is `Published` like a filled key, with
+    /// `bytes` as its measured size, merged into the current snapshot (every
+    /// other entry kept). Panics if `key` is already present or filling: a
+    /// seeded key is never filled, and its seeder checks it is absent.
     pub fn seed(&self, key: K, value: V, bytes: u64) {
         let mut reg = self.registry();
         let e = reg.entry(key.clone()).or_default();
         assert!(
             e.state == State::Absent,
-            "{key:?} is seeded once, before any request"
+            "{key:?} is seeded once, and only while absent"
         );
         e.state = State::Published;
         let generation = e.generation;
@@ -525,13 +528,14 @@ impl<K: StoreKey, V: StoreValue> Store<K, V> {
 
     /// A ready snapshot satisfying every `(key, requirement)` of `needs`
     /// (the closure of the request's needs: every prerequisite listed), or
-    /// why there is none (§4.2). `estimate` sizes the reservation of one
-    /// fill; `fill` computes a claimed key's value off the snapshot holding
-    /// its prerequisites.
+    /// why there is none (§4.2). `units` is the size in roots of one key's
+    /// fill, handed to its reservation ([`Control::reserve`]); `fill`
+    /// computes a claimed key's value off the snapshot holding its
+    /// prerequisites.
     pub fn ensure_prepared(
         &self,
         needs: &[(K, V::Req)],
-        estimate: &dyn Fn(&K) -> usize,
+        units: &dyn Fn(&K) -> usize,
         fill: &Fill<'_, K, V>,
         ctl: &Control<'_>,
     ) -> Result<Arc<Snapshot<K, V>>, PrepareError> {
@@ -622,7 +626,7 @@ impl<K: StoreKey, V: StoreValue> Store<K, V> {
                         let (k, generation) = (&k, &generation);
                         // Each fill holds its reservation while it computes (a
                         // fill worker), released once its value is in hand.
-                        let guard = match (ctl.reserve)(k.kind(), estimate(k)) {
+                        let guard = match (ctl.reserve)(k.kind(), units(k)) {
                             Ok(g) => g,
                             // `claims` drops: released, waiters woken.
                             Err(why) => return Err(PrepareError::Budget(why)),

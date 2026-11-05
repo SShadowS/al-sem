@@ -64,6 +64,52 @@ lost. Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §10 (as b
   `table-key-removed` (high) and `table-key-fields-changed` (medium), from the schema facts' key
   rows (a key is identified by its position, `<table>#K<n>`, as those rows identify it).
 
+### Fixed (warm MCP calls slow once `alsem_impact` / `alsem_tests` had run)
+
+Measured on CDO through one long-lived `alsem mcp` session (digest, impact, digest, impact,
+tests, digest, explain twice, impact, digest; then the 94-file range). Root causes, each with
+its own test and discrimination proof:
+
+- **`alsem impact`'s parts never used the resident engine.** `impact --part main` and
+  `--part up` were not in `SERVED_COMMANDS`, so the engine child ran each through the one-shot
+  job path over its inputs: a whole program build per part on every call, warm or not (CDO
+  before: main 34-50 s, up 13-43 s per call, no fill and no eviction counted). They are now
+  answered off the revision: the main part from its retained artifacts (digest's plan), the up
+  part from its sited graph.
+- **The first question that read the sited graph threw the revision's artifacts away.**
+  `pin_sited` rebuilt the session to add the graph, publishing a new revision with an empty
+  store, so the next digest or explain filled everything again (CDO: 9.1 s of fills for the
+  digest after the first impact). The graph is now added to the published revision, built from
+  a program over that revision's own read (the workspace session's, reusing every parse;
+  single-app, the cold builder's): no workspace read, no new revision, every filled artifact
+  kept. A cancelled request leaves the revision without the graph and is answered `stopped`.
+- **A request's witness batch reserved once per root.** The first witness fill computes every
+  witness of the request; the later ones are lookups, but each reserved the case's estimate
+  again (the batch's observed peak once observed): a 699-root diff was refused at 2042 MiB per
+  root over a 7.4 GB RSS. A witness fill whose batch has run reserves nothing.
+- **Large reads memoized every root's witness.** A witness is 5.6-7.9 MiB per root on CDO and
+  the tree read clones the ones it reads, so a 699-root impact held them twice and its trees'
+  reservation was refused. A read over more than `WITNESS_MEMO_MAX_ROOTS` (64) roots computes
+  its entries itself, as a one-shot run does, and publishes none.
+- **One large request's peak became every request's estimate.** The budget's estimate of a
+  case was the largest of its last three observed peaks whatever the work's size, so after the
+  range (trees peak 4174 MiB) every one-routine ask was refused over a 5.7 GB RSS. Estimates
+  and observations are now kept per size class (the work's roots, one class per factor of 4:
+  `budget::size_class`); a small request reads its own class, or the table.
+
+After (CDO, `release-fast`, machine load 25-110, so upper bounds): a repeated `alsem_impact`
+on one routine 0.44-0.53 s (before 47-63 s), `alsem_digest` 0.27-0.34 s after impact and tests
+(before 9.5 s once, then 0.3-0.4 s), `alsem_explain` 0.46-0.81 s, `alsem_tests` 0.07 s; the
+first impact of a session 17.4 s (its up part 2.3 s adds the sited graph; the test engine's
+cold start 14.4 s). After the 94-file range the one-routine calls stay there (digest 1.2-1.3 s
+with a refill of what the range's reclaim evicted, impact 0.44-0.46 s). Production child 5.4-
+5.6 GB, test child 2.2 GB. **Still open, measured:** the range itself answers cold (152 s;
+before 314-319 s, warm or cold) but a warm repeat is refused by the budget: its main part's
+trees peak at 4.1 GB over a 5.6 GB resident child (9.7 GB against 8 GiB), and an eviction does
+not lower the RSS the admission reads (10,882 entries evicted, RSS 5.79 → 5.62 GB, the retained
+floor 3.5 GB). Not fixed by raising the budget; computing the per-root totals in chunks would
+bound that peak.
+
 ### Added (agent tasks, milestone B1: impact on the current revision)
 
 The blast radius of a change, current effects only. Spec:
