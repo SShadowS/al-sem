@@ -1506,7 +1506,25 @@ impl Revision {
             };
             return Ok(answer_sited(job, d.side, &g));
         }
-        if universe_differs || d.key.no_roots_config || d.needs.analyze_extras || d.needs.graph {
+        // A model demand that also reads the sited graph (`query touches
+        // --field --from`) needs this revision's kept graph.
+        let sited = if d.needs.sited {
+            let Some(g) = self.sited() else {
+                return Err(PrepareError::Engine(format!(
+                    "'{}' reads the sited graph, which this revision did not build \
+                     (a request that reads it pins with `pin_sited`)",
+                    job.name()
+                )));
+            };
+            Some(Some(g))
+        } else {
+            None
+        };
+        if universe_differs
+            || d.key.no_roots_config
+            || d.needs.analyze_extras
+            || (d.needs.graph && !d.needs.sited)
+        {
             return Err(PrepareError::Engine(format!(
                 "'{}' needs a view this revision did not build",
                 job.name()
@@ -1539,6 +1557,7 @@ impl Revision {
             later: LaterReads::EVERYTHING,
             carry: part.carry,
             handed: &mut handed,
+            sited,
         };
         let (side, own) = capture(|| job.compute(d.side, &mut cx));
         drop(view);

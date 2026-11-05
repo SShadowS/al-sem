@@ -596,6 +596,10 @@
       {
         "kind": "resolved-call-graph",
         "noSolveRow": false
+      },
+      {
+        "kind": "external-callers",
+        "routines": 3
       }
     ],
     "searched": {
@@ -632,8 +636,8 @@
           "what": "no dependency code is loaded (single-app, or no dependency)"
         }
       ],
-      "scope": "Codeunit FT Consumers::Kinds's cone (2 routines) and its callers (0 routines)",
-      "workspaceRoutineBodies": 2
+      "scope": "Codeunit FT Consumers::Kinds's cone by the solve graph (2 routines) and its callers by the reverse walk (4 routines with a body: local 4, through dependency code 0, only through an open site 0; 0 more without a body in the model)",
+      "workspaceRoutineBodies": 6
     },
     "table": {
       "id": "08080808-0000-4000-8000-000000000081/table/50800",

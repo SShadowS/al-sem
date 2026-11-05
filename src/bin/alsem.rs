@@ -2056,6 +2056,31 @@ fn part_json(out: &JobOutput) -> Result<serde_json::Value, String> {
 
 const VALID_QUERY_FORMATS: &[&str] = &["human", "json"];
 
+/// Whether a `query touches` argv reads the sited graph: `--field` with
+/// `--from`, asked up (`up` or the default `both`), in either universe: R0's reverse
+/// walk names the callers (`QueryJob`'s demand states the same rule). The
+/// engine host pins such a request with `pin_sited`.
+fn query_field_reads_sited(argv: &[String]) -> bool {
+    let has = |flag: &str| {
+        argv.iter()
+            .any(|a| a == flag || a.starts_with(&format!("{flag}=")))
+    };
+    let value = |flag: &str| {
+        argv.iter().enumerate().find_map(|(i, a)| {
+            if a == flag {
+                argv.get(i + 1).cloned()
+            } else {
+                a.strip_prefix(&format!("{flag}=")).map(str::to_string)
+            }
+        })
+    };
+    argv.first().is_some_and(|c| c == "query")
+        && argv.get(1).is_some_and(|c| c == "touches")
+        && has("--field")
+        && has("--from")
+        && value("--direction").as_deref() != Some("down")
+}
+
 fn plan_query_touches(t: QueryTouchesCli) -> Planned {
     if !VALID_QUERY_FORMATS.contains(&t.format.as_str()) {
         return failed(
@@ -3757,8 +3782,9 @@ mod engine {
         // A tests select part on a model engine (the workspace's own tests)
         // reads the sited graph: the revision must have it (M0's pin_sited,
         // which turns the graph on once).
-        let reads_sited = ask.argv.first().is_some_and(|c| c == "tests")
-            && ask.argv.iter().any(|a| a == "--part=select")
+        let reads_sited = ((ask.argv.first().is_some_and(|c| c == "tests")
+            && ask.argv.iter().any(|a| a == "--part=select"))
+            || query_field_reads_sited(&ask.argv))
             && !open.session.is_graph_only();
         let pin = if reads_sited {
             open.session.pin_sited(ask.freshness, cx.stop)

@@ -570,7 +570,7 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 130
+            "line": 167
           },
           "display": "OnAfterGetRecord",
           "objectDisplay": "Page FT Card",
@@ -579,7 +579,7 @@
         "site": {
           "column": 11,
           "file": "ws:src/FTFields.al",
-          "line": 132
+          "line": 169
         },
         "source": "implicit-access",
         "tempState": "persistent",
@@ -711,7 +711,7 @@
         }
       ],
       "scope": "every routine body",
-      "workspaceRoutineBodies": 7
+      "workspaceRoutineBodies": 11
     },
     "table": {
       "id": "08080808-0000-4000-8000-000000000081/table/50800",

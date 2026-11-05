@@ -89,6 +89,7 @@ pub(crate) fn run_on_target(
         later: job::LaterReads::NONE,
         carry: part.carry,
         handed: &mut handed,
+        sited: None,
     };
     job.compute(d.side, &mut cx)
 }
@@ -365,6 +366,9 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
             .collect()
     };
     let mut results: Vec<Option<Side>> = on_view.iter().map(|_| None).collect();
+    // A model demand that also declares the sited graph reads it in its
+    // compute (`ViewCx::sited`): kept past the build for it.
+    let mut kept_sited: Option<Arc<crate::program::impact_graph::SitedGraph>> = None;
     // (1) The one builder; graph demands are done off its program.
     let built = build_view_model(&first.inputs, &first.key, needs, |program| {
         // The sited graph, built once off the lent program for every sited
@@ -372,15 +376,21 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
         let sited = on_view.iter().any(|(_, d)| d.needs.sited).then(|| {
             program.and_then(|p| {
                 crate::program::impact_graph::sited_from_program(p, &|| false)
+                    .map(Arc::new)
                     .map_err(|_| "the sited graph's build was cancelled")
             })
         });
+        if on_view.iter().any(|(_, d)| d.needs.sited && d.needs.model) {
+            kept_sited = sited.as_ref().and_then(|g| g.as_ref().ok()).cloned();
+        }
         for (i, (j, d)) in on_view.iter().enumerate() {
-            if d.needs.sited {
+            if d.needs.model {
+                // Computed off the model below.
+            } else if d.needs.sited {
                 let _s = job_span(*j, jobs[*j], "compute");
                 let g = sited.as_ref().expect("built for a sited demand");
                 results[i] = Some(capture(|| {
-                    jobs[*j].sited(d.side, g.as_ref().map_err(|e| *e))
+                    jobs[*j].sited(d.side, g.as_deref().map_err(|e| *e))
                 }));
             } else if d.needs.graph {
                 let _s = job_span(*j, jobs[*j], "compute");
@@ -477,6 +487,7 @@ fn run_view(jobs: &[&dyn Job], on_view: &[(usize, &ViewDemand)]) -> Vec<Side> {
             later: last_reads.after(k),
             carry: carries[k].take(),
             handed: &mut handed,
+            sited: d.needs.sited.then(|| kept_sited.clone()),
         };
         let _s = job_span(*j, jobs[*j], "compute");
         let (side, own) = capture(|| jobs[*j].compute(d.side, &mut cx));

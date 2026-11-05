@@ -569,6 +569,11 @@ pub struct ViewCx<'a> {
     /// only (D11): `Weak`, so the allocation's address stays unique while the
     /// view's census counts each distinct one once.
     pub(crate) handed: &'a mut Vec<HandedRun>,
+    /// The program's sited graph, for a model demand that also declares
+    /// [`ViewNeeds::sited`] (`query touches --field --from`'s callers, walked
+    /// by R0): `Some(None)` when its build did not finish. `None` for every
+    /// other demand (not declared).
+    pub(crate) sited: Option<Option<Arc<crate::program::impact_graph::SitedGraph>>>,
 }
 
 /// One run handed to a job (D11): the job, the allocation, its bytes.
@@ -582,6 +587,16 @@ impl ViewCx<'_> {
     /// The view's workspace read.
     pub fn inputs(&self) -> &Arc<WorkspaceInputs> {
         self.inputs
+    }
+
+    /// The sited graph a model demand declared with [`ViewNeeds::sited`]:
+    /// `None` only when its build did not finish (cancelled). Reading it
+    /// without the declaration panics: "not built" never reads as "no
+    /// graph".
+    pub fn sited(&self) -> Option<Arc<crate::program::impact_graph::SitedGraph>> {
+        self.sited.clone().expect(
+            "the sited graph was read without its declaration: set ViewNeeds::sited on the demand",
+        )
     }
 
     /// The program coverage of an analyze view.

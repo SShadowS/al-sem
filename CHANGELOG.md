@@ -22,7 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ones; a record of an unresolved table is a candidate. Workspace and loaded dependency bodies
   are searched, and the answer says so; CalcFormula, TableRelation and page/report/query/XMLport
   columns are stated as not searched, so an answer with no site is "no indexed consumer
-  observed", never no. With `--from R`, only R's cone and callers. The query schema is
+  observed", never no. With `--from R`, only R's cone (the solve graph, as `query touches` down)
+  and R's callers, named by R0's reverse walk over the sited graph as `alsem tests` names them
+  (each up site with its tier; `--single-app` walks the workspace program's graph). A model job may now
+  declare `ViewNeeds::sited` beside the model and read the graph in its compute
+  (`ViewCx::sited`); the engine host pins such a request with `pin_sited`. The query schema is
   **3.3.0** (additive: `field`, `searched`, `fieldSummary`, `fieldTouches[]`, `declaredKeys[]`,
   `reasons[]`, `absence`); every other query document changes only its version.
 - **Two field facts for field impact (agent-tasks milestone D, the D1 probe).** A bare field in

@@ -1188,9 +1188,25 @@ facts for one field. The query schema is 3.2.0 on master already (output step 1b
   `copySide` says `receiver` (F may be written) or `source` (F may be read).
 - `declared-key` is the `declaredKeys[]` list, not a site.
 - Without `--from` the job's plan is `session::field_plan()` (the model alone: no `l4`, no tree);
-  with `--from` it is `query_plan()`, and the scope is the solve graph (R and its transitive
-  callees, its transitive callers), stated as "the resolved call graph". R0's reverse walker is
-  not used (R0 is not on master).
+  with `--from` it is `query_plan()`. **Down** (R's cone) is the solve graph: R and its
+  transitive callees, dependency code one routine deep, as `query touches` down reads it.
+  **Up** (R's callers) is **R0's reverse walk** (`impact_graph::reverse::walk_one`) over the
+  sited graph, as `alsem tests` and impact read it: through dependency code, each up site with
+  its tier (`local`, `throughDependency`, `onlyOpen`), and the walk's external callers, hidden
+  channels and limit stated as reasons. Its demand declares `ViewNeeds::sited` beside the model
+  (a model demand that also reads the sited graph is new: the one-shot driver keeps the graph it
+  builds off the lent program and hands it to the compute, `ViewCx::sited`; the engine host pins
+  such a request with `pin_sited`, `alsem.rs`' `query_field_reads_sited`). `--single-app` lends
+  its workspace-scoped program for the same graph (`build_view_model`'s single-app arm now lends
+  it to a model demand that declares the sited graph), so both universes walk R0, and with no
+  dependency they answer alike (master's `without_dependencies_cross_app_equals_single_app`
+  failed while single-app still used the solve graph). The solve graph names callers only when
+  the sited graph did not build (stated as `sited-graph-not-built`); on code with no dependency
+  the two agree (`field_callers_agree_with_the_reverse_walk_on_local_code`).
+  Measured on CDO, `WaitForMailLimit`: the solve graph named 967 callers, R0 names 4,827 with a
+  body in the model (local 1,030, through dependency code 2,726, only through an open site
+  1,071) and 20,242 more the model holds no body for (stated as not searched). The sited graph
+  costs ~1.5 s and 58 MB (134,385 nodes, 318,084 sites); the whole answer 15.0 s / 3.19 GB peak.
 - An answer with no site always says `unknown` ("no indexed consumer observed"): in v1 the
   declaration-level consumers are never searched, so coverage is never complete.
 
@@ -1200,7 +1216,8 @@ Management :308), `SetRange` (:312), the implicit write in the table's `InitNewE
 (:385), and a by-number candidate in CDN's `GetLineUnitPrice` (`RecRef.GetTable(<Variant>)`
 then `Field(22)`); the `"Sent with"::SMTP` enum values are rightly not sites, the page
 columns are the stated declaration gap. Cross-app 23.2 s / 3.14 GB peak; `--from
-WaitForMailLimit` (cone 1, callers 967) 25.8 s / 3.11 GB; `--single-app` 7.6 s / 0.74 GB.
+WaitForMailLimit` (cone 1; callers by R0, above) 15.0 s / 3.19 GB on a quieter machine;
+`--single-app` 7.6 s / 0.74 GB.
 `CDO Merge Table Field` field 10 "Merge Table No.": 11 sites — 3 `Validate` in field
 triggers, `TestField`, the implicit read as `Field.SetRange(TableNo, "Merge Table No.")`'s
 value, implicit read/write in the XML export/import, 3 reads through `MergeTableField."Merge

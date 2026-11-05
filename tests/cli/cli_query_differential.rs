@@ -345,6 +345,24 @@ pub(crate) const CORPUS: &[Case] = &[
         args: &["--table", "FT Item", "--field", "Amount", "--from", "Kinds"],
         exit_code: 0,
     },
+    // `--from Kinds --direction up`: its callers by R0's reverse walk (two
+    // hops and an event subscriber), with each up site's tier.
+    Case {
+        slug: "ft.kinds.ft-item.unit-price.up",
+        workspace: FT_WS,
+        sub: "touches",
+        args: &[
+            "--table",
+            "FT Item",
+            "--field",
+            "Unit Price",
+            "--from",
+            "Kinds",
+            "--direction",
+            "up",
+        ],
+        exit_code: 0,
+    },
     // A field with no code consumer: the answer says what was not searched,
     // never "no".
     Case {
@@ -473,7 +491,7 @@ fn query_touches_w2_3_fixture_goldens() {
 #[test]
 fn query_touches_field_fixture_goldens() {
     let ft: Vec<&Case> = CORPUS.iter().filter(|c| c.workspace == FT_WS).collect();
-    assert_eq!(ft.len(), 5);
+    assert_eq!(ft.len(), 6);
     for c in ft {
         check_case(c);
     }

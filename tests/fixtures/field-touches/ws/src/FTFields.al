@@ -123,6 +123,43 @@ codeunit 50800 "FT Consumers"
     end;
 }
 
+// Callers of Kinds, for `--from Kinds --direction up` (two hops, and an
+// event subscriber one hop past a publisher). Neither uses Amount.
+codeunit 50801 "FT Callers"
+{
+    procedure CallsKinds()
+    var
+        I: Record "FT Item";
+        C: Codeunit "FT Consumers";
+    begin
+        I."Unit Price" := 1;
+        C.Kinds(I);
+        OnAfterKinds();
+    end;
+
+    procedure Top()
+    begin
+        CallsKinds();
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnAfterKinds()
+    begin
+    end;
+}
+
+codeunit 50802 "FT Subscriber"
+{
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"FT Callers", 'OnAfterKinds', '', false, false)]
+    local procedure HandleAfterKinds()
+    var
+        C: Codeunit "FT Consumers";
+        I: Record "FT Item";
+    begin
+        C.Kinds(I);
+    end;
+}
+
 page 50800 "FT Card"
 {
     SourceTable = "FT Item";

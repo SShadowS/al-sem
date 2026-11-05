@@ -332,3 +332,89 @@ fn what_is_not_searched_is_stated() {
         "declaration-consumers-not-searched"
     );
 }
+
+/// `--from R --direction up` names R's callers by R0's reverse walk over
+/// the sited graph (as `alsem tests` reads them: each up site carries its
+/// tier), in both universes: `--single-app` builds the workspace program's
+/// graph. `engine-ask` (the context server's path, which pins the
+/// revision's sited graph) prints what the CLI prints, in both universes.
+#[test]
+fn callers_come_from_the_reverse_walk() {
+    let args = [
+        "--table",
+        "FT Item",
+        "--field",
+        "Unit Price",
+        "--from",
+        "Kinds",
+        "--direction",
+        "up",
+    ];
+    let up_sites = |p: &Value| -> Vec<(String, String, Option<String>)> {
+        p["fieldTouches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| {
+                (
+                    s["routine"]["display"].as_str().unwrap().to_string(),
+                    s["scope"].as_str().unwrap_or("").to_string(),
+                    s["tier"].as_str().map(str::to_string),
+                )
+            })
+            .collect()
+    };
+    let (v, code) = touches(&fixture(), &args);
+    assert_eq!(code, 0, "{v}");
+    let p = &v["payload"];
+    let scope = p["searched"]["scope"].as_str().unwrap();
+    assert!(scope.contains("by the reverse walk"), "{scope}");
+    assert_eq!(
+        up_sites(p),
+        [(
+            "CallsKinds".to_string(),
+            "up".to_string(),
+            Some("local".to_string())
+        )]
+    );
+    let mut single = args.to_vec();
+    single.push("--single-app");
+    let (s, code) = touches(&fixture(), &single);
+    assert_eq!(code, 0, "{s}");
+    let sp = &s["payload"];
+    assert!(
+        sp["searched"]["scope"]
+            .as_str()
+            .unwrap()
+            .contains("by the reverse walk"),
+        "{sp}"
+    );
+    assert_eq!(up_sites(sp), up_sites(p));
+    // The engine host's answer equals the CLI's.
+    let ws = fixture();
+    let w = ws.to_str().unwrap();
+    let mut argv = vec!["query", "touches", w];
+    argv.extend(args);
+    argv.extend(["--format", "json", "--deterministic"]);
+    let run = |a: &[&str]| {
+        let o = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .args(a)
+            .output()
+            .expect("spawn alsem");
+        (
+            String::from_utf8_lossy(&o.stdout).to_string(),
+            o.status.code(),
+        )
+    };
+    for single_app in [false, true] {
+        let mut a = argv.clone();
+        if single_app {
+            a.push("--single-app");
+        }
+        let direct = run(&a);
+        assert_eq!(direct.1, Some(0), "{direct:?}");
+        let mut via = vec!["engine-ask", "--"];
+        via.extend(&a);
+        assert_eq!(run(&via), direct, "single_app {single_app}");
+    }
+}
