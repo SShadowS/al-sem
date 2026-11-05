@@ -1,5 +1,5 @@
 Codeunit CDO Issue Document::IssueReminder  ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:11
-  summary: may write 143 tables (11 owned by this app, 132 by dependencies) and 2 writes on a table not resolved; caller-dependent: none; commits: may (1 commit-bearing entry point); events: 524 (75 raised in workspace code); UI at 2 places; HTTP at 2 places; file at 1 place; background tasks at 1 place; isolated storage at 1 place; telemetry at 1 place; errors at 1 place; callers: none, reached from 1 page action; tests: none; gaps: 16 in workspace code, 265 in dependency code, 7 not placed
+  summary: may write 143 tables (11 owned by this app, 132 by dependencies) and 2 writes on a table not resolved; caller-dependent: none; commits: may (1 commit-bearing entry point); events: 524 (75 raised in workspace code); UI at 2 places; HTTP at 2 places; file at 1 place; background tasks at 1 place; isolated storage at 1 place; telemetry at 1 place; errors at 1 place; callers: none, reached from 1 page action; tests: none (no test code loaded); gaps: 16 in workspace code, 265 in dependency code, 7 not placed
   coverage: partial (interface-open-world, object-run-unresolved) — 267 interface calls open world, 21 dynamic calls not resolved
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
@@ -105,7 +105,7 @@ Codeunit CDO Issue Document::IssueReminder  ws:src/DocumentTypes/Finance/General
   isolated storage at 1 place: ISOLATED_STORAGE at ws:src/Features/ESeal/CDOeSealSetup.Table.al:220 (unknown)
   telemetry at 1 place: TELEMETRY beyond Codeunit CSC Core::IsAppActiveOrAskToActivate
   errors at 1 place: ERROR_IMPLICIT, ERROR_THROW, UI_ERROR beyond Codeunit Reminder-Issue::OnRun
-  tests: none reach it
+  tests: no test code loaded (0 [Test] procedures in the workspace app); that is not a reason to skip tests
   gaps in workspace code (16 gaps):
     gap: unresolved-call (callee DispatcherFactory.CreateeDocumentDispatcher, status polymorphic) at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:80
     gap: unresolved-call (callee DispatcherFactory.CreateLegacyeDocDispatcher, status polymorphic) at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:81
