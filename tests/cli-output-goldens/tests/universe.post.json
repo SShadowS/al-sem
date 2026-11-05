@@ -1,0 +1,80 @@
+{
+  "assumptions": [
+    "static reachability, not coverage: a reached test may not exercise the changed lines"
+  ],
+  "byTier": {
+    "local": 1,
+    "onlyOpen": 0,
+    "throughDependency": 0
+  },
+  "changed": [
+    {
+      "display": "Codeunit TU Core::Post",
+      "nearest": {
+        "hops": 1,
+        "test": "Codeunit TU Core Tests::PostUpdatesQty",
+        "tier": "local"
+      },
+      "nearestTestedCaller": null,
+      "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#22f7f361208a0d8c3669d02eeb4073ece883d836a783765eb80f3d1708f5c71f",
+      "status": "reached"
+    }
+  ],
+  "diagnostics": [],
+  "hidden": [],
+  "limits": [],
+  "lineBase": 1,
+  "next": "next: the test app depends on Microsoft's Library Assert, not loaded here. Put their symbols in the test app's .alpackages (in VS Code: open the test app and run \"AL: Download symbols\"; or copy Microsoft_<name>_<version>.app from a BC artifact's Applications folder), then ask again: calls into them then resolve",
+  "productionSourceStamp": "prod-v1:36dbae2fe449e122388fbf8c988a5991",
+  "requiredFallback": [],
+  "runFirst": [
+    {
+      "class": "direct",
+      "codeunit": "TU Core Tests",
+      "codeunitId": 50850,
+      "file": "src/CoreTests.al",
+      "hops": 1,
+      "path": [
+        "Codeunit TU Core Tests::PostUpdatesQty",
+        "Codeunit TU Core::Post"
+      ],
+      "procedure": "PostUpdatesQty",
+      "reaches": [
+        "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#22f7f361208a0d8c3669d02eeb4073ece883d836a783765eb80f3d1708f5c71f"
+      ],
+      "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a02:Codeunit:50850#cef2f0b2d01083453c0df5a65fe6974bc777040d9c41e9975027b27e906251c7",
+      "tier": "local"
+    }
+  ],
+  "runFirstTotal": 1,
+  "schema": "al-sem.tests",
+  "scope": {
+    "apps": [
+      {
+        "appId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a02",
+        "files": 1,
+        "found": "auto",
+        "name": "TU Production Tests",
+        "productionTier": "localApproximate",
+        "root": "<root>/Test",
+        "testsLoaded": 2,
+        "universe": "tests:<key>"
+      }
+    ],
+    "discovery": "auto",
+    "discoveryComplete": true,
+    "searched": 2,
+    "skipped": [
+      {
+        "detail": "no source",
+        "name": "TU Production Tests FR",
+        "reason": "no-source",
+        "root": "<root>/TestFR"
+      }
+    ],
+    "workspaceTests": 0
+  },
+  "selectionComplete": true,
+  "tier": "local",
+  "version": 1
+}

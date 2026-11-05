@@ -219,6 +219,9 @@ pub enum Universe {
     /// The cross-app program and its sited graph, no model (agent-tasks
     /// design §1.2 M0-2): it answers only commands that read the sited graph.
     GraphOnly,
+    /// A test universe (agent-tasks design §4.3): graph-only, over a test app
+    /// with the production app injected ([`OpenParams::test_universe`]).
+    Tests,
 }
 
 impl Universe {
@@ -229,6 +232,7 @@ impl Universe {
             Universe::CrossApp => "crossApp",
             Universe::SingleApp => "singleApp",
             Universe::GraphOnly => "graphOnly",
+            Universe::Tests => "tests",
         }
     }
 }
@@ -247,6 +251,10 @@ pub struct OpenParams {
     /// Absent: `crossApp`.
     #[serde(default)]
     pub universe: Universe,
+    /// The test universe's immutable descriptor (universe `tests` only):
+    /// what the session injects into every read, and its key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test_universe: Option<crate::engine::test_select::universe::TestUniverse>,
 }
 
 /// The front end's answers to a request's file-system questions, decided

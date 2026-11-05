@@ -1,0 +1,4 @@
+Each subfolder of this folder is a project of its own. Test app discovery
+(`alsem tests`, explain's `tests:` line) searches only the fixture that holds
+the workspace, not the whole repository: see `PROJECTS_MARKER` in
+src/engine/test_select/scope.rs.

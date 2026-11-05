@@ -20,6 +20,6 @@ Codeunit Rules Checks::CheckOrder  ws:src/checks.al:8
   events: 0 raised in workspace code; 0 more only beyond entry points
   extension points: none (the routine publishes no event itself)
   errors at 5 places: ERROR_IMPLICIT at ws:src/checks.al:20 (unconditional-on-success); ERROR_IMPLICIT at ws:src/checks.al:21 (unconditional-on-success); ERROR_THROW at ws:src/checks.al:15 (error-path); ERROR_THROW at ws:src/checks.al:17 (error-path); ERROR_THROW at ws:src/checks.al:25 (error-path)
-  tests: no test code loaded (0 [Test] procedures in the workspace app); that is not a reason to skip tests
+  tests: no test code found (0 [Test] procedures in the workspace app; no app under the project folder (its parent holds .al-sem-projects) depends on this one with a test codeunit (searched 0 app.json files)); that is not a reason to skip tests
   next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

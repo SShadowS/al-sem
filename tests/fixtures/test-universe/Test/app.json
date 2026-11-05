@@ -1,0 +1,27 @@
+{
+  "id": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a02",
+  "name": "TU Production Tests",
+  "publisher": "al-sem tests",
+  "version": "1.0.0.0",
+  "runtime": "17.0",
+  "dependencies": [
+    {
+      "id": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01",
+      "name": "TU Production",
+      "publisher": "al-sem tests",
+      "version": "1.0.0.0"
+    },
+    {
+      "id": "dd0be2ea-f733-4d65-bb34-a28f4624fb14",
+      "name": "Library Assert",
+      "publisher": "Microsoft",
+      "version": "1.0.0.0"
+    }
+  ],
+  "idRanges": [
+    {
+      "from": 50850,
+      "to": 50899
+    }
+  ]
+}

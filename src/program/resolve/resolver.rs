@@ -2219,7 +2219,9 @@ fn entry_trigger_name(kind: ObjectKind) -> &'static str {
 /// platform entry points are not modelled (the call graph's
 /// `platformEntryPointsNotModelled` assumption). A page part's triggers are
 /// not followed either.
-fn run_triggers(kind: ObjectKind) -> Option<(&'static [&'static str], &'static [&'static str])> {
+pub(crate) fn run_triggers(
+    kind: ObjectKind,
+) -> Option<(&'static [&'static str], &'static [&'static str])> {
     match kind {
         ObjectKind::Page => Some((
             &[
