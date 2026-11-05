@@ -22,6 +22,7 @@ fn never() -> Option<Stop> {
 fn revision(p: &Pinned) -> &Arc<Revision> {
     match &p.built {
         Built::Revision(r) => r,
+        Built::Graph(_) => panic!("a model session publishes a model revision"),
         Built::Failed(f) => panic!("the build failed: {:?}", f.failure),
     }
 }
@@ -597,4 +598,348 @@ mod budget {
         assert!(pinned.built.revision_id().is_some());
         assert_eq!(reads.load(Ordering::SeqCst), 1);
     }
+}
+
+/// The sited graph of a cold cross-app build over the disk now.
+fn sited_cold(ws: &Path) -> String {
+    let inputs = WorkspaceInputs::read(ws, &REVISION_READ);
+    let p = crate::program::resolved::ResolvedProgram::build(
+        &inputs,
+        crate::program::resolved::ProgramScope::CrossApp,
+    )
+    .expect("the fixture builds");
+    crate::program::impact_graph::sited_from_program(&p, &|| false)
+        .expect("not cancelled")
+        .text()
+}
+
+/// M0-T3 (agent-tasks design §1.3), in the given memory mode: a revision
+/// builds no sited graph until a question reads it; that question rebuilds
+/// once; from then on every revision builds it, and after a body edit that
+/// adds a call the new revision's graph has the new site and equals a cold
+/// build's.
+///
+/// DISCRIMINATION (2026-11-05): seeding the new revision with the previous
+/// revision's graph (`rev.with_sited(prev's Arc)` in `build_locked`) fails
+/// "the new call's site" in both modes.
+fn sited_graph_follows_a_body_edit(low_mem: bool) {
+    let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
+    let ws = dir.path();
+    let s = Arc::new(
+        ResidentSession::new(ws.to_path_buf(), false, "test".into()).with_low_mem(low_mem),
+    );
+    let first = s.pin(Freshness::Fresh, &never).unwrap();
+    assert!(revision(&first).sited().is_none(), "built only when asked");
+    let p = s.pin_sited(Freshness::Fresh, &never).unwrap();
+    assert_eq!(p.rebuilt_for, Some("sited"));
+    assert_eq!(revision(&p).id.generation, 2);
+    let g = revision(&p).sited().expect("the rebuild made it");
+    assert_eq!(g.text(), sited_cold(ws));
+    let ends = |g: &crate::program::impact_graph::SitedGraph| {
+        (
+            g.routines_named("callsymbolonlydep")[0],
+            g.routines_named("callembeddedsourcedep")[0],
+        )
+    };
+    let (c, e) = ends(&g);
+    assert!(
+        g.sites_between(c, e).is_empty(),
+        "precondition: no call yet"
+    );
+    edit(
+        ws,
+        "        \"Widget Mgt\".Compute(5);",
+        "        \"Widget Mgt\".Compute(5);\n        CallEmbeddedSourceDep();",
+    );
+    let p2 = s.pin_sited(Freshness::Fresh, &never).unwrap();
+    assert_eq!(p2.rebuilt_for, None, "every revision builds it now");
+    assert_eq!(s.stats().last_build_class.as_deref(), Some("B"));
+    let g2 = revision(&p2).sited().expect("built with the refresh");
+    let (c2, e2) = ends(&g2);
+    assert_eq!(g2.sites_between(c2, e2).len(), 1, "the new call's site");
+    assert_eq!(g2.text(), sited_cold(ws));
+    assert_eq!(s.stats().sited_builds, 2);
+    // A sited-graph job answered off the model revision's artifact.
+    let r2 = revision(&p2);
+    let warm = r2
+        .answer(&SitedTextJob { inputs: &r2.inputs }, &Control::unreserved())
+        .unwrap();
+    let cold_inputs = WorkspaceInputs::read(ws, &REVISION_READ);
+    let cold = crate::engine::batch::standalone_output(&SitedTextJob {
+        inputs: &cold_inputs,
+    });
+    assert_eq!(warm, cold);
+}
+
+#[test]
+fn sited_graph_follows_a_body_edit_default_mode() {
+    sited_graph_follows_a_body_edit(false);
+}
+
+#[test]
+fn sited_graph_follows_a_body_edit_low_mem() {
+    sited_graph_follows_a_body_edit(true);
+}
+
+/// M0-T8 (agent-tasks design §1.3): a request cancelled while the rebuild
+/// it caused builds the sited graph ends that graph's build; the revision
+/// is published without it (the build completes for later requests), and
+/// the next question builds it.
+///
+/// DISCRIMINATION (2026-11-05): ignoring the cancel (`build_sited(p, &||
+/// false)` in `build_locked`) fails "no graph published".
+#[test]
+fn a_cancelled_sited_rebuild_publishes_no_graph() {
+    let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
+    let ws = dir.path();
+    let reads = Arc::new(AtomicUsize::new(0));
+    let stop_now = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (r, f) = (Arc::clone(&reads), Arc::clone(&stop_now));
+    let s = Arc::new(
+        ResidentSession::new(ws.to_path_buf(), false, "test".into()).with_hook(Box::new(
+            move |point, _| {
+                // The second build (the rebuild for the graph) is cancelled
+                // once its read is in hand.
+                if point == BuildPoint::AfterRead && r.fetch_add(1, Ordering::SeqCst) == 1 {
+                    f.store(true, Ordering::SeqCst);
+                }
+            },
+        )),
+    );
+    s.pin(Freshness::Fresh, &never).unwrap();
+    let stop = || stop_now.load(Ordering::SeqCst).then_some(Stop::Cancelled);
+    let p = s.pin_sited(Freshness::Fresh, &stop).unwrap();
+    assert_eq!(revision(&p).id.generation, 2, "the build completed");
+    assert!(revision(&p).sited().is_none(), "no graph published");
+    assert_eq!(s.stats().sited_builds, 0);
+    stop_now.store(false, Ordering::SeqCst);
+    let p = s.pin_sited(Freshness::Fresh, &never).unwrap();
+    assert_eq!(p.rebuilt_for, Some("sited"));
+    assert!(revision(&p).sited().is_some());
+}
+
+/// A job reading the sited graph alone: it prints the graph's text.
+struct SitedTextJob<'a> {
+    inputs: &'a Arc<WorkspaceInputs>,
+}
+
+impl crate::engine::batch::job::Job for SitedTextJob<'_> {
+    fn name(&self) -> &'static str {
+        "sited-text"
+    }
+    fn demands(&self) -> Vec<crate::engine::batch::job::ViewDemand> {
+        crate::engine::batch::job::ViewDemand::one(self.inputs, false, false, ViewNeeds::SITED)
+    }
+    fn resolve(
+        &self,
+        _: crate::engine::batch::job::SideIx,
+        _: &crate::engine::batch::job::ResolveCx<'_>,
+    ) -> Result<crate::engine::batch::job::PlanPart, crate::engine::batch::job::JobFailure> {
+        unreachable!("reads only the sited graph")
+    }
+    fn compute(
+        &self,
+        _: crate::engine::batch::job::SideIx,
+        _: &mut crate::engine::batch::job::ViewCx<'_>,
+    ) -> Result<crate::engine::batch::job::SideDoc, crate::engine::batch::job::JobFailure> {
+        unreachable!("reads only the sited graph")
+    }
+    fn view_failed(
+        &self,
+        _: crate::engine::batch::job::SideIx,
+        _: &ViewFailure,
+    ) -> Result<crate::engine::batch::job::SideDoc, crate::engine::batch::job::JobFailure> {
+        unreachable!("done off the program")
+    }
+    fn sited(
+        &self,
+        _: crate::engine::batch::job::SideIx,
+        g: Result<&crate::program::impact_graph::SitedGraph, &str>,
+    ) -> Result<crate::engine::batch::job::SideDoc, crate::engine::batch::job::JobFailure> {
+        Ok(crate::engine::batch::job::SideDoc::new(
+            g.map(|g| g.text()).map_err(str::to_string),
+        ))
+    }
+    fn serialize(&self, doc: crate::engine::batch::job::Doc) -> JobOutput {
+        match doc.one::<Result<String, String>>().expect("one side") {
+            Ok(t) => JobOutput::lines(&[t], 0),
+            Err(e) => JobOutput::lines(&[e], 1),
+        }
+    }
+}
+
+/// M0-T4 (agent-tasks design §1.3): a graph-only session publishes a graph
+/// revision; it answers a sited-graph job exactly as the one-shot driver
+/// does (the same text, built from a cold program), refuses a model job with
+/// the reason, and follows a body edit.
+///
+/// DISCRIMINATION (2026-11-05): letting the model job fall through to the
+/// one-shot path (`return Ok(crate::engine::batch::standalone_output(job))`
+/// in `GraphRevision::answer`) fails "a model job is refused".
+#[test]
+fn a_graph_only_session_answers_sited_jobs_and_refuses_model_jobs() {
+    let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
+    let ws = dir.path();
+    let s = Arc::new(ResidentSession::graph_only(ws.to_path_buf(), "test".into()));
+    let graph = |p: &Pinned| match &p.built {
+        Built::Graph(g) => Arc::clone(g),
+        _ => panic!("a graph-only session publishes a graph revision"),
+    };
+    let p = s.pin(Freshness::Fresh, &never).unwrap();
+    let g = graph(&p);
+    let warm = g.answer(&SitedTextJob { inputs: &g.inputs }).unwrap();
+    let cold_inputs = WorkspaceInputs::read(ws, &REVISION_READ);
+    let cold = crate::engine::batch::standalone_output(&SitedTextJob {
+        inputs: &cold_inputs,
+    });
+    assert_eq!(warm, cold, "the one-shot driver's answer");
+    assert_eq!(warm.exit, 0);
+    let model_job = crate::engine::l4::effect_query_cli::QueryJob::effects(
+        &g.inputs, ROUTINE, "test", true, false,
+    );
+    match g.answer(&model_job) {
+        Err(crate::engine::resident::store::PrepareError::Engine(m)) => {
+            assert!(
+                m.contains("graph-only") && m.contains("needs a model"),
+                "{m}"
+            );
+        }
+        Err(e) => panic!("a model job is refused, with the reason: {e:?}"),
+        Ok(_) => panic!("a model job is refused"),
+    }
+    edit(
+        ws,
+        "        \"Widget Mgt\".Compute(5);",
+        "        \"Widget Mgt\".Compute(5);\n        CallEmbeddedSourceDep();",
+    );
+    let p2 = s.pin(Freshness::Fresh, &never).unwrap();
+    let g2 = graph(&p2);
+    assert_eq!(s.descriptor().map(|d| d.universe), Some("graphOnly".into()));
+    assert_eq!(g2.id.generation, 2);
+    assert_eq!(s.stats().last_build_class.as_deref(), Some("B"));
+    assert_eq!(g2.sited.text(), sited_cold(ws));
+}
+
+/// M0-T5 (agent-tasks design §1.3): a site's guards are read from the bytes
+/// the revision was built from. A call under `case` and `if` is built; the
+/// condition is then edited on disk; the guards still name the revision's
+/// condition, outermost first, and the condition of the `if` (not its then
+/// branch) holds no guard of its own.
+///
+/// DISCRIMINATION (2026-11-05): reading the workspace file from disk
+/// (`std::fs::read_to_string(&f.abs_path)` in `guards::pinned_texts`) fails
+/// "the revision's bytes".
+#[test]
+fn site_guards_read_the_pinned_bytes() {
+    let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
+    let ws = dir.path();
+    edit(
+        ws,
+        "        \"Widget Mgt\".Compute(5);",
+        "        \"Widget Mgt\".Compute(5);\n        case 1 + 1 of\n            2:\n                if 3 = 3 then\n                    CallEmbeddedSourceDep();\n        end;",
+    );
+    let s = Arc::new(ResidentSession::graph_only(ws.to_path_buf(), "test".into()));
+    let g = match s.pin(Freshness::Fresh, &never).unwrap().built {
+        Built::Graph(g) => g,
+        _ => panic!("a graph revision"),
+    };
+    let from = g.sited.routines_named("callsymbolonlydep")[0];
+    let to = g.sited.routines_named("callembeddedsourcedep")[0];
+    let sites = g.sited.sites_between(from, to);
+    assert_eq!(sites.len(), 1, "precondition: the guarded call's site");
+    edit(ws, "if 3 = 3 then", "if 4 = 4 then");
+    let guards = g.site_guards(sites[0]).expect("guards");
+    let shown: Vec<(&str, &str)> = guards.iter().map(|x| (x.kind, x.text.as_str())).collect();
+    assert_eq!(
+        shown,
+        vec![("case", "1 + 1 = 2"), ("if", "3 = 3")],
+        "the revision's bytes"
+    );
+    // A site with no anchor (a rule's edge) says so.
+    let unanchored =
+        (0..g.sited.site_count() as u32).find(|i| g.sited.sites()[*i as usize].anchor.is_none());
+    if let Some(i) = unanchored {
+        assert!(g.site_guards(i).is_err());
+    }
+}
+
+/// M0-T6 (agent-tasks design §1.3): a session whose rows were built with
+/// fewer needs (no rules) rebuilds them for a request that needs rules: one
+/// rebuild of class `needs`, every workspace row projected again (none
+/// reused), and the new model holds the rules; a second such request
+/// reuses the revision.
+///
+/// DISCRIMINATION (2026-11-05): ignoring the recorded needs in the row
+/// cache (dropping `&& self.needs == i.needs` from `CachedFile::matches`)
+/// fails `rules_built(&p)` (the reused rows have none); ignoring them in the
+/// session (`covered` always true) fails "rebuilt once".
+#[test]
+fn rows_built_with_fewer_needs_are_rebuilt_for_a_request_that_needs_more() {
+    let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
+    let ws = dir.path();
+    let s = Arc::new(
+        ResidentSession::new(ws.to_path_buf(), false, "test".into())
+            .with_needs(crate::engine::batch::job::ViewNeeds::MODEL),
+    );
+    let rules_built = |p: &Pinned| {
+        revision(p)
+            .target()
+            .resolved()
+            .workspace
+            .routines
+            .iter()
+            .all(|r| r.rules.is_some())
+    };
+    let first = s.pin(Freshness::Fresh, &never).unwrap();
+    assert!(!rules_built(&first), "precondition: built without rules");
+    let explain = crate::program::model::workspace::AssemblyNeeds::EXPLAIN;
+    let p = s.pin_needs(Freshness::Fresh, explain, &never).unwrap();
+    assert_eq!(p.rebuilt_for, Some("needs"), "rebuilt once");
+    assert_eq!(s.stats().needs_rebuilds, 1);
+    assert_eq!(s.stats().last_build_class.as_deref(), Some("needs"));
+    assert!(rules_built(&p));
+    let rows = s.last_refresh().and_then(|r| r.rows).expect("row stats");
+    assert!(
+        rows.workspace_projected > 0 && rows.workspace_reused == 0,
+        "projected again: {rows:?}"
+    );
+    let again = s.pin_needs(Freshness::Fresh, explain, &never).unwrap();
+    assert_eq!(again.rebuilt_for, None);
+    assert_eq!(revision(&again).id, revision(&p).id);
+    assert_eq!(s.stats().needs_rebuilds, 1);
+}
+
+/// M0-6's descriptor (agent-tasks design §1.2): the published state's
+/// manifest, with every file entry's stat, round-trips through the
+/// descriptor; a cached observation against the rebuilt manifest finds the
+/// state current, and one after an edit does not; the descriptor follows
+/// the generation.
+///
+/// DISCRIMINATION (2026-11-05): dropping the stats from
+/// `Manifest::descriptor_entries` fails "stats kept".
+#[test]
+fn the_input_descriptor_round_trips_the_published_manifest() {
+    let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
+    let ws = dir.path();
+    let s = session(ws);
+    assert!(s.descriptor().is_none(), "nothing published yet");
+    s.pin(Freshness::Fresh, &never).unwrap();
+    let d = s.descriptor().expect("published");
+    assert_eq!(d.generation, Some(1));
+    assert_eq!(Some(d.inputs_stamp.clone()), s.published_stamp());
+    assert_eq!(d.universe, "crossApp");
+    let m = Manifest::from_descriptor_entries(&d.manifest).expect("round-trips");
+    assert_eq!(m.descriptor_entries(), d.manifest, "stats kept");
+    assert!(
+        d.manifest.iter().any(|e| e.stat_len.is_some()),
+        "stats kept"
+    );
+    let none = BTreeSet::new();
+    let cached =
+        |prev: &Manifest| Manifest::observe(ws, false, Hashing::Cached { prev, dirty: &none });
+    assert_eq!(cached(&m), m, "current");
+    edit(ws, "Compute(5)", "Compute(6)");
+    assert_ne!(cached(&m), m, "an edit is seen");
+    s.pin(Freshness::Fresh, &never).unwrap();
+    assert_eq!(s.descriptor().and_then(|d| d.generation), Some(2));
 }

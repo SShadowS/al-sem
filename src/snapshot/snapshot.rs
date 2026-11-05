@@ -544,7 +544,14 @@ mod tests {
         let mut zip_bytes = std::io::Cursor::new(Vec::new());
         {
             let mut zip = zip::ZipWriter::new(&mut zip_bytes);
-            let options: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default();
+            // A fixed entry time: `zip` stamps an entry with the wall clock
+            // (DOS time, 2 s steps) by default, so two writes of one version
+            // gave different bytes whenever they straddled a tick. The
+            // overwrite-and-restore test then saw its "restored A" differ from
+            // A (same length, other blake3) on a slow, loaded machine. The
+            // package is now a function of its arguments alone.
+            let options: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+                .last_modified_time(zip::DateTime::default());
             zip.start_file("NavxManifest.xml", options).unwrap();
             zip.write_all(manifest.as_bytes()).unwrap();
             zip.start_file("SymbolReference.json", options).unwrap();

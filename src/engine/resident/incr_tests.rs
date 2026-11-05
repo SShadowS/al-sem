@@ -87,6 +87,7 @@ fn never() -> Option<Stop> {
 pub(super) fn pin(s: &Arc<ResidentSession>) -> Arc<Revision> {
     match s.pin(Freshness::Fresh, &never).unwrap().built {
         Built::Revision(r) => r,
+        Built::Graph(_) => panic!("a model session publishes a model revision"),
         Built::Failed(f) => panic!("the build failed: {:?}", f.failure),
     }
 }

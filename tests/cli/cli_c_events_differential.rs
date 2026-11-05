@@ -60,7 +60,7 @@ fn load_golden(name: &str) -> String {
 fn golden_or_regen(name: &str, actual: &str) -> String {
     if regen::regen_mode() {
         let path = golden_dir().join(name);
-        std::fs::write(&path, actual)
+        regen::write_golden(&path, actual)
             .unwrap_or_else(|e| panic!("regen write {}: {e}", path.display()));
         eprintln!("REGEN cli-c-events golden: {}", path.display());
         return actual.to_string();

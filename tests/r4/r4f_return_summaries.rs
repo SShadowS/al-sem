@@ -87,7 +87,7 @@ fn r4f_return_summaries_match_goldens() {
         // oracle retired). `pretty_with_newline` already produces the exact
         // on-disk form the assert path below reads.
         if regen::regen_mode() {
-            std::fs::write(&golden_path, &rust_text)
+            regen::write_golden(&golden_path, &rust_text)
                 .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
             eprintln!("REGEN r4f return-summary golden: {}", golden_path.display());
             continue;

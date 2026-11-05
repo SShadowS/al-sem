@@ -1175,6 +1175,21 @@ pub struct AssemblyNeeds {
 }
 
 impl AssemblyNeeds {
+    /// Whether rows built with `self` hold every fact `other` asks for.
+    #[must_use]
+    pub fn covers(self, other: AssemblyNeeds) -> bool {
+        (self.rules || !other.rules) && (self.card_text || !other.card_text)
+    }
+
+    /// Both needs.
+    #[must_use]
+    pub fn union(self, other: AssemblyNeeds) -> AssemblyNeeds {
+        AssemblyNeeds {
+            rules: self.rules || other.rules,
+            card_text: self.card_text || other.card_text,
+        }
+    }
+
     /// Nothing beyond the base rows: what every command but `explain` (and an
     /// `analyze` running a detector that requires `substrate::RULES`) builds.
     pub const BASE: AssemblyNeeds = AssemblyNeeds {

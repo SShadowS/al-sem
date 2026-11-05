@@ -2,7 +2,7 @@ Codeunit CDO Issue Document::IssueReminder  ws:src/DocumentTypes/Finance/General
   summary — writes: may write 143 tables (11 owned by this app, 132 by dependencies) and 2 writes on a table not resolved; 78 of them beyond Codeunit Reminder-Issue::OnRun (entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19); caller-dependent: none
     transaction, UI and errors: commits: may (5 sites, 7 commit-bearing entry points); UI at 17 places; errors at 194 places
     other effects: events: 524 (75 raised in workspace code); HTTP at 20 places; file at 4 places; background tasks at 3 places; isolated storage at 16 places; telemetry at 23 places
-    callers and tests: callers: none, reached from 1 page action; tests: none
+    callers and tests: callers: none, reached from 1 page action; tests: none (no test code loaded)
     uncertainty: gaps: 16 in workspace code, 265 in dependency code, 7 not placed
   coverage: partial (interface-open-world, object-run-unresolved) — 267 interface calls open world, 21 dynamic calls not resolved
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
@@ -112,7 +112,7 @@ Codeunit CDO Issue Document::IssueReminder  ws:src/DocumentTypes/Finance/General
   isolated storage at 16 places: ISOLATED_STORAGE at ws:src/Features/ESeal/CDOeSealSetup.Table.al:182 (guarded-by-IsHandled); ISOLATED_STORAGE at ws:src/Features/ESeal/CDOeSealSetup.Table.al:185 (guarded-by-IsHandled); ISOLATED_STORAGE at ws:src/Features/ESeal/CDOeSealSetup.Table.al:220 (unknown); ISOLATED_STORAGE at ws:src/Features/ESeal/CDOeSealSetup.Table.al:223 (unknown); ISOLATED_STORAGE at ws:src/Platform/Setup/CDOSetup.Table.al:678 (guarded-by-IsHandled); ISOLATED_STORAGE at ws:src/Platform/Setup/CDOSetup.Table.al:683 (guarded-by-IsHandled); … +10 places (--detail lists them)
   telemetry at 23 places: TELEMETRY beyond Codeunit Reminder-Issue::OnRun; TELEMETRY beyond Codeunit CTS-CDN Network Doc. Mgt.::CreateEDocument; TELEMETRY beyond Codeunit CSC Core::IsAppActiveOrAskToActivate; TELEMETRY beyond Codeunit Email::Send; TELEMETRY beyond Codeunit CSC Core::IsAppActiveOrAskToActivate; TELEMETRY beyond Codeunit CTS-CDN Network Doc. Mgt.::SendNetworkDocument(RecordVariant, eDocVariant, XMLDoc); … +17 places (--detail lists them)
   errors at 194 places: ERROR_IMPLICIT at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:64 (unknown); ERROR_IMPLICIT at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:21 (unknown); ERROR_IMPLICIT at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:27 (unknown); ERROR_IMPLICIT at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:32 (unknown); ERROR_IMPLICIT at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:37 (unknown); ERROR_IMPLICIT at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:42 (unknown); … +188 places (--detail lists them)
-  tests: none reach it
+  tests: no test code loaded (0 [Test] procedures in the workspace app); that is not a reason to skip tests
   gaps in workspace code (16 gaps):
     gap: unresolved-call (callee DispatcherFactory.CreateeDocumentDispatcher, status polymorphic) at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:80
     gap: unresolved-call (callee DispatcherFactory.CreateLegacyeDocDispatcher, status polymorphic) at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:81

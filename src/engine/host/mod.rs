@@ -216,6 +216,9 @@ pub enum Universe {
     CrossApp,
     /// The workspace alone (`--single-app`).
     SingleApp,
+    /// The cross-app program and its sited graph, no model (agent-tasks
+    /// design §1.2 M0-2): it answers only commands that read the sited graph.
+    GraphOnly,
 }
 
 impl Universe {
@@ -225,6 +228,7 @@ impl Universe {
         match self {
             Universe::CrossApp => "crossApp",
             Universe::SingleApp => "singleApp",
+            Universe::GraphOnly => "graphOnly",
         }
     }
 }
@@ -478,6 +482,12 @@ pub mod test_hooks {
         /// progress phase (`pin`, `prepare`, `compute`) of an ask that asked
         /// for progress: a front end can be observed mid-phase.
         SleepInPhase(String, u64),
+        /// Read by `alsem mcp`, not by a child (its children see no hook):
+        /// each `alsem_status` freshness check waits `delay_ms` before it
+        /// observes the disk, under a deadline of `deadline_ms`
+        /// (`status-check:<delay>:<deadline>`, agent-tasks design §2.5
+        /// F-3, F-9).
+        StatusCheck { delay_ms: u64, deadline_ms: u64 },
         /// Answer an ask with a line over the frame limit.
         OversizedFrameOnAsk,
         /// Answer an ask with a line that is not JSON.
@@ -527,6 +537,13 @@ pub mod test_hooks {
             "sleep-in-phase" => {
                 let (phase, ms) = arg.split_once(':')?;
                 Hook::SleepInPhase(phase.to_string(), ms.parse().ok()?)
+            }
+            "status-check" => {
+                let (delay, deadline) = arg.split_once(':')?;
+                Hook::StatusCheck {
+                    delay_ms: delay.parse().ok()?,
+                    deadline_ms: deadline.parse().ok()?,
+                }
             }
             "oversized-frame-on-ask" => Hook::OversizedFrameOnAsk,
             "garbage-frame-on-ask" => Hook::GarbageFrameOnAsk,

@@ -56,8 +56,8 @@ fn full_snapshot_split_is_byte_identical() {
         // (not of the split) re-mints explicitly, recorded in RECORD.
         let dir = repo().join("tests/cli-b-goldens/split");
         if std::env::var_os("REMINT_SPLIT_RECORDS").is_some() {
-            std::fs::write(dir.join(format!("{name}.json")), &json).unwrap();
-            std::fs::write(dir.join(format!("{name}.cbor")), &cbor).unwrap();
+            crate::regen::write_golden(dir.join(format!("{name}.json")), &json).unwrap();
+            crate::regen::write_golden(dir.join(format!("{name}.cbor")), &cbor).unwrap();
         }
         let want_json = std::fs::read_to_string(dir.join(format!("{name}.json"))).unwrap();
         let want_cbor = std::fs::read(dir.join(format!("{name}.cbor"))).unwrap();

@@ -2,7 +2,7 @@ Codeunit Calls Post::ForwardPost  ws:src/post.al:28
   summary — writes: no observed write that may persist; caller-dependent: 1 table
     transaction, UI and errors: commits: none; errors at 4 places
     other effects: events: 0 (0 raised in workspace code)
-    callers and tests: callers: none; tests: none
+    callers and tests: callers: none; tests: none (no test code loaded)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
@@ -20,6 +20,6 @@ Codeunit Calls Post::ForwardPost  ws:src/post.al:28
   events: 0 raised in workspace code; 0 more only beyond entry points
   extension points: none (the routine publishes no event itself)
   errors at 4 places: ERROR_IMPLICIT at ws:src/checks.al:8 (conditional); ERROR_THROW at ws:src/checks.al:6 (error-path); ERROR_THROW at ws:src/checks.al:15 (error-path); ERROR_THROW at ws:src/order.al:25 (error-path)
-  tests: none reach it
+  tests: no test code loaded (0 [Test] procedures in the workspace app); that is not a reason to skip tests
   next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

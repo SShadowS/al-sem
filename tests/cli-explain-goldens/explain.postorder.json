@@ -310,6 +310,7 @@
         "pageActions": 1,
         "temporaryOnlyTables": 0,
         "tests": 1,
+        "testsLoaded": 1,
         "unresolvedTableWrites": 0
       },
       "tests": [

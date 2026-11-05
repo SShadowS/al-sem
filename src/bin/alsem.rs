@@ -254,6 +254,12 @@ struct EngineHostCli {
     #[arg(long = "low-mem", default_value_t = false)]
     low_mem: bool,
 
+    /// Build the sited graph (the may-execute graph, one edge per site) with
+    /// every revision, for the questions about a routine's callers
+    /// (agent-tasks design §1.2 M0-1).
+    #[arg(long = "graph", default_value_t = false)]
+    graph: bool,
+
     /// End after this many seconds with no request and no work (the front
     /// end starts a new child on its next request); 0 never ends.
     #[arg(long = "idle-timeout", default_value_t = al_sem::engine::resident::budget::DEFAULT_IDLE_TIMEOUT_SECS)]
@@ -365,6 +371,12 @@ struct QueryTouchesCli {
     /// one row per touching caller), and human lists are folded.
     #[arg(long = "all", default_value_t = false)]
     all: bool,
+
+    /// Name every transitive caller (depth and location) without building
+    /// their witnesses: the consumers of the touch, which `--all` lists only
+    /// with every witness.
+    #[arg(long = "callers", default_value_t = false)]
+    callers: bool,
 
     /// Output format: human | json. Defaults to human.
     #[arg(long = "format", default_value = "human")]
@@ -1749,6 +1761,7 @@ fn plan_query_touches(t: QueryTouchesCli) -> Planned {
                     t.deterministic,
                     t.single_app,
                 )
+                .list_callers(t.callers)
                 .show_source(t.show_source)
                 .written(t.format == "json", t.out.as_deref()),
             )
@@ -2990,6 +3003,7 @@ mod engine {
         let engine = HostEngine {
             memory_budget,
             low_mem: h.low_mem,
+            graph: h.graph,
             idle_timeout_secs: idle_timeout.map(|d| d.as_secs()),
             estimate_per_al_byte: h.estimate_per_al_byte,
             estimate_floor: h.estimate_floor,
@@ -3032,6 +3046,8 @@ mod engine {
         asks: std::sync::atomic::AtomicU64,
         memory_budget: Option<u64>,
         low_mem: bool,
+        /// `--graph`: every revision builds the sited graph.
+        graph: bool,
         idle_timeout_secs: Option<u64>,
         estimate_per_al_byte: Option<u64>,
         estimate_floor: Option<u64>,
@@ -3068,10 +3084,15 @@ mod engine {
                 al_sem::engine::resident::budget::default_budget(single, self.low_mem)
             });
             let budget = Arc::new(Budget::new(bytes, Arc::new(ProcMeter), estimates));
-            let session =
+            let session = if params.universe == Universe::GraphOnly {
+                ResidentSession::graph_only(params.workspace.clone(), instance.to_string())
+            } else {
                 ResidentSession::new(params.workspace.clone(), single, instance.to_string())
-                    .with_low_mem(self.low_mem)
-                    .with_budget(Arc::clone(&budget));
+            };
+            let session = session
+                .with_low_mem(self.low_mem)
+                .with_sited(self.graph)
+                .with_budget(Arc::clone(&budget));
             *self.open.lock().unwrap_or_else(|p| p.into_inner()) = Some(Open {
                 workspace: params.workspace.clone(),
                 absolute,
@@ -3096,6 +3117,13 @@ mod engine {
             let mut answer = answer(id, params, &open, cx);
             answer.meta.universe = Some(open.universe.as_str().to_string());
             answer
+        }
+
+        fn descriptor(&self) -> serde_json::Value {
+            self.session()
+                .and_then(|o| o.session.descriptor())
+                .and_then(|d| serde_json::to_value(d).ok())
+                .unwrap_or(serde_json::Value::Null)
         }
 
         fn status(&self) -> ChildStatus {
@@ -3175,15 +3203,30 @@ mod engine {
                 return serde_json::json!({"revision": null, "error": "session/open first"});
             };
             let start = Instant::now();
+            let builds_before = o.session.stats().builds;
             match o
                 .session
                 .pin(al_sem::engine::resident::session::Freshness::Fresh, cx.stop)
             {
-                Ok(p) => serde_json::json!({
-                    "revision": p.built.revision_id(),
-                    "waitedForBuildMs": p.waited_for_build_ms,
-                    "wallMs": start.elapsed().as_millis() as u64,
-                }),
+                Ok(p) => {
+                    // Whether this refresh built (agent-tasks design §2.3:
+                    // `rebuilt` or `already-fresh`), its class and the
+                    // workspace files it found changed.
+                    let stats = o.session.stats();
+                    let built = stats.builds > builds_before;
+                    let mut v = serde_json::json!({
+                        "revision": p.built.revision_id(),
+                        "waitedForBuildMs": p.waited_for_build_ms,
+                        "wallMs": start.elapsed().as_millis() as u64,
+                        "built": built,
+                    });
+                    if built {
+                        v["class"] = serde_json::json!(stats.last_build_class);
+                        v["changedFiles"] =
+                            serde_json::json!(o.session.last_refresh().map(|r| r.changed.len()));
+                    }
+                    v
+                }
                 Err(e) => serde_json::json!({
                     "revision": null,
                     "error": match e {
@@ -3447,6 +3490,15 @@ mod engine {
                     }
                 }
             }
+            // A graph-only engine (agent-tasks M0-2) answers a sited-graph
+            // job off its graph and refuses every other with the reason.
+            Built::Graph(g) => match g.answer(job) {
+                Ok(out) => (out, Some(g.id.clone())),
+                Err(PrepareError::Engine(m)) => return failed(FailedOutcome::EngineError, &m),
+                Err(PrepareError::Cancelled) => return stopped(Stop::Cancelled, &["pin"]),
+                Err(PrepareError::Deadline) => return stopped(Stop::Deadline, &["pin"]),
+                Err(PrepareError::Budget(m)) => return failed(FailedOutcome::Budget, &m),
+            },
             Built::Failed(f) if served => (answer_failed_build(job, &f.failure), None),
             // The one-shot job path over the pinned read: the same inputs,
             // its own model (equal to the revision's by the stage-4 contract).

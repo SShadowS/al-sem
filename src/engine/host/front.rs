@@ -592,6 +592,21 @@ impl EngineFront {
         serde_json::from_value(v).map_err(|e| e.to_string())
     }
 
+    /// The running child's input descriptor (`session/descriptor`, agent-
+    /// tasks design §1.2 M0-6): `null` before its first build.
+    pub fn descriptor(&mut self) -> Result<serde_json::Value, String> {
+        self.ensure_running().map_err(|(_, m)| m)?;
+        let id = self.take_id();
+        self.call(
+            id,
+            "session/descriptor",
+            serde_json::Value::Null,
+            None,
+            &mut Watch::default(),
+        )
+        .map_err(|(_, m)| m)
+    }
+
     /// The running child's hello and pid.
     #[must_use]
     pub fn hello(&self) -> Option<&Hello> {

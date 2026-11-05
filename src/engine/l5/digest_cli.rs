@@ -202,6 +202,11 @@ pub enum ChangedRootsDiagnostic {
     SelectorAmbiguous {
         selector: String,
         candidates: Vec<String>,
+        /// Output step 1b (fable #7): per candidate, the selector that names
+        /// it (owner, routine and parameter types), where it is declared and
+        /// its stable id; JSON `candidateRoutines`. Empty when the model has
+        /// no row for a candidate.
+        routines: Vec<String>,
     },
     DiffFileUnmatched {
         file: String,
@@ -705,12 +710,30 @@ pub fn resolve_changed_roots(
         }
     }
 
-    // 2. Routine selector matching (port of resolveSelector — 5-form cascade).
+    // Output step 1b: stable id -> model row, for a selector's parameter list
+    // and an ambiguity's candidate labels; built on first need.
+    let rows = std::cell::LazyCell::new(|| {
+        let mut m: HashMap<&str, &crate::program::model::workspace::ModelRoutine> = HashMap::new();
+        for r in &resolved.workspace.routines {
+            m.entry(r.stable_routine_id.as_str()).or_insert(r);
+        }
+        m
+    });
+
+    // 2. Routine selector matching (port of resolveSelector — 5-form cascade),
+    // then (step 1b) an `(…)` parameter list picks among overloads.
     for selector in input.routines.iter().flatten() {
-        let (matches, matched_form) = resolve_selector(selector, &selector_idx);
-        let matches = narrow_to_owner(selector, matched_form, matches, |id| {
-            owners.object_display(id)
-        });
+        let (base, wanted) = crate::engine::l5::selector_index::split_signature(selector);
+        let (matches, matched_form) = resolve_selector(base, &selector_idx);
+        let mut matches =
+            narrow_to_owner(base, matched_form, matches, |id| owners.object_display(id));
+        if let Some(wanted) = &wanted {
+            matches.retain(|id| {
+                rows.get(id.as_str()).is_some_and(|r| {
+                    crate::engine::l5::selector_index::signature_matches(wanted, &r.parameters)
+                })
+            });
+        }
         if matches.is_empty() {
             diagnostics.push(ChangedRootsDiagnostic::SelectorUnmatched {
                 selector: selector.clone(),
@@ -728,8 +751,21 @@ pub fn resolve_changed_roots(
                     owners.qualified(id, display)
                 })
                 .collect();
+            let routines: Vec<String> = matches
+                .iter()
+                .zip(&candidates)
+                .filter_map(|(id, label)| {
+                    rows.get(id.as_str())
+                        .map(|r| crate::engine::l5::selector_index::candidate_label(label, r))
+                })
+                .collect();
             diagnostics.push(ChangedRootsDiagnostic::SelectorAmbiguous {
                 selector: selector.clone(),
+                routines: if routines.len() == candidates.len() {
+                    routines
+                } else {
+                    Vec::new()
+                },
                 candidates,
             });
         } else {
@@ -2320,9 +2356,13 @@ pub(crate) fn changed_roots_diagnostic_to_value(d: &ChangedRootsDiagnostic) -> s
         ChangedRootsDiagnostic::SelectorAmbiguous {
             selector,
             candidates,
+            routines,
         } => {
             m.insert("selector".into(), selector.clone().into());
             m.insert("candidates".into(), candidates.clone().into());
+            if !routines.is_empty() {
+                m.insert("candidateRoutines".into(), routines.clone().into());
+            }
         }
         ChangedRootsDiagnostic::FileAmbiguous { file, candidates }
         | ChangedRootsDiagnostic::DiffFileAmbiguous { file, candidates } => {
@@ -2367,11 +2407,24 @@ pub(crate) fn changed_roots_diagnostic_human(d: &ChangedRootsDiagnostic) -> Stri
         ChangedRootsDiagnostic::SelectorAmbiguous {
             selector,
             candidates,
-        } => format!(
-            "{} (candidates: {})",
-            escape_controls(selector),
-            list(candidates)
-        ),
+            routines,
+        } => {
+            let shown = if routines.is_empty() {
+                candidates
+            } else {
+                routines
+            };
+            format!(
+                "{} (candidates: {}){}",
+                escape_controls(selector),
+                list(shown),
+                if routines.is_empty() {
+                    ""
+                } else {
+                    "; pass one as <owner>::<routine>(<parameter types>) or its stable id"
+                }
+            )
+        }
         ChangedRootsDiagnostic::FileAmbiguous { file, candidates } => format!(
             "{} (candidates: {}); pass one candidate as --file, or --diff-root <folder> to read paths relative to <folder>",
             escape_controls(file),
@@ -4199,6 +4252,7 @@ mod tests {
             D::SelectorAmbiguous {
                 selector: s("Bar"),
                 candidates: vec![s("c1"), s("c2")],
+                routines: Vec::new(),
             },
             D::DiffFileUnmatched {
                 file: s("src/b.al"),

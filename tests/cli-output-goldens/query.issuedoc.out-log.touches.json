@@ -115,11 +115,11 @@
       "callersUnknown": 0,
       "informative": false,
       "notTouching": [],
-      "note": "this routine itself touches the table, so its callers touch it through this routine (summaries are transitive-down) — not a finding; each caller is still probed, and one without a summary row is unknown",
+      "note": "this routine itself touches the table, so its callers inherit the touch through this routine (summaries are transitive-down): they consume it, and no caller adds an operation of its own here; each caller is still probed, and one without a summary row is unknown",
       "scoped": true,
       "transitiveCallers": 1,
       "unknown": []
     }
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.2.0"
 }

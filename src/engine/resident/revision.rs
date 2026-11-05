@@ -101,6 +101,12 @@ pub enum ArtifactKey {
     /// each request walks it with a walk of its own. Never carried to the
     /// next revision.
     ExplainIndexes,
+    /// The program's sited graph (agent-tasks design §1.2 M0-1): built in
+    /// the revision's build, where the program is lent, and seeded into the
+    /// store before the revision publishes. It depends on nothing in the
+    /// store (phase 0) and is never filled or evicted: without the program
+    /// it cannot be built again.
+    Sited,
 }
 
 impl StoreKey for ArtifactKey {
@@ -113,7 +119,8 @@ impl StoreKey for ArtifactKey {
             | ArtifactKey::Rules
             | ArtifactKey::Fold
             | ArtifactKey::L4
-            | ArtifactKey::ExplainIndexes => 0,
+            | ArtifactKey::ExplainIndexes
+            | ArtifactKey::Sited => 0,
             ArtifactKey::Raw(_) | ArtifactKey::Det | ArtifactKey::TreeBase => 1,
             ArtifactKey::Run { .. } | ArtifactKey::Tree(_) => 2,
             ArtifactKey::Witness { .. } => 3,
@@ -222,6 +229,7 @@ pub enum ArtifactValue {
     /// mutates its entries), never the stored value.
     Witness(Arc<Option<DigestEntryResult>>),
     ExplainIndexes(Arc<ExplainIndexes>),
+    Sited(Arc<crate::program::impact_graph::SitedGraph>),
 }
 
 /// A request's batch of witness entries (plan 2026-11-03, W item 3): the
@@ -328,6 +336,7 @@ impl ArtifactKey {
             ArtifactKey::Run { .. } => "run",
             ArtifactKey::Witness { .. } => "witness",
             ArtifactKey::ExplainIndexes => "explain_indexes",
+            ArtifactKey::Sited => "sited",
         }
     }
 }
@@ -380,6 +389,43 @@ impl Revision {
             raw_seed,
             raw_counts: RawCounts::default(),
             witness: WitnessCounts::default(),
+        }
+    }
+
+    /// The revision with its sited graph seeded into the store (agent-tasks
+    /// design §1.2 M0-1), before it is published.
+    #[must_use]
+    pub fn with_sited(self, g: Arc<crate::program::impact_graph::SitedGraph>) -> Revision {
+        let bytes = g.bytes();
+        self.store.seed(
+            ArtifactKey::Sited,
+            Artifact {
+                value: ArtifactValue::Sited(g),
+                lines: Vec::new(),
+            },
+            bytes,
+        );
+        self
+    }
+
+    /// The enclosing conditions of site `site` of the revision's sited graph,
+    /// from its pinned inputs ([`crate::engine::resident::guards`]).
+    pub fn site_guards(
+        &self,
+        site: u32,
+    ) -> Result<Vec<crate::engine::resident::guards::Guard>, String> {
+        let g = self
+            .sited()
+            .ok_or_else(|| "this revision has no sited graph".to_string())?;
+        crate::engine::resident::guards::site_guards(&self.inputs, &g, site)
+    }
+
+    /// The revision's sited graph, when its build made one.
+    #[must_use]
+    pub fn sited(&self) -> Option<Arc<crate::program::impact_graph::SitedGraph>> {
+        match self.store.load().get(&ArtifactKey::Sited).map(|a| &a.value) {
+            Some(ArtifactValue::Sited(g)) => Some(Arc::clone(g)),
+            _ => None,
         }
     }
 
@@ -782,6 +828,13 @@ impl Revision {
             Ok(match cx.key {
                 ArtifactKey::Witness { .. } => {
                     ArtifactValue::Witness(self.fill_witness(plan, cx.key, cx.snapshot, scratch)?)
+                }
+                ArtifactKey::Sited => {
+                    return Err(
+                        "the sited graph is built with the revision's program and cannot be \
+                         filled after it (the session builds it on its next refresh)"
+                            .into(),
+                    );
                 }
                 ArtifactKey::ExplainIndexes => {
                     let _s = crate::engine::perf_trace::span("revision", "explain.indexes");
@@ -1431,11 +1484,20 @@ impl Revision {
                 "the job was made over another read than the pinned revision's".into(),
             ));
         }
-        if (d.key.universe == crate::engine::batch::job::ViewUniverse::SingleApp) != self.single_app
-            || d.key.no_roots_config
-            || d.needs.analyze_extras
-            || d.needs.graph
-        {
+        let universe_differs = (d.key.universe
+            == crate::engine::batch::job::ViewUniverse::SingleApp)
+            != self.single_app;
+        if d.needs.sited && !universe_differs && !d.needs.model {
+            let Some(g) = self.sited() else {
+                return Err(PrepareError::Engine(format!(
+                    "'{}' reads the sited graph, which this revision did not build \
+                     (a request that reads it pins with `pin_sited`)",
+                    job.name()
+                )));
+            };
+            return Ok(answer_sited(job, d.side, &g));
+        }
+        if universe_differs || d.key.no_roots_config || d.needs.analyze_extras || d.needs.graph {
             return Err(PrepareError::Engine(format!(
                 "'{}' needs a view this revision did not build",
                 job.name()
@@ -1492,6 +1554,66 @@ pub fn answer_failed_build(
     let (side, lines) = capture(|| job.view_failed(d.side, failure));
     let doc = job.finalize(vec![side]);
     crate::engine::batch::serialize(0, job, doc, lines)
+}
+
+/// A sited-graph job's answer off `g`: what the one-shot driver writes for
+/// it (`Job::sited` over the graph built from the same program).
+fn answer_sited(
+    job: &dyn Job,
+    side: crate::engine::batch::job::SideIx,
+    g: &crate::program::impact_graph::SitedGraph,
+) -> JobOutput {
+    let (side, lines) = capture(|| job.sited(side, Ok(g)));
+    let doc = job.finalize(vec![side]);
+    crate::engine::batch::serialize(0, job, doc, lines)
+}
+
+/// A graph-only revision (agent-tasks design §1.2 M0-2): the program's
+/// sited graph over one acquired read, and no model (no L4, no fold, no
+/// trees). The test universe (§4) and the impact base child (§10) are of
+/// this kind. It answers only jobs that read the sited graph; any other is
+/// refused with the reason.
+pub struct GraphRevision {
+    pub id: RevisionId,
+    pub inputs: Arc<WorkspaceInputs>,
+    pub sited: Arc<crate::program::impact_graph::SitedGraph>,
+}
+
+impl GraphRevision {
+    /// The enclosing conditions of site `site` of the revision's sited graph,
+    /// from its pinned inputs ([`crate::engine::resident::guards`]).
+    pub fn site_guards(
+        &self,
+        site: u32,
+    ) -> Result<Vec<crate::engine::resident::guards::Guard>, String> {
+        crate::engine::resident::guards::site_guards(&self.inputs, &self.sited, site)
+    }
+
+    /// `job` answered off the sited graph, or why this revision cannot.
+    pub fn answer(&self, job: &dyn Job) -> Result<JobOutput, PrepareError> {
+        let mut demands = job.demands();
+        if demands.len() != 1 {
+            return Err(PrepareError::Engine(format!(
+                "'{}' reads {} views; a revision serves one",
+                job.name(),
+                demands.len()
+            )));
+        }
+        let d = demands.pop().expect("one demand");
+        if !Arc::ptr_eq(&d.inputs, &self.inputs) {
+            return Err(PrepareError::Engine(
+                "the job was made over another read than the pinned revision's".into(),
+            ));
+        }
+        if !d.needs.sited || d.needs.model {
+            return Err(PrepareError::Engine(format!(
+                "this engine is graph-only (it builds the program and its sited graph, no \
+                 model): '{}' needs a model",
+                job.name()
+            )));
+        }
+        Ok(answer_sited(job, d.side, &self.sited))
+    }
 }
 
 /// A job whose resolve failed, as the driver writes it.

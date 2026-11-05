@@ -364,6 +364,7 @@
         "pageActions": 0,
         "temporaryOnlyTables": 0,
         "tests": 0,
+        "testsLoaded": 0,
         "unresolvedTableWrites": 0
       },
       "tests": []

@@ -4,7 +4,9 @@
 //! pair's engine child).
 //!
 //! The main thread reads requests and answers the light ones itself
-//! (`initialize`, `ping`, `tools/list`, `alsem_status`, every error); a
+//! (`initialize`, `ping`, `tools/list`, every error); `alsem_status`
+//! takes the workers' snapshots here and is answered by a checker thread
+//! once its disk check is done ([`super::freshness`]); a
 //! `tools/call` of a command or of `alsem_refresh` is queued on its
 //! engine's worker, which answers it when done, so a long build never
 //! blocks `ping` or a call on another workspace. Responses are written one
@@ -17,7 +19,7 @@ use serde_json::{Value, json};
 
 use super::output::OutputSink;
 use super::pool::{ChildConfig, Pool, PoolConfig, Request, Transport};
-use super::tools::{self, Defaults, EngineCall, ToolCall, Universe};
+use super::tools::{self, Defaults, ToolCall, Universe};
 use super::{DEFAULT_PROTOCOL, Decide, McpConfig, SUPPORTED_PROTOCOLS, codes};
 use crate::wire::{ReadFrame, encode_frame, read_frame};
 
@@ -222,6 +224,8 @@ pub fn serve(
     );
     let defaults = cfg.defaults;
     let mut state = State::Uninitialized;
+    // The status checks still running (each answers its own call).
+    let mut checkers: Vec<std::thread::JoinHandle<()>> = Vec::new();
     loop {
         let frame = match read_frame(&mut input) {
             Ok(ReadFrame::Frame(f)) => f,
@@ -337,9 +341,40 @@ pub fn serve(
                     .filter(|t| t.is_string() || t.is_number())
                     .cloned();
                 match call {
+                    // The snapshots and published descriptors are taken here;
+                    // the disk check runs on a checker thread, which answers
+                    // (agent-tasks design §2.2): the reader loop reads on.
                     ToolCall::Status(c) => {
-                        let body = status(&transport, &pool, &c, &defaults);
-                        out.send(&transport.response(&id, &body, false, None));
+                        checkers.retain(|h| !h.is_finished());
+                        let server = server_status(&transport, &pool, &defaults);
+                        let rows = pool.engine_rows(&c);
+                        let asked = c
+                            .workspace
+                            .clone()
+                            .or_else(|| defaults.workspace.clone())
+                            .map(|w| (w, c.universe.as_str()));
+                        let opts = super::freshness::CheckOptions::new(c.verify);
+                        let (out2, transport2, id2) =
+                            (out.clone(), Arc::clone(&transport), id.clone());
+                        let spawned = std::thread::Builder::new()
+                            .name("alsem-status".into())
+                            .spawn(move || {
+                                let body = super::freshness::status_body(
+                                    server,
+                                    rows,
+                                    asked.as_ref().map(|(w, u)| (w.as_str(), *u)),
+                                    opts,
+                                );
+                                out2.send(&transport2.response(&id2, &body, false, None));
+                            });
+                        match spawned {
+                            Ok(h) => checkers.push(h),
+                            Err(e) => out.send(&error(
+                                &id,
+                                codes::INTERNAL_ERROR,
+                                &format!("the status check could not start: {e}"),
+                            )),
+                        }
                     }
                     ToolCall::Refresh(c) => pool.submit(id, Request::Refresh(c)),
                     ToolCall::Command(call) => {
@@ -356,36 +391,22 @@ pub fn serve(
     }
     // The input ended: the client is shutting the server down (MCP stdio).
     // Queued calls are dropped unanswered; a call already running finishes,
-    // then every engine child is shut down.
+    // then every engine child is shut down. A status check still running
+    // answers first (each is bounded by its deadline).
+    for h in checkers {
+        let _ = h.join();
+    }
     pool.shutdown(false);
     // An instance folder nothing was written to is removed (only if empty).
     let _ = std::fs::remove_dir(pool.sink().instance());
     Ok(())
 }
 
-/// `alsem_status`: the server and every engine (or the named one), from
-/// the workers' published snapshots; starts nothing.
-fn status(transport: &McpTransport, pool: &Pool, call: &EngineCall, defaults: &Defaults) -> Value {
+/// `alsem_status`'s `server` block; the engines and their checks are
+/// [`super::freshness::status_body`]'s.
+fn server_status(transport: &McpTransport, pool: &Pool, defaults: &Defaults) -> Value {
     let children = pool.children();
-    // MCP output step 2: what this answer does NOT establish, and what to
-    // do next, first (the reviews read the revision as a disk check).
-    let next = match defaults.freshness.as_str() {
-        "fresh" => {
-            "nothing needed: the next command (freshness `fresh`, the default) checks the files \
-             and refreshes first; alsem_refresh only prepares later `latest-built` answers"
-        }
-        _ => {
-            "ask a command with freshness `fresh` or `verify` to check the files, or call \
-             alsem_refresh to rebuild"
-        }
-    };
     json!({
-        "kind": "status",
-        "diskChecked": false,
-        "freshnessNote": "This call does not read the workspace files: each engine's revision \
-            names the inputs it was BUILT from, not whether they still match the disk.",
-        "next": next,
-        "server": {
             "pid": std::process::id(),
             "alsemVersion": env!("CARGO_PKG_VERSION"),
             "protocolVersion": transport.version(),
@@ -402,8 +423,6 @@ fn status(transport: &McpTransport, pool: &Pool, call: &EngineCall, defaults: &D
             },
             "idleTimeoutSecs": children.idle_timeout_secs,
             "lowMem": children.low_mem,
-        },
-        "engines": pool.engines(call),
     })
 }
 

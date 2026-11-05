@@ -91,6 +91,22 @@ pub enum Request {
 /// The engines' key.
 type Key = (String, Universe);
 
+/// Why a call was not queued (the children bound, a full queue).
+struct Refused {
+    universe: Universe,
+    message: String,
+}
+
+/// One part of a composite request ([`Pool::run_composite`]).
+#[derive(Debug)]
+pub enum SubOutcome {
+    /// The part's response message, as the transport wrapped it.
+    Answered(Value),
+    /// Why the part was not computed (its engine could not be admitted, or
+    /// it ended unanswered).
+    NotComputed(String),
+}
+
 /// What a status shows of one engine, published by its worker.
 #[derive(Default)]
 struct Snapshot {
@@ -112,6 +128,80 @@ struct Snapshot {
     activity: Option<(&'static str, Instant)>,
     /// When `child` (the child's `session/status`) was last read.
     child_read_at: Option<Instant>,
+    /// The published revision's input descriptor (agent-tasks design §1.2
+    /// M0-6), read once per generation after a call; immutable, so a reader
+    /// holds its `Arc` without asking the child.
+    /// Keyed by `<engineInstanceId>/<generation>`.
+    descriptor: Option<(String, Arc<Value>)>,
+    /// The last `alsem_refresh` (agent-tasks design §2.3 refresh state).
+    refresh: RefreshTrack,
+}
+
+/// An `alsem_refresh`'s state (agent-tasks design §2.3): `idle` (none yet),
+/// `queued` (waiting for its worker, or an unwaited one the child runs on
+/// its own until a later call shows its outcome), `running` (its worker
+/// runs it), `completed`, `failed`. Never inferred from a command.
+#[derive(Default)]
+struct RefreshTrack {
+    state: Option<&'static str>,
+    wait: bool,
+    queued_unix_ms: Option<u64>,
+    started_unix_ms: Option<u64>,
+    finished_unix_ms: Option<u64>,
+    /// `rebuilt` or `already-fresh`, once known.
+    did: Option<&'static str>,
+    class: Option<String>,
+    generation: Option<u64>,
+    duration_ms: Option<u64>,
+    error: Option<String>,
+    /// The child's builds counter when an unwaited refresh was handed to
+    /// it: a later status with more builds shows it rebuilt.
+    builds_before: Option<u64>,
+}
+
+impl RefreshTrack {
+    fn json(&self) -> Value {
+        json!({
+            "state": self.state.unwrap_or("idle"),
+            "waited": self.state.map(|_| self.wait),
+            "queuedAtUnixMs": self.queued_unix_ms,
+            "startedAtUnixMs": self.started_unix_ms,
+            "finishedAtUnixMs": self.finished_unix_ms,
+            "did": self.did,
+            "class": self.class,
+            "generation": self.generation,
+            "durationMs": self.duration_ms,
+            "error": self.error,
+        })
+    }
+}
+
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+/// A session's build class (`session/status`'s `lastBuildClass`) by the
+/// session's own class names.
+pub fn class_name(letter: &str) -> &str {
+    match letter {
+        "B" => "BodyOnly",
+        "S" => "Declaration",
+        "P" => "Package",
+        "cold" => "Cold",
+        "needs" => "Needs",
+        other => other,
+    }
+}
+
+/// One engine as a status reports it: its key, the snapshot's operator data
+/// and the published input descriptor.
+pub struct EngineRow {
+    pub workspace: String,
+    pub universe: Universe,
+    pub details: Value,
+    pub descriptor: Option<Arc<Value>>,
 }
 
 /// A running command's bookkeeping: when it was queued, its cancel flag and
@@ -221,6 +311,9 @@ enum Job {
         queued: Instant,
         /// Set by the client's cancellation.
         cancel: Arc<AtomicBool>,
+        /// A composite's part: the answer frame goes here, not to the
+        /// transport (an empty frame: dropped while queued).
+        reply: Option<Sender<Vec<u8>>>,
     },
     Refresh {
         id: Value,
@@ -412,6 +505,72 @@ impl Pool {
     /// Hand `request` (call `id`) to its engine's worker, or answer it here
     /// (`busy`, a stopped worker).
     pub fn submit(&self, id: Value, request: Request) {
+        if let Err(Refused { universe, message }) = self.enqueue(id.clone(), request, None) {
+            let envelope = json!({
+                "kind": "failed",
+                "revision": null,
+                "outcome": FailedOutcome::Busy.as_str(),
+                "message": message,
+                "universe": universe.as_str(),
+            });
+            let shared = &self.shared;
+            shared.send_value(&shared.transport.response(&id, &envelope, true, None));
+        }
+    }
+
+    /// A request that needs several engine children (agent-tasks design
+    /// §1.2 M0-6: impact with tests, tests with the production root
+    /// resolution, the impact base), run as a sequence of plain
+    /// sub-requests, each part's outcome in order. The caller runs it off
+    /// its reader loop (it blocks until the last part ends).
+    ///
+    /// **A part never holds one child while waiting for another child's
+    /// admission**: a part is admitted only after the previous one has been
+    /// answered, so its child is idle (released) by then; admission never
+    /// waits. A part that cannot be admitted (every child busy, at the
+    /// `--max-children` bound) is [`SubOutcome::NotComputed`] with the
+    /// reason, and the remaining parts still run. A part admitted to a busy
+    /// engine waits in that engine's own queue, holding no other.
+    pub fn run_composite(&self, id: &Value, parts: Vec<CommandCall>) -> Vec<SubOutcome> {
+        let mut out = Vec::with_capacity(parts.len());
+        for (i, call) in parts.into_iter().enumerate() {
+            let universe = call.universe;
+            let (tx, rx) = channel::<Vec<u8>>();
+            let sub_id = json!(format!("{}#{i}", id_key(id)));
+            let request = Request::Command {
+                call,
+                progress: None,
+            };
+            if let Err(r) = self.enqueue(sub_id, request, Some(tx)) {
+                out.push(SubOutcome::NotComputed(format!(
+                    "the {} engine could not start: {}",
+                    universe.as_str(),
+                    r.message
+                )));
+                continue;
+            }
+            out.push(match rx.recv() {
+                Ok(frame) if frame.is_empty() => {
+                    SubOutcome::NotComputed("cancelled while queued".into())
+                }
+                Ok(frame) => match serde_json::from_slice(&frame) {
+                    Ok(v) => SubOutcome::Answered(v),
+                    Err(e) => SubOutcome::NotComputed(format!("the answer does not decode: {e}")),
+                },
+                Err(_) => SubOutcome::NotComputed("the engine's worker has stopped".into()),
+            });
+        }
+        out
+    }
+
+    /// Queue `request` on its engine's worker, after the children bound;
+    /// with `reply`, the answer frame goes there instead of the transport.
+    fn enqueue(
+        &self,
+        id: Value,
+        request: Request,
+        reply: Option<Sender<Vec<u8>>>,
+    ) -> Result<(), Refused> {
         let shared = &self.shared;
         let cancel = Arc::new(AtomicBool::new(false));
         let (key, job) = match request {
@@ -434,6 +593,7 @@ impl Pool {
                     progress,
                     queued: Instant::now(),
                     cancel: Arc::clone(&cancel),
+                    reply,
                 },
             ),
         };
@@ -467,18 +627,14 @@ impl Pool {
                         let _ = w.tx.send(Job::Retire);
                     }
                     None => {
-                        let envelope = json!({
-                            "kind": "failed",
-                            "revision": null,
-                            "outcome": FailedOutcome::Busy.as_str(),
-                            "message": format!(
-                                "{} engine children are running (--max-children) and none is idle",
-                                shared.children.max_children
+                        return Err(Refused {
+                            universe: key.1,
+                            message: format!(
+                                "{} engine children are running (--max-children) and none is idle \
+                                 (max-children {})",
+                                shared.children.max_children, shared.children.max_children
                             ),
-                            "universe": key.1.as_str(),
                         });
-                        shared.send_value(&shared.transport.response(&id, &envelope, true, None));
-                        return;
                     }
                 }
             }
@@ -488,15 +644,10 @@ impl Pool {
             .or_insert_with(|| spawn_worker(shared, &key));
         worker.last_used = Instant::now();
         if worker.pending.load(Ordering::SeqCst) >= WORKER_QUEUE_DEPTH {
-            let envelope = json!({
-                "kind": "failed",
-                "revision": null,
-                "outcome": FailedOutcome::Busy.as_str(),
-                "message": format!("{WORKER_QUEUE_DEPTH} requests already queued for this engine"),
-                "universe": key.1.as_str(),
+            return Err(Refused {
+                universe: key.1,
+                message: format!("{WORKER_QUEUE_DEPTH} requests already queued for this engine"),
             });
-            shared.send_value(&shared.transport.response(&id, &envelope, true, None));
-            return;
         }
         shared
             .in_flight
@@ -509,25 +660,62 @@ impl Pool {
             .expect("cancels")
             .insert(id_key(&id), cancel);
         worker.pending.fetch_add(1, Ordering::SeqCst);
-        if worker.tx.send(job).is_err() {
-            worker.pending.fetch_sub(1, Ordering::SeqCst);
-            shared.finish_value(
-                &id,
-                &error(
-                    &id,
-                    codes::INTERNAL_ERROR,
-                    "the engine's worker has stopped",
-                ),
-            );
+        if let Job::Refresh { call, .. } = &job {
+            worker.snapshot.lock().expect("snapshot").refresh = RefreshTrack {
+                state: Some("queued"),
+                wait: call.wait,
+                queued_unix_ms: Some(now_unix_ms()),
+                ..RefreshTrack::default()
+            };
         }
+        if let Err(std::sync::mpsc::SendError(job)) = worker.tx.send(job) {
+            worker.pending.fetch_sub(1, Ordering::SeqCst);
+            if matches!(job, Job::Command { reply: Some(_), .. }) {
+                // A composite's part: its coordinator hears it from the
+                // dropped reply channel.
+                shared.forget(&id);
+            } else {
+                shared.finish_value(
+                    &id,
+                    &error(
+                        &id,
+                        codes::INTERNAL_ERROR,
+                        "the engine's worker has stopped",
+                    ),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// The input descriptor (agent-tasks design §1.2 M0-6) the worker of
+    /// `(workspace, universe)` published for its child's revision, if any:
+    /// read from the worker's snapshot, never through its busy front end.
+    #[must_use]
+    pub fn descriptor(&self, workspace: &str, universe: Universe) -> Option<Arc<Value>> {
+        let workers = self.workers();
+        let w = workers.get(&(workspace.to_string(), universe))?;
+        let s = w.snapshot.lock().expect("snapshot");
+        s.descriptor.as_ref().map(|(_, d)| Arc::clone(d))
     }
 
     /// Every engine (or the one `call` names), from the workers' published
     /// snapshots; starts nothing.
     #[must_use]
     pub fn engines(&self, call: &EngineCall) -> Vec<Value> {
+        self.engine_rows(call)
+            .into_iter()
+            .map(|r| r.details)
+            .collect()
+    }
+
+    /// [`Self::engines`] with each engine's key and published input
+    /// descriptor (`alsem_status`'s freshness check reads it), sorted by
+    /// workspace and universe.
+    #[must_use]
+    pub fn engine_rows(&self, call: &EngineCall) -> Vec<EngineRow> {
         let workers = self.workers();
-        let mut engines: Vec<Value> = workers
+        let mut engines: Vec<EngineRow> = workers
             .iter()
             .filter(|(k, _)| {
                 call.workspace
@@ -536,7 +724,7 @@ impl Pool {
             })
             .map(|(k, w)| {
                 let s = w.snapshot.lock().expect("snapshot");
-                json!({
+                let details = json!({
                     "workspace": k.0,
                     "universe": k.1.as_str(),
                     "queued": w.pending.load(Ordering::SeqCst),
@@ -565,12 +753,19 @@ impl Pool {
                     "backoffMs": s.backoff_ms,
                     "lastFailure": s.last_failure.as_ref().map(|(o, m)| json!({"outcome": o.as_str(), "message": m})),
                     "stderrTail": s.stderr_tail,
-                })
+                    "refresh": s.refresh.json(),
+                });
+                EngineRow {
+                    workspace: k.0.clone(),
+                    universe: k.1,
+                    details,
+                    descriptor: s.descriptor.as_ref().map(|(_, d)| Arc::clone(d)),
+                }
             })
             .collect();
         engines.sort_by(|a, b| {
-            (a["workspace"].as_str(), a["universe"].as_str())
-                .cmp(&(b["workspace"].as_str(), b["universe"].as_str()))
+            (a.workspace.as_str(), a.universe.as_str())
+                .cmp(&(b.workspace.as_str(), b.universe.as_str()))
         });
         engines
     }
@@ -675,6 +870,16 @@ fn work(
         match job {
             Job::Retire | Job::Notify(_) => unreachable!("handled above"),
             // Cancelled while queued: dropped.
+            Job::Command {
+                id,
+                cancel,
+                reply: Some(reply),
+                ..
+            } if cancel.load(Ordering::SeqCst) => {
+                pending.fetch_sub(1, Ordering::SeqCst);
+                shared.forget(&id);
+                let _ = reply.send(Vec::new());
+            }
             Job::Command { id, cancel, .. } | Job::Refresh { id, cancel, .. }
                 if cancel.load(Ordering::SeqCst) =>
             {
@@ -687,6 +892,7 @@ fn work(
                 progress,
                 queued,
                 cancel,
+                reply,
             } => {
                 {
                     let mut s = snapshot.lock().expect("snapshot");
@@ -726,7 +932,12 @@ fn work(
                     s.activity = None;
                 }
                 pending.fetch_sub(1, Ordering::SeqCst);
-                if cancel.load(Ordering::SeqCst) {
+                if let Some(reply) = reply {
+                    // A composite's part: answered to its coordinator, the
+                    // worker idle (its child released) before it reads it.
+                    shared.forget(&id);
+                    let _ = reply.send(frame);
+                } else if cancel.load(Ordering::SeqCst) {
                     // Cancelled while it ran: the child stopped it.
                     shared.end_cancelled(&id, Some(&frame));
                 } else {
@@ -737,11 +948,17 @@ fn work(
                 // `session/refresh {wait}` (design §8.2): a failed front end
                 // is reset first, then the child brings its revision up to
                 // date with the disk (with `wait`, before answering).
-                {
+                let builds_before = {
                     let mut s = snapshot.lock().expect("snapshot");
                     s.running_tool = Some("alsem_refresh".to_string());
                     s.activity = Some(("refresh", Instant::now()));
-                }
+                    s.refresh.state = Some("running");
+                    s.refresh.started_unix_ms = Some(now_unix_ms());
+                    s.child
+                        .as_ref()
+                        .and_then(|c| c.session.as_ref())
+                        .and_then(|s| s["builds"].as_u64())
+                };
                 let (outcome, is_error) = match front.as_mut() {
                     Some(front) => {
                         front.reset();
@@ -774,13 +991,60 @@ fn work(
                         )
                     }
                 };
-                let body = json!({
+                // What the refresh did (agent-tasks design §2.3): with
+                // `wait`, the child says whether it built; without, it was
+                // handed to the child, which runs it on its own.
+                let did = if is_error {
+                    None
+                } else if !call.wait {
+                    Some("queued")
+                } else if outcome["built"] == json!(true) {
+                    Some("rebuilt")
+                } else {
+                    Some("already-fresh")
+                };
+                let class = outcome["class"]
+                    .as_str()
+                    .map(class_name)
+                    .map(str::to_string);
+                let generation = outcome["revision"]["generation"].as_u64();
+                {
+                    let mut s = snapshot.lock().expect("snapshot");
+                    let r = &mut s.refresh;
+                    r.finished_unix_ms = Some(now_unix_ms());
+                    if is_error {
+                        r.state = Some("failed");
+                        r.error = Some(
+                            outcome["error"]
+                                .as_str()
+                                .map_or_else(|| outcome.to_string(), str::to_string),
+                        );
+                    } else if call.wait {
+                        r.state = Some("completed");
+                        r.did = did;
+                        r.class.clone_from(&class);
+                        r.generation = generation;
+                        r.duration_ms = outcome["wallMs"].as_u64();
+                    } else {
+                        r.state = Some("queued");
+                        r.finished_unix_ms = None;
+                        r.builds_before = builds_before;
+                    }
+                }
+                let mut body = json!({
                     "kind": "refresh",
+                    "did": did,
                     "workspace": call.workspace,
                     "universe": call.universe.as_str(),
                     "waited": call.wait,
                     "engine": outcome,
                 });
+                if call.wait && !is_error {
+                    body["class"] = json!(class);
+                    body["files"] = outcome["changedFiles"].clone();
+                    body["durationMs"] = outcome["wallMs"].clone();
+                    body["generation"] = json!(generation);
+                }
                 pending.fetch_sub(1, Ordering::SeqCst);
                 let msg = shared.transport.response(&id, &body, is_error, None);
                 if cancel.load(Ordering::SeqCst) {
@@ -811,6 +1075,26 @@ fn publish(front: &mut EngineFront, snapshot: &Mutex<Snapshot>, ask_status: bool
     } else {
         None
     };
+    // A revision this worker holds no descriptor of (a new generation, or a
+    // new child): its descriptor, asked once.
+    let published = child
+        .as_ref()
+        .and_then(|c| c.revision.as_ref())
+        .map(|r| format!("{}/{}", r.engine_instance_id, r.generation));
+    let held = snapshot
+        .lock()
+        .expect("snapshot")
+        .descriptor
+        .as_ref()
+        .map(|(k, _)| k.clone());
+    let descriptor = match published {
+        Some(k) if held.as_ref() != Some(&k) => front
+            .descriptor()
+            .ok()
+            .filter(|d| !d.is_null())
+            .map(|d| (k, Arc::new(d))),
+        _ => None,
+    };
     let stats = front.stats();
     let tail = front.stderr_tail();
     let keep = tail.len().saturating_sub(4096);
@@ -821,9 +1105,37 @@ fn publish(front: &mut EngineFront, snapshot: &Mutex<Snapshot>, ask_status: bool
     let mut s = snapshot.lock().expect("snapshot");
     s.started = true;
     s.hello = front.hello().cloned();
+    // An unwaited refresh the child ran on its own (its heavy queue is in
+    // order, so the call just answered came after it): its outcome, from
+    // the child's builds counter.
+    if let (Some("queued"), false, Some(before), Some(session)) = (
+        s.refresh.state,
+        s.refresh.wait,
+        s.refresh.builds_before,
+        child.as_ref().and_then(|c| c.session.as_ref()),
+    ) {
+        let built = session["builds"].as_u64().is_some_and(|n| n > before);
+        let r = &mut s.refresh;
+        r.state = Some("completed");
+        r.finished_unix_ms = Some(now_unix_ms());
+        r.did = Some(if built { "rebuilt" } else { "already-fresh" });
+        if built {
+            r.class = session["lastBuildClass"]
+                .as_str()
+                .map(|c| class_name(c).to_string());
+            r.duration_ms = session["lastBuildMs"].as_u64();
+        }
+        r.generation = child
+            .as_ref()
+            .and_then(|c| c.revision.as_ref())
+            .map(|r| r.generation);
+    }
     if child.is_some() || s.hello.is_none() {
         s.child_read_at = child.as_ref().map(|_| Instant::now());
         s.child = child;
+    }
+    if descriptor.is_some() {
+        s.descriptor = descriptor;
     }
     s.activity = None;
     s.spawns = stats.spawns;

@@ -30,7 +30,7 @@ use crate::engine::batch::job::{ViewFailure, ViewKey, ViewNeeds};
 use crate::engine::gate::run::{AnalysisTarget, TargetFailure, build_view_model};
 use crate::engine::resident::budget::{Budget, BudgetStatus, Case, Refusal, Reservation};
 use crate::engine::resident::manifest::{Hashing, Manifest, check_consistent};
-use crate::engine::resident::revision::Revision;
+use crate::engine::resident::revision::{GraphRevision, Revision};
 use crate::engine::resident::store::Stop;
 use crate::program::inputs::{WorkspaceInputs, WorkspaceNeeds};
 use crate::program::session::WorkspaceSession;
@@ -63,6 +63,22 @@ pub enum Freshness {
     Verify,
 }
 
+/// A published state's input descriptor (agent-tasks design §1.2 M0-6): its
+/// generation (`None` for a failed build), the manifest stamp, the universe
+/// and the manifest it was built from, each file entry with the stat its
+/// hash was taken at. A front end observes the disk against it
+/// ([`Manifest::from_descriptor_entries`], `Hashing::Cached`) without asking
+/// the child.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputDescriptor {
+    pub generation: Option<u64>,
+    pub inputs_stamp: String,
+    pub workspace: PathBuf,
+    pub universe: String,
+    pub manifest: Vec<crate::engine::resident::manifest::ManifestEntry>,
+}
+
 /// A build that did not produce a model: its read and its failure.
 pub struct FailedBuild {
     pub inputs: Arc<WorkspaceInputs>,
@@ -73,6 +89,8 @@ pub struct FailedBuild {
 #[derive(Clone)]
 pub enum Built {
     Revision(Arc<Revision>),
+    /// A graph-only session's revision (M0-2).
+    Graph(Arc<GraphRevision>),
     Failed(Arc<FailedBuild>),
 }
 
@@ -82,6 +100,7 @@ impl Built {
     pub fn revision_id(&self) -> Option<RevisionId> {
         match self {
             Built::Revision(r) => Some(r.id.clone()),
+            Built::Graph(g) => Some(g.id.clone()),
             Built::Failed(_) => None,
         }
     }
@@ -91,6 +110,7 @@ impl Built {
     pub fn inputs(&self) -> &Arc<WorkspaceInputs> {
         match self {
             Built::Revision(r) => &r.inputs,
+            Built::Graph(g) => &g.inputs,
             Built::Failed(f) => &f.inputs,
         }
     }
@@ -101,6 +121,8 @@ impl Built {
 struct Published {
     built: Built,
     manifest: Manifest,
+    /// The assembly needs its model's rows were built with (M0-4).
+    needs: crate::program::model::workspace::AssemblyNeeds,
 }
 
 /// One request's pin: the state it is answered from, held for the whole
@@ -113,6 +135,9 @@ pub struct Pinned {
     pub changed_paths: Vec<String>,
     /// How long the request waited for a build.
     pub waited_for_build_ms: u64,
+    /// The rebuild this request caused for an artifact the published
+    /// revision lacked (`"sited"`, [`ResidentSession::pin_sited`]).
+    pub rebuilt_for: Option<&'static str>,
 }
 
 /// Why no state was pinned.
@@ -144,6 +169,14 @@ pub struct SessionStats {
     pub last_build_started_unix_ms: Option<u64>,
     /// The last freshness check's wall time, in microseconds.
     pub last_check_us: Option<u64>,
+    /// Revisions published with a sited graph, and the last one's build
+    /// time and resident bytes (agent-tasks design §1.2 M0-1).
+    pub sited_builds: u64,
+    pub last_sited_ms: Option<u64>,
+    pub last_sited_bytes: Option<u64>,
+    /// Rebuilds a request whose model needs exceeded the published rows'
+    /// caused ([`ResidentSession::pin_needs`], M0-4).
+    pub needs_rebuilds: u64,
 }
 
 /// A point in a build where a test hook runs (T-acquire-*).
@@ -181,6 +214,14 @@ pub struct ResidentSession {
     budget: Option<Arc<Budget>>,
     /// `--low-mem` ([`Self::with_low_mem`]).
     low_mem: bool,
+    /// Whether each build makes the sited graph ([`Self::with_sited`],
+    /// [`Self::builds_sited`]).
+    sited: std::sync::atomic::AtomicBool,
+    /// A graph-only session ([`Self::graph_only`], M0-2).
+    graph_only: bool,
+    /// The model each build makes ([`REVISION_NEEDS`] unless
+    /// [`Self::with_needs`] or [`Self::pin_needs`] set it, M0-4).
+    needs: Mutex<ViewNeeds>,
 }
 
 impl ResidentSession {
@@ -202,7 +243,105 @@ impl ResidentSession {
             hook: None,
             budget: None,
             low_mem: false,
+            sited: std::sync::atomic::AtomicBool::new(false),
+            graph_only: false,
+            needs: Mutex::new(REVISION_NEEDS),
         }
+    }
+
+    /// The session building its models with `needs` (a smaller model than
+    /// [`REVISION_NEEDS`]: a request that needs more pins with
+    /// [`Self::pin_needs`]).
+    #[must_use]
+    pub fn with_needs(self, needs: ViewNeeds) -> ResidentSession {
+        *lock(&self.needs) = needs;
+        self
+    }
+
+    /// The state a request whose model needs `needs` is answered from (M0-4):
+    /// [`Self::pin`]; then, when the published model's rows were built with
+    /// fewer needs, the session's needs are widened to cover them and the
+    /// model is rebuilt once (`Pinned::rebuilt_for: "needs"`, class `needs`;
+    /// the row cache misses every file whose recorded needs differ). A
+    /// rebuild the budget refuses is `PinError::Budget`, with the reason.
+    pub fn pin_needs(
+        self: &Arc<Self>,
+        mode: Freshness,
+        needs: crate::program::model::workspace::AssemblyNeeds,
+        stop: &dyn Fn() -> Option<Stop>,
+    ) -> Result<Pinned, PinError> {
+        let pinned = self.pin(mode, stop)?;
+        let covered = |s: &Self| {
+            lock(&s.current)
+                .as_ref()
+                .is_some_and(|p| p.needs.covers(needs))
+        };
+        if self.graph_only || !matches!(pinned.built, Built::Revision(_)) || covered(self) {
+            return Ok(pinned);
+        }
+        if let Some(s) = stop() {
+            return Err(PinError::Stopped(s));
+        }
+        let start = Instant::now();
+        let mut b = lock(&self.builder);
+        {
+            let mut n = lock(&self.needs);
+            n.rules |= needs.rules;
+            n.card_text |= needs.card_text;
+        }
+        if covered(self) {
+            return Ok(Pinned {
+                built: self.published().expect("published"),
+                waited_for_build_ms: start.elapsed().as_millis() as u64,
+                ..pinned
+            });
+        }
+        let built = self.build_locked(&mut b, None, 1, &|| stop().is_some())?;
+        {
+            let mut s = lock(&self.stats);
+            s.needs_rebuilds += 1;
+            s.last_build_class = Some("needs".into());
+        }
+        Ok(Pinned {
+            built,
+            stale: false,
+            changed_paths: Vec::new(),
+            waited_for_build_ms: pinned.waited_for_build_ms + start.elapsed().as_millis() as u64,
+            rebuilt_for: Some("needs"),
+        })
+    }
+
+    /// A graph-only session (agent-tasks design §1.2 M0-2) for `workspace`,
+    /// cross-app: each build makes the program and its sited graph and no
+    /// model ([`Built::Graph`]); the workspace session keeps what its next
+    /// refresh reuses (per-file parses and resolutions; under `--low-mem`, no
+    /// dependency trees).
+    #[must_use]
+    pub fn graph_only(workspace: PathBuf, instance_id: String) -> ResidentSession {
+        ResidentSession {
+            graph_only: true,
+            ..ResidentSession::new(workspace, false, instance_id)
+        }
+    }
+
+    /// Whether this session is graph-only.
+    #[must_use]
+    pub fn is_graph_only(&self) -> bool {
+        self.graph_only
+    }
+
+    /// The session building the sited graph with every revision when
+    /// `sited` (agent-tasks design §1.2 M0-1; `engine-host --graph`).
+    #[must_use]
+    pub fn with_sited(self, sited: bool) -> ResidentSession {
+        self.sited.store(sited, Ordering::SeqCst);
+        self
+    }
+
+    /// Whether each build makes the sited graph.
+    #[must_use]
+    pub fn builds_sited(&self) -> bool {
+        self.sited.load(Ordering::SeqCst)
     }
 
     /// The session with a build hook (tests).
@@ -351,6 +490,33 @@ impl ResidentSession {
         lock(&self.current).as_ref().map(|p| p.built.clone())
     }
 
+    /// The published state's input descriptor (agent-tasks design §1.2
+    /// M0-6): immutable per published state, so a front end that read it
+    /// for one generation never asks again until the generation moves.
+    #[must_use]
+    pub fn descriptor(&self) -> Option<InputDescriptor> {
+        let p = lock(&self.current).clone()?;
+        Some(InputDescriptor {
+            generation: p.built.revision_id().map(|r| r.generation),
+            inputs_stamp: p.manifest.stamp(),
+            workspace: self.workspace.clone(),
+            universe: self.universe_name().to_string(),
+            manifest: p.manifest.descriptor_entries(),
+        })
+    }
+
+    /// The session's universe as the descriptor names it.
+    #[must_use]
+    pub fn universe_name(&self) -> &'static str {
+        if self.graph_only {
+            "graphOnly"
+        } else if self.single_app {
+            "singleApp"
+        } else {
+            "crossApp"
+        }
+    }
+
     /// The published state's inputs stamp.
     #[must_use]
     pub fn published_stamp(&self) -> Option<String> {
@@ -398,6 +564,7 @@ impl ResidentSession {
                     stale: false,
                     changed_paths: Vec::new(),
                     waited_for_build_ms: 0,
+                    rebuilt_for: None,
                 });
             }
             if mode == Freshness::LatestBuilt {
@@ -408,7 +575,7 @@ impl ResidentSession {
                     if let Ok(mut b) = me.builder.try_lock() {
                         // No request holds this build: every holder is a
                         // releaser it may wait for.
-                        let _ = me.build_locked(&mut b, None, 0);
+                        let _ = me.build_locked(&mut b, None, 0, &|| false);
                     }
                 });
                 return Ok(Pinned {
@@ -416,6 +583,7 @@ impl ResidentSession {
                     stale: true,
                     changed_paths: changed,
                     waited_for_build_ms: 0,
+                    rebuilt_for: None,
                 });
             }
             return self.build(Some(observed), stop);
@@ -451,26 +619,76 @@ impl ResidentSession {
                     stale: false,
                     changed_paths: Vec::new(),
                     waited_for_build_ms: start.elapsed().as_millis() as u64,
+                    rebuilt_for: None,
                 });
             }
             _ => before,
         };
         // The request waiting for this build is one admitted holder.
-        let built = self.build_locked(&mut b, before, 1)?;
+        let built = self.build_locked(&mut b, before, 1, &|| false)?;
         Ok(Pinned {
             built,
             stale: false,
             changed_paths: Vec::new(),
             waited_for_build_ms: start.elapsed().as_millis() as u64,
+            rebuilt_for: None,
+        })
+    }
+
+    /// The state a request that reads the sited graph is answered from
+    /// (agent-tasks design §1.2 M0-1, owner answer 2026-11-05: the graph
+    /// costs ~1 s per refresh on CDO, over the 300 ms bar, so it is built
+    /// only once a question needs it). [`Self::pin`]; then, when the pinned
+    /// revision has no sited graph, the session builds it with every revision
+    /// from now on and rebuilds once, for this request (`Pinned::rebuilt_for`
+    /// says so). `stop` also cancels that rebuild's sited graph (polled every
+    /// `CANCEL_EVERY` sites): the revision is then published without it, and
+    /// the next such request builds it.
+    pub fn pin_sited(
+        self: &Arc<Self>,
+        mode: Freshness,
+        stop: &dyn Fn() -> Option<Stop>,
+    ) -> Result<Pinned, PinError> {
+        let pinned = self.pin(mode, stop)?;
+        match &pinned.built {
+            Built::Revision(r) if r.sited().is_none() => {}
+            _ => return Ok(pinned),
+        }
+        self.sited.store(true, Ordering::SeqCst);
+        if let Some(s) = stop() {
+            return Err(PinError::Stopped(s));
+        }
+        let start = Instant::now();
+        let mut b = lock(&self.builder);
+        // Another request may have published a revision with it meanwhile.
+        if let Some(Built::Revision(r)) = self.published()
+            && r.sited().is_some()
+        {
+            return Ok(Pinned {
+                built: Built::Revision(r),
+                waited_for_build_ms: start.elapsed().as_millis() as u64,
+                ..pinned
+            });
+        }
+        let built = self.build_locked(&mut b, None, 1, &|| stop().is_some())?;
+        Ok(Pinned {
+            built,
+            stale: false,
+            changed_paths: Vec::new(),
+            waited_for_build_ms: pinned.waited_for_build_ms + start.elapsed().as_millis() as u64,
+            rebuilt_for: Some("sited"),
         })
     }
 
     /// The build itself, under the builder lock (see the module doc).
+    /// `cancel_sited` stops the sited graph's build (the revision is then
+    /// published without it).
     fn build_locked(
         &self,
         b: &mut Builder,
         mut before: Option<Manifest>,
         mine: u64,
+        cancel_sited: &dyn Fn() -> bool,
     ) -> Result<Built, PinError> {
         let start = Instant::now();
         let started_unix_ms = std::time::SystemTime::now()
@@ -503,7 +721,12 @@ impl ResidentSession {
                         Some(Built::Revision(_)) => Case::Incremental,
                         _ => Case::Cold,
                     };
-                    let estimate = budget.estimate(case, m_before.input_sizes());
+                    let mut estimate = budget.estimate(case, m_before.input_sizes());
+                    // The sited graph joins the build's reservation (M0-5):
+                    // it is built inside the build, beside the lent program.
+                    if self.graph_only || self.sited.load(Ordering::SeqCst) {
+                        estimate += budget.estimate(Case::Fill("sited"), m_before.input_sizes());
+                    }
                     Some(
                         self.reserve_or_reclaim(budget, case, estimate, mine, &|| false)
                             .map_err(PinError::Budget)?,
@@ -527,7 +750,39 @@ impl ResidentSession {
             let inputs = WorkspaceInputs::read(&self.workspace, &REVISION_READ);
             self.hook(BuildPoint::AfterRead, attempt);
             let consumed = Manifest::consumed(&inputs, self.single_app);
-            let target = build_target(&mut b.workspace, &inputs, self.single_app);
+            let want_sited = self.graph_only || self.sited.load(Ordering::SeqCst);
+            let needs = *lock(&self.needs);
+            let mut sited: Option<SitedBuild> = None;
+            let target = if self.graph_only {
+                // The program and its sited graph, no model (M0-2): the
+                // workspace session still keeps what its next refresh reuses.
+                match b.workspace.refresh_program(&inputs) {
+                    Ok(p) => {
+                        sited = build_sited(&p, &|| false);
+                        Ok(None)
+                    }
+                    Err(e) => Err(ViewFailure {
+                        target: TargetFailure::CrossApp(
+                            crate::program::model::program_calls::CrossAppFailure::Build(e),
+                        ),
+                        analyze: None,
+                        inputs: Arc::clone(&inputs),
+                    }),
+                }
+            } else {
+                build_target_with(
+                    &mut b.workspace,
+                    &inputs,
+                    self.single_app,
+                    needs,
+                    &mut |p| {
+                        if want_sited {
+                            sited = build_sited(p, cancel_sited);
+                        }
+                    },
+                )
+                .map(Some)
+            };
             self.hook(BuildPoint::AfterBuild, attempt);
             let no_dirty = BTreeSet::new();
             let m_after = Manifest::observe(
@@ -543,14 +798,31 @@ impl ResidentSession {
                 lock(&self.stats).discarded_builds += 1;
                 continue;
             }
+            let next_id = || RevisionId {
+                engine_instance_id: self.instance_id.clone(),
+                generation: self.generation.fetch_add(1, Ordering::SeqCst) + 1,
+                inputs_stamp: consumed.stamp(),
+            };
+            let count_sited = |s: &SitedBuild| {
+                let mut st = lock(&self.stats);
+                st.sited_builds += 1;
+                st.last_sited_ms = Some(s.ms);
+                st.last_sited_bytes = Some(s.graph.bytes());
+            };
             let built = match target {
-                Ok(target) => {
-                    let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-                    let id = RevisionId {
-                        engine_instance_id: self.instance_id.clone(),
-                        generation,
-                        inputs_stamp: consumed.stamp(),
-                    };
+                Ok(None) => match sited.take() {
+                    Some(s) => {
+                        count_sited(&s);
+                        Built::Graph(Arc::new(GraphRevision {
+                            id: next_id(),
+                            inputs,
+                            sited: Arc::new(s.graph),
+                        }))
+                    }
+                    None => unreachable!("an uncancellable sited build finishes"),
+                },
+                Ok(Some(target)) => {
+                    let id = next_id();
                     // The L4 seed of the last published revision (§6.9):
                     // the new revision's solve starts from it when the
                     // seed key matches.
@@ -558,7 +830,12 @@ impl ResidentSession {
                         Some(Built::Revision(r)) => Some(&**r),
                         _ => None,
                     };
-                    Built::Revision(Arc::new(Revision::seeded(id, inputs, target, seed_from)))
+                    let mut rev = Revision::seeded(id, inputs, target, seed_from);
+                    if let Some(s) = sited.take() {
+                        count_sited(&s);
+                        rev = rev.with_sited(Arc::new(s.graph));
+                    }
+                    Built::Revision(Arc::new(rev))
                 }
                 Err(failure) => Built::Failed(Arc::new(FailedBuild { inputs, failure })),
             };
@@ -587,6 +864,7 @@ impl ResidentSession {
             *lock(&self.current) = Some(Arc::new(Published {
                 built: built.clone(),
                 manifest: m_after,
+                needs: needs.assembly(),
             }));
             self.clear_dirty(&dirty);
             if let Some(r) = reservation {
@@ -624,14 +902,55 @@ pub fn build_target(
     inputs: &Arc<WorkspaceInputs>,
     single_app: bool,
 ) -> Result<AnalysisTarget, ViewFailure> {
-    if single_app || inputs.model_instance_id.is_none() {
+    build_target_with(session, inputs, single_app, REVISION_NEEDS, &mut |_| {})
+}
+
+/// What a revision's build made beside its target: the sited graph (agent-
+/// tasks design §1.2 M0-1), when the session builds it, and its build's
+/// wall time.
+pub struct SitedBuild {
+    pub graph: crate::program::impact_graph::SitedGraph,
+    pub ms: u64,
+}
+
+/// The sited graph of `program`, timed, or `None` when `cancel` stopped it.
+#[must_use]
+pub fn build_sited(
+    program: &crate::program::resolved::ResolvedProgram,
+    cancel: &dyn Fn() -> bool,
+) -> Option<SitedBuild> {
+    let start = Instant::now();
+    crate::program::impact_graph::sited_from_program(program, cancel)
+        .ok()
+        .map(|graph| SitedBuild {
+            graph,
+            ms: start.elapsed().as_millis() as u64,
+        })
+}
+
+/// [`build_target`], lending the program to `on_program` between its build
+/// and the model's (agent-tasks design §1.2 M0-1). A workspace with no
+/// model-instance id builds no program here (its failure is the cold
+/// builder's). `needs` is the model the revision builds (the session's,
+/// [`REVISION_NEEDS`] unless a request widened them, M0-4).
+pub fn build_target_with(
+    session: &mut WorkspaceSession,
+    inputs: &Arc<WorkspaceInputs>,
+    single_app: bool,
+    needs: ViewNeeds,
+    on_program: &mut dyn FnMut(&crate::program::resolved::ResolvedProgram),
+) -> Result<AnalysisTarget, ViewFailure> {
+    if single_app {
+        return crate::engine::gate::run::build_single_app_model_lending(inputs, needs, on_program);
+    }
+    if inputs.model_instance_id.is_none() {
         let key = ViewKey::new(&inputs.workspace, single_app, false);
-        return build_view_model(inputs, &key, REVISION_NEEDS, |_| {})
+        return build_view_model(inputs, &key, needs, |_| {})
             .map(|m| m.expect("a model view builds a model").target);
     }
     let _s = crate::engine::perf_trace::span("crossapp", "crossapp.base_total");
     session
-        .refresh(inputs, false, REVISION_NEEDS.assembly())
+        .refresh_lending(inputs, false, needs.assembly(), on_program)
         .and_then(crate::engine::l4::capability_cone::cross_app_base_of)
         .map(|base| AnalysisTarget::CrossApp(Box::new(base)))
         .map_err(|e| ViewFailure {

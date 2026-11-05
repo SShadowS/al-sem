@@ -197,33 +197,68 @@ fn is_page_action_wrapper(syntax_kind: &str) -> bool {
     )
 }
 
-/// Compute the set of RootKinds a routine qualifies for, purely from its
-/// structural shape + the host object's declared metadata. Mirrors `kindsFor`.
-fn kinds_for(routine: &ModelRoutine, object: &ModelObject) -> Vec<String> {
-    let mut set: BTreeSet<String> = BTreeSet::new();
+/// What the AST classifier reads of a routine and its declaring object: the
+/// one input shape of [`root_kind_mask`], built from a model row
+/// ([`kinds_for`]) and from the owned IR (the sited graph's entry kinds,
+/// `program::impact_graph::facts`), so the two classify alike.
+pub(crate) struct RootShape<'a> {
+    /// `ir_walk::ir_routine_kind`: `trigger`, `event-subscriber`,
+    /// `event-publisher` or `procedure`.
+    pub routine_kind: &'a str,
+    pub routine_name: &'a str,
+    /// `ir_walk::ir_object_type` (`Table`, `PageExtension`, …).
+    pub object_type: &'a str,
+    /// The enclosing member wrapper's raw grammar kind, for a member trigger.
+    pub member_wrapper: Option<&'a str>,
+    /// The object's `Subtype` property text (codeunits).
+    pub object_subtype: Option<&'a str>,
+    /// The object's `PageType` property text (pages and page extensions).
+    pub page_type: Option<&'a str>,
+    /// The routine carries `[Test]`.
+    pub test_attribute: bool,
+    /// The routine has no access modifier (default access).
+    pub default_access: bool,
+}
+
+/// The bit of `kind` in a [`root_kind_mask`]: its index in
+/// [`ROOT_KIND_VALUES`].
+#[must_use]
+pub fn root_kind_bit(kind: &str) -> Option<u16> {
+    ROOT_KIND_VALUES
+        .iter()
+        .position(|k| *k == kind)
+        .map(|i| 1u16 << i)
+}
+
+/// The kinds of a mask, in [`ROOT_KIND_VALUES`] order.
+pub fn root_kinds_of_mask(mask: u16) -> impl Iterator<Item = &'static str> {
+    ROOT_KIND_VALUES
+        .iter()
+        .enumerate()
+        .filter(move |(i, _)| mask & (1 << i) != 0)
+        .map(|(_, k)| *k)
+}
+
+/// The RootKinds a routine of `shape` qualifies for, as a mask over
+/// [`ROOT_KIND_VALUES`]. Mirrors `kindsFor`.
+pub(crate) fn root_kind_mask(shape: &RootShape<'_>) -> u16 {
+    let bit = |k: &str| root_kind_bit(k).expect("a ROOT_KIND_VALUES kind");
+    let mut set = 0u16;
 
     // Trigger kinds — gated on routine.kind === "trigger".
-    if routine.kind == "trigger" {
-        match object.object_type.as_str() {
-            "Table" | "TableExtension" => {
-                set.insert("trigger-table".to_string());
-            }
+    if shape.routine_kind == "trigger" {
+        match shape.object_type {
+            "Table" | "TableExtension" => set |= bit("trigger-table"),
             "Page" | "PageExtension" => {
-                set.insert("trigger-page".to_string());
+                set |= bit("trigger-page");
                 // ADDITIVE: an action's trigger keeps `trigger-page` AND gains
                 // `page-action`. The enclosing member wrapper's raw grammar kind
                 // reaches here verbatim (`anchor_from_origin` → `PAnchor::syntax_kind`).
-                if routine
-                    .enclosing_member_range
-                    .as_ref()
-                    .is_some_and(|a| is_page_action_wrapper(&a.syntax_kind))
-                {
-                    set.insert("page-action".to_string());
+                if shape.member_wrapper.is_some_and(is_page_action_wrapper) {
+                    set |= bit("page-action");
                 }
             }
-            "Report" => {
-                set.insert("report-trigger".to_string());
-            }
+            "Report" => set |= bit("report-trigger"),
             _ => {}
         }
     }
@@ -231,58 +266,70 @@ fn kinds_for(routine: &ModelRoutine, object: &ModelObject) -> Vec<String> {
     // Codeunit OnRun — the entry point `Codeunit.Run(id)` and the job-queue
     // runner reach. Keyed on routine.kind == "trigger" (NOT the name alone), so a
     // plain procedure that happens to be called OnRun is not a root.
-    if routine.kind == "trigger"
-        && object.object_type == "Codeunit"
-        && routine.name.eq_ignore_ascii_case("OnRun")
+    if shape.routine_kind == "trigger"
+        && shape.object_type == "Codeunit"
+        && shape.routine_name.eq_ignore_ascii_case("OnRun")
     {
-        set.insert("onrun-codeunit".to_string());
+        set |= bit("onrun-codeunit");
     }
 
     // Event-subscriber — direct from routine.kind.
-    if routine.kind == "event-subscriber" {
-        set.insert("event-subscriber".to_string());
+    if shape.routine_kind == "event-subscriber" {
+        set |= bit("event-subscriber");
     }
 
     // Codeunit Subtype-based kinds (case-insensitive).
-    if object.object_type == "Codeunit" {
-        let subtype = object.object_subtype.as_deref().map(|s| s.to_lowercase());
+    if shape.object_type == "Codeunit" {
+        let subtype = shape.object_subtype.map(str::to_lowercase);
         if subtype.as_deref() == Some("install") {
-            set.insert("install-codeunit".to_string());
+            set |= bit("install-codeunit");
         }
         if subtype.as_deref() == Some("upgrade") {
-            set.insert("upgrade-codeunit".to_string());
+            set |= bit("upgrade-codeunit");
         }
     }
 
     // Page with PageType=API (case-insensitive) — every routine is HTTP-exposed.
-    if (object.object_type == "Page" || object.object_type == "PageExtension")
-        && object
-            .page_type
-            .as_deref()
-            .map(|p| p.to_lowercase())
-            .as_deref()
-            == Some("api")
+    if (shape.object_type == "Page" || shape.object_type == "PageExtension")
+        && shape.page_type.map(str::to_lowercase).as_deref() == Some("api")
     {
-        set.insert("api-page".to_string());
+        set |= bit("api-page");
     }
 
     // Test procedures — via [Test] attribute on the routine itself.
-    if routine
-        .attributes_parsed
-        .iter()
-        .any(|a| a.name.to_lowercase() == "test")
-    {
-        set.insert("test-procedure".to_string());
+    if shape.test_attribute {
+        set |= bit("test-procedure");
     }
 
     // Public procedures — non-trigger, non-event-subscriber procedures with
     // default access (None accessModifier). Catch-all: only when nothing more
     // specific applied (al-sem checks `kinds.length === 0` BEFORE this push).
-    if routine.kind == "procedure" && routine.access_modifier.is_none() && set.is_empty() {
-        set.insert("public-procedure".to_string());
+    if shape.routine_kind == "procedure" && shape.default_access && set == 0 {
+        set |= bit("public-procedure");
     }
+    set
+}
 
-    canonical_kinds(&set)
+/// Compute the set of RootKinds a routine qualifies for, purely from its
+/// structural shape + the host object's declared metadata. Mirrors `kindsFor`.
+fn kinds_for(routine: &ModelRoutine, object: &ModelObject) -> Vec<String> {
+    let mask = root_kind_mask(&RootShape {
+        routine_kind: &routine.kind,
+        routine_name: &routine.name,
+        object_type: &object.object_type,
+        member_wrapper: routine
+            .enclosing_member_range
+            .as_ref()
+            .map(|a| a.syntax_kind.as_str()),
+        object_subtype: object.object_subtype.as_deref(),
+        page_type: object.page_type.as_deref(),
+        test_attribute: routine
+            .attributes_parsed
+            .iter()
+            .any(|a| a.name.to_lowercase() == "test"),
+        default_access: routine.access_modifier.is_none(),
+    });
+    root_kinds_of_mask(mask).map(str::to_string).collect()
 }
 
 /// AST-only root classifier (al-sem `classifyRoots`). Produces a

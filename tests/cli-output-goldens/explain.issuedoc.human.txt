@@ -2,7 +2,7 @@ Codeunit Out Issue Document::IssueDoc  ws:src/OutIssueDocument.Codeunit.al:3
   summary — writes: may write 16 tables (1 owned by this app, 15 by dependencies); 14 of them beyond Codeunit Base Poster::OnRun (entered at ws:src/OutIssueDocument.Codeunit.al:15); caller-dependent: 1 table
     transaction, UI and errors: commits: may (1 commit-bearing entry point); errors at 2 places
     other effects: events: 2 (1 raised in workspace code); HTTP at 1 place; background tasks at 1 place
-    callers and tests: callers: none, reached from 1 page action; tests: none
+    callers and tests: callers: none, reached from 1 page action; tests: none of 1 loaded
     uncertainty: gaps: 2 in workspace code, 1 in dependency code, 0 not placed
   coverage: partial (interface-open-world, object-run-unresolved) — 1 interface call open world, 2 dynamic calls not resolved
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
@@ -33,7 +33,7 @@ Codeunit Out Issue Document::IssueDoc  ws:src/OutIssueDocument.Codeunit.al:3
   HTTP at 1 place: HTTP at ws:src/OutIssueDocument.Codeunit.al:72 (unconditional-on-success)
   background tasks at 1 place: BACKGROUND_TASK at ws:src/OutIssueDocument.Codeunit.al:19 (unconditional-on-success)
   errors at 2 places: ERROR_IMPLICIT at ws:src/OutIssueDocument.Codeunit.al:12 (unconditional-on-success); ERROR_IMPLICIT beyond Codeunit Base Poster::OnRun
-  tests: none reach it
+  tests: 1 [Test] procedure loaded; none reaches it (not a reason to skip tests)
   gaps in workspace code (2 gaps):
     gap: unresolved-call (callee Codeunit.Run(<dynamic>), status dynamic-target) at ws:src/OutIssueDocument.Codeunit.al:21
     gap: unresolved-call (callee Handler.Handle, status polymorphic) at ws:src/OutIssueDocument.Codeunit.al:23

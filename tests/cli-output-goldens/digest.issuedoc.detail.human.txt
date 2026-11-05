@@ -31,4 +31,4 @@ dependencies: Out Base (embedded)
     Codeunit.Run(<dynamic>) (dynamic-target) in IssueDoc at ws:src/OutIssueDocument.Codeunit.al:21
     Handler.Handle (polymorphic) in IssueDoc at ws:src/OutIssueDocument.Codeunit.al:23
   gaps in dependency code: 1 (0 interface, 1 dynamic); not placed: 0; top callees: Codeunit.Run(<dynamic>) ×1
-test coverage: 0 of 1 changed routines reached; 1 [Test] procedures considered (complete)
+test coverage: 0 of 1 changed routines reached; 1 [Test] procedures loaded and considered (complete); an unreached routine is not a reason to skip tests

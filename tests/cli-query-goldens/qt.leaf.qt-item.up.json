@@ -191,11 +191,11 @@
           }
         }
       ],
-      "note": "this routine does NOT touch the table; the touching callers reach it through other branches",
+      "note": "the index holds no touch of the table in this routine's cone (one routine into dependency code; not proof of absence); the touching callers reach it through other branches",
       "scoped": true,
       "transitiveCallers": 4,
       "unknown": []
     }
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.2.0"
 }

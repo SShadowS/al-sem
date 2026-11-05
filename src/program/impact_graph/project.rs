@@ -1,12 +1,16 @@
 //! The projection: engine edges plus the may-execute rules, open-site hubs,
 //! hidden-callers flags and pruning (spec §4.3-§4.6). Pure over its [`Inputs`].
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use al_syntax::IdentifierFoldExt;
 use al_syntax::ir::ObjectKind;
 
 use super::facts::{RunTarget, SourceFacts};
+use super::sited::{
+    Anchor, Boundary, Collapsed, Site, SitedBuilder, SitedGraph, collapse, condition_mask,
+    condition_names, via_ix,
+};
 use super::{Edge, Node};
 use crate::program::graph::ProgramGraph;
 use crate::program::node::{AppRef, ObjectNodeId, RoutineNodeId};
@@ -99,14 +103,6 @@ impl Conf {
             Conf::Open => "Open",
         }
     }
-}
-
-#[derive(Clone, Debug)]
-struct E {
-    conf: Conf,
-    via: &'static str,
-    line: Option<u32>,
-    conditions: BTreeSet<&'static str>,
 }
 
 /// The entry trigger a run of `kind` always runs (`resolver::entry_trigger_name`).
@@ -210,12 +206,42 @@ struct Builder<'a> {
     rtn_by_id: HashMap<&'a RoutineNodeId, &'a RoutineNode>,
     base_of: HashMap<&'a ObjectNodeId, ObjectNodeId>,
     exts_of: HashMap<ObjectNodeId, Vec<&'a ObjectNodeId>>,
-    edges: BTreeMap<(Key, Key, Kind), E>,
+    /// Every site added, in order: the sited graph.
+    sited: SitedBuilder,
+    /// The sites collapsed so far (the rules after the call sites read the
+    /// collapsed edges: hub expansion, `hiddenCallers`).
+    edges: HashMap<(u32, u32, Kind), Collapsed>,
     objects: BTreeSet<ObjectNodeId>,
+    /// Polled every [`CANCEL_EVERY`] sites; once it says stop, no site is
+    /// added and the build is reported cancelled.
+    cancel: &'a dyn Fn() -> bool,
+    cancelled: bool,
+    added: u64,
+}
+
+/// How many sites a sited-graph build adds between cancellation checks
+/// (literal reach's interval).
+pub(crate) const CANCEL_EVERY: u64 = 4096;
+
+/// The trigger boundary of a record trigger or platform table event named
+/// `name_lc`: the operation that fires it.
+fn trigger_op(name_lc: &str) -> Option<u8> {
+    super::sited::RECORD_OPS
+        .iter()
+        .position(|op| {
+            let (t, e) = record_trigger_names(op);
+            t.contains(&name_lc) || e.contains(&name_lc)
+        })
+        .map(|i| i as u8)
 }
 
 impl<'a> Builder<'a> {
+    #[cfg(test)]
     fn new(inp: &'a Inputs<'a>) -> Self {
+        Self::with_cancel(inp, &|| false)
+    }
+
+    fn with_cancel(inp: &'a Inputs<'a>, cancel: &'a dyn Fn() -> bool) -> Self {
         let g = inp.graph;
         let obj_by_id: HashMap<&ObjectNodeId, &ObjectNode> =
             g.objects.iter().map(|o| (&o.id, o)).collect();
@@ -242,11 +268,24 @@ impl<'a> Builder<'a> {
             rtn_by_id,
             base_of,
             exts_of,
-            edges: BTreeMap::new(),
+            sited: SitedBuilder::new(g),
+            edges: HashMap::new(),
             objects: BTreeSet::new(),
+            cancel,
+            cancelled: false,
+            added: 0,
         }
     }
 
+    /// The collapsed edge `(from, to, kind)`, if any site made it.
+    #[cfg(test)]
+    fn edge(&self, from: &Key, to: &Key, kind: Kind) -> Option<&Collapsed> {
+        let (f, t) = (self.sited.ix(from)?, self.sited.ix(to)?);
+        self.edges.get(&(f, t, kind))
+    }
+
+    /// One site (the sited graph's edge) and its collapse into the export's
+    /// edge. `line` is the site's anchor (`None`: no call site makes it).
     #[allow(clippy::too_many_arguments)]
     fn add(
         &mut self,
@@ -255,10 +294,15 @@ impl<'a> Builder<'a> {
         kind: Kind,
         conf: Conf,
         via: &'static str,
-        line: Option<u32>,
+        line: Option<Anchor>,
         conditions: BTreeSet<&'static str>,
     ) {
-        if from == to {
+        if from == to || self.cancelled {
+            return;
+        }
+        self.added += 1;
+        if self.added.is_multiple_of(CANCEL_EVERY) && (self.cancel)() {
+            self.cancelled = true;
             return;
         }
         if let Key::Object(o) = &to {
@@ -267,28 +311,43 @@ impl<'a> Builder<'a> {
         if let Key::Object(o) = &from {
             self.objects.insert(o.clone());
         }
-        let new = E {
-            conf,
-            via,
-            line,
-            conditions,
+        let boundary = match (via, kind, &to) {
+            (_, _, Key::Hub(Hub::Record(op))) => Boundary::TriggerOf {
+                op: super::sited::RECORD_OPS
+                    .iter()
+                    .position(|o| o == op)
+                    .map(|i| i as u8),
+            },
+            ("call" | "interface", _, _) => Boundary::Sync,
+            ("run", Kind::Trigger, _) => Boundary::TriggerOf { op: None },
+            ("run", Kind::Event, _) => Boundary::EventDispatch,
+            ("run" | "declaredRunnable", _, _) => Boundary::Run,
+            ("implicitTrigger", _, Key::Routine(r)) => Boundary::TriggerOf {
+                op: trigger_op(r.name_lc.as_str()),
+            },
+            ("eventFlow", _, _) => Boundary::EventDispatch,
+            ("lifecycle", _, _) => Boundary::Lifecycle,
+            ("testRunner", _, _) => Boundary::TestRunner,
+            ("testHandler", _, _) => Boundary::TestHandler,
+            _ => Boundary::Open,
         };
-        match self.edges.entry((from, to, kind)) {
-            std::collections::btree_map::Entry::Vacant(v) => {
-                v.insert(new);
+        let site = Site {
+            from: self.sited.node(&from),
+            to: self.sited.node(&to),
+            kind,
+            conf,
+            via: via_ix(via),
+            conditions: condition_mask(conditions),
+            boundary,
+            anchor: line,
+        };
+        self.sited.sites.push(site);
+        match self.edges.entry((site.from, site.to, kind)) {
+            std::collections::hash_map::Entry::Vacant(v) => {
+                v.insert(Collapsed::of(&site));
             }
-            std::collections::btree_map::Entry::Occupied(mut o) => {
-                let old = o.get_mut();
-                let line = match (old.line, new.line) {
-                    (Some(a), Some(b)) => Some(a.min(b)),
-                    (a, b) => a.or(b),
-                };
-                if new.conf < old.conf {
-                    *old = new;
-                } else if new.conf == old.conf {
-                    old.conditions.extend(new.conditions);
-                }
-                old.line = line;
+            std::collections::hash_map::Entry::Occupied(mut o) => {
+                o.get_mut().merge(Collapsed::of(&site));
             }
         }
     }
@@ -320,7 +379,13 @@ impl<'a> Builder<'a> {
             let e = &ce.edge;
             let from = Key::Routine(e.from.clone());
             let line = match ce.obligation_id {
-                ObligationId::CallSite { .. } => Some(e.site.span.start.line + 1),
+                ObligationId::CallSite { .. } => Some(Anchor {
+                    unit: self.sited.unit(&e.site.span.unit),
+                    start_line: e.site.span.start.line,
+                    start_col: e.site.span.start.col,
+                    end_line: e.site.span.end.line,
+                    end_col: e.site.span.end.col,
+                }),
                 ObligationId::Publisher(_) => None,
             };
             let mut unknown = false;
@@ -458,7 +523,7 @@ impl<'a> Builder<'a> {
         kind: EdgeKind,
         shape: DispatchShape,
         rid: &RoutineNodeId,
-        line: Option<u32>,
+        line: Option<Anchor>,
         conditions: BTreeSet<&'static str>,
     ) {
         let to_trigger = self.rtn_by_id.get(rid).is_some_and(|r| r.is_trigger);
@@ -617,10 +682,12 @@ impl<'a> Builder<'a> {
             members.extend(exts.iter().copied());
         }
         let mut opens: Vec<Key> = Vec::new();
+        let mut action_runs: HashSet<Key> = HashSet::new();
         let mut tables: Vec<ObjectNodeId> = Vec::new();
         for m in &members {
             if let Some(f) = self.inp.facts.objects.get(*m) {
                 opens.extend(f.opens.iter().map(|t| self.run_target_key(t)));
+                action_runs.extend(f.action_runs.iter().map(|t| self.run_target_key(t)));
                 tables.extend(f.tables.iter().cloned());
             }
             if let Some(mo) = self.obj_by_id.get(*m) {
@@ -643,6 +710,8 @@ impl<'a> Builder<'a> {
             tables.push(table);
         }
         for to in opens {
+            let action = action_runs.contains(&to);
+            let before = self.sited.sites.len();
             self.simple(
                 from.clone(),
                 to,
@@ -650,6 +719,11 @@ impl<'a> Builder<'a> {
                 Conf::OverApprox,
                 "lifecycle",
             );
+            if action && self.sited.sites.len() > before {
+                // A user starts this run from one of the page's actions
+                // (`RunObject`): the reverse walk's page-action entry.
+                self.sited.action_run_sites.push(before as u32);
+            }
         }
         for table in tables {
             let mut targets: Vec<RoutineNodeId> = self
@@ -797,10 +871,11 @@ impl<'a> Builder<'a> {
     }
 
     fn hub_expansions(&mut self) {
+        let nodes = &self.sited.nodes;
         let hubs: BTreeSet<Hub> = self
             .edges
             .keys()
-            .filter_map(|(_, to, _)| match to {
+            .filter_map(|(_, to, _)| match &nodes[*to as usize] {
                 Key::Hub(h) => Some(h.clone()),
                 _ => None,
             })
@@ -817,8 +892,8 @@ impl<'a> Builder<'a> {
         let subscribed: HashSet<RoutineNodeId> = self
             .edges
             .iter()
-            .filter(|((_, _, k), e)| *k == Kind::Event && e.via == "eventFlow")
-            .filter_map(|((from, _, _), _)| match from {
+            .filter(|((_, _, k), e)| *k == Kind::Event && e.via() == "eventFlow")
+            .filter_map(|((from, _, _), _)| match &nodes[*from as usize] {
                 Key::Routine(r) => Some(r.clone()),
                 _ => None,
             })
@@ -932,15 +1007,16 @@ impl<'a> Builder<'a> {
         let mut incoming_any: HashSet<&RoutineNodeId> = HashSet::new();
         let mut incoming_event: HashSet<&RoutineNodeId> = HashSet::new();
         let mut outgoing_event: HashSet<&RoutineNodeId> = HashSet::new();
+        let nodes = &self.sited.nodes;
         for ((from, to, kind), e) in &self.edges {
-            if let Key::Routine(t) = to {
+            if let Key::Routine(t) = &nodes[*to as usize] {
                 incoming_any.insert(t);
                 if *kind == Kind::Event {
                     incoming_event.insert(t);
                 }
             }
-            if let Key::Routine(f) = from
-                && e.via == "eventFlow"
+            if let Key::Routine(f) = &nodes[*from as usize]
+                && e.via() == "eventFlow"
             {
                 outgoing_event.insert(f);
             }
@@ -981,10 +1057,18 @@ impl<'a> Builder<'a> {
     }
 }
 
-/// Build the export's nodes and edges.
-#[must_use]
-pub fn project(inp: &Inputs<'_>) -> Projection {
-    let mut b = Builder::new(inp);
+/// The sited graph a build stopped by its cancellation did not finish.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Cancelled;
+
+/// Every site of the may-execute graph (see [`super::sited`]), and the
+/// unpruned graph's `hiddenCallers`. `cancel` is polled every
+/// [`CANCEL_EVERY`] sites; a `true` stops the build.
+fn build<'a>(
+    inp: &'a Inputs<'a>,
+    cancel: &'a dyn Fn() -> bool,
+) -> Result<(Builder<'a>, HashMap<RoutineNodeId, Vec<&'static str>>), Cancelled> {
+    let mut b = Builder::with_cancel(inp, cancel);
     b.engine_edges();
     b.routine_rules();
     b.universal_callers();
@@ -1007,30 +1091,60 @@ pub fn project(inp: &Inputs<'_>) -> Projection {
     b.hub_expansions();
     // Hub expansion adds object nodes only from the runnable set, already done.
     let hidden = b.hidden_callers();
+    if b.cancelled || cancel() {
+        return Err(Cancelled);
+    }
+    Ok((b, hidden))
+}
+
+/// The program's sited graph (see [`super::sited`]), or [`Cancelled`] when
+/// `cancel` said stop during the build. `friended` holds the apps whose
+/// manifest names an `internalsVisibleTo` friend, loaded or not (their
+/// `internal` routines are callable from outside the program).
+pub fn sited_graph(
+    inp: &Inputs<'_>,
+    friended: &HashSet<AppRef>,
+    cancel: &dyn Fn() -> bool,
+) -> Result<SitedGraph, Cancelled> {
+    let (b, hidden) = build(inp, cancel)?;
+    let hidden: HashMap<u32, Vec<&'static str>> = hidden
+        .into_iter()
+        .filter_map(|(r, f)| b.sited.ix(&Key::Routine(r)).map(|i| (i, f)))
+        .collect();
+    Ok(b.sited.finish(inp, hidden, friended))
+}
+
+/// Build the export's nodes and edges: the sited graph, collapsed
+/// ([`super::sited::collapse`]), pruned.
+#[must_use]
+pub fn project(inp: &Inputs<'_>) -> Projection {
+    let (b, hidden) = build(inp, &|| false).expect("an uncancellable build finishes");
+    let keys = &b.sited.nodes;
+    let collapsed = collapse(&b.sited.sites);
 
     // ── Pruning (spec §4.6) ────────────────────────────────────────────────
-    let mut succ: HashMap<&Key, Vec<&Key>> = HashMap::new();
-    let mut pred: HashMap<&Key, Vec<&Key>> = HashMap::new();
-    for (from, to, _) in b.edges.keys() {
-        succ.entry(from).or_default().push(to);
-        pred.entry(to).or_default().push(from);
+    let mut succ: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut pred: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (from, to, _) in collapsed.keys() {
+        succ.entry(*from).or_default().push(*to);
+        pred.entry(*to).or_default().push(*from);
     }
-    let workspace: Vec<Key> = inp
+    let workspace: Vec<u32> = inp
         .graph
         .routines
         .iter()
         .filter(|r| r.id.object.app == inp.edges.primary_app_ref)
-        .map(|r| Key::Routine(r.id.clone()))
+        .filter_map(|r| b.sited.ix(&Key::Routine(r.id.clone())))
         .collect();
-    let any = Key::Hub(Hub::Any);
-    let any_used = pred.contains_key(&any);
-    let walk = |start: &[Key], next: &HashMap<&Key, Vec<&Key>>| -> HashSet<Key> {
-        let mut seen: HashSet<Key> = start.iter().cloned().collect();
-        let mut queue: VecDeque<Key> = start.iter().cloned().collect();
+    let any = b.sited.ix(&Key::Hub(Hub::Any));
+    let any_used = any.is_some_and(|a| pred.contains_key(&a));
+    let walk = |start: &[u32], next: &HashMap<u32, Vec<u32>>| -> HashSet<u32> {
+        let mut seen: HashSet<u32> = start.iter().copied().collect();
+        let mut queue: VecDeque<u32> = start.iter().copied().collect();
         while let Some(k) = queue.pop_front() {
             for n in next.get(&k).into_iter().flatten() {
-                if seen.insert((*n).clone()) {
-                    queue.push_back((*n).clone());
+                if seen.insert(*n) {
+                    queue.push_back(*n);
                 }
             }
         }
@@ -1038,39 +1152,42 @@ pub fn project(inp: &Inputs<'_>) -> Projection {
     };
     let forward = walk(&workspace, &succ);
     let mut backward = walk(&workspace, &pred);
-    if any_used && !backward.is_empty() {
+    if let Some(a) = any
+        && any_used
+        && !backward.is_empty()
+    {
         // The universal hub is a caller of every node, so of every node here.
-        backward.extend(walk(std::slice::from_ref(&any), &pred));
+        backward.extend(walk(&[a], &pred));
     }
-    let universal_reached = forward.contains(&any);
-    let keep: HashSet<Key> = backward
+    let universal_reached = any.is_some_and(|a| forward.contains(&a));
+    let keep: HashSet<u32> = backward
         .iter()
         .filter(|k| {
             universal_reached
                 || forward.contains(*k)
-                || matches!(k, Key::Routine(r) if hidden.contains_key(r))
+                || matches!(&keys[**k as usize], Key::Routine(r) if hidden.contains_key(r))
         })
-        .cloned()
-        .chain(workspace.iter().cloned())
+        .copied()
+        .chain(workspace.iter().copied())
         .collect();
 
     // ── Rows ───────────────────────────────────────────────────────────────
-    let ids: HashMap<&Key, String> = keep
+    let ids: HashMap<u32, String> = keep
         .iter()
-        .map(|k| (k, super::key_id(k, inp.graph)))
+        .map(|k| (*k, super::key_id(&keys[*k as usize], inp.graph)))
         .collect();
     let mut nodes: Vec<Node> = keep
         .iter()
-        .map(|k| super::render_node(k, &ids[k], inp, &hidden))
+        .map(|k| super::render_node(&keys[*k as usize], &ids[k], inp, &hidden))
         .collect();
     nodes.sort_by(|a, c| a.id.cmp(&c.id));
     let mut edges: Vec<Edge> = Vec::new();
     let mut universal_callers = 0usize;
-    for ((from, to, kind), e) in &b.edges {
+    for ((from, to, kind), e) in &collapsed {
         let (Some(f), Some(t)) = (ids.get(from), ids.get(to)) else {
             continue;
         };
-        if *to == any {
+        if Some(*to) == any {
             universal_callers += 1;
         }
         edges.push(Edge {
@@ -1078,9 +1195,9 @@ pub fn project(inp: &Inputs<'_>) -> Projection {
             callee: t.clone(),
             kind: kind.as_str(),
             confidence: e.conf.as_str(),
-            via: e.via,
+            via: e.via(),
             line: e.line,
-            conditions: e.conditions.iter().copied().collect(),
+            conditions: condition_names(e.conditions).collect(),
         });
     }
     edges.sort_by(|a, c| {
@@ -1090,7 +1207,10 @@ pub fn project(inp: &Inputs<'_>) -> Projection {
             c.kind,
         ))
     });
-    let hubs = keep.iter().filter(|k| matches!(k, Key::Hub(_))).count();
+    let hubs = keep
+        .iter()
+        .filter(|k| matches!(keys[**k as usize], Key::Hub(_)))
+        .count();
     Projection {
         nodes,
         edges,
@@ -1100,7 +1220,7 @@ pub fn project(inp: &Inputs<'_>) -> Projection {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     //! The projection contract over hand-built graphs: every precondition is
     //! stated here, none is produced by the resolver.
 
@@ -1118,19 +1238,32 @@ mod tests {
     use crate::program::topology::DependencyGraph;
     use crate::snapshot::AppId;
 
+    /// A hand-built program (also the reverse walker's test world).
     #[derive(Default)]
-    struct World {
-        apps: AppRegistry,
-        deps: Vec<(AppRef, AppRef)>,
-        objects: Vec<ObjectNode>,
-        routines: Vec<RoutineNode>,
-        edges: Vec<ClassifiedEdge>,
+    pub(crate) struct World {
+        pub(crate) apps: AppRegistry,
+        pub(crate) deps: Vec<(AppRef, AppRef)>,
+        pub(crate) objects: Vec<ObjectNode>,
+        pub(crate) routines: Vec<RoutineNode>,
+        pub(crate) edges: Vec<ClassifiedEdge>,
         /// The second edge set (`EdgeView::dependency_body_edges`): `project`
         /// reads it after `edges`.
-        dependency_body_edges: Vec<ClassifiedEdge>,
-        site_facts: HashMap<ObligationId, SiteFacts>,
-        facts: SourceFacts,
-        missing: Vec<ObligationId>,
+        pub(crate) dependency_body_edges: Vec<ClassifiedEdge>,
+        pub(crate) site_facts: HashMap<ObligationId, SiteFacts>,
+        pub(crate) facts: SourceFacts,
+        pub(crate) missing: Vec<ObligationId>,
+    }
+
+    /// The sited graph of `w` with `primary` as the workspace app.
+    pub(crate) fn sited_of(w: &World, primary: AppRef, friended: &[AppRef]) -> SitedGraph {
+        let friended: HashSet<AppRef> = friended.iter().copied().collect();
+        w.with_inputs(primary, |inp| {
+            sited_graph(inp, &friended, &|| false).expect("not cancelled")
+        })
+    }
+
+    pub(crate) fn unknown_route() -> Route {
+        unknown()
     }
 
     fn src(rid: &RoutineNodeId) -> Route {
@@ -1166,7 +1299,7 @@ mod tests {
     }
 
     impl World {
-        fn app(&mut self, name: &str) -> AppRef {
+        pub(crate) fn app(&mut self, name: &str) -> AppRef {
             self.apps.intern(&AppId {
                 guid: format!("{name}-guid"),
                 name: name.into(),
@@ -1204,7 +1337,7 @@ mod tests {
             oid
         }
 
-        fn obj(
+        pub(crate) fn obj(
             &mut self,
             app: AppRef,
             kind: ObjectKind,
@@ -1220,14 +1353,14 @@ mod tests {
             self.push_obj(oid, name, tier)
         }
 
-        fn object_mut(&mut self, oid: &ObjectNodeId) -> &mut ObjectNode {
+        pub(crate) fn object_mut(&mut self, oid: &ObjectNodeId) -> &mut ObjectNode {
             self.objects
                 .iter_mut()
                 .find(|o| o.id == *oid)
                 .expect("object")
         }
 
-        fn rtn_with(
+        pub(crate) fn rtn_with(
             &mut self,
             o: &ObjectNodeId,
             name: &str,
@@ -1273,15 +1406,15 @@ mod tests {
             id
         }
 
-        fn rtn(&mut self, o: &ObjectNodeId, name: &str) -> RoutineNodeId {
+        pub(crate) fn rtn(&mut self, o: &ObjectNodeId, name: &str) -> RoutineNodeId {
             self.rtn_with(o, name, |_| {})
         }
 
-        fn trigger(&mut self, o: &ObjectNodeId, name: &str) -> RoutineNodeId {
+        pub(crate) fn trigger(&mut self, o: &ObjectNodeId, name: &str) -> RoutineNodeId {
             self.rtn_with(o, name, |r| r.is_trigger = true)
         }
 
-        fn edge(
+        pub(crate) fn edge(
             &mut self,
             from: &RoutineNodeId,
             kind: EdgeKind,
@@ -1322,7 +1455,7 @@ mod tests {
             ob
         }
 
-        fn call(&mut self, from: &RoutineNodeId, to: &RoutineNodeId, line: u32) {
+        pub(crate) fn call(&mut self, from: &RoutineNodeId, to: &RoutineNodeId, line: u32) {
             self.edge(
                 from,
                 EdgeKind::Call,
@@ -1332,7 +1465,7 @@ mod tests {
             );
         }
 
-        fn event(&mut self, publisher: &RoutineNodeId, subscribers: &[&RoutineNodeId]) {
+        pub(crate) fn event(&mut self, publisher: &RoutineNodeId, subscribers: &[&RoutineNodeId]) {
             self.edges.push(ClassifiedEdge {
                 obligation_id: ObligationId::Publisher(publisher.clone()),
                 edge: EngineEdge {
@@ -1362,7 +1495,11 @@ mod tests {
         }
 
         /// The projection's `Inputs` over this world, handed to `f`.
-        fn with_inputs<R>(&self, primary: AppRef, f: impl FnOnce(&Inputs<'_>) -> R) -> R {
+        pub(crate) fn with_inputs<R>(
+            &self,
+            primary: AppRef,
+            f: impl FnOnce(&Inputs<'_>) -> R,
+        ) -> R {
             let mut objects = self.objects.clone();
             objects.sort_by(|a, b| a.id.cmp(&b.id));
             let mut routines = self.routines.clone();
@@ -1644,6 +1781,7 @@ mod tests {
                 test: true,
                 handlers: vec!["modalhandler".into()],
                 runs: vec![RunTarget::Object(page.clone())],
+                ..Default::default()
             },
         );
         let o = w.project(a);
@@ -2005,7 +2143,7 @@ mod tests {
         let to = Key::Hub(Hub::Any);
         let via = w.with_inputs(a, |inp| {
             let mut b = Builder::new(inp);
-            for via in ["first", "second"] {
+            for via in ["unresolved", "dynamic"] {
                 b.add(
                     from.clone(),
                     to.clone(),
@@ -2016,9 +2154,79 @@ mod tests {
                     BTreeSet::new(),
                 );
             }
-            b.edges[&(from.clone(), to.clone(), Kind::Direct)].via
+            b.edge(&from, &to, Kind::Direct).expect("the edge").via()
         });
-        assert_eq!(via, "first");
+        assert_eq!(via, "unresolved");
+    }
+
+    /// M0-T2 and M0-T1's merge rule (agent-tasks design §1.3): two calls from
+    /// X to Y keep two sites with their own ids and anchors in the sited
+    /// graph, and the export collapses them to one edge whose line is the
+    /// MINIMUM. The call at line 9 is added first, so a collapse keeping the
+    /// first site's line fails here.
+    #[test]
+    fn sited_graph_keeps_each_site_and_the_export_collapses_them() {
+        let mut w = World::default();
+        let a = w.app("A");
+        let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
+        let x = w.rtn(&cu, "X");
+        let y = w.rtn(&cu, "Y");
+        w.call(&x, &y, 9);
+        w.call(&x, &y, 3);
+        let o = w.project(a);
+        let es = o.edges("Cu.X", "Cu.Y");
+        assert_eq!(es.len(), 1);
+        assert_eq!(es[0].line, Some(4), "the minimum line over both sites");
+        let g = w.with_inputs(a, |inp| {
+            sited_graph(inp, &HashSet::new(), &|| false).expect("not cancelled")
+        });
+        let (fx, fy) = (
+            g.routine_node(&x).expect("X"),
+            g.routine_node(&y).expect("Y"),
+        );
+        let ids = g.sites_between(fx, fy);
+        assert_eq!(ids.len(), 2, "one site per call");
+        let (s0, s1) = (&g.sites()[ids[0] as usize], &g.sites()[ids[1] as usize]);
+        assert_ne!(s0.anchor, s1.anchor);
+        assert_eq!((s0.line(), s1.line()), (Some(10), Some(4)));
+        assert_eq!((s0.boundary, s0.via()), (Boundary::Sync, "call"));
+        // The collapse of the sited graph is the export's edge.
+        let c = collapse(g.sites());
+        assert_eq!(c[&(fx, fy, Kind::Direct)].line, Some(4));
+        assert_eq!(g.node_id(fx), o.node("Cu.X").id);
+    }
+
+    /// M0-T8's builder half: the build polls its cancellation every
+    /// [`CANCEL_EVERY`] sites, not only at the end. The flag says stop from
+    /// its second poll: polled in the loop, the build stops at site 8192 and
+    /// yields no graph (two polls); polled only at the end, its one poll says
+    /// go and the graph is returned.
+    #[test]
+    fn a_cancelled_sited_build_yields_no_graph() {
+        let mut w = World::default();
+        let a = w.app("A");
+        let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
+        let x = w.rtn(&cu, "X");
+        let ys: Vec<RoutineNodeId> = (0..2 * CANCEL_EVERY as usize + 10)
+            .map(|i| w.rtn(&cu, &format!("Y{i}")))
+            .collect();
+        for (i, y) in ys.iter().enumerate() {
+            w.call(&x, y, i as u32);
+        }
+        let polls = std::cell::Cell::new(0u32);
+        let out = w.with_inputs(a, |inp| {
+            sited_graph(inp, &HashSet::new(), &|| {
+                polls.set(polls.get() + 1);
+                polls.get() >= 2
+            })
+            .map(|g| g.site_count())
+        });
+        assert_eq!(out, Err(Cancelled));
+        assert_eq!(polls.get(), 2, "stopped at the second check, in the loop");
+        let full = w.with_inputs(a, |inp| {
+            sited_graph(inp, &HashSet::new(), &|| false).map(|g| g.site_count())
+        });
+        assert!(full.is_ok_and(|n| n > CANCEL_EVERY as usize));
     }
 
     /// #160 spec §4.3.2 / §8.3: a tie ACROSS the two edge sets keeps the via of

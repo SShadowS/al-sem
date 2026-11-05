@@ -45,10 +45,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (1,250,000 / 720,000), RunReportID 1,198,204 / 692,325. The CDO rendering goldens are
   regenerated. The output checks read the new shapes: a folded `and N more …` / `also [TYPE]: …`
   line's anchors are checked item by item, and an entry-point count may be "at least".
-- **`alsem_status` says what it does not check.** The answer starts with `diskChecked: false`, a
-  `freshnessNote` (a revision names the inputs it was built from, not whether they still match
-  the disk) and `next` (with the default freshness `fresh`: nothing, the next command checks the
-  files itself; else call a command with `fresh`/`verify` or `alsem_refresh`).
 
 ### Fixed (commit sites dropped up the call chain)
 
@@ -94,6 +90,281 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   depth bound (64 calls) with a commit possibly beyond it records a `sites-partial` entry
   diagnostic; explain and digest then print "at least N sites … at least M commit-bearing entry
   points", and `summary.commits.atLeast` is `true`.
+
+### Added (agent tasks, milestone R0: the reverse cone)
+
+The shared up-walker ("who reaches this routine") that test selection, "what context does R run
+in" and impact build on. A library API and a measurement probe; the agent-facing tools come with
+milestones C, A and B1. Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §3.
+
+- **`program::impact_graph::reverse`**: `walk_one` (one root, streaming, its scratch reused across
+  roots) and `walk_multi` (all roots in one breadth-first walk, each state labelled with its
+  nearest root). The walk keeps the shortest hop count per **state** `(node, tier, crossedEvent,
+  ext)`, not per node, so a node reached locally and, shorter, through dependency code keeps both.
+  Tiers: `Local` (every node in the workspace or an app loaded from local source),
+  `ThroughDependency`, `OnlyOpen` (the path uses a hub). The universal hub `h:any` is walked once,
+  one hop from the roots, as `OnlyOpen`, and reported once as a hidden channel; its callers are
+  never dropped. `hiddenCallers` flags are reported per node. A state budget (2,000,000) and the
+  cancellation are reported as limits. The visitor (`ConeVisitor`) gets each state once with the
+  site and state it came from; `ConeVisitor::step` is the hook where a consumer sets its own state
+  bits per site and refines a `Run` or `TriggerOf` site by its anchor (checked or unchecked
+  `Codeunit.Run`, background starts, a trigger's temporary state: body facts the sited graph does
+  not carry). The walk keeps no path and nothing per root.
+- **Entry kinds from source**, not from the graph having no caller: the model's root classifier
+  is now one shape-based function (`root_classification::root_kind_mask`) that the model and the
+  sited graph's source facts both call, so they classify alike (a test checks the fixture's every
+  routine). A page action reached by a lifecycle edge is still a `page-action` entry; a page whose
+  action's `RunObject` runs the cone is one too. Graph sources are reported apart. The
+  roots.config kinds come from a model (`reverse::config_entries`) or not at all (graph-only).
+- **External callers**: a workspace (or local-source) procedure that apps outside the program may
+  call: `public` (public access, object not internal), `protected`, or `friend` (internal, and the
+  app's manifest names an `internalsVisibleTo` friend, loaded or not). `assumeNoDependents` is its
+  own walk option.
+- **The sited graph's node table** now holds each source routine's StableRoutineId (interned;
+  `SitedGraph::nodes_with_stable_id` is the test universe's lookup of a production routine), its
+  root kinds, flag bits and a reverse index. On CDO cross-app the graph is 57.0 MB by its own
+  estimate (`bytes()`), up from about 48 MB.
+- `aldump --reverse-cone <ws> (--routine <Object::Routine|stableId>)... [--roots-file F] [--multi]
+  [--no-dependents]` measures walks. Measured 2026-11-05 (release-fast):
+  - **Test universe** (the design's scratch `TestApp`, CDO as a source dependency): RunReportID
+    is reached by 68 tests in 7 codeunits by a local path at 3-7 hops, 369 tests without hubs and
+    622 with them; IssueReminder by 0 locally, nearest `CDO Setup Tests` at 6 hops through Base
+    Application; UpdateLastUpload by the 3 `CDO Telemetry Tests` tests at 1 hop (the pruned export
+    has no such routine). These equal the design's walks over the export, except one hidden node
+    more in RunReportID's resolved cone (48, not 47): `Check Dimensions::OnErrorMessageDrillDown`,
+    whose every out-edge the export prunes.
+  - **CDO cross-app**: 134,385 nodes, 318,084 sites. RunReportID's cone 27,957 nodes, 98,504
+    states, 68 ms with the probe's summarizing visitor. The 699 roots of the 94-file range as one
+    `walk_multi`: 100,090 states, 25 ms bare (48 ms with the visitor), 1.6 MB of scratch, no RSS
+    change. The same roots as 699 `walk_one` calls with one scratch: 33 s in all, most of it the
+    probe's per-root summaries; the scratch stays 1.6 MB.
+
+### Added (agent tasks, milestone F: freshness)
+
+Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §2.
+
+- **Source dependencies are stat-cached inputs** (`engine::resident::manifest`). The input
+  manifest records each configured source folder (`al-sem.dependencies.json`) as its own entries:
+  its `app.json` (`srcapp:`), its `.al` listing (`srcwalk:`) and every `.al` file with its stat
+  (`src:<spelled>\0<rel>`), through the same walk and checks the read makes
+  (`program::source_deps::walk`, which `read` now uses too). A stat-cached freshness check now
+  reads and hashes only the dependency files whose length or modification time moved; before, it
+  read and hashed every file of every source dependency on every check. A workspace without
+  source dependencies has the same entries and the same stamp as before.
+- **Input categories** (`Manifest::changes`): every input that differs between two manifests, with
+  its category (`al-file`, `al-walk`, `app-json`, `app-json-paths`, `roots-config`,
+  `coverage-config`, `source-dependency`, `package`, `package-list`, `unreadable-package-folder`,
+  `meta`), its path when it is one file, and what changed when the path does not say it (a file
+  on one side only is `added` or `removed`). `Manifest::hashed` lists the files an observation
+  actually read. The spec's `injected-source` / `injected-packages` categories wait for the test
+  universes (milestone C), which are the only builds with injected inputs.
+
+### Changed (agent tasks, milestone F)
+
+- **`alsem_status` checks the disk** (`statusVersion: 2`, `mcp::freshness`). Before, it returned the
+  workers' snapshots and never looked at a file, so `revision` and `lastBuild` read as "current"
+  when nothing was checked. Now each engine's row has a `check`: the disk compared with the input
+  descriptor its worker published for the revision (stat-cached, or every input hashed with the new
+  `verify: true` argument), bound to `checkedRevision` (`generation`, `inputsStamp`) with start and
+  end times, `complete`/`incompleteReasons` (a check past its deadline, 5 s cached and 30 s verify,
+  or one that meets an unreadable input is never `fresh`), `fresh`, the `changes` by category with
+  their paths, `filesHashed`, and the `refreshClass` from the session's own classes (`Package` for
+  a package, the root `app.json` or a source dependency; `Declaration` for a `.al` file added,
+  removed or renamed; `BodyOnly` for `roots.config.json`, the coverage config or a nested
+  `app.json` alone; `BodyOnly|Declaration`, not certain, for `.al` edits). A `headline` per engine
+  and one for the whole answer say FRESH, STALE (what changed, the class, the next action), not
+  checked (no engine for the workspace: `noEngine`, `check: null`), or that the check did not
+  finish. The check runs on a checker thread in the MCP process: the reader loop keeps answering,
+  and a busy engine child, worker or build never delays it, since it never goes through the
+  engine's front end; it builds nothing and leaves the child's session alone. The old per-engine
+  fields move under `details`. `refresh` gives the last `alsem_refresh`'s state (`idle`, `queued`,
+  `running`, `completed`, `failed`) with what it did, its class and generation; an unwaited refresh
+  is `queued` until a later call shows its outcome.
+- **Measured on a copy of the CDO baseline** (cross-app, 582 `.al` files, 11 packages,
+  `release-fast`, 2026-11-05; the machine was shared, load average 187-215, so these are upper
+  bounds). Idle: a cached check took 2.6-4.7 ms, and the status answer arrived 4.0-6.5 ms after the
+  call (10 runs; the spec's bar is 10 ms). A `verify` check hashed 594 files in 38-40 ms (answer
+  40-42 ms). While a heavy `alsem_explain` ran on the same engine: 3.2-4.2 ms cached, 36 ms verify,
+  and a `ping` sent during the check answered in 0.05-0.16 ms. After a body edit: STALE, 1 file
+  hashed, category `al-file`, class `BodyOnly|Declaration`. With one source dependency of 579
+  `.al` files: a cached check took 10-46 ms (it stats 1,173 files) and hashed 0 of them; the edit
+  of one dependency file hashed exactly that file and was reported as `source-dependency` with its
+  path and class `Package`; `verify` hashed 1,173 files in 190-330 ms. Before this milestone every
+  cached check read and hashed all 579 dependency files.
+- **`alsem_refresh` says what it did**: `did` is `rebuilt` (with `class`, `files`, `durationMs`,
+  `generation`), `already-fresh`, or `queued` (`wait: false`). The child's `session/refresh`
+  answer carries `built`, `class` and `changedFiles`.
+- `changedPaths` (a `latest-built` answer's stale inputs) now also names a changed source
+  dependency file and `al-sem.dependencies.json`; before, a source-dependency change gave no path
+  at all. It is computed from `Manifest::changes`.
+
+### Fixed (agent tasks, milestone F)
+
+- **The `freshness: verify` description** said "answer from the built revision and report whether
+  it is stale", but `verify` hashes every input and rebuilds first when anything changed. It now
+  says so: "verify: like fresh, but hashes every input instead of trusting size and modification
+  time; rebuilds first when anything changed." `fresh`'s text now says it trusts an unchanged size
+  and modification time. A contract test pins the text and the behavior (a same-size,
+  same-mtime rewrite: `fresh` keeps generation 1, `verify` rebuilds to generation 2).
+
+### Added (agent tasks, milestone M0: resident groundwork)
+
+Nothing an agent sees changes yet; these are the pieces the later milestones (the reverse cone,
+test selection, adding an effect, impact) build on. Spec:
+`docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §1.
+
+- **The sited graph** (`program::impact_graph::sited`). The may-execute graph behind `alsem graph`,
+  with one edge per site instead of one per `(caller, callee, kind)`: each site keeps its own id
+  (its index), its source anchor (unit and span), its kind, confidence, `via`, conditions and an
+  execution boundary (`Sync`, `Run`, `EventDispatch`, `TriggerOf{op}`, `Lifecycle`,
+  `TestHandler`, `TestRunner`, `Open`). Nodes, sites and units are interned to `u32`. `alsem
+  graph`'s edges are now computed by collapsing the sited graph with the old merge rule, folded in
+  site order (strongest confidence wins, equal confidences keep the first `via` and union their
+  conditions, the line is the minimum), so the export is byte-identical. The finer boundaries the
+  spec names (checked against unchecked `Codeunit.Run`, background sessions and tasks, a
+  trigger's temporary state) are body facts the program edges do not carry; R0 and A refine a
+  `Run` or `TriggerOf` site by its anchor. Measured on CDO cross-app: 134,385 nodes, 318,084 sites,
+  48 MB resident.
+- **The sited graph as a revision artifact** (`ArtifactKey::Sited`). It can only be built where the
+  program exists, so it is built inside the revision's build (the workspace session lends the
+  program between its build and the model's, `refresh_lending`; single-app through
+  `build_single_app_model_lending`) and seeded into the store before the revision publishes; it is
+  never filled afterwards and never evicted. Under `--low-mem` its source facts parse the
+  dependency trees again, as the model assembly does. **Built only when a question needs it**
+  (owner decision, agent-tasks §13.3 answer 1): on CDO cross-app its build costs 0.93-1.19 s per
+  body or declaration edit (CPU time equal to wall time: one thread), 0.84 s cold, and 45 MiB
+  resident (`aldump --session-refresh --sited`, 2026-11-05), over the 300 ms bar. Under
+  `--low-mem` it costs 2.1-2.4 s wall (about 26 s of CPU) per B or S edit, because its source facts
+  parse the 10,881 dependency files again. `alsem graph` on CDO is byte-identical before and after
+  (27.4 MB). `ResidentSession::pin_sited` pins as usual; when the revision has no graph it turns
+  the graph on for every later revision and rebuilds once for this request
+  (`Pinned::rebuilt_for: "sited"`). `alsem engine-host --graph` turns it on from the start. The
+  request's cancellation stops that graph's build (polled every 4,096 sites): the revision is then
+  published without it, and the next question builds it. `session/status` counts `sitedBuilds`,
+  `lastSitedMs`, `lastSitedBytes`.
+- **Graph-only sessions** (`ResidentSession::graph_only`, engine universe `graphOnly`): each build
+  makes the cross-app program and its sited graph and no model (no L4, fold or trees), and
+  publishes a `Built::Graph` revision. The workspace session still keeps what its next refresh
+  reuses. It answers only jobs that read the sited graph (`ViewNeeds::sited`, `Job::sited`; the
+  one-shot driver builds the graph off its lent program, so a resident answer equals the CLI's);
+  any other command is refused with `this engine is graph-only (…): '<command>' needs a model`. A
+  model revision built with its sited graph answers sited jobs too. The test universe and the
+  impact base child will be of this kind.
+- **Guard enrichment from pinned inputs** (`engine::resident::guards`, `Revision::site_guards`,
+  `GraphRevision::site_guards`): the enclosing `if`/`else`/`case`/loop conditions of one site of
+  the sited graph, outermost first, with their source text. The site's file is read from the
+  revision's own read (a workspace file's pinned text, a source-folder dependency's, or a
+  package's embedded source when the package's bytes are still the ones the read acquired), parsed
+  again and walked down to the site's anchor, so the text is the revision's even after the disk
+  moved. Nothing is kept per site; it works the same under `--low-mem`.
+- **Needs-aware resident rows** (`ResidentSession::with_needs`, `pin_needs`). A published state
+  records the assembly needs its model's rows were built with. A request that needs more pins with
+  `pin_needs`: the session widens its needs and rebuilds once (`rebuilt_for: "needs"`, class
+  `needs`, `session/status` `needsRebuilds`); the row cache misses every file whose recorded needs
+  differ, so the rows are projected again; a rebuild the budget refuses is a `budget` refusal with
+  its reason. No command needs more than the default (`ViewNeeds::EXPLAIN`) today; this makes the
+  next gated need safe.
+- **Admission for the sited graph.** A build that makes the sited graph reserves its estimate
+  (`Case::Fill("sited")`, 120 MiB: 46 MiB measured resident on CDO plus its build's working set,
+  not measured apart) on top of the build's own.
+- **The input descriptor** (`session/descriptor`, `ResidentSession::descriptor`,
+  `Pool::descriptor`): a published state's generation, inputs stamp, universe and manifest, every
+  file entry with the stat its hash was taken at (`Manifest::descriptor_entries` /
+  `from_descriptor_entries` round-trip it). After each call the pool's worker asks its child for
+  it once per revision and keeps it in its snapshot, so a later freshness check can observe the
+  disk against it without asking a busy engine.
+- **Composite requests** (`Pool::run_composite`): a request that needs several engine children
+  runs as a sequence of plain sub-requests, each part's outcome in order. A part is admitted only
+  after the previous one is answered (its child released), and admission never waits: a part
+  that cannot get a child says why (`the crossApp engine could not start: 2 engine children are
+  running (--max-children) and none is idle (max-children 2)`) and the rest still run. The
+  pool's own `busy` message gains the `(max-children N)` suffix.
+- `aldump --session-refresh --sited` builds and keeps the sited graph at every step and prints its
+  wall and CPU time, nodes, sites and bytes.
+
+### Fixed (test infrastructure: a clock-dependent package fixture)
+
+- **`an_in_place_overwrite_and_restore_during_consumption_is_refused` no longer fails on a
+  slow machine.** The test fixture `write_minimal_app` (`src/snapshot/snapshot.rs`) built its
+  `.app` with the `zip` crate's default entry time, which is the wall clock in 2-second steps.
+  So "restore A" wrote bytes that differed from the first A whenever the two writes fell on
+  different 2-second ticks: same length, another blake3. The test's precondition "the disk
+  reads A both times" then failed. It happened once at a load average of 100–900, where the
+  test's few milliseconds can stretch past a tick. Forcing the clock across a tick between
+  the writes failed it every time; with the fix it passes. The fixture now stamps every entry
+  with a fixed time, so its bytes depend on its arguments alone. Not a product bug: the
+  consistency check compares content hashes only, never times, and still refuses the
+  overwrite-and-restore.
+
+### Fixed (test infrastructure: golden regeneration raced its readers)
+
+- **A golden regen no longer rewrites committed files in place.** Under `scripts/check-goldens
+  --regen`, cargo-nextest runs every test in its own process at once, and
+  `output_fixture::fixture_app_matches_its_sources` rewrote
+  `tests/fixtures/mcp-output/ws/.alpackages/probe_Out Base_1.0.0.0.app` with a truncate-then-fill
+  write while other tests read it. One regen run loaded the dependency as symbol-only and wrote a
+  wrong `tests/cli-output-goldens/explain.issuedoc.json`; the same race once failed
+  `output_invariants::a_commit_beyond_an_entry_point_has_its_own_terminal_witness`. Every write
+  into the tree during a test run (about 55 golden, fixture and record writers, including the
+  `r3a*` goldens their `*_oracles` read and the `emit.policy-pins.yaml` golden `cli_policy_pins`
+  uses as a policy) now goes through one helper, `tests/common/regen.rs::write_golden`: it writes
+  nothing when the file already holds the bytes, and otherwise writes a temp file in the same
+  directory and renames it over the target, so a reader sees the old file or the new one, never a
+  part. The two shard regens (`cli_b_snapshot`, `cli_b_fingerprint`) no longer delete their
+  directory before rewriting it; they drop stale files afterwards (`regen::remove_stale`). The
+  dependency `.app` builder gained `symbol_app::source_app_bytes`, so the fixture test builds
+  bytes instead of writing a file. A new `cli` member, `regen_atomic_writes`, pins the helper (a
+  reader thread never sees a partial file while a writer swaps it 200 times; equal bytes keep the
+  file's modification time) and the use: it scans every test source and fails when a function
+  that consults the regen switch writes any other way, directly or through a same-file helper.
+
+### Fixed (MCP output, step 1b: correctness and wording of agent answers)
+
+- **`query touches` turned an index miss into a whole-cone "no".** `down` printed `no — this
+  routine's cone does not touch the table` whenever the per-operation index (one routine into
+  dependency code) held no operation on the table, and then warned on the next line that
+  operations on a RecordRef may be that table. On CDO, IssueReminder vs `Data Exch.` said `no`
+  beside 69 RecordRef operations, a cone that enters Base Application and calls not resolved. Now
+  the answer is `no` only when nothing leaves room for an unseen touch (no operation on a table
+  not resolved, no dependency code entered, every call resolved, the cone read and complete);
+  otherwise `unknown — no indexed touch observed`, with each reason on its own line. JSON:
+  `down.absence {answer: no | unknown | beyond, index, reasons[]}` (query schema 3.2.0,
+  additive). The workspace-global list states the depth it stands on (`index` in JSON).
+- **`query touches` called a hub's callers "not a finding".** RunReportID vs `CDO File` said `883
+  transitive callers … not a finding`. Those callers inherit the touch and are its consumers: the
+  line now says `883 transitive callers inherit this touch through this routine`, and the new
+  `--callers` (MCP `callers: true`) names every caller with its depth and location without
+  building `--all`'s caller × witness product (JSON `up.callers[]` with each caller's outcome).
+- **`query effects` showed routes the root's literal arguments rule out, unmarked.** IssueReminder
+  listed `CDO Queue Entry` through `DocHandle`, while explain shows that route cannot run with
+  IssueReminder's literal arguments and the only live one re-enters from Base Application. Rows
+  are still all kept and `via` is unchanged (ConTinAI reads them); each row the cone can judge now
+  carries `literalRoute` (`ruledOut`: an effect it originates from is literal-dead; `notInCone`:
+  the cone keeps no live write of that kind on that table; `otherRoute`: the cone keeps no live
+  route through the row's first hop, and names the first hop its live route takes; `coneRoute`),
+  and the human table line says so on the row it qualifies, with how many of the table's rows
+  are ruled out. `summary.literalRoutes` counts them (query schema 3.2.0, additive).
+- **An overloaded routine could not be selected.** `prove <ws> "CDO File::CreateDocumentFromReport"
+  …` answered `routine-ambiguous … names 4 routines (Table CDO File::CreateDocumentFromReport, x4)`
+  and told the agent to pass a stable id it never printed. Each candidate is now printed as the
+  selector that picks it, with its location and stable id (`Table CDO
+  File::CreateDocumentFromReport(Integer, Integer, Code[20], Text, Text, var RecordRef) at
+  ws:src/Foundation/CDOFile.Table.al:132 (stable id …)`; JSON `candidateRoutines`), and the one
+  selector grammar of explain, prove, digest and query takes a parameter list:
+  `Owner::Routine(Integer, Text)`, by types (a length, `var` and AL quotes optional, or the type
+  word alone) or by parameter names (`name: type` too). The tool descriptions and the server
+  instructions say so.
+- **"tests: none reach it" read the same with and without test code.** CDO holds no `[Test]`
+  procedure, yet every explain said `tests: none reach it`, as if the routine were untested in a
+  tested app. Explain now says `tests: no test code loaded (0 [Test] procedures in the workspace
+  app); that is not a reason to skip tests` or `tests: N [Test] procedures loaded; none reaches it
+  (not a reason to skip tests)`; the summary says `tests: none (no test code loaded)` or `tests:
+  none of N loaded`, and JSON `summary.testsLoaded` gives N. Digest's `--tests` line says the same
+  (`test coverage: no test code loaded …`, or `… loaded and considered; an unreached routine is
+  not a reason to skip tests`).
+- **Touch counts read as if the operation persisted.** `[CalcFields] read` rows were listed under
+  "possibly persistent". The classes are the record's temp state, so they now read `on persistent
+  records`, `on possibly persistent records` and `on temporary records`.
 
 ### Fixed (MCP output, the final hands-on CDO review)
 
