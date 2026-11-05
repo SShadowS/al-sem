@@ -226,13 +226,14 @@ mod tests {
         v.iter().filter(|b| **b & 1 == 1).count()
     }
 
-    /// Allocate `l` through `a`, write every byte, and return it with its
-    /// interior (the pages a release would discard).
+    /// Allocate `l` through `a`, write every usable byte (mimalloc rounds the
+    /// size up to its size class, and the interior a release discards runs to
+    /// the usable end), and return it with that interior.
     unsafe fn touched(a: &ReleasingMiMalloc, l: Layout) -> (*mut u8, usize, usize) {
         let p = unsafe { a.alloc(l) };
         assert!(!p.is_null());
-        unsafe { std::ptr::write_bytes(p, 0xA5, l.size()) };
         let usable = unsafe { libmimalloc_sys::mi_usable_size(p.cast()) };
+        unsafe { std::ptr::write_bytes(p, 0xA5, usable) };
         let (start, len) = interior(p as usize, usable).expect("a large block has an interior");
         (p, start, len)
     }
@@ -243,8 +244,22 @@ mod tests {
     /// on a `realloc` that moves it, the contents moving with the block. A
     /// block allocated again afterwards is usable, and `alloc_zeroed` still
     /// gives zeros. One test: the switch is process-wide.
+    ///
+    /// Transparent huge pages are off for the test (`PR_SET_THP_DISABLE`).
+    /// With them on, residency is the kernel's to decide, not the release's:
+    /// a 2 MiB range can be (re)mapped as one huge page, which `mincore`
+    /// reports wholly resident, and `khugepaged` collapses released ranges
+    /// back (the module doc). On CI (Ubuntu 26.04, kernel 7.0 azure) the old
+    /// block of the moving `realloc` read as all 79 pages resident after its
+    /// release, 16 of them never written since the first huge-page fault.
+    /// With 4 KiB pages only, a page is resident exactly when it was written
+    /// and not discarded since, on any kernel.
     #[test]
     fn freed_large_blocks_are_released_only_when_on() {
+        // SAFETY: a plain prctl on this process; it only changes how the
+        // kernel backs anonymous memory.
+        let thp_off = unsafe { libc::prctl(libc::PR_SET_THP_DISABLE, 1, 0, 0, 0) };
+        assert_eq!(thp_off, 0, "PR_SET_THP_DISABLE");
         let a = ReleasingMiMalloc;
         let l = Layout::from_size_align(256 * 1024, 16).unwrap();
         unsafe {
@@ -264,13 +279,21 @@ mod tests {
 
             set_release_on_free(RELEASE_MIN);
             let (p, start, len) = touched(&a, l);
+            assert_eq!(resident(start, len), len / 4096, "precondition: touched");
+            let before = released();
             a.dealloc(p, l);
             assert_eq!(resident(start, len), 0, "on: dealloc releases the interior");
-            assert!(released().0 > before.0);
+            assert_eq!(
+                released(),
+                (before.0 + 1, before.1 + len as u64),
+                "on: dealloc counts one release of the interior"
+            );
 
             // A realloc that moves the block: the contents move, the old
             // block's interior is released.
             let (q, start, len) = touched(&a, l);
+            assert_eq!(resident(start, len), len / 4096, "precondition: touched");
+            let before = released();
             let big = 1024 * 1024;
             let r = a.realloc(q, l, big);
             assert_ne!(r, q, "precondition: the block moved");
@@ -279,6 +302,11 @@ mod tests {
                 resident(start, len),
                 0,
                 "on: a moving realloc releases the old block"
+            );
+            assert_eq!(
+                released(),
+                (before.0 + 1, before.1 + len as u64),
+                "on: the moving realloc counts one release of the old interior"
             );
             a.dealloc(r, Layout::from_size_align(big, 16).unwrap());
 
@@ -289,6 +317,9 @@ mod tests {
             a.dealloc(z, l);
             set_release_on_free(0);
             a.dealloc(keep, l);
+            // SAFETY: as above; under `cargo test` the lib tests share this
+            // process, so huge pages go back on for the rest.
+            libc::prctl(libc::PR_SET_THP_DISABLE, 0, 0, 0, 0);
         }
     }
 }
