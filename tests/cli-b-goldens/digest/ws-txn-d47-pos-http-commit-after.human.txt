@@ -1,5 +1,8 @@
 --- Codeunit D47 Sender::SendThenCommit ---
-  summary: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none; commits: yes (1 site); events: 0 (0 raised in workspace code); HTTP at 1 place; errors at 1 place; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
+    transaction, UI and errors: commits: yes (1 site); errors at 1 place
+    other effects: events: 0 (0 raised in workspace code); HTTP at 1 place
+    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none

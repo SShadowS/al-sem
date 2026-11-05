@@ -1,5 +1,8 @@
 --- Codeunit D1 Multi Caller::CallerB ---
-  summary: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none; commits: none; events: 0 (0 raised in workspace code); errors at 1 place; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
+    transaction, UI and errors: commits: none; errors at 1 place
+    other effects: events: 0 (0 raised in workspace code)
+    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
@@ -13,7 +16,10 @@
   errors at 1 place: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:33 (unconditional-on-success)
 
 --- Codeunit D1 Multi Caller::CallerC ---
-  summary: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none; commits: none; events: 0 (0 raised in workspace code); errors at 1 place; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
+    transaction, UI and errors: commits: none; errors at 1 place
+    other effects: events: 0 (0 raised in workspace code)
+    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
@@ -27,7 +33,10 @@
   errors at 1 place: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:41 (unconditional-on-success)
 
 --- Codeunit D1 Multi Caller::CallerA ---
-  summary: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none; commits: none; events: 0 (0 raised in workspace code); errors at 1 place; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
+    transaction, UI and errors: commits: none; errors at 1 place
+    other effects: events: 0 (0 raised in workspace code)
+    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
@@ -41,7 +50,10 @@
   errors at 1 place: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:25 (unconditional-on-success)
 
 --- Codeunit D1 Multi Caller::ModifyHelper ---
-  summary: no observed write that may persist; caller-dependent: 1 table; commits: none; events: 0 (0 raised in workspace code); gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  summary — writes: no observed write that may persist; caller-dependent: 1 table
+    transaction, UI and errors: commits: none; UI and errors: none observed
+    other effects: events: 0 (0 raised in workspace code)
+    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none

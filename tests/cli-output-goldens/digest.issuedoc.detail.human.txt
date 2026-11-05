@@ -1,6 +1,9 @@
 dependencies: Out Base (embedded)
 --- Codeunit Out Issue Document::IssueDoc ---
-  summary: may write 16 tables (1 owned by this app, 15 by dependencies); caller-dependent: 1 table; commits: may (1 commit-bearing entry point); events: 2 (1 raised in workspace code); HTTP at 1 place; background tasks at 1 place; errors at 2 places; gaps: 2 in workspace code, 1 in dependency code, 0 not placed
+  summary — writes: may write 16 tables (1 owned by this app, 15 by dependencies); 14 of them beyond Codeunit Base Poster::OnRun (entered at ws:src/OutIssueDocument.Codeunit.al:15); caller-dependent: 1 table
+    transaction, UI and errors: commits: may (1 commit-bearing entry point); errors at 2 places
+    other effects: events: 2 (1 raised in workspace code); HTTP at 1 place; background tasks at 1 place
+    uncertainty: gaps: 2 in workspace code, 1 in dependency code, 0 not placed
   coverage: partial (interface-open-world, object-run-unresolved) — 1 interface call open world, 2 dynamic calls not resolved
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none

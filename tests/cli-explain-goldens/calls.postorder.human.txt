@@ -1,5 +1,9 @@
 Codeunit Calls Post::PostOrder  ws:src/post.al:3
-  summary: no observed write that may persist; caller-dependent: 1 table; commits: none; events: 1 (1 raised in workspace code); errors at 9 places; callers: 1, reached from 1 page action; tests: none; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  summary — writes: no observed write that may persist; caller-dependent: 1 table
+    transaction, UI and errors: commits: none; errors at 9 places
+    other effects: events: 1 (1 raised in workspace code)
+    callers and tests: callers: 1, reached from 1 page action; tests: none
+    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
@@ -19,7 +23,7 @@ Codeunit Calls Post::PostOrder  ws:src/post.al:3
   events: 1 raised in workspace code, by publisher: Codeunit Calls Post 1; 0 more only beyond entry points
   extension point OnBeforePostOrder: 1 subscriber(s)
     subscriber Codeunit Calls Subscriber::CheckBeforePost (only when its app is installed): rejects when Order.Amount = 0: "A zero amount cannot post."  [Error ws:src/post.al:129]
-  errors at 9 places: ERROR_IMPLICIT at ws:src/checks.al:8 (conditional); ERROR_IMPLICIT at ws:src/order.al:16 (unconditional-on-success); ERROR_THROW at ws:src/checks.al:6 (error-path); ERROR_THROW at ws:src/checks.al:15 (error-path); ERROR_THROW at ws:src/checks.al:32 (error-path); ERROR_THROW at ws:src/checks.al:39 (error-path); ERROR_THROW at ws:src/checks.al:45 (error-path); ERROR_THROW at ws:src/order.al:25 (error-path); ERROR_THROW at ws:src/post.al:129 (unknown)
+  errors at 9 places: ERROR_IMPLICIT at ws:src/checks.al:8 (conditional); ERROR_IMPLICIT at ws:src/order.al:16 (unconditional-on-success); ERROR_THROW at ws:src/checks.al:6 (error-path); ERROR_THROW at ws:src/checks.al:15 (error-path); ERROR_THROW at ws:src/checks.al:32 (error-path); ERROR_THROW at ws:src/checks.al:39 (error-path); … +3 more (--detail lists them)
   tests: none reach it
   next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

@@ -2733,6 +2733,9 @@ pub(crate) const SITE_ENUMERATED: &[&str] = &[
     "TELEMETRY",
 ];
 
+/// [`SITE_ENUMERATED`], for readers outside the crate (the output tests).
+pub const SITE_ENUMERATED_TYPES: &[&str] = SITE_ENUMERATED;
+
 /// What [`reconstruct_site_witnesses`] found.
 struct SiteWitnesses<'i> {
     /// One outcome per site in the root's own code (a carrier's direct fact,

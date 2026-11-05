@@ -1359,7 +1359,9 @@ fn write_keys(rows: &[Value], explain: bool) -> Vec<(String, String, String, Str
 
 /// W2-2, T-W2-16 leg 1 and T-W2-6 on the fixture: explain `/3` and digest
 /// 3.0.0 give every table write the same class (equal records), digest's
-/// default and `--detail` documents hold the same multiset of rows, digest's
+/// default and `--detail` documents hold the same multiset of rows (since MCP
+/// output step 2: the default's rows are `--detail` rows, and the others are
+/// exactly its `moreSites` places, all of site-enumerated types), digest's
 /// summary and explain's are the one `RollupTotals`, and every table either
 /// lists as a may-persist or caller-dependent write is one prove answers
 /// `writes-table:T` with `yes` for. Expected by hand from the fixture's AL:
@@ -1430,7 +1432,40 @@ fn explain_digest_and_prove_agree_on_the_fixture() {
         v.sort();
         v
     };
-    assert_eq!(rows(&digest), rows(&detail), "default vs --detail rows");
+    // MCP output step 2: a site-enumerated type keeps one row whole by
+    // default and lists its others as places in `moreSites`; every other
+    // row is in both documents.
+    let (default_rows, detail_rows) = (rows(&digest), rows(&detail));
+    let folded: Vec<&String> = detail_rows
+        .iter()
+        .filter(|r| !default_rows.contains(r))
+        .collect();
+    assert!(
+        default_rows.iter().all(|r| detail_rows.contains(r)),
+        "default rows are --detail rows"
+    );
+    let more_items: usize = entry["moreSites"]
+        .as_object()
+        .map(|types| {
+            types
+                .values()
+                .flat_map(|places| places.as_object().unwrap().values())
+                .map(|items| items.as_str().unwrap().split("; ").count())
+                .sum()
+        })
+        .unwrap_or(0);
+    assert_eq!(
+        folded.len(),
+        more_items,
+        "every folded row is a moreSites place"
+    );
+    for r in &folded {
+        let ty = r.split('|').nth(1).unwrap().trim_matches('"');
+        assert!(
+            al_sem::engine::l5::digest::SITE_ENUMERATED_TYPES.contains(&ty),
+            "only a site-enumerated type folds: {r}"
+        );
+    }
     // Every listed may-persist or caller-dependent table: prove says yes.
     let mut tables: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for w in card["effects"]["writes"].as_array().unwrap() {
@@ -2100,18 +2135,31 @@ fn explain_digest_and_prove_give_one_table_answer() {
 }
 
 /// T-W2-24 on the fixture: `Out Overloads::RunBoth` calls two overloads of
-/// `Note`. The human paths print each with its parameters, and digest's
-/// routine table keys them apart with distinct displays.
+/// `Note`. The human paths print each by its short handle (MCP output step
+/// 2: `Note/1`, `Note/2`, apart by arity), `--detail` prints their full
+/// signatures once, and digest's routine table keys them apart with
+/// distinct displays.
 #[test]
 fn overloads_print_with_their_signatures() {
     let ws = workspace().to_string_lossy().into_owned();
     let (human, err, code) = run_alsem(&["explain", &ws, "--routine", "Out Overloads::RunBoth"]);
     assert_eq!(code, 0, "{err}");
-    for want in [
-        "path: RunBoth → Note(Msg)\n",
-        "path: RunBoth → Note(Msg, Level)\n",
-    ] {
+    for want in ["path: RunBoth → Note/1\n", "path: RunBoth → Note/2\n"] {
         assert!(human.contains(want), "{want}\n{human}");
+    }
+    let (detail, err, code) = run_alsem(&[
+        "explain",
+        &ws,
+        "--routine",
+        "Out Overloads::RunBoth",
+        "--detail",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    for want in [
+        "Note/1 = (Msg: Text)",
+        "Note/2 = (Msg: Text; Level: Integer)",
+    ] {
+        assert!(detail.contains(want), "{want}\n{detail}");
     }
     let (out, _, _) = run_alsem(&["digest", &ws, "--routine", "Out Overloads::RunBoth"]);
     let d: Value = serde_json::from_str(&out).unwrap();

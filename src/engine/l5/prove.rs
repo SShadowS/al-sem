@@ -1655,8 +1655,49 @@ pub fn format_prove_human(
             "  evidence: {}",
             plural(indices.len(), "effect", "effects")
         ));
+        // MCP output step 2: by default one witnessed row per effect type
+        // (its shortest path), then at most `FOLDED_ROWS` more as locations,
+        // then a count; `--detail` prints every row with its path.
+        let detail = paths.is_none_or(|p| p.detail);
+        let path_len = |i: usize| -> usize {
+            let e = &effects[i];
+            e.via_paths
+                .iter()
+                .filter(|v| !v.is_empty())
+                .map(Vec::len)
+                .min()
+                .or_else(|| {
+                    e.group_terminal_path
+                        .as_ref()?
+                        .as_ref()
+                        .ok()
+                        .map(|w| w.steps.len())
+                })
+                .unwrap_or(usize::MAX)
+        };
+        let mut witnessed: BTreeMap<&str, usize> = BTreeMap::new();
+        for &i in indices {
+            let t = effects[i].effect_type.as_str();
+            match witnessed.get(t) {
+                Some(&j) if path_len(j) <= path_len(i) => {}
+                _ => {
+                    witnessed.insert(t, i);
+                }
+            }
+        }
+        // Per type: the folded rows' places, and how many more.
+        let mut folded: BTreeMap<&str, (Vec<String>, usize)> = BTreeMap::new();
         for &i in indices {
             let eff = &effects[i];
+            let t = eff.effect_type.as_str();
+            if !detail && witnessed.get(t) != Some(&i) {
+                let (listed, hidden) = folded.entry(t).or_default();
+                if listed.len() >= FOLDED_ROWS {
+                    *hidden += 1;
+                    continue;
+                }
+            }
+            let full = detail || witnessed.get(t) == Some(&i);
             let at = match (&eff.evidence.file, eff.evidence.line) {
                 (Some(f), Some(l)) => match paths {
                     Some(p) => p.cx.location(f, l),
@@ -1671,10 +1712,28 @@ pub fn format_prove_human(
                 .iter()
                 .find(|(k, _)| k == "boundary")
                 .map(|(_, v)| v.as_str());
-            lines.push(match (group, boundary) {
+            let row = match (group, boundary) {
                 (true, Some(b)) => format!("    [{}] beyond {b}, entered at {at}", eff.effect_type),
                 _ => format!("    [{}] at {at}", eff.effect_type),
-            });
+            };
+            if !full {
+                // A folded row: its place and conditionality, no path.
+                let place = row
+                    .trim_start()
+                    .trim_start_matches(&format!("[{t}] "))
+                    .to_string();
+                folded
+                    .entry(t)
+                    .or_default()
+                    .0
+                    .push(if eff.conditionality != "unknown" {
+                        format!("{place} ({})", eff.conditionality)
+                    } else {
+                        place
+                    });
+                continue;
+            }
+            lines.push(row);
             if eff.conditionality != "unknown" {
                 lines.push(format!("      conditionality: {}", eff.conditionality));
             }
@@ -1743,6 +1802,24 @@ pub fn format_prove_human(
                 None => {}
             }
         }
+        for (t, (listed, hidden)) in &folded {
+            let more = if *hidden > 0 {
+                format!("; … +{hidden} more")
+            } else {
+                String::new()
+            };
+            lines.push(format!(
+                "    also [{t}]: {}{more} (--detail lists every row with its path)",
+                listed.join("; ")
+            ));
+        }
+        if let Some(p) = paths {
+            lines.extend(
+                p.cx.take_legend(p.detail)
+                    .into_iter()
+                    .map(|l| format!("  {l}")),
+            );
+        }
     }
 
     // Blockers
@@ -1762,6 +1839,10 @@ pub fn format_prove_human(
     lines.push(String::new());
     lines.join("\n")
 }
+
+/// How many evidence rows of one effect type the default prints as places
+/// after the witnessed one (the rest are counted).
+pub const FOLDED_ROWS: usize = 3;
 
 /// How many blockers of one kind the default prints (the rest are counted).
 pub const BLOCKERS_PER_KIND: usize = 3;
@@ -2454,7 +2535,8 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     // loaded apps' names).
     let dependencies = cx.view().target().dependencies();
     let rollup_cx =
-        crate::engine::l5::routine_rollup::RollupCx::new(cx.view().model(), &dependencies.apps);
+        crate::engine::l5::routine_rollup::RollupCx::new(cx.view().model(), &dependencies.apps)
+            .with_short_handles();
     let human_text = format_prove_human(
         &entry.routine_display,
         &entry.object_display,

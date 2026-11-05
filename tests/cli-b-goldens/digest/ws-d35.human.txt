@@ -1,5 +1,8 @@
 --- Codeunit D35 Demo::OnBeforePrintSafe ---
-  summary: no observed write that may persist; caller-dependent: none; commits: none; events: 0 (0 raised in workspace code); UI at 1 place; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  summary — writes: no observed write that may persist; caller-dependent: none
+    transaction, UI and errors: commits: none; UI at 1 place
+    other effects: events: 0 (0 raised in workspace code)
+    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
@@ -9,7 +12,10 @@
   UI at 1 place: UI_MESSAGE at ws:src/Codeunit.al:21 (unconditional-on-success)
 
 --- Codeunit D35 Demo::OnAfterPostDirect ---
-  summary: no observed write that may persist; caller-dependent: none; commits: yes (1 site); events: 0 (0 raised in workspace code); gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  summary — writes: no observed write that may persist; caller-dependent: none
+    transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
+    other effects: events: 0 (0 raised in workspace code)
+    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
@@ -19,7 +25,10 @@
   events: 0 raised in workspace code; 0 more only beyond entry points
 
 --- Codeunit D35 Demo::PersistAudit ---
-  summary: no observed write that may persist; caller-dependent: none; commits: yes (1 site); events: 0 (0 raised in workspace code); gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  summary — writes: no observed write that may persist; caller-dependent: none
+    transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
+    other effects: events: 0 (0 raised in workspace code)
+    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
@@ -29,7 +38,10 @@
   events: 0 raised in workspace code; 0 more only beyond entry points
 
 --- Codeunit D35 Demo::NonSubscriberCommit ---
-  summary: no observed write that may persist; caller-dependent: none; commits: yes (1 site); events: 0 (0 raised in workspace code); gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  summary — writes: no observed write that may persist; caller-dependent: none
+    transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
+    other effects: events: 0 (0 raised in workspace code)
+    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
@@ -39,7 +51,10 @@
   events: 0 raised in workspace code; 0 more only beyond entry points
 
 --- Codeunit D35 Demo::OnAfterValidateTransitive ---
-  summary: no observed write that may persist; caller-dependent: none; commits: yes (1 site); events: 0 (0 raised in workspace code); gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  summary — writes: no observed write that may persist; caller-dependent: none
+    transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
+    other effects: events: 0 (0 raised in workspace code)
+    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none

@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (MCP output step 2: shorter, task-shaped output)
+
+- **Paths name overloads by a short handle.** A path printed every overloaded routine with its
+  whole parameter list (`CreateLogEntries(DocumentTemplateLine, FilterRecord, …)`, 20 names, twice
+  per path; 35–48 % of a large explain card). explain, digest (human) and prove now print
+  `Name/n` (its arity) when no other overload of the routine has that arity, `Name/n[position:
+  type]` (the parameter types it differs in) when one does, and `Name/n#k` (k in source order) when
+  only the place tells them apart (two field triggers); a `#k` handle's signature and declaration
+  are printed once under the card (`overload … = (…) at …`), every handle's with `--detail`.
+  `query effects` keeps the parameter lists (it prints no legend).
+- **A section's shared path start prints once.** Within one section, the start (the root and at
+  least two more hops) that saves the most text over its `path:`, `prefix path:` and
+  `representative path` lines prints once, `(below, a path that begins with \`… →\` begins with:
+  …)`, and those paths print `… → <rest>`. An entry point's prefix and its representative path now
+  print as one line (`--detail` keeps both).
+- **Commit and kind rows print paths for the first few only.** The `commits:` section prints a path
+  for the first 3 sites and the first 3 commit-bearing entry points; the others share one `and N
+  more (--detail prints their paths): …` line with their places. A kind family line lists its first
+  6 places and counts the rest. prove prints one witnessed row per effect type (its shortest path)
+  and lists up to 3 more as places on one `also [TYPE]:` line, then counts the rest; `--detail`
+  prints every row with its path. The digest JSON keeps one row of each site-enumerated type whole
+  (its shortest witness) and lists the type's other rows as places in a new
+  `entries[].moreSites[<type>]` (`file:line conditionality`, `beyond <crossing key> …`,
+  `literal-dead` when it cannot run); `--detail` keeps every row in `effects`.
+- **The summary is a short risk block.** explain's and digest's `summary` line is now `summary —
+  writes: …` followed by `transaction, UI and errors: …`, `other effects: …`, `callers and tests:
+  …` and `uncertainty: …`, the same clauses as before. The writes line names the entry point behind
+  most of the tables when one is behind more than half of 10 or more (RunReportID on CDO: "357 of
+  them beyond Codeunit Sales-Calc. Discount::OnRun (entered at
+  ws:src/Foundation/CDOFile.Table.al:125)"); JSON `summary.mayWriteTables.mostBeyond`.
+- **`alsem_status` says what it does not check.** The answer starts with `diskChecked: false`, a
+  `freshnessNote` (a revision names the inputs it was built from, not whether they still match
+  the disk) and `next` (with the default freshness `fresh`: nothing, the next command checks the
+  files itself; else call a command with `fresh`/`verify` or `alsem_refresh`).
+
 ### Fixed (commit sites dropped up the call chain)
 
 - **A routine's COMMIT rows now list every commit it reaches, not only the nearest.** On CDO,

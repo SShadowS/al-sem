@@ -2680,6 +2680,10 @@ pub fn format_digest_human_v3(
     changed: &[ChangedRootsDiagnostic],
 ) -> String {
     use crate::engine::l5::routine_rollup as rr;
+    // Paths name overloads by short handles; each root's block ends with
+    // their signatures (MCP output step 2).
+    cx.use_short_handles();
+    let _ = cx.take_legend(true);
     let mut text = if entries.is_empty() {
         "digest: no changed roots resolved\n".to_string()
     } else {
@@ -2691,18 +2695,26 @@ pub fn format_digest_human_v3(
             if entry.effects.is_empty() {
                 body.push("effects: none".to_string());
             }
-            body.extend(rr::commit_lines(r, entry, cx, opts));
-            body.extend(rr::workspace_write_lines(r, entry, cx, opts, &|_| None));
+            // A section's shared path start, once (MCP output step 2).
+            body.extend(rr::factor_prefix(rr::commit_lines(r, entry, cx, opts)));
+            body.extend(rr::factor_prefix(rr::workspace_write_lines(
+                r,
+                entry,
+                cx,
+                opts,
+                &|_| None,
+            )));
             body.extend(rr::caller_dependent_lines(r, entry));
-            body.extend(rr::beyond_lines(r, entry, cx, opts));
-            body.extend(rr::no_path_lines(r, entry, cx, opts));
+            body.extend(rr::factor_prefix(rr::beyond_lines(r, entry, cx, opts)));
+            body.extend(rr::factor_prefix(rr::no_path_lines(r, entry, cx, opts)));
             body.extend(rr::literal_dead_lines(r, opts));
             body.extend(rr::temporary_lines(r, opts));
             body.extend(rr::event_lines(r, cx, opts));
-            body.extend(rr::kind_lines(r, entry));
+            body.extend(rr::kind_lines(r, entry, opts.detail));
             body.extend(rr::workspace_gap_lines(r, entry, opts));
             body.extend(rr::dependency_gap_lines(r, opts));
             body.extend(diagnostic_lines(entry, opts.detail));
+            body.extend(cx.take_legend(opts.detail));
             lines.extend(body.into_iter().map(|l| format!("  {l}")));
             lines.push(String::new());
         }
@@ -3974,7 +3986,7 @@ mod tests {
             r.kind_sites
         );
         assert_eq!(r.totals.kinds.get(OTHER_KINDS), Some(&2), "{:?}", r.totals);
-        let lines = kind_lines(&r, &e);
+        let lines = kind_lines(&r, &e, false);
         assert_eq!(
             lines,
             vec![
@@ -4164,7 +4176,10 @@ mod tests {
             "digest: no changed roots resolved\n"
         );
         let text = human(&[entry_with(Vec::new())], &[], false);
-        assert!(text.starts_with("--- R ---\n  summary: "), "{text}");
+        assert!(
+            text.starts_with("--- R ---\n  summary — writes: "),
+            "{text}"
+        );
         assert!(text.contains("\n  effects: none\n"), "{text}");
         assert!(text.ends_with('\n') && !text.ends_with("\n\n"), "{text}");
     }

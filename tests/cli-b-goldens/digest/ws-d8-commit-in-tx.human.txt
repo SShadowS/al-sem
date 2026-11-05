@@ -1,5 +1,8 @@
 --- Codeunit D8PostingChain::PostSalesDoc ---
-  summary: may write 3 tables (3 owned by this app, 0 by dependencies); caller-dependent: none; commits: may (1 site); events: 1 (1 raised in workspace code); errors at 1 place; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  summary — writes: may write 3 tables (3 owned by this app, 0 by dependencies); caller-dependent: none
+    transaction, UI and errors: commits: may (1 site); errors at 1 place
+    other effects: events: 1 (1 raised in workspace code)
+    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
@@ -21,7 +24,10 @@
   errors at 1 place: ERROR_IMPLICIT at ws:src/posting.al:8 (unconditional-on-success)
 
 --- Codeunit D8PostingChain::OnAfterPostSalesDoc ---
-  summary: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none; commits: may (1 site); events: 1 (1 raised in workspace code); gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
+    transaction, UI and errors: commits: may (1 site); UI and errors: none observed
+    other effects: events: 1 (1 raised in workspace code)
+    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
@@ -37,7 +43,10 @@
   diagnostics: evidence-unavailable 1 (--detail lists each with its operation)
 
 --- Codeunit D8BadSubscriber::HandlePosted ---
-  summary: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none; commits: yes (1 site); events: 0 (0 raised in workspace code); gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
+    transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
+    other effects: events: 0 (0 raised in workspace code)
+    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none

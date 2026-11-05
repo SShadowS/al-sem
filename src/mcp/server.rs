@@ -367,8 +367,24 @@ pub fn serve(
 /// the workers' published snapshots; starts nothing.
 fn status(transport: &McpTransport, pool: &Pool, call: &EngineCall, defaults: &Defaults) -> Value {
     let children = pool.children();
+    // MCP output step 2: what this answer does NOT establish, and what to
+    // do next, first (the reviews read the revision as a disk check).
+    let next = match defaults.freshness.as_str() {
+        "fresh" => {
+            "nothing needed: the next command (freshness `fresh`, the default) checks the files \
+             and refreshes first; alsem_refresh only prepares later `latest-built` answers"
+        }
+        _ => {
+            "ask a command with freshness `fresh` or `verify` to check the files, or call \
+             alsem_refresh to rebuild"
+        }
+    };
     json!({
         "kind": "status",
+        "diskChecked": false,
+        "freshnessNote": "This call does not read the workspace files: each engine's revision \
+            names the inputs it was BUILT from, not whether they still match the disk.",
+        "next": next,
         "server": {
             "pid": std::process::id(),
             "alsemVersion": env!("CARGO_PKG_VERSION"),
