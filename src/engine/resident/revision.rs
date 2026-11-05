@@ -64,7 +64,26 @@ pub const SERVED_COMMANDS: &[&str] = &[
     // the select part off the revision's sited graph.
     "tests",
     "tests-select",
+    // `alsem impact`'s production parts (agent-tasks §8.4): the main part
+    // off the model (digest's plan over the roots), the up part off the
+    // revision's sited graph. Left out, each part ran the one-shot path: a
+    // whole program build per part on every call, warm or not (CDO, B1's
+    // binary: main 34-50 s, up 13-43 s, no fill and no eviction counted).
+    "impact",
+    "impact-up",
 ];
+
+/// The most roots one effects read memoizes as witnesses
+/// ([`ArtifactKey::Witness`]). A witness is 5.6-7.9 MiB resident per root
+/// on CDO, and an effects read finishes CLONES of its roots' witnesses, so a
+/// read over many roots held them twice: an impact over a 94-file diff (699
+/// roots, CDO) held 2+ GB of witnesses in the store, pinned through its own
+/// trees, and its trees' reservation was refused at 7.6 GB of 8 GiB. A read
+/// over more roots computes its entries itself, as a one-shot run does (the
+/// same bytes: the memo is only a cache), and publishes none: the memo
+/// serves the few-root asks it was made for (explain, prove, digest on a
+/// routine), and a large one leaves the store as it found it.
+pub const WITNESS_MEMO_MAX_ROOTS: usize = 64;
 
 /// A key of a revision's artifact store (see the module doc).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -283,6 +302,9 @@ pub struct Revision {
     dependency_calls: Option<Arc<Vec<CallEdge>>>,
     store: Store<ArtifactKey, Artifact>,
     answered: std::sync::atomic::AtomicU64,
+    /// [`WITNESS_MEMO_MAX_ROOTS`]; a test lowers it to reach the cap on a
+    /// small fixture.
+    witness_memo_max: std::sync::atomic::AtomicUsize,
     /// Fills per artifact kind (`status`, the T-order fill counters).
     fills: std::sync::Mutex<BTreeMap<&'static str, u64>>,
     /// [`seed_key`] of this revision's read.
@@ -390,6 +412,7 @@ impl Revision {
             dependency_calls,
             store: Store::new(),
             answered: std::sync::atomic::AtomicU64::new(0),
+            witness_memo_max: std::sync::atomic::AtomicUsize::new(WITNESS_MEMO_MAX_ROOTS),
             fills: std::sync::Mutex::new(BTreeMap::new()),
             seed_key,
             seed: std::sync::Mutex::new(seed),
@@ -399,6 +422,22 @@ impl Revision {
             raw_counts: RawCounts::default(),
             witness: WitnessCounts::default(),
         }
+    }
+
+    /// Whether an effects read over `roots` roots memoizes their witnesses
+    /// ([`WITNESS_MEMO_MAX_ROOTS`]).
+    fn memoizes(&self, roots: usize) -> bool {
+        roots
+            <= self
+                .witness_memo_max
+                .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Tests: memoize witnesses for reads of at most `n` roots.
+    #[cfg(test)]
+    pub(crate) fn set_witness_memo_max(&self, n: usize) {
+        self.witness_memo_max
+            .store(n, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// The revision with its sited graph seeded into the store (agent-tasks
@@ -415,6 +454,24 @@ impl Revision {
             bytes,
         );
         self
+    }
+
+    /// Add the sited graph to this PUBLISHED revision (a request first read
+    /// it, [`crate::engine::resident::session::ResidentSession::pin_sited`]):
+    /// a new snapshot with the graph, every artifact already filled kept.
+    /// `g` must be built from a program over [`Revision::inputs`]. Called
+    /// under the session's builder lock, once (the caller checked the
+    /// revision has none).
+    pub fn add_sited(&self, g: Arc<crate::program::impact_graph::SitedGraph>) {
+        let bytes = g.bytes();
+        self.store.seed(
+            ArtifactKey::Sited,
+            Artifact {
+                value: ArtifactValue::Sited(g),
+                lines: Vec::new(),
+            },
+            bytes,
+        );
     }
 
     /// The enclosing conditions of site `site` of the revision's sited graph,
@@ -724,7 +781,8 @@ impl Revision {
             .collect()
     }
 
-    /// Each effects read's tree group: its tree's subjects (the group's
+    /// Each MEMOIZED effects read's tree group (see
+    /// [`WITNESS_MEMO_MAX_ROOTS`]): its tree's subjects (the group's
     /// [`Revision::tree_scopes`] entry), its `include_reads`, and the
     /// distinct roots (stable ids) of its readers, sorted.
     fn witness_groups(&self, plan: &Plan) -> Vec<(BTreeSet<String>, bool, Vec<String>)> {
@@ -742,9 +800,10 @@ impl Revision {
                 (
                     scope,
                     trees[g[0]].1.include_reads,
-                    roots.into_iter().collect(),
+                    roots.into_iter().collect::<Vec<_>>(),
                 )
             })
+            .filter(|(_, _, roots)| self.memoizes(roots.len()))
             .collect()
     }
 
@@ -1184,14 +1243,16 @@ impl Revision {
             }
             // An effects read finishes its roots' memoized witnesses: owned
             // CLONES, which its passes may mutate (prove's literal reach),
-            // never the stored values.
+            // never the stored values. A group over more roots than
+            // `WITNESS_MEMO_MAX_ROOTS` (`memoizes`) memoizes none: its read computes its
+            // entries itself (`None`), as a one-shot run does.
+            let roots: BTreeSet<&String> = group
+                .iter()
+                .flat_map(|&m| trees[m].1.subjects.ids().iter())
+                .collect();
             let entries = match trees[group[0]].1.read {
-                TreeRead::Effects => {
+                TreeRead::Effects if self.memoizes(roots.len()) => {
                     let include_reads = trees[group[0]].1.include_reads;
-                    let roots: BTreeSet<&String> = group
-                        .iter()
-                        .flat_map(|&m| trees[m].1.subjects.ids().iter())
-                        .collect();
                     let mut entries = Vec::new();
                     for root in roots {
                         let k = ArtifactKey::Witness {
@@ -1373,9 +1434,43 @@ impl Revision {
         // The request's witness batch: dropped with the request (the store
         // holds what it published).
         let scratch = WitnessScratch::default();
-        let snap =
-            self.store
-                .ensure_prepared(&needs, &|_| 0, &|cx| self.fill(plan, &scratch, cx), ctl);
+        // The request's first witness fill computes every witness of the
+        // request in one batch (`fill_witness`); each later witness fill is
+        // a lookup in `scratch` and reserves nothing. Reserving again per
+        // root (each at the batch's observed peak, the case's estimate once
+        // observed) refused a 699-root diff on CDO: 2042 MiB per root over
+        // a 7.4 GB RSS, after the batch itself had fitted.
+        let reserve = |kind: &'static str,
+                       units: usize|
+         -> Result<crate::engine::resident::store::Guard<'_>, String> {
+            let in_hand =
+                kind == "witness" && !scratch.lock().unwrap_or_else(|p| p.into_inner()).is_empty();
+            if in_hand {
+                return Ok(Box::new(()));
+            }
+            (ctl.reserve)(kind, units)
+        };
+        // Each fill's size in roots (`budget::size_class`): a view's raw
+        // facts and tree by their subjects, the witness batch by the
+        // request's witnesses; the revision-wide artifacts are unsized.
+        let witnesses = needs
+            .iter()
+            .filter(|(k, _)| matches!(k, ArtifactKey::Witness { .. }))
+            .count();
+        let units = |k: &ArtifactKey| match k {
+            ArtifactKey::Raw(s) | ArtifactKey::Tree(s) => s.len(),
+            ArtifactKey::Witness { .. } => witnesses,
+            _ => 0,
+        };
+        let snap = self.store.ensure_prepared(
+            &needs,
+            &units,
+            &|cx| self.fill(plan, &scratch, cx),
+            &Control {
+                stop: ctl.stop,
+                reserve: &reserve,
+            },
+        );
         *prepare_ms = start.elapsed().as_millis() as u64;
         let snap = snap?;
         self.release_used_seed(&snap);
@@ -1403,11 +1498,17 @@ impl Revision {
             return Err(stop.into());
         }
         // The trees' working memory is reserved like a fill's (§4.5 "heavy
-        // request"), and released once they are read.
+        // request"), sized by the roots they are read for, and released
+        // once they are read.
         let guard = if plan.tree_demands().is_empty() {
             None
         } else {
-            Some((ctl.reserve)("trees", 0).map_err(PrepareError::Budget)?)
+            let roots: BTreeSet<&String> = plan
+                .tree_demands()
+                .iter()
+                .flat_map(|(_, d)| d.subjects.ids().iter())
+                .collect();
+            Some((ctl.reserve)("trees", roots.len()).map_err(PrepareError::Budget)?)
         };
         let trees = self.trees(plan, &snap, ctl);
         if let Some(g) = guard {

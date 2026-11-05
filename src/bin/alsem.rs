@@ -4303,18 +4303,25 @@ mod engine {
                 // Every fill and the trees reserve first (fill workers are
                 // counted while they hold theirs).
                 let refused = std::sync::Mutex::new(None);
+                // Each estimate is read, and each peak observed, in the
+                // work's size class (its roots): a large request's peak never
+                // becomes a small one's estimate.
                 let reserve = |kind: &'static str,
-                               _: usize|
+                               units: usize|
                  -> Result<al_sem::engine::resident::store::Guard<'_>, String> {
                     let case = if kind == "trees" {
                         Case::Trees
                     } else {
                         Case::Fill(kind)
                     };
-                    let estimate = open.budget.estimate(case, Default::default());
-                    match open.session.reserve_or_reclaim(
+                    let units = units as u64;
+                    let estimate = open
+                        .budget
+                        .estimate_sized(case, Default::default(), units);
+                    match open.session.reserve_or_reclaim_sized(
                         &open.budget,
                         case,
+                        units,
                         estimate,
                         1,
                         &is_stopped,

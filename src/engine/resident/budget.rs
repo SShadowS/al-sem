@@ -12,7 +12,9 @@
 //! floor (cross-app 1.5 GiB, single-app 0.5 GiB); after it, a per-case table
 //! measured on CDO, scaled by the revision's routine count. Once a case has
 //! been observed, the largest of its last three observed peaks replaces the
-//! table value.
+//! table value, per size class: a request's trees and its witness batch are
+//! observed and estimated by the number of roots they cover ([`size_class`]),
+//! so one large request's peak is never a small request's estimate.
 //!
 //! **Floor** ([`Budget::retained_floor`], `status.retainedBytes`): the bytes
 //! of the complete retained set, the part no eviction can free: the RSS less
@@ -184,8 +186,27 @@ pub struct Estimates {
     pub per_package_byte: u64,
     /// The published revision's routine count (`None` before the first).
     pub routines: Option<u64>,
-    /// The last three observed peaks per case.
-    observed: BTreeMap<Case, VecDeque<u64>>,
+    /// The last three observed peaks per case and size class
+    /// ([`size_class`]).
+    observed: BTreeMap<(Case, u32), VecDeque<u64>>,
+}
+
+/// The size class of a piece of work over `units` roots (0 or 1: class 0;
+/// then one class per factor of 4: 2-4, 5-16, 17-64, 65-256, ...). A
+/// request's trees and its witness batch grow with their roots: one 699-root
+/// impact's trees peaked at 4.2 GB on CDO, a one-root digest's at a few
+/// hundred MiB. An estimate is read from its own class's observations, so a
+/// large request's peak never becomes the next small request's estimate
+/// (it refused every later one-routine ask: 4174 MiB over a 5.7 GB RSS).
+#[must_use]
+pub fn size_class(units: u64) -> u32 {
+    let mut class = 0;
+    let mut top = 1u64;
+    while units > top {
+        top = top.saturating_mul(4);
+        class += 1;
+    }
+    class
 }
 
 impl Estimates {
@@ -221,24 +242,50 @@ impl Estimates {
             .max(self.floor)
     }
 
-    /// The estimate of `case`: the largest of its last three observed peaks,
-    /// else the table's, scaled by routine count (the pre-model formula for
-    /// a cold build).
+    /// The estimate of `case` for work of one unit ([`Estimates::of_sized`]).
     #[must_use]
     pub fn of(&self, case: Case, sizes: InputSizes) -> u64 {
-        if let Some(max) = self.observed.get(&case).and_then(|q| q.iter().max()) {
+        self.of_sized(case, sizes, 1)
+    }
+
+    /// The estimate of `case` for work over `units` roots: the largest of
+    /// the last three peaks observed in its size class ([`size_class`]);
+    /// else the table's, scaled by routine count (the pre-model formula for
+    /// a cold build), or the largest peak a SMALLER class observed when that
+    /// is larger. A larger class's peaks are never read: a 699-root
+    /// request's is no estimate of a one-root one.
+    #[must_use]
+    pub fn of_sized(&self, case: Case, sizes: InputSizes, units: u64) -> u64 {
+        let class = size_class(units);
+        if let Some(max) = self
+            .observed
+            .get(&(case, class))
+            .and_then(|q| q.iter().max())
+        {
             return *max;
         }
-        match (case, self.routines) {
+        let table = match (case, self.routines) {
             (Case::Cold, _) | (Case::Incremental, None) => self.pre_model(sizes),
             (_, None) => case.table_mib() * MIB,
             (_, Some(r)) => (case.table_mib() * MIB).saturating_mul(r.max(1)) / TABLE_ROUTINES,
-        }
+        };
+        let smaller = self
+            .observed
+            .range((case, 0)..(case, class))
+            .flat_map(|(_, q)| q.iter().copied())
+            .max()
+            .unwrap_or(0);
+        table.max(smaller)
     }
 
-    /// Record an observed peak of `case`.
+    /// Record an observed peak of `case` for work of one unit.
     pub fn observe(&mut self, case: Case, peak: u64) {
-        let q = self.observed.entry(case).or_default();
+        self.observe_sized(case, 1, peak);
+    }
+
+    /// Record an observed peak of `case` for work over `units` roots.
+    pub fn observe_sized(&mut self, case: Case, units: u64, peak: u64) {
+        let q = self.observed.entry((case, size_class(units))).or_default();
         q.push_back(peak);
         while q.len() > 3 {
             q.pop_front();
@@ -423,6 +470,9 @@ pub struct Budget {
 pub struct Reservation<'a> {
     budget: &'a Budget,
     case: Case,
+    /// The work's size in roots ([`size_class`]): its peak is observed in
+    /// that class.
+    units: u64,
     bytes: u64,
     /// The RSS when it was taken (an overrun and an observed peak are
     /// measured from it).
@@ -443,9 +493,11 @@ impl Reservation<'_> {
         let meter = &self.budget.meter;
         let (peak, rss) = (meter.peak(), meter.rss());
         if peak > 0 {
-            self.budget
-                .estimates()
-                .observe(self.case, peak.saturating_sub(self.rss_before));
+            self.budget.estimates().observe_sized(
+                self.case,
+                self.units,
+                peak.saturating_sub(self.rss_before),
+            );
         }
         if rss > self.budget.budget() {
             self.budget.state().overruns += 1;
@@ -560,6 +612,13 @@ impl Budget {
         self.estimates().of(case, sizes)
     }
 
+    /// The estimate of `case` for work over `units` roots
+    /// ([`Estimates::of_sized`]).
+    #[must_use]
+    pub fn estimate_sized(&self, case: Case, sizes: InputSizes, units: u64) -> u64 {
+        self.estimates().of_sized(case, sizes, units)
+    }
+
     /// Admit a request as a holder: waits while a reclaim has admission
     /// closed (each wait slice re-reads `stop`; a stopped request leaves
     /// with `false`). The reclaim that closed it reopens it after one
@@ -599,6 +658,17 @@ impl Budget {
     /// Reserve `estimate` bytes for `case` if `rss + reserved + estimate <=
     /// budget`; else the refusal. The peak window starts here.
     pub fn reserve(&self, case: Case, estimate: u64) -> Result<Reservation<'_>, Refusal> {
+        self.reserve_sized(case, 1, estimate)
+    }
+
+    /// [`Budget::reserve`] for work over `units` roots: its peak is
+    /// observed in that size class ([`size_class`]).
+    pub fn reserve_sized(
+        &self,
+        case: Case,
+        units: u64,
+        estimate: u64,
+    ) -> Result<Reservation<'_>, Refusal> {
         let rss = self.meter.rss();
         let budget = self.budget();
         let mut s = self.state();
@@ -628,6 +698,7 @@ impl Budget {
         Ok(Reservation {
             budget: self,
             case,
+            units,
             bytes: estimate,
             rss_before: rss,
         })

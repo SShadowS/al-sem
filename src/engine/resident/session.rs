@@ -188,6 +188,10 @@ pub enum BuildPoint {
     AfterRead,
     /// The target is built; `M_after` is next.
     AfterBuild,
+    /// [`ResidentSession::pin_sited`] is about to build the sited graph for
+    /// the published revision, from a program over that revision's read (no
+    /// workspace read, no new revision); the attempt number is 0.
+    BeforeSited,
 }
 
 /// A test's hook: called at each [`BuildPoint`] with the attempt number.
@@ -437,8 +441,22 @@ impl ResidentSession {
         mine: u64,
         stop: &dyn Fn() -> bool,
     ) -> Result<Reservation<'b>, Refusal> {
+        self.reserve_or_reclaim_sized(budget, case, 1, estimate, mine, stop)
+    }
+
+    /// [`Self::reserve_or_reclaim`] for work over `units` roots (its peak
+    /// is observed in that size class, `budget::size_class`).
+    pub fn reserve_or_reclaim_sized<'b>(
+        &self,
+        budget: &'b Budget,
+        case: Case,
+        units: u64,
+        estimate: u64,
+        mine: u64,
+        stop: &dyn Fn() -> bool,
+    ) -> Result<Reservation<'b>, Refusal> {
         self.update_floor();
-        match budget.reserve(case, estimate) {
+        match budget.reserve_sized(case, units, estimate) {
             Ok(r) => return Ok(r),
             Err(f) if f.impossible => return Err(f),
             Err(_) => {}
@@ -447,7 +465,7 @@ impl ResidentSession {
         budget.wait_for_releasers(mine, stop);
         self.reclaim(budget, estimate);
         self.update_floor();
-        let r = budget.reserve(case, estimate);
+        let r = budget.reserve_sized(case, units, estimate);
         drop(closed);
         r
     }
@@ -676,10 +694,19 @@ impl ResidentSession {
     /// costs ~1 s per refresh on CDO, over the 300 ms bar, so it is built
     /// only once a question needs it). [`Self::pin`]; then, when the pinned
     /// revision has no sited graph, the session builds it with every revision
-    /// from now on and rebuilds once, for this request (`Pinned::rebuilt_for`
-    /// says so). `stop` also cancels that rebuild's sited graph (polled every
-    /// `CANCEL_EVERY` sites): the revision is then published without it, and
-    /// the next such request builds it.
+    /// from now on, and adds it to the pinned revision for this request
+    /// (`Pinned::rebuilt_for` says `"sited"`): a program over that revision's
+    /// own read (the workspace session's, which reuses every parse; single-
+    /// app, the cold builder's), its graph, published into the revision's
+    /// store beside every artifact already filled. No workspace read and no
+    /// new revision: a rebuild here (as first built) published a new
+    /// revision with an empty store, so the next digest or explain filled
+    /// everything again (CDO: 9-13 s once the first impact or tests call had
+    /// run). Only when the pinned revision is no longer the published one,
+    /// or its program is not the session's to rebuild (cross-app with no
+    /// model-instance id), does it rebuild once. `stop` also cancels the
+    /// graph's build (polled every `CANCEL_EVERY` sites): the revision then
+    /// stays without it, and the next such request builds it.
     pub fn pin_sited(
         self: &Arc<Self>,
         mode: Freshness,
@@ -706,6 +733,13 @@ impl ResidentSession {
                 ..pinned
             });
         }
+        if let (Some(Built::Revision(current)), Built::Revision(mine)) =
+            (self.published(), &pinned.built)
+            && Arc::ptr_eq(&current, mine)
+            && (self.single_app || current.inputs.model_instance_id.is_some())
+        {
+            return self.add_sited_locked(&mut b, current, pinned, start, stop);
+        }
         let built = self.build_locked(&mut b, None, 1, &|| stop().is_some())?;
         Ok(Pinned {
             built,
@@ -714,6 +748,79 @@ impl ResidentSession {
             waited_for_build_ms: pinned.waited_for_build_ms + start.elapsed().as_millis() as u64,
             rebuilt_for: Some("sited"),
         })
+    }
+
+    /// [`Self::pin_sited`]'s addition, under the builder lock: the sited
+    /// graph of a program over `rev`'s own read, published into `rev`'s
+    /// store. The reservation is a build's (the program is the incremental
+    /// build's first half, the graph its addition, M0-5), released without
+    /// recording an observation: this is not a build, and its smaller peak
+    /// must not lower the next build's estimate.
+    fn add_sited_locked(
+        &self,
+        b: &mut Builder,
+        rev: Arc<Revision>,
+        pinned: Pinned,
+        start: Instant,
+        stop: &dyn Fn() -> Option<Stop>,
+    ) -> Result<Pinned, PinError> {
+        let reservation = match &self.budget {
+            Some(budget) => {
+                let sizes = Default::default();
+                let estimate = budget
+                    .estimate(Case::Incremental, sizes)
+                    .saturating_add(budget.estimate(Case::Fill("sited"), sizes));
+                Some(
+                    self.reserve_or_reclaim(budget, Case::Incremental, estimate, 1, &|| false)
+                        .map_err(PinError::Budget)?,
+                )
+            }
+            None => None,
+        };
+        self.hook(BuildPoint::BeforeSited, 0);
+        let program = if self.single_app {
+            let _s = crate::engine::perf_trace::span("revision", "revision.sited_program");
+            crate::program::resolved::ResolvedProgram::build(
+                &rev.inputs,
+                crate::program::resolved::ProgramScope::Workspace,
+            )
+        } else {
+            b.workspace.refresh_program(&rev.inputs)
+        };
+        let sited = program
+            .ok()
+            .and_then(|p| build_sited(&p, &|| stop().is_some()));
+        drop(reservation);
+        let waited = pinned.waited_for_build_ms + start.elapsed().as_millis() as u64;
+        match sited {
+            Some(s) => {
+                {
+                    let mut st = lock(&self.stats);
+                    st.sited_builds += 1;
+                    st.last_sited_ms = Some(s.ms);
+                    st.last_sited_bytes = Some(s.graph.bytes());
+                }
+                rev.add_sited(Arc::new(s.graph));
+                self.update_floor();
+                Ok(Pinned {
+                    built: Built::Revision(rev),
+                    waited_for_build_ms: waited,
+                    rebuilt_for: Some("sited"),
+                    ..pinned
+                })
+            }
+            // Stopped: the revision stays without the graph (the next such
+            // request builds it). A program that did not build (the
+            // revision's own did) leaves the answer to say the graph is
+            // missing.
+            None => match stop() {
+                Some(s) => Err(PinError::Stopped(s)),
+                None => Ok(Pinned {
+                    waited_for_build_ms: waited,
+                    ..pinned
+                }),
+            },
+        }
     }
 
     /// The build itself, under the builder lock (see the module doc).

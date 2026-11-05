@@ -462,6 +462,120 @@ fn the_child_releases_freed_large_blocks() {
     }
 }
 
+/// `alsem impact`'s production parts are answered OFF the resident revision
+/// (its retained artifacts and sited graph), never by the one-shot job path
+/// over its inputs, and a warm repeat fills nothing again: the main part
+/// (digest's plan over the roots) and the up part (the sited graph) each
+/// count as an answer of the revision, the CLI's part answer either way (the
+/// main part's bytes; the up part's but for its wall-clock `walkMs`); the
+/// up part's sited graph is added to the revision the main part filled (no
+/// second read, no new revision, nothing refilled); a second round reads no
+/// workspace, keeps the revision, adds two answers and no fill. Fixture:
+/// `tests/fixtures/test-universe/App`, copied with a `.git` marker (as
+/// `mcp_impact` does).
+///
+/// DISCRIMINATION (2026-11-05): `"impact"` and `"impact-up"` removed from
+/// `SERVED_COMMANDS` (the state B1 shipped, where every CDO part rebuilt the
+/// program, 24-96 s per main part warm): fails at "the main part is
+/// answered off the revision" (answered 0); restored, passes. `pin_sited`
+/// rebuilding as first built (its `add_sited_locked` branch removed): fails
+/// at "the up part is answered off the same revision" (`(2, 2, 1, 0)`: a
+/// second read, generation 2, an empty store, whose warm main part then
+/// filled 8 artifacts again); restored, passes.
+#[test]
+fn impact_parts_are_answered_off_the_revision_and_a_repeat_fills_nothing() {
+    fn copy(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for e in std::fs::read_dir(from).unwrap() {
+            let e = e.unwrap();
+            let t = to.join(e.file_name());
+            if e.file_type().unwrap().is_dir() {
+                copy(&e.path(), &t);
+            } else {
+                std::fs::copy(e.path(), &t).unwrap();
+            }
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    copy(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test-universe"),
+        dir.path(),
+    );
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    let ws = dir.path().join("App");
+    let w = ws.to_str().unwrap().to_string();
+    let main = [
+        "impact",
+        "--part",
+        "main",
+        "--routine=TU Core::Post",
+        "--",
+        &w,
+    ];
+    let mut front = front(&ws);
+    // A part's answer as JSON, its one wall-clock field (the up part's
+    // `cost.walkMs`) blanked: the rest is the CLI's to the byte.
+    let part = |out: (Vec<u8>, Vec<u8>, u8)| -> (serde_json::Value, Vec<u8>, u8) {
+        let mut v: serde_json::Value = serde_json::from_slice(&out.0).unwrap();
+        if let Some(c) = v.get_mut("cost").and_then(|c| c.as_object_mut()) {
+            c.remove("walkMs");
+        }
+        (v, out.1, out.2)
+    };
+    let answered = |front: &mut EngineFront| -> (u64, u64, u64, u64) {
+        let s = front.status().unwrap();
+        let f = s.fills.expect("the revision's fill counts");
+        (
+            s.workspace_reads,
+            s.revision.expect("a revision").generation,
+            f["answered"].as_u64().unwrap(),
+            f["fills"].as_u64().unwrap(),
+        )
+    };
+
+    let a = front.ask(ask(&main));
+    let main_out = cli_answer(a.outcome);
+    assert_eq!(main_out, cli(&main), "the main part's CLI bytes");
+    let doc: serde_json::Value = serde_json::from_slice(&main_out.0).unwrap();
+    let root = doc["roots"][0]["stableId"].as_str().unwrap().to_string();
+    let (reads, generation, main_answered, fills) = answered(&mut front);
+    assert_eq!(
+        main_answered, 1,
+        "the main part is answered off the revision"
+    );
+    assert_eq!((reads, generation), (1, 1));
+    assert!(fills > 0, "precondition: the main part filled artifacts");
+
+    let root_arg = format!("--root-id={root}");
+    let up = ["impact", "--part", "up", &root_arg, "--", &w];
+    let a = front.ask(ask(&up));
+    assert_eq!(
+        part(cli_answer(a.outcome)),
+        part(cli(&up)),
+        "the up part's CLI answer"
+    );
+    // The up part reads the sited graph the revision did not have: it is
+    // added to that revision (`pin_sited`), which keeps its artifacts.
+    assert_eq!(
+        answered(&mut front),
+        (1, 1, 2, fills),
+        "the up part is answered off the same revision, nothing refilled"
+    );
+
+    // Warm repeat: the same revision answers both, filling nothing.
+    for argv in [&main[..], &up[..]] {
+        let a = front.ask(ask(argv));
+        assert_eq!(a.revision.as_ref().map(|r| r.generation), Some(1));
+        assert_eq!(part(cli_answer(a.outcome)), part(cli(argv)), "{argv:?}");
+    }
+    assert_eq!(
+        answered(&mut front),
+        (1, 1, 4, fills),
+        "a warm repeat reads nothing, keeps the revision, fills nothing"
+    );
+    assert!(front.shutdown().graceful);
+}
+
 /// T-exit3 / T-plan: a planning failure with exit 3 (`digest --order`, a
 /// refused flag) is the CLI's own `kind: "cli"` answer, exit 3, with
 /// `revision: null` and no workspace read; so is an engine-only refusal
