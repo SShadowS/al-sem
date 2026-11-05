@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (agent tasks, milestone M0: resident groundwork)
+
+Nothing an agent sees changes yet; these are the pieces the later milestones (the reverse cone,
+test selection, adding an effect, impact) build on. Spec:
+`docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §1.
+
+- **The sited graph** (`program::impact_graph::sited`). The may-execute graph behind `alsem graph`,
+  with one edge per site instead of one per `(caller, callee, kind)`: each site keeps its own id
+  (its index), its source anchor (unit and span), its kind, confidence, `via`, conditions and an
+  execution boundary (`Sync`, `Run`, `EventDispatch`, `TriggerOf{op}`, `Lifecycle`,
+  `TestHandler`, `TestRunner`, `Open`). Nodes, sites and units are interned to `u32`. `alsem
+  graph`'s edges are now computed by collapsing the sited graph with the old merge rule, folded in
+  site order (strongest confidence wins, equal confidences keep the first `via` and union their
+  conditions, the line is the minimum), so the export is byte-identical. The finer boundaries the
+  spec names (checked against unchecked `Codeunit.Run`, background sessions and tasks, a
+  trigger's temporary state) are body facts the program edges do not carry; R0 and A refine a
+  `Run` or `TriggerOf` site by its anchor. Measured on CDO cross-app: 134,385 nodes, 318,084 sites,
+  48 MB resident.
+
 ### Fixed (MCP output, the final hands-on CDO review)
 
 - **`prove`'s human `unknown` no longer lists every blocker.** IssueReminder's
