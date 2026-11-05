@@ -8,4 +8,5 @@
     [Modify] write at ws:src/Features/ESeal/CDOUniversigneSealService.Codeunit.al:183 in Codeunit CDO Universign eSeal Service::ProcessSealResponse (temp state unknown), through Codeunit CDO E-Mail Handler::DocHandle
     temporary records: 199 touches in 55 routines (Codeunit CDO E-Mail Template Management::CreateDocumentsForRecord 14, Table CDO File::MergeAndReplacePDF 14, Codeunit CDO E-Mail Template Management::CreateDocuments 11, Codeunit CDO E-Mail Template Management::CreateReportsForRecord 11, … +51 routines) — --all lists them
   table not resolved: 69 operations in this cone, 69 of them on a RecordRef (table decided at run time) (they may be this table) — --table unknown lists them
+  callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens, nor a path through dependency code (alsem tests and impact follow both)
   up: 1 transitive caller (Page CDO Reminder Actions::OnAction) inherits this touch through this routine: 1 touches it, 0 do not, 0 unknown — --callers lists them, --all their witnesses
