@@ -117,11 +117,11 @@ impl Server {
         self.input.flush().unwrap();
     }
 
-    fn notify(&mut self, method: &str, params: Value) {
+    pub(crate) fn notify(&mut self, method: &str, params: Value) {
         self.line(&json!({"jsonrpc": "2.0", "method": method, "params": params}));
     }
 
-    fn send(&mut self, id: Value, method: &str, params: Value) {
+    pub(crate) fn send(&mut self, id: Value, method: &str, params: Value) {
         self.line(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
     }
 

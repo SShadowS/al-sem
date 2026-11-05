@@ -120,3 +120,63 @@ fn alsem_tests_answers_the_clis_bytes_through_two_engines() {
     );
     assert!(s.finish().success());
 }
+
+/// Milestone C item 2: a client's cancel of `alsem_tests` reaches its parts.
+/// The parts are sub-requests with ids of their own; the cancel names the
+/// call's id. Every child sleeps 1.5 s on each ask (`sleep-on-ask`), so the
+/// cancel lands while the roots part runs on the production engine: that
+/// part is stopped (`session/cancel`), the select part is never queued (no
+/// test engine starts), and the call is never answered, as MCP asks. Its id
+/// is free again after, and a second call with it is answered normally.
+///
+/// DISCRIMINATION (2026-11-05): queueing the parts with flags of their own
+/// (`self.enqueue(sub_id, request, Some(tx), None)` in `run_composite`)
+/// fails it at "the cancelled roots part built no revision" (the roots part
+/// ran on and published generation 1; the call is still not answered and no
+/// test engine starts, because the coordinator checks the call's flag
+/// between parts, so only the revision tells a stopped part from one run to
+/// its end); restored, passes.
+#[test]
+fn a_cancelled_tests_call_stops_its_parts_and_is_not_answered() {
+    let t = repo();
+    let ws = t.path().join("App");
+    let mut s = Server::ready(&ws, Some("sleep-on-ask:1500"));
+    s.send(
+        json!(7),
+        "tools/call",
+        json!({"name": "alsem_tests", "arguments": {"routines": ["TU Core::Post"]}}),
+    );
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    s.notify(
+        "notifications/cancelled",
+        json!({"requestId": 7, "reason": "test"}),
+    );
+    // Long enough for an uncancelled call to run all its parts (each ask
+    // sleeps 1.5 s; the fixture builds in well under a second).
+    std::thread::sleep(std::time::Duration::from_millis(6000));
+    // The next response is the status call's: the cancelled call sent none.
+    let list = engines(&mut s, 8);
+    assert_eq!(
+        list.len(),
+        1,
+        "no test engine started after the cancel: {list:?}"
+    );
+    // The roots part itself was stopped: the child reads the cancel at its
+    // first phase, before it pins (builds) a revision, so none is published.
+    assert!(
+        list[0]["check"].is_null(),
+        "the cancelled roots part built no revision: {list:?}"
+    );
+    let env = envelope(&s.call(
+        7,
+        "alsem_tests",
+        json!({"routines": ["TU Core::Post"], "format": "json"}),
+    ));
+    assert_eq!(env["kind"], "cli", "{env}");
+    assert_eq!(
+        env["revisions"]["tests"].as_array().map(Vec::len),
+        Some(1),
+        "the second call ran every part: {env}"
+    );
+    assert!(s.finish().success());
+}

@@ -509,7 +509,7 @@ impl Pool {
     /// Hand `request` (call `id`) to its engine's worker, or answer it here
     /// (`busy`, a stopped worker).
     pub fn submit(&self, id: Value, request: Request) {
-        if let Err(Refused { universe, message }) = self.enqueue(id.clone(), request, None) {
+        if let Err(Refused { universe, message }) = self.enqueue(id.clone(), request, None, None) {
             let envelope = json!({
                 "kind": "failed",
                 "revision": null,
@@ -535,9 +535,28 @@ impl Pool {
     /// `--max-children` bound) is [`SubOutcome::NotComputed`] with the
     /// reason, and the remaining parts still run. A part admitted to a busy
     /// engine waits in that engine's own queue, holding no other.
+    ///
+    /// **Cancellation reaches every part** (milestone C item 2): when the
+    /// composite's own id `id` is registered with a cancel flag (as
+    /// `run_tests` registers it), each part is queued with THAT flag, so a
+    /// client's cancel of `id` drops a queued part, sends `session/cancel` to
+    /// a running one, and every part after it is not run
+    /// ([`SubOutcome::NotComputed`] `cancelled`).
     pub fn run_composite(&self, id: &Value, parts: Vec<CommandCall>) -> Vec<SubOutcome> {
+        let parent = self
+            .shared
+            .cancels
+            .lock()
+            .expect("cancels")
+            .get(&id_key(id))
+            .cloned();
+        let cancelled = || parent.as_ref().is_some_and(|f| f.load(Ordering::SeqCst));
         let mut out = Vec::with_capacity(parts.len());
         for (i, call) in parts.into_iter().enumerate() {
+            if cancelled() {
+                out.push(SubOutcome::NotComputed("cancelled".into()));
+                continue;
+            }
             let universe = call.universe;
             let (tx, rx) = channel::<Vec<u8>>();
             let sub_id = json!(format!("{}#{i}", id_key(id)));
@@ -545,7 +564,7 @@ impl Pool {
                 call,
                 progress: None,
             };
-            if let Err(r) = self.enqueue(sub_id, request, Some(tx)) {
+            if let Err(r) = self.enqueue(sub_id, request, Some(tx), parent.clone()) {
                 out.push(SubOutcome::NotComputed(format!(
                     "the {} engine could not start: {}",
                     universe.as_str(),
@@ -557,6 +576,8 @@ impl Pool {
                 Ok(frame) if frame.is_empty() => {
                     SubOutcome::NotComputed("cancelled while queued".into())
                 }
+                // Stopped by the child (`session/cancel`): not an answer.
+                Ok(_) if cancelled() => SubOutcome::NotComputed("cancelled".into()),
                 Ok(frame) => match serde_json::from_slice(&frame) {
                     Ok(v) => SubOutcome::Answered(v),
                     Err(e) => SubOutcome::NotComputed(format!("the answer does not decode: {e}")),
@@ -585,6 +606,14 @@ impl Pool {
             .lock()
             .expect("in flight")
             .insert(id_key(id));
+        // The call's own cancel flag (item 2): `Pool::cancel(id)` sets it, and
+        // `run_composite` queues every part with it.
+        let cancel = Arc::new(AtomicBool::new(false));
+        shared
+            .cancels
+            .lock()
+            .expect("cancels")
+            .insert(id_key(id), Arc::clone(&cancel));
         let started = Instant::now();
         let mut production_rev = Value::Null;
         let mut test_revs: Vec<Value> = Vec::new();
@@ -692,19 +721,28 @@ impl Pool {
             _ => None,
         };
         let msg = shared.transport.response(id, &envelope, is_error, output);
-        shared.finish(id, &encode_or_log(&msg));
+        if cancel.load(Ordering::SeqCst) {
+            // Cancelled by the client: the transport says what it gets (MCP:
+            // nothing).
+            shared.end_cancelled(id, Some(&encode_or_log(&msg)));
+        } else {
+            shared.finish(id, &encode_or_log(&msg));
+        }
     }
 
     /// Queue `request` on its engine's worker, after the children bound;
     /// with `reply`, the answer frame goes there instead of the transport.
+    /// With `cancel`, the call shares that flag (a composite's part, its
+    /// parent's flag); otherwise it gets one of its own.
     fn enqueue(
         &self,
         id: Value,
         request: Request,
         reply: Option<Sender<Vec<u8>>>,
+        cancel: Option<Arc<AtomicBool>>,
     ) -> Result<(), Refused> {
         let shared = &self.shared;
-        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel = cancel.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
         let (key, job) = match request {
             Request::Refresh(c) => {
                 let key = (c.workspace.clone().unwrap_or_default(), c.universe);

@@ -101,6 +101,13 @@ Which tests to run first for a change, as a first-class answer. Spec:
   discovery finished and found none (or `testApps: []`). JSON cards: `summary.testApps
   {discovered, discoveryComplete}`. The explain goldens and the three CDO explain rendering
   goldens move by that clause.
+- **A client's cancel of `alsem_tests` reaches every part.** Its parts are sub-requests with ids
+  of their own, so `notifications/cancelled` for the call's id found no flag: the running part ran
+  to its end and the next parts still ran. `Pool::run_tests` now registers the call's cancel flag
+  and `run_composite` queues each part with it: a queued part is dropped, the running one is sent
+  `session/cancel`, no later part runs, and the call is not answered (MCP). Pinned by
+  `mcp_tests::a_cancelled_tests_call_stops_its_parts_and_is_not_answered` (the cancelled roots
+  part publishes no revision; no test engine starts).
 - **R0-3: explain's callers and the reverse cone agree.** `select::direct_callers` defines a
   direct caller over the sited graph the way the model's calls count it: a call, interface call,
   object run or record operation site (`via` call/interface/run/implicitTrigger, never a rule's
