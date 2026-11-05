@@ -78,7 +78,10 @@ use crate::program::resolve::full::LoadedDependencies;
 /// no indexed touch says what that means (`down.absence {answer: no |
 /// unknown | beyond, index, reasons[]}`), the workspace-global list states
 /// its `index` depth, and `--callers` adds the trivial case's `up.callers[]`
-/// (`{depth, routine, outcome}`).
+/// (`{depth, routine, outcome}`); `query effects` marks each row the cone
+/// judges (`literalRoute {status, coneFirstHop?}`, `byTable[].first.literalRoute`,
+/// `byTable[].literalRuledOut`, `summary.literalRoutes`), rows and `via`
+/// unchanged.
 const QUERY_SCHEMA_VERSION: &str = "3.2.0";
 
 /// Which direction(s) a `query touches` run reports.
@@ -538,6 +541,165 @@ impl<'c> Beyond<'c> {
             &self.rcx,
             crate::engine::l5::routine_rollup::RenderOpts::new(all, None),
         )
+    }
+}
+
+/// Step 1b (astra top 5): how the root's cone, after the literal pass,
+/// judges one `query effects` row's route. The rows stay L4's (spec §12.2:
+/// never dropped, `via` unchanged); this only marks them, and only where the
+/// cone can say something sound. The cone keeps no per-operation identity
+/// for every row (one effect per kind and table carries one evidence
+/// operation, and its `origin_operation_ids` need not hold every operation
+/// of that kind), so a row is judged by operation only when the cone names
+/// its operation (origin or evidence), and by kind and table only to say
+/// the cone has no live write of that kind on that table at all. A row the
+/// cone does not carry (a read, a lock, a temporary record, an operation
+/// one routine into dependency code that the cone groups beyond an entry
+/// point) is not judged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiteralRoute<'c> {
+    /// Every route is ruled out: an effect the operation originates from is
+    /// literal-dead (an effect is dead only when every operation it
+    /// originates from is, `literal_reach`).
+    RuledOut,
+    /// The cone keeps a live route entering through the row's first hop.
+    ConeRoute,
+    /// The cone keeps no live listed route for it; its searched live
+    /// witness enters through this other first hop (a stable id). The row's
+    /// first hop is the index's, which these literal arguments may rule out.
+    OtherRoute(&'c str),
+    /// A write of workspace code whose kind the cone (it follows the root's
+    /// literal arguments through its parameter guards, and its search was
+    /// not cut short) never performs on this table: no own effect of that
+    /// kind on it stays live, and no dependency group lists it for that
+    /// kind.
+    NotInCone,
+}
+
+type ConeEffect = crate::engine::l5::digest_cli::DigestEffectFull;
+
+/// The cone's effect type of an L4 write kind (`digest::map_op`: `Rename`
+/// is a modify); `None` for a kind the kind-level judgement does not map
+/// (`ModifyAll`, whose cone fact kind is not pinned here): it then judges
+/// nothing.
+fn write_effect_type(op: &str) -> Option<&'static str> {
+    match op {
+        "Insert" => Some("DB_INSERT"),
+        "Modify" | "Rename" => Some("DB_MODIFY"),
+        "Delete" | "DeleteAll" => Some("DB_DELETE"),
+        _ => None,
+    }
+}
+
+/// The cone's effects by origin operation and by evidence anchor, and the
+/// (effect type, table) pairs it may write, for [`LiteralRoute`].
+struct ConeRoutes<'c> {
+    by_op: HashMap<&'c str, Vec<&'c ConeEffect>>,
+    /// `(file, 0-based line, column)` of an own effect's evidence.
+    by_anchor: HashMap<(&'c str, u32, u32), Vec<&'c ConeEffect>>,
+    /// Live own writes, and every group's listed resources (dead or not):
+    /// `(effect type, table id)`.
+    kinds: std::collections::HashSet<(&'c str, &'c str)>,
+    /// The cone's search was cut short: no `NotInCone`.
+    truncated: bool,
+}
+
+impl<'c> ConeRoutes<'c> {
+    fn new(entry: &'c crate::engine::l5::digest_cli::DigestEntryFull) -> Self {
+        let mut by_op: HashMap<&str, Vec<_>> = HashMap::new();
+        let mut by_anchor: HashMap<_, Vec<_>> = HashMap::new();
+        let mut kinds = std::collections::HashSet::new();
+        for e in &entry.effects {
+            let ty = e.effect_type.as_str();
+            if e.crossing.is_some() {
+                for (id, _) in &e.group_resources {
+                    kinds.insert((ty, id.as_str()));
+                }
+                continue;
+            }
+            for op in &e.origin_operation_ids {
+                by_op.entry(op.as_str()).or_default().push(e);
+            }
+            if let (Some(f), Some(l), Some(c)) = (
+                e.evidence.file.as_deref(),
+                e.evidence.line,
+                e.evidence.column,
+            ) {
+                by_anchor.entry((f, l, c)).or_default().push(e);
+            }
+            if !e.literal_unreachable
+                && let Some((_, id)) = e.detail.iter().find(|(k, _)| k == "resourceId")
+            {
+                kinds.insert((ty, id.as_str()));
+            }
+        }
+        ConeRoutes {
+            by_op,
+            by_anchor,
+            kinds,
+            truncated: entry.unresolved_traversal.truncated,
+        }
+    }
+
+    /// `anchor`: the operation's `(file, 0-based line, column)`.
+    /// `first_hop`: the row's first hop's stable id (`None` on the root's own
+    /// row, which only `RuledOut` and `NotInCone` can mark). `write`: the
+    /// row's `(effect type, table id)` when it is a write a workspace routine
+    /// performs. `None`: not judged.
+    fn judge(
+        &self,
+        operation_id: &str,
+        anchor: Option<(&str, u32, u32)>,
+        first_hop: Option<&str>,
+        write: Option<(&str, &str)>,
+    ) -> Option<LiteralRoute<'c>> {
+        let by_op = self.by_op.get(operation_id).map_or(&[][..], Vec::as_slice);
+        if by_op.iter().any(|e| e.literal_unreachable) {
+            return Some(LiteralRoute::RuledOut);
+        }
+        let by_anchor = anchor
+            .and_then(|a| self.by_anchor.get(&a))
+            .map_or(&[][..], Vec::as_slice);
+        let effects: Vec<&ConeEffect> = by_op
+            .iter()
+            .chain(by_anchor)
+            .copied()
+            .filter(|e| !e.literal_unreachable)
+            .collect();
+        if effects.is_empty() {
+            return match write {
+                Some(k) if !self.truncated && !self.kinds.contains(&k) => {
+                    Some(LiteralRoute::NotInCone)
+                }
+                _ => None,
+            };
+        }
+        let hop = first_hop?;
+        let (mut listed, mut witness) = (false, None);
+        for e in effects {
+            for p in &e.via_paths {
+                if let Some(h) = p.first() {
+                    listed = true;
+                    if h.inner.to_routine_id.as_deref() == Some(hop) {
+                        return Some(LiteralRoute::ConeRoute);
+                    }
+                }
+            }
+            if let Some(Ok(w)) = &e.own_path
+                && let Some(s) = w.steps.first()
+            {
+                if s.to == hop {
+                    return Some(LiteralRoute::ConeRoute);
+                }
+                witness.get_or_insert(s.to.as_str());
+            }
+        }
+        // A live listed route through another first hop says nothing about
+        // this one (the listing is capped): not judged.
+        if listed {
+            return None;
+        }
+        witness.map(LiteralRoute::OtherRoute)
     }
 }
 
@@ -2516,11 +2678,59 @@ fn render_query_effects_body(
             .map_or_else(|| internal.to_string(), |x| x.qualified())
     };
 
-    // Rows: every field unchanged, plus `firstHop` (or why none) on a row
-    // that is not the routine's own (ConTinAI reads `via == "direct"`).
-    let rows: Vec<Value> = effects
+    // Step 1b: each row's route as the cone judges it after the literal pass
+    // (`None`: not judged, or the cone was not read).
+    let cone_routes = beyond.as_ref().map(|b| ConeRoutes::new(b.entry));
+    let literal: Vec<Option<LiteralRoute<'_>>> = effects
         .iter()
         .map(|t| {
+            let routes = cone_routes.as_ref()?;
+            let hop = match t.via {
+                crate::engine::l4::effect_store::ViaRank::Direct => None,
+                _ => hops
+                    .of(t)
+                    .ok()
+                    .and_then(|c| join.get(query.bundle().routine_id(c)))
+                    .map(|r| r.stable_id),
+            };
+            let origin = ops.get(t.operation_id, &join);
+            let anchor = origin.as_ref().map(|o| (o.file.as_str(), o.line, o.column));
+            let write = (matches!(bucket(t), "writes" | "callerDependent")
+                && !ops.in_dependency(t.operation_id, substrate.resolved()))
+            .then(|| write_effect_type(t.op))
+            .flatten()
+            .map(|ty| (ty, t.table_id));
+            routes.judge(t.operation_id, anchor, hop.as_deref(), write)
+        })
+        .collect();
+    let route_display = |stable: &str| -> String {
+        beyond
+            .as_ref()
+            .map_or_else(|| stable.to_string(), |b| b.rcx.qualified(stable))
+    };
+    let literal_json = |r: LiteralRoute<'_>| -> Value {
+        match r {
+            LiteralRoute::RuledOut => json!({"status": "ruledOut"}),
+            LiteralRoute::ConeRoute => json!({"status": "coneRoute"}),
+            LiteralRoute::OtherRoute(s) => json!({
+                "status": "otherRoute",
+                "coneFirstHop": {"display": route_display(s), "stableId": s},
+            }),
+            LiteralRoute::NotInCone => json!({"status": "notInCone"}),
+        }
+    };
+    // Both mean no route runs under the root's literal arguments.
+    let ruled_out_row = |r: &Option<LiteralRoute<'_>>| {
+        matches!(r, Some(LiteralRoute::RuledOut | LiteralRoute::NotInCone))
+    };
+
+    // Rows: every field unchanged, plus `firstHop` (or why none) on a row
+    // that is not the routine's own (ConTinAI reads `via == "direct"`), and
+    // (step 1b, additive) `literalRoute` on a row the cone judges.
+    let rows: Vec<Value> = effects
+        .iter()
+        .zip(&literal)
+        .map(|(t, lit)| {
             let mut v = touch_json(
                 t,
                 ops.get(t.operation_id, &join).as_ref(),
@@ -2561,6 +2771,9 @@ fn render_query_effects_body(
                         m.insert("firstHopUnavailable".into(), why.into());
                     }
                 }
+            }
+            if let (Some(r), Value::Object(m)) = (lit, &mut v) {
+                m.insert("literalRoute".into(), literal_json(*r));
             }
             v
         })
@@ -2651,6 +2864,15 @@ fn render_query_effects_body(
             {
                 v["first"]["firstHop"] = json!(hop_label(c));
             }
+            // Step 1b, additive: the first row's route and the table's rows
+            // the literal arguments rule out.
+            if let Some(r) = literal[rows[0]] {
+                v["first"]["literalRoute"] = literal_json(r);
+            }
+            let ruled_out = rows.iter().filter(|&&i| ruled_out_row(&literal[i])).count();
+            if cone_routes.is_some() {
+                v["literalRuledOut"] = ruled_out.into();
+            }
             v
         })
         .collect();
@@ -2708,6 +2930,20 @@ fn render_query_effects_body(
         "beyondEntryPoints": beyond_entry_points,
         "scope": scope_value(beyond.is_some()),
     });
+    // Step 1b, additive: how many rows each route judgement marks.
+    let mut summary = summary;
+    if cone_routes.is_some() {
+        let n = |want: fn(&LiteralRoute<'_>) -> bool| {
+            literal.iter().flatten().filter(|r| want(r)).count()
+        };
+        summary["literalRoutes"] = json!({
+            "ruledOut": n(|r| *r == LiteralRoute::RuledOut),
+            "notInCone": n(|r| *r == LiteralRoute::NotInCone),
+            "otherRoute": n(|r| matches!(r, LiteralRoute::OtherRoute(_))),
+            "coneRoute": n(|r| *r == LiteralRoute::ConeRoute),
+            "notJudged": literal.iter().filter(|r| r.is_none()).count(),
+        });
+    }
 
     let payload = json!({
         "routine": {
@@ -2781,10 +3017,10 @@ fn render_query_effects_body(
         // Wave 3a: the writes beyond each entry point are the cone's, read
         // as explain reads them; the per-operation rows keep L4's depth.
         human.push_str(
-            "  coverage: per operation, one routine into dependency code, and operations ruled \
-             out by literal arguments are listed (alsem explain and prove drop them); writes \
-             beyond dependency entry points follow the whole cone with literal arguments, as \
-             alsem explain does; lines are 1-based\n",
+            "  coverage: per operation, one routine into dependency code; operations and routes \
+             the root's literal arguments rule out are listed and marked (alsem explain and \
+             prove drop them); writes beyond dependency entry points follow the whole cone with \
+             literal arguments, as alsem explain does; lines are 1-based\n",
         );
         human.push_str(&format!(
             "  scope: dependency code: full cone for physical writes, grouped per entry point; \
@@ -2857,12 +3093,35 @@ fn render_query_effects_body(
                     Err(_) => via_note(v).to_string(),
                 },
             };
+            // Step 1b (astra top 5): the mark sits on the row it qualifies.
+            let mark = match literal[rows[0]] {
+                Some(LiteralRoute::RuledOut) => {
+                    " (ruled out by the root's literal arguments: no route runs)".to_string()
+                }
+                Some(LiteralRoute::NotInCone) => " (ruled out by the root's literal arguments: \
+                     the cone, which follows them, has no route to it)"
+                    .to_string(),
+                Some(LiteralRoute::OtherRoute(s)) => format!(
+                    " (the index's route; the cone keeps no live route through it with the root's \
+                     literal arguments, and its live route enters through {})",
+                    route_display(s)
+                ),
+                _ => String::new(),
+            };
+            let ruled_out = rows.iter().filter(|&&i| ruled_out_row(&literal[i])).count();
+            let ruled_out = match (ruled_out, rows.len()) {
+                (0, _) => String::new(),
+                // Every row, so the first one's mark says it.
+                (k, n) if k == n && n == 1 => String::new(),
+                (k, n) if k == n => format!("; all {n} ruled out by literal arguments"),
+                (k, n) => format!("; {k} of {n} ruled out by literal arguments"),
+            };
             let locks = locks_on
                 .get(id)
                 .map(|n| format!(" (+ LockTable {n})"))
                 .unwrap_or_default();
             human.push_str(&format!(
-                "    {}: {}{locks}{} — first {} {at}{through}\n",
+                "    {}: {}{locks}{} — first {} {at}{through}{mark}{ruled_out}\n",
                 table_name(id),
                 ops_text(&op_counts(rows)),
                 temp_note(first.temp_state),
@@ -3002,7 +3261,7 @@ fn render_query_effects_body(
     if all {
         human.push_str(&format!("  every operation ({}):\n", effects.len()));
     }
-    for e in effects.iter().filter(|_| all) {
+    for (e, lit) in effects.iter().zip(&literal).filter(|_| all) {
         let table = if is_unknown_table(e.table_id) {
             unresolved_label(ops.receiver_is_record_ref(e.operation_id)).to_string()
         } else {
@@ -3011,8 +3270,20 @@ fn render_query_effects_body(
                 None => e.table_id.to_string(),
             }
         };
+        let mark = match lit {
+            Some(LiteralRoute::RuledOut | LiteralRoute::NotInCone) => {
+                " [ruled out by literal arguments]".to_string()
+            }
+            Some(LiteralRoute::OtherRoute(s)) => {
+                format!(
+                    " [the cone's live route enters through {}]",
+                    route_display(s)
+                )
+            }
+            _ => String::new(),
+        };
         human.push_str(&format!(
-            "    [{}] on {} via {}, temp {} — {}\n",
+            "    [{}] on {} via {}, temp {} — {}{mark}\n",
             e.op,
             table,
             e.via.as_str(),
@@ -3029,6 +3300,11 @@ fn render_query_effects_body(
         m.insert(
             "beyondWrites".into(),
             json!({"tables": beyond_tables.len(), "entryPoints": beyond_writes.len()}),
+        );
+        // Step 1b: and how many rows the root's literal arguments mark.
+        m.insert(
+            "literalRoutes".into(),
+            payload["summary"]["literalRoutes"].clone(),
         );
     }
     QueryRunResult {

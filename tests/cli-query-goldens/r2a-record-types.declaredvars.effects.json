@@ -142,6 +142,13 @@
         "operations": 0,
         "tables": 0
       },
+      "literalRoutes": {
+        "coneRoute": 0,
+        "notInCone": 0,
+        "notJudged": 4,
+        "otherRoute": 0,
+        "ruledOut": 0
+      },
       "locks": {
         "operations": 0,
         "tables": 0

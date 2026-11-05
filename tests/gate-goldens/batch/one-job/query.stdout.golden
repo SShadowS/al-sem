@@ -94,6 +94,7 @@
           "first": {
             "operationId": "c8d0efe535357e91/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0"
           },
+          "literalRuledOut": 0,
           "ops": {
             "Modify": 1
           },
@@ -104,6 +105,13 @@
       "callerDependent": {
         "operations": 0,
         "tables": 0
+      },
+      "literalRoutes": {
+        "coneRoute": 0,
+        "notInCone": 0,
+        "notJudged": 2,
+        "otherRoute": 0,
+        "ruledOut": 0
       },
       "locks": {
         "operations": 0,

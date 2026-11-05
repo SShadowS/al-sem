@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line now says `883 transitive callers inherit this touch through this routine`, and the new
   `--callers` (MCP `callers: true`) names every caller with its depth and location without
   building `--all`'s caller × witness product (JSON `up.callers[]` with each caller's outcome).
+- **`query effects` showed routes the root's literal arguments rule out, unmarked.** IssueReminder
+  listed `CDO Queue Entry` through `DocHandle`, while explain shows that route cannot run with
+  IssueReminder's literal arguments and the only live one re-enters from Base Application. Rows
+  are still all kept and `via` is unchanged (ConTinAI reads them); each row the cone can judge now
+  carries `literalRoute` (`ruledOut`: an effect it originates from is literal-dead; `notInCone`:
+  the cone keeps no live write of that kind on that table; `otherRoute`: the cone keeps no live
+  route through the row's first hop, and names the first hop its live route takes; `coneRoute`),
+  and the human table line says so on the row it qualifies, with how many of the table's rows
+  are ruled out. `summary.literalRoutes` counts them (query schema 3.2.0, additive).
 - **Touch counts read as if the operation persisted.** `[CalcFields] read` rows were listed under
   "possibly persistent". The classes are the record's temp state, so they now read `on persistent
   records`, `on possibly persistent records` and `on temporary records`.
