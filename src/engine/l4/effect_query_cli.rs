@@ -866,6 +866,15 @@ pub fn resolve_routine_selector<'a>(
         return Resolution::Resolved(r);
     }
 
+    // Output step 1b (fable #7): an `(…)` parameter list picks among
+    // overloads, in every tool's one grammar.
+    let (selector, wanted) = crate::engine::l5::selector_index::split_signature(selector);
+    let signature_ok = |r: &ModelRoutine| {
+        wanted
+            .as_ref()
+            .is_none_or(|w| crate::engine::l5::selector_index::signature_matches(w, &r.parameters))
+    };
+    let routines = || routines().filter(|r| signature_ok(r));
     let want = selector.to_lowercase();
     // `Object.Routine` as written, or (MCP output plan 3b: one selector
     // grammar for every tool) `Owner::Routine` / `Owner.Routine` with the
@@ -896,9 +905,16 @@ pub fn resolve_routine_selector<'a>(
     match hits.len() {
         0 => Resolution::Unmatched,
         1 => Resolution::Resolved(hits[0]),
+        // Step 1b: each candidate by the selector that picks it, its
+        // location and stable id (overloads share owner and name).
         _ => Resolution::Ambiguous(
             hits.iter()
-                .map(|r| format!("{}.{} ({})", object_name(r), r.name, r.stable_routine_id))
+                .map(|r| {
+                    crate::engine::l5::selector_index::candidate_label(
+                        &owner_qualified(&object_display(&r.object_type, object_name(r)), &r.name),
+                        r,
+                    )
+                })
                 .collect(),
         ),
     }
@@ -1369,6 +1385,9 @@ fn selector_failure_doc<T>(
         let mut s = format!("{kind}: {selector_field} {selector:?} is AMBIGUOUS:\n");
         for c in &candidates {
             s.push_str(&format!("  - {c}\n"));
+        }
+        if selector_field != "table" {
+            s.push_str("  pass one as <owner>::<routine>(<parameter types>) or its stable id\n");
         }
         s
     };

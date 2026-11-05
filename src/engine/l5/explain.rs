@@ -430,23 +430,54 @@ fn distinct(selectors: &[String]) -> Vec<&String> {
     selectors.iter().filter(|s| seen.insert(*s)).collect()
 }
 
+/// The `routine-ambiguous` text explain and prove share (G42). Output step
+/// 1b (fable #7): with the candidates' rows known, each is named by the
+/// selector that picks it (its parameter types), its location and stable id,
+/// since an overload's owner and name alone are the same for all of them.
+pub(crate) fn ambiguity_text(
+    prefix: &str,
+    selector: &str,
+    candidates: &[String],
+    routines: &[String],
+) -> String {
+    if routines.is_empty() {
+        return format!(
+            "{prefix}'{selector}' names {} routines ({}); qualify it as <owner>::<routine> or \
+             pass a stable id",
+            candidates.len(),
+            candidates.join(", ")
+        );
+    }
+    format!(
+        "{prefix}'{selector}' names {} routines: {}; pass one as \
+         <owner>::<routine>(<parameter types>) or its stable id",
+        routines.len(),
+        routines.join("; ")
+    )
+}
+
 /// `--routine`'s diagnostic for one changed-roots diagnostic: prove's
 /// `routine-not-found` / `routine-ambiguous` wording (G42).
 fn selector_diagnostic(selector: &str, d: &ChangedRootsDiagnostic) -> Diagnostic {
     match d {
-        ChangedRootsDiagnostic::SelectorAmbiguous { candidates, .. } => Diagnostic {
-            json: json!({
+        ChangedRootsDiagnostic::SelectorAmbiguous {
+            candidates,
+            routines,
+            ..
+        } => {
+            let mut json = json!({
                 "kind": "routine-ambiguous",
                 "selector": selector,
                 "candidates": candidates,
-            }),
-            human: format!(
-                "explain: '{selector}' names {} routines ({}); qualify it as \
-                 <owner>::<routine> or pass a stable id",
-                candidates.len(),
-                candidates.join(", ")
-            ),
-        },
+            });
+            if !routines.is_empty() {
+                json["candidateRoutines"] = json!(routines);
+            }
+            Diagnostic {
+                json,
+                human: ambiguity_text("explain: ", selector, candidates, routines),
+            }
+        }
         ChangedRootsDiagnostic::SelectorUnmatched { .. } => Diagnostic {
             json: json!({ "kind": "routine-not-found", "selector": selector }),
             human: format!("explain: no routine of the program has the id or name '{selector}'"),

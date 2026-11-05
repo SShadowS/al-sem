@@ -1327,3 +1327,109 @@ fn split_object_analyze_locations_name_the_declaring_object() {
         "{doc}"
     );
 }
+
+/// Three overloads of `Persist` in one codeunit (output step 1b, fable #7).
+fn overload_workspace(dir: &Path) {
+    write(
+        &dir.join("app.json"),
+        &format!(
+            r#"{{"id":"{GUID}","name":"Ov","publisher":"probe","version":"1.0.0.0","platform":"1.0.0.0","application":"1.0.0.0","idRanges":[{{"from":50100,"to":50199}}],"runtime":"14.0"}}"#
+        ),
+    );
+    write(
+        &dir.join("src/a.al"),
+        "table 50100 \"Ov Table\"\n{\n    fields { field(1; Code; Code[20]) { } }\n    keys { key(PK; Code) { } }\n}\n\
+         codeunit 50101 \"Sel A\"\n{\n\
+         \x20   procedure Persist(Amount: Integer)\n    begin\n        Message('a');\n    end;\n\n\
+         \x20   procedure Persist(Name: Text; Count: Integer)\n    begin\n        Message('b');\n    end;\n\n\
+         \x20   procedure Persist(No: Code[20]; var Rec: Record \"Ov Table\")\n    begin\n        Rec.Modify();\n    end;\n}\n",
+    );
+}
+
+/// Output step 1b (fable #7): an overloaded name is ambiguous, and every
+/// candidate is printed with the selector that picks it (owner, name and
+/// parameter types), its location and its stable id; that printed selector,
+/// and the other `(…)` spellings (types, names, `name: type`, a type
+/// without its length or by its type word, `var` and quotes optional),
+/// select exactly one overload in prove, explain, digest and query effects.
+/// A list no overload has matches none.
+///
+/// Discrimination (2026-11-05): dropping the parameter-list filter in
+/// `resolve_changed_roots` fails at prove's exit code for
+/// `Sel A::Persist(Integer)` (2: still ambiguous); dropping it in query's
+/// `resolve_routine_selector` fails at the query effects exit code for the
+/// same selector (2, `AMBIGUOUS`); each restored, passes.
+#[test]
+fn a_parameter_list_selects_one_overload() {
+    let dir = tempfile::tempdir().unwrap();
+    overload_workspace(dir.path());
+    let w = dir.path().to_str().unwrap();
+
+    // The ambiguity names each overload's selector, location and stable id.
+    let (d, code) = alsem(&["digest", w, "--routine", "Persist", "--deterministic"]);
+    assert_eq!(code, 2, "{d}");
+    let listed: Vec<String> = d["payload"]["changedRootsDiagnostics"][0]["candidateRoutines"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{d}"))
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(listed.len(), 3, "{d}");
+    for (sig, line) in [
+        ("(Integer)", 8),
+        ("(Text, Integer)", 13),
+        ("(Code[20], var Record \"Ov Table\")", 18),
+    ] {
+        let want = format!("Codeunit Sel A::Persist{sig} at ws:src/a.al:{line} (stable id {GUID}:");
+        assert!(
+            listed.iter().any(|l| l.starts_with(&want)),
+            "{want}: {listed:?}"
+        );
+    }
+    let (out, err, code) = alsem_out(&["prove", w, "Persist", "may-commit", "--format", "human"]);
+    assert_eq!(code, 2, "{out}{err}");
+    assert!(
+        out.contains("Codeunit Sel A::Persist(Text, Integer) at ws:src/a.al:13"),
+        "{out}"
+    );
+    assert!(
+        out.contains("<owner>::<routine>(<parameter types>)"),
+        "{out}"
+    );
+
+    // Each spelling selects one overload: the prove root's declaration line.
+    let printed = listed
+        .iter()
+        .find(|l| l.contains(":18 "))
+        .and_then(|l| l.split(" at ").next())
+        .unwrap()
+        .to_string();
+    for (sel, line) in [
+        ("Sel A::Persist(Integer)", 8),
+        ("Codeunit Sel A::Persist(Amount)", 8),
+        ("Persist(Name: Text; Count: Integer)", 13),
+        ("Persist(text, integer)", 13),
+        (printed.as_str(), 18),
+        ("Sel A::Persist(Code, Rec)", 18),
+        ("Persist(Code[20], Record)", 18),
+    ] {
+        let (p, code) = alsem(&["prove", w, sel, "may-commit", "--deterministic"]);
+        assert_eq!(code, 0, "{sel}: {p}");
+        assert_eq!(
+            p["payload"]["routine"]["anchor"]["line"], line,
+            "prove selects line {line} for {sel}: {p}"
+        );
+        let (_, _, code) = alsem_out(&["explain", w, "--routine", sel]);
+        assert_eq!(code, 0, "explain {sel}");
+        let (d, code) = alsem(&["digest", w, "--routine", sel, "--deterministic"]);
+        assert_eq!(code, 0, "digest {sel}: {d}");
+        let (q, _, code) = alsem_out(&["query", "effects", w, "--routine", sel]);
+        assert_eq!(code, 0, "query effects {sel}: {q}");
+    }
+    for sel in ["Persist(Decimal)", "Persist()", "Persist(Integer, Integer)"] {
+        let (p, code) = alsem(&["prove", w, sel, "may-commit", "--deterministic"]);
+        assert_eq!(code, 2, "{sel}: {p}");
+        let (_, _, code) = alsem_out(&["query", "effects", w, "--routine", sel]);
+        assert_eq!(code, 2, "query effects {sel}");
+    }
+}

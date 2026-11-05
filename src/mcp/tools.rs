@@ -186,7 +186,7 @@ fn common_properties() -> Map<String, Value> {
 
 /// The one selector grammar every routine argument takes (MCP output plan
 /// 3b; the server instructions state it once).
-const SELECTOR: &str = "a stable routine id, `Owner::Routine` or `Owner.Routine` (type word and AL quotes optional), or a bare routine name unique in the workspace";
+const SELECTOR: &str = "a stable routine id, `Owner::Routine` or `Owner.Routine` (type word and AL quotes optional), or a bare routine name unique in the workspace; an overloaded name takes its parameter types in parentheses, `Owner::Routine(Integer, Text)` (or the parameter names), as an ambiguity answer prints each candidate";
 
 fn string_array(description: &str) -> Value {
     json!({"type": "array", "items": {"type": "string"}, "minItems": 1, "description": description})

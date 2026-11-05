@@ -68,6 +68,18 @@ fn descriptions_name_exactly_the_inputs_the_schemas_take() {
             .map(String::as_str)
             .collect();
         every_input.extend(props.iter().map(|p| p.to_string()));
+        // Output step 1b (fable #7): every routine-selector input states the
+        // overload form.
+        for (p, schema) in t["inputSchema"]["properties"].as_object().unwrap() {
+            // The property's whole schema text (an array's item description
+            // included).
+            let pd = schema.to_string();
+            if pd.contains("stable routine id") && !pd.contains("`Owner::Routine(Integer, Text)`") {
+                failures.push(format!(
+                    "{name}: selector input `{p}` omits the overload form"
+                ));
+            }
+        }
         let mentioned: BTreeSet<&str> = backticked(d)
             .into_iter()
             .filter_map(named)
@@ -119,6 +131,8 @@ fn descriptions_name_exactly_the_inputs_the_schemas_take() {
         "1-based",
         "`Owner::Routine`",
         "`Owner.Routine`",
+        // Output step 1b (fable #7): the overload form.
+        "`Owner::Routine(Integer, Text)`",
         "`unknown`",
         "`coverage`",
         "`assumptions`",

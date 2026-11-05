@@ -33,6 +33,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   route through the row's first hop, and names the first hop its live route takes; `coneRoute`),
   and the human table line says so on the row it qualifies, with how many of the table's rows
   are ruled out. `summary.literalRoutes` counts them (query schema 3.2.0, additive).
+- **An overloaded routine could not be selected.** `prove <ws> "CDO File::CreateDocumentFromReport"
+  …` answered `routine-ambiguous … names 4 routines (Table CDO File::CreateDocumentFromReport, x4)`
+  and told the agent to pass a stable id it never printed. Each candidate is now printed as the
+  selector that picks it, with its location and stable id (`Table CDO
+  File::CreateDocumentFromReport(Integer, Integer, Code[20], Text, Text, var RecordRef) at
+  ws:src/Foundation/CDOFile.Table.al:132 (stable id …)`; JSON `candidateRoutines`), and the one
+  selector grammar of explain, prove, digest and query takes a parameter list:
+  `Owner::Routine(Integer, Text)`, by types (a length, `var` and AL quotes optional, or the type
+  word alone) or by parameter names (`name: type` too). The tool descriptions and the server
+  instructions say so.
 - **Touch counts read as if the operation persisted.** `[CalcFields] read` rows were listed under
   "possibly persistent". The classes are the record's temp state, so they now read `on persistent
   records`, `on possibly persistent records` and `on temporary records`.
