@@ -518,11 +518,11 @@ fn a_transcript_answers_what_the_cli_answers() {
     let engines = st["engines"].as_array().unwrap();
     assert_eq!(engines.len(), 1, "{status}");
     assert_eq!(
-        engines[0]["spawns"], 1,
+        engines[0]["details"]["spawns"], 1,
         "one child answered every call: {status}"
     );
-    assert_eq!(engines[0]["deaths"], 0);
-    assert!(engines[0]["engine"]["pid"].is_number());
+    assert_eq!(engines[0]["details"]["deaths"], 0);
+    assert!(engines[0]["details"]["engine"]["pid"].is_number());
     let refresh = s.call(141, "alsem_refresh", json!({}));
     assert_eq!(refresh["structuredContent"]["kind"], "refresh", "{refresh}");
     assert_eq!(refresh["isError"], false);
@@ -782,7 +782,7 @@ fn the_children_bound_ends_the_least_recently_used_idle_child() {
             .unwrap()
             .iter()
             .find(|e| e["workspace"].as_str() == ws.to_str())
-            .and_then(|e| e["engine"]["pid"].as_i64())
+            .and_then(|e| e["details"]["engine"]["pid"].as_i64())
     };
     let st = s.call(2, "alsem_status", json!({}))["structuredContent"].clone();
     let pid = first_pid(&st).expect("the first child runs");
@@ -852,7 +852,7 @@ fn status_states_each_engines_freshness() {
         json!({"routine": "Archive", "deterministic": true}),
     ));
     let st = s.call(3, "alsem_status", json!({}))["structuredContent"].clone();
-    let f = &st["engines"][0]["freshness"];
+    let f = &st["engines"][0]["details"]["freshness"];
     assert_eq!(f["revision"]["generation"], 1, "{st}");
     assert_eq!(
         f["revision"]["inputsStamp"], env["revision"]["inputsStamp"],
@@ -880,7 +880,7 @@ fn status_states_each_engines_freshness() {
     let r = s.call(4, "alsem_refresh", json!({"wait": true}));
     assert_eq!(r["isError"], false, "{r}");
     let st = s.call(5, "alsem_status", json!({}))["structuredContent"].clone();
-    let f = &st["engines"][0]["freshness"];
+    let f = &st["engines"][0]["details"]["freshness"];
     assert!(
         f["countersAgeMs"].as_u64().is_some_and(|ms| ms < 60_000),
         "{st}"
@@ -899,9 +899,222 @@ fn status_states_each_engines_freshness() {
     assert!(s.finish().success());
 }
 
+/// A copy of `ws-explain` a test may edit.
+fn ws_explain_copy() -> tempfile::TempDir {
+    fn copy(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for e in std::fs::read_dir(from).unwrap() {
+            let e = e.unwrap();
+            if e.file_type().unwrap().is_dir() {
+                copy(&e.path(), &to.join(e.file_name()));
+            } else {
+                std::fs::copy(e.path(), to.join(e.file_name())).unwrap();
+            }
+        }
+    }
+    let t = tempfile::tempdir().unwrap();
+    copy(&ws_explain(), t.path());
+    t
+}
+
+/// Agent-tasks design §2 (F-1, F-2, F-5, the refresh state): `alsem_status`
+/// checks the disk against the revision the engine published. No engine:
+/// nothing checked (`noEngine.check: null`, the "nothing was checked"
+/// headline). After a call: FRESH at generation 1. After an edit: STALE
+/// with the file, its category and the uncertain class, twice: the check
+/// builds nothing (the waited refresh after it is the one that rebuilds,
+/// to generation 2), and it reads the disk each time, not the last
+/// answer. An unwaited refresh is `queued` until a later call shows it
+/// completed.
+///
+/// DISCRIMINATION (2026-11-05): answering status without observing the
+/// disk against the published descriptor (the rows' descriptors dropped
+/// before `status_body`) fails at "fresh after the call" (`check: null`);
+/// letting the status pin the engine (a fresh ask, run through
+/// `pool.run_composite` before the rows are read) fails at "stale after the
+/// edit" (the status built generation 2, then found it fresh). Each
+/// restored, it passes.
+#[test]
+fn status_checks_the_disk_against_the_published_revision() {
+    let dir = ws_explain_copy();
+    let ws = std::fs::canonicalize(dir.path()).unwrap();
+    let w = ws.to_str().unwrap();
+    let mut s = Server::ready(&ws, None);
+    let st = s.call(1, "alsem_status", json!({}))["structuredContent"].clone();
+    assert_eq!(st["statusVersion"], 2, "{st}");
+    assert_eq!(st["engines"], json!([]), "{st}");
+    assert_eq!(st["noEngine"]["check"], Value::Null, "{st}");
+    assert_eq!(
+        st["headline"],
+        format!(
+            "no engine is running for {w} (cross-app), so nothing was checked. The next command builds it (about 25 s cross-app on CDO)."
+        ),
+        "{st}"
+    );
+    let env = envelope(&s.call(2, "alsem_query_effects", json!({"routine": "Archive"})));
+    assert_eq!(env["revision"]["generation"], 1, "{env}");
+    let st = s.call(3, "alsem_status", json!({}))["structuredContent"].clone();
+    let e = &st["engines"][0];
+    assert_eq!(e["check"]["fresh"], true, "fresh after the call: {st}");
+    assert_eq!(e["check"]["complete"], true, "{st}");
+    assert_eq!(e["check"]["hashing"], "cached", "{st}");
+    assert_eq!(e["check"]["checkedRevision"]["generation"], 1, "{st}");
+    assert_eq!(
+        e["check"]["checkedRevision"]["inputsStamp"], env["revision"]["inputsStamp"],
+        "{st}"
+    );
+    assert!(
+        st["headline"].as_str().unwrap().starts_with(&format!(
+            "cross-app engine for {w}: FRESH: no input changed since generation 1 (checked just now: 4 files, "
+        )),
+        "{st}"
+    );
+    assert_eq!(e["refresh"]["state"], "idle", "{st}");
+
+    let post = ws.join("src/post.al");
+    let text = std::fs::read_to_string(&post).unwrap();
+    std::fs::write(
+        &post,
+        text.replace(
+            "        Order.Modify();\n        Commit();",
+            "        Order.Modify(true);\n        Commit();",
+        ),
+    )
+    .unwrap();
+    for id in [4, 5] {
+        let st = s.call(id, "alsem_status", json!({}))["structuredContent"].clone();
+        let c = &st["engines"][0]["check"];
+        assert_eq!(c["fresh"], false, "stale after the edit: {st}");
+        assert_eq!(
+            c["changes"],
+            json!([{"category": "al-file", "path": post.to_str().unwrap()}]),
+            "{st}"
+        );
+        assert_eq!(c["refreshClass"]["class"], "BodyOnly|Declaration", "{st}");
+        assert_eq!(c["checkedRevision"]["generation"], 1, "{st}");
+        assert!(
+            st["headline"].as_str().unwrap().starts_with(&format!(
+                "cross-app engine for {w}: STALE. 1 .al file changed on disk since generation 1. Refresh class: BodyOnly or Declaration"
+            )),
+            "{st}"
+        );
+    }
+    let r = s.call(6, "alsem_refresh", json!({"wait": true}))["structuredContent"].clone();
+    assert_eq!(r["did"], "rebuilt", "the refresh rebuilt: {r}");
+    assert_eq!(r["class"], "BodyOnly", "{r}");
+    assert_eq!(r["generation"], 2, "{r}");
+    assert_eq!(r["files"], 1, "{r}");
+    let st = s.call(7, "alsem_status", json!({}))["structuredContent"].clone();
+    let e = &st["engines"][0];
+    assert_eq!(e["check"]["fresh"], true, "{st}");
+    assert_eq!(e["check"]["checkedRevision"]["generation"], 2, "{st}");
+    assert_eq!(e["refresh"]["state"], "completed", "{st}");
+    assert_eq!(e["refresh"]["did"], "rebuilt", "{st}");
+    let r = s.call(8, "alsem_refresh", json!({"wait": true}))["structuredContent"].clone();
+    assert_eq!(r["did"], "already-fresh", "{r}");
+
+    // An unwaited refresh: queued until a later call shows its outcome.
+    std::fs::write(&post, &text).unwrap();
+    let r = s.call(9, "alsem_refresh", json!({"wait": false}))["structuredContent"].clone();
+    assert_eq!(r["did"], "queued", "{r}");
+    let st = s.call(10, "alsem_status", json!({}))["structuredContent"].clone();
+    assert_eq!(st["engines"][0]["refresh"]["state"], "queued", "{st}");
+    let _ = envelope(&s.call(11, "alsem_query_effects", json!({"routine": "Archive"})));
+    let st = s.call(12, "alsem_status", json!({}))["structuredContent"].clone();
+    let e = &st["engines"][0];
+    assert_eq!(e["refresh"]["state"], "completed", "{st}");
+    assert_eq!(e["refresh"]["did"], "rebuilt", "{st}");
+    assert_eq!(e["check"]["fresh"], true, "{st}");
+    assert_eq!(e["check"]["checkedRevision"]["generation"], 3, "{st}");
+    assert!(s.finish().success());
+}
+
 #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
 mod faults {
     use super::*;
+
+    /// F-3 (agent-tasks design §2.5): `alsem_status` answers with a complete
+    /// disk check within 200 ms while a heavy `alsem_explain` runs on the
+    /// same engine (its child sleeps 3 s on every ask), and names the
+    /// running call; the explain is answered after it.
+    ///
+    /// DISCRIMINATION (2026-11-05): making the status wait for the engine's
+    /// running call before it reads the worker's snapshot (as a check
+    /// through the busy front end would: `engine_rows` waiting while
+    /// `running_tool` is set) fails at "answered first"; restored, it
+    /// passes.
+    #[test]
+    fn status_answers_during_a_heavy_call() {
+        let ws = ws_explain();
+        let mut s = Server::ready(&ws, Some("sleep-on-ask:3000"));
+        let _ = envelope(&s.call(1, "alsem_query_effects", json!({"routine": "Archive"})));
+        s.send(
+            json!(7),
+            "tools/call",
+            json!({"name": "alsem_explain", "arguments": {"routines": ["Archive"]}}),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let start = std::time::Instant::now();
+        s.send(
+            json!(8),
+            "tools/call",
+            json!({"name": "alsem_status", "arguments": {}}),
+        );
+        let r = s.response();
+        let elapsed = start.elapsed();
+        assert_eq!(r["id"], 8, "answered first: {r}");
+        assert!(
+            elapsed < std::time::Duration::from_millis(200),
+            "within 200 ms: {elapsed:?}"
+        );
+        let st = &r["result"]["structuredContent"];
+        let e = &st["engines"][0];
+        assert_eq!(e["details"]["running"], "alsem_explain", "{st}");
+        assert_eq!(e["check"]["complete"], true, "{st}");
+        assert_eq!(e["check"]["fresh"], true, "{st}");
+        let r = s.response();
+        assert_eq!(r["id"], 7, "{r}");
+        assert_eq!(envelope(&r["result"])["kind"], "cli", "{r}");
+        assert!(s.finish().success());
+    }
+
+    /// The reader loop is never held by a check (agent-tasks design §2.2),
+    /// and a check past its deadline is `complete: false`, never fresh
+    /// (F-9): each check here waits 1.5 s under a 500 ms deadline
+    /// (`status-check:1500:500`, read by the MCP process). A ping sent
+    /// after the status is answered first; the status then says the check
+    /// did not finish.
+    ///
+    /// DISCRIMINATION (2026-11-05): joining the checker thread on the
+    /// reader loop (`h.join()` right after the spawn) fails at "the ping
+    /// first"; restored, it passes.
+    #[test]
+    fn a_slow_check_holds_neither_the_reader_nor_its_deadline() {
+        let ws = ws_explain();
+        let w = ws.to_str().unwrap();
+        let mut s = Server::ready(&ws, Some("status-check:1500:500"));
+        let _ = envelope(&s.call(1, "alsem_query_effects", json!({"routine": "Archive"})));
+        s.send(
+            json!(2),
+            "tools/call",
+            json!({"name": "alsem_status", "arguments": {}}),
+        );
+        s.send(json!(3), "ping", json!({}));
+        let r = s.response();
+        assert_eq!(r["id"], 3, "the ping first: {r}");
+        let r = s.response();
+        assert_eq!(r["id"], 2, "{r}");
+        let st = &r["result"]["structuredContent"];
+        let c = &st["engines"][0]["check"];
+        assert_eq!(c["complete"], false, "{st}");
+        assert_eq!(c["fresh"], false, "{st}");
+        assert_eq!(
+            st["headline"],
+            "cross-app engine: the check did not finish (the check did not finish within 500 ms); freshness unknown.",
+            "{st} ({w})"
+        );
+        assert!(s.finish().success());
+    }
 
     /// MCP output plan 3c: while a call is in the engine's `pin` phase (its
     /// freshness check and build) `alsem_status` says so (`activity: pin`,
@@ -922,7 +1135,7 @@ mod faults {
         );
         std::thread::sleep(std::time::Duration::from_millis(1000));
         let st = s.call(8, "alsem_status", json!({}))["structuredContent"].clone();
-        let e = &st["engines"][0];
+        let e = &st["engines"][0]["details"];
         assert_eq!(e["running"], "alsem_query_effects", "{st}");
         assert_eq!(e["freshness"]["activity"], "pin", "activity pin: {st}");
         assert_eq!(e["freshness"]["building"], true, "{st}");
@@ -930,7 +1143,7 @@ mod faults {
         let r = s.response();
         assert_eq!(r["id"], 7, "{r}");
         let st = s.call(9, "alsem_status", json!({}))["structuredContent"].clone();
-        let f = &st["engines"][0]["freshness"];
+        let f = &st["engines"][0]["details"]["freshness"];
         assert_eq!(
             (&f["activity"], &f["building"]),
             (&json!("idle"), &json!(false)),
@@ -1016,8 +1229,8 @@ mod faults {
         let env = envelope(&s.call(2, "alsem_prove", args));
         assert_eq!(cli_bytes(&env), expected);
         let st = s.call(3, "alsem_status", json!({}))["structuredContent"].clone();
-        assert_eq!(st["engines"][0]["spawns"], 2, "{st}");
-        assert_eq!(st["engines"][0]["deaths"], 1, "{st}");
+        assert_eq!(st["engines"][0]["details"]["spawns"], 2, "{st}");
+        assert_eq!(st["engines"][0]["details"]["deaths"], 1, "{st}");
         assert!(s.finish().success());
     }
 

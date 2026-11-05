@@ -581,6 +581,51 @@ impl Manifest {
         }
     }
 
+    /// A freshness check of the disk against `published` (a revision's
+    /// manifest, as its input descriptor carries it; agent-tasks design
+    /// §2.2): an observation, stat-cached against it unless `verify`, with
+    /// no change notification (the checker does not hold the session's
+    /// dirty set). The `meta:` entries are the revision's own: the engine
+    /// and grammar that built it are not disk inputs, and the checking
+    /// process may be another binary.
+    #[must_use]
+    pub fn check_against(
+        published: &Manifest,
+        workspace: &Path,
+        single_app: bool,
+        verify: bool,
+    ) -> Manifest {
+        let no_dirty = BTreeSet::new();
+        let hashing = if verify {
+            Hashing::All
+        } else {
+            Hashing::Cached {
+                prev: published,
+                dirty: &no_dirty,
+            }
+        };
+        let mut m = Manifest::observe(workspace, single_app, hashing);
+        m.entries.retain(|k, _| !k.starts_with("meta:"));
+        for (k, v) in &published.entries {
+            if k.starts_with("meta:") {
+                m.entries.insert(k.clone(), v.clone());
+            }
+        }
+        m
+    }
+
+    /// The entries whose input could not be read: `(key, why)`.
+    #[must_use]
+    pub fn unreadable(&self) -> Vec<(String, String)> {
+        self.entries
+            .iter()
+            .filter_map(|(k, v)| match v {
+                Ident::Unreadable(why) => Some((k.clone(), why.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The file entries this observation read and hashed, in the order it
     /// read them (the others reused the previous observation's hash).
     #[must_use]

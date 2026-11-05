@@ -113,6 +113,9 @@ pub struct EngineCall {
     pub universe: Universe,
     /// Refresh: wait for the refresh to finish before answering.
     pub wait: bool,
+    /// Status: hash every input in the freshness check, not only those
+    /// whose size or modification time moved.
+    pub verify: bool,
 }
 
 /// A validated tool call.
@@ -426,7 +429,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_status",
-            "Is the engine's answer current, and what is it doing? Per workspace and universe, `freshness` gives the revision that answers (`generation`, which a rebuild raises, and `inputsStamp`, the hash of the inputs it was built from, the same `revision` every answer's envelope carries), the last build (`class`: cold, P package, S declaration, B body; `startedAtUnixMs`, `durationMs`), `building` (true while a call checks freshness or builds, or a refresh runs; null after an unwaited refresh until the next call), `activity` (idle, asking, pin, prepare, compute, refresh) and the engine child's memory (`rssBytes`, `peakRssBytes`, read live where the OS allows). Also the child (pid, version), its counters, its last failure and stderr tail, and the server's output folder. Starts nothing; answers at once, even while a call runs.",
+            "Is the engine current with the files on disk, and what is it doing? Read `headline` first: per engine, FRESH (no input changed since the revision that answers), STALE (what changed, the refresh class, what to do next), not checked (no engine yet, and why), or the check did not finish. It checks the disk now, against the inputs of the last published revision, without waiting for a busy engine and without building anything. Per engine: `check` (`checkedRevision` with `generation` and `inputsStamp`, the same `revision` every answer's envelope carries; `fresh`; `complete` and `incompleteReasons`; `changes`, each input with its `category` (al-file, al-walk, app-json, app-json-paths, roots-config, coverage-config, source-dependency, package, package-list, unreadable-package-folder) and `path`; `refreshClass`: Package, Declaration, BodyOnly, or BodyOnly|Declaration when only .al contents changed (known after parsing them)); `refresh` (the last alsem_refresh: idle, queued, running, completed or failed, with what it did); `details` (the last build, `activity`, the child's memory, pid and counters, its last failure and stderr tail). The default check trusts a file's size and modification time; `verify: true` hashes every input. Starts nothing; answers at once, even while a call runs.",
             schema(
                 vec![
                     (
@@ -436,6 +439,10 @@ pub fn tool_list() -> Vec<Value> {
                     (
                         "singleApp",
                         json!({"type": "boolean", "description": "With workspace: only the single-app engine (default: the cross-app one)."}),
+                    ),
+                    (
+                        "verify",
+                        json!({"type": "boolean", "description": "Hash every input instead of trusting size and modification time (slower; default false)."}),
                     ),
                 ],
                 &[],
@@ -651,6 +658,7 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             workspace: workspace.as_deref().map(absolute),
             universe,
             wait: a.bool("wait")?.unwrap_or(true),
+            verify: a.bool("verify")?.unwrap_or(false),
         };
         return Ok(if tool == "alsem_status" {
             ToolCall::Status(call)

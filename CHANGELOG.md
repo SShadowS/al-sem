@@ -29,6 +29,28 @@ Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §2.
 
 ### Changed (agent tasks, milestone F)
 
+- **`alsem_status` checks the disk** (`statusVersion: 2`, `mcp::freshness`). Before, it returned the
+  workers' snapshots and never looked at a file, so `revision` and `lastBuild` read as "current"
+  when nothing was checked. Now each engine's row has a `check`: the disk compared with the input
+  descriptor its worker published for the revision (stat-cached, or every input hashed with the new
+  `verify: true` argument), bound to `checkedRevision` (`generation`, `inputsStamp`) with start and
+  end times, `complete`/`incompleteReasons` (a check past its deadline, 5 s cached and 30 s verify,
+  or one that meets an unreadable input is never `fresh`), `fresh`, the `changes` by category with
+  their paths, `filesHashed`, and the `refreshClass` from the session's own classes (`Package` for
+  a package, the root `app.json` or a source dependency; `Declaration` for a `.al` file added,
+  removed or renamed; `BodyOnly` for `roots.config.json`, the coverage config or a nested
+  `app.json` alone; `BodyOnly|Declaration`, not certain, for `.al` edits). A `headline` per engine
+  and one for the whole answer say FRESH, STALE (what changed, the class, the next action), not
+  checked (no engine for the workspace: `noEngine`, `check: null`), or that the check did not
+  finish. The check runs on a checker thread in the MCP process: the reader loop keeps answering,
+  and a busy engine child, worker or build never delays it, since it never goes through the
+  engine's front end; it builds nothing and leaves the child's session alone. The old per-engine
+  fields move under `details`. `refresh` gives the last `alsem_refresh`'s state (`idle`, `queued`,
+  `running`, `completed`, `failed`) with what it did, its class and generation; an unwaited refresh
+  is `queued` until a later call shows its outcome.
+- **`alsem_refresh` says what it did**: `did` is `rebuilt` (with `class`, `files`, `durationMs`,
+  `generation`), `already-fresh`, or `queued` (`wait: false`). The child's `session/refresh`
+  answer carries `built`, `class` and `changedFiles`.
 - `changedPaths` (a `latest-built` answer's stale inputs) now also names a changed source
   dependency file and `al-sem.dependencies.json`; before, a source-dependency change gave no path
   at all. It is computed from `Manifest::changes`.
