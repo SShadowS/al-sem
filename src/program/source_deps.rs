@@ -84,6 +84,62 @@ pub type SourceDependencies = Result<Vec<SourceDependency>, String>;
 
 /// Read the workspace's [`CONFIG_FILE`] and every folder it names.
 pub fn read(workspace: &Path) -> SourceDependencies {
+    let walked = walk(workspace, &mut |_, _, path| {
+        read_al_source(path).map_err(|e| e.to_string())
+    })?;
+    Ok(walked.into_iter().map(Walked::into_dependency).collect())
+}
+
+/// One configured folder as [`walk`] found it: its `app.json` (read and
+/// parsed) and, for each `.al` file in walk order, its `rel_posix` under
+/// `root`, its path and what the walk's per-file step made of it.
+pub struct Walked<T> {
+    pub spelled: String,
+    pub root: PathBuf,
+    pub app_json: serde_json::Value,
+    pub app_json_bytes: Vec<u8>,
+    pub files: Vec<(String, PathBuf, T)>,
+}
+
+impl Walked<String> {
+    /// The dependency these texts make ([`read`]).
+    fn into_dependency(self) -> SourceDependency {
+        let mut hasher = blake3::Hasher::new();
+        let mut put = |b: &[u8]| {
+            hasher.update(&(b.len() as u64).to_le_bytes());
+            hasher.update(b);
+        };
+        put(&self.app_json_bytes);
+        let mut files = Vec::with_capacity(self.files.len());
+        for (rel, _, text) in self.files {
+            put(rel.as_bytes());
+            put(text.as_bytes());
+            files.push(SourceFile {
+                virtual_path: rel,
+                text: text.into(),
+            });
+        }
+        SourceDependency {
+            spelled: self.spelled,
+            root: self.root,
+            app_json: self.app_json,
+            app_json_bytes: self.app_json_bytes,
+            files: Arc::new(files),
+            content_hash: hasher.finalize().to_hex().to_string(),
+        }
+    }
+}
+
+/// The config and every folder it names, with the checks [`read`] makes
+/// (in its order, with its messages), each `.al` file handed to `per_file`
+/// (`(spelled, rel_posix, path)`) instead of read: [`read`] reads it; the
+/// resident manifest's freshness check (agent-tasks design §2.2) reuses a
+/// file's earlier hash when its stat is unchanged, so only a changed file is
+/// read. A `per_file` error is the file's read error.
+pub fn walk<T>(
+    workspace: &Path,
+    per_file: &mut dyn FnMut(&str, &str, &Path) -> Result<T, String>,
+) -> Result<Vec<Walked<T>>, String> {
     let config_path = workspace.join(CONFIG_FILE);
     let bytes = match std::fs::read(&config_path) {
         Ok(b) => b,
@@ -93,14 +149,23 @@ pub fn read(workspace: &Path) -> SourceDependencies {
     let text = std::str::from_utf8(&bytes).map_err(|_| format!("{CONFIG_FILE}: not UTF-8"))?;
     let config: Config = serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(text))
         .map_err(|e| format!("{CONFIG_FILE}: {e}"))?;
-    let mut deps: Vec<SourceDependency> = Vec::with_capacity(config.sources.len());
+    let mut deps: Vec<Walked<T>> = Vec::with_capacity(config.sources.len());
+    let guid = |v: &serde_json::Value| {
+        v.get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+    };
     for spelled in config.sources {
-        let dep = read_one(workspace, &spelled)
+        let dep = walk_one(workspace, &spelled, per_file)
             .map_err(|e| format!("{CONFIG_FILE}: source \"{spelled}\": {e}"))?;
-        let guid = dep.guid();
-        if let Some(other) = deps.iter().find(|d| !guid.is_empty() && d.guid() == guid) {
+        let id = guid(&dep.app_json);
+        if let Some(other) = deps
+            .iter()
+            .find(|d| !id.is_empty() && guid(&d.app_json) == id)
+        {
             return Err(format!(
-                "{CONFIG_FILE}: sources \"{}\" and \"{spelled}\" are both app {guid}",
+                "{CONFIG_FILE}: sources \"{}\" and \"{spelled}\" are both app {id}",
                 other.spelled
             ));
         }
@@ -124,7 +189,11 @@ pub fn configured_roots(workspace: &Path) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-fn read_one(workspace: &Path, spelled: &str) -> Result<SourceDependency, String> {
+fn walk_one<T>(
+    workspace: &Path,
+    spelled: &str,
+    per_file: &mut dyn FnMut(&str, &str, &Path) -> Result<T, String>,
+) -> Result<Walked<T>, String> {
     let root = workspace.join(spelled);
     if !root.is_dir() {
         return Err(format!("{} is not a folder", root.display()));
@@ -156,29 +225,17 @@ fn read_one(workspace: &Path, spelled: &str) -> Result<SourceDependency, String>
     let found = discover_al_files(&root, NestedApps::Walk)
         .map_err(|e| format!("walking {}: {e}", root.display()))?;
     let mut files = Vec::with_capacity(found.len());
-    let mut hasher = blake3::Hasher::new();
-    let mut put = |b: &[u8]| {
-        hasher.update(&(b.len() as u64).to_le_bytes());
-        hasher.update(b);
-    };
-    put(&app_json_bytes);
     for f in found {
-        let text = read_al_source(&f.abs_path)
+        let made = per_file(spelled, &f.rel_posix, &f.abs_path)
             .map_err(|e| format!("reading {}: {e}", f.abs_path.display()))?;
-        put(f.rel_posix.as_bytes());
-        put(text.as_bytes());
-        files.push(SourceFile {
-            virtual_path: f.rel_posix,
-            text: text.into(),
-        });
+        files.push((f.rel_posix, f.abs_path, made));
     }
-    Ok(SourceDependency {
+    Ok(Walked {
         spelled: spelled.to_string(),
         root,
         app_json,
         app_json_bytes,
-        files: Arc::new(files),
-        content_hash: hasher.finalize().to_hex().to_string(),
+        files,
     })
 }
 

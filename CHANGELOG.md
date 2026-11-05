@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (agent tasks, milestone F: freshness)
+
+Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §2.
+
+- **Source dependencies are stat-cached inputs** (`engine::resident::manifest`). The input
+  manifest records each configured source folder (`al-sem.dependencies.json`) as its own entries:
+  its `app.json` (`srcapp:`), its `.al` listing (`srcwalk:`) and every `.al` file with its stat
+  (`src:<spelled>\0<rel>`), through the same walk and checks the read makes
+  (`program::source_deps::walk`, which `read` now uses too). A stat-cached freshness check now
+  reads and hashes only the dependency files whose length or modification time moved; before, it
+  read and hashed every file of every source dependency on every check. A workspace without
+  source dependencies has the same entries and the same stamp as before.
+- **Input categories** (`Manifest::changes`): every input that differs between two manifests, with
+  its category (`al-file`, `al-walk`, `app-json`, `app-json-paths`, `roots-config`,
+  `coverage-config`, `source-dependency`, `package`, `package-list`, `unreadable-package-folder`,
+  `meta`), its path when it is one file, and what changed when the path does not say it (a file
+  on one side only is `added` or `removed`). `Manifest::hashed` lists the files an observation
+  actually read. The spec's `injected-source` / `injected-packages` categories wait for the test
+  universes (milestone C), which are the only builds with injected inputs.
+
+### Changed (agent tasks, milestone F)
+
+- `changedPaths` (a `latest-built` answer's stale inputs) now also names a changed source
+  dependency file and `al-sem.dependencies.json`; before, a source-dependency change gave no path
+  at all. It is computed from `Manifest::changes`.
+
 ### Added (agent tasks, milestone M0: resident groundwork)
 
 Nothing an agent sees changes yet; these are the pieces the later milestones (the reverse cone,
