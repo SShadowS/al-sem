@@ -541,6 +541,48 @@ The blast radius of a change, current effects only. Spec:
   accounting line, the first five routines, the tests line). The LSP front end refuses it, as it
   refuses `alsem_tests`. The server instructions name it for reviewing a diff or a PR.
 
+### Fixed (transaction spans read statement order)
+
+- **A transaction span now ends at its Commit and the next one starts after it.** The spans
+  behind d9, d8, d50 and digest's transaction context (`engine::l5::transaction_spans`) read
+  the statement order only for the pending writes. Three other parts ignored it:
+  - **coverage**: `coverage_complete` was the AND of every member's whole-cone coverage, so a
+    gap in a callee called AFTER the Commit (or in a checked `Codeunit.Run`, its own
+    transaction) made the span "effect scope unknown". It now reads what each member may run
+    before its call toward the Commit (the Commit routine: before the Commit), with the same
+    site set as the pending writes: no gap of the member's own and complete cones for the
+    routines it may call first. A member whose whole cone is complete stays complete.
+  - **an earlier Commit of the Commit routine**: `w1; Commit; X(); Commit` gave the second
+    Commit's span the routine's callers and their writes, which the first Commit had already
+    ended. That span is now the routine alone, from the first Commit on (its span root).
+  - **a caller that commits**: the walk stopped at every caller with a Commit anywhere in its
+    body. It now stops only when a Commit statement runs on the way to the caller's call
+    toward the Commit (`Before::committed`, read by `pending_writes::sites_before`); a caller
+    that commits only after (or beside, or in a branch before) its call does not end the
+    transaction its callers opened, so they are in the span. With the order unknown (no tree,
+    or a site the tree does not hold) the old stop rule holds.
+- digest's transaction context names a Commit's span `span-has-known-writes` from the physical
+  writes pending at it (`pending_physical_tables`), not from everything the span can reach.
+- On CDO (`bc3ccb18`, `--scope primary` and `--scope all` alike) 12 d9 findings move and no
+  other detector's: 2 drop (SendQueue, whose only gap is in the checked `Codeunit.Run` after its
+  Commit; StampBlankSendCodeBatched, whose gaps are in `RunMigration`'s phase 2, after its call),
+  10 change their routine count (callers past `HandleEntry`, `PrintDocuments`,
+  `PrintOrEMailAll` and `RunMigration`, which commit after their call) and 2 of those lose one
+  pending table (`CDO Print document`, written after `PrintDocuments`' call toward the Commit).
+- Known precision gap, not fixed here: a literal argument is not followed through a function
+  return and an event `var` parameter. `EnableeDocsFeature` passes `GetCDNeDocsFeatureCode()` to
+  `CSC Feature Management.EnableFeature`, whose `OnAfterEnableFeature` reaches
+  `OnAfterEnableCDOFeature`'s `case FeatureCode of ... ESealFeatureCodeLbl: RunESealServiceSetup`,
+  so the eSeal arm counts as reachable from the CDN eDocs feature. This was found while checking
+  the proto/dep-callers d9 report: its RunESealServiceSetup growth (5 → 18 routines) comes from
+  these callers, not from statement order.
+- Tests: `transaction_spans::order_tests` (7 inline-AL fixtures) and
+  `pending_writes::tests::a_commit_on_the_way_clears_and_a_branch_or_loop_commit_does_not`,
+  `digest_cli::tests::tx_context_reads_the_writes_pending_at_the_commit`.
+- Milestone A's callers' context questions read the same order: `pending_before_report` is now
+  `sites_before` + `pending_of` (its `committed` is `Before::committed`, a Commit on the way to
+  every target; the questions pass one target, so their answers do not change).
+
 ### Added (agent tasks, milestone C: test selection)
 
 Which tests to run first for a change, as a first-class answer. Spec:
