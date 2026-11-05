@@ -659,6 +659,12 @@ impl<'a> ViewCx<'a> {
         self.view.take_effects(self.job)
     }
 
+    /// This job's streamed tree read (a tree demand with
+    /// `TreeDemand::stream`): its effects batch by batch.
+    pub fn take_effects_stream(&mut self) -> crate::engine::session::EffectsStream {
+        self.view.take_effects_stream(self.job)
+    }
+
     /// This job's tree read (#160 step 9 D5; #277 D5.4).
     pub fn take_tree_read(&mut self) -> TreeReadOut {
         self.view.take_tree_read(self.job)

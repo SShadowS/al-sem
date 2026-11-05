@@ -33,20 +33,41 @@ pub struct RenderOpts {
     /// Routines shown in the human text (the JSON holds every one).
     pub max_roots: usize,
     pub detail: bool,
+    /// The human text's size budget in bytes: fewer than `max_roots`
+    /// routines are shown when their blocks would pass it, and the fold says
+    /// so. `None` (a `--max-roots` or `--detail` the caller asked for): no
+    /// budget.
+    pub budget: Option<usize>,
 }
 
 impl Default for RenderOpts {
     fn default() -> Self {
+        RenderOpts::new(false, None, false)
+    }
+}
+
+impl RenderOpts {
+    /// The options of a request: `max_roots` as asked (default
+    /// [`DEFAULT_MAX_ROOTS`]); the size budget [`HUMAN_BUDGET`] unless the
+    /// caller asked for a routine count or for everything (`detail`).
+    #[must_use]
+    pub fn new(json: bool, max_roots: Option<usize>, detail: bool) -> RenderOpts {
         RenderOpts {
-            json: false,
-            max_roots: DEFAULT_MAX_ROOTS,
-            detail: false,
+            json,
+            max_roots: max_roots.unwrap_or(DEFAULT_MAX_ROOTS),
+            detail,
+            budget: (max_roots.is_none() && !detail).then_some(HUMAN_BUDGET),
         }
     }
 }
 
 /// `--max-roots`' default.
 pub const DEFAULT_MAX_ROOTS: usize = 20;
+
+/// The default human answer's size budget: under the MCP tool's 40 KiB
+/// inline cap (`mcp::tools::MCP_DEFAULT_INLINE_BYTES`) with room to spare,
+/// so the default answer is returned inline.
+pub const HUMAN_BUDGET: usize = 38 * 1024;
 
 /// The rendered answer: stdout, the exit code, and the summary an MCP
 /// answer carries inline when the text goes to a file.
@@ -62,6 +83,12 @@ fn s<'a>(v: &'a Value, k: &str) -> &'a str {
 
 fn u(v: &Value, k: &str) -> usize {
     v.get(k).and_then(Value::as_u64).unwrap_or(0) as usize
+}
+
+/// A routine's display with its short handle (`Codeunit X::F/2`): two
+/// overloads never print alike.
+fn named(v: &Value) -> String {
+    format!("{}{}", s(v, "display"), s(v, "handle"))
 }
 
 fn short(c: &str) -> String {
@@ -503,8 +530,24 @@ fn rank_key(
     )
 }
 
+/// The sites one count change lists by default (all of them with
+/// `detail`); the clause's own counts (`17 → 33 sites`) stay whole.
+const SITES_SHOWN: usize = 2;
+
+/// A count change's site list: the first [`SITES_SHOWN`] (every one with
+/// `detail`), then how many it hides.
+fn sites_list(sites: &[Value], detail: bool) -> String {
+    let all: Vec<&str> = sites.iter().filter_map(Value::as_str).collect();
+    let cap = if detail { usize::MAX } else { SITES_SHOWN };
+    let mut s = all.iter().take(cap).copied().collect::<Vec<_>>().join(", ");
+    if all.len() > cap {
+        s.push_str(&format!(", … +{}", all.len() - cap));
+    }
+    s
+}
+
 /// The changes of one root's delta block, own first, as human clauses.
-fn delta_clauses(d: &Value) -> Vec<String> {
+fn delta_clauses(d: &Value, detail: bool) -> Vec<String> {
     ["own", "cone"]
         .iter()
         .flat_map(|k| d[*k].as_array().cloned().unwrap_or_default())
@@ -521,21 +564,9 @@ fn delta_clauses(d: &Value) -> Vec<String> {
                     let which = if c["sites"] == "ambiguous" {
                         " (which site: ambiguous)".to_string()
                     } else if let Some(a) = c["addedSites"].as_array() {
-                        format!(
-                            " (added at {})",
-                            a.iter()
-                                .filter_map(Value::as_str)
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
+                        format!(" (added at {})", sites_list(a, detail))
                     } else if let Some(r) = c["removedSites"].as_array() {
-                        format!(
-                            " (removed: base {})",
-                            r.iter()
-                                .filter_map(Value::as_str)
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
+                        format!(" (removed: base {})", sites_list(r, detail))
                     } else {
                         String::new()
                     };
@@ -688,10 +719,7 @@ pub fn render(
     }
     for r in &roots {
         if let Some(l) = r["up"]["limited"].as_str() {
-            limits.push(format!(
-                "{}: the reverse walk stopped ({l})",
-                s(r, "display")
-            ));
+            limits.push(format!("{}: the reverse walk stopped ({l})", named(r)));
         }
     }
     let mut assumptions = vec![
@@ -796,7 +824,21 @@ pub fn render(
             if cmp.untracked.is_empty() {
                 String::new()
             } else {
-                format!(" ({})", cmp.untracked.join(", "))
+                let show = if opts.detail { usize::MAX } else { 5 };
+                format!(
+                    " ({}{})",
+                    cmp.untracked
+                        .iter()
+                        .take(show)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    if cmp.untracked.len() > show {
+                        format!(", … +{}", cmp.untracked.len() - show)
+                    } else {
+                        String::new()
+                    }
+                )
             }
         ));
     }
@@ -939,35 +981,124 @@ pub fn render(
             exit,
         };
     }
-    // 2. Per root.
-    let shown = roots.len().min(opts.max_roots);
-    match delta {
-        Ok(d) => out.push(format!(
-            "behavior changed in {} of the {} paired with the base; ranked: changed behavior first, then reached from a user or a job, then by ancestors; {}:",
-            d.delta["behaviorChanged"],
-            plural(u(&d.delta, "paired"), "routine", "routines"),
-            if shown == roots.len() {
-                "all shown".to_string()
-            } else {
-                format!("first {shown}")
-            }
-        )),
-        Err(e) => {
-            if e != "not asked" {
-                out.push(format!("before/after: not computed — {e}"));
-            }
-            out.push(format!(
-                "current effects of the {} (no base given: current effects; no before/after); ranked: reached from a user or a job first, then by ancestors; {}:",
-                plural(roots.len(), "changed routine", "changed routines"),
-                if shown == roots.len() {
-                    "all shown".to_string()
-                } else {
-                    format!("first {shown}")
+    // 2. Per root: each shown routine's block, then the whole change (3),
+    // the tests (4) and what was not seen (5). The routines shown are the
+    // first `max_roots`, fewer when the answer would pass its size budget
+    // (`RenderOpts::budget`); the fold says how many it hides and why.
+    let header = |shown: usize| -> Vec<String> {
+        let which = if shown == roots.len() {
+            "all shown".to_string()
+        } else {
+            format!("first {shown}")
+        };
+        match delta {
+            Ok(d) => vec![format!(
+                "behavior changed in {} of the {} paired with the base; ranked: changed behavior first, then reached from a user or a job, then by ancestors; {which}:",
+                d.delta["behaviorChanged"],
+                plural(u(&d.delta, "paired"), "routine", "routines"),
+            )],
+            Err(e) => {
+                let mut h = Vec::new();
+                if e != "not asked" {
+                    h.push(format!("before/after: not computed — {e}"));
                 }
-            ));
+                h.push(format!(
+                    "current effects of the {} (no base given: current effects; no before/after); ranked: reached from a user or a job first, then by ancestors; {which}:",
+                    plural(roots.len(), "changed routine", "changed routines"),
+                ));
+                h
+            }
+        }
+    };
+    let blocks: Vec<Vec<String>> = roots
+        .iter()
+        .take(opts.max_roots)
+        .map(|r| root_block(r, opts))
+        .collect();
+    let mut tail: Vec<String> = Vec::new();
+    // 3. The whole change.
+    if let Ok(up) = up {
+        let un = &up["union"];
+        tail.push(format!(
+            "the whole change is reached from: {}; {}",
+            reached_clause(un, false),
+            plural(u(&un["ancestors"], "total"), "ancestor", "ancestors")
+        ));
+    }
+    if let Ok(d) = delta {
+        before_after_tail(&mut tail, d, opts);
+    } else if schema_lines > 0 {
+        tail.push(format!(
+            "schema: {} field, key or field group lines changed (current revision only; a base gives the schema findings)",
+            thousands(schema_lines)
+        ));
+    }
+    // 4. Tests.
+    tail.push(match tests {
+        Err(e) => format!("tests: not computed — {e}"),
+        Ok(t) => tests_line(&t.doc),
+    });
+    // 5. What was not seen.
+    for l in &limits {
+        tail.push(format!("limit: {l}"));
+    }
+    tail.push(if delta.is_ok() {
+        "these are static may-paths; before/after compares semantic keys of both sides; tests are static reachability, not coverage".into()
+    } else {
+        "these are static may-paths and current effects; tests are static reachability, not coverage".into()
+    });
+    let fold = |shown: usize, cut: bool| -> Option<String> {
+        (roots.len() > shown).then(|| {
+            format!(
+                "  … +{} ({}max-roots N to show more, or format json for every one)",
+                plural(roots.len() - shown, "routine", "routines"),
+                if cut {
+                    format!(
+                        "the answer is kept under {} KiB: ",
+                        opts.budget.unwrap_or(0) / 1024
+                    )
+                } else {
+                    String::new()
+                }
+            )
+        })
+    };
+    let bytes = |lines: &[String]| -> usize { lines.iter().map(|l| l.len() + 1).sum() };
+    let mut shown = blocks.len();
+    if let Some(budget) = opts.budget {
+        let fixed = bytes(&out) + bytes(&tail);
+        let size = |k: usize| {
+            fixed
+                + bytes(&header(k))
+                + blocks[..k].iter().map(|b| bytes(b)).sum::<usize>()
+                + fold(k, k < blocks.len()).map_or(0, |l| l.len() + 1)
+        };
+        // At least one routine is always shown.
+        while shown > 1 && size(shown) > budget {
+            shown -= 1;
         }
     }
-    for r in roots.iter().take(shown) {
+    out.extend(header(shown));
+    for b in &blocks[..shown] {
+        out.extend(b.iter().cloned());
+    }
+    out.extend(fold(shown, shown < blocks.len()));
+    out.extend(tail);
+    let text = out.join("\n") + "\n";
+    Rendered {
+        summary: summary_text(cmp, main, &roots, files, tests, delta),
+        text,
+        exit,
+    }
+}
+
+/// One routine's lines in the human answer: its name and anchor, its
+/// before/after (with a base), its current effects, who reaches it, its
+/// tests. Every list is capped (all of it with `detail`), each cap saying
+/// how many it hides.
+fn root_block(r: &Value, opts: RenderOpts) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    {
         let anchor = &r["anchor"];
         let status = match s(r, "status") {
             "signatureChanged" => "signature changed",
@@ -977,7 +1108,7 @@ pub fn render(
         };
         out.push(format!(
             "  {} ({}:{}) — {status}",
-            s(r, "display"),
+            named(r),
             s(anchor, "file"),
             anchor["line"]
         ));
@@ -989,7 +1120,7 @@ pub fn render(
                     s(d, "notComputed")
                 ));
             } else {
-                let clauses = delta_clauses(d);
+                let clauses = delta_clauses(d, opts.detail);
                 let cap = if opts.detail { usize::MAX } else { 6 };
                 out.push(format!(
                     "      before/after{}: {}{}",
@@ -1081,49 +1212,7 @@ pub fn render(
             out.push(format!("      {}", tests_clause(&r["tests"])));
         }
     }
-    if roots.len() > shown {
-        out.push(format!(
-            "  … +{} (max-roots N to show more, or format json for every one)",
-            plural(roots.len() - shown, "routine", "routines")
-        ));
-    }
-    // 3. The whole change.
-    if let Ok(up) = up {
-        let un = &up["union"];
-        out.push(format!(
-            "the whole change is reached from: {}; {}",
-            reached_clause(un, false),
-            plural(u(&un["ancestors"], "total"), "ancestor", "ancestors")
-        ));
-    }
-    if let Ok(d) = delta {
-        before_after_tail(&mut out, d, opts);
-    } else if schema_lines > 0 {
-        out.push(format!(
-            "schema: {} field, key or field group lines changed (current revision only; a base gives the schema findings)",
-            thousands(schema_lines)
-        ));
-    }
-    // 4. Tests.
-    out.push(match tests {
-        Err(e) => format!("tests: not computed — {e}"),
-        Ok(t) => tests_line(&t.doc),
-    });
-    // 5. What was not seen.
-    for l in &limits {
-        out.push(format!("limit: {l}"));
-    }
-    out.push(if delta.is_ok() {
-        "these are static may-paths; before/after compares semantic keys of both sides; tests are static reachability, not coverage".into()
-    } else {
-        "these are static may-paths and current effects; tests are static reachability, not coverage".into()
-    });
-    let text = out.join("\n") + "\n";
-    Rendered {
-        summary: summary_text(cmp, main, &roots, files, tests, delta),
-        text,
-        exit,
-    }
+    out
 }
 
 /// The deleted routines and the schema findings of a before/after answer.
@@ -1156,7 +1245,7 @@ fn before_after_tail(out: &mut Vec<String>, d: &super::run::DeltaOutcome, opts: 
                 .unwrap_or_default();
             out.push(format!(
                 "  {} (in the base at {}:{}): called in the base by {}{}{}{}",
-                s(x, "display"),
+                named(x),
                 s(&x["anchor"], "file"),
                 x["anchor"]["line"],
                 plural(u(c, "count"), "routine", "routines"),
@@ -1302,10 +1391,10 @@ fn summary_text(
             d.delta["deleted"].as_array().map_or(0, Vec::len)
         ));
         for r in roots.iter().filter(|r| delta_changed(&r["delta"])).take(5) {
-            let c = delta_clauses(&r["delta"]);
+            let c = delta_clauses(&r["delta"], false);
             out.push(format!(
                 "  {}: {}{}",
-                s(r, "display"),
+                named(r),
                 c.iter().take(3).cloned().collect::<Vec<_>>().join("; "),
                 if c.len() > 3 {
                     format!("; … +{}", c.len() - 3)
@@ -1335,7 +1424,7 @@ fn summary_text(
     for r in roots.iter().take(5) {
         out.push(format!(
             "  {} — {}; {} ancestors, {} user or job entries",
-            s(r, "display"),
+            named(r),
             effects_clause(&r["effects"]),
             u(&r["up"]["ancestors"], "total"),
             u(&r["up"], "userOrJobEntries")
@@ -1350,3 +1439,7 @@ fn summary_text(
     });
     out.join("\n") + "\n"
 }
+
+#[cfg(test)]
+#[path = "render_tests.rs"]
+mod tests;

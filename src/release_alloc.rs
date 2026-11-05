@@ -115,6 +115,29 @@ pub fn thp_disabled() -> bool {
     THP_DISABLED.load(Relaxed)
 }
 
+/// Whether a reclaim hands freed memory back ([`collect_freed`]);
+/// `ALSEM_RECLAIM_COLLECT=0` turns it off (a measurement's A/B).
+#[must_use]
+pub fn collect_after_reclaim() -> bool {
+    std::env::var("ALSEM_RECLAIM_COLLECT").map_or(true, |v| v != "0")
+}
+
+/// Hand back to the OS what the threads that allocate hold freed: a
+/// forced `mi_collect` on every thread of the global rayon pool (where the
+/// engine's parallel work allocates) and on the caller's. mimalloc frees a
+/// block freed by another thread only when its owning thread next collects
+/// or allocates in that page, so an eviction on the request's thread leaves
+/// pages the idle pool threads own full of freed blocks, resident; a
+/// collect frees the pages left empty (with a purge delay of 0, at once).
+/// A page still holding a live block stays (no collect frees that, see the
+/// module doc). Off Linux, or under another global allocator (the library's
+/// tests), it collects mimalloc's own unused heaps: harmless.
+pub fn collect_freed() {
+    // SAFETY: plain mimalloc calls, each on its own thread's heap.
+    rayon::broadcast(|_| unsafe { libmimalloc_sys::mi_collect(true) });
+    unsafe { libmimalloc_sys::mi_collect(true) };
+}
+
 /// The largest block a release covers: mimalloc's largest size class that
 /// shares a page (`MI_LARGE_MAX_OBJ_SIZE`, 512 KiB in mimalloc 3). A larger
 /// block has a page of its own, which mimalloc purges itself when it is

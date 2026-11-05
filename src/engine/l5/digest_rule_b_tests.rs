@@ -852,6 +852,130 @@ fn t3_digest_scoped_equals_unscoped() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// A streamed read (`digest_effects_chunks`, agent-tasks impact follow-up:
+/// the main part of a large impact) gives each root exactly what one read
+/// over every root gives: its entry after the literal pass and its
+/// unresolved cone with the gap and table-event counts, in root order, over
+/// batches of 1 and of 3 that share the tree's indexes, carrier cache and
+/// suffix trees. Every r0 dir (single-app) and the dependency fixtures
+/// (cross-app), every reportable root plus every dependency routine with a
+/// body (rule B off for those, G31).
+///
+/// Break: a batch read with rule B on for every root (`any_dependency`
+/// forced false) → the dependency roots' entries differ.
+#[test]
+fn streamed_effects_equal_one_read() {
+    let mut dirs: Vec<(String, std::path::PathBuf, bool)> = Vec::new();
+    let r0 = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/r0-corpus");
+    let mut r0_dirs: Vec<_> = walkdir::WalkDir::new(&r0)
+        .into_iter()
+        .map(|e| e.unwrap().into_path())
+        .filter(|p| p.join("app.json").is_file())
+        .collect();
+    r0_dirs.sort();
+    for d in r0_dirs {
+        dirs.push((d.display().to_string(), d, true));
+    }
+    let tmps: Vec<tempfile::TempDir> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    write_fixture_rule_b(tmps[0].path());
+    write_fixture_dep_ambiguous(tmps[1].path());
+    write_fixture_dep_uncertainty(tmps[2].path());
+    for (i, t) in tmps.iter().enumerate() {
+        dirs.push((
+            format!("dependency fixture {i}"),
+            t.path().to_path_buf(),
+            false,
+        ));
+    }
+    let shown = |e: &DigestEffects| -> Vec<String> {
+        let mut v: Vec<String> = e.entries.iter().map(|x| format!("{x:?}")).collect();
+        v.extend(e.unresolved.iter().map(|(r, c)| {
+            format!(
+                "{r}\n{:?}\n{:?}\n{:?}\n{:?}",
+                c.items, c.traversal, c.gaps_in_cone, c.fires_table_events
+            )
+        }));
+        v
+    };
+    let (mut roots_seen, mut dependency_roots, mut passed_seen) = (0usize, 0usize, 0usize);
+    for (name, dir, single) in &dirs {
+        let Ok(target) = AnalysisTarget::build(&inputs(dir), *single, "digest") else {
+            continue;
+        };
+        let model = target.resolved();
+        let sl = source_less_of(&target);
+        let (rel, calls) = match &target {
+            AnalysisTarget::SingleApp(m) => (Arc::new(ExecRelation::single_app(m)), &[][..]),
+            AnalysisTarget::CrossApp(b) => (Arc::clone(b.rel()), b.dependency_calls_or_empty()),
+        };
+        let mut roots: Vec<String> = crate::engine::l5::digest::root_set(model)
+            .into_iter()
+            .collect();
+        roots.sort();
+        let all = tree_of(
+            model,
+            &rel,
+            calls,
+            &sl,
+            ConeScope {
+                derived: false,
+                raw: WitnessScope::All,
+            },
+        );
+        dependency_roots += roots
+            .iter()
+            .filter(|r| {
+                all.boundary
+                    .as_ref()
+                    .is_some_and(|b| b.dependency_app.contains_key(*r))
+            })
+            .count();
+        let one = digest_effects_each(&all, model, &[&roots], false, true, false, BoundaryMode::On)
+            .pop()
+            .unwrap();
+        passed_seen += one
+            .entries
+            .iter()
+            .filter(|e| {
+                e.effects
+                    .iter()
+                    .any(|f| f.literal_unreachable || f.own_path.is_some())
+            })
+            .count();
+        let whole = shown(&one);
+        for chunk in [1, 3] {
+            let (mut entries, mut unresolved, mut batches) =
+                (Vec::new(), BTreeMap::new(), Vec::new());
+            digest_effects_chunks(&all, model, &roots, chunk, false, true, false, |b, e| {
+                assert!(b.len() <= chunk);
+                batches.extend(b.iter().cloned());
+                entries.extend(e.entries);
+                unresolved.extend(e.unresolved);
+            });
+            assert_eq!(batches, roots, "{name}: every root once, in order");
+            let streamed = DigestEffects {
+                entries,
+                unresolved,
+                ..DigestEffects::default()
+            };
+            assert_eq!(shown(&streamed), whole, "{name}, batches of {chunk}");
+        }
+        roots_seen += roots.len();
+    }
+    assert!(
+        roots_seen > 100,
+        "precondition: roots compared ({roots_seen})"
+    );
+    assert!(
+        dependency_roots > 0,
+        "precondition: a dependency root (rule B off) is read"
+    );
+    assert!(
+        passed_seen > 0,
+        "precondition: the literal pass marks an entry"
+    );
+}
+
 /// #160 step 9 T25 (trigger and event arms, spec §5, S9-2): the fingerprint
 /// query's witness path names its rule-B boundary per kind. No compilable AL
 /// gives either edge cross-app (a workspace record operation's dependency

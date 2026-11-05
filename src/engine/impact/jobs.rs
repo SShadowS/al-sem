@@ -63,6 +63,42 @@ pub struct MainJob<'a> {
     /// `--root-id` with `--summaries`: routines summarized as well when this
     /// side has them (the base side is asked the working tree's roots).
     pub extra_roots: Vec<String>,
+    /// Tests: stream any effects read over more than this many roots, in
+    /// batches of this many ([`stream_batch`]); `None`, the default rule.
+    pub root_batch: Option<usize>,
+}
+
+/// The batch size of the main part's streamed effects read, in roots
+/// (`TreeDemand::stream`). A root's witnesses are 5.6-7.9 MiB on CDO, so
+/// one batch holds about 0.2-0.25 GB of them (an unstreamed 699-root read
+/// peaked at 4.1 GB and was refused warm by the 8 GiB budget). Each batch
+/// reuses the tree's indexes and caches (`digest_effects_chunks`).
+pub const ROOT_BATCH: usize = 32;
+
+/// The main part's batch size for `roots` roots: `None` (one read, whole)
+/// up to [`crate::engine::resident::revision::WITNESS_MEMO_MAX_ROOTS`],
+/// whose witnesses a resident revision memoizes, so a warm small ask reads
+/// them from the store; [`ROOT_BATCH`] beyond. `set` (`MainJob::root_batch`)
+/// or `AL_SEM_IMPACT_ROOT_BATCH=N` (tests) streams any read over N roots in
+/// batches of N.
+fn stream_batch(roots: usize, set: Option<usize>) -> Option<usize> {
+    let (above, batch) = match set.or_else(|| {
+        std::env::var("AL_SEM_IMPACT_ROOT_BATCH")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+    }) {
+        Some(n) if n > 0 => (n, n),
+        _ => (
+            crate::engine::resident::revision::WITNESS_MEMO_MAX_ROOTS,
+            ROOT_BATCH,
+        ),
+    };
+    (roots > above).then_some(batch)
+}
+
+/// Whether the main part over `changed` streams its effects read.
+fn streamed(changed: &ChangedRootsResult, set: Option<usize>) -> bool {
+    stream_batch(changed.roots.len(), set).is_some()
 }
 
 /// What `resolve` hands `compute`: the roots and the document so far.
@@ -311,12 +347,17 @@ impl Job for MainJob<'_> {
             };
         }
         // Digest's plan over the roots: their raw facts, the tree and its
-        // effects (no root: nothing to compose).
-        let plan = crate::engine::session::digest_reads_plan(
-            crate::engine::l5::detectors::default_detectors(),
-            changed.roots.iter().cloned().collect(),
-            false,
-            false,
+        // effects (no root: nothing to compose). Over many roots the effects
+        // are streamed in batches (`stream_batch`): one batch's witnesses
+        // alive at a time, each root's totals kept, its entry dropped.
+        let plan = crate::engine::session::streaming(
+            crate::engine::session::digest_reads_plan(
+                crate::engine::l5::detectors::default_detectors(),
+                changed.roots.iter().cloned().collect(),
+                false,
+                false,
+            ),
+            stream_batch(changed.roots.len(), self.root_batch),
         );
         Ok(PlanPart {
             plan,
@@ -330,40 +371,69 @@ impl Job for MainJob<'_> {
         let dependencies = cx.view().target().dependencies();
         let key = cx.keys()[0].clone();
         let (_, tx) = finish_default_run(cx, &key);
-        let mut effects = if cx.has_tree() {
-            cx.take_effects()
-        } else {
-            Default::default()
+        let (mut whole, stream) = match (cx.has_tree(), streamed(&changed, self.root_batch)) {
+            (false, _) => (Some(Default::default()), None),
+            (true, false) => (Some(cx.take_effects()), None),
+            (true, true) => (None, Some(cx.take_effects_stream())),
         };
         let resolved = cx.view().model();
         let temp_states = DbTempStates::new(resolved, &cx.view().l4().bundle);
         let owners = OwnerIndex::build(resolved);
-        let q = run_digest_query_full_from_entries(
-            &mut effects,
-            &changed.roots,
-            &tx,
-            &temp_states,
-            &changed,
-            &owners,
-        );
-        drop(effects);
         let rcx = RollupCx::new(resolved, &dependencies.apps);
         // One rollup per root, each entry dropped once its totals are taken.
         let mut totals: HashMap<String, Value> = HashMap::new();
         let mut handles: HashMap<String, String> = HashMap::new();
-        let names = self.summaries.then(|| super::keys::Names::new(resolved));
+        let names = self
+            .summaries
+            .then(|| super::keys::Names::new(resolved, &rcx));
         let mut summaries = serde_json::Map::new();
-        for e in q.entries {
-            let r = RoutineRollup::build(&e, &rcx);
-            handles.insert(e.routine_id.clone(), rcx.handle(&e.routine_id));
-            totals.insert(e.routine_id.clone(), r.totals.to_json());
-            if let Some(names) = &names
-                && let Some(s) =
-                    super::keys::summarize(names, &e.routine_id, Some(&e), Some(&r.totals))
-            {
-                summaries.insert(e.routine_id.clone(), json!(s));
+        let mut query_diagnostics = 0;
+        // Digest's query over `roots` of `effects`, then each entry's rollup
+        // (and summary), the entry dropped once they are taken.
+        let mut take = |effects: &mut crate::engine::l5::digest_cli::DigestEffects,
+                        roots: &[String]| {
+            let q = run_digest_query_full_from_entries(
+                effects,
+                roots,
+                &tx,
+                &temp_states,
+                &changed,
+                &owners,
+            );
+            query_diagnostics += q.query_diagnostics.len();
+            for e in q.entries {
+                let r = RoutineRollup::build(&e, &rcx);
+                handles.insert(e.routine_id.clone(), rcx.handle(&e.routine_id));
+                totals.insert(e.routine_id.clone(), r.totals.to_json());
+                if let Some(names) = &names
+                    && let Some(s) =
+                        super::keys::summarize(names, &e.routine_id, Some(&e), Some(&r.totals))
+                {
+                    summaries.insert(e.routine_id.clone(), json!(s));
+                }
             }
+        };
+        match (&mut whole, &stream) {
+            (Some(effects), _) => take(effects, &changed.roots),
+            // A batch's query reads the batch's roots in `changed.roots`
+            // order (digest's order), each root in exactly one batch.
+            (None, Some(stream)) => {
+                stream.for_each(resolved, |batch, mut effects| {
+                    let batch: std::collections::HashSet<&str> =
+                        batch.iter().map(String::as_str).collect();
+                    let roots: Vec<String> = changed
+                        .roots
+                        .iter()
+                        .filter(|r| batch.contains(r.as_str()))
+                        .cloned()
+                        .collect();
+                    take(&mut effects, &roots);
+                });
+            }
+            (None, None) => unreachable!("an effects read is whole or streamed"),
         }
+        drop(whole);
+        drop(stream);
         if let Some(names) = &names {
             // A root the digest computed no entry for still has its own sites.
             for id in &changed.roots {
@@ -383,7 +453,7 @@ impl Job for MainJob<'_> {
                 r["handle"] = json!(handles.remove(&id));
             }
         }
-        doc["queryDiagnostics"] = json!(q.query_diagnostics.len());
+        doc["queryDiagnostics"] = json!(query_diagnostics);
         Ok(SideDoc::new(Ok::<Value, String>(doc)))
     }
 

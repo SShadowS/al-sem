@@ -285,7 +285,11 @@ impl StoreValue for Artifact {
 }
 
 /// A request's tree reads: each tree job's effects and fingerprint reads.
-type TreeReads = (BTreeMap<JobId, DigestEffects>, BTreeMap<JobId, TreeReadOut>);
+type TreeReads = (
+    BTreeMap<JobId, DigestEffects>,
+    BTreeMap<JobId, crate::engine::session::EffectsStream>,
+    BTreeMap<JobId, TreeReadOut>,
+);
 
 /// A revision's ready snapshot.
 pub type ReadySnapshot = Arc<Snapshot<ArtifactKey, Artifact>>;
@@ -656,6 +660,28 @@ impl Revision {
             .sum()
     }
 
+    /// The measured bytes of the evictable artifacts a reclaim could evict
+    /// NOW: [`Self::evictable_bytes`] less what a request holds (pinned for
+    /// its compute, or read through its snapshot). A request's own needs are
+    /// held through its trees and compute, so they are no room for it.
+    pub fn reclaimable_bytes(&self) -> u64 {
+        self.store
+            .reclaimable_bytes(&self.keys_where(|k| Self::EVICTION_ORDER.contains(&k.kind())))
+    }
+
+    /// Tests: pin `keys` as a request pins its needs for its compute
+    /// (`answer_inner`'s `hold`).
+    #[cfg(test)]
+    pub(crate) fn hold_keys<'a>(&'a self, keys: &'a [ArtifactKey]) -> impl Drop + 'a {
+        self.store.hold(keys)
+    }
+
+    /// [`Self::reclaimable_bytes`] of one artifact kind.
+    pub fn reclaimable_bytes_of(&self, kind: &str) -> u64 {
+        self.store
+            .reclaimable_bytes(&self.keys_where(|k| k.kind() == kind))
+    }
+
     /// Evict every unpinned artifact of `kind`; returns how many.
     pub fn evict_kind(&self, kind: &str) -> usize {
         let keys = self.keys_where(|k| k.kind() == kind);
@@ -790,7 +816,10 @@ impl Revision {
         tree_groups(trees)
             .iter()
             .zip(self.tree_scopes(plan))
-            .filter(|(g, _)| matches!(trees[g[0]].1.read, TreeRead::Effects))
+            // A streamed read computes its batches' entries itself.
+            .filter(|(g, _)| {
+                matches!(trees[g[0]].1.read, TreeRead::Effects) && trees[g[0]].1.stream.is_none()
+            })
             .map(|(g, scope)| {
                 let roots: BTreeSet<String> = g
                     .iter()
@@ -1226,11 +1255,12 @@ impl Revision {
         ctl: &Control<'_>,
     ) -> Result<(TreeReads, Vec<String>), PrepareError> {
         use crate::engine::session::read_tree_shared;
-        let (mut effects, mut tree_reads) = (BTreeMap::new(), BTreeMap::new());
+        let (mut effects, mut streams, mut tree_reads) =
+            (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
         let mut lines = Vec::new();
         let trees = plan.tree_demands();
         if trees.is_empty() {
-            return Ok(((effects, tree_reads), lines));
+            return Ok(((effects, streams, tree_reads), lines));
         }
         let target = &*self.target;
         let base_lines = snap
@@ -1251,7 +1281,9 @@ impl Revision {
                 .flat_map(|&m| trees[m].1.subjects.ids().iter())
                 .collect();
             let entries = match trees[group[0]].1.read {
-                TreeRead::Effects if self.memoizes(roots.len()) => {
+                TreeRead::Effects
+                    if self.memoizes(roots.len()) && trees[group[0]].1.stream.is_none() =>
+                {
                     let include_reads = trees[group[0]].1.include_reads;
                     let mut entries = Vec::new();
                     for root in roots {
@@ -1284,6 +1316,16 @@ impl Revision {
             };
             lines.extend(base_lines.iter().cloned());
             lines.extend(artifact.lines.iter().cloned());
+            let (job, demand) = &trees[group[0]];
+            if demand.stream.is_some() {
+                // A streamed read (`TreeDemand::stream`, never grouped): the
+                // job reads the published tree in batches at compute.
+                streams.insert(
+                    *job,
+                    crate::engine::session::EffectsStream::of(Arc::clone(tree), demand),
+                );
+                continue;
+            }
             let stopped = || (ctl.stop)().is_some();
             let ((), read_lines) = capture(|| {
                 read_tree_shared(
@@ -1304,7 +1346,7 @@ impl Revision {
             }
             lines.extend(read_lines);
         }
-        Ok(((effects, tree_reads), lines))
+        Ok(((effects, streams, tree_reads), lines))
     }
 
     /// `job` (one of [`SERVED_COMMANDS`], made over [`Revision::inputs`])
@@ -1423,12 +1465,36 @@ impl Revision {
     /// `plan` prepared and served as a view (the request's trees read off
     /// the ready snapshot), with the job lines `prepare` would have printed
     /// before and after the trees.
+    #[cfg(test)]
     pub(crate) fn serve_plan(
         &self,
         plan: &Plan,
         ctl: &Control<'_>,
         prepare_ms: &mut u64,
     ) -> Result<(View, Vec<String>), PrepareError> {
+        let (view, lines, held) = self.serve_plan_held(plan, ctl, prepare_ms)?;
+        if let Some(g) = held {
+            g.finish();
+        }
+        Ok((view, lines))
+    }
+
+    /// [`Revision::serve_plan`], with the trees' reservation still held
+    /// when the plan streams a read ([`TreeDemand::stream`]): its batches
+    /// are read at compute, so the caller finishes the guard after it.
+    fn serve_plan_held<'c>(
+        &self,
+        plan: &Plan,
+        ctl: &'c Control<'_>,
+        prepare_ms: &mut u64,
+    ) -> Result<
+        (
+            View,
+            Vec<String>,
+            Option<crate::engine::resident::store::Guard<'c>>,
+        ),
+        PrepareError,
+    > {
         let needs = self.needs_of(plan);
         let start = std::time::Instant::now();
         // The request's witness batch: dropped with the request (the store
@@ -1498,23 +1564,38 @@ impl Revision {
             return Err(stop.into());
         }
         // The trees' working memory is reserved like a fill's (§4.5 "heavy
-        // request"), sized by the roots they are read for, and released
-        // once they are read.
+        // request"), sized by the roots they are read for at once, and
+        // released once they are read: a streamed read's roots count by its
+        // batch, and its reservation is held through compute, where its
+        // batches are read.
+        let streamed = plan.tree_demands().iter().any(|(_, d)| d.stream.is_some());
         let guard = if plan.tree_demands().is_empty() {
             None
         } else {
-            let roots: BTreeSet<&String> = plan
+            let whole: BTreeSet<&String> = plan
                 .tree_demands()
                 .iter()
+                .filter(|(_, d)| d.stream.is_none())
                 .flat_map(|(_, d)| d.subjects.ids().iter())
                 .collect();
-            Some((ctl.reserve)("trees", roots.len()).map_err(PrepareError::Budget)?)
+            let batch = plan
+                .tree_demands()
+                .iter()
+                .filter_map(|(_, d)| d.stream.map(|c| c.min(d.subjects.ids().len())))
+                .max()
+                .unwrap_or(0);
+            Some((ctl.reserve)("trees", whole.len() + batch).map_err(PrepareError::Budget)?)
         };
         let trees = self.trees(plan, &snap, ctl);
-        if let Some(g) = guard {
-            g.finish();
-        }
-        let ((effects, tree_reads), tree_lines) = trees?;
+        let held = match guard {
+            Some(g) if streamed && trees.is_ok() => Some(g),
+            Some(g) => {
+                g.finish();
+                None
+            }
+            None => None,
+        };
+        let ((effects, streams, tree_reads), tree_lines) = trees?;
         let runs: BTreeMap<RunKey, Arc<RunOutput>> = needs
             .iter()
             .filter_map(|(k, _)| match (k, snap.get(k).map(|a| &a.value)) {
@@ -1544,6 +1625,7 @@ impl Revision {
             l4,
             det,
             effects,
+            streams,
             tree_reads,
             runs,
             explain_indexes,
@@ -1576,7 +1658,7 @@ impl Revision {
                 }
             }
         }
-        Ok((view, lines))
+        Ok((view, lines, held))
     }
 
     fn answer_inner(
@@ -1650,7 +1732,7 @@ impl Revision {
         let needed: Vec<ArtifactKey> = self.needs_of(&plan).into_iter().map(|(k, _)| k).collect();
         let _hold = self.store.hold(&needed);
         let (keys, has_tree) = (plan.keys(), plan.has_tree(JobId(0)));
-        let (mut view, mut lines) = self.serve_plan(&plan, ctl, prepare_ms)?;
+        let (mut view, mut lines, held) = self.serve_plan_held(&plan, ctl, prepare_ms)?;
         if let Some(stop) = (ctl.stop)() {
             return Err(stop.into());
         }
@@ -1669,6 +1751,11 @@ impl Revision {
         };
         let (side, own) = capture(|| job.compute(d.side, &mut cx));
         drop(view);
+        // A streamed read's batches were read in compute: its trees'
+        // reservation ends (and its peak is observed) here.
+        if let Some(g) = held {
+            g.finish();
+        }
         lines.extend(own);
         let doc = job.finalize(vec![side]);
         Ok(crate::engine::batch::serialize(0, job, doc, lines))

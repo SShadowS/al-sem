@@ -479,8 +479,9 @@ struct ImpactCli {
     #[arg(long = "no-tests", default_value_t = false)]
     no_tests: bool,
 
-    /// Show at most N routines in the human output (default 20; the JSON
-    /// holds every one).
+    /// Show at most N routines in the human output (default 20, fewer when
+    /// the answer would pass 38 KiB; the JSON holds every one). Given, the
+    /// size budget is off.
     #[arg(long = "max-roots")]
     max_roots: Option<usize>,
 
@@ -2400,6 +2401,7 @@ fn plan_impact(t: ImpactCli, cx: &PlanCx) -> Planned {
                         scope,
                         summaries,
                         extra_roots,
+                        root_batch: None,
                     })
                 }),
             }
@@ -2439,7 +2441,7 @@ fn plan_impact(t: ImpactCli, cx: &PlanCx) -> Planned {
 /// the MCP tool's own path).
 fn run_impact_cmd(t: ImpactCli) -> ExitCode {
     use al_sem::engine::impact::compare;
-    use al_sem::engine::impact::render::{DEFAULT_MAX_ROOTS, RenderOpts};
+    use al_sem::engine::impact::render::RenderOpts;
     if !["human", "json"].contains(&t.format.as_str()) {
         eprintln!(
             "al-sem impact: invalid --format '{}'. Expected: human | json",
@@ -2501,11 +2503,7 @@ fn run_impact_cmd(t: ImpactCli) -> ExitCode {
     } else {
         (compare::for_input("routines", ws, None), None)
     };
-    let opts = RenderOpts {
-        json: t.format == "json",
-        max_roots: t.max_roots.unwrap_or(DEFAULT_MAX_ROOTS),
-        detail: t.detail,
-    };
+    let opts = RenderOpts::new(t.format == "json", t.max_roots, t.detail);
     let mut run = |_: al_sem::engine::test_select::run::Target<'_>,
                    argv: Vec<String>|
      -> Result<serde_json::Value, String> {
