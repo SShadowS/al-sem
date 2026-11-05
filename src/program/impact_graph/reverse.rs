@@ -62,9 +62,13 @@
 //! The roots.config overlay kinds (`web-service-exposed`,
 //! `job-queue-entrypoint`) are not in the source; a consumer with a model
 //! passes them as [`WalkOptions::extra_entries`] ([`config_entries`]).
-//! `background-start` (a static `StartSession`/`CreateTask` target) is a body
-//! fact (the capability `start` fact): A supplies it the same way. A
-//! symbol-only routine has no source, so no entry kinds and no stable id.
+//! `background-start` comes from the graph (F3): the node a
+//! [`Boundary::Background`] site enters (the codeunit object a static
+//! `StartSession`/`TaskScheduler.CreateTask`/`CurrPage.EnqueueBackgroundTask`
+//! starts) is that entry. The walk still goes on over the start site (R0
+//! does not stop at a boundary; a consumer's [`ConeVisitor::step`] does). A
+//! start whose codeunit is not a literal has no such site. A symbol-only
+//! routine has no source, so no entry kinds and no stable id.
 
 use std::collections::{HashMap, HashSet};
 
@@ -526,7 +530,14 @@ fn report(
             .and_then(|m| m.get(&s.node))
             .copied()
             .unwrap_or(0);
-    let kinds = EntryKind::of_root_kinds(mask);
+    let mut kinds = EntryKind::of_root_kinds(mask);
+    // F3: the target of a static background start (a `Background` site) is
+    // a `background-start` entry: a run starts there, in its own session.
+    if g.is_background_target(s.node) {
+        kinds.push(EntryKind::BackgroundStart);
+        kinds.sort();
+        kinds.dedup();
+    }
     if !kinds.is_empty() {
         v.entry(root, s.node, &kinds, s, hops);
     }
@@ -573,6 +584,112 @@ pub fn config_entries(
         }
     }
     out
+}
+
+/// Whether a run of routine node `r`'s object runs `r` with no user acting:
+/// the resolver's own rule ([`crate::program::resolve::resolver::run_triggers`],
+/// `dispatch_entry_trigger`). A codeunit's `OnRun`; a page's, report's or
+/// XMLport's lifecycle triggers, and the same triggers of a page or report
+/// EXTENSION (a run of the base object runs them too). Not: an action's
+/// `OnAction`, a field's `OnValidate`/`OnLookup`/`OnDrillDown`, a page's
+/// record triggers (`OnInsertRecord`, …), anything a page part runs.
+#[must_use]
+pub fn object_run_reaches(g: &SitedGraph, r: NodeIx) -> bool {
+    use al_syntax::ir::ObjectKind;
+    let Some(super::project::Key::Routine(id)) = g.nodes.get(r as usize) else {
+        return false;
+    };
+    let kind = match id.object.kind {
+        ObjectKind::PageExtension => ObjectKind::Page,
+        ObjectKind::ReportExtension => ObjectKind::Report,
+        k => k,
+    };
+    let name = id.name_lc.as_str();
+    match crate::program::resolve::resolver::run_triggers(kind) {
+        Some((object, members)) => {
+            if id.enclosing_member_lc.is_some() {
+                members.contains(&name)
+            } else {
+                object.contains(&name)
+            }
+        }
+        None => kind == ObjectKind::Codeunit && id.enclosing_member_lc.is_none() && name == "onrun",
+    }
+}
+
+/// Whether site `s` is an edge of the **code-call relation**: the calls the
+/// program engine resolves for code that runs, the relation the model's calls
+/// hold and the solve graph (`query touches` up, the detectors' caller
+/// traversals) walks. It is the sited graph's may-execute relation without
+/// what only a user or the platform starts:
+///
+/// - kept: a direct or interface call, an object run (`Codeunit.Run`,
+///   `Page.RunModal`, a typed-variable run) and the trigger the run runs
+///   ([`object_run_reaches`]), a record operation firing a table trigger, an
+///   event publisher dispatching to its subscribers;
+/// - dropped: a page's lifecycle into a trigger a user starts (an action, a
+///   field trigger, a part, a page it opens, its tables' triggers and platform
+///   events), a rule's edge (`declaredRunnable`, a test's handler list or
+///   runner), a background start (F3: a new session the model's calls do
+///   not follow), every open site and hub.
+///
+/// On local code this is the solve graph's caller relation exactly (pinned by
+/// `caller_agreement_tests`); the solve graph additionally stops at
+/// dependency code (it holds workspace callers' calls only), which a
+/// [`Tier::Local`] path never enters. R0-3's `select::direct_callers` counts
+/// the same direct sites, minus event dispatch (a subscriber is dispatched,
+/// not called).
+#[must_use]
+pub fn is_code_call_site(g: &SitedGraph, s: SiteIx) -> bool {
+    let site = &g.sites()[s as usize];
+    if site.conf == super::project::Conf::Open || g.flags(site.from) & flag::HUB != 0 {
+        return false;
+    }
+    match site.boundary {
+        Boundary::Sync | Boundary::Run | Boundary::TriggerOf { .. } => {
+            matches!(site.via(), "call" | "interface" | "run" | "implicitTrigger")
+        }
+        Boundary::EventDispatch => site.via() == "eventFlow",
+        Boundary::Lifecycle => {
+            g.routine_object(site.from).is_none() && object_run_reaches(g, site.to)
+        }
+        // A background start (F3): the started codeunit runs in its own
+        // session, and the model's calls do not carry the start's edge.
+        Boundary::Background => false,
+        Boundary::TestHandler | Boundary::TestRunner | Boundary::Open => false,
+    }
+}
+
+/// A visitor adapter that walks only the code-call relation
+/// ([`is_code_call_site`]) and hands every report to the visitor it wraps.
+pub struct CodeCalls<'v>(pub &'v mut dyn ConeVisitor);
+
+impl ConeVisitor for CodeCalls<'_> {
+    fn reach(&mut self, root: u32, s: WalkState, hops: u32, via: Via, from: Option<WalkState>) {
+        self.0.reach(root, s, hops, via, from);
+    }
+    fn hidden(&mut self, root: u32, n: NodeIx, ch: HiddenChannel) {
+        self.0.hidden(root, n, ch);
+    }
+    fn entry(&mut self, root: u32, n: NodeIx, kinds: &[EntryKind], s: WalkState, hops: u32) {
+        self.0.entry(root, n, kinds, s, hops);
+    }
+    fn external(&mut self, root: u32, n: NodeIx, why: ExternalWhy, s: WalkState, hops: u32) {
+        self.0.external(root, n, why, s, hops);
+    }
+    fn source(&mut self, root: u32, s: WalkState, hops: u32) {
+        self.0.source(root, s, hops);
+    }
+    fn limit(&mut self, l: Limit) {
+        self.0.limit(l);
+    }
+    fn step(&mut self, g: &SitedGraph, from: WalkState, site: SiteIx) -> Option<u8> {
+        if is_code_call_site(g, site) {
+            self.0.step(g, from, site)
+        } else {
+            None
+        }
+    }
 }
 
 /// A visitor that records every state's hops and first parent, for tests and
@@ -623,3 +740,7 @@ impl Recorder {
 #[cfg(test)]
 #[path = "reverse_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "caller_agreement_tests.rs"]
+mod caller_agreement_tests;

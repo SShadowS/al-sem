@@ -317,7 +317,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_prove",
-            "A yes/no question about one AL routine (`routine`, a selector), answered with its evidence. `question`, about the routine's existing effects (what it and its callees already do): may-commit, commits-on-success-path, writes-table:<table>, publishes-event:<event>, reaches-ui, throws-error. Or about its callers' context, before adding a COMMIT, an error or UI to it: callers-have-pending-writes (may a caller have a database write pending when it runs), callers-intercept-errors (may a caller turn its error into false: a TryFunction whose result is used, a checked Codeunit.Run, asserterror, collectible errors; a TryFunction does not roll back database changes), callers-may-run-noninteractive (may it run where no user answers UI: API pages, job queue and web service roots from roots.config.json, install and upgrade codeunits, background sessions); these walk every caller up to its entry points, and a public routine's callers in apps that are not loaded block a no unless `assumeNoDependents: true`. Answers: yes (a path to the effect exists; a may-answer), no (proven absent under the stated assumptions), unknown (no matching effect observed, but coverage is incomplete, so not a proof). A temporary-record write is not a write for writes-table. Default (`format: human`): about 10 lines with the answer, each evidence row with its location and one witness path, then the blockers of an unknown grouped by kind with their counts and the first 3 of each (workspace ones first), then coverage (calls not resolved and interface calls open world, with the top callees), assumptions and limits. Ask for more: `detail: true` (every blocker), `closedWorld: true` (interface calls dispatch only to the loaded implementations; it can turn unknown into no, and says so under assumptions), `format: json` (every evidence row, its group path and witness hops; 5-60 KB). Size: 1-5 KB human. Lines are 1-based. Dependency code: the whole call cone is followed with literal arguments. Next: on unknown, alsem_explain lists the workspace gaps behind it. Returns the exact `alsem prove` stdout.",
+            "A yes/no question about one AL routine (`routine`, a selector), answered with its evidence. `question`, about the routine's existing effects (what it and its callees already do): may-commit, commits-on-success-path, writes-table:<table>, publishes-event:<event>, reaches-ui, throws-error. Or about its callers' context, before adding a COMMIT, an error or UI to it: callers-have-pending-writes (may a caller have a database write pending when it runs), callers-intercept-errors (may a caller turn its error into false: a TryFunction whose result is used, a checked Codeunit.Run, asserterror, collectible errors; a TryFunction does not roll back database changes), callers-may-run-noninteractive (may it run where no user answers UI: API pages, job queue and web service roots from roots.config.json, install and upgrade codeunits, background sessions); these walk every caller up to its entry points, and a public routine's callers in apps that are not loaded block a no unless `assumeNoDependents: true`. Answers: yes (a path to the effect exists; a may-answer), no (proven absent under the stated assumptions), unknown (no matching effect observed, but coverage is incomplete, so not a proof). A temporary-record write is not a write for writes-table. Default (`format: human`): about 10 lines with the answer, each evidence row with its location and one witness path, then the blockers of an unknown grouped by kind with their counts and the first 3 of each (workspace ones first), then coverage (calls not resolved and interface calls open world, with the top callees), assumptions and limits. Ask for more: `detail: true` (every blocker), `closedWorld: true` (interface calls dispatch only to the loaded implementations; it can turn unknown into no, and says so under assumptions), `format: json` (every evidence row, its group path and witness hops; 5-60 KB). Why did an error or a write happen: filter to the sites that may explain it with `match: \"<text>\"` (throws-error: the error's static message text, a literal or a Label's or TextConst's value with %1 placeholders kept, or the Label's name), `site: \"<file>:<line>\"` (throws-error, writes-table, may-commit, reaches-ui), `op: \"<kind>\"` (throws-error: Error, TestField, FieldError, Get, …; writes-table: Insert, Modify, ModifyAll, Delete, DeleteAll, Rename) or `table: \"<table>\"` (throws-error: errors a record operation on that table raises); the answer is then about the matching sites, each with its message text, one route from the routine and up to 2 innermost enclosing conditions per site on the route (selected context, not all necessary conditions, with the count left out; a while condition is loop-entry, a repeat-until one continuation). `routes: N` (1-10, with a filter) lists up to N distinct routes per matching site, fewest hops first, each with its guards: a route is a simple path over (routine, known argument values) states, so recursion is followed only while it changes the known values; the answer says whether the enumeration completed (then every route is listed) or which cap fired (the routes asked, or 50,000 candidate edges per site), and the candidate edges it examined and rejected (by literal arguments, by returning to a state on the route), never a count of routes ruled out. Static candidates, not an observed trace. An error whose message is not static (a variable, an ErrorInfo, the platform's own) never matches and blocks a filtered no; an implicit error matches only by its kind word. Size: 1-5 KB human. Lines are 1-based. Dependency code: the whole call cone is followed with literal arguments. Next: on unknown, alsem_explain lists the workspace gaps behind it. Returns the exact `alsem prove` stdout.",
             schema(
                 vec![
                     (
@@ -343,6 +343,26 @@ pub fn tool_list() -> Vec<Value> {
                     (
                         "detail",
                         json!({"type": "boolean", "description": "Human output: every blocker, not the first few of each kind (the JSON always lists every one)."}),
+                    ),
+                    (
+                        "match",
+                        json!({"type": "string", "description": "throws-error only: keep the error sites whose static message text or Label/TextConst name contains this text (case-insensitive; %1 placeholders kept). An error whose message is not static never matches and blocks a no."}),
+                    ),
+                    (
+                        "site",
+                        json!({"type": "string", "description": "<file>:<line> (a source path or its tail, 1-based line): keep only the sites there. throws-error, writes-table, may-commit, reaches-ui."}),
+                    ),
+                    (
+                        "op",
+                        json!({"type": "string", "description": "throws-error or writes-table: keep only the sites of this operation (Error, TestField, FieldError, Get, …; Insert, Modify, ModifyAll, Delete, DeleteAll, Rename)."}),
+                    ),
+                    (
+                        "table",
+                        json!({"type": "string", "description": "throws-error only: keep only the errors a record operation on this table raises."}),
+                    ),
+                    (
+                        "routes",
+                        json!({"type": "integer", "minimum": 1, "maximum": 10, "description": "With match, site, op or table: up to this many distinct routes per matching site (default 1), fewest hops first, each with its guards; says whether the enumeration completed (every route listed) or which cap fired, and the candidate edges examined and rejected."}),
                     ),
                     ("deterministic", deterministic()),
                 ],
@@ -437,12 +457,16 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_query_touches",
-            "Is a table touched by any record operation, transitively? `table`: a number, a name, an internal table id, or unknown (operations whose table is decided at run time). Without `from`: every workspace routine that touches it, by the per-operation index. With `from` (a routine selector), `direction`: down (does it touch the table, and through which operations; when no indexed operation does, the answer is `unknown` with its reasons, such as operations on a RecordRef, calls not resolved or dependency code deeper than one routine, and `no` only when none applies), up (its transitive callers: how many touch it, do not, or are unknown), or both (the default). Touches are counted on persistent records, on possibly persistent records and on temporary records (a temporary-record touch persists nothing but uses the table's schema and runs its triggers); when the routine touches the table itself its callers inherit the touch and are counted, not listed. Default (`format: human`): a few lines to about 10 KB, lists folded. Ask for more: `callers: true` (every caller by name, depth and location, without witnesses), `all: true` (every witness, the callers' included, no fold; tens of megabytes on a hub routine), `showSource: true` (the cited source line ±2), `format: json` (every down witness, about 200 KB on a hub routine; over the cap a file with a summary of the down and up headlines). Lines are 1-based. Dependency code: per operation one routine deep; with `from` asked down, the dependency entry points beyond which the whole cone may write the table are listed too (`down.beyond`). Next: alsem_query_effects for the routine's other tables. Returns the exact `alsem query touches` stdout.",
+            "Is a table touched by any record operation, transitively? `table`: a number, a name, an internal table id, or unknown (operations whose table is decided at run time). Without `from`: every workspace routine that touches it, by the per-operation index. With `from` (a routine selector), `direction`: down (does it touch the table, and through which operations; when no indexed operation does, the answer is `unknown` with its reasons, such as operations on a RecordRef, calls not resolved or dependency code deeper than one routine, and `no` only when none applies), up (its transitive callers: how many touch it, do not, or are unknown), or both (the default). Touches are counted on persistent records, on possibly persistent records and on temporary records (a temporary-record touch persists nothing but uses the table's schema and runs its triggers); when the routine touches the table itself its callers inherit the touch and are counted, not listed. With `field` (a field name or number of `table`): every code consumer of that one field instead, by use kind (read, write, validate, filter, key-use, load, calc, rule, metadata, copy-candidate for TransferFields, by-number for RecordRef.Field of a literal), each site once with its uses (`F += 1` is one site, read and write), temporary records counted with persistent ones, a record of an unresolved table as a candidate, the table's keys holding it, and what was searched: every workspace body and the dependency bodies loaded, never declaration-level consumers (CalcFormula, TableRelation, page and report columns); with no site the answer is \"no indexed consumer observed\", never no; with `from`, only the routine's cone (down) and its callers (up, by the reverse walk alsem_tests uses, each with its tier: local, through dependency code, only through an open site). Default (`format: human`): a few lines to about 10 KB, lists folded. Ask for more: `callers: true` (every caller by name, depth and location, without witnesses), `all: true` (every witness, the callers' included, no fold; tens of megabytes on a hub routine), `showSource: true` (the cited source line ±2), `format: json` (every down witness, about 200 KB on a hub routine; over the cap a file with a summary of the down and up headlines). Lines are 1-based. Dependency code: per operation one routine deep; with `from` asked down, the dependency entry points beyond which the whole cone may write the table are listed too (`down.beyond`). Next: alsem_query_effects for the routine's other tables. Returns the exact `alsem query touches` stdout.",
             schema(
                 vec![
                     (
                         "table",
                         json!({"type": "string", "description": "A table number or name, an internal table id, or `unknown`."}),
+                    ),
+                    (
+                        "field",
+                        json!({"type": "string", "description": "A field of `table` (its name or number): the field's code consumers by use kind instead of the table's record operations (`--field`)."}),
                     ),
                     (
                         "from",
@@ -925,6 +949,23 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             v.switch("closed-world", a.flag("closedWorld")?);
             v.switch("no-dependents", a.flag("assumeNoDependents")?);
             v.switch("detail", a.flag("detail")?);
+            // Agent-tasks E1: the filters; which question each goes with is
+            // the CLI's own check (one error text).
+            for (key, flag) in [
+                ("match", "match"),
+                ("site", "site"),
+                ("op", "op"),
+                ("table", "table"),
+            ] {
+                if let Some(x) = a.string(key)? {
+                    v.opt(flag, x);
+                }
+            }
+            // Agent-tasks E2: `--routes` only when set; its range and that it
+            // needs a filter are the CLI's own checks.
+            if let Some(n) = a.count("routes")? {
+                v.opt("routes", &n.to_string());
+            }
             v.switch("deterministic", a.flag("deterministic")?);
             v
         }
@@ -991,6 +1032,9 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
         "alsem_query_touches" => {
             let mut v = Argv::new(&["query", "touches"], &workspace);
             v.opt("table", a.required("table")?);
+            if let Some(field) = a.string("field")? {
+                v.opt("field", field);
+            }
             if let Some(from) = a.string("from")? {
                 v.opt("from", from);
             }
@@ -1271,6 +1315,41 @@ mod tests {
         );
         assert!(
             !c.argv.iter().any(|a| a == "--closed-world"),
+            "{:?}",
+            c.argv
+        );
+    }
+
+    /// Agent-tasks E1: prove's filters become the CLI's `--match`, `--site`,
+    /// `--op` and `--table`, value and all; which question each goes with is
+    /// the CLI's own check.
+    #[test]
+    fn prove_filters_become_cli_flags() {
+        let c = command(
+            "alsem_prove",
+            json!({"routine": "R", "question": "throws-error", "match": "-already issued", "site": "a.al:3", "op": "Error", "table": "T", "routes": 3}),
+        )
+        .unwrap();
+        for want in [
+            "--match=-already issued",
+            "--site=a.al:3",
+            "--op=Error",
+            "--table=T",
+            "--routes=3",
+        ] {
+            assert!(c.argv.iter().any(|a| a == want), "{want}: {:?}", c.argv);
+        }
+        let c = command(
+            "alsem_prove",
+            json!({"routine": "R", "question": "throws-error"}),
+        )
+        .unwrap();
+        assert!(
+            !c.argv
+                .iter()
+                .any(|a| ["--match", "--site", "--op", "--table", "--routes"]
+                    .iter()
+                    .any(|f| a.starts_with(f))),
             "{:?}",
             c.argv
         );

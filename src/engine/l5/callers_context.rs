@@ -60,9 +60,13 @@
 //! user answers: an API page, a web-service or job-queue root (from
 //! `roots.config.json`), an install or upgrade codeunit, or a codeunit a
 //! static `StartSession`/`TaskScheduler.CreateTask`/`EnqueueBackgroundTask`
-//! starts (read from the capability `start` facts and the page's call sites,
-//! not from an edge). A background start resets the session context: the
-//! run below it is non-interactive whatever started it. A call inside the
+//! starts (the target of a [`Boundary::Background`] site, F3: R0 reports it
+//! as a `background-start` entry, placed at its first start site). A start
+//! whose codeunit is not a literal has no such site; it blocks `no`
+//! (`unresolved-background-target`). A background start resets the session
+//! context: the run below it is non-interactive whatever started it, and the
+//! walk does not go above the starter (no question here does: the starter's
+//! pending writes, traps and UI are another session's). A call inside the
 //! then-branch of `if GuiAllowed then` is not followed (no witness through
 //! it); a condition that mentions `GuiAllowed` in another shape keeps the
 //! witness and is listed. Guards are read from the revision's pinned bytes
@@ -94,6 +98,7 @@ use crate::program::impact_graph::reverse::{
 };
 use crate::program::impact_graph::sited::{Anchor, Boundary, RECORD_OPS, flag};
 use crate::program::model::workspace::{Model, ModelObject, ModelRoutine};
+use crate::program::resolve::background::{Starter, starter_of_callee};
 
 /// The three questions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -459,21 +464,14 @@ fn attr_member(r: &ModelRoutine, name: &str) -> Option<String> {
         .or_else(|| Some(arg.text.clone()))
 }
 
-/// A call that starts a new session or task, and the index of its codeunit
-/// argument: `TaskScheduler.CreateTask` (0), `StartSession` (1),
-/// `CurrPage.EnqueueBackgroundTask` (1).
-fn background_start(cs: &PCallSite) -> Option<usize> {
+/// A call that starts a new session or task
+/// ([`crate::program::resolve::background::STARTERS`]): `StartSession`,
+/// `Session.StartSession`, `TaskScheduler.CreateTask`,
+/// `CurrPage.EnqueueBackgroundTask`.
+fn background_start(cs: &PCallSite) -> Option<&'static Starter> {
     match &cs.callee {
-        PCallee::Member { receiver, method } => {
-            let (r, m) = (receiver.to_lowercase(), method.to_lowercase());
-            match (r.as_str(), m.as_str()) {
-                ("taskscheduler", "createtask") => Some(0),
-                ("session", "startsession") => Some(1),
-                ("currpage", "enqueuebackgroundtask") => Some(1),
-                _ => None,
-            }
-        }
-        PCallee::Bare { name } if name.eq_ignore_ascii_case("startsession") => Some(1),
+        PCallee::Member { receiver, method } => starter_of_callee(Some(receiver), method),
+        PCallee::Bare { name } => starter_of_callee(None, name),
         _ => None,
     }
 }
@@ -482,6 +480,7 @@ fn boundary_str(b: Boundary) -> &'static str {
     match b {
         Boundary::Sync => "sync",
         Boundary::Run => "run",
+        Boundary::Background => "background",
         Boundary::EventDispatch => "event",
         Boundary::TriggerOf { .. } => "trigger",
         Boundary::Lifecycle => "lifecycle",
@@ -525,95 +524,50 @@ struct SiteEval {
     bits: u8,
 }
 
-/// The static background-start targets and the count of non-literal ones.
-struct BackgroundTargets {
-    nodes: HashSet<NodeIx>,
-    unresolved: Vec<String>,
-}
-
-/// The codeunit a literal argument names: `Codeunit::"X"`, `Codeunit::X`, or
-/// a number.
-fn literal_codeunit(text: &str) -> Option<Result<i64, String>> {
-    let t = text.trim();
-    if let Ok(n) = t.parse::<i64>() {
-        return Some(Ok(n));
-    }
-    let lower = t.to_ascii_lowercase();
-    let rest = lower.strip_prefix("codeunit::")?;
-    let name = t[t.len() - rest.len()..]
-        .trim()
-        .trim_matches('"')
-        .to_string();
-    Some(Err(name))
-}
-
-fn background_targets(model: &Model, g: &SitedGraph) -> BackgroundTargets {
-    // The OnRun triggers of codeunits, by number and by folded name.
-    let mut by_number: HashMap<i64, Vec<NodeIx>> = HashMap::new();
-    let mut by_name: HashMap<String, Vec<NodeIx>> = HashMap::new();
-    let numbers: HashMap<String, i64> = model
-        .workspace
-        .objects
-        .iter()
-        .filter(|o| o.object_type == "Codeunit")
-        .map(|o| (o.name.to_lowercase(), o.object_number))
-        .collect();
-    for n in g.routines_named("onrun") {
-        let Some(o) = g.routine_object(n) else {
-            continue;
-        };
-        if o.kind != al_syntax::ir::ObjectKind::Codeunit {
-            continue;
-        }
-        match &o.key {
-            crate::program::node::ObjKey::Id(id) => by_number.entry(*id).or_default().push(n),
-            crate::program::node::ObjKey::Name(s) => {
-                by_name.entry(s.to_lowercase()).or_default().push(n)
-            }
-        }
-    }
-    let mut out = BackgroundTargets {
-        nodes: HashSet::new(),
-        unresolved: Vec::new(),
+/// Whether a codeunit argument's text is a literal: `Codeunit::"X"`,
+/// `Codeunit::X` or a number (as `background::start_target` reads the IR).
+/// `failure`: `TaskScheduler.CreateTask`'s failure codeunit, where `0`
+/// names none (and so is no dynamic target either).
+fn literal_or_none(text: Option<&String>, failure: bool) -> bool {
+    let Some(t) = text.map(|t| t.trim()) else {
+        return failure;
     };
+    if let Ok(n) = t.parse::<i64>() {
+        return n > 0 || (failure && n == 0);
+    }
+    t.to_ascii_lowercase().starts_with("codeunit::")
+}
+
+/// The background starts whose codeunit is not a literal (`<callee> at
+/// <file>:<line>`, sorted): the graph has no edge to their target (they reach
+/// the open `run:codeunit` hub). A literal start's target is a
+/// [`Boundary::Background`] site's (F3), so R0 reports it as a
+/// `background-start` entry itself.
+fn unresolved_background_starts(model: &Model) -> Vec<String> {
+    let mut out = Vec::new();
     let mut seen: HashSet<(&str, &str)> = HashSet::new();
     for r in &model.workspace.routines {
         for cs in &r.call_sites {
-            let Some(idx) = background_start(cs) else {
+            let Some(s) = background_start(cs) else {
                 continue;
             };
             if !seen.insert((r.id.as_str(), cs.id.as_str())) {
                 continue;
             }
-            // `StartSession`/`CreateTask` are the capability `start` facts
-            // (`dispatch_background.rs`); a page's `EnqueueBackgroundTask`
-            // is read off the same call site shape.
-            let started = cs
-                .argument_texts
-                .get(idx)
-                .and_then(|t| literal_codeunit(t))
-                .and_then(|lit| match lit {
-                    Ok(n) => by_number.get(&n).cloned(),
-                    Err(name) => {
-                        let lc = name.to_lowercase();
-                        numbers
-                            .get(&lc)
-                            .and_then(|n| by_number.get(n).cloned())
-                            .or_else(|| by_name.get(&lc).cloned())
-                    }
-                });
-            match started {
-                Some(nodes) if !nodes.is_empty() => out.nodes.extend(nodes),
-                _ => out.unresolved.push(format!(
+            let literal = literal_or_none(cs.argument_texts.get(s.codeunit_arg), false)
+                && s.failure_arg
+                    .is_none_or(|f| literal_or_none(cs.argument_texts.get(f), true));
+            if !literal {
+                out.push(format!(
                     "{} at {}:{}",
                     cs.callee_text,
                     cs.source_anchor.source_unit_id,
                     cs.source_anchor.start_line + 1
-                )),
+                ));
             }
         }
     }
-    out.unresolved.sort();
+    out.sort();
     out
 }
 
@@ -706,7 +660,6 @@ struct Visitor<'a, 'c> {
     q: CallersQuestion,
     cx: &'c CallersCx<'a>,
     ix: &'c Index<'a>,
-    bg: &'c BackgroundTargets,
     /// Each reached state's hops and parent.
     hops: HashMap<WalkState, u32>,
     parent: HashMap<WalkState, (WalkState, SiteIx)>,
@@ -1446,32 +1399,6 @@ impl ConeVisitor for Visitor<'_, '_> {
         if !pending {
             self.commit_rows(s.node);
         }
-        if self.bg.nodes.contains(&s.node) {
-            let d = self.ix.display(self.cx.g, s.node);
-            match self.q {
-                CallersQuestion::NonInteractive => {
-                    self.entries
-                        .entry("background-start")
-                        .or_default()
-                        .insert(s.node);
-                    self.entry_witness(s, "background-start", d);
-                }
-                CallersQuestion::InterceptErrors => {
-                    self.entries
-                        .entry("background-start")
-                        .or_default()
-                        .insert(s.node);
-                }
-                CallersQuestion::PendingWrites => {
-                    if pending {
-                        self.entries
-                            .entry("background-start")
-                            .or_default()
-                            .insert(s.node);
-                    }
-                }
-            }
-        }
     }
 
     fn hidden(&mut self, _root: u32, n: NodeIx, ch: HiddenChannel) {
@@ -1628,24 +1555,39 @@ impl Visitor<'_, '_> {
             return;
         }
         let g = self.cx.g;
-        let row = self.ix.row_for(g, s.node, None);
-        let place = row.map(|r| {
-            (
-                r.source_anchor.source_unit_id.clone(),
-                r.source_anchor.start_line + 1,
-            )
+        // A background-start entry is the started codeunit's object node: its
+        // place is the first start site into it (the call, in the starter).
+        let start = (kind == "background-start")
+            .then(|| {
+                g.sites_into(s.node).iter().find_map(|&x| {
+                    let st = g.sites()[x as usize];
+                    (st.boundary == Boundary::Background)
+                        .then(|| st.anchor.map(|a| anchor_place(g, st.from, &a)))
+                        .flatten()
+                })
+            })
+            .flatten();
+        let place = start.clone().or_else(|| {
+            self.ix.row_for(g, s.node, None).map(|r| {
+                (
+                    r.source_anchor.source_unit_id.clone(),
+                    r.source_anchor.start_line + 1,
+                )
+            })
         });
         let extra = if s.ext & UNRECOGNIZED != 0 {
             " (past a GuiAllowed condition not recognized)"
         } else {
             ""
         };
-        let detail = if kind == "background-start" {
-            format!(
-                "{display} is started in a background session or task (a static start target, not an edge){extra}"
-            )
-        } else {
-            format!("{display} is a {kind} entry{extra}")
+        let detail = match (&start, kind) {
+            (Some((file, line)), _) => format!(
+                "{display} is started in a background session or task (at {file}:{line}){extra}"
+            ),
+            (None, "background-start") => {
+                format!("{display} is started in a background session or task{extra}")
+            }
+            _ => format!("{display} is a {kind} entry{extra}"),
         };
         let w = Witness {
             kind: "non-interactive-entry",
@@ -1671,7 +1613,7 @@ impl Visitor<'_, '_> {
 pub fn answer(q: CallersQuestion, roots: &[NodeIx], cx: &CallersCx<'_>) -> CallersAnswer {
     let g = cx.g;
     let ix = Index::new(cx.model, g);
-    let bg = background_targets(cx.model, g);
+    let unresolved_bg = unresolved_background_starts(cx.model);
     let config = config_entries(g, cx.model);
     let opts = WalkOptions {
         assume_no_dependents: cx.assume_no_dependents,
@@ -1683,7 +1625,6 @@ pub fn answer(q: CallersQuestion, roots: &[NodeIx], cx: &CallersCx<'_>) -> Calle
         q,
         cx,
         ix: &ix,
-        bg: &bg,
         hops: HashMap::new(),
         parent: HashMap::new(),
         evals: HashMap::new(),
@@ -1736,7 +1677,7 @@ pub fn answer(q: CallersQuestion, roots: &[NodeIx], cx: &CallersCx<'_>) -> Calle
                 );
             }
         }
-        for u in &bg.unresolved {
+        for u in &unresolved_bg {
             v.block(
                 "unresolved-background-target",
                 u.clone(),

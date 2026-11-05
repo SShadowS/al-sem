@@ -328,6 +328,11 @@ pub fn program_sites(edges: &[CanonicalEdge]) -> BTreeMap<Site, BTreeSet<Target>
             EdgeKind::Run => EdgeClass::Run,
             EdgeKind::ImplicitTrigger => EdgeClass::Trigger,
             EdgeKind::EventFlow => EdgeClass::Event,
+            // The compiler graph ends a background start at its built-in
+            // node (holes doc A21), and the site's catalog call is the
+            // program's `Call` edge there: the start's own edge has nothing to
+            // be compared with, so it is left out (not reported as a run).
+            EdgeKind::BackgroundStart => continue,
         };
         let targets: BTreeSet<Target> = e
             .targets
@@ -523,6 +528,49 @@ mod tests {
             object_key: "50100".into(),
             routine: name.into(),
         }
+    }
+
+    /// F3: a background start's own edge is not compared (the compiler graph
+    /// has none; the site's catalog call is the comparable edge), while a run
+    /// of the same target at the same place is.
+    ///
+    /// DISCRIMINATION (2026-11-05): mapping `EdgeKind::BackgroundStart` to
+    /// `EdgeClass::Run` in `program_sites` fails this test.
+    #[test]
+    fn a_background_start_edge_is_not_compared() {
+        use crate::program::resolve::differential::{
+            CanonicalEdge, CanonicalKey, CanonicalSiteKey, CanonicalTarget,
+        };
+        use crate::program::resolve::edge::{CanonicalSpan, SourcePos};
+        let key = |routine: &str| CanonicalKey {
+            app_guid: APP.into(),
+            object_kind: "codeunit".into(),
+            object_lc: "50100".into(),
+            routine_lc: routine.into(),
+        };
+        let at = |kind: EdgeKind, line: u32| CanonicalEdge {
+            from: key("go"),
+            site: CanonicalSiteKey {
+                caller: key("go"),
+                span: CanonicalSpan {
+                    unit: "src/S.al".into(),
+                    start: SourcePos { line, col: 0 },
+                    end: SourcePos { line, col: 1 },
+                },
+                callee_fp: 0,
+            },
+            kind,
+            targets: [CanonicalTarget {
+                kind: 0,
+                app: Some(APP.into()),
+                object_lc: "50101".into(),
+                routine_lc: Some("onrun".into()),
+            }]
+            .into(),
+        };
+        let sites = program_sites(&[at(EdgeKind::BackgroundStart, 4), at(EdgeKind::Run, 6)]);
+        let got: Vec<(u32, EdgeClass)> = sites.keys().map(|s| (s.line, s.class)).collect();
+        assert_eq!(got, vec![(7, EdgeClass::Run)]);
     }
 
     /// Pairs, not lines: the compiler keeps one edge per (caller, callee) pair,

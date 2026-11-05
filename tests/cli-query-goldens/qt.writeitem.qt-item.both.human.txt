@@ -2,4 +2,5 @@
   scope: dependency code: full cone for physical writes, grouped per entry point; per-operation detail one routine deep; temporary-record touches persist nothing but use the table's schema and run its triggers; lines are 1-based
   down: yes — 1 record touch: 0 on persistent records, 1 on a possibly persistent record (caller-dependent), 0 on temporary records
     [Insert] write at ws:src/QTTouches.al:33 in Codeunit QT Touches::WriteItem (caller-dependent: parameter 1)
+  callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens, nor a path through dependency code (alsem tests and impact follow both)
   up: 5 transitive callers inherit this touch through this routine: 5 touch it, 0 do not, 0 unknown — --callers lists them, --all their witnesses

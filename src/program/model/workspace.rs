@@ -347,6 +347,12 @@ pub struct ModelRecordOperation {
     /// serialized `fieldArguments` and the input of every detector that
     /// reads them. Never serialized.
     pub modify_all_field: Option<String>,
+    /// Agent-tasks D1: for a `TransferFields(From[, InitPrimaryKey])`, its
+    /// first argument as written: the record copied from. Read at assembly
+    /// from the IR, as `modify_all_field` is (`TransferFields` is not in
+    /// `FIELD_ARGS_OPS`, and its argument is a record, not a field). `None`
+    /// for every other operation. Never serialized.
+    pub transfer_fields_source: Option<String>,
     /// MCP output wave 3a (Q4): the receiver is a variable declared
     /// `RecordRef` (`PRecordOperation::receiver_is_record_ref`, forwarded), so
     /// the operation's table is decided at run time. Read by `alsem query`'s
@@ -541,6 +547,12 @@ pub struct ModelRoutine {
     /// Field accesses (from L2 body walk). Required by the R3a-2 summary
     /// engine to derive RecordRoleSummary.readsFields per record parameter.
     pub field_accesses: Vec<crate::program::body::features::PFieldAccess>,
+    /// Agent-tasks D1: bare identifiers read or written through the routine's
+    /// implicit record (`Amount := 0` in a table trigger), not matched against
+    /// the table's fields yet (`ir_walk::IrSpine::implicit_field_accesses`).
+    /// Read by `alsem query touches --field` only; kept apart from
+    /// `field_accesses` so no detector input moves. Empty for a symbol-only row.
+    pub implicit_field_accesses: Vec<crate::program::body::features::PFieldAccess>,
     /// The routine's lexical scope (params → locals → non-shadowed object globals).
     /// Iterate with `.iter()`; see [`RoutineVariables`] for why the globals are shared
     /// rather than replicated per routine.
@@ -663,6 +675,13 @@ pub struct ModelRoutine {
     /// built them gets an empty one (the model has no source for it). Read
     /// through [`ModelRoutine::card_text`], which fails loudly on `None`.
     pub card_text: Option<Box<CardText>>,
+    /// The enclosing conditions of the routine's sites
+    /// ([`crate::program::body::site_guards`], agent-tasks design §9.4).
+    /// `None` when the view did not declare `ViewNeeds::site_guards` (not
+    /// built); a symbol-only row of a model that built them gets an empty one.
+    /// Read through [`ModelRoutine::site_guards`], which fails loudly on
+    /// `None`.
+    pub site_guards: Option<Box<crate::program::body::site_guards::SiteGuards>>,
 }
 
 /// One routine's text for `alsem explain` (intent-evidence spec §4.4), read
@@ -717,6 +736,16 @@ impl ModelRoutine {
         self.card_text
             .as_deref()
             .expect("card text not built: declare ViewNeeds::card_text")
+    }
+
+    /// The routine's guard arms. Reading them from a model built without
+    /// `ViewNeeds::site_guards` is a bug and panics, in every build, like
+    /// [`ModelRoutine::rules`].
+    #[must_use]
+    pub fn site_guards(&self) -> &crate::program::body::site_guards::SiteGuards {
+        self.site_guards
+            .as_deref()
+            .expect("site guards not built: declare ViewNeeds::site_guards")
     }
 
     /// Whether this row believes a site of its own with `control_context`
@@ -1172,13 +1201,20 @@ pub struct AssemblyNeeds {
     /// spec §4.4): `alsem explain` alone reads it. `false` leaves every row's
     /// `card_text` `None` (not built).
     pub card_text: bool,
+    /// Build each routine's guard arms (`ModelRoutine::site_guards`, the
+    /// enclosing conditions of its sites; agent-tasks design §9.4): `alsem
+    /// prove` with a filter alone reads them. `false` leaves every row's
+    /// `site_guards` `None` (not built).
+    pub site_guards: bool,
 }
 
 impl AssemblyNeeds {
     /// Whether rows built with `self` hold every fact `other` asks for.
     #[must_use]
     pub fn covers(self, other: AssemblyNeeds) -> bool {
-        (self.rules || !other.rules) && (self.card_text || !other.card_text)
+        (self.rules || !other.rules)
+            && (self.card_text || !other.card_text)
+            && (self.site_guards || !other.site_guards)
     }
 
     /// Both needs.
@@ -1187,6 +1223,7 @@ impl AssemblyNeeds {
         AssemblyNeeds {
             rules: self.rules || other.rules,
             card_text: self.card_text || other.card_text,
+            site_guards: self.site_guards || other.site_guards,
         }
     }
 
@@ -1195,16 +1232,19 @@ impl AssemblyNeeds {
     pub const BASE: AssemblyNeeds = AssemblyNeeds {
         rules: false,
         card_text: false,
+        site_guards: false,
     };
     /// The base rows and the rules.
     pub const RULES: AssemblyNeeds = AssemblyNeeds {
         rules: true,
         card_text: false,
+        site_guards: false,
     };
     /// What `alsem explain` reads: the rules and the card text.
     pub const EXPLAIN: AssemblyNeeds = AssemblyNeeds {
         rules: true,
         card_text: true,
+        site_guards: false,
     };
 }
 
@@ -1250,7 +1290,9 @@ pub fn rows_population(
 
 /// The first argument of the `ModifyAll(..)` call whose expression index is
 /// `expr` (`SiteExprs::record_ops`), as written: the field it writes
-/// (`ModelRecordOperation::modify_all_field`).
+/// (`ModelRecordOperation::modify_all_field`). Also a `TransferFields(..)`'s
+/// first argument, the record it copies from
+/// (`ModelRecordOperation::transfer_fields_source`).
 fn modify_all_field(
     ir_file: &al_syntax::ir::AlFile,
     source: &str,
@@ -1558,7 +1600,7 @@ fn project_ir(
             // unescapes it.
             let enclosing_member = crate::program::body::ir_walk::ir_enclosing_member(ir_routine);
 
-            let (routine_id, mut features, site_exprs) = {
+            let (routine_id, mut features, site_exprs, implicit_field_accesses) = {
                 let kind_for_id = crate::program::body::ir_walk::ir_routine_kind(ir_routine);
                 let params_for_id = crate::program::body::ir_walk::ir_parameter_symbols(ir_routine);
                 let rid = crate::program::body::scope::compute_routine_id(
@@ -1571,7 +1613,7 @@ fn project_ir(
                     &params_for_id,
                     ir_routine.return_type.as_deref(),
                 );
-                let (feats, site_exprs) =
+                let (feats, site_exprs, implicit) =
                     crate::program::body::ir_walk::project_routine_features_ir_with(
                         ir_file,
                         oi,
@@ -1582,7 +1624,7 @@ fn project_ir(
                         source_table_name.as_deref(),
                         parenless_calls,
                     );
-                (rid, feats, site_exprs)
+                (rid, feats, site_exprs, implicit)
             };
 
             // R1b control-context lattice (the SAME pass `aldump --l2` applies):
@@ -1692,6 +1734,11 @@ fn project_ir(
                 .enumerate()
                 .map(|(i, op)| ModelRecordOperation {
                     modify_all_field: (op.op == "ModifyAll")
+                        .then(|| {
+                            modify_all_field(ir_file, source, site_exprs.record_ops.get(i).copied())
+                        })
+                        .flatten(),
+                    transfer_fields_source: (op.op == "TransferFields")
                         .then(|| {
                             modify_all_field(ir_file, source, site_exprs.record_ops.get(i).copied())
                         })
@@ -2008,6 +2055,16 @@ fn project_ir(
                     cols,
                 ))
             });
+            // Agent-tasks §9.4: the sites' enclosing conditions, from the IR
+            // still in hand.
+            let site_guards = needs.site_guards.then(|| {
+                Box::new(crate::program::body::site_guards::build_site_guards(
+                    ir_file,
+                    ir_routine,
+                    source,
+                    &|origin| anchor_from_origin(origin, source_unit_id, cols),
+                ))
+            });
             workspace.routines.push(ModelRoutine {
                 id: routine_id,
                 stable_routine_id,
@@ -2024,6 +2081,7 @@ fn project_ir(
                 record_variables,
                 record_operations,
                 field_accesses,
+                implicit_field_accesses,
                 variables,
                 parameters,
                 access_modifier,
@@ -2049,6 +2107,7 @@ fn project_ir(
                 rules: None,
                 rule_drafts,
                 card_text,
+                site_guards,
             });
         }
     }
@@ -2655,6 +2714,12 @@ fn append_abi_rows(
         }
         for o in &mut ws.objects[first_abi_object..] {
             o.run_actions = Some(Vec::new());
+        }
+    }
+    if needs.site_guards {
+        // No source, so no site of its own and no guard.
+        for r in &mut ws.routines[first_abi_row..] {
+            r.site_guards = Some(Box::default());
         }
     }
     ids.into_iter().filter_map(|(k, v)| Some((k, v?))).collect()

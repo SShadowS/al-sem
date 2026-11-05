@@ -300,22 +300,30 @@ fn probe(g: &SitedGraph, id: &str, opts: &WalkOptions<'_>) -> Value {
 /// with a direct or interface call (`Sync`), an object run (`Run`) or a
 /// record operation firing the trigger (`TriggerOf`) into `r`; and, when
 /// `r` is a trigger a run of its object runs (`Lifecycle`: a codeunit's
-/// `OnRun`, a page's or report's lifecycle triggers, the resolver's own
-/// `run_triggers`), every routine that runs that object (the model's calls
+/// `OnRun`, a page's or report's lifecycle triggers and the same triggers of
+/// its extensions, [`crate::program::impact_graph::reverse::object_run_reaches`]),
+/// every routine that runs that object (the model's calls
 /// map `Codeunit.Run` straight to `OnRun`; the sited graph goes through the
 /// object node). Only call sites the model has count (`via` call,
 /// interface, run, implicitTrigger): a rule's edge (`declaredRunnable`, a
 /// test's TestPage variable) is no call. Not callers: an event's publisher (a subscriber is
-/// dispatched, not called), a test's handler list, open sites, `r` itself,
-/// hubs, and a page's triggers (page actions are counted apart, explain's
-/// F16j).
+/// dispatched, not called), a background start (a `Background` site, F3: the
+/// target runs in its own session, and the model's calls do not carry it;
+/// the walks over the graph still reach the starter), a test's handler list, open sites, `r` itself,
+/// hubs, and a page's or page extension's triggers (page actions are counted
+/// apart, explain's F16j).
 #[must_use]
 pub fn direct_callers(g: &SitedGraph, r: NodeIx) -> BTreeSet<NodeIx> {
     use crate::program::impact_graph::sited::Boundary;
+    // A page's or page extension's trigger (explain's F16j: `object_type`
+    // starting with `Page`).
     let is_page_trigger = |n: NodeIx| {
-        g.routine_object(n)
-            .is_some_and(|o| matches!(o.kind, al_syntax::ir::ObjectKind::Page))
-            && g.local_name(n).is_some_and(|l| l.trigger)
+        g.routine_object(n).is_some_and(|o| {
+            matches!(
+                o.kind,
+                al_syntax::ir::ObjectKind::Page | al_syntax::ir::ObjectKind::PageExtension
+            )
+        }) && g.local_name(n).is_some_and(|l| l.trigger)
     };
     let mut out = BTreeSet::new();
     let add = |n: NodeIx, out: &mut BTreeSet<NodeIx>| {
@@ -327,27 +335,10 @@ pub fn direct_callers(g: &SitedGraph, r: NodeIx) -> BTreeSet<NodeIx> {
             out.insert(n);
         }
     };
-    // Whether a run of `r`'s object runs `r` (the resolver's own lists:
-    // a codeunit's `OnRun`, a page's or report's lifecycle triggers).
-    let run_reaches = g.routine_object(r).is_some_and(|o| {
-        let d = g.display(r);
-        let parts: Vec<&str> = d.splitn(3, "::").collect();
-        let (member, name) = match parts.as_slice() {
-            [_, n] => (false, *n),
-            [_, _, n] => (true, *n),
-            _ => return false,
-        };
-        match crate::program::resolve::resolver::run_triggers(o.kind) {
-            Some((object, members)) => {
-                if member {
-                    members.contains(&name)
-                } else {
-                    object.contains(&name)
-                }
-            }
-            None => !member && name == "onrun",
-        }
-    });
+    // Whether a run of `r`'s object runs `r` (the resolver's own rule: a
+    // codeunit's `OnRun`, a page's or report's lifecycle triggers, and those
+    // of a page or report extension).
+    let run_reaches = crate::program::impact_graph::reverse::object_run_reaches(g, r);
     for &s in g.sites_into(r) {
         let site = &g.sites()[s as usize];
         let from_routine = g.routine_object(site.from).is_some();

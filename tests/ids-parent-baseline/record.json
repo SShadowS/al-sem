@@ -1,5 +1,5 @@
 {
-  "mintedAt": "004f0ee4",
+  "mintedAt": "044f7137",
   "fixtures": {
     "fixtures/analyze-json": {
       "findings": [
@@ -470,18 +470,14 @@
       ]
     },
     "r0-corpus/ws-callsite-resolutions": {
-      "findings": [
-        "d9-transaction-span-summary|al-sem/v1=c37c5f08649ccae4"
-      ],
+      "findings": [],
       "stableIds": [
         "11111111-2222-3333-4444-555555555555:Codeunit:50100#708496f489864d6a1474620c5f618551f0b0261cc4f38e0f45d46b1167d345ed",
         "11111111-2222-3333-4444-555555555555:Codeunit:50100#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc",
         "11111111-2222-3333-4444-555555555555:Codeunit:50100#e1c70a546ea08fc525ac78a0f7aa33c159843046d614a58d09b8de4ddb279b81",
-        "11111111-2222-3333-4444-555555555555:Codeunit:50100#e1c70a546ea08fc525ac78a0f7aa33c159843046d614a58d09b8de4ddb279b81/op0",
         "11111111-2222-3333-4444-555555555555:Codeunit:50101#337986a952c0fde5957bdd4f5f1b10c63d5c1e992a8f3fc3637e51f6c87fbd80",
         "11111111-2222-3333-4444-555555555555:Codeunit:50102#d9856041059f64d8aadd6e81f9291b0c6e2650ef69812ad24eadb27d52050200"
-      ],
-      "baseline": "{\n  \"schemaVersion\": \"1\",\n  \"generatedAt\": \"1970-01-01T00:00:00.000Z\",\n  \"fingerprints\": [\n    \"c37c5f08649ccae4\"\n  ]\n}\n"
+      ]
     },
     "r0-corpus/ws-chain-tables": {
       "findings": [],

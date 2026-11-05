@@ -2436,6 +2436,7 @@ mod tests {
                 upgraded_bindings: HashMap::new(),
                 diagnostics: Vec::new(),
                 external_targets: Vec::new(),
+                background_starts: Default::default(),
             }),
             events: Default::default(),
         };

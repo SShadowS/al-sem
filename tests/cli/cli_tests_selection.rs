@@ -332,11 +332,19 @@ fn explain_names_the_discovered_test_apps_without_analyzing_them() {
 /// graph) for every workspace routine of the fixture. explain keeps reading
 /// the model: building the sited graph for every explain would cost each
 /// edit 0.93-1.19 s and 45 MiB on CDO (M0's measured lazy-graph decision);
-/// this test is what keeps the two readers from drifting apart.
+/// this test is what keeps the two readers from drifting apart. The second
+/// fixture, `caller-relations`, adds a page extension: a run of the base page
+/// runs the extension's `OnOpenPage` (the resolver's `run_triggers`), and
+/// its action is a page action (F16j), not a routine caller.
 #[test]
 fn explain_callers_equal_the_cones_direct_callers() {
+    explain_callers_equal_direct_callers_in("tests/fixtures/test-selection-graph", 20);
+    explain_callers_equal_direct_callers_in("tests/fixtures/caller-relations/ws", 18);
+}
+
+fn explain_callers_equal_direct_callers_in(fixture: &str, min_checked: usize) {
     use al_sem::engine::test_select::select::direct_callers;
-    let ws = repo_root().join("tests/fixtures/test-selection-graph");
+    let ws = repo_root().join(fixture);
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
     let p = al_sem::program::resolved::ResolvedProgram::build(
         &inputs,
@@ -370,8 +378,8 @@ fn explain_callers_equal_the_cones_direct_callers() {
         }
         checked += 1;
     }
-    assert!(checked >= 20, "{checked}");
-    assert!(differ.is_empty(), "{}", differ.join("\n"));
+    assert!(checked >= min_checked, "{fixture}: {checked}");
+    assert!(differ.is_empty(), "{fixture}:\n{}", differ.join("\n"));
 }
 
 /// `--test-app` names the app (no discovery); a routine no selector finds

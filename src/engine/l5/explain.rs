@@ -350,8 +350,11 @@ impl Job for ExplainJob<'_> {
         let resolved: Resolved = cx.take_carry();
         // `--callers-context`: each card's three callers' answers, off the
         // sited graph and the detector run (agent-tasks §6.6).
-        let callers: HashMap<String, (Value, Vec<String>)> = match cx.sited() {
-            Some(g) if self.callers_context && !resolved.roots.is_empty() => {
+        // The graph is declared only with `--callers-context` (read it only
+        // then: an undeclared read panics).
+        let sited = self.callers_context.then(|| cx.sited()).flatten();
+        let callers: HashMap<String, (Value, Vec<String>)> = match sited {
+            Some(g) if !resolved.roots.is_empty() => {
                 let det = cx.view().det();
                 let ccx = crate::engine::l5::callers_context::CallersCx {
                     model: cx.view().model(),

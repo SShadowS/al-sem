@@ -281,6 +281,53 @@ fn entries_come_from_source_not_from_indegree() {
     assert!(!rec.entries.iter().any(|e| e.1 == o));
 }
 
+/// F3: the codeunit object a static background start enters (a
+/// `Background` site) is a `background-start` entry, from the graph; the
+/// walk goes on over the start site to the starter (R0 stops nowhere; a
+/// consumer's `step` does). The starter itself is no such entry.
+///
+/// DISCRIMINATION (2026-11-05): dropping the `is_background_target` arm in
+/// `report` fails "the started codeunit is a background-start entry".
+#[test]
+fn a_background_start_target_is_an_entry() {
+    let mut w = World::default();
+    let a = w.app("W");
+    let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
+    let bg = w.obj(a, ObjectKind::Codeunit, 2, "Bg", TrustTier::Workspace);
+    let starter = w.rtn_with(&cu, "Starter", |x| x.access = Access::Local);
+    let on_run = w.trigger(&bg, "OnRun");
+    let r = w.rtn_with(&cu, "R", |x| x.access = Access::Local);
+    w.call(&on_run, &r, 1);
+    w.background(
+        &starter,
+        vec![crate::program::resolve::edge::Route {
+            target: crate::program::resolve::edge::RouteTarget::Routine(on_run.clone()),
+            evidence: crate::program::resolve::edge::Evidence::Source,
+            conditions: vec![],
+            witness: crate::program::resolve::edge::Witness::None,
+            receiver_tier: None,
+        }],
+        2,
+    );
+    let g = sited_of(&w, a, &[]);
+    let rec = walk(&g, &[node(&g, &r)], &WalkOptions::default());
+    let object = (0..g.node_count() as u32)
+        .find(|&n| g.object_node(n).as_ref() == Some(&bg))
+        .expect("the started codeunit's object node");
+    let e = rec
+        .entries
+        .iter()
+        .find(|e| e.1 == object)
+        .expect("the started codeunit is a background-start entry");
+    assert_eq!(e.2, vec![EntryKind::BackgroundStart]);
+    let s = node(&g, &starter);
+    assert!(
+        rec.states.iter().any(|x| x.1.node == s),
+        "the walk reaches the starter"
+    );
+    assert!(!rec.entries.iter().any(|e| e.1 == s));
+}
+
 /// R0-9: an internal procedure of an app with a friend is external (reason
 /// `friend`); without a friend it is not; with `assumeNoDependents` nothing
 /// is external.

@@ -634,6 +634,14 @@ struct QueryTouchesCli {
     #[arg(long = "table")]
     table: String,
 
+    /// A field of `--table` (a name or a number): every code consumer of the
+    /// field by use kind (read, write, validate, filter, key-use, load, calc,
+    /// rule, metadata, copy-candidate, by-number), instead of the table's
+    /// record operations. With `--from`, only the routine's cone (down) and
+    /// its callers (up).
+    #[arg(long = "field")]
+    field: Option<String>,
+
     /// Scope the answer to one routine: internal id, StableRoutineId,
     /// `Object.Routine`, or a bare routine name. Omit for the workspace-global
     /// list (count reported first; the list is complete, never truncated).
@@ -1092,6 +1100,43 @@ struct ProveCli {
     /// first. The JSON always lists every one.
     #[arg(long, default_value_t = false)]
     detail: bool,
+
+    /// throws-error only: keep the error sites whose static message text
+    /// (a literal, a Label's or TextConst's value, `%1` placeholders kept) or
+    /// Label/TextConst name contains TEXT, case-insensitive. A site whose
+    /// message is not static (a variable or expression, an ErrorInfo, the
+    /// platform's own) never matches it, and it blocks a `no`; an implicit
+    /// error (TestField, an unguarded Get, …) matches only by its kind word.
+    #[arg(long = "match", value_name = "TEXT")]
+    match_text: Option<String>,
+
+    /// Keep only the sites at FILE:LINE (a source path or its tail, a
+    /// 1-based line): throws-error, writes-table:<table>, may-commit,
+    /// reaches-ui.
+    #[arg(long, value_name = "FILE:LINE")]
+    site: Option<String>,
+
+    /// throws-error or writes-table:<table>: keep only the sites of this
+    /// operation (Error, TestField, FieldError, Get, …; Insert, Modify,
+    /// ModifyAll, Delete, DeleteAll, Rename).
+    #[arg(long, value_name = "KIND")]
+    op: Option<String>,
+
+    /// throws-error only: keep only the errors a record operation on this
+    /// table raises (TestField, FieldError, an unguarded Get, …).
+    #[arg(long, value_name = "TABLE")]
+    table: Option<String>,
+
+    /// With --match, --site, --op or --table: up to N distinct routes per
+    /// matching site (1 to 10; default 1, one route), fewest hops first, each
+    /// with its guards. A route is a simple path over (routine, known
+    /// argument values) states, so recursion is followed only while it
+    /// changes the known values; the answer says whether the enumeration
+    /// completed (then every route is listed) or which cap fired (the routes
+    /// asked, or 50,000 candidate edges per site), and how many candidate
+    /// edges it examined and rejected.
+    #[arg(long, value_name = "N")]
+    routes: Option<usize>,
 }
 
 /// `ExplainCli` — arguments for `alsem explain <ws>` (intent-evidence spec
@@ -1939,21 +1984,30 @@ fn write_run_stdout(out: Vec<u8>, whole: bool) -> ExitCode {
     ExitCode::from(code)
 }
 
-/// A job's kind for the peak table (D12): its command and its view's
-/// universe. `None`: `batch`, `policy explain`, `cache prune` (no job).
-/// Whether `command` walks the sited graph beside the model (agent-tasks
-/// design §6): a callers' context prove question, or explain with
-/// `--callers-context`. A resident engine then pins with `pin_sited`.
+/// Whether `command` walks the sited graph beside the model
+/// (`ViewNeeds::MODEL_SITED`): a callers' context prove question or explain
+/// with `--callers-context` (agent-tasks design §6), and `query touches
+/// --field --from` asked up (`up` or the default `both`, either universe:
+/// R0's reverse walk names the callers; design §7). Each job's demand states
+/// the same rule. A resident engine then pins with `pin_sited`.
 fn reads_sited(command: &Commands) -> bool {
     match command {
         Commands::Prove(p) => {
             al_sem::engine::l5::callers_context::CallersQuestion::parse(&p.question).is_some()
         }
         Commands::Explain(e) => e.callers_context,
+        Commands::Query(q) => match &q.command {
+            QueryCommands::Touches(t) => {
+                t.field.is_some() && t.from.is_some() && t.direction != "down"
+            }
+            QueryCommands::Effects(_) => false,
+        },
         _ => false,
     }
 }
 
+/// A job's kind for the peak table (D12): its command and its view's
+/// universe. `None`: `batch`, `policy explain`, `cache prune` (no job).
 fn job_kind(command: &Commands) -> Option<JobKind> {
     let universe = |single_app: bool| match single_app {
         true => ViewUniverse::SingleApp,
@@ -2552,6 +2606,7 @@ fn plan_query_touches(t: QueryTouchesCli) -> Planned {
                     t.single_app,
                 )
                 .list_callers(t.callers)
+                .field(t.field.as_deref())
                 .show_source(t.show_source)
                 .written(t.format == "json", t.out.as_deref()),
             )
@@ -3172,6 +3227,18 @@ fn plan_prove(p: ProveCli) -> Planned {
             1,
         );
     }
+    // Agent-tasks E1: the filters, and which question each goes with.
+    let slice = match al_sem::engine::l5::prove_slice::SliceRequest::of(
+        &p.question,
+        p.match_text.as_deref(),
+        p.site.as_deref(),
+        p.op.as_deref(),
+        p.table.as_deref(),
+        p.routes,
+    ) {
+        Ok(s) => s,
+        Err(e) => return failed(e, 1, 1),
+    };
 
     ready(
         &p.workspace.clone(),
@@ -3179,6 +3246,7 @@ fn plan_prove(p: ProveCli) -> Planned {
         move |slot, inputs| {
             let version = inputs.get().driver_version.clone();
             let (p, inputs, version) = hold(slot, (p, inputs, version));
+            let slice = slice.clone();
             Box::new(ProveJob {
                 detectors: al_sem::engine::l5::detectors::default_detectors(),
                 inputs,
@@ -3192,6 +3260,7 @@ fn plan_prove(p: ProveCli) -> Planned {
                 human: p.format == "human",
                 detail: p.detail,
                 out: p.out.as_deref(),
+                slice,
             })
         },
     )
@@ -4260,9 +4329,9 @@ mod engine {
         // A tests select part on a model engine (the workspace's own tests)
         // reads the sited graph: the revision must have it (M0's pin_sited,
         // which turns the graph on once). So does an impact up part
-        // (agent-tasks B1) and a question that walks the callers (agent-tasks
-        // design §6: callers' context prove questions, explain
-        // --callers-context).
+        // (agent-tasks B1), and every command that walks the sited graph
+        // beside the model (`reads_sited`: the callers' context questions,
+        // explain --callers-context, query touches --field --from).
         let part_is = |p: &str| {
             ask.argv.iter().any(|a| *a == format!("--part={p}"))
                 || ask.argv.windows(2).any(|w| w[0] == "--part" && w[1] == p)

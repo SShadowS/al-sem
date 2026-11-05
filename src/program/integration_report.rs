@@ -265,6 +265,7 @@ fn conditions(conds: &[Condition]) -> Vec<&'static str> {
             // Task 3 (sigfp-and-ambiguous-reclassification plan): compiler-forced
             // arm — no producer emits this condition yet (mechanics only).
             Condition::AmbiguousDispatch => "ambiguous_dispatch",
+            Condition::OnTaskFailure => "on_task_failure",
         });
     }
     out

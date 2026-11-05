@@ -268,6 +268,55 @@ pub struct ResolvedCalls {
     /// The dependency routines this resolution's to-less dependency edges reach
     /// (S3.3), in edge order. Empty from the legacy resolver.
     pub external_targets: Vec<ExternalTargetRef>,
+    /// internal callsite id → the codeunits a background start at that site
+    /// starts (callgraph F3, `program::resolve::background`). The model's
+    /// edges never follow a start (its effects are not the starter's); this
+    /// side table only names the target, for explain's and digest's
+    /// `BACKGROUND_TASK` line. Shared, so a clone of the calls is cheap.
+    pub background_starts: std::sync::Arc<HashMap<String, BackgroundStart>>,
+}
+
+/// What a background start starts (`StartSession`, `Session.StartSession`,
+/// `TaskScheduler.CreateTask`, `CurrPage.EnqueueBackgroundTask`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackgroundStart {
+    /// The started codeunit.
+    pub codeunit: StartedCodeunit,
+    /// `TaskScheduler.CreateTask`'s failure codeunit; `None` when absent or
+    /// `0` (no failure codeunit).
+    pub on_failure: Option<StartedCodeunit>,
+}
+
+/// One codeunit argument of a background start.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartedCodeunit {
+    /// A literal codeunit (`Codeunit::X`, `Codeunit::"X"`, `50100`): its
+    /// display, `Codeunit <name>` with the declared name when the program
+    /// engine resolved it, else as written.
+    Literal(String),
+    /// Not a literal: the codeunit is decided at run time.
+    RunTime,
+}
+
+impl StartedCodeunit {
+    fn phrase(&self) -> &str {
+        match self {
+            StartedCodeunit::Literal(d) => d,
+            StartedCodeunit::RunTime => "a codeunit decided at run time",
+        }
+    }
+}
+
+impl BackgroundStart {
+    /// The start's target in words: `Codeunit X`, or `a codeunit decided at
+    /// run time`, then `, on failure Codeunit F` for a failure codeunit.
+    #[must_use]
+    pub fn phrase(&self) -> String {
+        match &self.on_failure {
+            None => self.codeunit.phrase().to_string(),
+            Some(f) => format!("{}, on failure {}", self.codeunit.phrase(), f.phrase()),
+        }
+    }
 }
 
 /// Map an object-run objectKind to its dispatch kind.

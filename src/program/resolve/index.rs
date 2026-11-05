@@ -296,6 +296,12 @@ impl SubscriberIndex {
             routine_indices_by_obj_name.entry(key).or_default().push(i);
         }
 
+        // An event declared in a table, page or report EXTENSION is published on
+        // the object it extends: a subscriber names the base (`ObjectType::Table,
+        // Database::"Error Message"`), never the extension. So the candidates
+        // of a base object include the publishers of its extensions.
+        let extensions = PublisherExtensions::build(graph);
+
         // ── Event subscriber index ────────────────────────────────────────────
         let mut subscribers_map: HashMap<RoutineNodeId, Vec<SubscriberEntry>> = HashMap::new();
         let mut subscriptions: Vec<Subscription> = Vec::new();
@@ -333,11 +339,18 @@ impl SubscriberIndex {
                     //     routine even when two share a `RoutineNodeId`. Each
                     //     carries whether it is a PLATFORM publisher, so the
                     //     chosen one decides `Subscription::platform`.
-                    let candidates: Vec<(RoutineNodeId, bool)> = routine_indices_by_obj_name
-                        .get(&(pub_obj_id.clone(), event_name_lc.as_str().into()))
-                        .map(Vec::as_slice)
-                        .unwrap_or(&[])
-                        .iter()
+                    //     The object's own routines come first, then those of
+                    //     each extension the subscriber's app can see (see
+                    //     `PublisherExtensions`).
+                    let event_key: SharedStr = event_name_lc.as_str().into();
+                    let candidates: Vec<(RoutineNodeId, bool)> = std::iter::once(&pub_obj_id)
+                        .chain(extensions.visible(graph, &pub_obj_id, sub_app))
+                        .flat_map(|obj| {
+                            routine_indices_by_obj_name
+                                .get(&(obj.clone(), event_key.clone()))
+                                .map(Vec::as_slice)
+                                .unwrap_or(&[])
+                        })
                         .filter_map(|&i| {
                             let r = &graph.routines[i];
                             // Sender-tolerant arity bound (Task 1, round-2: CONDITIONAL, never
@@ -1474,6 +1487,80 @@ pub(crate) fn resolve_subscription_publisher<'g>(
     }
 }
 
+/// The table, page and report extensions of each base object, for event
+/// subscription: an `[IntegrationEvent]` / `[BusinessEvent]` declared in an
+/// extension is published on the object it extends, so a subscriber names the
+/// base (`[EventSubscriber(ObjectType::Table, Database::"Error Message",
+/// 'OnDrillDownSource', …)]` binds to the event Base Application's
+/// `tableextension "Error Message Extension"` declares). Without this the
+/// subscription was `Orphaned` and its event-flow edge was missing.
+///
+/// An extension is listed under its base only when its `extends_target`
+/// resolves, from the extension's own app, to exactly that object
+/// ([`ProgramGraph::resolve_object`] fails closed). Untargeted `#if`
+/// alternatives (#264 N2-1) are not listed: which table they extend is not
+/// known. Enum extensions are left out: enums publish no events.
+pub(crate) struct PublisherExtensions {
+    /// Base object → its extensions, in `graph.objects` order.
+    by_base: HashMap<ObjectNodeId, Vec<ObjectNodeId>>,
+    /// Extension → its base (the reverse of `by_base`).
+    base_of: HashMap<ObjectNodeId, ObjectNodeId>,
+}
+
+impl PublisherExtensions {
+    pub(crate) fn build(graph: &ProgramGraph) -> Self {
+        let mut by_base: HashMap<ObjectNodeId, Vec<ObjectNodeId>> = HashMap::new();
+        let mut base_of: HashMap<ObjectNodeId, ObjectNodeId> = HashMap::new();
+        for obj in &graph.objects {
+            if !matches!(
+                obj.id.kind,
+                ObjectKind::TableExtension
+                    | ObjectKind::PageExtension
+                    | ObjectKind::ReportExtension
+            ) {
+                continue;
+            }
+            let (Some(base_kind), Some(target)) = (
+                obj.id.kind.extension_base_kind(),
+                obj.extends_target.as_deref(),
+            ) else {
+                continue;
+            };
+            if let Some(base) = graph.resolve_object(obj.id.app, base_kind, target) {
+                by_base
+                    .entry(base.id.clone())
+                    .or_default()
+                    .push(obj.id.clone());
+                base_of.insert(obj.id.clone(), base.id.clone());
+            }
+        }
+        PublisherExtensions { by_base, base_of }
+    }
+
+    /// The extensions of `base` that an `[EventSubscriber]` in app `from` can
+    /// see: those declared in `from`'s dependency closure (itself included),
+    /// in `graph.objects` order.
+    pub(crate) fn visible<'a>(
+        &'a self,
+        graph: &ProgramGraph,
+        base: &ObjectNodeId,
+        from: AppRef,
+    ) -> impl Iterator<Item = &'a ObjectNodeId> + use<'a> {
+        let exts = self.by_base.get(base).map(Vec::as_slice).unwrap_or(&[]);
+        let closure = if exts.is_empty() {
+            Default::default()
+        } else {
+            graph.topology.closure(from)
+        };
+        exts.iter().filter(move |e| closure.contains(&e.app))
+    }
+
+    /// The base object `ext` extends, when it is listed under one.
+    pub(crate) fn base_of(&self, ext: &ObjectNodeId) -> Option<&ObjectNodeId> {
+        self.base_of.get(ext)
+    }
+}
+
 /// Map a lowercased publisher-object-type string (as written in an
 /// `[EventSubscriber]` attribute) to the corresponding [`ObjectKind`].
 /// Returns `None` for unrecognised strings.
@@ -1522,7 +1609,12 @@ fn kind_from_object_type_str(s: &str) -> Option<ObjectKind> {
 /// wiring loop (rather than instrumenting it) — a diagnostic that shares no
 /// code path with the mechanism it audits cannot be silently defeated by a
 /// future change to that mechanism.
+///
+/// It reads where events live from the same [`PublisherExtensions`] as the
+/// wiring (an extension's event is published on its base): that is a fact
+/// about AL, not part of the wiring it audits.
 pub fn count_unknown_include_sender_plus1_subscribers(graph: &ProgramGraph) -> usize {
+    let extensions = PublisherExtensions::build(graph);
     let mut count = 0usize;
     for sub_routine in &graph.routines {
         if sub_routine.event_subscribers.is_empty() {
@@ -1536,9 +1628,12 @@ pub fn count_unknown_include_sender_plus1_subscribers(graph: &ProgramGraph) -> u
                 continue;
             };
             let event_name_lc = args.event_name.fold_identifier();
+            let objects: Vec<&ObjectNodeId> = std::iter::once(&pub_obj.id)
+                .chain(extensions.visible(graph, &pub_obj.id, sub_app))
+                .collect();
 
             for pr in &graph.routines {
-                if pr.id.object == pub_obj.id
+                if objects.contains(&&pr.id.object)
                     && pr.id.name_lc == event_name_lc
                     && pr.publisher_kind.is_some()
                     && pr.include_sender.is_none()
@@ -3709,6 +3804,164 @@ mod tests {
              sub onafterx/0 <- handlerc [] Some(\"Field1\")\n\
              ambiguous handlerd -> true/onamb x2\n\
              orphan handlere -> true/onmissing\n"
+        );
+    }
+
+    // -- Events declared in an extension (fix/unbound-subscriptions) ----------
+
+    /// An event declared in a table or page EXTENSION is published on the base
+    /// object, so a subscriber that names the base binds to the extension's
+    /// publisher. The CDO shape: table "Error Message" lives in System
+    /// Application (`sys`); Base Application (`base`, depends on `sys`) adds
+    /// `OnDrillDownSource` in a tableextension and subscribes to it as
+    /// `ObjectType::Table, Database::"Error Message"`. A third app (`other`,
+    /// also on `sys`, NOT in `base`'s closure) declares an event of another
+    /// name in its own extension: `base` cannot see it, so that subscription
+    /// stays orphaned.
+    #[test]
+    fn subscriber_naming_the_base_binds_to_an_extension_event() {
+        let mut apps = AppRegistry::default();
+        let sys = apps.intern(&make_app_id("Sys"));
+        let base = apps.intern(&make_app_id("Base"));
+        let other = apps.intern(&make_app_id("Other"));
+        let mut topology = DependencyGraph::default();
+        topology.add_dependency(base, sys);
+        topology.add_dependency(other, sys);
+
+        let table = make_obj(
+            sys,
+            ObjectKind::Table,
+            Some(700),
+            "Error Message",
+            None,
+            vec![],
+        );
+        let page = make_obj(
+            sys,
+            ObjectKind::Page,
+            Some(700),
+            "Error Messages",
+            None,
+            vec![],
+        );
+        let tableext = make_obj(
+            base,
+            ObjectKind::TableExtension,
+            Some(5000),
+            "Error Message Extension",
+            Some("Error Message"),
+            vec![],
+        );
+        let pageext = make_obj(
+            base,
+            ObjectKind::PageExtension,
+            Some(5001),
+            "Error Messages Extension",
+            Some("Error Messages"),
+            vec![],
+        );
+        let other_ext = make_obj(
+            other,
+            ObjectKind::TableExtension,
+            Some(6000),
+            "Other Ext",
+            Some("Error Message"),
+            vec![],
+        );
+        let sub_cu = make_obj(
+            base,
+            ObjectKind::Codeunit,
+            Some(480),
+            "Check Dimensions",
+            None,
+            vec![],
+        );
+
+        let on_drill = make_publisher(
+            tableext.id.clone(),
+            "OnDrillDownSource",
+            3,
+            PublisherKind::Integration,
+            Some(false),
+        );
+        let on_open = make_publisher(
+            pageext.id.clone(),
+            "OnOpenRelatedRecord",
+            2,
+            PublisherKind::Integration,
+            Some(false),
+        );
+        let on_hidden = make_publisher(
+            other_ext.id.clone(),
+            "OnHidden",
+            0,
+            PublisherKind::Integration,
+            Some(false),
+        );
+        let arg = |kind: &str, name: &str, event: &str| ParsedSubscriberArgs {
+            publisher_object_type: kind.into(),
+            ..sub_args(name, event)
+        };
+        let subscribers = vec![
+            make_subscriber(
+                sub_cu.id.clone(),
+                "OnErrorMessageDrillDown",
+                3,
+                vec![arg("table", "error message", "OnDrillDownSource")],
+                false,
+            ),
+            make_subscriber(
+                sub_cu.id.clone(),
+                "OnOpenRelatedRecord",
+                2,
+                vec![arg("page", "error messages", "OnOpenRelatedRecord")],
+                false,
+            ),
+            make_subscriber(
+                sub_cu.id.clone(),
+                "OnHiddenHandler",
+                0,
+                vec![arg("table", "error message", "OnHidden")],
+                false,
+            ),
+        ];
+
+        let mut objects = vec![table, page, tableext, pageext, other_ext, sub_cu];
+        objects.sort_by(|x, y| x.id.cmp(&y.id));
+        let mut routines: Vec<RoutineNode> = [
+            vec![on_drill.clone(), on_open.clone(), on_hidden],
+            subscribers,
+        ]
+        .concat();
+        routines.sort_by(|x, y| x.id.cmp(&y.id));
+        let obj_index = ObjectIndex::build(&objects);
+        let graph = ProgramGraph {
+            apps,
+            topology,
+            objects: objects.into(),
+            routines: routines.into(),
+            obj_index,
+            ..Default::default()
+        };
+
+        let idx = SubscriberIndex::build(&graph);
+        let names = |rid: &RoutineNodeId| -> Vec<String> {
+            idx.subscribers_of(rid)
+                .iter()
+                .map(|s| s.subscriber.name_lc.to_string())
+                .collect()
+        };
+        assert_eq!(names(&on_drill.id), ["onerrormessagedrilldown"]);
+        assert_eq!(names(&on_open.id), ["onopenrelatedrecord"]);
+        let orphans: Vec<String> = idx
+            .orphaned_subscriptions()
+            .iter()
+            .map(|s| s.subscriber.name_lc.to_string())
+            .collect();
+        assert_eq!(
+            orphans,
+            ["onhiddenhandler"],
+            "an extension outside the subscriber's closure is not visible"
         );
     }
 

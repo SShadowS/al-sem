@@ -60,6 +60,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
 
+#[path = "literal_routes.rs"]
+pub mod routes;
+
 /// The most (routine, bindings) states one root's search visits.
 pub(crate) const STATE_CAP: usize = 400_000;
 
@@ -1031,20 +1034,46 @@ impl<'a> LiteralReach<'a> {
         cap: usize,
         cancel: &dyn Fn() -> bool,
     ) -> Result<LiveTree<'a>, Stop> {
+        self.tree_recording(start, cap, cancel, None)
+    }
+
+    /// [`Self::tree_from`], and when `rec` is given every transition the
+    /// search examines, live or not (agent-tasks E2: the state-transition
+    /// graph [`routes::StateGraph`] is built from them). The search itself
+    /// is the same with or without `rec`: the same states, in the same
+    /// order, with the same first parents.
+    fn tree_recording(
+        &self,
+        start: State<'a>,
+        cap: usize,
+        cancel: &dyn Fn() -> bool,
+        mut rec: Option<&mut routes::Recorder<'a>>,
+    ) -> Result<LiveTree<'a>, Stop> {
         let mut parent: HashMap<State<'a>, Option<(State<'a>, Via<'a>)>> =
             HashMap::from([(start.clone(), None)]);
         let mut order: Vec<State<'a>> = Vec::new();
+        if let Some(r) = rec.as_deref_mut() {
+            r.start(start.clone());
+        }
         let mut q = VecDeque::from([start]);
         while let Some((f, b)) = q.pop_front() {
             if order.len().is_multiple_of(CANCEL_EVERY) && cancel() {
                 return Err(Stop::Cancelled);
             }
             order.push((f, b.clone()));
-            for &(to, edge_site, binds, kind) in self.out.get(f).into_iter().flatten() {
+            if let Some(r) = rec.as_deref_mut() {
+                r.open_state();
+            }
+            for (j, &(to, edge_site, binds, kind)) in
+                self.out.get(f).into_iter().flatten().enumerate()
+            {
                 let site = edge_site.and_then(EdgeSite::guarded);
                 if let Some(s) = site
                     && self.dead_at(f, s, &b)
                 {
+                    if let Some(r) = rec.as_deref_mut() {
+                        r.dead(j);
+                    }
                     continue;
                 }
                 let nb = match (binds, site) {
@@ -1056,8 +1085,16 @@ impl<'a> LiteralReach<'a> {
                     if parent.len() > cap {
                         return Err(Stop::Capped);
                     }
+                    if let Some(r) = rec.as_deref_mut() {
+                        // A new state's index is its discovery position,
+                        // which is its position in `order` (the queue is
+                        // first in, first out).
+                        r.live_new(j, key.clone(), parent.len());
+                    }
                     parent.insert(key.clone(), Some(((f, b.clone()), (edge_site, kind))));
                     q.push_back(key);
+                } else if let Some(r) = rec.as_deref_mut() {
+                    r.live_seen(j, &key);
                 }
             }
         }
@@ -1108,6 +1145,13 @@ impl<'a> LiteralReach<'a> {
     ) -> Option<(Vec<Step<'a>>, &'t str)> {
         let (state, op) = self.first_live_owner(tree, ops)?;
         Some((tree.steps_to(state), op))
+    }
+
+    /// Whether `tree` has a state of `routine` (stable id): the guarded
+    /// search reaches it under some bindings (agent-tasks E1: a fact with no
+    /// site of its own is in the root's reach exactly then).
+    pub(crate) fn reaches(&self, tree: &LiveTree<'a>, routine: &str) -> bool {
+        !tree.states_of(routine).is_empty()
     }
 
     /// Whether `root` itself owns operation `op` and it can run at the

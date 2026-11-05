@@ -161,6 +161,9 @@ pub mod unresolved_cone;
 
 // cli-b/b2 — PROVE CLI (tristate existing-effects query + json/human formatters).
 pub mod prove;
+// Agent-tasks milestone E1: prove's filters (`--match`, `--site`, `--op`,
+// `--table`), message text, one route with selected guards.
+pub mod prove_slice;
 // Agent-tasks milestone A: prove's callers' context questions (the reverse
 // cone, evaluated per caller edge).
 pub mod callers_context;

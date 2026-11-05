@@ -4,9 +4,29 @@
 //! `compute_transaction_spans` produces a `TransactionSpan` per Commit (and per
 //! checked Codeunit.Run implicit commit). For each seed it walks callers BACKWARD
 //! over the reverse call graph to find every routine that participates in the
-//! transaction; the walk stops at any routine that itself commits (a prior span's
-//! domain) or at `MAX_DEPTH`. The span aggregates writes/events (union over the
-//! span via the capability-query helpers) and a `coverage_complete` flag.
+//! transaction; the walk stops at `MAX_DEPTH` and past a routine whose call
+//! toward the Commit follows a Commit of its own (below). The span aggregates
+//! writes/events (union over the span via the capability-query helpers), the
+//! writes and events pending at the Commit, and a `coverage_complete` flag.
+//!
+//! ## Statement order
+//!
+//! A `Commit()` ends the transaction it closes and the next one starts after
+//! it. The order is read off each routine's control-flow tree as
+//! [`super::pending_writes`] reads it (a Commit statement on the way to the
+//! target ends what ran before; one in a branch or a loop, or after the
+//! target, does not; a checked `Codeunit.Run` is its own transaction):
+//! - an earlier Commit of the Commit routine on the way to this one: the span
+//!   is the Commit routine alone, from that Commit on;
+//! - a caller whose call toward the Commit follows a Commit of its own is in
+//!   the span (what it does after that Commit is pending), its callers are
+//!   not; a caller that commits only after (or beside) its call does not end
+//!   the span, so its callers' earlier writes are pending. With the order
+//!   unknown, any Commit in the caller ends the span (the rule before order
+//!   was read);
+//! - `coverage_complete` reads only what may run before each member's call
+//!   toward the Commit: a callee called after the Commit is not in the
+//!   transaction, so its gaps are not the span's.
 //!
 //! ## Role threading
 //!
@@ -38,7 +58,8 @@ use crate::engine::l4::param_guard::{FrameGuards, Req, across_edge, conjoin, fra
 use crate::engine::l5::capability_query::reachable_coverage;
 use crate::engine::l5::full_summary::FullRoutineSummary;
 use crate::engine::l5::pending_writes::{
-    ForwardSites, Pending, PendingCtx, forward_sites, is_checked_run, pending_before, toward_sites,
+    Before, ForwardSites, Pending, PendingCtx, forward_sites, is_checked_run, pending_of,
+    sites_before, toward_sites,
 };
 use crate::engine::l5::reverse_call_graph::ReverseCallGraph;
 use crate::program::body::features::{PCallSite, PCallee};
@@ -66,8 +87,8 @@ pub struct TransactionSpan {
     pub seed_callsite_id: Option<String>,
     /// The routine containing the bounding Commit.
     pub commit_routine_id: String,
-    /// All routines reachable backward from `commit_routine_id` up to another
-    /// commit or root. SORTED.
+    /// All routines reachable backward from `commit_routine_id` up to a routine
+    /// whose call follows a Commit of its own (included), or a root. SORTED.
     pub routines_in_span: Vec<String>,
     /// Union of tables written by any routine in the span. SORTED + deduped.
     pub writes_tables: Vec<String>,
@@ -77,10 +98,14 @@ pub struct TransactionSpan {
     pub writes_physical_tables_count: usize,
     /// Union of events published by any routine in the span. SORTED + deduped.
     pub publishes_events: Vec<String>,
-    /// Span entry roots — routines in the span with no upstream caller. SORTED.
+    /// Span entry roots — routines in the span with no upstream caller, and the
+    /// Commit routine when an earlier Commit of its own starts the span. SORTED.
     pub span_roots: Vec<String>,
-    /// True iff EVERY routine in `routines_in_span` has a defined summary AND
-    /// `reachable_coverage(summary) == "complete"`.
+    /// True iff what EVERY routine in `routines_in_span` may run before its call
+    /// toward the Commit (the Commit routine: before the Commit) is fully known
+    /// (`member_coverage_complete`): a defined summary, and a complete cone or,
+    /// with the order known, no gap of its own and complete cones for the
+    /// routines it may call first.
     pub coverage_complete: bool,
     /// The physical tables written BEFORE the Commit (engine-switch S8 gap 3,
     /// [`super::pending_writes`]): what this transaction leaves half-written.
@@ -98,18 +123,41 @@ fn is_primary(routine: &ModelRoutine, dep_routine_ids: &BTreeSet<String>) -> boo
     !dep_routine_ids.contains(&routine.id)
 }
 
-/// Backward BFS over the reverse graph from `seed`, stopping at another
-/// committing routine (other than the seed) and at `MAX_DEPTH`. Returns the
-/// visited set (a `BTreeSet` for order-independence). Mirrors the inner while-loop
-/// in both al-sem seed passes verbatim.
+/// Whether `caller`'s call at `site` is reached only after a Commit of its own
+/// has ended the transaction `caller` was entered in: then `caller` is in the
+/// span (what it does after that Commit is pending) but its callers are not.
+///
+/// The order is read as [`sites_before`] reads it: a `Commit()` statement on
+/// the way to the call ([`Before::committed`]); one in a branch or a loop, or
+/// after the call, closes nothing. When the order is unknown (no row, no site,
+/// no tree, or a site the tree does not hold) any Commit in `caller` closes the
+/// span, the rule the walk had before it read the order.
+fn closes_span(caller: &str, site: Option<&str>, inputs: &SpanInputs<'_>) -> bool {
+    if !inputs.commits_by_routine.contains_key(caller) {
+        return false;
+    }
+    let (Some(r), Some(site)) = (inputs.routine_by_id.get(caller), site) else {
+        return true;
+    };
+    let before = sites_before(r, &[site], false);
+    before.all || before.committed
+}
+
+/// Backward BFS over the reverse graph from `seed`, stopping at `MAX_DEPTH`
+/// and past a caller whose call is reached only after a Commit of its own
+/// ([`closes_span`]: the caller is in the span, its callers are not). With
+/// `seed_open` false (a Commit of the seed ends the transaction before the
+/// seed's Commit runs), the span is the seed alone. Returns the visited set (a
+/// `BTreeSet` for order-independence).
 ///
 /// A caller that reaches `id` only through a CHECKED run (`if Codeunit.Run(...)`)
 /// is not in its transaction: the run is its own (engine-switch S8 gap 3).
 fn backward_cone(
     seed: &str,
     seed_reqs: &[Req],
+    seed_open: bool,
     inputs: &SpanInputs<'_>,
-    frames: &mut HashMap<String, Option<FrameGuards>>,
+    scratch: &mut SpanScratch,
 ) -> BTreeSet<String> {
     // routine -> what its parameters must be for the Commit to run when it is
     // entered (engine-switch S8 gap 3, [`crate::engine::l4::param_guard`]). A
@@ -118,14 +166,23 @@ fn backward_cone(
     // different requirements keeps none (it may reach the Commit either way).
     let mut reached: HashMap<String, Vec<Req>> = HashMap::new();
     reached.insert(seed.to_string(), seed_reqs.to_vec());
+    if !seed_open {
+        return reached.into_keys().collect();
+    }
+    // The members whose callers are walked: reached through at least one call
+    // that no Commit of their own precedes.
+    let mut open: HashSet<String> = HashSet::new();
+    open.insert(seed.to_string());
+    let frames = &mut scratch.frames;
     let mut queue: VecDeque<(String, usize)> = VecDeque::new();
     queue.push_back((seed.to_string(), 0));
     while let Some((id, depth)) = queue.pop_front() {
         if depth >= MAX_DEPTH {
             continue;
         }
-        // Don't walk past another committing routine (prior span bounds the trace).
-        if id != seed && inputs.commits_by_routine.contains_key(&id) {
+        // A member whose every call toward the Commit follows a Commit of its
+        // own: the transaction its callers opened ended there.
+        if !open.contains(&id) {
             continue;
         }
         let reqs = reached[&id].clone();
@@ -172,12 +229,32 @@ fn backward_cone(
             let Some(new) = across.and_then(|a| conjoin(&a, edge_reqs)) else {
                 continue; // a literal argument makes the Commit unreachable here
             };
+            let site = caller
+                .callsite_id
+                .as_deref()
+                .or(caller.operation_id.as_deref());
+            let key = (caller.from.clone(), site.map(str::to_string));
+            let closed = match scratch.closes.get(&key) {
+                Some(c) => *c,
+                None => {
+                    let c = closes_span(&caller.from, site, inputs);
+                    scratch.closes.insert(key, c);
+                    c
+                }
+            };
+            let newly_open = !closed && open.insert(caller.from.clone());
             match reached.get_mut(&caller.from) {
                 None => {
                     reached.insert(caller.from.clone(), new);
                     queue.push_back((caller.from.clone(), depth + 1));
                 }
-                Some(old) if old.is_empty() || *old == new => {}
+                // Reached before only through calls a Commit precedes: walk its
+                // callers now.
+                Some(old) if old.is_empty() || *old == new => {
+                    if newly_open {
+                        queue.push_back((caller.from.clone(), depth + 1));
+                    }
+                }
                 Some(old) => {
                     old.clear();
                     queue.push_back((caller.from.clone(), depth + 1));
@@ -221,14 +298,12 @@ fn aggregate_span(
     events_bs: &mut ResBitset,
     phys_bs: &mut ResBitset,
     census: &mut TxSpanCensus,
-) -> (Vec<String>, usize, Vec<String>, bool) {
+) -> (Vec<String>, usize, Vec<String>) {
     writes_bs.clear();
     events_bs.clear();
     phys_bs.clear();
-    let mut coverage_complete = true;
     for rid in visited {
         let Some(summary) = summaries.get(rid) else {
-            coverage_complete = false;
             continue;
         };
         writes_bs.insert_all(cone_derived.writes_table_ids_of(&summary.routine_id));
@@ -236,13 +311,68 @@ fn aggregate_span(
             phys_bs.insert(id);
         }
         events_bs.insert_all(cone_derived.event_ids_of(&summary.routine_id));
-        if reachable_coverage(summary, None) != "complete" {
-            coverage_complete = false;
-        }
     }
     let writes = resolve_sorted_ids(writes_bs, cone_derived, census);
     let events = resolve_sorted_ids(events_bs, cone_derived, census);
-    (writes, phys_bs.len(), events, coverage_complete)
+    (writes, phys_bs.len(), events)
+}
+
+/// Whether what span member `rid` runs before its call toward the Commit (for
+/// the Commit routine: before the Commit; `before`, from [`sites_before`]) is
+/// fully known. A member with no summary is not. A member whose whole cone is
+/// complete is. Otherwise, with the order known: its own body has no gap
+/// (`direct_status`, read for the whole body) and every routine it may call
+/// before the target has a complete cone. A callee called after the Commit, or
+/// in a branch that does not reach it, is not in this transaction, so its gaps
+/// are not this span's. A checked `Codeunit.Run` runs in its own transaction
+/// and is skipped, as [`super::pending_writes`] skips its writes. An edge with
+/// no site (an event dispatch from a publisher) counts.
+fn member_coverage_complete(
+    rid: &str,
+    r: Option<&ModelRoutine>,
+    before: Option<&Before>,
+    inputs: &SpanInputs<'_>,
+) -> bool {
+    let Some(summary) = inputs.summaries.get(rid) else {
+        return false;
+    };
+    if reachable_coverage(summary, None) == "complete" {
+        return true;
+    }
+    let (Some(r), Some(before)) = (r, before) else {
+        return false;
+    };
+    if before.all
+        || summary
+            .coverage
+            .as_ref()
+            .is_none_or(|c| c.direct_status != "complete")
+    {
+        return false;
+    }
+    inputs
+        .fwd
+        .get(rid)
+        .map_or(&[][..], Vec::as_slice)
+        .iter()
+        .all(|(site, to)| {
+            if let Some(site) = site {
+                if !before.sites.contains(*site) {
+                    return true;
+                }
+                if r.call_sites
+                    .iter()
+                    .find(|c| c.id == *site)
+                    .is_some_and(|cs| is_checked_run(cs, inputs.routine_by_id.get(*to).copied()))
+                {
+                    return true;
+                }
+            }
+            inputs
+                .summaries
+                .get(*to)
+                .is_some_and(|c| reachable_coverage(c, None) == "complete")
+        })
 }
 
 /// Resolve a `ResId` set into the sorted-unique `Vec<String>` the old
@@ -264,10 +394,20 @@ fn resolve_sorted_ids(
 
 /// span roots = visited routines with no reverse callers. Mirrors al-sem
 /// `[...visited].filter((rid) => (reverse.get(rid) ?? []).length === 0)`.
-fn span_roots_of(visited: &BTreeSet<String>, reverse: &ReverseCallGraph) -> Vec<String> {
+/// When a Commit of the seed precedes the span's Commit (`seed_open` false),
+/// the transaction starts in the seed, after that Commit: the seed is the root.
+fn span_roots_of(
+    visited: &BTreeSet<String>,
+    reverse: &ReverseCallGraph,
+    seed: &str,
+    seed_open: bool,
+) -> Vec<String> {
     let mut roots: Vec<String> = visited
         .iter()
-        .filter(|rid| reverse.get(*rid).map(|v| v.is_empty()).unwrap_or(true))
+        .filter(|rid| {
+            (!seed_open && rid.as_str() == seed)
+                || reverse.get(*rid).map(|v| v.is_empty()).unwrap_or(true)
+        })
         .cloned()
         .collect();
     roots.sort();
@@ -285,7 +425,9 @@ struct SpanTemplate {
     writes_physical_tables_count: usize,
     publishes_events: Vec<String>,
     span_roots: Vec<String>,
-    coverage_complete: bool,
+    /// Every member except the seed routine is [`member_coverage_complete`]
+    /// (the seed's part depends on WHICH Commit).
+    others_coverage_complete: bool,
 }
 
 /// `ALSEM_TXSPAN_CENSUS=1` — the population this module actually processes,
@@ -355,7 +497,7 @@ struct SpanInputs<'a> {
     cone_derived: &'a ConeDerivedStore,
     routine_by_id: &'a HashMap<&'a str, &'a ModelRoutine>,
     fwd: &'a ForwardSites<'a>,
-    /// [`pending_before`]'s lookups (the ones above, and the collided ids).
+    /// [`pending_of`]'s lookups (the ones above, and the collided ids).
     pending: &'a PendingCtx<'a>,
 }
 
@@ -365,6 +507,8 @@ struct SpanInputs<'a> {
 struct SpanScratch {
     /// Guard frames, computed on first use (`backward_cone`).
     frames: HashMap<String, Option<FrameGuards>>,
+    /// [`closes_span`] per `(caller, site)`, computed on first use.
+    closes: HashMap<(String, Option<String>), bool>,
     writes: ResBitset,
     events: ResBitset,
     phys_writes: ResBitset,
@@ -424,36 +568,43 @@ fn seed_reqs(
 fn span_template<'c>(
     seed: &str,
     seed_reqs: &[Req],
+    seed_open: bool,
     inputs: &SpanInputs<'_>,
     cache: &'c mut HashMap<String, SpanTemplate>,
     scratch: &mut SpanScratch,
 ) -> &'c SpanTemplate {
     scratch.census.template_calls += 1;
-    // One template per seed routine AND the requirements its Commit needs.
-    let key = format!("{seed}|{seed_reqs:?}");
+    // One template per seed routine, the requirements its Commit needs, and
+    // whether a Commit of the seed precedes it (then the seed's callers are
+    // not in the span).
+    let key = format!("{seed}|{seed_reqs:?}|{seed_open}");
     if !cache.contains_key(&key) {
-        let visited = backward_cone(seed, seed_reqs, inputs, &mut scratch.frames);
+        let visited = backward_cone(seed, seed_reqs, seed_open, inputs, scratch);
         scratch.census.templates += 1;
         scratch.census.visited_total += visited.len();
-        let (writes_tables, writes_physical_tables_count, publishes_events, coverage_complete) =
-            aggregate_span(
-                &visited,
-                inputs.summaries,
-                inputs.cone_derived,
-                &mut scratch.writes,
-                &mut scratch.events,
-                &mut scratch.phys_writes,
-                &mut scratch.census,
-            );
-        let span_roots = span_roots_of(&visited, inputs.reverse);
+        let (writes_tables, writes_physical_tables_count, publishes_events) = aggregate_span(
+            &visited,
+            inputs.summaries,
+            inputs.cone_derived,
+            &mut scratch.writes,
+            &mut scratch.events,
+            &mut scratch.phys_writes,
+            &mut scratch.census,
+        );
+        let span_roots = span_roots_of(&visited, inputs.reverse, seed, seed_open);
         let mut pending_others = Pending::default();
         let mut pending_by_routine: BTreeMap<String, usize> = BTreeMap::new();
+        let mut others_coverage_complete = true;
         for rid in visited.iter().filter(|r| r.as_str() != seed) {
             let Some(r) = inputs.routine_by_id.get(rid.as_str()) else {
+                others_coverage_complete &= member_coverage_complete(rid, None, None, inputs);
                 continue;
             };
             let (targets, unsited) = toward_sites(rid, |to| visited.contains(to), inputs.fwd);
-            let p = pending_before(r, &targets, unsited, inputs.pending);
+            let before = sites_before(r, &targets, unsited);
+            others_coverage_complete &=
+                member_coverage_complete(rid, Some(r), Some(&before), inputs);
+            let p = pending_of(r, &before, &targets, inputs.pending);
             pending_by_routine.insert(rid.clone(), p.tables.len());
             pending_others.tables.extend(p.tables);
             pending_others.events.extend(p.events);
@@ -468,7 +619,7 @@ fn span_template<'c>(
                 writes_physical_tables_count,
                 publishes_events,
                 span_roots,
-                coverage_complete,
+                others_coverage_complete,
             },
         );
     }
@@ -583,30 +734,40 @@ pub fn compute_transaction_spans(
         pending: &pending,
     };
     // The seed routine's own pending part, up to ONE Commit (or checked run),
-    // joined with the template's.
-    let pending_at =
-        |t: &SpanTemplate, seed: &ModelRoutine, at: &str| -> (Vec<String>, Vec<String>) {
-            let own = pending_before(seed, &[at], false, &pending);
-            let tables: BTreeSet<String> = t
-                .pending_others
-                .tables
-                .iter()
-                .cloned()
-                .chain(own.tables)
-                .collect();
-            let events: BTreeSet<String> = t
-                .pending_others
-                .events
-                .iter()
-                .cloned()
-                .chain(own.events)
-                .collect();
-            (tables.into_iter().collect(), events.into_iter().collect())
-        };
+    // joined with the template's, and the span's coverage.
+    let pending_at = |t: &SpanTemplate,
+                      seed: &ModelRoutine,
+                      at: &str,
+                      before: &Before|
+     -> (Vec<String>, Vec<String>, bool) {
+        let own = pending_of(seed, before, &[at], &pending);
+        let coverage_complete = t.others_coverage_complete
+            && member_coverage_complete(&seed.id, Some(seed), Some(before), &inputs);
+        let tables: BTreeSet<String> = t
+            .pending_others
+            .tables
+            .iter()
+            .cloned()
+            .chain(own.tables)
+            .collect();
+        let events: BTreeSet<String> = t
+            .pending_others
+            .events
+            .iter()
+            .cloned()
+            .chain(own.events)
+            .collect();
+        (
+            tables.into_iter().collect(),
+            events.into_iter().collect(),
+            coverage_complete,
+        )
+    };
     // ONE bitset pair for the whole run: `aggregate_span` clears and refills them
     // per template, so the union never allocates per routine or per element.
     let mut scratch = SpanScratch {
         frames: HashMap::new(),
+        closes: HashMap::new(),
         writes: ResBitset::new(cone_derived.res_universe_len()),
         events: ResBitset::new(cone_derived.res_universe_len()),
         phys_writes: ResBitset::new(cone_derived.res_universe_len()),
@@ -620,15 +781,19 @@ pub fn compute_transaction_spans(
         for commit_operation_id in commit_ops {
             let seed = seed_of_commit[commit_operation_id.as_str()];
             let reqs = seed_reqs(seed, commit_operation_id, &inputs, &mut scratch);
+            // An earlier Commit of the seed on the way to this one: the span
+            // starts after it, in the seed.
+            let before = sites_before(seed, &[commit_operation_id.as_str()], false);
             let t = span_template(
                 commit_routine_id,
                 &reqs,
+                !before.committed,
                 &inputs,
                 &mut template_cache,
                 &mut scratch,
             );
-            let (pending_physical_tables, pending_events) =
-                pending_at(t, seed, commit_operation_id);
+            let (pending_physical_tables, pending_events, coverage_complete) =
+                pending_at(t, seed, commit_operation_id, &before);
             scratch.census.spans_emitted += 1;
             scratch.census.payload_strings += t.routines_in_span.len()
                 + t.writes_tables.len()
@@ -644,7 +809,7 @@ pub fn compute_transaction_spans(
                 writes_physical_tables_count: t.writes_physical_tables_count,
                 publishes_events: t.publishes_events.clone(),
                 span_roots: t.span_roots.clone(),
-                coverage_complete: t.coverage_complete,
+                coverage_complete,
                 pending_physical_tables,
                 pending_events,
                 pending_physical_by_routine: t.pending_by_routine.clone(),
@@ -667,8 +832,17 @@ pub fn compute_transaction_spans(
                 continue;
             }
             let reqs = seed_reqs(r, &cs.id, &inputs, &mut scratch);
-            let t = span_template(&r.id, &reqs, &inputs, &mut template_cache, &mut scratch);
-            let (pending_physical_tables, pending_events) = pending_at(t, r, &cs.id);
+            let before = sites_before(r, &[cs.id.as_str()], false);
+            let t = span_template(
+                &r.id,
+                &reqs,
+                !before.committed,
+                &inputs,
+                &mut template_cache,
+                &mut scratch,
+            );
+            let (pending_physical_tables, pending_events, coverage_complete) =
+                pending_at(t, r, &cs.id, &before);
             scratch.census.spans_emitted += 1;
             scratch.census.payload_strings += t.routines_in_span.len()
                 + t.writes_tables.len()
@@ -686,7 +860,7 @@ pub fn compute_transaction_spans(
                 writes_physical_tables_count: t.writes_physical_tables_count,
                 publishes_events: t.publishes_events.clone(),
                 span_roots: t.span_roots.clone(),
-                coverage_complete: t.coverage_complete,
+                coverage_complete,
                 pending_physical_tables,
                 pending_events,
                 pending_physical_by_routine: t.pending_by_routine.clone(),
@@ -1065,3 +1239,9 @@ mod tests {
         );
     }
 }
+
+// Statement order (a Commit ends its span, the next starts after it), on inline
+// AL fixtures through the real pipeline.
+#[cfg(test)]
+#[path = "transaction_spans_order_tests.rs"]
+mod order_tests;

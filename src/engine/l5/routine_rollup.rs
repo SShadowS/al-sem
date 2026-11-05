@@ -2972,8 +2972,14 @@ pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, detail: bool) -> V
             .flatten()
             .map(|&i| {
                 let e = &entry.effects[i];
+                // F3: a background start names the codeunit it starts.
+                let starts = e
+                    .detail
+                    .iter()
+                    .find(|(k, _)| k == "starts")
+                    .map_or(String::new(), |(_, s)| format!(", starts {s}"));
                 format!(
-                    "{} at {} ({})",
+                    "{} at {} ({}){starts}",
                     e.effect_type,
                     row_anchor(e),
                     e.conditionality

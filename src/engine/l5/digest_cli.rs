@@ -951,6 +951,10 @@ const TX_UNKNOWN: TransactionContext = "unknown";
 /// the spans of a `det` cell whose run demanded `TRANSACTION_SPANS` (digest and
 /// prove's plan asserts it, #160 A2.10).
 /// Mirrors TS: `computeTransactionSpans` + `transactionContextByOperationId` build.
+/// "Known writes" are the physical writes PENDING at the Commit
+/// (`pending_physical_tables`): a write after the Commit, or in a branch that
+/// does not reach it, is not in the transaction it ends, and a temporary
+/// record is in no transaction.
 fn tx_context_map(spans: &[TransactionSpan]) -> HashMap<String, TransactionContext> {
     let mut map: HashMap<String, TransactionContext> = HashMap::new();
     for span in spans {
@@ -959,7 +963,7 @@ fn tx_context_map(spans: &[TransactionSpan]) -> HashMap<String, TransactionConte
         }
         let tc: TransactionContext = if !span.coverage_complete {
             TX_UNKNOWN
-        } else if !span.writes_tables.is_empty() {
+        } else if !span.pending_physical_tables.is_empty() {
             TX_SPAN_KNOWN_WRITES
         } else {
             TX_SPAN_NO_WRITES
@@ -1238,6 +1242,13 @@ pub struct DigestEffects {
     /// `--tests` (#254): the test-coverage graph over the same tree, one per
     /// tree, shared by every reader that asked for it.
     pub coverage_graph: Option<Arc<crate::engine::l5::test_coverage::CoverageGraph>>,
+    /// Agent-tasks E1: a filtered prove's slice of its root, read off the
+    /// same tree (`TreeDemand::slice`); `None` for every other reader.
+    pub slice: Option<crate::engine::l5::prove_slice::SliceOut>,
+    /// The model's background starts by call-site id
+    /// (`ResolvedCalls::background_starts`): a `BACKGROUND_TASK` row at a start
+    /// names the codeunit it starts (detail `starts`).
+    pub background_starts: Arc<HashMap<String, crate::program::model::calls::BackgroundStart>>,
 }
 
 /// A root's unresolved cone: its items and the traversal block (depth,
@@ -1547,6 +1558,8 @@ pub(crate) fn finish_effects(
             coverage: Arc::clone(&tree.coverage),
             identities: Arc::clone(&tree.identities),
             coverage_graph: coverage_graph.clone(),
+            slice: None,
+            background_starts: Arc::clone(&model.calls.background_starts),
         })
         .collect()
 }
@@ -1771,6 +1784,7 @@ pub fn run_digest_query_full_from_entries(
 ) -> DigestQueryFullResult {
     let (spans, touched) = (&changed.spans, &changed.touched);
     let mut query_diagnostics: Vec<DigestQueryDiagnostic> = Vec::new();
+    let background_starts = Arc::clone(&effects.background_starts);
 
     // Coverage map
     let mut coverage_by_id: HashMap<&str, (&str, Vec<&str>)> = HashMap::new();
@@ -2040,6 +2054,17 @@ pub fn run_digest_query_full_from_entries(
                         &eff.fact_id,
                         join.problems,
                     ));
+                }
+                // F3: a background start names what it starts (CLI layer
+                // only, as the temp state). A boundary group has no site.
+                if eff.effect_type == "BACKGROUND_TASK"
+                    && !eff.boundary_group
+                    && let Some(start) = eff
+                        .evidence_callsite_id
+                        .as_deref()
+                        .and_then(|cs| background_starts.get(cs))
+                {
+                    detail.push(("starts".to_string(), start.phrase()));
                 }
 
                 full_effects.push(DigestEffectFull {
@@ -4401,5 +4426,31 @@ mod tests {
         let gap_subjects = vec!["zzzz9999-0000-0000-0000-00000000eeee"];
         let count = count_gaps_in_cone(&gap_subjects, &visited, &Default::default());
         assert_eq!(count, 0, "unrelated gap subject must not be counted");
+    }
+
+    /// The transaction context of a Commit names the writes PENDING at it, not
+    /// everything the span can reach: a span whose only writes run after the
+    /// Commit (`writes_tables` set, `pending_physical_tables` empty, both
+    /// stated by hand) has no known writes; one with a pending write has.
+    #[test]
+    fn tx_context_reads_the_writes_pending_at_the_commit() {
+        let span = |op: &str, pending: &[&str]| TransactionSpan {
+            seed_kind: SeedKind::ExplicitCommit,
+            commit_operation_id: op.to_string(),
+            seed_callsite_id: None,
+            commit_routine_id: "r".to_string(),
+            routines_in_span: vec!["r".to_string()],
+            writes_tables: vec!["t/After".to_string()],
+            writes_physical_tables_count: 1,
+            publishes_events: vec![],
+            span_roots: vec!["r".to_string()],
+            coverage_complete: true,
+            pending_physical_tables: pending.iter().map(|s| s.to_string()).collect(),
+            pending_events: vec![],
+            pending_physical_by_routine: Default::default(),
+        };
+        let map = tx_context_map(&[span("op/after", &[]), span("op/before", &["t/Before"])]);
+        assert_eq!(map["op/after"], TX_SPAN_NO_WRITES);
+        assert_eq!(map["op/before"], TX_SPAN_KNOWN_WRITES);
     }
 }

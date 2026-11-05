@@ -64,119 +64,168 @@ lost. Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §10 (as b
   `table-key-removed` (high) and `table-key-fields-changed` (medium), from the schema facts' key
   rows (a key is identified by its position, `<table>#K<n>`, as those rows identify it).
 
-### Fixed (warm MCP calls slow once `alsem_impact` / `alsem_tests` had run)
+### Added (agent tasks, milestone E2: the debugging slice, several routes)
 
-Measured on CDO through one long-lived `alsem mcp` session (digest, impact, digest, impact,
-tests, digest, explain twice, impact, digest; then the 94-file range). Root causes, each with
-its own test and discrimination proof:
+Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §11 (revision 2; review item a15).
 
-- **`alsem impact`'s parts never used the resident engine.** `impact --part main` and
-  `--part up` were not in `SERVED_COMMANDS`, so the engine child ran each through the one-shot
-  job path over its inputs: a whole program build per part on every call, warm or not (CDO
-  before: main 34-50 s, up 13-43 s per call, no fill and no eviction counted). They are now
-  answered off the revision: the main part from its retained artifacts (digest's plan), the up
-  part from its sited graph.
-- **The first question that read the sited graph threw the revision's artifacts away.**
-  `pin_sited` rebuilt the session to add the graph, publishing a new revision with an empty
-  store, so the next digest or explain filled everything again (CDO: 9.1 s of fills for the
-  digest after the first impact). The graph is now added to the published revision, built from
-  a program over that revision's own read (the workspace session's, reusing every parse;
-  single-app, the cold builder's): no workspace read, no new revision, every filled artifact
-  kept. A cancelled request leaves the revision without the graph and is answered `stopped`.
-- **A request's witness batch reserved once per root.** The first witness fill computes every
-  witness of the request; the later ones are lookups, but each reserved the case's estimate
-  again (the batch's observed peak once observed): a 699-root diff was refused at 2042 MiB per
-  root over a 7.4 GB RSS. A witness fill whose batch has run reserves nothing.
-- **Large reads memoized every root's witness.** A witness is 5.6-7.9 MiB per root on CDO and
-  the tree read clones the ones it reads, so a 699-root impact held them twice and its trees'
-  reservation was refused. A read over more than `WITNESS_MEMO_MAX_ROOTS` (64) roots computes
-  its entries itself, as a one-shot run does, and publishes none.
-- **One large request's peak became every request's estimate.** The budget's estimate of a
-  case was the largest of its last three observed peaks whatever the work's size, so after the
-  range (trees peak 4174 MiB) every one-routine ask was refused over a 5.7 GB RSS. Estimates
-  and observations are now kept per size class (the work's roots, one class per factor of 4:
-  `budget::size_class`); a small request reads its own class, or the table.
+- **`alsem prove … --routes N`** (MCP `routes`; 1 to 10, default 1; only with `--match`, `--site`,
+  `--op` or `--table`): up to N distinct routes per matching site (the first 20 matching sites),
+  fewest hops first, each with its selected guards as in E1. `--routes 1` is E1's answer byte
+  for byte. The routes are enumerated over the literal search's **state-transition graph**
+  (`engine::l5::literal_reach::routes`: the same search, the same states, every transition it
+  examined kept), not over its tree, which keeps one parent per `(routine, known values)` state
+  and so loses paths that reconverge. Definitions: a route is a simple path over those states
+  (recursion is followed while it changes the known values; a transition back to a state on the
+  route is counted, not followed), ending at the first state where the site can run; routes are
+  told apart by their sequence of (site, callee); order is fewest hops, then site ids
+  (best-first search with the exact distance to the site as its estimate). Caps: the routes
+  asked, and 50,000 candidate edges examined per site; cancellation is checked at the first
+  edge and every 1,024. Each site says whether the enumeration completed (then every route is
+  listed) or which cap fired (`route-cap`, `edge-budget`, `cancelled`, with the partial routes
+  left), and the candidate edges it examined and rejected: by literal arguments at the edge's
+  own site, by literal arguments further on (no live way on, although the callee reaches the
+  site's routine with guards ignored), back to a state on the route, or with a callee that
+  cannot reach the site at all. These are counts of edges; no count of ruled-out routes is
+  given. An enumeration that listed none falls back to E1's route, labelled so.
+- Prove JSON (2.5.0, additive): per matching site `routes` (E1's route shape each) and
+  `routeSearch` (`requested`, `listed`, `complete`, `limit`, `edgeBudget`, `edgesExamined`,
+  `edgesRejected`, `duplicatePaths`, `partialRoutesLeft`, the definitions); `payload.filter.routes`
+  when above 1. E1's `route` stays.
+- A resident tree read passes the request's cancellation to the slice and is checked again
+  after it, so a stopped enumeration is never answered (`session::read_tree_shared`).
 
-After (CDO, `release-fast`, machine load 25-110, so upper bounds): a repeated `alsem_impact`
-on one routine 0.44-0.53 s (before 47-63 s), `alsem_digest` 0.27-0.34 s after impact and tests
-(before 9.5 s once, then 0.3-0.4 s), `alsem_explain` 0.46-0.81 s, `alsem_tests` 0.07 s; the
-first impact of a session 17.4 s (its up part 2.3 s adds the sited graph; the test engine's
-cold start 14.4 s). After the 94-file range the one-routine calls stay there (digest 1.2-1.3 s
-with a refill of what the range's reclaim evicted, impact 0.44-0.46 s). Production child 5.4-
-5.6 GB, test child 2.2 GB. **Still open, measured:** the range itself answers cold (152 s;
-before 314-319 s, warm or cold) but a warm repeat is refused by the budget: its main part's
-trees peak at 4.1 GB over a 5.6 GB resident child (9.7 GB against 8 GiB), and an eviction does
-not lower the RSS the admission reads (10,882 entries evicted, RSS 5.79 → 5.62 GB, the retained
-floor 3.5 GB). Not fixed by raising the budget; computing the per-root totals in chunks would
-bound that peak.
+### Added (agent tasks, milestone E1: the debugging slice, narrow)
 
-### Added (agent tasks, milestone B1: impact on the current revision)
+Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §9 (revision 2; astra 15's
+honesty parts). Multiple routes (E2) are not in this milestone.
 
-The blast radius of a change, current effects only. Spec:
-`docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §8.
+- **Prove filters** (`engine::l5::prove_slice`): `alsem prove … --match <text>` (throws-error),
+  `--site <file:line>` (throws-error, writes-table, may-commit, reaches-ui), `--op <kind>`
+  (throws-error, writes-table) and `--table <table>` (throws-error); MCP `match`, `site`, `op`,
+  `table` on `alsem_prove`. A filter on another question is refused with one text, before the
+  workspace is read. The answer is about the matching SITES: each direct fact of the question's
+  kinds whose routine the root's guarded search (literal arguments followed) reaches where the
+  site can run. Each matching site prints its location, its operation, the error message text
+  (a literal, a Label's or TextConst's value, `%1` kept, with the Label's name; "message not
+  known" for a variable, an expression, an ErrorInfo or the platform's own message), one
+  representative route from the root (shortest first) and, per site on the route, the 2 innermost
+  enclosing conditions with their polarity (then/else, case arm, case else), labelled "selected
+  context, not all necessary conditions" with the count left out (`guards shown: k of n`). A
+  `while`/`for`/`foreach` condition is a loop-entry condition, a `repeat … until` condition a
+  continuation condition. Every answer says "static candidates, not an observed trace".
+- **Filtered verdicts.** `yes`: a matching site is reachable. `no`: none matches, every reachable
+  site is decided against the filter, the root's search completed and the cone's obligations are
+  clear. `unknown` otherwise, with one blocker per reason: `message-unknown` (no static text: an
+  unknown message never supports "no error matching this text"), `message-placeholders` (a text
+  that did not match but has `%1` values that may hold it), `message-platform-wrapped` (a
+  `FieldError` text, which the platform wraps), `temp-state-depends-on-caller`,
+  `unknown-table-write`, `position-unknown`, `operation-unknown`, `table-unknown`, `no-site`,
+  `slice-search-capped`, `slice-found-no-site`. An implicit error (TestField, an unguarded Get, …)
+  matches `--match` only by its kind word, and says so.
+- **A new gated fact: the sites' guard arms** (`program::body::site_guards`,
+  `ModelRoutine::site_guards`): per routine, each `if`/`case`/loop block with its condition text
+  (whitespace folded, at most 120 characters). Built at assembly behind
+  `AssemblyNeeds::site_guards` / `ViewNeeds::site_guards`; only `alsem prove` with a filter
+  declares it (`ViewNeeds::PROVE_SLICE`, with the rules for the message text). Every other
+  command, and an unfiltered prove, builds none; reading it unbuilt panics "site guards not
+  built: declare ViewNeeds::site_guards". The resident session widens its needs for it as for
+  the rules. The slice is a level-3 read of prove's tree (`TreeDemand::slice`,
+  `session::prove_slice_plan`).
+- Prove JSON: a filtered document is schema **2.5.0** (additive: `payload.filter`,
+  `payload.slice` with counts and the first 10 undecided sites per kind, evidence rows that are
+  the matching sites with `message`, `route` (hops, witness, per-site `guards`,
+  `enclosingTotal`, `guardsShown`, `guardsTotal`, `guardsAre`) and `evidence.{file, line}` as
+  before). An unfiltered document is byte-identical (2.4.0). The MCP instructions' "which tool"
+  line names the filters.
 
-- **Every changed line accounted** (`engine::impact::accounting`, B-1b): each added or removed
-  line of a diff lands in exactly one bucket: a routine's body or signature (split at the body's
-  first `var` or `begin` line; the attributes and header above are the signature), an
-  object-level declaration by kind (field, key, field group, global variable, property, action,
-  layout, trigger declaration, enum value, object header, comment or blank, other), outside any
-  object, removed routine text (removed lines that held a routine no new-side span holds: named
-  from their header lines, never called deleted without a base), routine text the model holds no
-  span for, or unmapped with the reason (not in the workspace, two workspace files, not AL, a
-  deleted file, a rejected hunk header, a line past the end of the analyzed file). Per file the
-  buckets sum to the file's changed lines, and a hunk that touches a global and a routine reports
-  both (digest's `hunk-outside-routines` names only hunks that hit no routine). The declaration
-  kinds come from a line scanner (`engine::impact::scan`) over the analyzed text: braces outside
-  comments and strings, the head before each `{`, `var` sections and routine headers; a removed
-  run is scanned from the scanner's state at its gap, so it is classified by what it was.
-- **The diff is checked against the analyzed text**: each new-side line a hunk shows (context and
-  added) must be the analyzed file's line at that number; a file that fails is reported with its
-  first differing line, and its routines' positions are uncertain.
-- The unified-diff parser keeps each deletion run's text (`DiffHunk::deleted`) and the new-side
-  lines a hunk shows (`DiffHunk::new_side`); digest's output does not change.
-- **The comparison tuple** (`engine::impact::compare`, B-3): `requestedRef`, `resolvedCommit`,
-  `mergeBase`, `comparisonBase`, `head` (commit and the revision's `inputsStamp`) and `diffHash`
-  (blake3 of the diff text used), resolved once and printed. `--base REV` alone compares the
-  MERGE BASE of `REV` and `HEAD` with the working tree: committed, staged and unstaged changes
-  (each layer's files listed) and every untracked `.al` file under the workspace (listed, and read
-  as a new file so its routines resolve). Git is only read; a diff alone names no base, and says
-  so.
-- **`alsem impact <ws> (--routine R… | --file F… | --diff P [--diff-root D] | --base REV)`**
-  (`engine::impact::{jobs,up,run,render}`, B-1, B-2, B-3b): the input accounting first (the
-  tuple, every bucket with counts, the hunks outside routines with what each touched, unmapped
-  files, removed routine headers, diff/working-tree mismatches, every root diagnostic), then per
-  changed routine, ranked "reached from a user or a job first, then by ancestors": its CURRENT
-  effects (digest's own plan and the per-routine rollup: writes, caller-dependent tables, commits,
-  UI, errors, events), who reaches it (R0's reverse walk over the sited graph, one streaming walk
-  per root with one reused scratch and a counting visitor, never a cone per root: direct callers
-  by explain's definition with each first call site, ancestors by tier, entries by kind with page
-  actions by caption, event publishers, external callers by reason), and its tests (milestone C's
-  select parts, unchanged, with the production-stamp retry). Then the whole change's reach (one
-  `walk_multi` over every root), schema lines, the tests line (`selectionComplete` and its
-  reasons, the codeunit filter), and the walks' limits. "Current effects; no before/after" is
-  said plainly; nothing is called added or deleted. **Nearest tested caller** (C left it null): a
-  root no test universe has is answered with the nearest production ancestor a test universe has
-  and a test reaches (the up walk's nearest ancestors, probed in each test universe with
-  `tests --part select --probe-id`, which never joins the selection). Human by default, the first
-  20 routines (`--max-roots`), more per list with `--detail`; `--format json` is
-  `al-sem.impact/1` (`comparison`, `input`, `roots[]` with `up`, `effects`, `tests`, `delta:
-  null`; `union`, `tests`, `assumptions`, `limits`, `base: null`). `--no-tests` skips the test
-  universes, `--no-dependents` the external callers. Spec §12.1's refusals: exactly one mode;
-  `--base` with `--diff` is B2's delta; `--diff-root` goes with `--diff`. Goldens:
-  `tests/cli-output-goldens/impact/`.
-- The diff check ignores a byte-order mark (found on CDO: 54 files of the 94-file range added
-  one, and read as mismatched before).
-- **MCP tool `alsem_impact`** (B-8, B-10): `routines` | `files` | `diff` (+ `diffRoot`) | `base`,
-  with `testApps`, `tests` (default true), `maxRoots`, `detail`, `assumeNoDependents`, `format`
-  (human by default). The front end resolves the comparison tuple (`base`: git, read only) before
-  it sends anything, then runs the parts as a composite request, one at a time (the main and up
-  parts on the production engine, which builds its sited graph on the first up part; the select
-  parts on the test engines, as `alsem_tests`). The stdout is `alsem impact`'s bytes except the
-  tuple's inputs stamp, which is the main part's revision (a one-shot CLI run has none); the
-  envelope's `revisions` names every part's revision, wall time (`ms`) and engine timing. Over the inline cap (40 KiB) or the client's
-  50,000-character budget the answer goes to a file with a `summary` (the comparison, the
-  accounting line, the first five routines, the tests line). The LSP front end refuses it, as it
-  refuses `alsem_tests`. The server instructions name it for reviewing a diff or a PR.
+### Fixed (F3, the effect side: every background start, named)
+
+- **`CurrPage.EnqueueBackgroundTask` is a `BACKGROUND_TASK` effect.** The `start` capability fact
+  (both extractors: the cone's `direct_facts_for_routine` and the L2 `extract_background`) now reads
+  `program::resolve::background::STARTERS`, the table F3's edges use, instead of its own list of
+  three; the page task had no fact, so explain, digest and prove never saw it.
+- **explain's and digest's `BACKGROUND_TASK` line names what the start starts**: `BACKGROUND_TASK at
+  ws:src/a.al:12 (unconditional-on-success), starts Codeunit BS Job`, and for a task with a failure
+  codeunit `…, starts Codeunit BS Job, on failure Codeunit BS Fail`. A literal is named by the object
+  the program engine resolved it to (a number by its declared name); a codeunit that is not a
+  literal is `a codeunit decided at run time`; a literal the start's edge reaches no routine of (an
+  id no object declares, a codeunit without `OnRun`) keeps its spelling (`Codeunit 59999`); a
+  failure codeunit of `0` is none. The model keeps the names in a side table,
+  `ResolvedCalls::background_starts` (call-site id → `BackgroundStart`), filled by the adapter from
+  each start's `ObligationId::Background` edge; the model's edges still never follow a start. The
+  digest JSON carries it as the effect's `detail.starts` (CLI layer only, like `tempState`: no
+  `factId`, dedupe key or fingerprint moves).
+- **CDO** (release-fast, 2026-11-05): the workspace has no background start; `alsem analyze` findings
+  identical at `--scope primary` (2,240) and `--scope all` (31,313), call-graph statistics as above.
+
+### Fixed (an integer object id runs its object)
+
+- **`Codeunit.Run(50000)` resolves as `Codeunit.Run(Codeunit::50000)` does.** A positive integer
+  literal as a run's first argument is the object's id: `Codeunit.Run(N)` and `Codeunit.Run(N,
+  Rec)`, `Page.Run`/`RunModal(N…)`, `Report.Run`/`RunModal(N…)`, `XmlPort.Run`/`Import`/`Export(N…)`
+  now reach the entry triggers of the object the caller's app sees with that id
+  (`ResolveIndex::object_by_number`, the same app-scoped lookup `Codeunit::N` uses). Before, the
+  extractor read only a `Codeunit::…` reference as static and left an integer `DynamicOpen`
+  (`honestDynamic`). An id no object declares is `ObjectNotInGraph` (unknown, with its reason), as
+  a missing `Codeunit::N` is; `0`, a variable and an expression stay dynamic, and `Page.Run(0, Rec)`
+  still opens the table's lookup page. The body facts' `ObjectRun` target (`ir_walk`) reads the
+  same shapes, so the model names the same object. Transpiled dependency bodies write runs this
+  way. (`Query` has no run method, so these four kinds are every run.)
+- **CDO** (`/home/sshadows/Projects/DO-cdo-baseline/Cloud`, release-fast, 2026-11-05): the workspace
+  has no integer run (`--program-call-graph-stats` unchanged: 46,328 edges, 16 `honestDynamic`, 0
+  unknown). Dependency bodies: `honestDynamic` 263 → 258, `resolvedSource` 191,142 → 191,147, 0
+  unknown before and after; all five are Continia Delivery Network's
+  `CTS-CDN Document Output Mgt.` (`Codeunit.Run(6086250, SalesHeader)` and four more, each now the
+  `OnRun` of the `CTS-CDN … Chk. … Hdr.` codeunit with that id). `alsem analyze`: 2,240 findings at
+  `--scope primary` and 31,313 at `--scope all`, identical before and after.
+
+### Added (callgraph gap F3: static background starts are edges)
+
+Spec: `docs/superpowers/specs/2026-10-13-callgraph-export-design.md` §9 (F3) and §16.1.
+
+- **A static background start gets its own engine edge.** `StartSession(S, Codeunit::X)`,
+  `Session.StartSession(S, 50100)`, `TaskScheduler.CreateTask(Codeunit::X, Codeunit::F)` and
+  `CurrPage.EnqueueBackgroundTask(T, Codeunit::X)` keep their catalog `Call` edge and get an
+  `EdgeKind::BackgroundStart` edge (own obligation, `ObligationId::Background`) to each literal
+  codeunit's `OnRun`, resolved as `Codeunit.Run(Codeunit::X)` is. A literal is `Codeunit::X`,
+  `Codeunit::"X"` or a positive integer (the transpiled bodies of symbol packages spell every start
+  that way). The site is classified by the catalog id its call resolved to
+  (`program::resolve::background`), so a procedure named `StartSession` is no start. The failure
+  codeunit's route carries the new `Condition::OnTaskFailure` (does not fire by default; a failure
+  codeunit of `0` is none). A non-literal codeunit gets no edge and keeps the open `Run{codeunit}`
+  bound with its reason; a literal-only site drops that bound. The bare `StartSession(S, Id)` had
+  no bound at all (its catalog id was not a dispatching builtin) and now has one.
+- **An execution boundary in the sited graph and the export.** The edge projects to a `Run` of the
+  started codeunit's object with the additive `via: "backgroundStart"` (and `conditions:
+  ["onTaskFailure"]`, `OverApprox`, for a failure codeunit), at a new `Boundary::Background` site:
+  a new session or task, no shared transaction, no UI, errors do not come back. Schema stays
+  `al-sem.callgraph` v1 (new `via` and condition values are additive, spec §4.2).
+- **R0: the started codeunit is a `background-start` entry, from the graph** (the node a
+  `Background` site enters). The walk itself does not stop there; consumers decide.
+- **Milestone A's background-start stop is now reachable.** `callers-*` questions get the
+  `background-start` entry from R0 (placed at the start site) instead of their own body-fact
+  lookup; a start whose codeunit is not a literal still blocks `no`
+  (`unresolved-background-target`). The stop's discrimination proof now fails when the stop is
+  removed (`a_trap_above_a_background_start_does_not_intercept`).
+- **LSP**: the started `OnRun`'s incoming calls list the starter.
+
+### Changed (F3)
+
+- **Effects beyond a background start are never the starter's.** The model's calls (and so the
+  cone, `prove`, `explain`, `digest` and every detector) do not carry the start's edge: the start
+  stays one `BACKGROUND_TASK` effect at its site, and the started codeunit's commits, UI and errors
+  are not counted as the caller's (pinned by
+  `a_started_codeunits_commit_ui_and_error_are_not_the_starters`). Cross-app demand does not follow
+  the edge either. explain's `callers:` line does not count a starter (`direct_callers`); the
+  reverse walks (tests and page actions that reach a routine) do pass through it.
+- The compiler-graph oracle leaves the start's edge out (altool has none, holes doc A21).
+- **CDO** (`/home/sshadows/Projects/DO-cdo-baseline/Cloud`, release-fast, 2026-11-05): the workspace
+  has no background start, so `--program-call-graph-stats` is unchanged (46,328 edges, 0 unknown,
+  coverage holds). Dependency bodies: 431,321 → 431,379 edges (+58, all `resolvedSource`), 0
+  unknown before and after. `alsem analyze`: 2,240 findings at `--scope primary` and 31,313 at
+  `--scope all`, the same fingerprints before and after. `alsem graph`: 125 → 82 callers of
+  `h:run:codeunit`, 21 `backgroundStart` edges after pruning; 31,265 → 31,095 nodes and 78,936 →
+  78,665 edges (the hub no longer keeps every codeunit on a path).
 
 ### Added (agent tasks, milestone A: adding an effect)
 
@@ -298,6 +347,241 @@ Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §6 (revision 2;
   argument and the server instructions say which is which; a contract test keeps the word "safe"
   out of every tool description, argument description and the instructions.
 - **explain JSON `al-sem.explain/4`** (additive: `callersContext` with `--callers-context`).
+
+### Added (agent tasks, milestone D: field impact)
+
+- **`alsem query touches --table T --field F`: every code consumer of one field** (agent-tasks
+  milestone D, narrowed v1; MCP: `field` on `alsem_query_touches`). Each site is listed once
+  with its uses: read, write (a `R.F += 1` is one site with uses read and write), validate,
+  filter (`SetRange`, `SetFilter`, `GetFilter`, `GetRangeMin/Max`, `CopyFilter`), key-use,
+  load, calc (`CalcFields`, `CalcSums`, `SetAutoCalcFields`), rule (`TestField`,
+  `FieldError`), metadata (`FieldNo`, `FieldCaption`, `FieldName`, `FieldActive`),
+  copy-candidate (`TransferFields`, when the other table has a field with F's number, or its
+  table is not resolved), and by-number (`RecordRef.Field(<literal>)`, a match only when the
+  routine decides the RecordRef's table). Extraction is per operation: `Next(2)`, `Get('X')`
+  and `FieldIndex(n)` never name a field. Temporary consumers are counted beside persistent
+  ones; a record of an unresolved table is a candidate. Workspace and loaded dependency bodies
+  are searched, and the answer says so; CalcFormula, TableRelation and page/report/query/XMLport
+  columns are stated as not searched, so an answer with no site is "no indexed consumer
+  observed", never no. With `--from R`, only R's cone (the solve graph, as `query touches` down)
+  and R's callers, named by R0's reverse walk over the sited graph as `alsem tests` names them
+  (each up site with its tier; `--single-app` walks the workspace program's graph). It reads
+  the graph through milestone A's one mechanism (`ViewNeeds::MODEL_SITED`, `ViewCx::sited`,
+  the engine host's `reads_sited` pin rule), extended for D: single-app, `build_view_model`
+  lends the workspace program for the graph, and `ViewCx::sited` panics when read without
+  the declaration and says when the graph's build did not finish. The query schema is
+  **3.3.0** (additive: `field`, `searched`, `fieldSummary`, `fieldTouches[]`, `declaredKeys[]`,
+  `reasons[]`, `absence`); every other query document changes only its version.
+- **Two field facts for field impact (agent-tasks milestone D, the D1 probe).** A bare field in
+  a table or page trigger (`Amount := Amount + 1`, through the implicit `Rec` or a `with`
+  record) was no field access at all: only the `X.F` member form was recorded. The body walk
+  now records it as `ModelRoutine::implicit_field_accesses`, with its read / write kind, apart
+  from `field_accesses` so no detector input and no serialized feature moves. A record method's
+  field-naming argument (`TestField(F)`, `SetRange(F, …)`'s first) is not one. A
+  `TransferFields`' source record is kept as `ModelRecordOperation::transfer_fields_source`.
+  `aldump --field-census <ws> [--single-app]` counts the field facts by role (on CDO, cross-app:
+  22,707 implicit accesses, 5.3 MB, against 16.9 MB for the existing field accesses). The
+  findings and scope decisions are in the agent-tasks design §7.3a.
+
+### Added (caller relations)
+
+- **Two caller relations, named and pinned.** The solve graph (`query touches` up,
+  `DbEffectQuery::ancestors`, the detectors' caller walks) and R0's reverse walk (`alsem tests`,
+  impact, `query touches --field --from` up) disagreed on CDO (`WaitForMailLimit`: 967 transitive
+  callers against 4,827 with a body, 1,030 of them local). Diffed exactly: every local difference
+  (66 routines) is a routine that opens a page whose user-started trigger (an action, a field's
+  `OnDrillDown`/`OnLookup`, a part, a page it opens) reaches the root. The program engine does
+  not follow those on purpose (`run_triggers`: platform entry points are not modelled); R0's
+  may-execute graph does. Not a bug on either side. New in `program::impact_graph::reverse`:
+  `is_code_call_site` (the code-call relation over the sited graph: calls, object runs and the
+  triggers a run runs, record triggers, event dispatch; no user-started lifecycle, rule edge or
+  open site), `object_run_reaches` (the resolver's run rule, page and report extensions
+  included) and the `CodeCalls` visitor adapter. R0 over code-call sites equals the solve graph's
+  local callers exactly on CDO (`WaitForMailLimit` 964 = 964, `RunReportID` 880 = 880).
+  The rest of the gap is the solve graph's documented cut at dependency code (it holds workspace
+  callers' calls only): 86 workspace routines reach `WaitForMailLimit` by code calls only through
+  Base Application code (84 by `Sales-Post`'s `OnAfterFinalizePosting`), plus open sites and
+  bodiless dependency routines.
+- **`query touches` up names its relation**: JSON `up.relation: "code-calls"` and a human
+  `callers:` line saying what it follows and what it does not (a page a caller opens, a path
+  through dependency code). Query schema **3.4.0** (additive; milestone D's `touches --field`
+  fields are 3.3.0, and this branch's `up.relation`, minted as 3.3.0 in parallel, is the next
+  step on top of them).
+- Fixture `tests/fixtures/caller-relations` and the agreement test
+  `reverse::caller_agreement_tests::solve_callers_equal_the_reverse_walk_over_code_call_sites`.
+- `aldump --caller-diff <ws> "<Object>::<Routine>" [--code-calls]`: the probe that measured the
+  above (both caller sets, every local difference with a witness path).
+
+### Fixed (caller relations)
+
+- **R0-3's `select::direct_callers` missed page extensions.** A run of a page runs its
+  extensions' lifecycle triggers too (the resolver's `dispatch_entry_trigger`), so explain counted
+  the page's runners as callers of an extension's `OnOpenPage` while `direct_callers` (which
+  looked up `run_triggers` by the extension's own kind) counted none; and an extension's triggers
+  were counted as routine callers where explain counts them apart as page actions (F16j: an
+  `object_type` starting with `Page`). It now reads `reverse::object_run_reaches`, and a page
+  extension's trigger is a page trigger. `explain_callers_equal_the_cones_direct_callers` runs
+  over `caller-relations` as well (breaks: the old run rule -> `explain 1, cone 0` on the
+  extension's `OnOpenPage`; page triggers only -> `explain 4, cone 6` on `Target`). No shipped
+  output read `direct_callers` on master.
+- The code-call relation (`is_code_call_site`) leaves out F3's background-start sites, as the
+  model's calls do (integration of the two branches).
+
+### Fixed (warm MCP calls slow once `alsem_impact` / `alsem_tests` had run)
+
+Measured on CDO through one long-lived `alsem mcp` session (digest, impact, digest, impact,
+tests, digest, explain twice, impact, digest; then the 94-file range). Root causes, each with
+its own test and discrimination proof:
+
+- **`alsem impact`'s parts never used the resident engine.** `impact --part main` and
+  `--part up` were not in `SERVED_COMMANDS`, so the engine child ran each through the one-shot
+  job path over its inputs: a whole program build per part on every call, warm or not (CDO
+  before: main 34-50 s, up 13-43 s per call, no fill and no eviction counted). They are now
+  answered off the revision: the main part from its retained artifacts (digest's plan), the up
+  part from its sited graph.
+- **The first question that read the sited graph threw the revision's artifacts away.**
+  `pin_sited` rebuilt the session to add the graph, publishing a new revision with an empty
+  store, so the next digest or explain filled everything again (CDO: 9.1 s of fills for the
+  digest after the first impact). The graph is now added to the published revision, built from
+  a program over that revision's own read (the workspace session's, reusing every parse;
+  single-app, the cold builder's): no workspace read, no new revision, every filled artifact
+  kept. A cancelled request leaves the revision without the graph and is answered `stopped`.
+- **A request's witness batch reserved once per root.** The first witness fill computes every
+  witness of the request; the later ones are lookups, but each reserved the case's estimate
+  again (the batch's observed peak once observed): a 699-root diff was refused at 2042 MiB per
+  root over a 7.4 GB RSS. A witness fill whose batch has run reserves nothing.
+- **Large reads memoized every root's witness.** A witness is 5.6-7.9 MiB per root on CDO and
+  the tree read clones the ones it reads, so a 699-root impact held them twice and its trees'
+  reservation was refused. A read over more than `WITNESS_MEMO_MAX_ROOTS` (64) roots computes
+  its entries itself, as a one-shot run does, and publishes none.
+- **One large request's peak became every request's estimate.** The budget's estimate of a
+  case was the largest of its last three observed peaks whatever the work's size, so after the
+  range (trees peak 4174 MiB) every one-routine ask was refused over a 5.7 GB RSS. Estimates
+  and observations are now kept per size class (the work's roots, one class per factor of 4:
+  `budget::size_class`); a small request reads its own class, or the table.
+
+After (CDO, `release-fast`, machine load 25-110, so upper bounds): a repeated `alsem_impact`
+on one routine 0.44-0.53 s (before 47-63 s), `alsem_digest` 0.27-0.34 s after impact and tests
+(before 9.5 s once, then 0.3-0.4 s), `alsem_explain` 0.46-0.81 s, `alsem_tests` 0.07 s; the
+first impact of a session 17.4 s (its up part 2.3 s adds the sited graph; the test engine's
+cold start 14.4 s). After the 94-file range the one-routine calls stay there (digest 1.2-1.3 s
+with a refill of what the range's reclaim evicted, impact 0.44-0.46 s). Production child 5.4-
+5.6 GB, test child 2.2 GB. **Still open, measured:** the range itself answers cold (152 s;
+before 314-319 s, warm or cold) but a warm repeat is refused by the budget: its main part's
+trees peak at 4.1 GB over a 5.6 GB resident child (9.7 GB against 8 GiB), and an eviction does
+not lower the RSS the admission reads (10,882 entries evicted, RSS 5.79 → 5.62 GB, the retained
+floor 3.5 GB). Not fixed by raising the budget; computing the per-root totals in chunks would
+bound that peak.
+
+### Added (agent tasks, milestone B1: impact on the current revision)
+
+The blast radius of a change, current effects only. Spec:
+`docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §8.
+
+- **Every changed line accounted** (`engine::impact::accounting`, B-1b): each added or removed
+  line of a diff lands in exactly one bucket: a routine's body or signature (split at the body's
+  first `var` or `begin` line; the attributes and header above are the signature), an
+  object-level declaration by kind (field, key, field group, global variable, property, action,
+  layout, trigger declaration, enum value, object header, comment or blank, other), outside any
+  object, removed routine text (removed lines that held a routine no new-side span holds: named
+  from their header lines, never called deleted without a base), routine text the model holds no
+  span for, or unmapped with the reason (not in the workspace, two workspace files, not AL, a
+  deleted file, a rejected hunk header, a line past the end of the analyzed file). Per file the
+  buckets sum to the file's changed lines, and a hunk that touches a global and a routine reports
+  both (digest's `hunk-outside-routines` names only hunks that hit no routine). The declaration
+  kinds come from a line scanner (`engine::impact::scan`) over the analyzed text: braces outside
+  comments and strings, the head before each `{`, `var` sections and routine headers; a removed
+  run is scanned from the scanner's state at its gap, so it is classified by what it was.
+- **The diff is checked against the analyzed text**: each new-side line a hunk shows (context and
+  added) must be the analyzed file's line at that number; a file that fails is reported with its
+  first differing line, and its routines' positions are uncertain.
+- The unified-diff parser keeps each deletion run's text (`DiffHunk::deleted`) and the new-side
+  lines a hunk shows (`DiffHunk::new_side`); digest's output does not change.
+- **The comparison tuple** (`engine::impact::compare`, B-3): `requestedRef`, `resolvedCommit`,
+  `mergeBase`, `comparisonBase`, `head` (commit and the revision's `inputsStamp`) and `diffHash`
+  (blake3 of the diff text used), resolved once and printed. `--base REV` alone compares the
+  MERGE BASE of `REV` and `HEAD` with the working tree: committed, staged and unstaged changes
+  (each layer's files listed) and every untracked `.al` file under the workspace (listed, and read
+  as a new file so its routines resolve). Git is only read; a diff alone names no base, and says
+  so.
+- **`alsem impact <ws> (--routine R… | --file F… | --diff P [--diff-root D] | --base REV)`**
+  (`engine::impact::{jobs,up,run,render}`, B-1, B-2, B-3b): the input accounting first (the
+  tuple, every bucket with counts, the hunks outside routines with what each touched, unmapped
+  files, removed routine headers, diff/working-tree mismatches, every root diagnostic), then per
+  changed routine, ranked "reached from a user or a job first, then by ancestors": its CURRENT
+  effects (digest's own plan and the per-routine rollup: writes, caller-dependent tables, commits,
+  UI, errors, events), who reaches it (R0's reverse walk over the sited graph, one streaming walk
+  per root with one reused scratch and a counting visitor, never a cone per root: direct callers
+  by explain's definition with each first call site, ancestors by tier, entries by kind with page
+  actions by caption, event publishers, external callers by reason), and its tests (milestone C's
+  select parts, unchanged, with the production-stamp retry). Then the whole change's reach (one
+  `walk_multi` over every root), schema lines, the tests line (`selectionComplete` and its
+  reasons, the codeunit filter), and the walks' limits. "Current effects; no before/after" is
+  said plainly; nothing is called added or deleted. **Nearest tested caller** (C left it null): a
+  root no test universe has is answered with the nearest production ancestor a test universe has
+  and a test reaches (the up walk's nearest ancestors, probed in each test universe with
+  `tests --part select --probe-id`, which never joins the selection). Human by default, the first
+  20 routines (`--max-roots`), more per list with `--detail`; `--format json` is
+  `al-sem.impact/1` (`comparison`, `input`, `roots[]` with `up`, `effects`, `tests`, `delta:
+  null`; `union`, `tests`, `assumptions`, `limits`, `base: null`). `--no-tests` skips the test
+  universes, `--no-dependents` the external callers. Spec §12.1's refusals: exactly one mode;
+  `--base` with `--diff` is B2's delta; `--diff-root` goes with `--diff`. Goldens:
+  `tests/cli-output-goldens/impact/`.
+- The diff check ignores a byte-order mark (found on CDO: 54 files of the 94-file range added
+  one, and read as mismatched before).
+- **MCP tool `alsem_impact`** (B-8, B-10): `routines` | `files` | `diff` (+ `diffRoot`) | `base`,
+  with `testApps`, `tests` (default true), `maxRoots`, `detail`, `assumeNoDependents`, `format`
+  (human by default). The front end resolves the comparison tuple (`base`: git, read only) before
+  it sends anything, then runs the parts as a composite request, one at a time (the main and up
+  parts on the production engine, which builds its sited graph on the first up part; the select
+  parts on the test engines, as `alsem_tests`). The stdout is `alsem impact`'s bytes except the
+  tuple's inputs stamp, which is the main part's revision (a one-shot CLI run has none); the
+  envelope's `revisions` names every part's revision, wall time (`ms`) and engine timing. Over the inline cap (40 KiB) or the client's
+  50,000-character budget the answer goes to a file with a `summary` (the comparison, the
+  accounting line, the first five routines, the tests line). The LSP front end refuses it, as it
+  refuses `alsem_tests`. The server instructions name it for reviewing a diff or a PR.
+
+### Fixed (transaction spans read statement order)
+
+- **A transaction span now ends at its Commit and the next one starts after it.** The spans
+  behind d9, d8, d50 and digest's transaction context (`engine::l5::transaction_spans`) read
+  the statement order only for the pending writes. Three other parts ignored it:
+  - **coverage**: `coverage_complete` was the AND of every member's whole-cone coverage, so a
+    gap in a callee called AFTER the Commit (or in a checked `Codeunit.Run`, its own
+    transaction) made the span "effect scope unknown". It now reads what each member may run
+    before its call toward the Commit (the Commit routine: before the Commit), with the same
+    site set as the pending writes: no gap of the member's own and complete cones for the
+    routines it may call first. A member whose whole cone is complete stays complete.
+  - **an earlier Commit of the Commit routine**: `w1; Commit; X(); Commit` gave the second
+    Commit's span the routine's callers and their writes, which the first Commit had already
+    ended. That span is now the routine alone, from the first Commit on (its span root).
+  - **a caller that commits**: the walk stopped at every caller with a Commit anywhere in its
+    body. It now stops only when a Commit statement runs on the way to the caller's call
+    toward the Commit (`Before::committed`, read by `pending_writes::sites_before`); a caller
+    that commits only after (or beside, or in a branch before) its call does not end the
+    transaction its callers opened, so they are in the span. With the order unknown (no tree,
+    or a site the tree does not hold) the old stop rule holds.
+- digest's transaction context names a Commit's span `span-has-known-writes` from the physical
+  writes pending at it (`pending_physical_tables`), not from everything the span can reach.
+- On CDO (`bc3ccb18`, `--scope primary` and `--scope all` alike) 12 d9 findings move and no
+  other detector's: 2 drop (SendQueue, whose only gap is in the checked `Codeunit.Run` after its
+  Commit; StampBlankSendCodeBatched, whose gaps are in `RunMigration`'s phase 2, after its call),
+  10 change their routine count (callers past `HandleEntry`, `PrintDocuments`,
+  `PrintOrEMailAll` and `RunMigration`, which commit after their call) and 2 of those lose one
+  pending table (`CDO Print document`, written after `PrintDocuments`' call toward the Commit).
+- Known precision gap, not fixed here: a literal argument is not followed through a function
+  return and an event `var` parameter. `EnableeDocsFeature` passes `GetCDNeDocsFeatureCode()` to
+  `CSC Feature Management.EnableFeature`, whose `OnAfterEnableFeature` reaches
+  `OnAfterEnableCDOFeature`'s `case FeatureCode of ... ESealFeatureCodeLbl: RunESealServiceSetup`,
+  so the eSeal arm counts as reachable from the CDN eDocs feature. This was found while checking
+  the proto/dep-callers d9 report: its RunESealServiceSetup growth (5 → 18 routines) comes from
+  these callers, not from statement order.
+- Tests: `transaction_spans::order_tests` (7 inline-AL fixtures) and
+  `pending_writes::tests::a_commit_on_the_way_clears_and_a_branch_or_loop_commit_does_not`,
+  `digest_cli::tests::tx_context_reads_the_writes_pending_at_the_commit`.
+- Milestone A's callers' context questions read the same order: `pending_before_report` is now
+  `sites_before` + `pending_of` (its `committed` is `Before::committed`, a Commit on the way to
+  every target; the questions pass one target, so their answers do not change).
 
 ### Added (agent tasks, milestone C: test selection)
 
@@ -473,6 +757,32 @@ Which tests to run first for a change, as a first-class answer. Spec:
   had failed on this since 2026-11-02 (`the_private_namespace_contract`; nextest's fail-fast hid
   the same failure in `overwrite_only_what_the_server_wrote`); it passed locally because btrfs
   and tmpfs do not reuse inode numbers at once. Reproduced and verified on a real ext4 mount.
+
+### Fixed (event subscriptions to events declared in an extension)
+
+- **An event declared in a table, page or report extension now binds the subscribers that name
+  the base object.** AL publishes such an event on the object the extension extends, so a
+  subscriber writes `[EventSubscriber(ObjectType::Table, Database::"Error Message",
+  'OnDrillDownSource', …)]`, not the extension. `SubscriberIndex::build` searched only the named
+  object's own routines, so the subscription was `Orphaned` and the publisher's event-flow edge
+  had no route. The candidates now also include the publishers of the base object's extensions
+  (`index::PublisherExtensions`): an extension counts when its `extends_target` resolves, from its
+  own app, to that object, and when it is in the subscriber's dependency closure. Found on CDO,
+  where three Base Application subscribers of events in its own extensions were orphaned
+  (`OnDrillDownSource` in `tableextension "Error Message Extension"`, `OnOpenRelatedRecord` in
+  `pageextension "Error Messages Extension"`, `OnAfterSetIsDocumentArchiveTable` in
+  `pageextension "Reten. Pol. Setup Lines Ext."`). On CDO `--program-call-graph-stats`
+  `wholeProgram` moves 3 edges from `honestEmpty` to `resolvedSource` (28256 → 28253, 11639 →
+  11642); `primaryScoped`, `--dependency-bodies-stats`, `alsem analyze` at both scopes and every
+  `--switch-dump` file (event graph and findings included) are unchanged. The IncludeSender
+  preflight diagnostic and the semantic-golden event check read the same extension facts (the
+  check accepts the declaring object or its base as the named publisher).
+- Not changed, and honest: Continia Core's four subscriptions to codeunit `"Hybrid Cloud
+  Management"` and page `"Cloud Migration Management"` stay `ObjectUnresolved` ("target object
+  not in indexed source"). Both objects are in Microsoft's Intelligent Cloud Base app, which is
+  in no loaded package, and all four attributes sit under `#if BCONLINE`, a symbol the shipped
+  Core build does not define (its manifest lists `BC21`–`BC26` and `CLOUD`). The engine reads
+  every `#if` arm (the union read of `al-syntax`'s lowerer), so it still sees them.
 
 ### Fixed
 

@@ -936,32 +936,22 @@ pub(crate) fn direct_facts_for_routine(
         });
     }
 
-    // ── background family (al-sem background.ts) ───────────────────────────
-    // TaskScheduler.CreateTask(arg0) / Session.StartSession(_, arg1) / bare
-    // StartSession(_, arg1). op=start, resourceKind=background.
+    // ── background family ──────────────────────────────────────────────────
+    // Every background start in `program::resolve::background::STARTERS`
+    // (StartSession, Session.StartSession, TaskScheduler.CreateTask,
+    // CurrPage.EnqueueBackgroundTask); the resource argument is the started
+    // codeunit. op=start, resourceKind=background.
     for cs in &call_sites {
-        let codeunit_arg_idx: Option<usize> = match &cs.callee {
+        let starter = match &cs.callee {
             PCallee::Member { receiver, method } => {
-                let r = receiver.to_lowercase();
-                let m = method.to_lowercase();
-                if r == "taskscheduler" && m == "createtask" {
-                    Some(0)
-                } else if r == "session" && m == "startsession" {
-                    Some(1)
-                } else {
-                    None
-                }
+                crate::program::resolve::background::starter_of_callee(Some(receiver), method)
             }
             PCallee::Bare { name } => {
-                if name.to_lowercase() == "startsession" {
-                    Some(1)
-                } else {
-                    None
-                }
+                crate::program::resolve::background::starter_of_callee(None, name)
             }
             _ => None,
         };
-        let Some(idx) = codeunit_arg_idx else {
+        let Some(idx) = starter.map(|s| s.codeunit_arg) else {
             continue;
         };
         let codeunit_source = match cs.argument_infos.get(idx) {
@@ -4954,6 +4944,7 @@ pub(crate) fn cross_app_base_of(
         upgraded_bindings,
         diagnostics,
         external_targets,
+        background_starts,
     } = std::sync::Arc::try_unwrap(std::mem::take(&mut x.resolved.calls))
         .unwrap_or_else(|shared| (*shared).clone());
     let (dependency_calls, primary_calls): (
@@ -4974,6 +4965,7 @@ pub(crate) fn cross_app_base_of(
         upgraded_bindings,
         diagnostics,
         external_targets,
+        background_starts,
     };
 
     let _s_index = crate::engine::perf_trace::span("crossapp", "crossapp.field_index");
@@ -7513,7 +7505,7 @@ codeunit 50111 "Cell Calls"
     /// it too).
     pub(crate) const FIXTURE_ROOTS: [(&str, usize); 5] = [
         ("r0-corpus", 221),
-        ("fixtures", 54),
+        ("fixtures", 56),
         ("r3a4-fixtures", 1),
         ("r3a5-fixtures", 1),
         ("r2-5b-fixtures", 1),
