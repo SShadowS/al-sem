@@ -8177,6 +8177,15 @@ fn resolve_module_pick_first_base_function_callers_are_a_known_allowlist() {
             "index.rs",
             "None => graph.resolve_object(from, kind, &args.publisher_name),",
         ),
+        // `PublisherExtensions::build` (fix/unbound-subscriptions): the base
+        // object of a table/page/report extension, from the extension's own
+        // app, so an event the extension declares is found under its base. The
+        // same lookup as the first `resolver.rs` entry; a collision fails
+        // closed and the extension is listed under no base.
+        (
+            "index.rs",
+            "if let Some(base) = graph.resolve_object(obj.id.app, base_kind, target) {",
+        ),
         (
             "receiver.rs",
             "let iface = graph.resolve_object(from_object.id.app, ObjectKind::Interface, name_lc)?;",

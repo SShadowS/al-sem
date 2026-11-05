@@ -1173,6 +1173,9 @@ pub fn route_applicability(
     let mut instance_builtin_routes_checked = 0usize;
     let mut implicit_trigger_routes_checked = 0usize;
     let mut event_routes_checked = 0usize;
+    // An event declared in an extension is published on its base object, and
+    // a subscriber names the base (`index::PublisherExtensions`).
+    let publisher_extensions = crate::program::resolve::index::PublisherExtensions::build(graph);
 
     for edge in edges {
         for route in edge.all_routes() {
@@ -1285,9 +1288,23 @@ pub fn route_applicability(
                 // fix). Running the teeth against a `pub_name_lc` that silently
                 // fell back to "" via `unwrap_or_default()` would be a
                 // meaningless check, not a sound one.
-                if let Some(pub_obj) = graph.objects.iter().find(|o| o.id == edge.from.object) {
-                    let pub_name_lc = pub_obj.name.fold_identifier();
-                    let pub_type_lc = format!("{:?}", edge.from.object.kind).to_ascii_lowercase();
+                if let Some(declaring) = graph.objects.iter().find(|o| o.id == edge.from.object) {
+                    // The objects a subscriber may name: the declaring object,
+                    // and the base of an extension that declares the event.
+                    let named: Vec<(String, String, Option<i64>)> = std::iter::once(declaring)
+                        .chain(
+                            publisher_extensions
+                                .base_of(&declaring.id)
+                                .and_then(|b| graph.objects.iter().find(|o| &o.id == b)),
+                        )
+                        .map(|o| {
+                            (
+                                format!("{:?}", o.id.kind).to_ascii_lowercase(),
+                                o.name.fold_identifier(),
+                                o.declared_id,
+                            )
+                        })
+                        .collect();
                     // Look up the publisher ROUTINE's `include_sender` (Task 1) — the
                     // conditional Sender-tolerant bound needs it, and it is NOT
                     // recoverable from `edge.from` alone (a `RoutineNodeId`).
@@ -1302,17 +1319,19 @@ pub fn route_applicability(
                     for route in edge.all_routes() {
                         if let RouteTarget::Routine(sub_rid) = &route.target {
                             event_routes_checked += 1;
-                            let ok = verify_event_subscriber_route(
-                                sub_rid,
-                                &pub_type_lc,
-                                &pub_name_lc,
-                                pub_obj.declared_id,
-                                &edge.from.name_lc,
-                                edge.from.params_count,
-                                pub_include_sender,
-                                parsed,
-                                &graph.apps,
-                            );
+                            let ok = named.iter().any(|(pub_type_lc, pub_name_lc, number)| {
+                                verify_event_subscriber_route(
+                                    sub_rid,
+                                    pub_type_lc,
+                                    pub_name_lc,
+                                    *number,
+                                    &edge.from.name_lc,
+                                    edge.from.params_count,
+                                    pub_include_sender,
+                                    parsed,
+                                    &graph.apps,
+                                )
+                            });
                             if !ok {
                                 event_violations += 1;
                             }

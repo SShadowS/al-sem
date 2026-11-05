@@ -182,6 +182,32 @@ Which tests to run first for a change, as a first-class answer. Spec:
   the same failure in `overwrite_only_what_the_server_wrote`); it passed locally because btrfs
   and tmpfs do not reuse inode numbers at once. Reproduced and verified on a real ext4 mount.
 
+### Fixed (event subscriptions to events declared in an extension)
+
+- **An event declared in a table, page or report extension now binds the subscribers that name
+  the base object.** AL publishes such an event on the object the extension extends, so a
+  subscriber writes `[EventSubscriber(ObjectType::Table, Database::"Error Message",
+  'OnDrillDownSource', …)]`, not the extension. `SubscriberIndex::build` searched only the named
+  object's own routines, so the subscription was `Orphaned` and the publisher's event-flow edge
+  had no route. The candidates now also include the publishers of the base object's extensions
+  (`index::PublisherExtensions`): an extension counts when its `extends_target` resolves, from its
+  own app, to that object, and when it is in the subscriber's dependency closure. Found on CDO,
+  where three Base Application subscribers of events in its own extensions were orphaned
+  (`OnDrillDownSource` in `tableextension "Error Message Extension"`, `OnOpenRelatedRecord` in
+  `pageextension "Error Messages Extension"`, `OnAfterSetIsDocumentArchiveTable` in
+  `pageextension "Reten. Pol. Setup Lines Ext."`). On CDO `--program-call-graph-stats`
+  `wholeProgram` moves 3 edges from `honestEmpty` to `resolvedSource` (28256 → 28253, 11639 →
+  11642); `primaryScoped`, `--dependency-bodies-stats`, `alsem analyze` at both scopes and every
+  `--switch-dump` file (event graph and findings included) are unchanged. The IncludeSender
+  preflight diagnostic and the semantic-golden event check read the same extension facts (the
+  check accepts the declaring object or its base as the named publisher).
+- Not changed, and honest: Continia Core's four subscriptions to codeunit `"Hybrid Cloud
+  Management"` and page `"Cloud Migration Management"` stay `ObjectUnresolved` ("target object
+  not in indexed source"). Both objects are in Microsoft's Intelligent Cloud Base app, which is
+  in no loaded package, and all four attributes sit under `#if BCONLINE`, a symbol the shipped
+  Core build does not define (its manifest lists `BC21`–`BC26` and `CLOUD`). The engine reads
+  every `#if` arm (the union read of `al-syntax`'s lowerer), so it still sees them.
+
 ### Fixed
 
 - `release_alloc::tests::freed_large_blocks_are_released_only_when_on` no longer depends on how
