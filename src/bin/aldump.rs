@@ -64,9 +64,70 @@ fn usage() -> ExitCode {
          \x20      aldump --dump-dependency-source <workspace> <out-dir>\n\
          \x20      aldump --switch-compare <dump-dir-A> <dump-dir-B> [--sample N] [--width N]\n\
          \x20      aldump --snapshot-memory <workspace> [--single-app] [--hash] [--pd-dump <file>]\n\
-         \x20      aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--implements <interface>] [--verify] [--low-mem] [--sited]"
+         \x20      aldump --session-refresh <workspace-copy> [--file <src-relative .al>] [--implements <interface>] [--verify] [--low-mem] [--sited]\n\
+         \x20      aldump --reverse-cone <workspace> (--routine <Object::Routine|stableId>)... [--roots-file F] [--multi] [--no-dependents]"
     );
     ExitCode::FAILURE
+}
+
+/// `--reverse-cone`: the reverse walker's measurement probe (agent-tasks
+/// design §3.8, `program::impact_graph::cone_probe`). Roots come from
+/// `--routine` (repeatable) and `--roots-file` (one per line). `--multi` walks
+/// them all at once; otherwise one streaming walk each. Prints one JSON object.
+fn reverse_cone_cmd(args: &[String]) -> ExitCode {
+    use al_sem::program::impact_graph::cone_probe::{ProbeArgs, run};
+    const USAGE: &str = "usage: aldump --reverse-cone <workspace> (--routine <Object::Routine|stableId>)... [--roots-file F] [--multi] [--no-dependents]";
+    let mut ws = None::<std::path::PathBuf>;
+    let mut p = ProbeArgs {
+        roots: Vec::new(),
+        multi: false,
+        assume_no_dependents: false,
+    };
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--multi" => p.multi = true,
+            "--no-dependents" => p.assume_no_dependents = true,
+            "--routine" => match it.next() {
+                Some(r) => p.roots.push(r.clone()),
+                None => {
+                    eprintln!("{USAGE}");
+                    return ExitCode::FAILURE;
+                }
+            },
+            "--roots-file" => {
+                let Some(text) = it.next().and_then(|f| std::fs::read_to_string(f).ok()) else {
+                    eprintln!("aldump --reverse-cone: --roots-file needs a readable file");
+                    return ExitCode::FAILURE;
+                };
+                p.roots.extend(
+                    text.lines()
+                        .map(str::trim)
+                        .filter(|l| !l.is_empty())
+                        .map(str::to_string),
+                );
+            }
+            w if ws.is_none() && !w.starts_with("--") => ws = Some(w.into()),
+            _ => {
+                eprintln!("{USAGE}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let Some(ws) = ws else {
+        eprintln!("{USAGE}");
+        return ExitCode::FAILURE;
+    };
+    match run(&ws, &p) {
+        Ok(v) => {
+            println!("{}", serde_json::to_string_pretty(&v).expect("json"));
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("aldump --reverse-cone: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// `aldump --session-refresh <workspace-copy> [--file <rel>] [--verify]`:
@@ -901,6 +962,7 @@ fn run_main() -> ExitCode {
         Some("--compiler-oracle") => return compiler_oracle_cmd(&raw[1..]),
         Some("--snapshot-memory") => return snapshot_memory_cmd(&raw[1..]),
         Some("--session-refresh") => return session_refresh_cmd(&raw[1..]),
+        Some("--reverse-cone") => return reverse_cone_cmd(&raw[1..]),
         _ => {}
     }
     let mut l2 = false;

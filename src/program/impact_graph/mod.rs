@@ -69,6 +69,7 @@
 //! a caller of every node), plus every node with `hiddenCallers` that reaches a
 //! workspace routine.
 
+pub mod cone_probe;
 pub(crate) mod facts;
 mod project;
 pub mod reverse;
