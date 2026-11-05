@@ -203,9 +203,20 @@ pub struct SelectJob<'a> {
     /// production stamp of the bytes the universe consumed.
     declared: Vec<(String, String, String)>,
     stamp: Option<String>,
+    /// Production routines probed apart (`--probe-id`, impact's nearest
+    /// tested caller).
+    probes: Vec<String>,
 }
 
 impl<'a> SelectJob<'a> {
+    /// `--probe-id`: routines whose presence and nearest test the part
+    /// reports apart, never adding to the selection.
+    #[must_use]
+    pub fn with_probes(mut self, probes: Vec<String>) -> SelectJob<'a> {
+        self.probes = probes;
+        self
+    }
+
     /// The select part over the read `inputs` (made with the universe's
     /// injected inputs) for `roots`.
     #[must_use]
@@ -223,6 +234,7 @@ impl<'a> SelectJob<'a> {
             roots,
             declared,
             stamp,
+            probes: Vec::new(),
         }
     }
 }
@@ -274,6 +286,7 @@ impl Job for SelectJob<'_> {
                 production_app_id: &self.universe.production_app_id,
                 production_stamp: self.stamp.clone(),
                 declared: &self.declared,
+                probes: &self.probes,
             },
         );
         Ok(SideDoc::new(Ok::<Value, String>(v)))

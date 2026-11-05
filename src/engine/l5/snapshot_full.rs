@@ -138,6 +138,71 @@ fn snapshot_rows(inputs: &crate::program::inputs::WorkspaceInputs) -> &[Snapshot
         .expect("fingerprint rows were not requested")
 }
 
+/// The model-only part of a snapshot `alsem diff`'s preflight, rename pairing
+/// and contract passes read (agent-tasks design §10.4, `alsem impact` with a
+/// base): the header (`schemaVersion`, `alsemVersion`, `analysisUniverse`,
+/// `lineBase`), the primary app row, `identities`, `contractFacts` and
+/// `schemaFacts`, each from the SAME deriver [`compose_full_snapshot`] uses.
+/// No cone is built, so `capabilityFacts`, `coverage`, `permissionFacts` and
+/// `eventDeclarations` are absent: a diff of two of these finds no
+/// capability, permission or event finding (the caller states that limit).
+#[must_use]
+pub fn contract_snapshot(resolved: &Model, universe: &str) -> CborValue {
+    let mut m: IndexMap<String, CborValue> = IndexMap::new();
+    m.insert(
+        "schemaVersion".into(),
+        CborValue::Int(SNAPSHOT_SCHEMA_VERSION),
+    );
+    m.insert(
+        "alsemVersion".into(),
+        CborValue::Text(crate::engine::gate::version::driver_version()),
+    );
+    m.insert("analysisUniverse".into(), CborValue::Text(universe.into()));
+    m.insert(
+        "lineBase".into(),
+        CborValue::Int(i64::from(crate::engine::line_base::LINE_BASE)),
+    );
+    let mut apps = Vec::new();
+    if let Some(app) = resolved
+        .primary_app
+        .as_ref()
+        .filter(|_| primary_app_guid(resolved).is_some())
+    {
+        let mut a: IndexMap<String, CborValue> = IndexMap::new();
+        a.insert("appGuid".into(), CborValue::Text(app.app_guid.clone()));
+        a.insert("publisher".into(), CborValue::Text(app.publisher.clone()));
+        a.insert("name".into(), CborValue::Text(app.name.clone()));
+        a.insert("version".into(), CborValue::Text(app.version.clone()));
+        a.insert(
+            "role".into(),
+            CborValue::Text(Role::Primary.as_str().into()),
+        );
+        apps.push(CborValue::Map(a));
+    }
+    m.insert("apps".into(), CborValue::Array(apps));
+    // Primary rows only, as the other two derivers keep (a cross-app model
+    // holds every dependency routine too).
+    let mut identities = crate::engine::l5::snapshot::derive_identity_table(resolved);
+    let primary = primary_app_guid(resolved);
+    let keep: Vec<bool> = identities
+        .stable_ids
+        .iter()
+        .map(|id| role_of_stable_id(primary, id) == Role::Primary)
+        .collect();
+    let mut k = keep.iter();
+    identities
+        .stable_ids
+        .retain(|_| *k.next().unwrap_or(&false));
+    let mut k = keep.iter();
+    identities
+        .display_names
+        .retain(|_| *k.next().unwrap_or(&false));
+    m.insert("identities".into(), to_cbor_value(&identities));
+    m.insert("contractFacts".into(), derive_contracts(resolved));
+    m.insert("schemaFacts".into(), derive_schema(resolved));
+    CborValue::Map(m)
+}
+
 pub fn compose_full_snapshot(resolved: &Model, opts: &FullSnapshotOptions) -> CborValue {
     // The consumed-core (identities, capabilityFacts, typedEdges, …, eventDeclarations,
     // rootClassifications, [routineOrderFrames]).

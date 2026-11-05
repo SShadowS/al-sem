@@ -50,6 +50,20 @@ fn is_coverage_sensitive(kind: DiffKind) -> bool {
     )
 }
 
+/// The loose policy's wording of a loss: a capability only the old side has
+/// is lost when the new side's coverage is complete, and only "lost under
+/// coverage" (not observed, may still be there) when it is not. `alsem
+/// impact`'s before/after delta words its losses through this one rule
+/// (agent-tasks design §10.4: "no longer observed").
+#[must_use]
+pub fn loss_kind(new_partial: bool) -> DiffKind {
+    if new_partial {
+        DiffKind::CapabilityLostUnderCoverage
+    } else {
+        DiffKind::CapabilityLost
+    }
+}
+
 pub fn apply_coverage_policy(
     findings: Vec<DiffFinding>,
     indexes: &DiffIndexes,
@@ -104,8 +118,8 @@ pub fn apply_coverage_policy(
         // `kind`, NOT the severity (so the downgraded finding keeps its medium
         // severity; verified against the abi-signature-changed golden). The `details`
         // map is NOT updated either (it still carries `kind:"capability-lost"`).
-        if annotated.kind == DiffKind::CapabilityLost && new_partial {
-            annotated.kind = DiffKind::CapabilityLostUnderCoverage;
+        if annotated.kind == DiffKind::CapabilityLost {
+            annotated.kind = loss_kind(new_partial);
         }
         out_findings.push(annotated);
     }

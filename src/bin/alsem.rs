@@ -147,6 +147,12 @@ enum Commands {
     /// tests that reach it, and whether the selection is complete (when not:
     /// run the whole suite as well, with the reasons).
     Tests(TestsCli),
+    /// The impact of a change on the current revision: every changed line
+    /// accounted first, then per changed routine who reaches it (callers,
+    /// page actions by caption, event publishers, entries, external callers),
+    /// its current effects and its tests. Current effects only: no base is
+    /// built, so there is no before/after.
+    Impact(ImpactCli),
     /// Run the commands of a JSON manifest: jobs of one batch on one
     /// workspace share one build. Prints one JSON line per job.
     ///
@@ -180,7 +186,9 @@ enum Commands {
     /// (always a file, with a summary), `alsem_query_effects`,
     /// `alsem_query_touches`, `alsem_tests` (a composite request: the
     /// production engine and one test-universe engine per test app),
-    /// `alsem_status`, `alsem_refresh`.
+    /// `alsem_impact` (a composite request too: the change accounted, its
+    /// routines' callers, current effects and tests), `alsem_status`,
+    /// `alsem_refresh`.
     ///
     /// Files go only into a private folder the server creates under
     /// `--output-root`; a tool's `out` must be inside it. The engine child
@@ -416,6 +424,156 @@ struct TestsCli {
     /// Internal (`--part select`): a changed root's StableRoutineId.
     #[arg(long = "root-id", hide = true)]
     root_id: Vec<String>,
+
+    /// Internal (`--part select`): a routine probed apart (impact's nearest
+    /// tested caller); it never joins the selection.
+    #[arg(long = "probe-id", hide = true)]
+    probe_id: Vec<String>,
+}
+
+/// `ImpactCli` — arguments for `alsem impact <ws>` (agent-tasks design §8).
+#[derive(Parser, Clone)]
+struct ImpactCli {
+    /// Path to the AL workspace root.
+    workspace: String,
+
+    /// A changed routine (the selector grammar of `explain --routine`).
+    /// Repeatable.
+    #[arg(long = "routine")]
+    routine: Vec<String>,
+
+    /// A changed file (workspace-relative): every routine in it. Repeatable.
+    #[arg(long = "file")]
+    file: Vec<String>,
+
+    /// A unified diff (a file, or `-` for stdin): every changed line.
+    #[arg(long = "diff")]
+    diff: Option<String>,
+
+    /// The folder the diff's paths are relative to (as `digest --diff-root`).
+    #[arg(long = "diff-root")]
+    diff_root: Option<String>,
+
+    /// Compare the working tree with the merge base of REV and HEAD
+    /// (committed, staged, unstaged and untracked .al files): the base is
+    /// built from that commit's files under the current packages and each
+    /// changed routine's behavior is compared. With --diff, the diff is the
+    /// change and its pre-images must match the merge base.
+    #[arg(long = "base")]
+    base: Option<String>,
+
+    /// With --base: no base build, current effects only (no before/after).
+    #[arg(long = "no-delta", default_value_t = false)]
+    no_delta: bool,
+
+    /// With --base: neither read nor write the impact-base cache
+    /// (~/.al-sem/cache/impact-base/v1).
+    #[arg(long = "no-base-cache", default_value_t = false)]
+    no_base_cache: bool,
+
+    /// A sibling test app's folder (repeatable), as `alsem tests --test-app`.
+    #[arg(long = "test-app")]
+    test_app: Vec<String>,
+
+    /// Do not compute the tests (no test universe is built).
+    #[arg(long = "no-tests", default_value_t = false)]
+    no_tests: bool,
+
+    /// Show at most N routines in the human output (default 20; the JSON
+    /// holds every one).
+    #[arg(long = "max-roots")]
+    max_roots: Option<usize>,
+
+    /// More of each list per routine (callers, entries, publishers) and
+    /// every hunk outside routines and every diagnostic.
+    #[arg(long = "detail", default_value_t = false)]
+    detail: bool,
+
+    /// Assume no app outside the program depends on these apps: report no
+    /// external callers.
+    #[arg(long = "no-dependents", default_value_t = false)]
+    no_dependents: bool,
+
+    /// Output format: human | json (`al-sem.impact/1`).
+    #[arg(long = "format", default_value = "human")]
+    format: String,
+
+    /// Resolve in the workspace alone.
+    #[arg(long = "single-app", default_value_t = false)]
+    single_app: bool,
+
+    /// Write to a file instead of stdout.
+    #[arg(long = "out")]
+    out: Option<String>,
+
+    /// Internal: one part of the answer (`main` or `up`), as JSON.
+    #[arg(long = "part", hide = true)]
+    part: Option<String>,
+
+    /// Internal (`--part up`): a changed root's StableRoutineId; with
+    /// `--part main --summaries`, a routine summarized as well when present.
+    #[arg(long = "root-id", hide = true)]
+    root_id: Vec<String>,
+
+    /// Internal (`--part main`): print each root's semantic summary, the
+    /// contract snapshot and the packages read (a side of a before/after).
+    #[arg(long = "summaries", hide = true, default_value_t = false)]
+    summaries: bool,
+
+    /// Internal (`--part main`, the base side): a folder whose package
+    /// discovery is read as well (the current workspace's packages).
+    #[arg(long = "package-root", hide = true)]
+    package_root: Vec<String>,
+
+    /// Internal (`--part main`, the base side): a source dependency read
+    /// from disk.
+    #[arg(long = "source-dep", hide = true)]
+    source_dep: Vec<String>,
+}
+
+impl ImpactCli {
+    fn request(&self) -> al_sem::engine::impact::run::ImpactRequest {
+        al_sem::engine::impact::run::ImpactRequest {
+            workspace: self.workspace.clone(),
+            routines: self.routine.clone(),
+            files: self.file.clone(),
+            diff: self.diff.is_some(),
+            diff_root: self.diff_root.clone(),
+            base: self.base.clone(),
+            test_apps: self.test_app.clone(),
+            single_app: self.single_app,
+            tests: !self.no_tests,
+            assume_no_dependents: self.no_dependents,
+            detail: self.detail,
+            delta: self.base.is_some() && !self.no_delta,
+        }
+    }
+}
+
+/// The selector and mode rules of `alsem impact` (spec §12.1), shared with
+/// the MCP front end's wording: exactly one of routines, files, diff, base.
+fn impact_modes(t: &ImpactCli) -> Result<(), String> {
+    // `--base` with `--diff` is one mode: the diff against that base (B2).
+    let modes = [
+        !t.routine.is_empty(),
+        !t.file.is_empty(),
+        t.diff.is_some() || t.base.is_some(),
+    ];
+    if modes.iter().filter(|m| **m).count() != 1 {
+        return Err(
+            "al-sem: impact: give exactly one of --routine, --file, --diff or --base (--base with --diff compares the diff against that base)".into(),
+        );
+    }
+    if t.diff_root.is_some() && t.diff.is_none() {
+        return Err("al-sem: impact: --diff-root goes with --diff".into());
+    }
+    if (t.no_delta || t.no_base_cache) && t.base.is_none() {
+        return Err("al-sem: impact: --no-delta and --no-base-cache go with --base".into());
+    }
+    if t.no_delta && t.diff.is_some() {
+        return Err("al-sem: impact: --base with --diff is a before/after; --no-delta drops it (give --diff alone)".into());
+    }
+    Ok(())
 }
 
 impl TestsCli {
@@ -475,6 +633,14 @@ struct QueryTouchesCli {
     /// not a table).
     #[arg(long = "table")]
     table: String,
+
+    /// A field of `--table` (a name or a number): every code consumer of the
+    /// field by use kind (read, write, validate, filter, key-use, load, calc,
+    /// rule, metadata, copy-candidate, by-number), instead of the table's
+    /// record operations. With `--from`, only the routine's cone (down) and
+    /// its callers (up).
+    #[arg(long = "field")]
+    field: Option<String>,
 
     /// Scope the answer to one routine: internal id, StableRoutineId,
     /// `Object.Routine`, or a bare routine name. Omit for the workspace-global
@@ -934,6 +1100,43 @@ struct ProveCli {
     /// first. The JSON always lists every one.
     #[arg(long, default_value_t = false)]
     detail: bool,
+
+    /// throws-error only: keep the error sites whose static message text
+    /// (a literal, a Label's or TextConst's value, `%1` placeholders kept) or
+    /// Label/TextConst name contains TEXT, case-insensitive. A site whose
+    /// message is not static (a variable or expression, an ErrorInfo, the
+    /// platform's own) never matches it, and it blocks a `no`; an implicit
+    /// error (TestField, an unguarded Get, …) matches only by its kind word.
+    #[arg(long = "match", value_name = "TEXT")]
+    match_text: Option<String>,
+
+    /// Keep only the sites at FILE:LINE (a source path or its tail, a
+    /// 1-based line): throws-error, writes-table:<table>, may-commit,
+    /// reaches-ui.
+    #[arg(long, value_name = "FILE:LINE")]
+    site: Option<String>,
+
+    /// throws-error or writes-table:<table>: keep only the sites of this
+    /// operation (Error, TestField, FieldError, Get, …; Insert, Modify,
+    /// ModifyAll, Delete, DeleteAll, Rename).
+    #[arg(long, value_name = "KIND")]
+    op: Option<String>,
+
+    /// throws-error only: keep only the errors a record operation on this
+    /// table raises (TestField, FieldError, an unguarded Get, …).
+    #[arg(long, value_name = "TABLE")]
+    table: Option<String>,
+
+    /// With --match, --site, --op or --table: up to N distinct routes per
+    /// matching site (1 to 10; default 1, one route), fewest hops first, each
+    /// with its guards. A route is a simple path over (routine, known
+    /// argument values) states, so recursion is followed only while it
+    /// changes the known values; the answer says whether the enumeration
+    /// completed (then every route is listed) or which cap fired (the routes
+    /// asked, or 50,000 candidate edges per site), and how many candidate
+    /// edges it examined and rejected.
+    #[arg(long, value_name = "N")]
+    routes: Option<usize>,
 }
 
 /// `ExplainCli` — arguments for `alsem explain <ws>` (intent-evidence spec
@@ -1231,6 +1434,7 @@ fn main() -> ExitCode {
             command: CacheCommands::Prune(p),
         }) => run_cache_prune_cmd(p),
         Commands::Tests(t) if t.part.is_none() => run_tests_cmd(t),
+        Commands::Impact(t) if t.part.is_none() => run_impact_cmd(t),
         job => {
             // The process's one request (context-server design r3 §4.3): the
             // argv decoded, the request's file-system questions decided here
@@ -1437,6 +1641,7 @@ fn plan_command(command: Commands, in_batch: bool, cx: &PlanCx) -> Planned {
         },
         Commands::Graph(g) => plan_graph(g),
         Commands::Tests(t) => plan_tests(t, cx),
+        Commands::Impact(t) => plan_impact(t, cx),
         Commands::Cache(_)
         | Commands::Batch(_)
         | Commands::EngineHost(_)
@@ -1459,6 +1664,7 @@ fn refused(command: &Commands) -> Option<&'static str> {
         Commands::Cache(_) => Some("cache prune"),
         // `tests` runs several parts (one per universe); a part is a job.
         Commands::Tests(t) if t.part.is_none() => Some("tests"),
+        Commands::Impact(t) if t.part.is_none() => Some("impact"),
         Commands::Policy(PolicyCli {
             command: PolicyCommands::Explain(_),
         }) => Some("policy explain"),
@@ -1564,6 +1770,12 @@ fn job_paths(command: &Commands, streams: &JobStreams) -> JobPaths {
         },
         Commands::Graph(g) => (Some(&g.workspace), g.out.as_ref()),
         Commands::Tests(t) => {
+            if let Some(d) = t.diff.as_deref().filter(|d| *d != "-") {
+                p.reads.push(PathBuf::from(d));
+            }
+            (Some(&t.workspace), t.out.as_ref())
+        }
+        Commands::Impact(t) => {
             if let Some(d) = t.diff.as_deref().filter(|d| *d != "-") {
                 p.reads.push(PathBuf::from(d));
             }
@@ -1772,21 +1984,30 @@ fn write_run_stdout(out: Vec<u8>, whole: bool) -> ExitCode {
     ExitCode::from(code)
 }
 
-/// A job's kind for the peak table (D12): its command and its view's
-/// universe. `None`: `batch`, `policy explain`, `cache prune` (no job).
-/// Whether `command` walks the sited graph beside the model (agent-tasks
-/// design §6): a callers' context prove question, or explain with
-/// `--callers-context`. A resident engine then pins with `pin_sited`.
+/// Whether `command` walks the sited graph beside the model
+/// (`ViewNeeds::MODEL_SITED`): a callers' context prove question or explain
+/// with `--callers-context` (agent-tasks design §6), and `query touches
+/// --field --from` asked up (`up` or the default `both`, either universe:
+/// R0's reverse walk names the callers; design §7). Each job's demand states
+/// the same rule. A resident engine then pins with `pin_sited`.
 fn reads_sited(command: &Commands) -> bool {
     match command {
         Commands::Prove(p) => {
             al_sem::engine::l5::callers_context::CallersQuestion::parse(&p.question).is_some()
         }
         Commands::Explain(e) => e.callers_context,
+        Commands::Query(q) => match &q.command {
+            QueryCommands::Touches(t) => {
+                t.field.is_some() && t.from.is_some() && t.direction != "down"
+            }
+            QueryCommands::Effects(_) => false,
+        },
         _ => false,
     }
 }
 
+/// A job's kind for the peak table (D12): its command and its view's
+/// universe. `None`: `batch`, `policy explain`, `cache prune` (no job).
 fn job_kind(command: &Commands) -> Option<JobKind> {
     let universe = |single_app: bool| match single_app {
         true => ViewUniverse::SingleApp,
@@ -1821,6 +2042,13 @@ fn job_kind(command: &Commands) -> Option<JobKind> {
             ("tests-select", ViewUniverse::CrossApp)
         }
         Commands::Tests(_) => return None,
+        // The main part runs digest's plan over the roots; the up part
+        // builds the program and its sited graph, as `graph` does.
+        Commands::Impact(t) if t.part.as_deref() == Some("main") => {
+            ("digest", universe(t.single_app))
+        }
+        Commands::Impact(t) if t.part.as_deref() == Some("up") => ("graph", universe(t.single_app)),
+        Commands::Impact(_) => return None,
         Commands::Policy(_)
         | Commands::Cache(_)
         | Commands::Batch(_)
@@ -1985,6 +2213,7 @@ fn plan_tests(t: TestsCli, cx: &PlanCx) -> Planned {
             let universe = t.universe();
             let injected = universe.injected();
             let roots = t.root_id.clone();
+            let probes = t.probe_id.clone();
             let path = PathBuf::from(&t.workspace);
             let needs = WorkspaceNeeds::default();
             Planned::Ready {
@@ -1992,7 +2221,7 @@ fn plan_tests(t: TestsCli, cx: &PlanCx) -> Planned {
                 make: Box::new(move |reader, slot| {
                     let read = reader.read_scoped(&path, needs, &injected);
                     let inputs = hold(slot, HandOff::new(read));
-                    Box::new(SelectJob::new(inputs, universe, roots))
+                    Box::new(SelectJob::new(inputs, universe, roots).with_probes(probes))
                 }),
             }
         }
@@ -2079,6 +2308,264 @@ fn part_json(out: &JobOutput) -> Result<serde_json::Value, String> {
     serde_json::from_slice(&stdout).map_err(|e| format!("tests: a part's answer is no JSON: {e}"))
 }
 
+// ── impact (agent-tasks design §8) ───────────────────────────────────────────
+
+/// A part of `alsem impact` as a job: `--part main` over the production
+/// model, `--part up` over its sited graph.
+fn plan_impact(t: ImpactCli, cx: &PlanCx) -> Planned {
+    use al_sem::engine::impact::jobs::{MainAsk, MainJob, UpAsk, UpJob};
+    use al_sem::engine::test_select::scope::ScopeRequest;
+    match t.part.as_deref() {
+        Some("main") => {
+            let modes = [!t.routine.is_empty(), !t.file.is_empty(), t.diff.is_some()]
+                .iter()
+                .filter(|m| **m)
+                .count();
+            if modes != 1 {
+                return failed(
+                    "al-sem: impact: give one of --routine, --file, or --diff",
+                    exit::CONFIG_ERROR,
+                    1,
+                );
+            }
+            let ask = if !t.routine.is_empty() {
+                MainAsk::Routines(t.routine.clone())
+            } else if !t.file.is_empty() {
+                MainAsk::Files(t.file.clone())
+            } else {
+                let diff = t.diff.clone().unwrap_or_default();
+                let text = match diff.as_str() {
+                    "-" => match cx.stdin_text() {
+                        Some(text) => text.to_string(),
+                        None => {
+                            return failed(
+                                "al-sem: impact: failed to read diff from stdin",
+                                exit::CONFIG_ERROR,
+                                1,
+                            );
+                        }
+                    },
+                    path => match FileInput::read_with(path.into(), &|p| cx.read(p)).text() {
+                        Ok(s) => s.to_string(),
+                        Err(err) => {
+                            return failed(
+                                format!("al-sem: impact: could not read diff file '{path}': {err}"),
+                                exit::CONFIG_ERROR,
+                                1,
+                            );
+                        }
+                    },
+                };
+                let root = match decided_root(cx, true) {
+                    Ok(r) => r,
+                    Err(line) => return failed(line, exit::CONFIG_ERROR, 1),
+                };
+                MainAsk::Diff { text, root }
+            };
+            let scope = ScopeRequest {
+                test_apps: (!t.test_app.is_empty()).then(|| {
+                    t.test_app
+                        .iter()
+                        .map(|a| {
+                            let p = PathBuf::from(a);
+                            if p.is_absolute() {
+                                p
+                            } else {
+                                std::path::absolute(&p).unwrap_or(p)
+                            }
+                        })
+                        .collect()
+                }),
+            };
+            let single_app = t.single_app;
+            let summaries = t.summaries;
+            let extra_roots = t.root_id.clone();
+            // The base side reads the current workspace's packages and the
+            // source dependencies from disk (agent-tasks B2 §10.6).
+            let injected = al_sem::program::inputs::Injected {
+                sources: t.source_dep.iter().map(PathBuf::from).collect(),
+                package_roots: t.package_root.iter().map(PathBuf::from).collect(),
+            };
+            let path = PathBuf::from(&t.workspace);
+            let needs = WorkspaceNeeds::default();
+            Planned::Ready {
+                reads: vec![(path.clone(), needs)],
+                make: Box::new(move |reader, slot| {
+                    let read = reader.read_scoped(&path, needs, &injected);
+                    let inputs = hold(slot, HandOff::new(read));
+                    Box::new(MainJob {
+                        inputs,
+                        single_app,
+                        ask,
+                        scope,
+                        summaries,
+                        extra_roots,
+                    })
+                }),
+            }
+        }
+        Some("up") => {
+            let ask = UpAsk {
+                roots: t.root_id.clone(),
+                assume_no_dependents: t.no_dependents,
+                detail: t.detail,
+                single_app: t.single_app,
+            };
+            ready(
+                &t.workspace.clone(),
+                WorkspaceNeeds::default(),
+                move |slot, inputs| {
+                    let inputs = hold(slot, inputs);
+                    Box::new(UpJob::new(inputs, ask))
+                },
+            )
+        }
+        Some(other) => failed(
+            format!("al-sem: impact: unknown --part '{other}'"),
+            exit::CONFIG_ERROR,
+            1,
+        ),
+        None => failed(
+            "al-sem: impact runs several parts and is not a batch job",
+            exit::CONFIG_ERROR,
+            1,
+        ),
+    }
+}
+
+/// `alsem impact`: the comparison tuple (git, read only), then the main
+/// part, the up part and a select part per test universe, each run in this
+/// process as its own command, then the answer (`impact::run::orchestrate`,
+/// the MCP tool's own path).
+fn run_impact_cmd(t: ImpactCli) -> ExitCode {
+    use al_sem::engine::impact::compare;
+    use al_sem::engine::impact::render::{DEFAULT_MAX_ROOTS, RenderOpts};
+    if !["human", "json"].contains(&t.format.as_str()) {
+        eprintln!(
+            "al-sem impact: invalid --format '{}'. Expected: human | json",
+            t.format
+        );
+        return ExitCode::from(1);
+    }
+    if let Err(e) = impact_modes(&t) {
+        eprintln!("{e}");
+        return ExitCode::from(exit::CONFIG_ERROR);
+    }
+    let ws = Path::new(&t.workspace);
+    let read_diff = |d: &str| -> Result<String, String> {
+        if d == "-" {
+            let mut s = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)
+                .map_err(|_| "al-sem: impact: failed to read diff from stdin".to_string())?;
+            Ok(s)
+        } else {
+            std::fs::read_to_string(d)
+                .map_err(|e| format!("al-sem: impact: could not read diff file '{d}': {e}"))
+        }
+    };
+    // The tuple, and the diff text the main part reads on stdin.
+    let (cmp, diff_text) = if let (Some(rev), Some(d)) = (&t.base, &t.diff) {
+        let text = match read_diff(d) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::from(exit::CONFIG_ERROR);
+            }
+        };
+        match compare::for_base_and_diff(ws, rev, &text) {
+            Ok(c) => (c, Some(text)),
+            Err(e) => {
+                eprintln!("al-sem {e}");
+                return ExitCode::from(exit::CONFIG_ERROR);
+            }
+        }
+    } else if let Some(rev) = &t.base {
+        match compare::for_base(ws, rev) {
+            Ok((c, text)) => (c, Some(text)),
+            Err(e) => {
+                eprintln!("al-sem {e}");
+                return ExitCode::from(exit::CONFIG_ERROR);
+            }
+        }
+    } else if let Some(d) = &t.diff {
+        let text = match read_diff(d) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::from(exit::CONFIG_ERROR);
+            }
+        };
+        (compare::for_input("diff", ws, Some(&text)), Some(text))
+    } else if !t.file.is_empty() {
+        (compare::for_input("files", ws, None), None)
+    } else {
+        (compare::for_input("routines", ws, None), None)
+    };
+    let opts = RenderOpts {
+        json: t.format == "json",
+        max_roots: t.max_roots.unwrap_or(DEFAULT_MAX_ROOTS),
+        detail: t.detail,
+    };
+    let mut run = |_: al_sem::engine::test_select::run::Target<'_>,
+                   argv: Vec<String>|
+     -> Result<serde_json::Value, String> {
+        let stdin = argv
+            .iter()
+            .any(|a| a == "--diff=-")
+            .then(|| diff_text.clone())
+            .flatten();
+        run_part_with_stdin(&argv, stdin)
+    };
+    // The base side (B2): the copy is made under the cache's folder (or the
+    // system's temporary folder without a cache); the base part runs here.
+    let req = t.request();
+    let cache = (!t.no_base_cache)
+        .then(al_sem::engine::impact::cache::Cache::default_dir)
+        .flatten()
+        .map(|d| al_sem::engine::impact::cache::Cache::new(d, Default::default()));
+    let scratch = al_sem::engine::impact::before::scratch_for(cache.as_ref());
+    let mut bcx = req.delta.then(|| al_sem::engine::impact::before::BaseCx {
+        cache,
+        scratch,
+        diff_text: diff_text.clone().unwrap_or_default(),
+        run: Box::new(|argv: Vec<String>, stdin: String| run_part_with_stdin(&argv, Some(stdin))),
+    });
+    match al_sem::engine::impact::run::orchestrate(&req, cmp, opts, &mut run, bcx.as_mut()) {
+        Ok(r) => {
+            let out = JobOutput::text(t.out.as_deref(), Ok((r.text, r.exit)));
+            ExitCode::from(al_sem::engine::batch::output::replay(&out, 1))
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// One part, run in this process with `stdin` as its stdin text (a diff
+/// the front already read): its JSON, or its stderr.
+fn run_part_with_stdin(
+    argv: &[String],
+    stdin: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let command = parse_job(argv)?;
+    let reads = match stdin {
+        Some(text) => PlanReads::seeded(
+            Some(al_sem::engine::batch::worker::StdinRead::Text(text)),
+            Default::default(),
+        ),
+        None => PlanReads::process(),
+    };
+    let cx = PlanCx::new(&reads);
+    let (command, cx) = decide(command, cx, None);
+    let planned = plan(command, false, &cx);
+    let reader = reader_for(planned.reads(), &cx);
+    let slots = [Slot::new()];
+    let jobs = make_jobs(vec![planned], &reader, &slots);
+    let out = al_sem::engine::batch::standalone_output(&*jobs[0]);
+    part_json(&out)
+}
+
 // ── query commands ───────────────────────────────────────────────────────────
 
 const VALID_QUERY_FORMATS: &[&str] = &["human", "json"];
@@ -2119,6 +2606,7 @@ fn plan_query_touches(t: QueryTouchesCli) -> Planned {
                     t.single_app,
                 )
                 .list_callers(t.callers)
+                .field(t.field.as_deref())
                 .show_source(t.show_source)
                 .written(t.format == "json", t.out.as_deref()),
             )
@@ -2398,6 +2886,13 @@ fn diff_root_of(command: &Commands, cx: &PlanCx) -> Option<Result<DiffRoot, Stri
         // `tests --diff` reads its diff paths as digest does (the roots part).
         Commands::Tests(t) if t.part.as_deref() != Some("select") => Some(decide_diff_root(
             "tests",
+            &t.workspace,
+            t.diff_root.as_deref(),
+            t.diff.is_some(),
+            cx,
+        )),
+        Commands::Impact(t) if t.part.as_deref() != Some("up") => Some(decide_diff_root(
+            "impact",
             &t.workspace,
             t.diff_root.as_deref(),
             t.diff.is_some(),
@@ -2732,6 +3227,18 @@ fn plan_prove(p: ProveCli) -> Planned {
             1,
         );
     }
+    // Agent-tasks E1: the filters, and which question each goes with.
+    let slice = match al_sem::engine::l5::prove_slice::SliceRequest::of(
+        &p.question,
+        p.match_text.as_deref(),
+        p.site.as_deref(),
+        p.op.as_deref(),
+        p.table.as_deref(),
+        p.routes,
+    ) {
+        Ok(s) => s,
+        Err(e) => return failed(e, 1, 1),
+    };
 
     ready(
         &p.workspace.clone(),
@@ -2739,6 +3246,7 @@ fn plan_prove(p: ProveCli) -> Planned {
         move |slot, inputs| {
             let version = inputs.get().driver_version.clone();
             let (p, inputs, version) = hold(slot, (p, inputs, version));
+            let slice = slice.clone();
             Box::new(ProveJob {
                 detectors: al_sem::engine::l5::detectors::default_detectors(),
                 inputs,
@@ -2752,6 +3260,7 @@ fn plan_prove(p: ProveCli) -> Planned {
                 human: p.format == "human",
                 detail: p.detail,
                 out: p.out.as_deref(),
+                slice,
             })
         },
     )
@@ -3819,11 +4328,16 @@ mod engine {
         (cx.progress)("pin");
         // A tests select part on a model engine (the workspace's own tests)
         // reads the sited graph: the revision must have it (M0's pin_sited,
-        // which turns the graph on once). So does a question that walks the
-        // callers (agent-tasks design §6: callers' context prove questions,
-        // explain --callers-context).
-        let reads_sited = (ask.argv.first().is_some_and(|c| c == "tests")
-            && ask.argv.iter().any(|a| a == "--part=select")
+        // which turns the graph on once). So does an impact up part
+        // (agent-tasks B1), and every command that walks the sited graph
+        // beside the model (`reads_sited`: the callers' context questions,
+        // explain --callers-context, query touches --field --from).
+        let part_is = |p: &str| {
+            ask.argv.iter().any(|a| *a == format!("--part={p}"))
+                || ask.argv.windows(2).any(|w| w[0] == "--part" && w[1] == p)
+        };
+        let reads_sited = ((ask.argv.first().is_some_and(|c| c == "tests") && part_is("select"))
+            || (ask.argv.first().is_some_and(|c| c == "impact") && part_is("up"))
             || wants_sited)
             && !open.session.is_graph_only();
         let pin = if reads_sited {
@@ -3864,18 +4378,25 @@ mod engine {
                 // Every fill and the trees reserve first (fill workers are
                 // counted while they hold theirs).
                 let refused = std::sync::Mutex::new(None);
+                // Each estimate is read, and each peak observed, in the
+                // work's size class (its roots): a large request's peak never
+                // becomes a small one's estimate.
                 let reserve = |kind: &'static str,
-                               _: usize|
+                               units: usize|
                  -> Result<al_sem::engine::resident::store::Guard<'_>, String> {
                     let case = if kind == "trees" {
                         Case::Trees
                     } else {
                         Case::Fill(kind)
                     };
-                    let estimate = open.budget.estimate(case, Default::default());
-                    match open.session.reserve_or_reclaim(
+                    let units = units as u64;
+                    let estimate = open
+                        .budget
+                        .estimate_sized(case, Default::default(), units);
+                    match open.session.reserve_or_reclaim_sized(
                         &open.budget,
                         case,
+                        units,
                         estimate,
                         1,
                         &is_stopped,
@@ -3951,6 +4472,7 @@ mod engine {
             Commands::Digest(d) => d.diff.as_deref() == Some("-"),
             Commands::Explain(e) => e.diff.as_deref() == Some("-"),
             Commands::Tests(t) => t.diff.as_deref() == Some("-"),
+            Commands::Impact(t) => t.diff.as_deref() == Some("-"),
             _ => false,
         }
     }

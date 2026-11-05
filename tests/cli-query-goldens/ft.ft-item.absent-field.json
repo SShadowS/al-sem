@@ -1,0 +1,19 @@
+{
+  "alsemVersion": "cli-query-v1",
+  "deterministic": true,
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "query.touches",
+  "payload": {
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "field": {
+      "candidates": [],
+      "resolution": "unmatched",
+      "selector": "No Such Field"
+    },
+    "lineBase": 1
+  },
+  "schemaVersion": "3.4.0"
+}

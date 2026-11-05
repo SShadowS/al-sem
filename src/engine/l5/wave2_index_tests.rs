@@ -227,7 +227,7 @@ fn fixture() -> (tempfile::TempDir, R3a5CrossAppBase, CapabilitySnapshot) {
 
 /// The cross-app base of `ws` and digest's tree over it, its raw witness
 /// facts kept for `scope`.
-fn tree_over(ws: &Path, scope: WitnessScope) -> (R3a5CrossAppBase, CapabilitySnapshot) {
+pub(crate) fn tree_over(ws: &Path, scope: WitnessScope) -> (R3a5CrossAppBase, CapabilitySnapshot) {
     let inputs = crate::program::inputs::WorkspaceInputs::read(ws, &Default::default());
     let base = crate::engine::l4::capability_cone::build_cross_app_base(&inputs)
         .unwrap_or_else(|_| panic!("cross-app base"));

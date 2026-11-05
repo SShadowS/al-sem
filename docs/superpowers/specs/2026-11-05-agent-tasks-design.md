@@ -1159,6 +1159,73 @@ Each finding is a scope decision recorded in the D1 commit: the fact is added in
 or body fact, measured, through the `add-al-construct` or `declared-needs` skill), or the kind
 is printed under `not searched`. r1's "no new IR in v1" is withdrawn.
 
+### 7.3a D1 result (measured 2026-11-05, branch `m-d-fields`)
+
+Probe: a fixture with every kind (`aldump --l2` on it), and `aldump --field-census <ws>`
+(`engine::l4::field_touches::census`, new) on the CDO baseline, cross-app (the model `query`
+reads), `cdo` profile. The census counts the model's field facts by role.
+
+| # | Question | Finding | v1 decision |
+|---|---|---|---|
+| 1 | Bare field in a table / page trigger | **Not captured.** `Amount := Amount + 1` in a field's `OnValidate` gave no `PFieldAccess`; only `X.F` member forms are recorded. A bare `TestField("No.")` was a record op on `Rec` | **Added**: `ModelRoutine::implicit_field_accesses` (body walk, `IrSpine::implicit_field_accesses`): a bare identifier in an implicit-record frame (`Rec`, a `with` record) that no parameter, local, global, dataitem or procedure takes, with its access kind; a record method's field-naming argument is not one. Kept apart from `field_accesses`, so no detector input or serialized feature moves. CDO: 3,966 workspace + 18,741 dependency rows (2,478 + 15,823 name a field of the record's table), **5.3 MB** against 16.9 MB for `field_accesses` and a 2.96 GB peak build: a plain fact, no gate |
+| 2 | `FieldNo(F)` / `FieldCaption(F)` | **Captured** as call sites with every argument text (also `FieldError`, `SetAutoCalcFields`, `CopyFilter`, `GetFilter`). CDO workspace: 504 metadata calls, 177 filter readers, 15 `SetAutoCalcFields` | No new fact. New kind `metadata` (`FieldNo`, `FieldCaption`, `FieldName`, `FieldActive`): a rename or removal breaks them. `FieldError` is `rule` from its call site, not from the rules-gated fact |
+| 3 | TransferFields' argument | **Not kept** (`TransferFields` is not in `FIELD_ARGS_OPS`; no call site either) | **Added**: `ModelRecordOperation::transfer_fields_source`, read at assembly from the IR beside `modify_all_field`. CDO: 57 + 303 TransferFields, every source captured and its table resolved |
+| 4 | RecordRef `Field(<literal>)` | **Already a call site** with its argument text (Fable f8 looked for a record op); `FieldIndex(n)` too | No new fact. A literal counts only when the routine alone decides the RecordRef's table (a local, every `Open`/`GetTable` naming one table, never assigned or passed): CDO workspace 25 literal sites, 0 decided; dependency 273, 13 decided. The rest are candidates; 64 + 119 non-literal numbers are counted as "any field", never matched |
+| 5 | Dependency rows with `field_accesses` | Under `FULL` (cross-app) every dependency routine the model holds has a body: 27,808, 8,554 with field accesses (60,868 accesses). Code the workspace does not demand is not in the model at all. `--low-mem` (context server only) drops dependency syntax trees between revisions, not model rows; that the answer is the same is checked with the feature (measurement below) | The `searched` line counts bodies by role and states that undemanded dependency code is not loaded |
+
+Cost: the census over every fact took 278 ms on CDO (the build 22 s); `--field` scans the same
+facts for one field. The query schema is 3.2.0 on master already (output step 1b), so
+`--field` ships as **3.3.0** (additive), not 3.2.0.
+
+**As built (commit 2 of D).** `engine::l4::field_touches` (extraction and census) and
+`effect_query_cli::render_field_touches`. Differences from §7.2-7.4:
+
+- A `metadata` kind (`FieldNo`, `FieldCaption`, `FieldName`, `FieldActive`), and the filter
+  readers (`GetFilter`, `GetRangeMin/Max`, `CopyFilter`'s first argument) count as `filter`.
+  `Validate` is `validate` only (as §7.2), not also `write`.
+- `TransferFields` is listed only when the other table has a field with F's number (it copies
+  by number); with the other table not resolved it is a candidate (`copy-table-not-resolved`).
+  `copySide` says `receiver` (F may be written) or `source` (F may be read).
+- `declared-key` is the `declaredKeys[]` list, not a site.
+- Without `--from` the job's plan is `session::field_plan()` (the model alone: no `l4`, no tree);
+  with `--from` it is `query_plan()`. **Down** (R's cone) is the solve graph: R and its
+  transitive callees, dependency code one routine deep, as `query touches` down reads it.
+  **Up** (R's callers) is **R0's reverse walk** (`impact_graph::reverse::walk_one`) over the
+  sited graph, as `alsem tests` and impact read it: through dependency code, each up site with
+  its tier (`local`, `throughDependency`, `onlyOpen`), and the walk's external callers, hidden
+  channels and limit stated as reasons. Its demand declares `ViewNeeds::sited` beside the model
+  (a model demand that also reads the sited graph is new: the one-shot driver keeps the graph it
+  builds off the lent program and hands it to the compute, `ViewCx::sited`; the engine host pins
+  such a request with `pin_sited`, `alsem.rs`' `query_field_reads_sited`). `--single-app` lends
+  its workspace-scoped program for the same graph (`build_view_model`'s single-app arm now lends
+  it to a model demand that declares the sited graph), so both universes walk R0, and with no
+  dependency they answer alike (master's `without_dependencies_cross_app_equals_single_app`
+  failed while single-app still used the solve graph). The solve graph names callers only when
+  the sited graph did not build (stated as `sited-graph-not-built`); on code with no dependency
+  the two agree (`field_callers_agree_with_the_reverse_walk_on_local_code`).
+  Measured on CDO, `WaitForMailLimit`: the solve graph named 967 callers, R0 names 4,827 with a
+  body in the model (local 1,030, through dependency code 2,726, only through an open site
+  1,071) and 20,242 more the model holds no body for (stated as not searched). The sited graph
+  costs ~1.5 s and 58 MB (134,385 nodes, 318,084 sites); the whole answer 15.0 s / 3.19 GB peak.
+- An answer with no site always says `unknown` ("no indexed consumer observed"): in v1 the
+  declaration-level consumers are never searched, so coverage is never complete.
+
+**Measured on CDO** (`cdo` profile, cold one-shot CLI, `/usr/bin/time -v`; hand-checked
+against source): `CDO E-Mail Log` field 22 "Sent with": 4 sites — `SetCurrentKey` (Send Mail
+Management :308), `SetRange` (:312), the implicit write in the table's `InitNewEntryCore`
+(:385), and a by-number candidate in CDN's `GetLineUnitPrice` (`RecRef.GetTable(<Variant>)`
+then `Field(22)`); the `"Sent with"::SMTP` enum values are rightly not sites, the page
+columns are the stated declaration gap. Cross-app 23.2 s / 3.14 GB peak; `--from
+WaitForMailLimit` (cone 1; callers by R0, above) 15.0 s / 3.19 GB on a quieter machine;
+`--single-app` 7.6 s / 0.74 GB.
+`CDO Merge Table Field` field 10 "Merge Table No.": 11 sites — 3 `Validate` in field
+triggers, `TestField`, the implicit read as `Field.SetRange(TableNo, "Merge Table No.")`'s
+value, implicit read/write in the XML export/import, 3 reads through `MergeTableField."Merge
+Table No."` in another table, 1 by-number candidate; the two CalcFormula uses (:86, :94) are
+the stated gap, and the other tables' same-named fields are not counted. 32.2 s / 3.11 GB.
+The build dominates; the field scan itself is the census's order (278 ms for every fact).
+`--low-mem` exists only on the context server and was not measured here.
+
 ### 7.4 Surface and output
 
 CLI: `alsem query touches <ws> --table T --field F [--from R] [--direction …] [--all]`. MCP:
@@ -1352,6 +1419,53 @@ peak during the 699-root `walk_multi` and the accounting.
 3. `feat(impact): alsem impact, al-sem.impact/1, current effects and up` (B-1, B-2).
 4. `feat(mcp): alsem_impact through a composite request with tests` (B-8, B-10).
 
+### 8.10 As built in B1 (2026-11-05)
+
+- **Parts.** `impact --part main` (production model: roots, accounting, digest's plan and the
+  per-routine `RollupTotals`, the tests scope), `impact --part up` (production sited graph:
+  `walk_one` per root with one reused scratch and a counting visitor, plus one `walk_multi` for
+  the union), then C's select parts unchanged (`test_select::run::select_parts`, split out of
+  C's `orchestrate`). The CLI runs each part in-process (a one-shot run builds the production
+  program twice: once for the model, once for the sited graph); the MCP tool runs them on the
+  resident engines.
+- **Tests default on** (`--no-tests` / `tests: false`), not opt-in as §8.2's `[--tests]` reads:
+  an agent reviewing a PR wants them, and a resident test universe answers in 0.2 s warm.
+- **Nearest tested caller** (§4.4, left `null` by C): the up part keeps each root's first 32
+  ancestors with a stable id in reach order; for a root every test universe reports
+  `not-in-projection` / `not-loaded`, they are probed there (`tests --part select --probe-id`,
+  status walk only, never joining the selection) and the nearest reached one is reported.
+- **Accounting kinds** come from a line scanner over the analyzed text (§8.3's "IR declaration
+  spans": the IR carries no origin for keys, field groups or layout), with three buckets §8.3 did
+  not list: `object-header`, `comment-or-blank`, and `removed-routine-text` (removed lines that
+  held a routine no new-side span holds, named from their header lines, never called deleted).
+- **The diff check** compares each hunk's new-side lines (context and added) with the analyzed
+  text, a byte-order mark ignored; the `index` blob ids are not used (no SHA-1 in the build).
+- **inputsStamp.** A one-shot CLI run has none (printed "one-shot run"); the MCP answer prints the
+  main part's revision stamp, so its bytes differ from the CLI's in that one clause.
+- **`--base` with `--diff`** is refused (B2).
+
+### 8.11 Warm latency on the resident engine (fix, 2026-11-05)
+
+B1 measured warm `alsem_impact` calls of 35-58 s for one routine and a digest of 9-45 s after
+them. Re-measured on CDO with the store's counters per call, five causes, all fixed:
+
+1. **The parts were not served.** `impact` and `impact-up` were missing from
+   `SERVED_COMMANDS`, so the child ran each part through the one-shot job path (a whole
+   program build per part per call). §8.10's "the MCP tool runs them on the resident engines"
+   was true only of the child, not of the artifacts.
+2. **M0-1's "one rebuild on the first ask" lost the store.** The rebuild published a new
+   revision with an empty store. `pin_sited` now ADDS the graph to the published revision:
+   the program is rebuilt from the workspace session's retained parses over the revision's own
+   read (a program refresh, not a model build), its graph seeded into the revision's store.
+   This revises §1.2 M0-1 ("lazy is not possible without keeping the program"): the program is
+   not kept, but the session can remake it cheaply for the revision it built.
+3. **The witness batch reserved per root** at the batch's observed peak; now once.
+4. **Witnesses are memoized only for reads of at most 64 roots** (`WITNESS_MEMO_MAX_ROOTS`):
+   a larger read computes its entries itself and leaves the store as it found it.
+5. **Estimates are per size class** (`budget::size_class`, by the roots a request's trees,
+   raw facts, tree and witness batch cover): the observed peak of a 699-root request is no
+   longer the next one-routine request's estimate.
+
 ---
 
 ## 9. E1. Debugging slice, narrow
@@ -1418,6 +1532,34 @@ to confirm: set a breakpoint at ReminderIssue:68 and read ReminderHeader."Issued
 
 Measurement plan: CDO, resident, warm; with a dependency-code error site (re-parse cost of the
 dependency files on the route); `--low-mem`.
+
+### 9.7 As built (E1, 2026-11-05)
+
+- **Guards are a gated assembly fact, not M0-3's re-parse** (coordinator's decision for E1; M0-3
+  is not built). `ModelRoutine::site_guards` holds each routine's `if`/`case`/loop blocks with
+  the condition text (folded, ≤ 120 characters), built only behind `ViewNeeds::site_guards`,
+  which only `alsem prove` with a filter declares (`ViewNeeds::PROVE_SLICE`, with `rules` for the
+  message text). Measured on CDO cross-app (`IssueReminder`, `ALSEM_TRACE`
+  counters `prove.site_guard_arms` / `prove.site_guard_bytes`): **49,428 arms, 5.6 MB**, below
+  r1's 15-130 MB estimate. Peak RSS of `alsem prove IssueReminder throws-error`: 3.14 GB
+  unfiltered, 3.14 GB with `--match` (no measurable change). The slice itself (`prove.slice`
+  span: a second `LiteralReach`, the root's live tree, the terminal records) took 0.45 s.
+- The slice is a level-3 read of prove's tree (`TreeDemand::slice`), so it runs one-shot and
+  resident alike, while the tree is alive. Sites come from the tree's terminal records (every
+  direct fact, dependency code included), kept when the root's guarded search reaches a state
+  where the site can run; a route is `GroupPaths::own_path` over the same search.
+- Filters: `--match` (throws-error), `--table` (throws-error: errors a record operation on that
+  table raises; the coordinator's addition), `--op` (throws-error and writes-table),
+  `--site` (throws-error, writes-table, may-commit, reaches-ui). `publishes-event` and
+  `commits-on-success-path` take none in E1.
+- Two more `no` blockers than §9.3 names: `message-placeholders` (a text with `%1` that did not
+  match: the value may hold the text) and `message-platform-wrapped` (a `FieldError` text). On
+  CDO `IssueReminder` has 5,278 reachable error sites, 4,454 of them with no static text, so a
+  filtered `no` is out of reach there; the `yes` side is what serves debugging.
+- Guards are shown per route site (at most 2 innermost each), so `k` in "k of n" sums over the
+  route's sites. A route through a TryFunction is not marked as trapped
+  (`callers-intercept-errors` answers that question).
+- A filtered document is schema 2.5.0; an unfiltered one stays 2.4.0, byte for byte.
 
 ---
 
@@ -1563,6 +1705,64 @@ same with `--low-mem` on the resident child.
 5. `feat(diff): table key passes in the shared diff engine` (B-9) — `alsem diff` goldens move.
 6. `feat(impact): bounded impact-base cache` (B-6, B-6b).
 
+### 10.11 As built in B2 (2026-11-05)
+
+- **One base part, both sides.** The base side is B1's main part run over the copy with
+  `--summaries` (`impact --part main --summaries --diff=- --root-id=<the working tree's roots>
+  --package-root=<workspace> -- <copy>`), its stdin the change's REVERSED diff (`base::reverse_diff`:
+  the base's removed lines map to the base's routines). The working tree's main part runs with
+  `--summaries` too, so both sides' summaries, contract snapshots and package lists come from
+  one job. No engine-host `--one-shot` mode was added: the CLI runs the base part in its own
+  process (as every part), the MCP front end runs `alsem impact --part main …` as a plain
+  one-shot child (no resident state, so the `ON_DEMAND` shape by construction).
+- **The copy** sits at the workspace's path below the diff's root inside a fresh folder whose top
+  holds an empty `.git` (the diff root is found there, and the package walk stops there), under
+  the cache namespace's `work/` (or the temporary folder without a cache), and is deleted after
+  the build. A source-dependency config in the archive is moved aside; its folders are resolved
+  against the real workspace, read from disk (`--source-dep`) and hashed into the key.
+- **Keys.** Own sites come from `direct_facts_for_routine` (the cone's own starting facts,
+  unreachable sites dropped) and the model's resolved calls (builtin and implicit-trigger edges
+  left out: the write covers the trigger); the cone set from the digest entry's rows
+  (`<TYPE>|<resource>`, group rows per resource, literal-dead rows counted, not keyed). A cone
+  change an own change explains (`write|T|Modify|…` and `DB_MODIFY|T`) is printed once.
+- **Policy reuse** is the function, not a copy: `policy::loss_kind` was split out of
+  `apply_coverage_policy`'s loose branch and both call it. One deviation from §10.4's wording,
+  found on CDO: a CALL the analyzed body no longer makes (`callee|`, `event|` own keys) is
+  "removed" whatever the cone's coverage (the call is read off the body; under the coverage rule
+  1,599 of CDO's changes read "no longer observed", 386 of them calls); effect keys keep the rule.
+- **Callees through the pairing**: a base callee id that paired by signature is read as its
+  working-tree id (`root_delta_with`), so a call to a routine whose parameter list changed is the
+  same call, not a removal plus an addition.
+- **Schema/contract findings** run `run_diff_engine` over `contract_snapshot` (header, primary
+  app, primary identities, `contractFacts`, `schemaFacts`; no cone), so the preflight, renames
+  and the schema and ABI passes run as in `alsem diff`; events, capabilities and permissions need
+  the cone and are stated as not computed. The key passes identify a key by its position
+  (`#K<n>`), as `derive_schema` does: inserting a key before others reads as fields changed on
+  the later ones (a stated limit).
+- **Pairing reasons.** An unpaired routine with a same-object, same-name routine only on the
+  other side says so (`renames.rs` pairs one-to-one, same ABI status, member-less only); a pure
+  rename is deleted + added.
+- **Admission** counts one-shot children in the children bound (`Shared::oneshots`, also in
+  `enqueue`), so with the default `--max-children 2` the resident production child and the base
+  child can run side by side; a busy bound waits 60 s (`AL_SEM_BASE_ADMIT_WAIT_MS` for tests).
+  The base child itself has no `--memory-budget` (a CLI run has no budget switch); its place is
+  its share of `--total-budget`.
+- **`--base` alone now builds the base by default** (`--no-delta`, MCP `delta: false`, keeps
+  B1's current-only answer).
+- **Measured on CDO** (2026-11-05, `--base bc3ccb18~5`, `--no-tests`, release-fast; the machine
+  was shared with other builds, load average 115-430 on 22 cores, so every time is an upper
+  bound): CLI cold 6:12 wall, peak 6.37 GB (the same run with `--no-delta` 5:10, 6.35 GB: the
+  base side's model is dropped before the next part); base part 132 s, materialize 0.27 s;
+  cached second run 4:16 (no base build; the rest is B1's parts). MCP: cold 340 s = main 232 s
+  (first build) + up 40 s + base child 64 s at a sampled peak of 4.81 GB, admitted at once
+  (`admitWaitMs` 0) beside the resident child (4.23 GB RSS idle after, 6.5 GB seen during the
+  main part); cached 141.5 s (main 104 s, up 35 s, base from the cache). Cache entry 6.2 MB
+  compressed. Result: 699 roots = 221 paired (175 with a behavior change before the call rule,
+  168 after), 478 added, 19 deleted (13 still called in the base); schema/contract findings
+  table-field-added 123, procedure-added 88, object-added 21, table-key-added 9; the five
+  dependency version bumps (29 → 30) named. The all-routine base table was not built (lazy
+  summaries for the change's roots are what is measured).
+
 ---
 
 ## 11. E2. Debugging slice, multiple routes
@@ -1590,6 +1790,37 @@ walk the parent tree), E-10 (a cap gives `limit`; break: stop silently). Commits
 `feat(literal): keep the state-transition graph for one root on demand`;
 `feat(prove): --routes`. Measurement: state-graph memory for RunReportID and IssueReminder on
 CDO, routes 1/3/10, warm.
+
+### 11.1 As built (E2, 2026-11-05)
+
+- `--routes` goes only with a filter (`--match`/`--site`/`--op`/`--table`); `--routes 1` is E1's
+  answer byte for byte (E1's route off the search tree, no `routes` key, no `filter.routes`).
+  Above 1, routes are enumerated for the first 20 matching sites (E1's `MAX_ROUTES`), each with
+  its own 50,000-edge budget. E1's `route` stays on each row; an enumeration that lists none
+  falls back to it, labelled.
+- The state graph is the literal search itself run once with a recorder
+  (`LiteralReach::state_graph`, module `literal_reach::routes`): same states, same order, same
+  first parents, so the rest of the slice reads its tree unchanged. Transitions are kept as
+  (target state, edge index) pairs, plus their live reverse and the reversed routine graph of
+  the root's guard-free reach.
+- A route ends at its FIRST state where the site can run (a longer one passes the site first).
+  Enumeration is best-first over partial routes ranked by (hops + exact hops left, site-id
+  sequence), so routes come out in the spec's order without a sort.
+- Rejected edges are split four ways: literal arguments at the edge's own site; literal
+  arguments further on (no live way on, but the callee reaches the site's routine with guards
+  ignored); back to a state on the route; callee cannot reach the site at all. Counts are of
+  edges, each time a partial route reaches them.
+- Cancellation: the request's stop reaches the slice through `read_tree_shared`; the resident
+  tree read checks it again after the read. Checked at the first edge and every 1,024.
+- Equal-length routes are ordered by site ids, so `--routes 3`'s first route can differ from
+  `--routes 1`'s (E1's is the search tree's first). Both are shortest.
+- CDO (pinned baseline, `release-fast`, cold CLI; the machine had a load average near 380, so
+  times are relative only): `RunReportID throws-error --op Error --routes 10`: state graph
+  21,556 states, 40,178 transitions, 3.2 MB beyond the tree; 20 sites enumerated in 8.6 ms with
+  153,211 candidate edges examined in all. `IssueReminder --match issued --routes 3`: 21,818
+  states, 40,626 transitions, 3.2 MB, 58 edges. Peak RSS 3.09-3.15 GB at routes 1, 3 and 10 (no
+  measurable change). The `prove.slice` span with routes is no longer than without (the graph
+  replaces the tree: the same search).
 
 ---
 

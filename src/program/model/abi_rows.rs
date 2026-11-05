@@ -203,6 +203,7 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
         record_variables,
         record_operations: Vec::new(),
         field_accesses: Vec::new(),
+        implicit_field_accesses: Vec::new(),
         // A dep routine's object globals are not modelled by the ABI at all.
         variables: RoutineVariables::default(),
         parameters,
@@ -258,6 +259,8 @@ pub(crate) fn dep_routine_to_l3(r: &ProjectedRoutine, object_type: &str) -> Mode
         rule_drafts: None,
         // Likewise the card text (`append_dependency_rows`).
         card_text: None,
+        // Likewise the site guards.
+        site_guards: None,
         entry_temp_guard_receiver: None,
     }
 }

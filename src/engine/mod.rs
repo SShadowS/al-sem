@@ -13,6 +13,8 @@ pub mod gate;
 /// The engine child process and its protocol (context-server stage 2).
 pub mod host;
 pub mod ids;
+/// Agent-tasks B1: `alsem impact` (impact of a change, current revision).
+pub mod impact;
 /// #222: the incremental L4 host (`IncrementalHost`).
 pub mod incremental;
 pub(crate) mod joined_key;

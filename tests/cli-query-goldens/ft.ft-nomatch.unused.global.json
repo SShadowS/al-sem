@@ -1,0 +1,105 @@
+{
+  "alsemVersion": "cli-query-v1",
+  "deterministic": true,
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "query.touches",
+  "payload": {
+    "absence": {
+      "answer": "unknown",
+      "reasons": [
+        {
+          "kind": "declaration-consumers-not-searched"
+        },
+        {
+          "kind": "by-number-not-literal",
+          "sites": 1
+        }
+      ],
+      "statement": "no indexed consumer observed"
+    },
+    "declaredKeys": [],
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "direction": "both",
+    "field": {
+      "dataType": "Integer",
+      "fieldClass": "Normal",
+      "id": "08080808-0000-4000-8000-000000000081/table/50802/5",
+      "name": "Unused",
+      "number": 5,
+      "resolution": "resolved",
+      "selector": "Unused"
+    },
+    "fieldSummary": {
+      "byNumberNotLiteral": 1,
+      "candidates": 0,
+      "candidatesByReason": {},
+      "declaredKeys": 0,
+      "fieldIndexSites": 1,
+      "objects": 0,
+      "readWriteSites": 0,
+      "routines": 0,
+      "sites": 0,
+      "sitesByTempState": {},
+      "uses": {}
+    },
+    "fieldTouches": [],
+    "lineBase": 1,
+    "reasons": [
+      {
+        "kind": "declaration-consumers-not-searched"
+      },
+      {
+        "kind": "by-number-not-literal",
+        "sites": 1
+      }
+    ],
+    "searched": {
+      "dependencyRoutineBodies": 0,
+      "kinds": [
+        "read",
+        "write",
+        "validate",
+        "filter",
+        "key-use",
+        "load",
+        "calc",
+        "rule",
+        "metadata",
+        "copy-candidate",
+        "by-number",
+        "declared-key"
+      ],
+      "notSearched": [
+        {
+          "kind": "calcformula",
+          "what": "CalcFormula of FlowFields (declaration-level, D2)"
+        },
+        {
+          "kind": "tablerelation",
+          "what": "TableRelation properties (declaration-level, D2)"
+        },
+        {
+          "kind": "columns",
+          "what": "page, report, query and XMLport columns and controls (declaration-level, D2)"
+        },
+        {
+          "kind": "dependency-code",
+          "what": "no dependency code is loaded (single-app, or no dependency)"
+        }
+      ],
+      "scope": "every routine body",
+      "workspaceRoutineBodies": 11
+    },
+    "table": {
+      "id": "08080808-0000-4000-8000-000000000081/table/50802",
+      "isUnknownBucket": false,
+      "name": "FT NoMatch",
+      "resolution": "resolved",
+      "selector": "FT NoMatch"
+    }
+  },
+  "schemaVersion": "3.4.0"
+}

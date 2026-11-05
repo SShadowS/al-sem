@@ -50,11 +50,12 @@ use crate::program::resolve::abi_check::{
     AbiIntegrity, AbiIntegrityReport, abi_ingestion_integrity, build_raw_abi_index_from_snapshot,
 };
 use crate::program::resolve::arg_dispatch::{self, ArgDispatchInfo};
+use crate::program::resolve::background;
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{
-    CanonicalSpan, DispatchShape, Edge, EdgeKind, Evidence, EvidenceKind, Histogram, OpenBound,
-    OpenWorldReason, Route, RouteTarget, SetCompleteness, SiteId, UnknownReason, Witness,
-    callee_fp, classify_obligation, record_trigger_op,
+    CanonicalSpan, Condition, DispatchShape, Edge, EdgeKind, Evidence, EvidenceKind, Histogram,
+    OpenBound, OpenWorldReason, Route, RouteTarget, SetCompleteness, SiteId, UnknownReason,
+    Witness, callee_fp, classify_obligation, record_trigger_op,
 };
 use crate::program::resolve::extract::{
     CalleeShape, WithState, extract_sites_for_routine, static_database_reference_target,
@@ -86,6 +87,11 @@ use std::sync::Arc;
 /// - **`CallSite`** — mirrors [`SiteId`]: `(caller, span, callee_fp)`.
 /// - **`Publisher`** — the publisher routine's node id.
 ///   One `Publisher` obligation per publisher routine in the graph.
+/// - **`Background`** — a static background start's target resolution (F3,
+///   [`EdgeKind::BackgroundStart`]): the same `(caller, span, callee_fp)` as
+///   the start's own `CallSite` obligation (the catalog call), kept apart so
+///   the site has one obligation per edge. Only a site with at least one
+///   literal codeunit argument has one.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ObligationId {
     CallSite {
@@ -94,6 +100,11 @@ pub enum ObligationId {
         callee_fp: u64,
     },
     Publisher(RoutineNodeId),
+    Background {
+        caller: RoutineNodeId,
+        span: CanonicalSpan,
+        callee_fp: u64,
+    },
 }
 
 /// A classified edge annotated with the obligation it was resolved from.
@@ -1185,6 +1196,26 @@ pub(crate) fn resolve_file_obligations(
                 if facts.open.is_empty() {
                     facts.open = site_open_bounds(&site.shape, site.arity, shape, &routes);
                 }
+                // F3: a background start (by the catalog id the call resolved
+                // to). Its literal codeunits get their own edge below; only a
+                // dynamic one keeps the open "any codeunit" bound.
+                let bg_start = routes
+                    .iter()
+                    .find_map(|r| match &r.target {
+                        RouteTarget::Builtin(b) => background::starter_of_builtin(b),
+                        _ => None,
+                    })
+                    .map(|s| background::start_targets(s, &pf.file, &site.args));
+                if let Some((_, dynamic)) = &bg_start {
+                    let any_codeunit = OpenBound::Run {
+                        kind: Some(ObjectKind::Codeunit),
+                    };
+                    facts.open.retain(|b| *b != any_codeunit);
+                    if *dynamic {
+                        facts.open.push(any_codeunit);
+                        facts.open.sort();
+                    }
+                }
                 // G30: the codeunit variables passed to a routine's interface
                 // parameters (`interface_holder::close_holder_sites` reads them).
                 if let [route] = routes.as_slice()
@@ -1264,6 +1295,34 @@ pub(crate) fn resolve_file_obligations(
                         commit,
                     }),
                 });
+                if let Some((targets, _)) = bg_start
+                    && !targets.is_empty()
+                {
+                    let (shape, completeness, routes) =
+                        background_routes(&targets, caller_app, graph, index, surface);
+                    edges.push(ClassifiedEdge {
+                        obligation_id: ObligationId::Background {
+                            caller: caller.clone(),
+                            span: site.span.clone(),
+                            callee_fp: fp,
+                        },
+                        edge: Edge {
+                            from: caller.clone(),
+                            site: SiteId {
+                                caller: caller.clone(),
+                                span: site.span.clone(),
+                                callee_fingerprint: fp,
+                            },
+                            kind: EdgeKind::BackgroundStart,
+                            shape,
+                            completeness,
+                            routes,
+                        },
+                        // No site key: the key is the call's own (the model
+                        // pairs it with the catalog call, never with this).
+                        site: None,
+                    });
+                }
             }
         }
     }
@@ -1275,6 +1334,61 @@ pub(crate) fn resolve_file_obligations(
         site_facts,
         parenless,
     }
+}
+
+/// The routes of a background start's edge (F3): each literal codeunit's run
+/// (`resolve_object_run`, as `Codeunit.Run(Codeunit::X)` resolves), the
+/// failure codeunit's marked [`Condition::OnTaskFailure`]. One target keeps
+/// its run's shape; two make a `Multicast`, `Partial` when either is.
+fn background_routes(
+    targets: &[(background::StartTarget, bool)],
+    caller_app: AppRef,
+    graph: &dyn GraphReads,
+    index: &dyn IndexReads,
+    surface: &dyn SurfaceReads,
+) -> (DispatchShape, SetCompleteness, Vec<Route>) {
+    let mut out: Option<(DispatchShape, SetCompleteness)> = None;
+    let mut routes: Vec<Route> = Vec::new();
+    for (t, failure) in targets {
+        let background::StartTarget::Literal {
+            target_ref,
+            is_name,
+        } = t
+        else {
+            continue;
+        };
+        let (shape, completeness, mut r) = resolve_object_run(
+            caller_app,
+            ObjectKind::Codeunit,
+            Some(target_ref),
+            *is_name,
+            graph,
+            index,
+            surface,
+        );
+        if *failure {
+            for x in &mut r {
+                if x.evidence.kind() != EvidenceKind::Unknown {
+                    x.conditions.push(Condition::OnTaskFailure);
+                }
+            }
+        }
+        routes.extend(r);
+        out = Some(match out {
+            None => (shape, completeness),
+            Some((_, c)) => (
+                DispatchShape::Multicast,
+                if matches!(c, SetCompleteness::Partial { .. }) {
+                    c
+                } else {
+                    completeness
+                },
+            ),
+        });
+    }
+    let (shape, completeness) =
+        out.unwrap_or((DispatchShape::Multicast, SetCompleteness::Complete));
+    (shape, completeness, routes)
 }
 
 /// The table of `Rec` in `Page.Run(0, Rec)` / `Page.RunModal(0, Rec)`: the
@@ -3403,6 +3517,101 @@ mod tests {
         );
     }
 
+    /// An event declared in a table or page extension is published on the base
+    /// object: a subscriber names the base, and the extension's publisher gets
+    /// the event-flow edge to it. Found on CDO: three Base Application
+    /// subscribers of events in its own `tableextension "Error Message
+    /// Extension"`, `pageextension "Error Messages Extension"` and `pageextension
+    /// "Reten. Pol. Setup Lines Ext."` were orphaned.
+    #[test]
+    fn extension_event_reaches_subscriber_that_names_the_base() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("E.al"),
+            "table 50000 \"Error Message\"
+{
+    fields
+    {
+        field(1; ID; Integer) { }
+    }
+}
+page 50000 \"Error Messages\"
+{
+    SourceTable = \"Error Message\";
+}
+tableextension 50001 \"Error Message Ext\" extends \"Error Message\"
+{
+    procedure DrillDown()
+    var
+        IsHandled: Boolean;
+    begin
+        OnDrillDownSource(Rec, IsHandled);
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnDrillDownSource(ErrorMessage: Record \"Error Message\"; var IsHandled: Boolean)
+    begin
+    end;
+}
+pageextension 50002 \"Error Messages Ext\" extends \"Error Messages\"
+{
+    [IntegrationEvent(false, false)]
+    local procedure OnOpenRelatedRecord(var IsHandled: Boolean)
+    begin
+    end;
+}
+codeunit 50003 \"Check Dimensions\"
+{
+    [EventSubscriber(ObjectType::Table, Database::\"Error Message\", 'OnDrillDownSource', '', false, false)]
+    local procedure OnErrorMessageDrillDown(ErrorMessage: Record \"Error Message\"; var IsHandled: Boolean)
+    begin
+    end;
+
+    [EventSubscriber(ObjectType::Page, Page::\"Error Messages\", 'OnOpenRelatedRecord', '', false, false)]
+    local procedure OnOpenRelatedRecord(var IsHandled: Boolean)
+    begin
+    end;
+}
+",
+        )
+        .expect("write E.al");
+
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let mut flows: Vec<(String, String, String)> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.kind == EdgeKind::EventFlow)
+            .flat_map(|ce| {
+                ce.edge.routes.iter().filter_map(move |r| match &r.target {
+                    RouteTarget::Routine(id) => Some((
+                        format!("{:?}", ce.edge.from.object.kind),
+                        ce.edge.from.name_lc.to_string(),
+                        id.name_lc.to_string(),
+                    )),
+                    _ => None,
+                })
+            })
+            .collect();
+        flows.sort();
+        assert_eq!(
+            flows,
+            vec![
+                (
+                    "PageExtension".to_string(),
+                    "onopenrelatedrecord".to_string(),
+                    "onopenrelatedrecord".to_string()
+                ),
+                (
+                    "TableExtension".to_string(),
+                    "ondrilldownsource".to_string(),
+                    "onerrormessagedrilldown".to_string()
+                ),
+            ],
+            "each extension event reaches the subscriber that names its base"
+        );
+    }
+
     /// S9.0c (found by the compiler oracle): a call inside a ternary, an `in` list
     /// or an `is`/`as` operand is a call site. The lowerer used to make those
     /// containers an opaque `Unknown`, so the calls had no edge.
@@ -4663,6 +4872,288 @@ mod tests {
             }]
         );
         assert_eq!(at("// missing-bare"), vec![name("missing", 0)]);
+    }
+
+    /// F3: a static background start keeps its catalog `Call` edge and gets a
+    /// `BackgroundStart` edge (its own `Background` obligation) to each literal
+    /// codeunit's `OnRun`: `Codeunit::"X"`, `Codeunit::X` or a number; the
+    /// failure codeunit's route carries `OnTaskFailure`, a failure codeunit
+    /// of `0` is none. A dynamic codeunit gets no such edge and keeps the
+    /// open `Run{codeunit}` bound (the bare `StartSession` too, which had
+    /// none); a literal site drops it. A procedure named `StartSession` is
+    /// no start.
+    ///
+    /// DISCRIMINATION (2026-11-05): removing the `facts.open.retain` in
+    /// `resolve_file_obligations` fails "a literal start is closed"
+    /// (`session-number`); removing the `facts.open.push` fails the
+    /// `dynamic-task` bound; not marking the failure route in
+    /// `background_routes` fails the `task-and-failure` targets; dropping
+    /// `OnTaskFailure` from `Route::fires_by_default` fails the
+    /// `ConditionalResolved` assertion.
+    #[test]
+    fn background_starts_get_an_edge_to_each_literal_codeunit() {
+        use crate::program::resolve::edge::OpenBound as B;
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        let src = "codeunit 50001 Bg\n{\n    trigger OnRun()\n    begin\n    end;\n}\n\
+             codeunit 50002 \"Bg Two\"\n{\n    trigger OnRun()\n    begin\n    end;\n}\n\
+             codeunit 50003 Fail\n{\n    trigger OnRun()\n    begin\n    end;\n}\n\
+             codeunit 50004 Own\n{\n    procedure StartSession(var S: Integer; Id: Integer)\n    begin\n    end;\n\
+             procedure Mine()\n    var\n        S: Integer;\n    begin\n        \
+             StartSession(S, Codeunit::Bg); // own-procedure\n    end;\n}\n\
+             codeunit 50005 C\n{\n    procedure P()\n    var\n        S: Integer;\n        Id: Integer;\n    begin\n        \
+             StartSession(S, Codeunit::Bg); // bare-literal\n        \
+             Session.StartSession(S, 50002); // session-number\n        \
+             TaskScheduler.CreateTask(Codeunit::\"Bg Two\", Codeunit::Fail); // task-and-failure\n        \
+             TaskScheduler.CreateTask(Codeunit::Bg, 0); // task-no-failure\n        \
+             TaskScheduler.CreateTask(Id, Codeunit::Fail); // dynamic-task\n        \
+             StartSession(S, Id); // bare-dynamic\n    end;\n}\n\
+             page 50006 Pg\n{\n    trigger OnOpenPage()\n    var\n        T: Integer;\n    begin\n        \
+             CurrPage.EnqueueBackgroundTask(T, Codeunit::Bg); // page-task\n    end;\n}\n";
+        std::fs::write(dir.path().join("C.al"), src).expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        assert!(coverage_holds(&report.coverage), "{:?}", report.coverage);
+        let line = |tag: &str| src.lines().position(|l| l.contains(tag)).expect("tag") as u32;
+        let at = |tag: &str| -> Vec<&ClassifiedEdge> {
+            let l = line(tag);
+            report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.site.span.start.line == l)
+                .collect()
+        };
+        // Per tag: the background edge's targets (object number, conditions).
+        let started = |tag: &str| -> Option<Vec<(String, Vec<Condition>)>> {
+            let bg: Vec<&ClassifiedEdge> = at(tag)
+                .into_iter()
+                .filter(|ce| ce.edge.kind == EdgeKind::BackgroundStart)
+                .collect();
+            assert!(bg.len() <= 1, "{tag}: one background edge per site");
+            let ce = bg.first()?;
+            assert!(
+                matches!(ce.obligation_id, ObligationId::Background { .. }),
+                "{tag}"
+            );
+            assert!(ce.site.is_none(), "{tag}: the model never pairs it");
+            Some(
+                ce.edge
+                    .routes
+                    .iter()
+                    .map(|r| match &r.target {
+                        RouteTarget::Routine(rid) => (
+                            format!("{:?}::{}", rid.object.key, rid.name_lc),
+                            r.conditions.clone(),
+                        ),
+                        other => (format!("{other:?}"), r.conditions.clone()),
+                    })
+                    .collect(),
+            )
+        };
+        let open = |tag: &str| -> Vec<B> {
+            at(tag)
+                .iter()
+                .filter(|ce| ce.edge.kind == EdgeKind::Call)
+                .flat_map(|ce| {
+                    report
+                        .site_facts
+                        .get(&ce.obligation_id)
+                        .map(|f| f.open.clone())
+                        .unwrap_or_default()
+                })
+                .collect()
+        };
+        let any_codeunit = || {
+            vec![B::Run {
+                kind: Some(ObjectKind::Codeunit),
+            }]
+        };
+        let run = |n: i64| (format!("{:?}::onrun", ObjKey::Id(n)), vec![]);
+        // Every start keeps its catalog call.
+        for tag in [
+            "// bare-literal",
+            "// session-number",
+            "// task-and-failure",
+            "// task-no-failure",
+            "// dynamic-task",
+            "// bare-dynamic",
+            "// page-task",
+        ] {
+            assert!(
+                at(tag).iter().any(|ce| ce.edge.kind == EdgeKind::Call
+                    && ce
+                        .edge
+                        .routes
+                        .iter()
+                        .all(|r| matches!(r.target, RouteTarget::Builtin(_)))),
+                "{tag}: the catalog call stays"
+            );
+        }
+        assert_eq!(started("// bare-literal"), Some(vec![run(50001)]));
+        assert_eq!(started("// session-number"), Some(vec![run(50002)]));
+        assert_eq!(
+            started("// task-and-failure"),
+            Some(vec![
+                run(50002),
+                (
+                    format!("{:?}::onrun", ObjKey::Id(50003)),
+                    vec![Condition::OnTaskFailure]
+                )
+            ])
+        );
+        assert_eq!(started("// task-no-failure"), Some(vec![run(50001)]));
+        assert_eq!(
+            started("// dynamic-task"),
+            Some(vec![(
+                format!("{:?}::onrun", ObjKey::Id(50003)),
+                vec![Condition::OnTaskFailure]
+            )])
+        );
+        assert_eq!(started("// bare-dynamic"), None);
+        assert_eq!(started("// page-task"), Some(vec![run(50001)]));
+        assert_eq!(started("// own-procedure"), None, "a procedure is no start");
+        // Literal starts are closed; a dynamic codeunit keeps "any codeunit".
+        for tag in [
+            "// bare-literal",
+            "// session-number",
+            "// task-and-failure",
+            "// task-no-failure",
+            "// page-task",
+        ] {
+            assert_eq!(open(tag), vec![], "{tag}: a literal start is closed");
+        }
+        assert_eq!(open("// dynamic-task"), any_codeunit());
+        assert_eq!(
+            open("// bare-dynamic"),
+            any_codeunit(),
+            "the bare StartSession's dynamic codeunit is open"
+        );
+        // A task whose failure codeunit alone is literal is conditional.
+        let dynamic_task = at("// dynamic-task")
+            .into_iter()
+            .find(|ce| ce.edge.kind == EdgeKind::BackgroundStart)
+            .expect("background edge");
+        assert_eq!(
+            classify_obligation(&dynamic_task.edge),
+            crate::program::resolve::edge::ObligationOutcome::ConditionalResolved
+        );
+    }
+
+    /// A positive integer literal names its object as `Codeunit::50001` does:
+    /// `Codeunit.Run(50001)` (with or without a record), `Page.Run`/`RunModal`,
+    /// `Report.Run`/`RunModal`, `XmlPort.Run`/`Import`/`Export` run the object
+    /// with that id. The transpiled bodies of symbol packages write every run
+    /// this way. An id no object declares is `ObjectNotInGraph` (unknown, with
+    /// its reason, as `Codeunit::59999` is); `0`, a variable and an expression
+    /// stay dynamic, and `Page.Run(0, Rec)` still opens the table's lookup page.
+    ///
+    /// DISCRIMINATION (2026-11-05): returning `None` for an integer literal in
+    /// `extract::static_database_reference_target` (the old behaviour) fails
+    /// every literal tag (`codeunit-int` becomes `DynamicOpen`); letting
+    /// `positive_object_id` accept `0` fails `page-zero-lookup` (`Page.Run(0,
+    /// R)` becomes a run of a missing page 0 instead of the lookup page).
+    #[test]
+    fn an_integer_object_id_runs_the_object_with_that_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        let src = "codeunit 50001 Cu\n{\n    trigger OnRun()\n    begin\n    end;\n}\n\
+             table 50002 Tb\n{\n    LookupPageId = 50003;\n    fields\n    {\n        field(1; K; Integer) { }\n    }\n}\n\
+             page 50003 Pg\n{\n    SourceTable = Tb;\n    trigger OnOpenPage()\n    begin\n    end;\n}\n\
+             report 50004 Rp\n{\n    trigger OnPreReport()\n    begin\n    end;\n}\n\
+             xmlport 50005 Xp\n{\n    trigger OnPreXmlPort()\n    begin\n    end;\n}\n\
+             codeunit 50006 C\n{\n    procedure P()\n    var\n        R: Record Tb;\n        Id: Integer;\n        InS: InStream;\n        OutS: OutStream;\n    begin\n        \
+             Codeunit.Run(50001); // codeunit-int\n        \
+             Codeunit.Run(50001, R); // codeunit-int-rec\n        \
+             Codeunit.Run(Codeunit::Cu); // codeunit-name\n        \
+             Codeunit.Run(59999); // codeunit-missing\n        \
+             Codeunit.Run(Codeunit::59999); // codeunit-missing-ref\n        \
+             Codeunit.Run(0); // codeunit-zero\n        \
+             Codeunit.Run(Id); // codeunit-var\n        \
+             Codeunit.Run(Id + 1); // codeunit-expr\n        \
+             Page.Run(50003); // page-int\n        \
+             Page.RunModal(50003, R); // page-runmodal-int\n        \
+             Page.Run(0, R); // page-zero-lookup\n        \
+             Report.Run(50004); // report-int\n        \
+             Report.RunModal(50004, false); // report-runmodal-int\n        \
+             XmlPort.Run(50005); // xmlport-int\n        \
+             XmlPort.Import(50005, InS); // xmlport-import-int\n        \
+             XmlPort.Export(50005, OutS); // xmlport-export-int\n    end;\n}\n";
+        std::fs::write(dir.path().join("C.al"), src).expect("write C.al");
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        assert!(coverage_holds(&report.coverage), "{:?}", report.coverage);
+        // Per tag: the run edge's shape and its routes (object id :: trigger, or
+        // the evidence kind and unknown reason of a route with no routine).
+        let run = |tag: &str| -> (DispatchShape, Vec<String>) {
+            let l = src.lines().position(|l| l.contains(tag)).expect("tag") as u32;
+            let runs: Vec<&ClassifiedEdge> = report
+                .edges
+                .iter()
+                .filter(|ce| ce.edge.site.span.start.line == l && ce.edge.kind == EdgeKind::Run)
+                .collect();
+            assert_eq!(runs.len(), 1, "{tag}: one run edge");
+            let mut routes: Vec<String> = runs[0]
+                .edge
+                .routes
+                .iter()
+                .map(|r| match &r.target {
+                    RouteTarget::Routine(rid) => format!("{:?}::{}", rid.object.key, rid.name_lc),
+                    other => format!("{other:?} {:?}", r.evidence.kind()),
+                })
+                .collect();
+            routes.sort();
+            (runs[0].edge.shape, routes)
+        };
+        let id = |n: i64, t: &str| format!("{:?}::{t}", ObjKey::Id(n));
+        // A codeunit by number reaches exactly what its name reaches.
+        assert_eq!(run("// codeunit-int"), run("// codeunit-name"));
+        for tag in ["// codeunit-int", "// codeunit-int-rec"] {
+            assert_eq!(
+                run(tag),
+                (DispatchShape::Exact, vec![id(50001, "onrun")]),
+                "{tag}"
+            );
+        }
+        for (tag, n, trigger) in [
+            ("// page-int", 50003, "onopenpage"),
+            ("// page-runmodal-int", 50003, "onopenpage"),
+            ("// page-zero-lookup", 50003, "onopenpage"),
+            ("// report-int", 50004, "onprereport"),
+            ("// report-runmodal-int", 50004, "onprereport"),
+            ("// xmlport-int", 50005, "onprexmlport"),
+            ("// xmlport-import-int", 50005, "onprexmlport"),
+            ("// xmlport-export-int", 50005, "onprexmlport"),
+        ] {
+            let (shape, routes) = run(tag);
+            assert_ne!(shape, DispatchShape::DynamicOpen, "{tag}");
+            assert_eq!(routes, vec![id(n, trigger)], "{tag}");
+        }
+        // A missing id is unresolved with the run's reason, the same as a
+        // missing `Codeunit::59999`.
+        assert_eq!(run("// codeunit-missing"), run("// codeunit-missing-ref"));
+        let missing = report
+            .edges
+            .iter()
+            .find(|ce| {
+                ce.edge.kind == EdgeKind::Run
+                    && ce.edge.site.span.start.line
+                        == src
+                            .lines()
+                            .position(|l| l.contains("// codeunit-missing"))
+                            .expect("tag") as u32
+            })
+            .expect("missing run");
+        assert_eq!(missing.edge.shape, DispatchShape::Exact);
+        assert_eq!(
+            missing
+                .edge
+                .routes
+                .iter()
+                .map(|r| &r.evidence)
+                .collect::<Vec<_>>(),
+            vec![&Evidence::Unknown(UnknownReason::ObjectNotInGraph)]
+        );
+        for tag in ["// codeunit-zero", "// codeunit-var", "// codeunit-expr"] {
+            assert_eq!(run(tag).0, DispatchShape::DynamicOpen, "{tag}");
+        }
     }
 
     /// #63 (export spec §15): a `Call` never reaches a trigger — AL code cannot

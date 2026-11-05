@@ -3,4 +3,5 @@
   down: no indexed touch (per operation, one routine into dependency code); the whole cone may write it beyond dependency entry points (below)
   table not resolved: 2 operations in this cone, 2 of them on a RecordRef (table decided at run time) (they may be this table) — --table unknown lists them
   beyond dependency entry points (the whole cone, literal arguments followed): may write it beyond 1 entry point: Codeunit Base Poster::OnRun (Modify) — alsem prove <routine> writes-table:<table> gives the path
+  callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens, nor a path through dependency code (alsem tests and impact follow both)
   up: 0 of 1 transitive caller touch it through other branches, 1 does not, 0 unknown; not touching: Page Out Doc Card::OnAction

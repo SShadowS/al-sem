@@ -141,7 +141,7 @@ impl Server {
         }
     }
 
-    fn request(&mut self, id: Value, method: &str, params: Value) -> Value {
+    pub(crate) fn request(&mut self, id: Value, method: &str, params: Value) -> Value {
         self.send(id.clone(), method, params);
         let r = self.response();
         assert_eq!(r["id"], id, "{r}");
@@ -292,6 +292,7 @@ fn a_transcript_answers_what_the_cli_answers() {
             "alsem_query_effects",
             "alsem_query_touches",
             "alsem_tests",
+            "alsem_impact",
             "alsem_status",
             "alsem_refresh"
         ]

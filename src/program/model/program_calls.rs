@@ -119,9 +119,9 @@ use al_syntax::IdentifierFoldExt;
 use serde::Serialize;
 
 use super::calls::{
-    BindingState, CallEdge, DispatchMeta, ExternalTypeRef, ResolvedCalls,
-    UnknownReason as ModelReason, UpgradedBinding, initial_binding_state, mark_bindings_ambiguous,
-    object_run_dispatch_kind, upgrade_bindings, upgrade_bindings_with,
+    BackgroundStart, BindingState, CallEdge, DispatchMeta, ExternalTypeRef, ResolvedCalls,
+    StartedCodeunit, UnknownReason as ModelReason, UpgradedBinding, initial_binding_state,
+    mark_bindings_ambiguous, object_run_dispatch_kind, upgrade_bindings, upgrade_bindings_with,
 };
 use super::ix::RoutineIx;
 use super::taxonomy::{DispatchKind, Resolution};
@@ -132,7 +132,8 @@ use crate::program::node::{AppRef, ObjKey, ObjectNodeId, RoutineNodeId};
 use crate::program::node_extract::{AbiParams, ObjectNode};
 use crate::program::resolve::decl_surface::DeclSurface;
 use crate::program::resolve::edge::{
-    DispatchShape, EdgeKind, Evidence, Route, RouteTarget, UnknownReason as PReason, callee_fp,
+    CanonicalSpan, DispatchShape, EdgeKind, Evidence, Route, RouteTarget, UnknownReason as PReason,
+    callee_fp,
 };
 use crate::program::resolve::full::{
     ClassifiedEdge, ObligationId, ProgramContext, ProgramReport, can_fire_trigger,
@@ -1508,12 +1509,31 @@ fn convert<'a>(
     // The adapter emits no resolver diagnostics (the legacy resolver's
     // double-upgrade warning had no program-engine analogue to fire).
     let diagnostics = Vec::new();
+    // F3: each static background start's own edge, by its site (the key its
+    // catalog call shares), to name the codeunits it starts.
+    let background_edges: HashMap<_, &ClassifiedEdge> = view
+        .all_edges()
+        .filter_map(|ce| match &ce.obligation_id {
+            ObligationId::Background {
+                caller,
+                span,
+                callee_fp,
+            } => Some(((caller, span, *callee_fp), ce)),
+            _ => None,
+        })
+        .collect();
+    let mut background_starts: HashMap<String, BackgroundStart> = HashMap::new();
     // Call sites in routine order, then the implicit-trigger edges in
     // routine/op order (the legacy resolver's order).
     for (ri, r) in ws.routines.iter().enumerate() {
         let ix = RoutineIx::of(ri);
         for (ci, cs) in r.call_sites.iter().enumerate() {
             let program_edge = j.calls.get(&(ri, ci));
+            if let Some(start) =
+                program_edge.and_then(|ce| conv.background_start(cs, ce, &background_edges))
+            {
+                background_starts.insert(cs.id.clone(), start);
+            }
             let converted = program_edge.and_then(|ce| {
                 let out = conv.call(ix, r, cs, ce, &mut c);
                 if out.is_none() {
@@ -1558,6 +1578,7 @@ fn convert<'a>(
             upgraded_bindings,
             diagnostics,
             external_targets: conv.targets.into_inner(),
+            background_starts: std::sync::Arc::new(background_starts),
         },
         c,
     )
@@ -1647,6 +1668,78 @@ impl<'a> Converter<'a> {
                 .map_or(Target::Outside, Target::Model),
             RouteTarget::Builtin(_) | RouteTarget::Unresolved => Target::Outside,
         }
+    }
+
+    /// F3: what the background start at `cs` starts, when its program call
+    /// `ce` resolved to a starter's catalog id (`background::starter_of_builtin`,
+    /// so a procedure named `StartSession` is none); `None` for any other call.
+    /// A literal codeunit is named by the object the start's own edge
+    /// (`ObligationId::Background`, same site) reaches, which the resolver
+    /// found from the caller's app as `Codeunit.Run` finds it. A literal the
+    /// edge reaches no routine of (an id no object declares, a codeunit
+    /// without `OnRun`) keeps its spelling: `Codeunit 50100`.
+    fn background_start(
+        &self,
+        cs: &PCallSite,
+        ce: &ClassifiedEdge,
+        background_edges: &HashMap<(&RoutineNodeId, &CanonicalSpan, u64), &ClassifiedEdge>,
+    ) -> Option<BackgroundStart> {
+        use crate::program::resolve::background::{self as bg, StartTarget};
+        let starter = ce.edge.routes.iter().find_map(|r| match &r.target {
+            RouteTarget::Builtin(b) => bg::starter_of_builtin(b),
+            _ => None,
+        })?;
+        let ObligationId::CallSite {
+            caller,
+            span,
+            callee_fp,
+        } = &ce.obligation_id
+        else {
+            return None;
+        };
+        // The objects the start's edge reaches (an object is the same whether
+        // its route is the failure codeunit's or not).
+        let reached: Vec<&ObjectNode> = background_edges
+            .get(&(caller, span, *callee_fp))
+            .into_iter()
+            .flat_map(|e| e.edge.routes.iter())
+            .filter_map(|r| {
+                let key = match &r.target {
+                    RouteTarget::Routine(rid) => object_key(&rid.object),
+                    RouteTarget::AbiSymbol { key } => (
+                        key.app,
+                        key.object_type.clone(),
+                        ObjKey::Id(key.object_number),
+                    ),
+                    _ => return None,
+                };
+                self.objects.get(&key).copied()
+            })
+            .collect();
+        let arg = |idx: usize, failure: bool| -> Option<StartedCodeunit> {
+            match bg::start_target_of_info(cs.argument_infos.get(idx), failure) {
+                StartTarget::None => None,
+                StartTarget::Dynamic => Some(StartedCodeunit::RunTime),
+                StartTarget::Literal {
+                    target_ref,
+                    is_name,
+                } => {
+                    let declared = reached.iter().find(|o| {
+                        if is_name {
+                            o.name.fold_identifier() == target_ref.fold_identifier()
+                        } else {
+                            matches!(&o.id.key, ObjKey::Id(n) if n.to_string() == target_ref)
+                        }
+                    });
+                    let name = declared.map_or(target_ref.clone(), |o| o.name.to_string());
+                    Some(StartedCodeunit::Literal(format!("Codeunit {name}")))
+                }
+            }
+        };
+        Some(BackgroundStart {
+            codeunit: arg(starter.codeunit_arg, false).unwrap_or(StartedCodeunit::RunTime),
+            on_failure: starter.failure_arg.and_then(|f| arg(f, true)),
+        })
     }
 
     fn type_ref(&self, key: &ObjectKey) -> Option<ExternalTypeRef> {

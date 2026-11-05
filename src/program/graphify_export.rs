@@ -841,6 +841,8 @@ fn relation_for(kind: EdgeKind, target: &RouteTarget) -> &'static str {
         EdgeKind::Run => "runs",
         EdgeKind::ImplicitTrigger => "triggers",
         EdgeKind::EventFlow => "raises_event",
+        // F3: the target runs in a new session or task, not in the caller's.
+        EdgeKind::BackgroundStart => "starts_background",
         EdgeKind::Call => match target {
             RouteTarget::Builtin(_) => "calls_builtin",
             RouteTarget::AbiSymbol { .. } => "calls_external",

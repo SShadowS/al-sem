@@ -35,7 +35,7 @@
 //! arc; a count that says "377" and a complete list is honest, a silently
 //! elided list is not.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::engine::l4::routine_interner::SolveIx;
 
@@ -81,8 +81,13 @@ use crate::program::resolve::full::LoadedDependencies;
 /// (`{depth, routine, outcome}`); `query effects` marks each row the cone
 /// judges (`literalRoute {status, coneFirstHop?}`, `byTable[].first.literalRoute`,
 /// `byTable[].literalRuledOut`, `summary.literalRoutes`), rows and `via`
-/// unchanged.
-const QUERY_SCHEMA_VERSION: &str = "3.2.0";
+/// unchanged. 3.3.0 (agent-tasks milestone D, additive): `touches --field`
+/// answers with `field`, `searched`, `fieldSummary`, `fieldTouches[]`,
+/// `declaredKeys[]`, `reasons[]` and, with no site, `absence`; a touches
+/// answer without `--field` keeps its shape. 3.4.0 (additive): a touches
+/// `up` names the caller relation its `transitiveCallers` counts
+/// (`up.relation: "code-calls"`, [`UP_RELATION`]).
+const QUERY_SCHEMA_VERSION: &str = "3.4.0";
 
 /// Which direction(s) a `query touches` run reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -231,6 +236,9 @@ enum QueryAsk<'a> {
         all: bool,
         /// `--callers` (step 1b): every caller named, no witness product.
         callers: bool,
+        /// `--field` (agent-tasks D): the field's consumers, not the table's
+        /// record operations ([`super::field_touches`]).
+        field: Option<&'a str>,
     },
     Effects {
         routine: &'a str,
@@ -276,8 +284,19 @@ impl<'a> QueryJob<'a> {
             direction,
             all,
             callers: false,
+            field: None,
         };
         Self::with(inputs, ask, alsem_ver, deterministic, single_app)
+    }
+
+    /// `query touches --field F` (agent-tasks D): every code consumer of
+    /// field `F` of the table, by use kind.
+    #[must_use]
+    pub fn field(mut self, selector: Option<&'a str>) -> QueryJob<'a> {
+        if let QueryAsk::Touches { field, .. } = &mut self.ask {
+            *field = selector;
+        }
+        self
     }
 
     /// `query touches --callers` (step 1b): name every transitive caller,
@@ -345,6 +364,24 @@ impl<'a> QueryJob<'a> {
         QueryJob { json, out, ..self }
     }
 
+    /// The view this job reads: the model, and with `--field --from` asked
+    /// up also the sited graph (of the universe asked: cross-app, or the
+    /// workspace alone), whose R0 reverse walk names the callers (as `alsem
+    /// tests` and impact read them). The solve graph names them only when
+    /// the graph did not build, which the answer states. The engine host's
+    /// pin rule is `alsem.rs`' `reads_sited`.
+    fn needs(&self) -> ViewNeeds {
+        match self.ask {
+            QueryAsk::Touches {
+                field: Some(_),
+                from: Some(_),
+                direction,
+                ..
+            } if direction.wants_up() => ViewNeeds::MODEL_SITED,
+            _ => ViewNeeds::MODEL,
+        }
+    }
+
     /// The job's result, through the driver.
     fn run(&self) -> Result<QueryRunResult, String> {
         crate::engine::batch::run_doc(self)
@@ -358,7 +395,7 @@ impl Job for QueryJob<'_> {
         "query"
     }
     fn demands(&self) -> Vec<ViewDemand> {
-        ViewDemand::one(self.inputs, self.single_app, false, ViewNeeds::MODEL)
+        ViewDemand::one(self.inputs, self.single_app, false, self.needs())
     }
 
     fn resolve(&self, _: SideIx, cx: &ResolveCx<'_>) -> Result<PlanPart, JobFailure> {
@@ -367,6 +404,25 @@ impl Job for QueryJob<'_> {
         // that root, for the writes beyond each dependency entry point. A
         // selector that does not resolve reads none (its answer is the
         // failure document, as before).
+        // Agent-tasks D: `--field` reads the model alone; with `--from` also
+        // the solve graph, for the routine's cone and callers. No tree.
+        if let QueryAsk::Touches {
+            field: Some(_),
+            from,
+            ..
+        } = self.ask
+        {
+            let (plan, reads) = if from.is_some() {
+                (query_plan(), vec![Cell::Rel, Cell::L4])
+            } else {
+                (crate::engine::session::field_plan(), Vec::new())
+            };
+            return Ok(PlanPart {
+                plan,
+                reads,
+                carry: None,
+            });
+        }
         let model = cx.model();
         let root = cone_root(model, &self.ask);
         let reads = if root.is_some() {
@@ -383,6 +439,52 @@ impl Job for QueryJob<'_> {
 
     fn compute(&self, _: SideIx, cx: &mut ViewCx<'_>) -> Result<SideDoc, JobFailure> {
         let workspace = cx.inputs().workspace.clone();
+        if let QueryAsk::Touches {
+            table,
+            field: Some(field),
+            from,
+            direction,
+            all,
+            ..
+        } = self.ask
+        {
+            let ask = FieldAsk {
+                table,
+                field,
+                from,
+                direction,
+                all,
+            };
+            let body = if from.is_some() {
+                // `Some(None)`: declared, its build did not finish.
+                let sited = self.needs().sited.then(|| cx.sited());
+                let substrate = released_substrate(cx);
+                let query = substrate.query();
+                render_field_touches(
+                    substrate.resolved(),
+                    &substrate.dependencies,
+                    Some((&query, sited)),
+                    &ask,
+                    self.alsem_ver,
+                    self.deterministic,
+                )
+            } else {
+                let view = cx.view();
+                render_field_touches(
+                    view.model(),
+                    &view.target().dependencies(),
+                    None,
+                    &ask,
+                    self.alsem_ver,
+                    self.deterministic,
+                )
+            };
+            let deps = cx.view().target().dependencies();
+            let sources = (self.show_source && !self.json)
+                .then(|| crate::engine::source_excerpt::SourceTexts::read(&workspace));
+            let result = finish_human(body, &deps, sources.as_ref());
+            return Ok(SideDoc::new(Ok::<_, String>(result)));
+        }
         let root: Option<String> = cx.take_carry();
         // The cone's entry first: the substrate below releases every cell
         // but `l4`, the tree's effects included.
@@ -399,6 +501,7 @@ impl Job for QueryJob<'_> {
                 direction,
                 all,
                 callers,
+                field: _,
             } => render_query_touches_body(
                 &substrate,
                 table,
@@ -2267,6 +2370,18 @@ fn render_touches_down(
     }
 }
 
+/// Which callers `up` names: the code-call relation of the solve graph
+/// (`program::impact_graph::reverse::is_code_call_site`), never R0's
+/// may-execute walk, which `alsem tests` and impact read. On local code the two
+/// differ only by what a user starts on a page a caller opens (CDO
+/// `WaitForMailLimit`: 964 against 1,030); the solve graph also does not
+/// follow a path through dependency code (86 more workspace callers there).
+/// Pinned by `reverse::caller_agreement_tests`.
+const UP_RELATION: &str = "code-calls";
+const UP_RELATION_LINE: &str = "  callers: by code calls of workspace code (calls, object runs and \
+     the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a \
+     caller opens, nor a path through dependency code (alsem tests and impact follow both)\n";
+
 /// `up`: every transitive caller probed ("has a summary row?", then
 /// "touches?"). When the routine touches the table itself (the trivial case)
 /// no caller witness is built: one counted line. Otherwise each touching
@@ -2308,6 +2423,8 @@ fn render_touches_up(
     };
     let mut up = Map::new();
     up.insert("scoped".into(), true.into());
+    // 3.4.0, additive: which caller relation `transitiveCallers` counts.
+    up.insert("relation".into(), UP_RELATION.into());
     up.insert("transitiveCallers".into(), callers.len().into());
     up.insert("callersTouching".into(), touching.into());
     up.insert("callersNotTouching".into(), not_touching.len().into());
@@ -2400,6 +2517,7 @@ fn render_touches_up(
         );
     }
     payload.insert("up".into(), Value::Object(up));
+    human.push_str(UP_RELATION_LINE);
 
     let names = |list: &[&CallerTouch<'_>]| -> String {
         let n = fold_len(list.len(), 3, all || list_callers);
@@ -3335,6 +3453,855 @@ fn render_query_effects_body(
     }
 }
 
+// ---------------------------------------------------------------------------
+// `alsem query touches --field` (agent-tasks design §7, milestone D)
+// ---------------------------------------------------------------------------
+
+/// What a `query touches --field` run asks.
+struct FieldAsk<'a> {
+    table: &'a str,
+    field: &'a str,
+    from: Option<&'a str>,
+    direction: Direction,
+    all: bool,
+}
+
+/// The human answer lists this many objects, and this many sites per object,
+/// before folding (`--all` lists every site).
+const FIELD_OBJECTS_CAP: usize = 12;
+const FIELD_SITES_PER_OBJECT_CAP: usize = 6;
+
+/// The `--from` scope of a field answer: each routine (model position) in
+/// the routine's cone (`down`) or among its callers (`up`).
+struct FieldScope {
+    routine: RoutineRef,
+    sides: HashMap<usize, &'static str>,
+    down: usize,
+    up: usize,
+    /// The routine has no row in the solve, so only its own body is read.
+    no_solve_row: bool,
+    /// How the callers were found: `reverse-walk` (R0 over the sited graph)
+    /// or `solve-graph` (single-app, or the sited graph did not build).
+    up_engine: &'static str,
+    /// Per caller (model position), the best tier R0 reached it by.
+    tiers: HashMap<usize, crate::program::impact_graph::reverse::Tier>,
+    /// R0 callers the model holds no body row for (symbol-only routines,
+    /// dependency code not loaded): their bodies are not searched.
+    up_not_in_model: usize,
+    /// R0 callers apps outside the program may call (public, protected,
+    /// internal with friends).
+    up_external: usize,
+    /// Nodes of the reverse cone that may run in a way no site shows.
+    up_hidden: usize,
+    /// The walk stopped at its budget or was cancelled.
+    up_limited: bool,
+    /// The sited graph was declared but did not build.
+    sited_missing: bool,
+}
+
+/// What R0's reverse walk reports for one root, as the field answer reads
+/// it: the best tier per node, external and hidden counts, a limit.
+#[derive(Default)]
+struct UpCollector {
+    best: HashMap<u32, crate::program::impact_graph::reverse::Tier>,
+    external: HashSet<u32>,
+    hidden: HashSet<u32>,
+    limited: bool,
+}
+
+impl crate::program::impact_graph::reverse::ConeVisitor for UpCollector {
+    fn reach(
+        &mut self,
+        _: u32,
+        s: crate::program::impact_graph::reverse::WalkState,
+        _: u32,
+        _: crate::program::impact_graph::reverse::Via,
+        _: Option<crate::program::impact_graph::reverse::WalkState>,
+    ) {
+        let e = self.best.entry(s.node).or_insert(s.tier);
+        *e = (*e).min(s.tier);
+    }
+    fn hidden(&mut self, _: u32, n: u32, _: crate::program::impact_graph::reverse::HiddenChannel) {
+        self.hidden.insert(n);
+    }
+    fn external(
+        &mut self,
+        _: u32,
+        n: u32,
+        _: crate::program::impact_graph::reverse::ExternalWhy,
+        _: crate::program::impact_graph::reverse::WalkState,
+        _: u32,
+    ) {
+        self.external.insert(n);
+    }
+    fn limit(&mut self, _: crate::program::impact_graph::reverse::Limit) {
+        self.limited = true;
+    }
+}
+
+/// The `--from` scope: the routine and its transitive callees over the solve
+/// graph (`down`: dependency code in the solve is a leaf one routine deep,
+/// and a call not resolved has no edge), and its transitive callers (`up`)
+/// by R0's reverse walk over the sited graph when it is given, as `alsem
+/// tests` and impact read them (through dependency code, with tiers), else
+/// over the solve graph.
+fn field_scope(
+    model: &Model,
+    query: &DbEffectQuery<'_>,
+    sited: Option<Option<&crate::program::impact_graph::SitedGraph>>,
+    r: &ModelRoutine,
+    direction: Direction,
+    join: &RoutineJoin<'_>,
+) -> FieldScope {
+    let ix_of: HashMap<&str, usize> = model
+        .workspace
+        .routines
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (r.id.as_str(), i))
+        .collect();
+    let mut sides: HashMap<usize, &'static str> = HashMap::new();
+    let (mut down, mut up) = (0, 0);
+    let mut scope = FieldScope {
+        routine: join.of(r),
+        sides: HashMap::new(),
+        down: 0,
+        up: 0,
+        no_solve_row: false,
+        up_engine: "solve-graph",
+        tiers: HashMap::new(),
+        up_not_in_model: 0,
+        up_external: 0,
+        up_hidden: 0,
+        up_limited: false,
+        sited_missing: matches!(sited, Some(None)),
+    };
+    // Up by R0 when the sited graph is given (before the solve's own rows:
+    // a routine with no solve row still has callers).
+    let r0_up = match sited {
+        Some(Some(g)) if direction.wants_up() => Some(g),
+        _ => None,
+    };
+    if let Some(g) = r0_up {
+        use crate::program::impact_graph::reverse::{WalkOptions, WalkScratch, walk_one};
+        scope.up_engine = "reverse-walk";
+        let by_stable: HashMap<&str, Vec<usize>> = model
+            .workspace
+            .routines
+            .iter()
+            .enumerate()
+            .fold(HashMap::new(), |mut m, (i, x)| {
+                m.entry(x.stable_routine_id.as_str()).or_default().push(i);
+                m
+            });
+        let roots = g.nodes_with_stable_id(&r.stable_routine_id);
+        let mut c = UpCollector::default();
+        if let Some(&root) = roots.first() {
+            walk_one(
+                g,
+                root,
+                &WalkOptions::default(),
+                &mut WalkScratch::default(),
+                &mut c,
+            );
+            for (&n, &tier) in &c.best {
+                if n == root || g.universal_hub() == Some(n) {
+                    continue;
+                }
+                let at = g
+                    .stable_id(n)
+                    .and_then(|id| by_stable.get(id.as_str()))
+                    .filter(|ixs| {
+                        ixs.iter()
+                            .any(|&i| model.workspace.routines[i].body_available)
+                    });
+                match at {
+                    Some(ixs) => {
+                        for &i in ixs {
+                            sides.insert(i, "up");
+                            scope.tiers.insert(i, tier);
+                        }
+                        up += 1;
+                    }
+                    None if g.stable_id(n).is_some() => scope.up_not_in_model += 1,
+                    None => {}
+                }
+            }
+        }
+        scope.up_external = c.external.len();
+        scope.up_hidden = c.hidden.len();
+        scope.up_limited = c.limited;
+    }
+    let Some(rix) = query.routine_ix(&r.id) else {
+        if let Some(&i) = ix_of.get(r.id.as_str()) {
+            sides.insert(i, "down");
+        }
+        return FieldScope {
+            sides,
+            down: 1,
+            up,
+            no_solve_row: true,
+            ..scope
+        };
+    };
+    let model_ix = |s: SolveIx| ix_of.get(query.bundle().routine_id(s)).copied();
+    if direction.wants_up() && r0_up.is_none() {
+        for (_, a) in query.ancestors(rix) {
+            if let Some(i) = model_ix(a) {
+                sides.insert(i, "up");
+                up += 1;
+            }
+        }
+    }
+    if direction.wants_down() {
+        let mut seen: BTreeSet<SolveIx> = BTreeSet::new();
+        let mut stack = vec![rix];
+        while let Some(s) = stack.pop() {
+            if !seen.insert(s) {
+                continue;
+            }
+            if let Some(i) = model_ix(s) {
+                // A routine in both the cone and the callers (a cycle) is
+                // reported as down: its body runs below R too.
+                sides.insert(i, "down");
+            }
+            stack.extend(query.direct_callees(s).iter().copied());
+        }
+        down = seen.len();
+    }
+    FieldScope {
+        sides,
+        down,
+        up,
+        ..scope
+    }
+}
+
+/// A use list as text: `read+write`.
+fn uses_text(uses: &[crate::program::body::record_op::FieldUse]) -> String {
+    uses.iter()
+        .map(|u| u.as_str())
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+/// What `--from` walks: the solve, and the sited graph when the demand
+/// declared it (`Some(None)`: declared, not built).
+type FromGraphs<'q, 'g> = (
+    &'q DbEffectQuery<'q>,
+    Option<Option<&'g crate::program::impact_graph::SitedGraph>>,
+);
+
+fn render_field_touches(
+    model: &Model,
+    deps: &LoadedDependencies,
+    query: Option<FromGraphs<'_, '_>>,
+    ask: &FieldAsk<'_>,
+    alsem_ver: &str,
+    deterministic: bool,
+) -> QueryRunResult {
+    use super::field_touches::{self as ft, Candidate, TempClass};
+    use crate::program::body::record_op::FieldUse;
+    const KIND: &str = "query.touches";
+    if ask.from.is_none() && ask.direction == Direction::Down {
+        let payload = json!({
+            "direction": ask.direction.as_str(),
+            "from": Value::Null,
+            "error": "a `down` query is about one routine's cone — pass --from <routine>, \
+                      or omit --direction for every consumer",
+        });
+        return QueryRunResult {
+            json_text: envelope(KIND, payload, deps, alsem_ver, deterministic),
+            human_text: "query.touches: --direction down requires --from <routine>\n".to_string(),
+            exit_code: 2,
+            summary: Value::Null,
+            ancestor_witnesses_built: 0,
+        };
+    }
+    let table_ref = match resolve_table_selector(model, ask.table) {
+        Resolution::Resolved(t) if !is_unknown_table(&t.id) => t,
+        Resolution::Resolved(_) => {
+            let payload = json!({
+                "table": {"selector": ask.table, "resolution": "unknown-bucket"},
+                "error": "--field needs a table: `unknown` is the bucket of operations whose \
+                          table is not resolved",
+            });
+            return QueryRunResult {
+                json_text: envelope(KIND, payload, deps, alsem_ver, deterministic),
+                human_text: "query.touches: --field needs a table, not the `unknown` bucket\n"
+                    .to_string(),
+                exit_code: 2,
+                summary: Value::Null,
+                ancestor_witnesses_built: 0,
+            };
+        }
+        other => {
+            return selector_failure_doc(
+                KIND,
+                "table",
+                ask.table,
+                &other,
+                deps,
+                alsem_ver,
+                deterministic,
+            );
+        }
+    };
+    let tables = table_by_id_preferring_real(&model.workspace.tables);
+    let table = tables[table_ref.id.as_str()];
+    let field = match ft::resolve_field(table, ask.field) {
+        Ok(f) => f,
+        Err(candidates) => {
+            let res: Resolution<()> = if candidates.is_empty() {
+                Resolution::Unmatched
+            } else {
+                Resolution::Ambiguous(candidates)
+            };
+            return selector_failure_doc(
+                KIND,
+                "field",
+                ask.field,
+                &res,
+                deps,
+                alsem_ver,
+                deterministic,
+            );
+        }
+    };
+    let join = RoutineJoin::build(model);
+    let scope = match ask.from {
+        None => None,
+        Some(sel) => match resolve_routine_selector(model, &join.declaring, sel) {
+            Resolution::Resolved(r) => {
+                let (q, sited) = query.expect("--field --from reads the solve (`query_plan`)");
+                Some(field_scope(model, q, sited, r, ask.direction, &join))
+            }
+            other => {
+                return selector_failure_doc(
+                    KIND,
+                    "from",
+                    sel,
+                    &other,
+                    deps,
+                    alsem_ver,
+                    deterministic,
+                );
+            }
+        },
+    };
+
+    let in_scope = |ix: usize| scope.as_ref().is_none_or(|sc| sc.sides.contains_key(&ix));
+    let answer = ft::field_touches(model, table, field, &in_scope);
+    let routines = &model.workspace.routines;
+    let mut sites: Vec<(&ft::FieldSite<'_>, RoutineRef, Option<&'static str>)> = answer
+        .sites
+        .iter()
+        .map(|s| {
+            let side = scope
+                .as_ref()
+                .and_then(|sc| sc.sides.get(&s.routine_ix).copied());
+            (s, join.of(&routines[s.routine_ix]), side)
+        })
+        .collect();
+    sites.sort_by(|a, b| {
+        (
+            &a.1.object_display,
+            &a.1.display,
+            &a.0.anchor.source_unit_id,
+            a.0.anchor.start_line,
+            a.0.anchor.start_column,
+        )
+            .cmp(&(
+                &b.1.object_display,
+                &b.1.display,
+                &b.0.anchor.source_unit_id,
+                b.0.anchor.start_line,
+                b.0.anchor.start_column,
+            ))
+    });
+
+    // Counts: sites, uses, temp classes, candidates.
+    let site_list: Vec<ft::FieldSite<'_>> = sites.iter().map(|(s, _, _)| (*s).clone()).collect();
+    let use_counts = ft::use_counts(&site_list);
+    let read_write_sites = site_list
+        .iter()
+        .filter(|s| s.uses.contains(&FieldUse::Read) && s.uses.contains(&FieldUse::Write))
+        .count();
+    let mut temp_counts: BTreeMap<TempClass, usize> = BTreeMap::new();
+    let mut candidate_counts: BTreeMap<Candidate, usize> = BTreeMap::new();
+    for s in &site_list {
+        *temp_counts.entry(s.temp).or_insert(0) += 1;
+        if let Some(c) = s.candidate {
+            *candidate_counts.entry(c).or_insert(0) += 1;
+        }
+    }
+    let candidates: usize = candidate_counts.values().sum();
+    let routine_set: BTreeSet<usize> = site_list.iter().map(|s| s.routine_ix).collect();
+    let object_set: BTreeSet<&str> = sites
+        .iter()
+        .map(|(_, r, _)| r.object_display.as_str())
+        .collect();
+
+    // What was searched.
+    let cov = &answer.coverage;
+    let cross_app = !deps.apps.is_empty();
+    let mut not_searched: Vec<Value> = ft::NOT_SEARCHED
+        .iter()
+        .map(|(k, w)| json!({"kind": k, "what": w}))
+        .collect();
+    let mut not_searched_human: Vec<String> = vec![
+        "CalcFormula, TableRelation, page/report/query/XMLport columns (declaration-level)"
+            .to_string(),
+    ];
+    if cross_app {
+        not_searched.push(json!({"kind": "dependency-code-not-demanded",
+            "what": "dependency code the workspace does not call is not loaded"}));
+        not_searched_human.push("dependency code the workspace does not call (not loaded)".into());
+    } else {
+        not_searched.push(json!({"kind": "dependency-code",
+            "what": "no dependency code is loaded (single-app, or no dependency)"}));
+        not_searched_human.push("dependency code (none loaded)".into());
+    }
+    if cov.dependency_without_body > 0 {
+        not_searched.push(json!({"kind": "routines-without-body",
+            "routines": cov.dependency_without_body}));
+        not_searched_human.push(format!(
+            "{} known by symbols only",
+            plural(
+                cov.dependency_without_body,
+                "dependency routine",
+                "dependency routines"
+            )
+        ));
+    }
+    let scope_label = match &scope {
+        None => "every routine body".to_string(),
+        Some(sc) => {
+            let mut parts = Vec::new();
+            if ask.direction.wants_down() {
+                parts.push(format!(
+                    "{}'s cone by the solve graph ({})",
+                    sc.routine.qualified(),
+                    plural(sc.down, "routine", "routines")
+                ));
+            }
+            if ask.direction.wants_up() {
+                use crate::program::impact_graph::reverse::Tier;
+                if sc.up_engine == "reverse-walk" {
+                    let tier_n = |t: Tier| sc.tiers.values().filter(|x| **x == t).count();
+                    parts.push(format!(
+                        "its callers by the reverse walk ({} with a body: local {}, through \
+                         dependency code {}, only through an open site {}; {} more without a body \
+                         in the model)",
+                        plural(sc.up, "routine", "routines"),
+                        tier_n(Tier::Local),
+                        tier_n(Tier::ThroughDependency),
+                        tier_n(Tier::OnlyOpen),
+                        sc.up_not_in_model
+                    ));
+                } else {
+                    parts.push(format!(
+                        "its callers by the solve graph ({})",
+                        plural(sc.up, "routine", "routines")
+                    ));
+                }
+            }
+            parts.join(" and ")
+        }
+    };
+
+    // Why an answer is not a whole "no" (and what may hide more).
+    let mut reasons: Vec<(Value, String)> = vec![(
+        json!({"kind": "declaration-consumers-not-searched"}),
+        "declaration-level consumers (CalcFormula, TableRelation, columns) are not searched"
+            .to_string(),
+    )];
+    if cross_app {
+        reasons.push((
+            json!({"kind": "dependency-code-not-demanded"}),
+            "dependency code the workspace does not call is not loaded".to_string(),
+        ));
+    }
+    if cov.by_number_not_literal > 0 {
+        reasons.push((
+            json!({"kind": "by-number-not-literal", "sites": cov.by_number_not_literal}),
+            format!(
+                "{} RecordRef.Field with a number that is not a literal (any field; not matched)",
+                plural(cov.by_number_not_literal, "site uses", "sites use")
+            ),
+        ));
+    }
+    if let Some(sc) = &scope {
+        if ask.direction.wants_down() || sc.up_engine == "solve-graph" {
+            reasons.push((
+                json!({"kind": "resolved-call-graph", "noSolveRow": sc.no_solve_row}),
+                if sc.no_solve_row && ask.direction.wants_down() {
+                    "the routine has no row in the call graph: only its own body was read in its \
+                     cone"
+                        .to_string()
+                } else {
+                    "the solve graph is the resolved call graph: calls not resolved, and \
+                     dependency code deeper than one routine, are not followed"
+                        .to_string()
+                },
+            ));
+        }
+        if ask.direction.wants_up() {
+            if sc.sited_missing {
+                reasons.push((
+                    json!({"kind": "sited-graph-not-built"}),
+                    "the sited graph did not build: callers by the solve graph, dependency code \
+                     one routine deep"
+                        .to_string(),
+                ));
+            }
+            if sc.up_not_in_model > 0 {
+                reasons.push((
+                    json!({"kind": "callers-without-body", "routines": sc.up_not_in_model}),
+                    format!(
+                        "{} the model holds no body for are not searched",
+                        plural(sc.up_not_in_model, "caller", "callers")
+                    ),
+                ));
+            }
+            if sc.up_external > 0 {
+                reasons.push((
+                    json!({"kind": "external-callers", "routines": sc.up_external}),
+                    format!(
+                        "{} may also be called by apps outside the program",
+                        plural(
+                            sc.up_external,
+                            "routine in the reverse cone",
+                            "routines in the reverse cone"
+                        )
+                    ),
+                ));
+            }
+            if sc.up_hidden > 0 {
+                reasons.push((
+                    json!({"kind": "hidden-callers", "nodes": sc.up_hidden}),
+                    format!(
+                        "{} in the reverse cone may run in a way no call site shows",
+                        plural(sc.up_hidden, "node", "nodes")
+                    ),
+                ));
+            }
+            if sc.up_limited {
+                reasons.push((
+                    json!({"kind": "reverse-walk-limited"}),
+                    "the reverse walk stopped at its budget: callers beyond it are not listed"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+
+    // JSON.
+    let site_json: Vec<Value> = sites
+        .iter()
+        .map(|(s, rr, side)| {
+            let mut v = json!({
+                "kind": s.uses.first().map_or("", |u| u.as_str()),
+                "uses": s.uses.iter().map(|u| u.as_str()).collect::<Vec<_>>(),
+                "site": {
+                    "file": s.anchor.source_unit_id,
+                    "line": shown(s.anchor.start_line),
+                    "column": s.anchor.start_column,
+                },
+                "routine": routine_ref_json(rr),
+                "object": rr.object_display,
+                "record": s.record,
+                "source": s.source,
+                "tempState": s.temp.as_str(),
+                "candidate": s.candidate.map(Candidate::as_str),
+                "role": s.role.as_str(),
+            });
+            if let Some(side) = s.copy_side {
+                v["copySide"] = match side {
+                    ft::CopySide::Receiver => "receiver".into(),
+                    ft::CopySide::Source => "source".into(),
+                };
+            }
+            if let Some(side) = side {
+                v["scope"] = (*side).into();
+            }
+            if let Some(t) = scope
+                .as_ref()
+                .filter(|_| *side == Some("up"))
+                .and_then(|sc| sc.tiers.get(&s.routine_ix))
+            {
+                v["tier"] = t.as_str().into();
+            }
+            v
+        })
+        .collect();
+    let field_name_of = |id: &str| {
+        table
+            .fields
+            .iter()
+            .find(|f| f.id == id)
+            .map_or(id.to_string(), |f| f.name.clone())
+    };
+    let keys_json: Vec<Value> = answer
+        .declared_keys
+        .iter()
+        .map(|&i| {
+            let k = &table.keys[i];
+            json!({"id": k.id, "fields": k.fields.iter().map(|f| field_name_of(f)).collect::<Vec<_>>()})
+        })
+        .collect();
+    let uses_json: Map<String, Value> = use_counts
+        .iter()
+        .map(|(u, n)| (u.as_str().to_string(), (*n).into()))
+        .collect();
+    let temp_json: Map<String, Value> = temp_counts
+        .iter()
+        .map(|(t, n)| (t.as_str().to_string(), (*n).into()))
+        .collect();
+    let cand_json: Map<String, Value> = candidate_counts
+        .iter()
+        .map(|(c, n)| (c.as_str().to_string(), (*n).into()))
+        .collect();
+    let mut payload = Map::new();
+    payload.insert(
+        "table".into(),
+        json!({
+            "selector": ask.table,
+            "id": table.id,
+            "name": table.name,
+            "isUnknownBucket": false,
+            "resolution": "resolved",
+        }),
+    );
+    payload.insert(
+        "field".into(),
+        json!({
+            "selector": ask.field,
+            "id": field.id,
+            "number": field.field_number,
+            "name": field.name,
+            "dataType": field.data_type,
+            "fieldClass": field.field_class,
+            "resolution": "resolved",
+        }),
+    );
+    payload.insert("direction".into(), ask.direction.as_str().into());
+    payload.insert(
+        "from".into(),
+        match &scope {
+            None => Value::Null,
+            Some(sc) => json!({
+                "selector": ask.from.unwrap_or(""),
+                "resolution": "resolved",
+                "routine": routine_ref_json(&sc.routine),
+            }),
+        },
+    );
+    let kinds: Vec<&str> = [
+        FieldUse::Read,
+        FieldUse::Write,
+        FieldUse::Validate,
+        FieldUse::Filter,
+        FieldUse::KeyUse,
+        FieldUse::Load,
+        FieldUse::Calc,
+        FieldUse::Rule,
+        FieldUse::Metadata,
+        FieldUse::CopyCandidate,
+        FieldUse::ByNumber,
+    ]
+    .iter()
+    .map(|u| u.as_str())
+    .chain(["declared-key"])
+    .collect();
+    payload.insert(
+        "searched".into(),
+        json!({
+            "scope": scope_label,
+            "workspaceRoutineBodies": cov.workspace_bodies,
+            "dependencyRoutineBodies": cov.dependency_bodies,
+            "kinds": kinds,
+            "notSearched": not_searched,
+        }),
+    );
+    payload.insert(
+        "fieldSummary".into(),
+        json!({
+            "sites": site_list.len(),
+            "routines": routine_set.len(),
+            "objects": object_set.len(),
+            "uses": uses_json,
+            "readWriteSites": read_write_sites,
+            "sitesByTempState": temp_json,
+            "candidates": candidates,
+            "candidatesByReason": cand_json,
+            "byNumberNotLiteral": cov.by_number_not_literal,
+            "fieldIndexSites": cov.field_index_sites,
+            "declaredKeys": keys_json.len(),
+        }),
+    );
+    payload.insert("fieldTouches".into(), Value::Array(site_json));
+    payload.insert("declaredKeys".into(), Value::Array(keys_json));
+    payload.insert(
+        "reasons".into(),
+        Value::Array(reasons.iter().map(|r| r.0.clone()).collect()),
+    );
+    if site_list.is_empty() {
+        payload.insert(
+            "absence".into(),
+            json!({
+                "answer": "unknown",
+                "statement": "no indexed consumer observed",
+                "reasons": reasons.iter().map(|r| r.0.clone()).collect::<Vec<_>>(),
+            }),
+        );
+    }
+
+    // Human.
+    let mut human = format!(
+        "--- touches field {} \"{}\" of {} ({}) ---\n",
+        field.field_number, field.name, table.name, table.id
+    );
+    human.push_str(&format!(
+        "  field: {}, {}\n",
+        field.data_type, field.field_class
+    ));
+    human.push_str(&format!(
+        "  searched: {}, {} (scope: {scope_label}); not searched: {}\n",
+        plural(
+            cov.workspace_bodies,
+            "workspace routine body",
+            "workspace routine bodies"
+        ),
+        plural(
+            cov.dependency_bodies,
+            "dependency routine body",
+            "dependency routine bodies"
+        ),
+        not_searched_human.join("; ")
+    ));
+    if site_list.is_empty() {
+        human.push_str(
+            "  consumers: no indexed consumer observed, which is not proof of absence:\n",
+        );
+        for (_, text) in &reasons {
+            human.push_str(&format!("    {text}\n"));
+        }
+    } else {
+        let uses_h: Vec<String> = use_counts
+            .iter()
+            .map(|(u, n)| {
+                if *u == FieldUse::Write && read_write_sites > 0 {
+                    format!("{} {n} ({read_write_sites} also read)", u.as_str())
+                } else {
+                    format!("{} {n}", u.as_str())
+                }
+            })
+            .collect();
+        let temp_h: Vec<String> = temp_counts
+            .iter()
+            .map(|(t, n)| format!("{} {n}", t.as_str()))
+            .collect();
+        let cand_h = if candidates == 0 {
+            String::new()
+        } else {
+            let by: Vec<String> = candidate_counts
+                .iter()
+                .map(|(c, n)| format!("{} {n}", c.as_str()))
+                .collect();
+            format!("; candidates: {candidates} ({})", by.join(", "))
+        };
+        human.push_str(&format!(
+            "  consumers: {} in {} of {} — uses: {}; records: {}{cand_h}\n",
+            plural(site_list.len(), "site", "sites"),
+            plural(routine_set.len(), "routine", "routines"),
+            plural(object_set.len(), "object", "objects"),
+            uses_h.join(", "),
+            temp_h.join(", "),
+        ));
+        for (_, text) in reasons.iter().skip(1) {
+            human.push_str(&format!("  note: {text}\n"));
+        }
+    }
+    if !answer.declared_keys.is_empty() {
+        let keys: Vec<String> = answer
+            .declared_keys
+            .iter()
+            .map(|&i| {
+                let k = &table.keys[i];
+                let names: Vec<String> = k.fields.iter().map(|f| field_name_of(f)).collect();
+                format!("key {} ({})", i + 1, names.join(", "))
+            })
+            .collect();
+        human.push_str(&format!("  declared keys: {}\n", keys.join("; ")));
+    }
+    // Per object, folded unless --all.
+    let mut by_object: Vec<(&str, Vec<usize>)> = Vec::new();
+    for (i, (_, rr, _)) in sites.iter().enumerate() {
+        match by_object.last_mut() {
+            Some((o, v)) if *o == rr.object_display.as_str() => v.push(i),
+            _ => by_object.push((rr.object_display.as_str(), vec![i])),
+        }
+    }
+    let shown_objects = fold_len(by_object.len(), FIELD_OBJECTS_CAP, ask.all);
+    for (object, ixs) in &by_object[..shown_objects] {
+        let obj_sites: Vec<ft::FieldSite<'_>> = ixs.iter().map(|&i| sites[i].0.clone()).collect();
+        let obj_uses: Vec<String> = ft::use_counts(&obj_sites)
+            .iter()
+            .map(|(u, n)| format!("{} {n}", u.as_str()))
+            .collect();
+        let obj_routines: BTreeSet<usize> = obj_sites.iter().map(|s| s.routine_ix).collect();
+        human.push_str(&format!(
+            "  {object}: {} in {} ({})\n",
+            plural(ixs.len(), "site", "sites"),
+            plural(obj_routines.len(), "routine", "routines"),
+            obj_uses.join(", ")
+        ));
+        let shown_sites = fold_len(ixs.len(), FIELD_SITES_PER_OBJECT_CAP, ask.all);
+        for &i in &ixs[..shown_sites] {
+            let (s, rr, side) = &sites[i];
+            let mut extra = vec![s.temp.as_str().to_string(), s.source.clone()];
+            if let Some(c) = s.candidate {
+                extra.push(format!("candidate: {}", c.as_str()));
+            }
+            if let Some(side) = side {
+                match scope.as_ref().and_then(|sc| sc.tiers.get(&s.routine_ix)) {
+                    Some(t) if *side == "up" => extra.push(format!("up, {}", t.as_str())),
+                    _ => extra.push((*side).to_string()),
+                }
+            }
+            human.push_str(&format!(
+                "    {} {}:{} {} [{}]\n",
+                rr.display,
+                s.anchor.source_unit_id,
+                shown(s.anchor.start_line),
+                uses_text(&s.uses),
+                extra.join(", ")
+            ));
+        }
+        if shown_sites < ixs.len() {
+            human.push_str(&format!(
+                "    … +{} — --all lists them\n",
+                plural(ixs.len() - shown_sites, "site", "sites")
+            ));
+        }
+    }
+    if shown_objects < by_object.len() {
+        human.push_str(&format!(
+            "  … +{} — --all lists every site\n",
+            plural(by_object.len() - shown_objects, "object", "objects")
+        ));
+    }
+    let summary = touches_summary(&payload);
+    QueryRunResult {
+        json_text: envelope(KIND, Value::Object(payload), deps, alsem_ver, deterministic),
+        human_text: human,
+        exit_code: 0,
+        summary,
+        ancestor_witnesses_built: 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3652,5 +4619,73 @@ mod tests {
             Resolution::Resolved(t) => assert_eq!(t.name.as_deref(), Some("Real Table")),
             other => panic!("{other:?}"),
         }
+    }
+
+    /// Agent-tasks D (coordinator review): `touches --field --from R
+    /// --direction up` takes R's callers from R0's reverse walk over the
+    /// sited graph (`program::impact_graph::reverse`, as `alsem tests`
+    /// reads them) cross-app, and from the solve graph single-app, where no
+    /// sited graph is built. On code both see the same way (a workspace with
+    /// no dependency: two call hops, an event publisher and its subscriber)
+    /// the two must name the same callers; on CDO they differ through
+    /// dependency code, which the solve keeps one routine deep (spec §7.3a).
+    #[test]
+    fn field_callers_agree_with_the_reverse_walk_on_local_code() {
+        use crate::program::impact_graph::reverse::{Recorder, WalkOptions, WalkScratch, walk_one};
+        let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/field-touches/ws");
+        let inputs = std::sync::Arc::new(crate::program::inputs::WorkspaceInputs::read(
+            &ws,
+            &Default::default(),
+        ));
+        // The solve graph's callers, as the answer computes them.
+        let view = query_view(&inputs, false).expect("view");
+        let substrate = QuerySubstrate::of(&view);
+        let model = substrate.resolved();
+        let query = substrate.query();
+        let join = RoutineJoin::build(model);
+        let kinds = model
+            .workspace
+            .routines
+            .iter()
+            .find(|r| r.name == "Kinds")
+            .expect("Kinds");
+        let ids = |sc: &FieldScope| -> BTreeSet<String> {
+            sc.sides
+                .keys()
+                .map(|&i| model.workspace.routines[i].stable_routine_id.clone())
+                .collect()
+        };
+        // R0's callers over the sited graph of the same workspace.
+        let program = crate::program::resolved::ResolvedProgram::build(
+            &inputs,
+            crate::program::resolved::ProgramScope::CrossApp,
+        )
+        .expect("program");
+        let g = crate::program::impact_graph::sited_from_program(&program, &|| false)
+            .expect("sited graph");
+        let root = g.nodes_with_stable_id(&kinds.stable_routine_id)[0];
+        let mut rec = Recorder::default();
+        walk_one(
+            &g,
+            root,
+            &WalkOptions::default(),
+            &mut WalkScratch::default(),
+            &mut rec,
+        );
+        let r0: BTreeSet<String> = rec
+            .states
+            .iter()
+            .filter(|s| s.1.node != root)
+            .filter_map(|s| g.stable_id(s.1.node))
+            .collect();
+        // The answer's callers, by each engine.
+        let by_r0 = field_scope(model, &query, Some(Some(&g)), kinds, Direction::Up, &join);
+        let by_solve = field_scope(model, &query, None, kinds, Direction::Up, &join);
+        assert_eq!(by_r0.up_engine, "reverse-walk");
+        assert_eq!(by_solve.up_engine, "solve-graph");
+        assert_eq!(r0.len(), 4, "the fixture's callers: {r0:?}");
+        assert_eq!(ids(&by_r0), r0, "the answer reads the reverse walk");
+        assert_eq!(ids(&by_solve), r0, "on local code the solve graph agrees");
     }
 }

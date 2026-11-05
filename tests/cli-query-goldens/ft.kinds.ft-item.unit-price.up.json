@@ -1,0 +1,147 @@
+{
+  "alsemVersion": "cli-query-v1",
+  "deterministic": true,
+  "generatedAt": "1970-01-01T00:00:00Z",
+  "kind": "query.touches",
+  "payload": {
+    "declaredKeys": [
+      {
+        "fields": [
+          "Amount",
+          "Unit Price"
+        ],
+        "id": "08080808-0000-4000-8000-000000000081/table/50800/key/1"
+      }
+    ],
+    "dependencies": {
+      "apps": [],
+      "mode": "crossApp"
+    },
+    "direction": "up",
+    "field": {
+      "dataType": "Decimal",
+      "fieldClass": "Normal",
+      "id": "08080808-0000-4000-8000-000000000081/table/50800/3",
+      "name": "Unit Price",
+      "number": 3,
+      "resolution": "resolved",
+      "selector": "Unit Price"
+    },
+    "fieldSummary": {
+      "byNumberNotLiteral": 0,
+      "candidates": 0,
+      "candidatesByReason": {},
+      "declaredKeys": 1,
+      "fieldIndexSites": 0,
+      "objects": 1,
+      "readWriteSites": 0,
+      "routines": 1,
+      "sites": 1,
+      "sitesByTempState": {
+        "persistent": 1
+      },
+      "uses": {
+        "write": 1
+      }
+    },
+    "fieldTouches": [
+      {
+        "kind": "write",
+        "object": "Codeunit FT Callers",
+        "record": "I",
+        "role": "primary",
+        "routine": {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/FTFields.al",
+            "line": 130
+          },
+          "display": "CallsKinds",
+          "objectDisplay": "Codeunit FT Callers",
+          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50801#e5a6540abf796ad2f364c8a758d938ce762720975b1a9b4368dd599c5ee823ed"
+        },
+        "scope": "up",
+        "site": {
+          "column": 8,
+          "file": "ws:src/FTFields.al",
+          "line": 135
+        },
+        "source": "access",
+        "tempState": "persistent",
+        "tier": "local",
+        "uses": [
+          "write"
+        ]
+      }
+    ],
+    "from": {
+      "resolution": "resolved",
+      "routine": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/FTFields.al",
+          "line": 60
+        },
+        "display": "Kinds",
+        "objectDisplay": "Codeunit FT Consumers",
+        "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+      },
+      "selector": "Kinds"
+    },
+    "lineBase": 1,
+    "reasons": [
+      {
+        "kind": "declaration-consumers-not-searched"
+      },
+      {
+        "kind": "external-callers",
+        "routines": 3
+      }
+    ],
+    "searched": {
+      "dependencyRoutineBodies": 0,
+      "kinds": [
+        "read",
+        "write",
+        "validate",
+        "filter",
+        "key-use",
+        "load",
+        "calc",
+        "rule",
+        "metadata",
+        "copy-candidate",
+        "by-number",
+        "declared-key"
+      ],
+      "notSearched": [
+        {
+          "kind": "calcformula",
+          "what": "CalcFormula of FlowFields (declaration-level, D2)"
+        },
+        {
+          "kind": "tablerelation",
+          "what": "TableRelation properties (declaration-level, D2)"
+        },
+        {
+          "kind": "columns",
+          "what": "page, report, query and XMLport columns and controls (declaration-level, D2)"
+        },
+        {
+          "kind": "dependency-code",
+          "what": "no dependency code is loaded (single-app, or no dependency)"
+        }
+      ],
+      "scope": "its callers by the reverse walk (4 routines with a body: local 4, through dependency code 0, only through an open site 0; 0 more without a body in the model)",
+      "workspaceRoutineBodies": 4
+    },
+    "table": {
+      "id": "08080808-0000-4000-8000-000000000081/table/50800",
+      "isUnknownBucket": false,
+      "name": "FT Item",
+      "resolution": "resolved",
+      "selector": "FT Item"
+    }
+  },
+  "schemaVersion": "3.4.0"
+}

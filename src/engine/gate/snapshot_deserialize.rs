@@ -208,7 +208,7 @@ fn unwrap_snapshot_document(tree: &CborValue) -> CborValue {
 // IndexMap is acceptable for the JSON path.
 // ===========================================================================
 
-fn json_to_cbor(v: &serde_json::Value) -> CborValue {
+pub(crate) fn json_to_cbor(v: &serde_json::Value) -> CborValue {
     match v {
         serde_json::Value::Null => CborValue::Null,
         serde_json::Value::Bool(b) => CborValue::Bool(*b),

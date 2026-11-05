@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -362,6 +362,44 @@ struct Shared {
     /// `scope.testConfig`): `alsem_status` compares it with the disk
     /// (category `test-config`, milestone C item 3).
     test_configs: Mutex<HashMap<String, Value>>,
+    /// One-shot children alive or admitted (an impact base child,
+    /// agent-tasks B2 §10.6 step 3): each holds one place of the children
+    /// bound, so the bound (and with it `--total-budget`) is never
+    /// oversubscribed.
+    oneshots: AtomicUsize,
+}
+
+/// A one-shot child's place in the children bound, released on drop.
+pub struct OneShotSlot<'a> {
+    shared: &'a Shared,
+}
+
+impl Drop for OneShotSlot<'_> {
+    fn drop(&mut self) {
+        self.shared.oneshots.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// What admitting a one-shot child does now (a pure rule, so it is tested
+/// apart): admit it, end an idle engine child first, or wait.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Admit {
+    Now,
+    Evict,
+    Wait,
+}
+
+/// The admission rule: `live` engine children (of which `idle` have nothing
+/// to do), `oneshots` one-shot children, `max` the bound.
+#[must_use]
+pub fn admit_rule(live: usize, idle: usize, oneshots: usize, max: usize) -> Admit {
+    if live + oneshots < max {
+        Admit::Now
+    } else if idle > 0 {
+        Admit::Evict
+    } else {
+        Admit::Wait
+    }
 }
 
 fn log(line: &str) {
@@ -448,6 +486,7 @@ impl Pool {
                 children,
                 test_universes: Mutex::new(HashMap::new()),
                 test_configs: Mutex::new(HashMap::new()),
+                oneshots: AtomicUsize::new(0),
             }),
             workers: Mutex::new(HashMap::new()),
         }
@@ -743,6 +782,233 @@ impl Pool {
         }
     }
 
+    /// `alsem_impact` (agent-tasks design §8.4): the comparison tuple first,
+    /// resolved here (`base`: git, read only; the diff text it yields goes
+    /// to the main part like a call's own diff), then the parts as a
+    /// composite request, one at a time: the main part and the up part on
+    /// the production engine (the up part reads its sited graph), then the
+    /// tests' select parts on the test engines, as `alsem_tests` runs them.
+    /// A part that fails or is not admitted is reported `not computed` in
+    /// the answer (B-10); the rest stands. The answer is rendered by
+    /// `impact::run::orchestrate_with`, the CLI's own function, so its stdout
+    /// is `alsem impact`'s bytes (the tuple's inputs stamp is the main
+    /// part's revision; a one-shot CLI run has none). Over the inline cap or
+    /// the client's budget it goes to a file with its summary.
+    pub fn run_impact(&self, id: &Value, call: &tools::ImpactCall) {
+        use crate::engine::impact::compare;
+        use crate::engine::test_select::run::Target;
+        let shared = &self.shared;
+        shared
+            .in_flight
+            .lock()
+            .expect("in flight")
+            .insert(id_key(id));
+        let cancel = Arc::new(AtomicBool::new(false));
+        shared
+            .cancels
+            .lock()
+            .expect("cancels")
+            .insert(id_key(id), Arc::clone(&cancel));
+        let started = Instant::now();
+        let ws = Path::new(&call.command.workspace);
+        let prepared: Result<(compare::Comparison, Option<String>), String> =
+            match &call.request.base {
+                Some(rev) if call.request.diff => {
+                    let text = call.command.diff_text.clone().unwrap_or_default();
+                    compare::for_base_and_diff(ws, rev, &text).map(|c| (c, Some(text)))
+                }
+                Some(rev) => compare::for_base(ws, rev).map(|(c, t)| (c, Some(t))),
+                None if call.request.diff => Ok((
+                    compare::for_input("diff", ws, call.command.diff_text.as_deref()),
+                    call.command.diff_text.clone(),
+                )),
+                None if !call.request.files.is_empty() => {
+                    Ok((compare::for_input("files", ws, None), None))
+                }
+                None => Ok((compare::for_input("routines", ws, None), None)),
+            };
+        let main_rev = std::cell::RefCell::new(Value::Null);
+        let mut part_revs: Vec<Value> = Vec::new();
+        let rendered = match prepared {
+            Err(e) => Err(e),
+            Ok((cmp, diff_text)) => {
+                let mut run = |t: Target<'_>, argv: Vec<String>| -> Result<Value, String> {
+                    let base = &call.command;
+                    let main = argv.iter().any(|a| a == "main");
+                    let (workspace, universe, key) = match t {
+                        Target::Production => (base.workspace.clone(), base.universe, None),
+                        Target::Tests(u) if u.is_workspace() => (
+                            base.workspace.clone(),
+                            base.universe,
+                            Some("workspace".to_string()),
+                        ),
+                        Target::Tests(u) => {
+                            let ws = u.test_root.to_string_lossy().into_owned();
+                            shared
+                                .test_universes
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .insert(ws.clone(), u.clone());
+                            (ws, Universe::Tests, Some(u.key()))
+                        }
+                    };
+                    let part = CommandCall {
+                        tool: base.tool,
+                        workspace: workspace.clone(),
+                        universe,
+                        freshness: base.freshness,
+                        argv: argv.clone(),
+                        diff_text: if argv.iter().any(|a| a == "--diff=-") {
+                            diff_text.clone()
+                        } else {
+                            None
+                        },
+                        out: None,
+                        max_inline_bytes: Some(crate::wire::MAX_INLINE_BYTES as u64),
+                        always_file: false,
+                        client_budget_chars: None,
+                    };
+                    let part_started = Instant::now();
+                    let frame = match self.run_composite(id, vec![part]).pop() {
+                        Some(SubOutcome::Answered(f)) => f,
+                        Some(SubOutcome::NotComputed(m)) => return Err(m),
+                        None => return Err("the part was not run".into()),
+                    };
+                    let (head, stdout) = part_answer(&frame)?;
+                    // Each part's wall time and the engine's own timing: where
+                    // an answer's time went.
+                    let rev = json!({"workspace": workspace,
+                                     "universe": key.unwrap_or_else(|| universe.as_str().to_string()),
+                                     "part": argv.get(2).cloned().unwrap_or_default(),
+                                     "ms": part_started.elapsed().as_millis() as u64,
+                                     "timing": head.get("timing").cloned().unwrap_or(Value::Null),
+                                     "revision": head.get("revision").cloned().unwrap_or(Value::Null)});
+                    let v: Value = serde_json::from_str(&stdout)
+                        .map_err(|e| format!("an impact part is no JSON: {e}"))?;
+                    if main && matches!(t, Target::Production) {
+                        *main_rev.borrow_mut() = rev.clone();
+                        self.record_test_scope(&workspace, &v["scope"]);
+                    }
+                    part_revs.push(rev);
+                    Ok(v)
+                };
+                let stamp = || {
+                    main_rev.borrow()["revision"]["inputsStamp"]
+                        .as_str()
+                        .map(str::to_string)
+                };
+                // The base side (B2): a one-shot child admitted under the
+                // children bound, run after the production parts.
+                let base_cancel = Arc::clone(&cancel);
+                let base_rev = std::cell::RefCell::new(Value::Null);
+                let mut bcx = call.request.delta.then(|| {
+                    let cache = crate::engine::impact::cache::Cache::default_dir()
+                        .map(|d| crate::engine::impact::cache::Cache::new(d, Default::default()));
+                    let scratch = crate::engine::impact::before::scratch_for(cache.as_ref());
+                    crate::engine::impact::before::BaseCx {
+                        cache,
+                        scratch,
+                        diff_text: diff_text.clone().unwrap_or_default(),
+                        run: Box::new(|argv: Vec<String>, stdin: String| {
+                            let waited = Instant::now();
+                            let slot = self.admit_oneshot(base_admit_wait(), &base_cancel)?;
+                            let admitted_ms = waited.elapsed().as_millis() as u64;
+                            let ran = run_oneshot(
+                                &shared.program,
+                                &shared.child_env,
+                                &argv,
+                                &stdin,
+                                &base_cancel,
+                            );
+                            drop(slot);
+                            *base_rev.borrow_mut() = json!({"part": "base", "admitWaitMs": admitted_ms,
+                                "ms": waited.elapsed().as_millis() as u64 - admitted_ms,
+                                "peakRssKiB": ran.as_ref().ok().map(|r| r.1)});
+                            ran.map(|r| r.0)
+                        }),
+                    }
+                });
+                let r = crate::engine::impact::run::orchestrate_with(
+                    &call.request,
+                    cmp,
+                    call.opts,
+                    &mut run,
+                    &stamp,
+                    bcx.as_mut(),
+                );
+                drop(bcx);
+                let b = base_rev.into_inner();
+                if !b.is_null() {
+                    part_revs.push(b);
+                }
+                r
+            }
+        };
+        let compute_ms = started.elapsed().as_millis() as u64;
+        let mut envelope = match rendered {
+            Ok(r) => {
+                let inline = crate::wire::clamp_inline(call.command.max_inline_bytes);
+                let over_budget = call.command.client_budget_chars.is_some_and(|b| {
+                    client_chars(&r.text, None) + tools::MCP_ENVELOPE_ROOM_CHARS > b
+                });
+                let stdout = if (r.text.len() > inline || over_budget) && shared.sink.writable() {
+                    match shared.sink.write_new(
+                        "impact",
+                        extension(&call.command.argv),
+                        r.text.as_bytes(),
+                    ) {
+                        Ok(p) => Stdout::File(SpillFile::of(
+                            p.to_string_lossy().into_owned(),
+                            r.text.as_bytes(),
+                        )),
+                        Err(_) => Stdout::Text(r.text),
+                    }
+                } else {
+                    Stdout::Text(r.text)
+                };
+                match place_stdout(shared, &call.command, stdout) {
+                    Ok((stdout, _)) => {
+                        let mut e = json!({
+                            "kind": "cli", "exitCode": r.exit, "stderr": [],
+                            "stale": false, "changedPaths": [], "changedPathsTruncated": false,
+                            "lineBase": crate::engine::line_base::LINE_BASE,
+                        });
+                        match stdout {
+                            Stdout::Text(t) => e["stdoutText"] = json!(t),
+                            Stdout::File(f) => {
+                                e["stdoutFile"] = serde_json::to_value(f).unwrap_or(Value::Null);
+                                e["summary"] = bounded_summary(json!({"text": r.summary}));
+                            }
+                        }
+                        e
+                    }
+                    Err((o, m)) => json!({"kind": "failed", "outcome": o, "message": m}),
+                }
+            }
+            Err(m) => {
+                json!({"kind": "failed", "outcome": FailedOutcome::EngineError, "message": m})
+            }
+        };
+        let main_rev = main_rev.into_inner();
+        envelope["revision"] = main_rev["revision"].clone();
+        envelope["revisions"] = json!({"production": main_rev, "parts": part_revs});
+        envelope["universe"] = json!(call.command.universe.as_str());
+        envelope["freshness"] =
+            json!({"requested": call.command.freshness.as_str(), "served": "fresh"});
+        envelope["timing"] = json!({"computeMs": compute_ms});
+        let is_error = envelope["kind"] == "failed";
+        let output = match (&envelope.get("stdoutText"), call.opts.json) {
+            (Some(Value::String(t)), true) => serde_json::from_str(t).ok(),
+            _ => None,
+        };
+        let msg = shared.transport.response(id, &envelope, is_error, output);
+        if cancel.load(Ordering::SeqCst) {
+            shared.end_cancelled(id, Some(&encode_or_log(&msg)));
+        } else {
+            shared.finish(id, &encode_or_log(&msg));
+        }
+    }
+
     /// A tests answer's roots part discovered `scope` for `workspace`
     /// (milestone C item 3): record what `.al-sem.json` `testApps` said, for
     /// `alsem_status`'s `test-config` check, and drop what an earlier
@@ -851,7 +1117,8 @@ impl Pool {
                 .filter(|(k, w)| **k != key && running(w))
                 .map(|(k, _)| k)
                 .collect();
-            if live.len() >= shared.children.max_children {
+            let oneshots = shared.oneshots.load(Ordering::SeqCst);
+            if live.len() + oneshots >= shared.children.max_children {
                 let idle = live
                     .iter()
                     .filter(|k| workers[**k].pending.load(Ordering::SeqCst) == 0)
@@ -867,11 +1134,21 @@ impl Pool {
                     None => {
                         return Err(Refused {
                             universe: key.1,
-                            message: format!(
-                                "{} engine children are running (--max-children) and none is idle \
-                                 (max-children {})",
-                                shared.children.max_children, shared.children.max_children
-                            ),
+                            message: if oneshots == 0 {
+                                format!(
+                                    "{} engine children are running (--max-children) and none is idle \
+                                     (max-children {})",
+                                    shared.children.max_children, shared.children.max_children
+                                )
+                            } else {
+                                format!(
+                                    "{} engine children and {oneshots} one-shot children (an impact \
+                                     base build) are running (--max-children) and none is idle \
+                                     (max-children {})",
+                                    live.len(),
+                                    shared.children.max_children
+                                )
+                            },
                         });
                     }
                 }
@@ -924,6 +1201,77 @@ impl Pool {
             }
         }
         Ok(())
+    }
+
+    /// Admit a one-shot child (agent-tasks B2 §10.6 step 3, owner: no
+    /// oversubscription): a place in the children bound when one is free;
+    /// else the least recently used idle engine child ends (a test
+    /// universe's before a production one) and its place is taken; else wait
+    /// for one to become idle, up to `wait`, then refuse with the reason. The
+    /// place is held until the returned slot drops.
+    pub fn admit_oneshot(
+        &self,
+        wait: Duration,
+        cancel: &AtomicBool,
+    ) -> Result<OneShotSlot<'_>, String> {
+        let shared = &*self.shared;
+        let started = Instant::now();
+        loop {
+            {
+                let workers = self.workers();
+                let running = |w: &Worker| {
+                    w.pending.load(Ordering::SeqCst) > 0
+                        || w.snapshot.lock().expect("snapshot").hello.is_some()
+                };
+                let live: Vec<(&Key, &Worker)> =
+                    workers.iter().filter(|(_, w)| running(w)).collect();
+                let idle: Vec<&(&Key, &Worker)> = live
+                    .iter()
+                    .filter(|(_, w)| w.pending.load(Ordering::SeqCst) == 0)
+                    .collect();
+                // The count and the reservation under one lock of the
+                // workers, as `enqueue` counts.
+                match admit_rule(
+                    live.len(),
+                    idle.len(),
+                    shared.oneshots.load(Ordering::SeqCst),
+                    shared.children.max_children,
+                ) {
+                    Admit::Now => {
+                        shared.oneshots.fetch_add(1, Ordering::SeqCst);
+                        return Ok(OneShotSlot { shared });
+                    }
+                    Admit::Evict => {
+                        if let Some((_, w)) = idle
+                            .iter()
+                            .min_by_key(|(k, w)| (k.1 != Universe::Tests, w.last_used))
+                        {
+                            w.snapshot.lock().expect("snapshot").hello = None;
+                            let _ = w.tx.send(Job::Retire);
+                        }
+                        continue;
+                    }
+                    Admit::Wait => {}
+                }
+            }
+            if cancel.load(Ordering::SeqCst) {
+                return Err("cancelled while waiting for an engine child's place".into());
+            }
+            if started.elapsed() >= wait {
+                let live = self
+                    .workers()
+                    .values()
+                    .filter(|w| w.snapshot.lock().expect("snapshot").hello.is_some())
+                    .count();
+                return Err(format!(
+                    "base not built: {live} engine and {} one-shot children hold every place of the children bound (max-children {}) and none became idle within {} ms; retry when the engines are idle, or stop one",
+                    shared.oneshots.load(Ordering::SeqCst),
+                    shared.children.max_children,
+                    wait.as_millis()
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
     }
 
     /// The input descriptor (agent-tasks design §1.2 M0-6) the worker of
@@ -1316,6 +1664,91 @@ fn work(
     if let Some(mut front) = front {
         front.shutdown();
     }
+}
+
+/// How long an impact base child waits for a place in the children bound
+/// (agent-tasks §10.6 step 3: 60 s; `AL_SEM_BASE_ADMIT_WAIT_MS` overrides,
+/// for tests).
+fn base_admit_wait() -> Duration {
+    std::env::var("AL_SEM_BASE_ADMIT_WAIT_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(Duration::from_secs(60), Duration::from_millis)
+}
+
+/// Run `program argv` as a one-shot child with `stdin`: its stdout as JSON
+/// and its peak resident set (KiB, sampled), or why not (its stderr's tail).
+/// A cancelled request kills it.
+fn run_oneshot(
+    program: &Path,
+    env: &[(std::ffi::OsString, std::ffi::OsString)],
+    argv: &[String],
+    stdin: &str,
+    cancel: &AtomicBool,
+) -> Result<(Value, u64), String> {
+    use std::io::{Read as _, Write as _};
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(program)
+        .args(argv)
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("the base child could not start: {e}"))?;
+    let pid = child.id();
+    let mut si = child.stdin.take().ok_or("the base child has no stdin")?;
+    let text = stdin.to_string();
+    let writer = std::thread::spawn(move || {
+        let _ = si.write_all(text.as_bytes());
+    });
+    let mut so = child.stdout.take().ok_or("the base child has no stdout")?;
+    let reader = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        let _ = so.read_to_end(&mut b);
+        b
+    });
+    let mut se = child.stderr.take().ok_or("the base child has no stderr")?;
+    let err_reader = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        let _ = se.read_to_end(&mut b);
+        b
+    });
+    let mut peak = 0u64;
+    let status = loop {
+        if let Some((_, hwm)) = live_rss(pid) {
+            peak = peak.max(hwm / 1024);
+        }
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) => {}
+            Err(e) => return Err(format!("the base child: {e}")),
+        }
+        if cancel.load(Ordering::SeqCst) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("cancelled during the base build".into());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let _ = writer.join();
+    let out = reader.join().unwrap_or_default();
+    let err = err_reader.join().unwrap_or_default();
+    if !status.success() {
+        let tail: String = String::from_utf8_lossy(&err)
+            .lines()
+            .rev()
+            .take(5)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join(" | ");
+        return Err(format!("the base child failed ({status}): {tail}"));
+    }
+    serde_json::from_slice(&out)
+        .map(|v| (v, peak))
+        .map_err(|e| format!("the base child's answer is no JSON: {e}"))
 }
 
 fn encode_or_log(msg: &Value) -> Vec<u8> {

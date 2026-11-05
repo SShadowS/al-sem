@@ -482,8 +482,8 @@ mod tests {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("src/engine/gate/run.rs"),
         )
         .unwrap();
-        // `build_single_app` delegates to its lending form, which holds the
-        // body (agent-tasks M0-1).
+        // The single-app build is its lending form, which holds the body
+        // (agent-tasks M0-1).
         let start = src.find("\nfn build_single_app_lending(").unwrap();
         let body = &src[start..];
         let body = &body[..body.find("\n}\n").unwrap()];

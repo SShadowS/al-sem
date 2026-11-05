@@ -381,15 +381,29 @@ pub fn build_view_model(
     };
     if single_app || (!needs.graph && model_instance_id.is_none()) {
         assert!(
-            !needs.graph,
+            !needs.graph || (needs.sited && needs.model),
             "the call-graph export reads a cross-app program"
         );
         if !extras && model_instance_id.is_none() {
             return Err(no_id());
         }
         // A cross-app analyze with no id: one build under the single-app
-        // profile, never `FULL`'s dependency bodies.
-        return build_single_app(inputs, key.no_roots_config, extras, needs.assembly()).map(Some);
+        // profile, never `FULL`'s dependency bodies. A model demand that also
+        // reads the sited graph (`query touches --field --from`) gets the
+        // workspace-scoped program lent, as a resident single-app revision
+        // builds its graph from it.
+        return build_single_app_lending(
+            inputs,
+            key.no_roots_config,
+            extras,
+            needs.assembly(),
+            |p| {
+                if needs.graph {
+                    on_program(Ok(p));
+                }
+            },
+        )
+        .map(Some);
     }
     // The base span covers the program build and the base's, never the graph
     // export lent in between (#277 R6-5); a graph-only view builds no base.
@@ -467,17 +481,6 @@ pub fn build_view_model(
     }
 }
 
-/// [`build_view_model`]'s single-app half: one `Workspace` program build, the
-/// model projected from its parse (engine-switch S2a), its calls attached.
-fn build_single_app(
-    inputs: &Arc<WorkspaceInputs>,
-    skip_roots_config: bool,
-    extras: bool,
-    assembly: crate::program::model::workspace::AssemblyNeeds,
-) -> Result<ViewModel, ViewFailure> {
-    build_single_app_lending(inputs, skip_roots_config, extras, assembly, |_| {})
-}
-
 /// A single-app model view with no analyze extras (the resident revision's
 /// build), lending its workspace-scoped program to `on_program` once it is
 /// built and before the model is (agent-tasks design §1.2 M0-1: the sited
@@ -490,6 +493,9 @@ pub fn build_single_app_model_lending(
     build_single_app_lending(inputs, false, false, needs.assembly(), on_program).map(|m| m.target)
 }
 
+/// [`build_view_model`]'s single-app half: one `Workspace` program build
+/// (lent to `on_program` before the model is built), the model projected
+/// from its parse (engine-switch S2a), its calls attached.
 fn build_single_app_lending(
     inputs: &Arc<WorkspaceInputs>,
     skip_roots_config: bool,

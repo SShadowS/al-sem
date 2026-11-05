@@ -1,0 +1,641 @@
+{
+  "assumptions": [
+    "current effects only: no base was built, so there is no before/after and no routine is called added or deleted",
+    "callers and entries are static may-paths over the sited graph (R0's reverse walk)",
+    "tests are static reachability, not coverage"
+  ],
+  "base": null,
+  "behavior": null,
+  "comparison": {
+    "comparisonBase": null,
+    "comparisonBaseNote": "none: a diff alone names no base (no before/after; B2 checks the diff's pre-images against a base)",
+    "diffHash": "blake3:ffae8ba8abdd3ec13627d9baa6c6edac0aaa066d6b572fa3c488582e54c62d5c",
+    "head": {
+      "commit": null,
+      "inputsStamp": null
+    },
+    "layers": {
+      "committed": [],
+      "staged": [],
+      "unstaged": [],
+      "untracked": []
+    },
+    "mergeBase": null,
+    "requestedRef": null,
+    "resolvedCommit": null,
+    "source": "diff"
+  },
+  "coverage": {
+    "graph": {
+      "nodes": 7,
+      "sites": 4
+    },
+    "states": {
+      "perRoot": 2,
+      "union": 2
+    }
+  },
+  "deleted": null,
+  "input": {
+    "accounting": {
+      "changedLines": 6,
+      "errors": [],
+      "files": [
+        {
+          "added": 2,
+          "buckets": {
+            "objectDeclaration": {
+              "byKind": {
+                "action": 0,
+                "comment-or-blank": 0,
+                "enum-value": 0,
+                "field": 2,
+                "fieldgroup": 0,
+                "global-var": 0,
+                "key": 0,
+                "layout": 0,
+                "object-header": 0,
+                "other": 0,
+                "property": 0,
+                "trigger-decl": 0
+              },
+              "total": 2
+            },
+            "outsideObject": 0,
+            "removedRoutineText": 0,
+            "routineBody": 2,
+            "routineNotInModel": 0,
+            "routineSignature": 0,
+            "total": 4,
+            "unmapped": {
+              "byReason": {},
+              "total": 0
+            }
+          },
+          "hunks": [
+            {
+              "buckets": {
+                "objectDeclaration": {
+                  "byKind": {
+                    "action": 0,
+                    "comment-or-blank": 0,
+                    "enum-value": 0,
+                    "field": 2,
+                    "fieldgroup": 0,
+                    "global-var": 0,
+                    "key": 0,
+                    "layout": 0,
+                    "object-header": 0,
+                    "other": 0,
+                    "property": 0,
+                    "trigger-decl": 0
+                  },
+                  "total": 2
+                },
+                "outsideObject": 0,
+                "removedRoutineText": 0,
+                "routineBody": 0,
+                "routineNotInModel": 0,
+                "routineSignature": 0,
+                "total": 2,
+                "unmapped": {
+                  "byReason": {},
+                  "total": 0
+                }
+              },
+              "endLine": 10,
+              "routines": [],
+              "startLine": 8
+            },
+            {
+              "buckets": {
+                "objectDeclaration": {
+                  "byKind": {
+                    "action": 0,
+                    "comment-or-blank": 0,
+                    "enum-value": 0,
+                    "field": 0,
+                    "fieldgroup": 0,
+                    "global-var": 0,
+                    "key": 0,
+                    "layout": 0,
+                    "object-header": 0,
+                    "other": 0,
+                    "property": 0,
+                    "trigger-decl": 0
+                  },
+                  "total": 0
+                },
+                "outsideObject": 0,
+                "removedRoutineText": 0,
+                "routineBody": 2,
+                "routineNotInModel": 0,
+                "routineSignature": 0,
+                "total": 2,
+                "unmapped": {
+                  "byReason": {},
+                  "total": 0
+                }
+              },
+              "endLine": 26,
+              "routines": [
+                "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514"
+              ],
+              "startLine": 24
+            }
+          ],
+          "kind": "modified",
+          "mismatch": null,
+          "oldPath": null,
+          "path": "App/src/Core.al",
+          "removed": 2,
+          "removedRoutineNames": [],
+          "unmapped": null,
+          "workspaceFile": "src/Core.al"
+        },
+        {
+          "added": 1,
+          "buckets": {
+            "objectDeclaration": {
+              "byKind": {
+                "action": 0,
+                "comment-or-blank": 0,
+                "enum-value": 0,
+                "field": 0,
+                "fieldgroup": 0,
+                "global-var": 0,
+                "key": 0,
+                "layout": 0,
+                "object-header": 0,
+                "other": 0,
+                "property": 0,
+                "trigger-decl": 0
+              },
+              "total": 0
+            },
+            "outsideObject": 0,
+            "removedRoutineText": 0,
+            "routineBody": 0,
+            "routineNotInModel": 0,
+            "routineSignature": 0,
+            "total": 2,
+            "unmapped": {
+              "byReason": {
+                "not-al": 2
+              },
+              "total": 2
+            }
+          },
+          "hunks": [
+            {
+              "buckets": {
+                "objectDeclaration": {
+                  "byKind": {
+                    "action": 0,
+                    "comment-or-blank": 0,
+                    "enum-value": 0,
+                    "field": 0,
+                    "fieldgroup": 0,
+                    "global-var": 0,
+                    "key": 0,
+                    "layout": 0,
+                    "object-header": 0,
+                    "other": 0,
+                    "property": 0,
+                    "trigger-decl": 0
+                  },
+                  "total": 0
+                },
+                "outsideObject": 0,
+                "removedRoutineText": 0,
+                "routineBody": 0,
+                "routineNotInModel": 0,
+                "routineSignature": 0,
+                "total": 2,
+                "unmapped": {
+                  "byReason": {
+                    "not-al": 2
+                  },
+                  "total": 2
+                }
+              },
+              "endLine": 1,
+              "routines": [],
+              "startLine": 1
+            }
+          ],
+          "kind": "modified",
+          "mismatch": null,
+          "oldPath": null,
+          "path": "App/notes.md",
+          "removed": 1,
+          "removedRoutineNames": [],
+          "unmapped": "not-al",
+          "workspaceFile": null
+        }
+      ],
+      "onlyIn": [],
+      "totals": {
+        "objectDeclaration": {
+          "byKind": {
+            "action": 0,
+            "comment-or-blank": 0,
+            "enum-value": 0,
+            "field": 2,
+            "fieldgroup": 0,
+            "global-var": 0,
+            "key": 0,
+            "layout": 0,
+            "object-header": 0,
+            "other": 0,
+            "property": 0,
+            "trigger-decl": 0
+          },
+          "total": 2
+        },
+        "outsideObject": 0,
+        "removedRoutineText": 0,
+        "routineBody": 2,
+        "routineNotInModel": 0,
+        "routineSignature": 0,
+        "total": 6,
+        "unmapped": {
+          "byReason": {
+            "not-al": 2
+          },
+          "total": 2
+        }
+      }
+    },
+    "diagnostics": [
+      {
+        "endLine": 10,
+        "file": "App/src/Core.al",
+        "kind": "hunk-outside-routines",
+        "startLine": 8,
+        "text": "changed-roots: hunk-outside-routines App/src/Core.al:8-10"
+      },
+      {
+        "file": "App/notes.md",
+        "kind": "diff-file-not-al",
+        "text": "changed-roots: diff-file-not-al App/notes.md"
+      }
+    ],
+    "hunksOutsideRoutines": [
+      {
+        "buckets": {
+          "objectDeclaration": {
+            "byKind": {
+              "action": 0,
+              "comment-or-blank": 0,
+              "enum-value": 0,
+              "field": 2,
+              "fieldgroup": 0,
+              "global-var": 0,
+              "key": 0,
+              "layout": 0,
+              "object-header": 0,
+              "other": 0,
+              "property": 0,
+              "trigger-decl": 0
+            },
+            "total": 2
+          },
+          "outsideObject": 0,
+          "removedRoutineText": 0,
+          "routineBody": 0,
+          "routineNotInModel": 0,
+          "routineSignature": 0,
+          "total": 2,
+          "unmapped": {
+            "byReason": {},
+            "total": 0
+          }
+        },
+        "endLine": 10,
+        "file": "App/src/Core.al",
+        "startLine": 8
+      },
+      {
+        "buckets": {
+          "objectDeclaration": {
+            "byKind": {
+              "action": 0,
+              "comment-or-blank": 0,
+              "enum-value": 0,
+              "field": 0,
+              "fieldgroup": 0,
+              "global-var": 0,
+              "key": 0,
+              "layout": 0,
+              "object-header": 0,
+              "other": 0,
+              "property": 0,
+              "trigger-decl": 0
+            },
+            "total": 0
+          },
+          "outsideObject": 0,
+          "removedRoutineText": 0,
+          "routineBody": 0,
+          "routineNotInModel": 0,
+          "routineSignature": 0,
+          "total": 2,
+          "unmapped": {
+            "byReason": {
+              "not-al": 2
+            },
+            "total": 2
+          }
+        },
+        "endLine": 1,
+        "file": "App/notes.md",
+        "startLine": 1
+      }
+    ],
+    "layers": {
+      "committed": 0,
+      "staged": 0,
+      "unstaged": 0,
+      "untracked": 0
+    },
+    "mismatches": [],
+    "rootsResolved": 1,
+    "untracked": []
+  },
+  "limits": [],
+  "lineBase": 1,
+  "revisions": null,
+  "roots": [
+    {
+      "anchor": {
+        "file": "ws:src/Core.al",
+        "line": 23
+      },
+      "changedLines": {
+        "body": 2,
+        "signature": 0
+      },
+      "delta": null,
+      "display": "Codeunit TU Core::Calc",
+      "effects": {
+        "callerDependentTables": 0,
+        "commits": {
+          "answer": "none",
+          "entryPoints": 0,
+          "ownSites": 0
+        },
+        "entryPoints": {
+          "count": 0,
+          "sites": 0,
+          "withWrites": 0,
+          "withWritesSites": 0
+        },
+        "events": {
+          "distinct": 0,
+          "inWorkspaceCode": 0
+        },
+        "gaps": {
+          "dependency": 0,
+          "notPlaced": 0,
+          "workspace": 0
+        },
+        "kinds": {},
+        "literalDeadTables": 0,
+        "mayWriteTables": {
+          "byDependencies": 0,
+          "count": 0,
+          "ownedByApp": 0
+        },
+        "noPathKept": {
+          "operations": 0,
+          "tables": 0
+        },
+        "temporaryOnlyTables": 0,
+        "unresolvedTableWrites": 0
+      },
+      "handle": "",
+      "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514",
+      "status": "changed",
+      "tests": {
+        "local": 2,
+        "nearest": {
+          "hops": 1,
+          "test": "Codeunit TU Core Tests::CalcAddsOne",
+          "tier": "local"
+        },
+        "nearestTestedCaller": null,
+        "onlyOpen": 0,
+        "status": "reached",
+        "throughDependency": 0
+      },
+      "up": {
+        "ancestors": {
+          "local": 1,
+          "onlyOpen": 0,
+          "throughDependency": 0,
+          "total": 1
+        },
+        "callers": {
+          "count": 1,
+          "first": [
+            {
+              "display": "Codeunit TU Core::Post",
+              "file": "src/Core.al",
+              "line": 18,
+              "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#22f7f361208a0d8c3669d02eeb4073ece883d836a783765eb80f3d1708f5c71f"
+            }
+          ],
+          "local": 1
+        },
+        "display": "Codeunit TU Core::Calc",
+        "entries": [],
+        "eventPublishers": {
+          "count": 0,
+          "first": []
+        },
+        "external": [
+          {
+            "count": 2,
+            "first": [
+              {
+                "display": "Codeunit TU Core::Calc",
+                "file": "src/Core.al",
+                "hops": 0,
+                "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514",
+                "tier": "local"
+              },
+              {
+                "display": "Codeunit TU Core::Post",
+                "file": "src/Core.al",
+                "hops": 1,
+                "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#22f7f361208a0d8c3669d02eeb4073ece883d836a783765eb80f3d1708f5c71f",
+                "tier": "local"
+              }
+            ],
+            "why": "public"
+          }
+        ],
+        "hidden": {
+          "byChannel": {},
+          "universalHub": false
+        },
+        "limited": null,
+        "maxHops": 1,
+        "nearestAncestors": [
+          {
+            "display": "Codeunit TU Core::Post",
+            "hops": 1,
+            "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#22f7f361208a0d8c3669d02eeb4073ece883d836a783765eb80f3d1708f5c71f"
+          }
+        ],
+        "nodes": 1,
+        "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514",
+        "states": 2,
+        "status": "walked",
+        "userOrJobEntries": 0
+      }
+    }
+  ],
+  "schema": "al-sem.impact",
+  "schemaChanges": null,
+  "schemaLines": 2,
+  "tests": {
+    "assumptions": [
+      "static reachability, not coverage: a reached test may not exercise the changed lines"
+    ],
+    "byTier": {
+      "local": 2,
+      "onlyOpen": 0,
+      "throughDependency": 0
+    },
+    "changed": [
+      {
+        "display": "Codeunit TU Core::Calc",
+        "nearest": {
+          "hops": 1,
+          "test": "Codeunit TU Core Tests::CalcAddsOne",
+          "tier": "local"
+        },
+        "nearestTestedCaller": null,
+        "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514",
+        "status": "reached"
+      }
+    ],
+    "diagnostics": [
+      "changed-roots: hunk-outside-routines App/src/Core.al:8-10",
+      "changed-roots: diff-file-not-al App/notes.md"
+    ],
+    "hidden": [],
+    "limits": [],
+    "lineBase": 1,
+    "next": "next: the test app depends on Microsoft's Library Assert, not loaded here. Put their symbols in the test app's .alpackages (in VS Code: open the test app and run \"AL: Download symbols\"; or copy Microsoft_<name>_<version>.app from a BC artifact's Applications folder), then ask again: calls into them then resolve",
+    "productionSourceStamp": "prod-v1:36dbae2fe449e122388fbf8c988a5991",
+    "requiredFallback": [],
+    "runFirst": [
+      {
+        "class": "direct",
+        "codeunit": "TU Core Tests",
+        "codeunitId": 50850,
+        "file": "src/CoreTests.al",
+        "hops": 1,
+        "path": [
+          "Codeunit TU Core Tests::CalcAddsOne",
+          "Codeunit TU Core::Calc"
+        ],
+        "procedure": "CalcAddsOne",
+        "reaches": [
+          "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514"
+        ],
+        "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a02:Codeunit:50850#310c060899a22ae7a89c63e3dc802ee1ea1199806096dbfbd5efa1afa7c5c940",
+        "tier": "local"
+      },
+      {
+        "class": "direct",
+        "codeunit": "TU Core Tests",
+        "codeunitId": 50850,
+        "file": "src/CoreTests.al",
+        "hops": 2,
+        "path": [
+          "Codeunit TU Core Tests::PostUpdatesQty",
+          "Codeunit TU Core::Post",
+          "Codeunit TU Core::Calc"
+        ],
+        "procedure": "PostUpdatesQty",
+        "reaches": [
+          "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514"
+        ],
+        "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a02:Codeunit:50850#cef2f0b2d01083453c0df5a65fe6974bc777040d9c41e9975027b27e906251c7",
+        "tier": "local"
+      }
+    ],
+    "runFirstTotal": 2,
+    "schema": "al-sem.tests",
+    "scope": {
+      "apps": [
+        {
+          "appId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a02",
+          "files": 1,
+          "found": "auto",
+          "name": "TU Production Tests",
+          "productionTier": "localApproximate",
+          "root": "<root>/Test",
+          "testsLoaded": 2,
+          "universe": "tests:<key>"
+        }
+      ],
+      "discovery": "auto",
+      "discoveryComplete": true,
+      "searched": 1,
+      "skipped": [],
+      "workspaceTests": 0
+    },
+    "selectionComplete": true,
+    "tier": "local",
+    "version": 1
+  },
+  "union": {
+    "ancestors": {
+      "local": 1,
+      "onlyOpen": 0,
+      "throughDependency": 0,
+      "total": 1
+    },
+    "entries": [],
+    "eventPublishers": {
+      "count": 0,
+      "first": []
+    },
+    "external": [
+      {
+        "count": 2,
+        "first": [
+          {
+            "display": "Codeunit TU Core::Calc",
+            "file": "src/Core.al",
+            "hops": 0,
+            "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514",
+            "tier": "local"
+          },
+          {
+            "display": "Codeunit TU Core::Post",
+            "file": "src/Core.al",
+            "hops": 1,
+            "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#22f7f361208a0d8c3669d02eeb4073ece883d836a783765eb80f3d1708f5c71f",
+            "tier": "local"
+          }
+        ],
+        "why": "public"
+      }
+    ],
+    "hidden": {
+      "byChannel": {},
+      "universalHub": false
+    },
+    "limited": null,
+    "maxHops": 1,
+    "states": 2,
+    "userOrJobEntries": 0
+  },
+  "version": 1
+}
