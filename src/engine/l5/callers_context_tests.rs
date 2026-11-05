@@ -54,6 +54,7 @@ fn prove_both(
         human: false,
         detail: true,
         out: None,
+        slice: None,
     };
     let r = crate::engine::batch::run_doc(&job)
         .one::<Result<crate::engine::l5::prove::ProveRunResult, String>>()

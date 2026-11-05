@@ -15,6 +15,7 @@ pub mod operation_order;
 pub mod record_op;
 pub mod rules;
 pub mod scope;
+pub mod site_guards;
 
 /// Project the L2 `PFeatures` of a single named routine in a one-file source, via
 /// the owned IR. Thin wrapper over [`l2_workspace::ir_features_for_named_routine`]

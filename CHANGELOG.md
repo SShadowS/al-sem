@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (agent tasks, milestone E1: the debugging slice, narrow)
+
+Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §9 (revision 2; astra 15's
+honesty parts). Multiple routes (E2) are not in this milestone.
+
+- **Prove filters** (`engine::l5::prove_slice`): `alsem prove … --match <text>` (throws-error),
+  `--site <file:line>` (throws-error, writes-table, may-commit, reaches-ui), `--op <kind>`
+  (throws-error, writes-table) and `--table <table>` (throws-error); MCP `match`, `site`, `op`,
+  `table` on `alsem_prove`. A filter on another question is refused with one text, before the
+  workspace is read. The answer is about the matching SITES: each direct fact of the question's
+  kinds whose routine the root's guarded search (literal arguments followed) reaches where the
+  site can run. Each matching site prints its location, its operation, the error message text
+  (a literal, a Label's or TextConst's value, `%1` kept, with the Label's name; "message not
+  known" for a variable, an expression, an ErrorInfo or the platform's own message), one
+  representative route from the root (shortest first) and, per site on the route, the 2 innermost
+  enclosing conditions with their polarity (then/else, case arm, case else), labelled "selected
+  context, not all necessary conditions" with the count left out (`guards shown: k of n`). A
+  `while`/`for`/`foreach` condition is a loop-entry condition, a `repeat … until` condition a
+  continuation condition. Every answer says "static candidates, not an observed trace".
+- **Filtered verdicts.** `yes`: a matching site is reachable. `no`: none matches, every reachable
+  site is decided against the filter, the root's search completed and the cone's obligations are
+  clear. `unknown` otherwise, with one blocker per reason: `message-unknown` (no static text: an
+  unknown message never supports "no error matching this text"), `message-placeholders` (a text
+  that did not match but has `%1` values that may hold it), `message-platform-wrapped` (a
+  `FieldError` text, which the platform wraps), `temp-state-depends-on-caller`,
+  `unknown-table-write`, `position-unknown`, `operation-unknown`, `table-unknown`, `no-site`,
+  `slice-search-capped`, `slice-found-no-site`. An implicit error (TestField, an unguarded Get, …)
+  matches `--match` only by its kind word, and says so.
+- **A new gated fact: the sites' guard arms** (`program::body::site_guards`,
+  `ModelRoutine::site_guards`): per routine, each `if`/`case`/loop block with its condition text
+  (whitespace folded, at most 120 characters). Built at assembly behind
+  `AssemblyNeeds::site_guards` / `ViewNeeds::site_guards`; only `alsem prove` with a filter
+  declares it (`ViewNeeds::PROVE_SLICE`, with the rules for the message text). Every other
+  command, and an unfiltered prove, builds none; reading it unbuilt panics "site guards not
+  built: declare ViewNeeds::site_guards". The resident session widens its needs for it as for
+  the rules. The slice is a level-3 read of prove's tree (`TreeDemand::slice`,
+  `session::prove_slice_plan`).
+- Prove JSON: a filtered document is schema **2.5.0** (additive: `payload.filter`,
+  `payload.slice` with counts and the first 10 undecided sites per kind, evidence rows that are
+  the matching sites with `message`, `route` (hops, witness, per-site `guards`,
+  `enclosingTotal`, `guardsShown`, `guardsTotal`, `guardsAre`) and `evidence.{file, line}` as
+  before). An unfiltered document is byte-identical (2.4.0). The MCP instructions' "which tool"
+  line names the filters.
+
 ### Added (agent tasks, milestone A: adding an effect)
 
 Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §6 (revision 2; astra 3/4/5, Fable

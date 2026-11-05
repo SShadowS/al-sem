@@ -60,6 +60,7 @@ pub(super) fn job<'a>(
             human: false,
             detail: false,
             out: None,
+            slice: None,
         }),
         Cmd::Digest => Box::new(DigestJob::new(
             DigestRequest {

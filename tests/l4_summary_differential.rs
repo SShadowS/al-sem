@@ -1330,6 +1330,7 @@ mod fixtures {
             rules: None,
             rule_drafts: None,
             card_text: None,
+            site_guards: None,
         }
     }
 
