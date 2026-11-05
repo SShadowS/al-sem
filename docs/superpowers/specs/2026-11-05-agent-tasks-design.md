@@ -1196,7 +1196,9 @@ facts for one field. The query schema is 3.2.0 on master already (output step 1b
   channels and limit stated as reasons. Its demand declares `ViewNeeds::sited` beside the model
   (a model demand that also reads the sited graph is new: the one-shot driver keeps the graph it
   builds off the lent program and hands it to the compute, `ViewCx::sited`; the engine host pins
-  such a request with `pin_sited`, `alsem.rs`' `query_field_reads_sited`). `--single-app` lends
+  such a request with `pin_sited`, through `alsem.rs`' shared `reads_sited(command)` rule — the
+  `Commands::Query` arm since the wave-3 integration, which folded D's own `query_field_reads_sited`
+  into milestone A's mechanism). `--single-app` lends
   its workspace-scoped program for the same graph (`build_view_model`'s single-app arm now lends
   it to a model demand that declares the sited graph), so both universes walk R0, and with no
   dependency they answer alike (master's `without_dependencies_cross_app_equals_single_app`
