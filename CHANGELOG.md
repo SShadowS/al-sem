@@ -61,6 +61,24 @@ Which tests to run first for a change, as a first-class answer. Spec:
   they are "effectively the suite's posting tests, not specific to this change". When the test
   app declares Microsoft test libraries that are not loaded, a `next:` line says how to get their
   symbols. Static reachability is not coverage, said once at the end.
+- **explain's `tests:` line reads the test scope** (C-7) without analyzing it: "no [Test]
+  procedure in the workspace app; 1 test app discovered (…); not analyzed in this call — alsem
+  tests (MCP: alsem_tests) selects them", or "no test code found (0 [Test] procedures in the
+  workspace app; <why no sibling was found>)", and with workspace tests an `also …` line. JSON
+  cards carry `testScope` (`analyzed: false`). Explain never builds a test universe. **Explain
+  goldens move**: a fixture inside this repository reads "test app discovery incomplete (the cap
+  of 64 app.json files was reached …)", which is the honest answer there. A workspace with no git
+  top level searches no sibling and says so.
+- **R0-3: explain's callers and the reverse cone agree.** `select::direct_callers` defines a
+  direct caller over the sited graph the way the model's calls count it: a call, interface call,
+  object run or record operation site (`via` call/interface/run/implicitTrigger, never a rule's
+  edge such as a TestPage variable's `declaredRunnable`), and for a trigger a run of its object
+  runs (the resolver's `run_triggers`: a codeunit's `OnRun`, a page's or report's lifecycle
+  triggers) every routine that runs that object; not an event's publisher, a test's handler list,
+  a hub or a page's triggers. A test checks every workspace routine of `test-selection-graph`:
+  explain's `callers` count equals the cone's. **explain keeps reading the model's adjacency**
+  (M0's lazy-graph decision: the sited graph costs each edit 0.93-1.19 s and 45 MiB on CDO; only
+  `alsem tests` builds a graph, and only in its test universes).
 - **The sited graph names local routines** in their source spelling (`SitedGraph::local_name`:
   object, routine, file) and lists the platform table-event publishers
   (`is_platform_publisher`); `SitedGraph::apps`.

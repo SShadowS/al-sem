@@ -234,6 +234,8 @@ pub struct LocalName {
     pub routine: Box<str>,
     /// The file declaring it (its unit's virtual path).
     pub file: Box<str>,
+    /// The routine is a trigger (`OnRun`, `OnAction`, …).
+    pub trigger: bool,
 }
 
 impl SitedGraph {
@@ -695,6 +697,7 @@ impl SitedBuilder {
                                     .map(|o| Box::from(&*o.name))
                                     .unwrap_or_default(),
                                 routine: Box::from(&*node.name),
+                                trigger: node.is_trigger,
                                 file: inp
                                     .surface
                                     .get_with_path(r)

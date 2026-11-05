@@ -257,6 +257,94 @@ fn no_test_scope_says_no_test_was_considered() {
     golden("universe.noscope.human.txt", &human, Some(t.path()));
 }
 
+/// C-7: explain's `tests:` line reads the same scope and never analyzes it:
+/// "1 test app discovered (…); not analyzed in this call" when a sibling
+/// qualifies, the switched-off scope when `testApps: []`, and JSON
+/// `testScope.analyzed: false`. (That explain starts no test engine is pinned
+/// at the MCP level, `mcp_tests`.)
+///
+/// DISCRIMINATION (2026-11-05): dropping the `siblings` arm of explain's
+/// tests line (reverting to "no test code loaded") fails the first
+/// assertion.
+#[test]
+fn explain_names_the_discovered_test_apps_without_analyzing_them() {
+    let t = universe_repo();
+    let ws = t.path().join("App");
+    let run = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .arg("explain")
+            .arg(&ws)
+            .args(args)
+            .output()
+            .unwrap();
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let human = run(&["--routine", "TU Core::Post"]);
+    assert!(
+        human.contains(
+            "  tests: no [Test] procedure in the workspace app; 1 test app discovered (TU Production Tests); not analyzed in this call — alsem tests (MCP: alsem_tests) selects them"
+        ),
+        "{human}"
+    );
+    let v: Value =
+        serde_json::from_str(&run(&["--routine", "TU Core::Post", "--format", "json"])).unwrap();
+    assert_eq!(v["cards"][0]["testScope"]["analyzed"], false);
+    assert_eq!(v["cards"][0]["testScope"]["apps"][0], "TU Production Tests");
+    std::fs::write(ws.join(".al-sem.json"), r#"{"testApps": []}"#).unwrap();
+    let human = run(&["--routine", "TU Core::Post"]);
+    assert!(
+        human.contains("sibling test apps turned off (testApps: [] in .al-sem.json)"),
+        "{human}"
+    );
+}
+
+/// R0-3: explain's `callers:` count (the model's call adjacency) equals the
+/// reverse cone's direct callers (`select::direct_callers` over the sited
+/// graph) for every workspace routine of the fixture. explain keeps reading
+/// the model: building the sited graph for every explain would cost each
+/// edit 0.93-1.19 s and 45 MiB on CDO (M0's measured lazy-graph decision);
+/// this test is what keeps the two readers from drifting apart.
+#[test]
+fn explain_callers_equal_the_cones_direct_callers() {
+    use al_sem::engine::test_select::select::direct_callers;
+    let ws = repo_root().join("tests/fixtures/test-selection-graph");
+    let inputs = al_sem::program::inputs::WorkspaceInputs::read(&ws, &Default::default());
+    let p = al_sem::program::resolved::ResolvedProgram::build(
+        &inputs,
+        al_sem::program::resolved::ProgramScope::CrossApp,
+    )
+    .unwrap();
+    let g = al_sem::program::impact_graph::sited_from_program(&p, &|| false).unwrap();
+    let mut checked = 0;
+    let mut differ = Vec::new();
+    for n in 0..g.node_count() as u32 {
+        let (Some(id), Some(_)) = (g.stable_id(n), g.local_name(n)) else {
+            continue;
+        };
+        let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .args(["explain"])
+            .arg(&ws)
+            .args(["--routine", &id, "--format", "json"])
+            .output()
+            .unwrap();
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        let model = v["cards"][0]["summary"]["callers"].as_u64().unwrap_or(0) as usize;
+        let callers = direct_callers(&g, n);
+        let cone = callers.len();
+        if model != cone {
+            let names: Vec<String> = callers.iter().map(|c| g.display(*c)).collect();
+            differ.push(format!(
+                "{}: explain {model}, cone {cone} ({})",
+                g.display(n),
+                names.join(", ")
+            ));
+        }
+        checked += 1;
+    }
+    assert!(checked >= 20, "{checked}");
+    assert!(differ.is_empty(), "{}", differ.join("\n"));
+}
+
 /// `--test-app` names the app (no discovery); a routine no selector finds
 /// exits 2 and selects nothing.
 #[test]
@@ -278,4 +366,70 @@ fn named_test_apps_and_unresolved_routines() {
     let (human, code) = tests(&ws, &["--routine", "TU Core::Nope"]);
     assert_eq!(code, 2, "{human}");
     assert!(human.contains("changed: no routine resolved"));
+}
+
+/// C-9 (CDO ratchet, `scripts/cdo-gate`): `alsem tests Cloud --routine
+/// "CDO Telemetry::UpdateLastUpload"` lists exactly the 3 `CDO Telemetry
+/// Tests` tests, tier local, 1 hop (the pruned export has no such routine;
+/// the sited graph does). The sibling test app is auto-discovered beside the
+/// pinned baseline (`DO-cdo-baseline/Test`). Also RunReportID's 68 local
+/// tests in 7 codeunits and IssueReminder's 0 local with a nearest test
+/// through dependency code; `selectionComplete` false with its reasons.
+#[test]
+fn cdo_selection_ratchets() {
+    let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
+        return;
+    };
+    let v = json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"]);
+    let names: Vec<&str> = v["runFirst"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["procedure"].as_str().unwrap())
+        .collect();
+    assert_eq!(names.len(), 3, "{names:?}");
+    for t in v["runFirst"].as_array().unwrap() {
+        assert_eq!(t["codeunit"], "CDO Telemetry Tests");
+        assert_eq!(t["tier"], "local");
+        assert_eq!(t["hops"], 1);
+    }
+    for n in [
+        "UpdateLastUpload_ShouldSetLastTelemetryUploadToToday",
+        "UpdateLastUpload_WhenNeverUploaded",
+        "UpdateLastUpload_WhenCalledMultipleTimes",
+    ] {
+        assert!(names.iter().any(|x| x.starts_with(n)), "{n}: {names:?}");
+    }
+    let v = json(
+        &ws,
+        &[
+            "--routine",
+            "CDO E-Mail Handler::RunReportID",
+            "--routine",
+            "CDO Issue Document::IssueReminder",
+        ],
+    );
+    let local: Vec<&Value> = v["runFirst"].as_array().unwrap().iter().collect();
+    assert_eq!(local.len(), 68);
+    let codeunits: std::collections::BTreeSet<&str> = local
+        .iter()
+        .map(|t| t["codeunit"].as_str().unwrap())
+        .collect();
+    assert_eq!(codeunits.len(), 7, "{codeunits:?}");
+    let ir = v["changed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["display"] == "Codeunit CDO Issue Document::IssueReminder")
+        .expect("IssueReminder resolved");
+    assert_eq!(ir["nearest"]["tier"], "throughDependency", "{ir}");
+    assert_eq!(v["selectionComplete"], false);
+    let reasons: Vec<&str> = v["requiredFallback"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["reason"].as_str().unwrap())
+        .collect();
+    assert!(reasons.contains(&"hidden-callers"), "{reasons:?}");
+    assert!(reasons.contains(&"unresolved-test-calls"), "{reasons:?}");
 }

@@ -253,6 +253,88 @@ pub struct SelectArgs<'a> {
     pub declared: &'a [(String, String, String)],
 }
 
+/// The **direct callers** of routine node `r` in the sited graph, as
+/// explain's `callers:` line counts them (agent-tasks R0-3): every routine
+/// with a direct or interface call (`Sync`), an object run (`Run`) or a
+/// record operation firing the trigger (`TriggerOf`) into `r`; and, when
+/// `r` is a trigger a run of its object runs (`Lifecycle`: a codeunit's
+/// `OnRun`, a page's or report's lifecycle triggers, the resolver's own
+/// `run_triggers`), every routine that runs that object (the model's calls
+/// map `Codeunit.Run` straight to `OnRun`; the sited graph goes through the
+/// object node). Only call sites the model has count (`via` call,
+/// interface, run, implicitTrigger): a rule's edge (`declaredRunnable`, a
+/// test's TestPage variable) is no call. Not callers: an event's publisher (a subscriber is
+/// dispatched, not called), a test's handler list, open sites, `r` itself,
+/// hubs, and a page's triggers (page actions are counted apart, explain's
+/// F16j).
+#[must_use]
+pub fn direct_callers(g: &SitedGraph, r: NodeIx) -> BTreeSet<NodeIx> {
+    use crate::program::impact_graph::sited::Boundary;
+    let is_page_trigger = |n: NodeIx| {
+        g.routine_object(n)
+            .is_some_and(|o| matches!(o.kind, al_syntax::ir::ObjectKind::Page))
+            && g.local_name(n).is_some_and(|l| l.trigger)
+    };
+    let mut out = BTreeSet::new();
+    let add = |n: NodeIx, out: &mut BTreeSet<NodeIx>| {
+        if n != r
+            && g.flags(n) & flag::HUB == 0
+            && g.routine_object(n).is_some()
+            && !is_page_trigger(n)
+        {
+            out.insert(n);
+        }
+    };
+    // Whether a run of `r`'s object runs `r` (the resolver's own lists:
+    // a codeunit's `OnRun`, a page's or report's lifecycle triggers).
+    let run_reaches = g.routine_object(r).is_some_and(|o| {
+        let d = g.display(r);
+        let parts: Vec<&str> = d.splitn(3, "::").collect();
+        let (member, name) = match parts.as_slice() {
+            [_, n] => (false, *n),
+            [_, _, n] => (true, *n),
+            _ => return false,
+        };
+        match crate::program::resolve::resolver::run_triggers(o.kind) {
+            Some((object, members)) => {
+                if member {
+                    members.contains(&name)
+                } else {
+                    object.contains(&name)
+                }
+            }
+            None => !member && name == "onrun",
+        }
+    });
+    for &s in g.sites_into(r) {
+        let site = &g.sites()[s as usize];
+        let from_routine = g.routine_object(site.from).is_some();
+        // A call site the model has: not a rule's edge (`declaredRunnable`,
+        // a TestPage variable; `hubExpansion`, `coverageMiss`, …).
+        let called = |s: &crate::program::impact_graph::sited::Site| {
+            matches!(s.via(), "call" | "interface" | "run" | "implicitTrigger")
+        };
+        match site.boundary {
+            Boundary::Sync | Boundary::Run | Boundary::TriggerOf { .. }
+                if from_routine && called(site) =>
+            {
+                add(site.from, &mut out);
+            }
+            // An object running its trigger: whoever runs the object.
+            Boundary::Lifecycle if !from_routine && run_reaches => {
+                for &t in g.sites_into(site.from) {
+                    let run = &g.sites()[t as usize];
+                    if run.boundary == Boundary::Run && called(run) {
+                        add(run.from, &mut out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// The graph's forward adjacency over resolved sites (no open site), built
 /// once per select call that needs it: `to[off[n]..off[n + 1]]`.
 struct Forward {

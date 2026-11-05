@@ -14,6 +14,6 @@ Codeunit Calls Post::PreviewPost  ws:src/post.al:36
   events: 0 raised in workspace code; 0 more only beyond entry points
   extension points: none (the routine publishes no event itself)
   errors at 1 place: ERROR_THROW at ws:src/order.al:25 (error-path)
-  tests: no test code loaded (0 [Test] procedures in the workspace app); that is not a reason to skip tests
+  tests: no test code found (0 [Test] procedures in the workspace app; test app discovery incomplete (the cap of 64 app.json files was reached before the search ended), so test apps may exist that were not found); that is not a reason to skip tests
   next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

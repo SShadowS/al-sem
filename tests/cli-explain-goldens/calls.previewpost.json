@@ -229,6 +229,14 @@
         "testsLoaded": 0,
         "unresolvedTableWrites": 0
       },
+      "testScope": {
+        "analyzed": false,
+        "apps": [],
+        "complete": false,
+        "discovery": "auto",
+        "skipped": 0,
+        "summary": "test app discovery incomplete (the cap of 64 app.json files was reached before the search ended), so test apps may exist that were not found"
+      },
       "tests": []
     }
   ],

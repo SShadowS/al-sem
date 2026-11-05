@@ -10,7 +10,9 @@
 //!    `"testApps": []` turns sibling discovery off ([`Origin::Off`]);
 //! 3. **auto-discovery** ([`Origin::Auto`]): the folders under the git top
 //!    level (the nearest ancestor of the workspace holding `.git`; with none,
-//!    the workspace's parent folder), sorted, at most [`MAX_DEPTH`] levels
+//!    nothing is searched and the scope is incomplete, saying so: the folders
+//!    around a workspace outside any repository are no project of its own),
+//!    sorted, at most [`MAX_DEPTH`] levels
 //!    deep, at most [`MAX_APP_JSON`] `app.json` files read. Skipped folders:
 //!    the workspace itself (its nested folders are its own app), every
 //!    folder whose name starts with `.` (`.git`, `.alpackages`, `.claude`, …),
@@ -228,15 +230,20 @@ pub fn discover(workspace: &Path, req: &ScopeRequest) -> Scope {
         return scope;
     }
     let abs = std::path::absolute(workspace).unwrap_or_else(|_| workspace.to_path_buf());
-    let (root, is_git) = match abs.ancestors().find(|a| a.join(".git").exists()) {
-        Some(top) => (top.to_path_buf(), true),
-        None => (
-            abs.parent().map_or_else(|| abs.clone(), Path::to_path_buf),
-            false,
-        ),
+    // No git top level: the folders around the workspace are no project of
+    // its own (a temporary folder, a home folder), so nothing is searched,
+    // and the scope says so rather than "none depends on it".
+    let Some(root) = abs.ancestors().find(|a| a.join(".git").exists()) else {
+        scope.complete = false;
+        scope.incomplete.push(
+            "no git top level above the workspace, so sibling apps were not searched; name them \
+             with --test-app or testApps in .al-sem.json"
+                .into(),
+        );
+        return scope;
     };
-    scope.search_root = Some((root.clone(), is_git));
-    walk(&mut scope, &root, &abs, 0);
+    scope.search_root = Some((root.to_path_buf(), true));
+    walk(&mut scope, root, &abs, 0);
     scope
 }
 
@@ -507,12 +514,7 @@ impl Scope {
                 self.incomplete.join("; ")
             ),
             (None, Origin::Auto) => format!(
-                "no app under the {} depends on this one with a test codeunit (searched {} app.json {})",
-                if self.search_root.as_ref().is_some_and(|r| r.1) {
-                    "git top level"
-                } else {
-                    "workspace's parent folder"
-                },
+                "no app under the git top level depends on this one with a test codeunit (searched {} app.json {})",
                 self.searched,
                 if self.searched == 1 { "file" } else { "files" }
             ),

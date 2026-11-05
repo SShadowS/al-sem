@@ -20,6 +20,6 @@ Codeunit Calls Post::PostOrder  ws:src/post.al:3
   extension point OnBeforePostOrder: 1 subscriber(s)
     subscriber Codeunit Calls Subscriber::CheckBeforePost (only when its app is installed): rejects when Order.Amount = 0: "A zero amount cannot post."  [Error ws:src/post.al:129]
   errors at 2 places: ERROR_IMPLICIT at ws:src/order.al:16 (unconditional-on-success); ERROR_THROW at ws:src/order.al:25 (error-path)
-  tests: no test code loaded (0 [Test] procedures in the workspace app); that is not a reason to skip tests
+  tests: no test code found (0 [Test] procedures in the workspace app; test app discovery incomplete (the cap of 64 app.json files was reached before the search ended), so test apps may exist that were not found); that is not a reason to skip tests
   next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 
