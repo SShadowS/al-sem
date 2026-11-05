@@ -108,6 +108,8 @@ pub fn refresh_class(categories: &BTreeSet<&str>) -> Option<Value> {
                     | "unreadable-package-folder"
                     | "app-json"
                     | "source-dependency"
+                    | "injected-source"
+                    | "injected-packages"
                     | "meta"
                     | "other"
             )
@@ -183,6 +185,16 @@ fn summary(changes: &[InputChange]) -> String {
             "roots-config" => "roots.config.json".to_string(),
             "coverage-config" => "al-sem.coverage.yaml".to_string(),
             "source-dependency" => plural(n, "source-dependency input", "source-dependency inputs"),
+            "injected-source" => plural(
+                n,
+                "production source input (injected into the test universe)",
+                "production source inputs (injected into the test universe)",
+            ),
+            "injected-packages" => plural(
+                n,
+                "package from the production root",
+                "packages from the production root",
+            ),
             "package" => plural(n, "package", "packages"),
             "package-list" => plural(n, "package added or removed", "packages added or removed"),
             "unreadable-package-folder" => "the unreadable package folders".to_string(),

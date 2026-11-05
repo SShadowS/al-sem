@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (agent tasks, milestone C: test selection)
+
+Which tests to run first for a change, as a first-class answer. Spec:
+`docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §4.
+
+- **Test universes** (`engine::test_select::universe::TestUniverse`): a sibling test app's
+  program with the workspace (production) app loaded as an **injected** source dependency and the
+  production root's `.alpackages` (and ancestors) as an extra package root. Nothing is written into
+  the user's test app: `WorkspaceInputs::read_scoped` takes the injected inputs
+  (`program::inputs::Injected`), `source_deps::read_with` / `walk_with` read the injected folders
+  after the configured ones (one the configuration already names by app id is left out), and
+  `dependencies::discover_app_files_with` searches the extra roots after the workspace's. The
+  descriptor's key is `tests:<16 hex>`. A **production stamp** (blake3 over the sorted relative
+  path and content hash of the production app's `.al` files and its `app.json`, the same function
+  on both sides) tells whether the two universes were built from the same production bytes. On
+  the fixture every production routine keeps its StableRoutineId and its resolved out-edges in the
+  test universe (C-2, C-2b).
+- **The manifest names a test universe's injected inputs** (`inj:sources`, `inj:pkg-roots`;
+  `Manifest::observe_scoped`, `Manifest::injected`), so a resident test universe sees a production
+  edit as its own change, and the freshness check (`check_against`) observes the injected inputs
+  from the published manifest alone (F-7). `Manifest::changes` names them by category:
+  `injected-source` (an injected folder's files, app.json and listing) and `injected-packages` (a
+  package found under an injected package root); both are refresh class `Package`.
+  `ResidentSession::with_injected` / `with_universe_label` (the descriptor's universe is
+  `tests:<key>`); `WorkspaceReader::read_scoped`.
+
 ### Added (agent tasks, milestone R0: the reverse cone)
 
 The shared up-walker ("who reaches this routine") that test selection, "what context does R run

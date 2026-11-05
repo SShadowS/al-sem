@@ -454,10 +454,31 @@ pub struct DiscoveredAppFile {
 pub fn discover_app_files(
     project_root: &Path,
 ) -> (Vec<DiscoveredAppFile>, Vec<(PathBuf, std::io::Error)>) {
+    discover_app_files_with(project_root, &[])
+}
+
+/// [`discover_app_files`] over `project_root`, then over each of
+/// `extra_roots` (a test universe's injected package roots, agent-tasks design
+/// §4.3: the production root's `.alpackages` and its ancestors), in order.
+/// A folder two roots share is walked once, and a file already found is not
+/// listed again; two `.app` files of one app id are settled by the loader as
+/// usual (highest version first).
+pub fn discover_app_files_with(
+    project_root: &Path,
+    extra_roots: &[PathBuf],
+) -> (Vec<DiscoveredAppFile>, Vec<(PathBuf, std::io::Error)>) {
     let mut files = Vec::new();
     let mut unreadable = Vec::new();
     let mut seen_paths: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-    for folder in find_all_alpackages_folders(project_root) {
+    let mut folders = find_all_alpackages_folders(project_root);
+    for r in extra_roots {
+        for f in find_all_alpackages_folders(r) {
+            if !folders.contains(&f) {
+                folders.push(f);
+            }
+        }
+    }
+    for folder in folders {
         let entries = match std::fs::read_dir(&folder) {
             Ok(e) => e,
             Err(e) => {

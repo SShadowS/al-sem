@@ -42,7 +42,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::program::inputs::WorkspaceInputs;
+use crate::program::inputs::{Injected, WorkspaceInputs};
 
 /// The stamp's scheme (§4.7).
 pub const STAMP_PREFIX: &str = "al-sem-manifest-v1:";
@@ -99,7 +99,8 @@ pub struct Manifest {
 pub struct InputChange {
     /// `al-file`, `al-walk`, `app-json`, `app-json-paths`, `roots-config`,
     /// `coverage-config`, `source-dependency`, `package`, `package-list`,
-    /// `unreadable-package-folder`, `meta` or `other`.
+    /// `unreadable-package-folder`, `meta`, `other`, or (a test universe's
+    /// injected inputs) `injected-source` and `injected-packages`.
     pub category: &'static str,
     /// The path, spelled as [`Manifest::changed_paths`] spells it, when the
     /// input is one file.
@@ -150,6 +151,38 @@ fn meta(entries: &mut BTreeMap<String, Ident>, single_app: bool) {
         "meta:grammar".into(),
         Ident::Text(crate::engine::host::grammar_sha().to_string()),
     );
+}
+
+/// A test universe's injected inputs (agent-tasks design §4.3), when it has
+/// any: `inj:sources` (each injected folder's spelling) and `inj:pkg-roots`
+/// (each extra package root). An injected folder's own files are
+/// `srcapp:`/`srcwalk:`/`src:` entries under its spelling, as a configured
+/// one's; [`Manifest::changes`] names them `injected-source`.
+fn injected_entries(e: &mut BTreeMap<String, Ident>, injected: &Injected) {
+    if !injected.sources.is_empty() {
+        e.insert(
+            "inj:sources".into(),
+            Ident::List(
+                injected
+                    .sources
+                    .iter()
+                    .map(|p| crate::program::source_deps::injected_spelling(p))
+                    .collect(),
+            ),
+        );
+    }
+    if !injected.package_roots.is_empty() {
+        e.insert(
+            "inj:pkg-roots".into(),
+            Ident::List(
+                injected
+                    .package_roots
+                    .iter()
+                    .map(|p| path_text(p))
+                    .collect(),
+            ),
+        );
+    }
 }
 
 /// One configured source folder as the manifest records it: its spelled
@@ -345,6 +378,7 @@ impl Manifest {
     pub fn consumed(inputs: &WorkspaceInputs, single_app: bool) -> Manifest {
         let mut e = BTreeMap::new();
         meta(&mut e, single_app);
+        injected_entries(&mut e, &inputs.injected);
         e.insert("ws:app.json".into(), read_ident(&inputs.app_json.bytes));
         e.insert(
             "ws:roots.config.json".into(),
@@ -444,11 +478,24 @@ impl Manifest {
     /// reader's own discovery, hashed as `hashing` says.
     #[must_use]
     pub fn observe(workspace: &Path, single_app: bool, hashing: Hashing<'_>) -> Manifest {
+        Self::observe_scoped(workspace, &Injected::default(), single_app, hashing)
+    }
+
+    /// [`Self::observe`] of a read that also takes `injected`'s inputs (a
+    /// test universe, [`Injected`]): the same discovery the scoped read runs.
+    #[must_use]
+    pub fn observe_scoped(
+        workspace: &Path,
+        injected: &Injected,
+        single_app: bool,
+        hashing: Hashing<'_>,
+    ) -> Manifest {
         let _s = crate::engine::perf_trace::span("resident", "manifest.observe");
         let mut e = BTreeMap::new();
         let mut stats = BTreeMap::new();
         let mut hashed = Vec::new();
         meta(&mut e, single_app);
+        injected_entries(&mut e, injected);
         // A file's identity: the previous hash when its stat is unchanged
         // (and it is not dirty), else `read`'s.
         let mut cached = |key: &str, path: &Path, read: &dyn Fn() -> Ident| -> Ident {
@@ -524,7 +571,8 @@ impl Manifest {
             }
         };
         e.insert("ws:al-walk".into(), listing);
-        let (files, unreadable) = crate::dependencies::discover_app_files(workspace);
+        let (files, unreadable) =
+            crate::dependencies::discover_app_files_with(workspace, &injected.package_roots);
         for f in &files {
             file(
                 &mut e,
@@ -540,18 +588,19 @@ impl Manifest {
         // The source dependencies: the same walk and checks as the read,
         // each file stat-cached like the workspace's own (a file's read
         // error is the walk's error, as the read reports it).
-        let walked =
-            crate::program::source_deps::walk(workspace, &mut |spelled, rel, path| match cached(
-                &src_key(spelled, rel),
-                path,
-                &|| match crate::source_text::read_al_source(path) {
+        let walked = crate::program::source_deps::walk_with(
+            workspace,
+            &injected.sources,
+            &mut |spelled, rel, path| match cached(&src_key(spelled, rel), path, &|| {
+                match crate::source_text::read_al_source(path) {
                     Ok(t) => Ident::bytes(t.as_bytes()),
                     Err(err) => Ident::Unreadable(err.to_string()),
-                },
-            ) {
+                }
+            }) {
                 Ident::Unreadable(why) => Err(why),
                 id => Ok(id),
-            });
+            },
+        );
         source_dep_entries(
             &mut e,
             walked.map(|deps| {
@@ -604,7 +653,9 @@ impl Manifest {
                 dirty: &no_dirty,
             }
         };
-        let mut m = Manifest::observe(workspace, single_app, hashing);
+        // A test universe's injected inputs are named in its own manifest
+        // (`inj:` entries), so the check observes them too (F-7).
+        let mut m = Manifest::observe_scoped(workspace, &published.injected(), single_app, hashing);
         m.entries.retain(|k, _| !k.starts_with("meta:"));
         for (k, v) in &published.entries {
             if k.starts_with("meta:") {
@@ -612,6 +663,20 @@ impl Manifest {
             }
         }
         m
+    }
+
+    /// The injected inputs this manifest's read took (its `inj:` entries;
+    /// empty for every universe but a test universe).
+    #[must_use]
+    pub fn injected(&self) -> Injected {
+        let list = |k: &str| match self.entries.get(k) {
+            Some(Ident::List(v)) => v.iter().map(PathBuf::from).collect(),
+            _ => Vec::new(),
+        };
+        Injected {
+            sources: list("inj:sources"),
+            package_roots: list("inj:pkg-roots"),
+        }
     }
 
     /// The entries whose input could not be read: `(key, why)`.
@@ -694,7 +759,37 @@ impl Manifest {
             .into_iter()
             .filter(|k| self.entries.get(*k) != other.entries.get(*k))
             .collect();
+        // A test universe's injected folders (either side's): their files
+        // are `injected-source`, a configured folder's `source-dependency`.
+        let injected: BTreeSet<String> = [self, other]
+            .iter()
+            .flat_map(|m| m.injected().sources)
+            .map(|p| crate::program::source_deps::injected_spelling(&p))
+            .collect();
+        let src_category = |spelled: &str| -> &'static str {
+            if injected.contains(spelled) {
+                "injected-source"
+            } else {
+                "source-dependency"
+            }
+        };
+        // A package found under an injected package root (and not under the
+        // workspace's own discovery first) is `injected-packages`.
+        let injected_roots: Vec<PathBuf> = [self, other]
+            .iter()
+            .flat_map(|m| m.injected().package_roots)
+            .collect();
         let one_sided = |k: &str| self.entries.contains_key(k) != other.entries.contains_key(k);
+        let side_if = |k: &str| {
+            one_sided(k).then(|| {
+                if other.entries.contains_key(k) {
+                    "added"
+                } else {
+                    "removed"
+                }
+                .to_string()
+            })
+        };
         let side = |k: &str| {
             Some(
                 if other.entries.contains_key(k) {
@@ -730,13 +825,13 @@ impl Manifest {
                 let (spelled, rel) = rest.split_once('\u{0}').unwrap_or((rest, ""));
                 let path = Some(path_text(&workspace.join(spelled).join(rel)));
                 change(
-                    "source-dependency",
+                    src_category(spelled),
                     path,
                     if one_sided(k) { side(k) } else { None },
                 )
             } else if let Some(spelled) = k.strip_prefix("srcapp:") {
                 change(
-                    "source-dependency",
+                    src_category(spelled),
                     Some(path_text(&workspace.join(spelled).join("app.json"))),
                     None,
                 )
@@ -745,9 +840,21 @@ impl Manifest {
                     continue;
                 }
                 change(
-                    "source-dependency",
+                    src_category(spelled),
                     None,
                     Some(format!("the .al listing of source dependency {spelled}")),
+                )
+            } else if k == "inj:sources" {
+                change(
+                    "injected-source",
+                    None,
+                    Some("the test universe's injected source folders".into()),
+                )
+            } else if k == "inj:pkg-roots" {
+                change(
+                    "injected-packages",
+                    None,
+                    Some("the test universe's extra package roots".into()),
                 )
             } else if k == "pkg:list" {
                 if differs.iter().any(|d| {
@@ -765,6 +872,10 @@ impl Manifest {
                     None,
                     Some("the package folders that could not be read".into()),
                 )
+            } else if let Some(p) = k.strip_prefix("pkg:")
+                && injected_roots.iter().any(|r| Path::new(p).starts_with(r))
+            {
+                change("injected-packages", Some(p.to_string()), side_if(k))
             } else if let Some(p) = k.strip_prefix("pkg:") {
                 if one_sided(k) {
                     change("package-list", Some(p.to_string()), side(k))
