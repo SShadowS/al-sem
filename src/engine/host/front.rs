@@ -64,6 +64,8 @@ pub struct FrontConfig {
     /// Its universe (one child per workspace and universe; an ask of the
     /// other universe is refused `notThisWorkspace`).
     pub universe: super::Universe,
+    /// A test universe's descriptor (universe `tests`).
+    pub test_universe: Option<crate::engine::test_select::universe::TestUniverse>,
     pub hello_deadline: Duration,
     pub shutdown_deadline: Duration,
     pub backoff_initial: Duration,
@@ -88,6 +90,7 @@ impl FrontConfig {
             env: Vec::new(),
             workspace: workspace.into(),
             universe: super::Universe::CrossApp,
+            test_universe: None,
             hello_deadline: HELLO_DEADLINE,
             shutdown_deadline: SHUTDOWN_DEADLINE,
             backoff_initial: BACKOFF_INITIAL,
@@ -903,6 +906,7 @@ impl EngineFront {
             workspace: self.cfg.workspace.clone(),
             output_root: self.output_root.path().to_path_buf(),
             universe: self.cfg.universe,
+            test_universe: self.cfg.test_universe.clone(),
         };
         let id = self.take_id();
         let params = serde_json::to_value(open).expect("open params serialize");

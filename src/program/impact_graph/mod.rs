@@ -212,6 +212,11 @@ pub struct GraphJob<'a> {
     /// errors name this one, as standalone does (#277 R7-8).
     pub workspace: &'a Path,
     pub out: Option<&'a str>,
+    /// `--keep-local-sources` (agent-tasks design §4.8): keep every routine
+    /// of an app loaded from local source (a source-folder dependency, a test
+    /// universe's production app) through pruning. `None`: on when such an
+    /// app is loaded, so an export with none is the same bytes as before.
+    pub keep_local_sources: Option<bool>,
 }
 
 impl Job for GraphJob<'_> {
@@ -241,7 +246,7 @@ impl Job for GraphJob<'_> {
     ) -> Result<SideDoc, JobFailure> {
         let graph = program
             .map_err(str::to_string)
-            .and_then(|p| export_as(p, self.workspace));
+            .and_then(|p| export_as(p, self.workspace, self.keep_local_sources));
         Ok(SideDoc::new(graph))
     }
 
@@ -263,7 +268,7 @@ impl Job for GraphJob<'_> {
 /// The program must be [`ProgramScope::CrossApp`]: a workspace-scoped build has
 /// no dependency call-site edges, so its graph would lose them silently.
 pub fn export_from_program(program: &ResolvedProgram) -> Result<ImpactGraph, String> {
-    export_as(program, &program.meta().inputs.workspace)
+    export_as(program, &program.meta().inputs.workspace, None)
 }
 
 /// The sited graph of a built program (agent-tasks design §1.2 M0-1), of any
@@ -329,7 +334,11 @@ pub fn sited_from_program(
 }
 
 /// [`export_from_program`], its errors naming the workspace as `workspace`.
-fn export_as(program: &ResolvedProgram, workspace: &Path) -> Result<ImpactGraph, String> {
+fn export_as(
+    program: &ResolvedProgram,
+    workspace: &Path,
+    keep_local_sources: Option<bool>,
+) -> Result<ImpactGraph, String> {
     let pm = program.meta();
     let inputs = &pm.inputs;
     if pm.scope() != ProgramScope::CrossApp {
@@ -355,15 +364,44 @@ fn export_as(program: &ResolvedProgram, workspace: &Path) -> Result<ImpactGraph,
     let facts = extract_source_facts(graph, &index, &ctx.all_units());
     let surface = ctx.decl_surface();
     let recovered: HashSet<String> = pm.recovered_files.iter().cloned().collect();
-    let projection = project(&Inputs {
-        graph,
-        index: &index,
-        surface: &surface,
-        edges: body.edge_view(),
-        facts: &facts,
-        missing_obligations: &pm.coverage_contract.missing,
-        recovered_files: &recovered,
-    });
+    // §4.8: the apps loaded from local source, and their folders.
+    let mut apps = program.loaded_apps();
+    let local_roots: HashMap<String, String> = inputs
+        .source_dependencies
+        .as_ref()
+        .map(|deps| {
+            deps.iter()
+                .map(|d| (d.guid(), d.root.to_string_lossy().replace('\\', "/")))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut any_local = false;
+    for a in &mut apps {
+        let local = matches!(
+            a["source"].as_str(),
+            Some("localApproximate" | "localVerified")
+        );
+        if local {
+            any_local = true;
+            let id = a["appId"].as_str().unwrap_or("").to_ascii_lowercase();
+            if let Some(root) = local_roots.get(&id) {
+                a["sourceRoot"] = json!(root);
+            }
+        }
+    }
+    let keep_local = keep_local_sources.unwrap_or(any_local);
+    let projection = project::project_keeping(
+        &Inputs {
+            graph,
+            index: &index,
+            surface: &surface,
+            edges: body.edge_view(),
+            facts: &facts,
+            missing_obligations: &pm.coverage_contract.missing,
+            recovered_files: &recovered,
+        },
+        keep_local,
+    );
 
     // The dependency call sites (spec §4.3.2: over all edges, the dependency
     // callers' `CallSite` edges are exactly this set).
@@ -371,7 +409,6 @@ fn export_as(program: &ResolvedProgram, workspace: &Path) -> Result<ImpactGraph,
         Histogram::of_edges(body.dependency_body_edges().iter().map(|ce| &ce.edge));
     let snap = ctx.snapshot();
     let ws = snap.apps.first();
-    let apps = program.loaded_apps();
     let meta = json!({
         "schema": SCHEMA,
         "version": VERSION,

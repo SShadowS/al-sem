@@ -24,6 +24,10 @@ pub enum Universe {
     CrossApp,
     /// `--single-app`: the workspace alone.
     SingleApp,
+    /// A test universe (agent-tasks §4.3): the engine's workspace is the test
+    /// app; its descriptor is registered with the pool before the first call
+    /// (`Pool::run_tests`). Never a call's own choice.
+    Tests,
 }
 
 impl Universe {
@@ -33,6 +37,7 @@ impl Universe {
         match self {
             Universe::CrossApp => "cross-app",
             Universe::SingleApp => "single-app",
+            Universe::Tests => "tests",
         }
     }
 }
@@ -118,12 +123,23 @@ pub struct EngineCall {
     pub verify: bool,
 }
 
+/// A call of `alsem_tests` (agent-tasks §4): `command` is the CLI command
+/// it equals (`alsem tests …`, the byte contract); the pool runs it as a
+/// composite request, part by part ([`crate::engine::test_select::run`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TestsCall {
+    pub command: CommandCall,
+    pub request: crate::engine::test_select::run::TestsRequest,
+    pub opts: crate::engine::test_select::render::RenderOpts,
+}
+
 /// A validated tool call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolCall {
     Command(CommandCall),
     Status(EngineCall),
     Refresh(EngineCall),
+    Tests(TestsCall),
 }
 
 /// The inline cap when a call names none (MCP output plan 1c, item T's E4):
@@ -157,6 +173,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "alsem_digest",
     "alsem_query_effects",
     "alsem_query_touches",
+    "alsem_tests",
     "alsem_status",
     "alsem_refresh",
 ];
@@ -441,6 +458,52 @@ pub fn tool_list() -> Vec<Value> {
                     ("deterministic", deterministic()),
                 ],
                 &["table"],
+                true,
+            ),
+        ),
+        tool(
+            "alsem_tests",
+            "Which tests to run first for a change, and whether that is enough. Exactly one of `routines` (selectors), `files` (workspace-relative .al files: every routine in them) or `diff` (a unified diff's text; `diffRoot` is the folder its paths are relative to, default the git top level). The test scope comes first: the workspace's own [Test] procedures and the sibling test apps, from `testApps` (folders), else `testApps` in .al-sem.json (`[]` turns them off), else found under the git top level (at most 3 levels and 64 app.json files; a cap says discovery incomplete). Each test app is analyzed in a test universe of its own (the workspace app loaded into it as source; nothing is written into the test app), started on the first call; the production engine resolves the changed routines. Then each changed routine's status (reached, no-known-path, analysis-incomplete, not-loaded, not-in-projection), the tests to run first ranked by tier, hops and codeunit, grouped per codeunit with the first test's path, `selection complete: yes|no` and, when no, every reason the whole suite must run as well (ways to run no edge shows, calls from test code that resolve nowhere, a root not in a test universe), and a codeunit filter. Default (`format: human`): one line per test codeunit (the first 5), 2-6 KB. Ask for more: `tier: dependency` (also tests whose path passes dependency code) or `tier: all` (also paths over open sites), `maxTests: N` (at most N tests in runFirst), `format: json` (schema al-sem.tests/1: runFirst, requiredFallback, selectionComplete, byTier, hidden, next). Lines are 1-based. Dependency code: a test reaching the routine only through dependency code is counted in its own tier, never as local, and when those paths go through nodes that may execute most of the program the answer says they are not specific to this change. Static reachability, not coverage. Next: run the runFirst filter, then the whole suite when selection complete is no. Returns the exact `alsem tests` stdout.",
+            schema(
+                vec![
+                    (
+                        "routines",
+                        string_array(&format!("Mode 1, the changed routines: {SELECTOR}.")),
+                    ),
+                    (
+                        "files",
+                        string_array(
+                            "Mode 2, the changed .al files, workspace-relative: every routine in them.",
+                        ),
+                    ),
+                    (
+                        "diff",
+                        json!({"type": "string", "description": "Mode 3, a unified diff's text: the routines its hunks touch."}),
+                    ),
+                    (
+                        "diffRoot",
+                        json!({"type": "string", "description": "With `diff`: the folder its paths are relative to (default: the git top level)."}),
+                    ),
+                    (
+                        "testApps",
+                        string_array(
+                            "The sibling test apps' folders, instead of .al-sem.json's testApps and discovery.",
+                        ),
+                    ),
+                    (
+                        "tier",
+                        json!({"type": "string", "enum": ["local", "dependency", "all"], "description": "Which tests runFirst lists: local (default), dependency (also through dependency code), all (also over open sites)."}),
+                    ),
+                    (
+                        "maxTests",
+                        json!({"type": "integer", "minimum": 0, "description": "List at most this many tests in runFirst; the counts stay whole."}),
+                    ),
+                    (
+                        "format",
+                        json!({"type": "string", "enum": ["human", "json"], "description": "Output format (default human)."}),
+                    ),
+                ],
+                &[],
                 true,
             ),
         ),
@@ -869,6 +932,78 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             );
             v.switch("deterministic", a.flag("deterministic")?);
             v
+        }
+        "alsem_tests" => {
+            let mut v = Argv::new(&["tests"], &workspace);
+            let routines = a.strings("routines")?;
+            let files = a.strings("files")?;
+            let diff = a.string("diff")?;
+            let modes = [routines.is_some(), files.is_some(), diff.is_some()];
+            if modes.iter().filter(|m| **m).count() != 1 {
+                return Err(
+                    "alsem_tests takes exactly one of 'routines', 'files' or 'diff'".into(),
+                );
+            }
+            if a.string("diffRoot")?.is_some() && diff.is_none() {
+                return Err("'diffRoot' goes with 'diff'".into());
+            }
+            let mut req = crate::engine::test_select::run::TestsRequest {
+                workspace: workspace.clone(),
+                single_app: universe == Universe::SingleApp,
+                ..Default::default()
+            };
+            for r in routines.unwrap_or_default() {
+                v.opt("routine", r);
+                req.routines.push(r.to_string());
+            }
+            for f in files.unwrap_or_default() {
+                v.opt("file", f);
+                req.files.push(f.to_string());
+            }
+            if let Some(d) = diff {
+                v.opt("diff", "-");
+                req.diff = Some("-".into());
+                diff_text = Some(d.to_string());
+                if let Some(root) = a.string("diffRoot")? {
+                    v.opt("diff-root", root);
+                    req.diff_root = Some(root.to_string());
+                }
+            }
+            for t in a.strings("testApps")?.unwrap_or_default() {
+                let t = absolute(t);
+                v.opt("test-app", &t);
+                req.test_apps.push(t);
+            }
+            let tier = a.enumerated("tier", &["local", "dependency", "all"], "local")?;
+            v.opt("tier", &tier);
+            let max_tests = a.count("maxTests")?;
+            if let Some(n) = max_tests {
+                v.opt("max-tests", &n.to_string());
+            }
+            let format = a.enumerated("format", &["human", "json"], "human")?;
+            v.opt("format", &format);
+            v.switch("single-app", universe == Universe::SingleApp);
+            let opts = crate::engine::test_select::render::RenderOpts {
+                tier: crate::engine::test_select::render::TierPick::parse(&tier)?,
+                max_tests: max_tests.map(|n| n as usize),
+                json: format == "json",
+            };
+            return Ok(ToolCall::Tests(TestsCall {
+                command: CommandCall {
+                    tool,
+                    workspace,
+                    universe,
+                    freshness,
+                    argv: v.done(),
+                    diff_text,
+                    out,
+                    max_inline_bytes,
+                    always_file,
+                    client_budget_chars,
+                },
+                request: req,
+                opts,
+            }));
         }
         _ => unreachable!("every tool is listed"),
     };

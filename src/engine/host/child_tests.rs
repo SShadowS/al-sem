@@ -104,6 +104,7 @@ fn open(dir: &std::path::Path) -> Message {
             workspace: dir.into(),
             output_root: dir.into(),
             universe: super::super::Universe::CrossApp,
+            test_universe: None,
         })
         .unwrap(),
     )

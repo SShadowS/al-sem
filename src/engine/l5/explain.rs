@@ -429,6 +429,13 @@ impl Job for ExplainJob<'_> {
         let apps = view.target().dependencies().apps;
         let sources = (self.show_source && self.human)
             .then(|| crate::engine::source_excerpt::SourceTexts::read(&workspace));
+        // The test scope (agent-tasks C-7): the same discovery `alsem tests`
+        // runs, files only. explain never starts a test universe: it says
+        // what was found and that `alsem tests` selects from it.
+        let test_scope = crate::engine::test_select::scope::discover(
+            &workspace,
+            &crate::engine::test_select::scope::ScopeRequest::default(),
+        );
         let result = render(
             model,
             &self.req.mode,
@@ -440,6 +447,7 @@ impl Job for ExplainJob<'_> {
             self.opts,
             sources.as_ref(),
             &table_answers,
+            &test_scope,
             &callers,
         );
         drop(full);
@@ -1136,6 +1144,7 @@ fn render(
     opts: RenderOpts,
     sources: Option<&crate::engine::source_excerpt::SourceTexts>,
     table_answers: &TableAnswers,
+    test_scope: &crate::engine::test_select::scope::Scope,
     callers: &HashMap<String, (Value, Vec<String>)>,
 ) -> ExplainRunResult {
     use crate::engine::perf_trace::span;
@@ -1182,7 +1191,10 @@ fn render(
                 rid,
                 entry,
                 &rcx,
-                tests_reaching.as_ref().map(|(t, n)| (t, *n)),
+                CardTests {
+                    reaching: tests_reaching.as_ref().map(|(t, n)| (t, *n)),
+                    scope: Some(test_scope),
+                },
                 opts,
             );
             let (mut json, mut human) = (card.json(), card.human());
@@ -1490,6 +1502,9 @@ struct Card {
     reached_from: Vec<(Value, String)>,
     extension_points: Vec<(Value, String)>,
     tests: Vec<(Value, String)>,
+    /// The sibling test scope (agent-tasks C-7): discovered, never analyzed
+    /// here.
+    test_scope: Option<crate::engine::test_select::scope::Scope>,
     gaps: Vec<Gap>,
     /// W2-2: the rollup's totals (with callers, page actions and tests).
     totals: RollupTotals,
@@ -1638,6 +1653,15 @@ fn detail<'e>(e: &'e DigestEffectFull, key: &str) -> Option<&'e str> {
 /// Per routine, the `[Test]` procedures that reach it (`reaching_tests`).
 type ReachingTests = BTreeMap<String, Vec<(String, bool)>>;
 
+/// What a card knows about tests: the `[Test]` procedures that reach each
+/// routine with the number loaded (`None`: no test search ran), and the
+/// test scope discovery's result (C-7; the summary reads it too).
+#[derive(Clone, Copy)]
+struct CardTests<'a> {
+    reaching: Option<(&'a ReachingTests, usize)>,
+    scope: Option<&'a crate::engine::test_select::scope::Scope>,
+}
+
 impl Card {
     fn build(
         ix: &Indexes<'_>,
@@ -1645,9 +1669,13 @@ impl Card {
         rid: &str,
         full: Option<&DigestEntryFull>,
         rcx: &RollupCx<'_>,
-        tests_reaching: Option<(&ReachingTests, usize)>,
+        card_tests: CardTests<'_>,
         opts: RenderOpts,
     ) -> Card {
+        let CardTests {
+            reaching: tests_reaching,
+            scope: test_scope,
+        } = card_tests;
         let model = ix.model;
         let rows: Vec<usize> = ix.rows_of(rid).to_vec();
         let mut gaps: Vec<Gap> = Vec::new();
@@ -2406,6 +2434,13 @@ impl Card {
         totals.page_actions = Some(reached_from.len());
         totals.tests = Some(tests.len());
         totals.tests_loaded = tests_reaching.map(|(_, n)| n);
+        // The summary's `tests:` clause reads the same scope as the detail
+        // line (agent-tasks C, item 1).
+        totals.sibling_tests =
+            test_scope.map(|s| crate::engine::l5::routine_rollup::SiblingTests {
+                apps: s.apps.len(),
+                complete: s.complete,
+            });
         let mut limits: Vec<String> = Vec::new();
         let mut notes: BTreeMap<&str, usize> = BTreeMap::new();
         for g in &gaps {
@@ -2520,6 +2555,7 @@ impl Card {
             reached_from,
             extension_points,
             tests,
+            test_scope: test_scope.cloned(),
             gaps,
             totals,
             coverage,
@@ -2575,6 +2611,14 @@ impl Card {
             "reachedFromSummary": self.reached_from_summary(),
             "extensionPoints": self.extension_points.iter().map(|r| r.0.clone()).collect::<Vec<_>>(),
             "tests": self.tests.iter().map(|r| r.0.clone()).collect::<Vec<_>>(),
+            "testScope": self.test_scope.as_ref().map(|s| json!({
+                "discovery": s.origin.as_str(),
+                "complete": s.complete,
+                "apps": s.apps.iter().map(|a| a.name.clone()).collect::<Vec<_>>(),
+                "skipped": s.skipped.len(),
+                "summary": s.sibling_summary(),
+                "analyzed": false,
+            })),
             "gaps": self
                 .gaps
                 .iter()
@@ -2746,20 +2790,39 @@ impl Card {
         // 19: tests.
         // Output step 1b (astra Task 5, fable fact 2): "none reach it" read
         // the same with and without test code loaded.
+        // Agent-tasks C-7: the sibling test apps are discovered, never
+        // analyzed here (no test universe is built for explain).
+        let siblings = self.test_scope.as_ref().filter(|s| !s.apps.is_empty());
+        let not_here = "not analyzed in this call — alsem tests (MCP: alsem_tests) selects them";
         if self.tests.is_empty() {
-            line(&match self.totals.tests_loaded {
-                None => "tests: not searched in this answer".to_string(),
-                Some(0) => "tests: no test code loaded (0 [Test] procedures in the workspace \
-                            app); that is not a reason to skip tests"
-                    .to_string(),
-                Some(n) => format!(
-                    "tests: {} loaded; none reaches it (not a reason to skip tests)",
-                    rf_plural(n, "[Test] procedure", "[Test] procedures")
+            line(&match (self.totals.tests_loaded, siblings) {
+                (None, _) => "tests: not searched in this answer".to_string(),
+                (Some(0), Some(s)) => format!(
+                    "tests: no [Test] procedure in the workspace app; {}; {not_here}",
+                    s.sibling_summary()
+                ),
+                (Some(0), None) => format!(
+                    "tests: no test code found (0 [Test] procedures in the workspace app; {}); \
+                     that is not a reason to skip tests",
+                    self.test_scope.as_ref().map_or_else(
+                        || "sibling apps not searched".into(),
+                        |s| s.sibling_summary()
+                    )
+                ),
+                (Some(n), _) => format!(
+                    "tests: {} loaded; none reaches it (not a reason to skip tests){}",
+                    rf_plural(n, "[Test] procedure", "[Test] procedures"),
+                    siblings
+                        .map(|s| format!("; also {}, {not_here}", s.sibling_summary()))
+                        .unwrap_or_default()
                 ),
             });
         }
         for (_, h) in &self.tests {
             line(h);
+        }
+        if let (false, Some(s)) = (self.tests.is_empty(), siblings) {
+            line(&format!("  also {}, {not_here}", s.sibling_summary()));
         }
         // 20: gaps in workspace code (dependency gaps fold, 21).
         let shown: Vec<&Gap> = self

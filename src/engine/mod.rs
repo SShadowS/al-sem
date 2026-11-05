@@ -36,3 +36,4 @@ pub mod snapshot;
 /// W2-7: `--show-source` excerpts.
 pub mod source_excerpt;
 pub mod switch_dump;
+pub mod test_select;

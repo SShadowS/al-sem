@@ -84,10 +84,24 @@ pub type SourceDependencies = Result<Vec<SourceDependency>, String>;
 
 /// Read the workspace's [`CONFIG_FILE`] and every folder it names.
 pub fn read(workspace: &Path) -> SourceDependencies {
-    let walked = walk(workspace, &mut |_, _, path| {
+    read_with(workspace, &[])
+}
+
+/// [`read`], then the `injected` folders (a test universe's production app,
+/// agent-tasks design §4.3: named by the universe, not by a file in the
+/// user's test app). See [`walk_with`].
+pub fn read_with(workspace: &Path, injected: &[PathBuf]) -> SourceDependencies {
+    let walked = walk_with(workspace, injected, &mut |_, _, path| {
         read_al_source(path).map_err(|e| e.to_string())
     })?;
     Ok(walked.into_iter().map(Walked::into_dependency).collect())
+}
+
+/// How an injected folder is spelled: its path as given (absolute, from the
+/// universe descriptor). The manifest keys and messages use it.
+#[must_use]
+pub fn injected_spelling(p: &Path) -> String {
+    p.to_string_lossy().replace('\\', "/")
 }
 
 /// One configured folder as [`walk`] found it: its `app.json` (read and
@@ -140,15 +154,58 @@ pub fn walk<T>(
     workspace: &Path,
     per_file: &mut dyn FnMut(&str, &str, &Path) -> Result<T, String>,
 ) -> Result<Vec<Walked<T>>, String> {
+    walk_with(workspace, &[], per_file)
+}
+
+/// [`walk`], then each `injected` folder (spelled by [`injected_spelling`]),
+/// with the same checks. An injected folder whose app id a configured folder
+/// already supplies is left out: the user's own configuration names that app
+/// (the design's scratch test app lists the production folder itself).
+pub fn walk_with<T>(
+    workspace: &Path,
+    injected: &[PathBuf],
+    per_file: &mut dyn FnMut(&str, &str, &Path) -> Result<T, String>,
+) -> Result<Vec<Walked<T>>, String> {
     let config_path = workspace.join(CONFIG_FILE);
-    let bytes = match std::fs::read(&config_path) {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+    let sources = match std::fs::read(&config_path) {
+        Ok(bytes) => {
+            let text =
+                std::str::from_utf8(&bytes).map_err(|_| format!("{CONFIG_FILE}: not UTF-8"))?;
+            let config: Config =
+                serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(text))
+                    .map_err(|e| format!("{CONFIG_FILE}: {e}"))?;
+            config.sources
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(format!("{CONFIG_FILE}: {e}")),
     };
-    let text = std::str::from_utf8(&bytes).map_err(|_| format!("{CONFIG_FILE}: not UTF-8"))?;
-    let config: Config = serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(text))
-        .map_err(|e| format!("{CONFIG_FILE}: {e}"))?;
+    let mut deps = walk_sources(workspace, sources, per_file)?;
+    for p in injected {
+        let spelled = injected_spelling(p);
+        let dep = walk_one(workspace, &spelled, per_file)
+            .map_err(|e| format!("injected source \"{spelled}\": {e}"))?;
+        let id = str_id(&dep.app_json);
+        if !id.is_empty() && deps.iter().any(|d| str_id(&d.app_json) == id) {
+            continue;
+        }
+        deps.push(dep);
+    }
+    Ok(deps)
+}
+
+fn str_id(v: &serde_json::Value) -> String {
+    v.get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+}
+
+fn walk_sources<T>(
+    workspace: &Path,
+    sources: Vec<String>,
+    per_file: &mut dyn FnMut(&str, &str, &Path) -> Result<T, String>,
+) -> Result<Vec<Walked<T>>, String> {
+    let config = Config { sources };
     let mut deps: Vec<Walked<T>> = Vec::with_capacity(config.sources.len());
     let guid = |v: &serde_json::Value| {
         v.get("id")

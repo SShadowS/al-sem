@@ -219,9 +219,44 @@ pub struct SitedGraph {
     /// `rev_sites[rev_off[n]..rev_off[n + 1]]`, ascending.
     rev_off: Vec<u32>,
     rev_sites: Vec<u32>,
+    /// The source-cased names of each local routine node (workspace and
+    /// local-source apps): what a test-selection answer prints.
+    local_names: HashMap<u32, LocalName>,
+    /// The platform's table-event publishers (`OnAfterModifyEvent`, …: the
+    /// synthetic publishers a subscriber binds to), ascending.
+    platform_publishers: Vec<u32>,
+}
+
+/// A local routine node's names as its source spells them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LocalName {
+    pub object: Box<str>,
+    pub routine: Box<str>,
+    /// The file declaring it (its unit's virtual path).
+    pub file: Box<str>,
+    /// The routine is a trigger (`OnRun`, `OnAction`, …).
+    pub trigger: bool,
 }
 
 impl SitedGraph {
+    /// A local routine's source-cased names ([`LocalName`]).
+    #[must_use]
+    pub fn local_name(&self, ix: u32) -> Option<&LocalName> {
+        self.local_names.get(&ix)
+    }
+
+    /// Whether `ix` is a platform table-event publisher (`OnAfterModifyEvent`
+    /// and the like, raised by the platform on a record operation).
+    #[must_use]
+    pub fn is_platform_publisher(&self, ix: u32) -> bool {
+        self.platform_publishers.binary_search(&ix).is_ok()
+    }
+
+    /// Every loaded app's `(guid, name)` (the apps the node table names).
+    pub fn apps(&self) -> impl Iterator<Item = &(String, String)> {
+        self.apps.values()
+    }
+
     /// A node's [`flag`] bits.
     #[must_use]
     pub fn flags(&self, ix: u32) -> u8 {
@@ -482,7 +517,15 @@ impl SitedGraph {
                 .iter()
                 .map(|s| 2 * s.len() + 16 + size_of::<u32>() + 8)
                 .sum::<usize>();
-        (nodes + sites + units + tables) as u64
+        let names: usize = self
+            .local_names
+            .values()
+            .map(|n| {
+                n.object.len() + n.routine.len() + n.file.len() + size_of::<(u32, LocalName)>() + 8
+            })
+            .sum::<usize>()
+            + self.platform_publishers.capacity() * size_of::<u32>();
+        (nodes + sites + units + tables + names) as u64
     }
 }
 
@@ -599,6 +642,8 @@ impl SitedBuilder {
         let mut stable_objects: Vec<Box<str>> = Vec::new();
         let mut stable_object_ix: HashMap<Box<str>, u32> = HashMap::new();
         let mut stable: Vec<StableEntry> = Vec::new();
+        let mut local_names: HashMap<u32, LocalName> = HashMap::new();
+        let mut platform_publishers: Vec<u32> = Vec::new();
         for (i, k) in self.nodes.iter().enumerate() {
             let f = &mut flags[i];
             match k {
@@ -611,6 +656,15 @@ impl SitedBuilder {
                 Key::Object(o) => {
                     if local_apps.contains(&o.app) {
                         *f |= flag::LOCAL;
+                        if let Some(x) = obj_of(o) {
+                            local_names.insert(
+                                i as u32,
+                                LocalName {
+                                    object: Box::from(&*x.name),
+                                    ..LocalName::default()
+                                },
+                            );
+                        }
                     }
                     if obj_of(o).is_some_and(|x| x.tier == TrustTier::SymbolOnly) {
                         *f |= flag::SYMBOL_ONLY;
@@ -634,9 +688,32 @@ impl SitedBuilder {
                     else {
                         continue;
                     };
+                    if matches!(
+                        node.publisher_kind,
+                        Some(crate::program::resolve::event::PublisherKind::Platform)
+                    ) {
+                        platform_publishers.push(i as u32);
+                    }
                     if node.tier == TrustTier::SymbolOnly {
                         *f |= flag::SYMBOL_ONLY;
                         continue;
+                    }
+                    if local {
+                        local_names.insert(
+                            i as u32,
+                            LocalName {
+                                object: obj_of(&r.object)
+                                    .map(|o| Box::from(&*o.name))
+                                    .unwrap_or_default(),
+                                routine: Box::from(&*node.name),
+                                trigger: node.is_trigger,
+                                file: inp
+                                    .surface
+                                    .get_with_path(r)
+                                    .map(|(_, p)| Box::from(p))
+                                    .unwrap_or_default(),
+                            },
+                        );
                     }
                     if local
                         && !node.is_trigger
@@ -739,6 +816,8 @@ impl SitedBuilder {
             action_run_sites,
             rev_off,
             rev_sites,
+            local_names,
+            platform_publishers,
         }
     }
 }

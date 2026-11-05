@@ -1144,3 +1144,11 @@ fn cdo_entry_point_counts_agree() {
     );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+/// Agent-tasks C-9: `alsem tests` on the pinned baseline
+/// (`cli_tests_selection::cdo_selection_ratchets`), here so `cdo-gate` runs
+/// it.
+#[test]
+fn cdo_test_selection_ratchets() {
+    crate::cli_tests_selection::cdo_selection_ratchets();
+}

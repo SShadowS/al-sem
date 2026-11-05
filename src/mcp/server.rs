@@ -212,7 +212,7 @@ pub fn serve(
         out: out.clone(),
         protocol: Mutex::new(DEFAULT_PROTOCOL),
     });
-    let pool = Pool::new(
+    let pool = Arc::new(Pool::new(
         PoolConfig {
             program: cfg.program,
             child_env: cfg.child_env,
@@ -221,7 +221,7 @@ pub fn serve(
             decide,
         },
         Arc::clone(&transport) as Arc<dyn Transport>,
-    );
+    ));
     let defaults = cfg.defaults;
     let mut state = State::Uninitialized;
     // The status checks still running (each answers its own call).
@@ -379,6 +379,20 @@ pub fn serve(
                     ToolCall::Refresh(c) => pool.submit(id, Request::Refresh(c)),
                     ToolCall::Command(call) => {
                         pool.submit(id, Request::Command { call, progress });
+                    }
+                    // A composite request (agent-tasks §4.7): its parts are
+                    // queued one after the other from a coordinator thread;
+                    // the reader loop reads on.
+                    ToolCall::Tests(call) => {
+                        checkers.retain(|h| !h.is_finished());
+                        let pool2 = Arc::clone(&pool);
+                        let spawned = std::thread::Builder::new()
+                            .name("alsem-tests".into())
+                            .spawn(move || pool2.run_tests(&id, &call));
+                        match spawned {
+                            Ok(h) => checkers.push(h),
+                            Err(e) => log(&format!("a tests call could not start: {e}")),
+                        }
                     }
                 }
             }

@@ -81,6 +81,9 @@ pub struct WorkspaceInputs {
     pub model_instance_id: Option<String>,
     /// `WorkspaceNeeds::build_only` as asked.
     pub build_only: bool,
+    /// The inputs the read took besides the workspace's own (a test
+    /// universe's, [`Injected`]); empty for every other read.
+    pub injected: Injected,
     /// `rel_posix` -> index into `al_files`.
     index: HashMap<String, usize>,
 }
@@ -387,9 +390,37 @@ pub enum PolicyRequest {
     Disabled,
 }
 
+/// Inputs a read takes that the workspace's own files do not name (agent-tasks
+/// design §4.3, a test universe): extra source-folder dependencies, read as
+/// if `al-sem.dependencies.json` listed them after its own (nothing is written
+/// into the user's folder), and extra package roots whose `.alpackages` (and
+/// ancestors, to their `.git` boundary) are searched after the workspace's.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Injected {
+    pub sources: Vec<PathBuf>,
+    pub package_roots: Vec<PathBuf>,
+}
+
+impl Injected {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.sources.is_empty() && self.package_roots.is_empty()
+    }
+}
+
 impl WorkspaceInputs {
     /// The ONE workspace reader (spec §4.2.2). Charges the `inputs.read` counter.
     pub fn read(workspace: &Path, needs: &WorkspaceNeeds) -> Arc<WorkspaceInputs> {
+        Self::read_scoped(workspace, needs, &Injected::default())
+    }
+
+    /// [`Self::read`] with `injected`'s inputs as well ([`Injected`]).
+    pub fn read_scoped(
+        workspace: &Path,
+        needs: &WorkspaceNeeds,
+        injected: &Injected,
+    ) -> Arc<WorkspaceInputs> {
         pt::counter_delta("inputs.read", 1);
         // A command reads before its own top span (`analyze.total`) opens, so the
         // read is timed here.
@@ -448,10 +479,12 @@ impl WorkspaceInputs {
             )
         };
 
-        let (files, unreadable) = crate::dependencies::discover_app_files(workspace);
+        let (files, unreadable) =
+            crate::dependencies::discover_app_files_with(workspace, &injected.package_roots);
         let closure =
             ClosureEntries::acquire(files, unreadable, !build_only && needs.fingerprint_rows);
-        let source_dependencies = crate::program::source_deps::read(workspace);
+        let source_dependencies =
+            crate::program::source_deps::read_with(workspace, &injected.sources);
 
         let mut set = WorkspaceInputs {
             workspace: workspace.to_path_buf(),
@@ -468,6 +501,7 @@ impl WorkspaceInputs {
             driver_version: crate::engine::gate::version::driver_version(),
             model_instance_id: None,
             build_only,
+            injected: injected.clone(),
             index,
         };
         if !build_only {
