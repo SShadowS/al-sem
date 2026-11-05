@@ -280,9 +280,26 @@ impl WorkspaceSession {
         skip_roots_config: bool,
         needs: AssemblyNeeds,
     ) -> Result<CrossAppProgram, CrossAppFailure> {
+        self.refresh_lending(inputs, skip_roots_config, needs, &mut |_| {})
+    }
+
+    /// [`Self::refresh`], lending the program to `on_program` between its
+    /// build and the model's (agent-tasks design §1.2 M0-1: the sited graph
+    /// is built there, the one place the program exists). Not called when
+    /// the program failed.
+    pub fn refresh_lending(
+        &mut self,
+        inputs: &Arc<WorkspaceInputs>,
+        skip_roots_config: bool,
+        needs: AssemblyNeeds,
+        on_program: &mut dyn FnMut(&ResolvedProgram),
+    ) -> Result<CrossAppProgram, CrossAppFailure> {
         let start = std::time::Instant::now();
         let _s = pt::span("revision", "revision.refresh");
         let program = self.refresh_program(inputs);
+        if let Ok(p) = &program {
+            on_program(p);
+        }
         let out = self.refresh_model(program, inputs, skip_roots_config, needs);
         if let Some(r) = self.last.as_mut() {
             r.wall_ms = start.elapsed().as_millis();

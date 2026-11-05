@@ -113,6 +113,9 @@ pub struct Pinned {
     pub changed_paths: Vec<String>,
     /// How long the request waited for a build.
     pub waited_for_build_ms: u64,
+    /// The rebuild this request caused for an artifact the published
+    /// revision lacked (`"sited"`, [`ResidentSession::pin_sited`]).
+    pub rebuilt_for: Option<&'static str>,
 }
 
 /// Why no state was pinned.
@@ -144,6 +147,11 @@ pub struct SessionStats {
     pub last_build_started_unix_ms: Option<u64>,
     /// The last freshness check's wall time, in microseconds.
     pub last_check_us: Option<u64>,
+    /// Revisions published with a sited graph, and the last one's build
+    /// time and resident bytes (agent-tasks design §1.2 M0-1).
+    pub sited_builds: u64,
+    pub last_sited_ms: Option<u64>,
+    pub last_sited_bytes: Option<u64>,
 }
 
 /// A point in a build where a test hook runs (T-acquire-*).
@@ -181,6 +189,9 @@ pub struct ResidentSession {
     budget: Option<Arc<Budget>>,
     /// `--low-mem` ([`Self::with_low_mem`]).
     low_mem: bool,
+    /// Whether each build makes the sited graph ([`Self::with_sited`],
+    /// [`Self::builds_sited`]).
+    sited: std::sync::atomic::AtomicBool,
 }
 
 impl ResidentSession {
@@ -202,7 +213,22 @@ impl ResidentSession {
             hook: None,
             budget: None,
             low_mem: false,
+            sited: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// The session building the sited graph with every revision when
+    /// `sited` (agent-tasks design §1.2 M0-1; `engine-host --graph`).
+    #[must_use]
+    pub fn with_sited(self, sited: bool) -> ResidentSession {
+        self.sited.store(sited, Ordering::SeqCst);
+        self
+    }
+
+    /// Whether each build makes the sited graph.
+    #[must_use]
+    pub fn builds_sited(&self) -> bool {
+        self.sited.load(Ordering::SeqCst)
     }
 
     /// The session with a build hook (tests).
@@ -398,6 +424,7 @@ impl ResidentSession {
                     stale: false,
                     changed_paths: Vec::new(),
                     waited_for_build_ms: 0,
+                    rebuilt_for: None,
                 });
             }
             if mode == Freshness::LatestBuilt {
@@ -408,7 +435,7 @@ impl ResidentSession {
                     if let Ok(mut b) = me.builder.try_lock() {
                         // No request holds this build: every holder is a
                         // releaser it may wait for.
-                        let _ = me.build_locked(&mut b, None, 0);
+                        let _ = me.build_locked(&mut b, None, 0, &|| false);
                     }
                 });
                 return Ok(Pinned {
@@ -416,6 +443,7 @@ impl ResidentSession {
                     stale: true,
                     changed_paths: changed,
                     waited_for_build_ms: 0,
+                    rebuilt_for: None,
                 });
             }
             return self.build(Some(observed), stop);
@@ -451,26 +479,76 @@ impl ResidentSession {
                     stale: false,
                     changed_paths: Vec::new(),
                     waited_for_build_ms: start.elapsed().as_millis() as u64,
+                    rebuilt_for: None,
                 });
             }
             _ => before,
         };
         // The request waiting for this build is one admitted holder.
-        let built = self.build_locked(&mut b, before, 1)?;
+        let built = self.build_locked(&mut b, before, 1, &|| false)?;
         Ok(Pinned {
             built,
             stale: false,
             changed_paths: Vec::new(),
             waited_for_build_ms: start.elapsed().as_millis() as u64,
+            rebuilt_for: None,
+        })
+    }
+
+    /// The state a request that reads the sited graph is answered from
+    /// (agent-tasks design §1.2 M0-1, owner answer 2026-11-05: the graph
+    /// costs ~1 s per refresh on CDO, over the 300 ms bar, so it is built
+    /// only once a question needs it). [`Self::pin`]; then, when the pinned
+    /// revision has no sited graph, the session builds it with every revision
+    /// from now on and rebuilds once, for this request (`Pinned::rebuilt_for`
+    /// says so). `stop` also cancels that rebuild's sited graph (polled every
+    /// `CANCEL_EVERY` sites): the revision is then published without it, and
+    /// the next such request builds it.
+    pub fn pin_sited(
+        self: &Arc<Self>,
+        mode: Freshness,
+        stop: &dyn Fn() -> Option<Stop>,
+    ) -> Result<Pinned, PinError> {
+        let pinned = self.pin(mode, stop)?;
+        match &pinned.built {
+            Built::Revision(r) if r.sited().is_none() => {}
+            _ => return Ok(pinned),
+        }
+        self.sited.store(true, Ordering::SeqCst);
+        if let Some(s) = stop() {
+            return Err(PinError::Stopped(s));
+        }
+        let start = Instant::now();
+        let mut b = lock(&self.builder);
+        // Another request may have published a revision with it meanwhile.
+        if let Some(Built::Revision(r)) = self.published()
+            && r.sited().is_some()
+        {
+            return Ok(Pinned {
+                built: Built::Revision(r),
+                waited_for_build_ms: start.elapsed().as_millis() as u64,
+                ..pinned
+            });
+        }
+        let built = self.build_locked(&mut b, None, 1, &|| stop().is_some())?;
+        Ok(Pinned {
+            built,
+            stale: false,
+            changed_paths: Vec::new(),
+            waited_for_build_ms: pinned.waited_for_build_ms + start.elapsed().as_millis() as u64,
+            rebuilt_for: Some("sited"),
         })
     }
 
     /// The build itself, under the builder lock (see the module doc).
+    /// `cancel_sited` stops the sited graph's build (the revision is then
+    /// published without it).
     fn build_locked(
         &self,
         b: &mut Builder,
         mut before: Option<Manifest>,
         mine: u64,
+        cancel_sited: &dyn Fn() -> bool,
     ) -> Result<Built, PinError> {
         let start = Instant::now();
         let started_unix_ms = std::time::SystemTime::now()
@@ -527,7 +605,13 @@ impl ResidentSession {
             let inputs = WorkspaceInputs::read(&self.workspace, &REVISION_READ);
             self.hook(BuildPoint::AfterRead, attempt);
             let consumed = Manifest::consumed(&inputs, self.single_app);
-            let target = build_target(&mut b.workspace, &inputs, self.single_app);
+            let want_sited = self.sited.load(Ordering::SeqCst);
+            let mut sited: Option<SitedBuild> = None;
+            let target = build_target_with(&mut b.workspace, &inputs, self.single_app, &mut |p| {
+                if want_sited {
+                    sited = build_sited(p, cancel_sited);
+                }
+            });
             self.hook(BuildPoint::AfterBuild, attempt);
             let no_dirty = BTreeSet::new();
             let m_after = Manifest::observe(
@@ -558,7 +642,16 @@ impl ResidentSession {
                         Some(Built::Revision(r)) => Some(&**r),
                         _ => None,
                     };
-                    Built::Revision(Arc::new(Revision::seeded(id, inputs, target, seed_from)))
+                    let mut rev = Revision::seeded(id, inputs, target, seed_from);
+                    if let Some(s) = sited.take() {
+                        let mut st = lock(&self.stats);
+                        st.sited_builds += 1;
+                        st.last_sited_ms = Some(s.ms);
+                        st.last_sited_bytes = Some(s.graph.bytes());
+                        drop(st);
+                        rev = rev.with_sited(Arc::new(s.graph));
+                    }
+                    Built::Revision(Arc::new(rev))
                 }
                 Err(failure) => Built::Failed(Arc::new(FailedBuild { inputs, failure })),
             };
@@ -624,14 +717,57 @@ pub fn build_target(
     inputs: &Arc<WorkspaceInputs>,
     single_app: bool,
 ) -> Result<AnalysisTarget, ViewFailure> {
-    if single_app || inputs.model_instance_id.is_none() {
+    build_target_with(session, inputs, single_app, &mut |_| {})
+}
+
+/// What a revision's build made beside its target: the sited graph (agent-
+/// tasks design §1.2 M0-1), when the session builds it, and its build's
+/// wall time.
+pub struct SitedBuild {
+    pub graph: crate::program::impact_graph::SitedGraph,
+    pub ms: u64,
+}
+
+/// The sited graph of `program`, timed, or `None` when `cancel` stopped it.
+#[must_use]
+pub fn build_sited(
+    program: &crate::program::resolved::ResolvedProgram,
+    cancel: &dyn Fn() -> bool,
+) -> Option<SitedBuild> {
+    let start = Instant::now();
+    crate::program::impact_graph::sited_from_program(program, cancel)
+        .ok()
+        .map(|graph| SitedBuild {
+            graph,
+            ms: start.elapsed().as_millis() as u64,
+        })
+}
+
+/// [`build_target`], lending the program to `on_program` between its build
+/// and the model's (agent-tasks design §1.2 M0-1). A workspace with no
+/// model-instance id builds no program here (its failure is the cold
+/// builder's).
+pub fn build_target_with(
+    session: &mut WorkspaceSession,
+    inputs: &Arc<WorkspaceInputs>,
+    single_app: bool,
+    on_program: &mut dyn FnMut(&crate::program::resolved::ResolvedProgram),
+) -> Result<AnalysisTarget, ViewFailure> {
+    if single_app {
+        return crate::engine::gate::run::build_single_app_model_lending(
+            inputs,
+            REVISION_NEEDS,
+            on_program,
+        );
+    }
+    if inputs.model_instance_id.is_none() {
         let key = ViewKey::new(&inputs.workspace, single_app, false);
         return build_view_model(inputs, &key, REVISION_NEEDS, |_| {})
             .map(|m| m.expect("a model view builds a model").target);
     }
     let _s = crate::engine::perf_trace::span("crossapp", "crossapp.base_total");
     session
-        .refresh(inputs, false, REVISION_NEEDS.assembly())
+        .refresh_lending(inputs, false, REVISION_NEEDS.assembly(), on_program)
         .and_then(crate::engine::l4::capability_cone::cross_app_base_of)
         .map(|base| AnalysisTarget::CrossApp(Box::new(base)))
         .map_err(|e| ViewFailure {

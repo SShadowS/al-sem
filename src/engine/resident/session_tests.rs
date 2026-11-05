@@ -598,3 +598,111 @@ mod budget {
         assert_eq!(reads.load(Ordering::SeqCst), 1);
     }
 }
+
+/// The sited graph of a cold cross-app build over the disk now.
+fn sited_cold(ws: &Path) -> String {
+    let inputs = WorkspaceInputs::read(ws, &REVISION_READ);
+    let p = crate::program::resolved::ResolvedProgram::build(
+        &inputs,
+        crate::program::resolved::ProgramScope::CrossApp,
+    )
+    .expect("the fixture builds");
+    crate::program::impact_graph::sited_from_program(&p, &|| false)
+        .expect("not cancelled")
+        .text()
+}
+
+/// M0-T3 (agent-tasks design §1.3), in the given memory mode: a revision
+/// builds no sited graph until a question reads it; that question rebuilds
+/// once; from then on every revision builds it, and after a body edit that
+/// adds a call the new revision's graph has the new site and equals a cold
+/// build's.
+///
+/// DISCRIMINATION (2026-11-05): seeding the new revision with the previous
+/// revision's graph (`rev.with_sited(prev's Arc)` in `build_locked`) fails
+/// "the new call's site" in both modes.
+fn sited_graph_follows_a_body_edit(low_mem: bool) {
+    let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
+    let ws = dir.path();
+    let s = Arc::new(
+        ResidentSession::new(ws.to_path_buf(), false, "test".into()).with_low_mem(low_mem),
+    );
+    let first = s.pin(Freshness::Fresh, &never).unwrap();
+    assert!(revision(&first).sited().is_none(), "built only when asked");
+    let p = s.pin_sited(Freshness::Fresh, &never).unwrap();
+    assert_eq!(p.rebuilt_for, Some("sited"));
+    assert_eq!(revision(&p).id.generation, 2);
+    let g = revision(&p).sited().expect("the rebuild made it");
+    assert_eq!(g.text(), sited_cold(ws));
+    let ends = |g: &crate::program::impact_graph::SitedGraph| {
+        (
+            g.routines_named("callsymbolonlydep")[0],
+            g.routines_named("callembeddedsourcedep")[0],
+        )
+    };
+    let (c, e) = ends(&g);
+    assert!(
+        g.sites_between(c, e).is_empty(),
+        "precondition: no call yet"
+    );
+    edit(
+        ws,
+        "        \"Widget Mgt\".Compute(5);",
+        "        \"Widget Mgt\".Compute(5);\n        CallEmbeddedSourceDep();",
+    );
+    let p2 = s.pin_sited(Freshness::Fresh, &never).unwrap();
+    assert_eq!(p2.rebuilt_for, None, "every revision builds it now");
+    assert_eq!(s.stats().last_build_class.as_deref(), Some("B"));
+    let g2 = revision(&p2).sited().expect("built with the refresh");
+    let (c2, e2) = ends(&g2);
+    assert_eq!(g2.sites_between(c2, e2).len(), 1, "the new call's site");
+    assert_eq!(g2.text(), sited_cold(ws));
+    assert_eq!(s.stats().sited_builds, 2);
+}
+
+#[test]
+fn sited_graph_follows_a_body_edit_default_mode() {
+    sited_graph_follows_a_body_edit(false);
+}
+
+#[test]
+fn sited_graph_follows_a_body_edit_low_mem() {
+    sited_graph_follows_a_body_edit(true);
+}
+
+/// M0-T8 (agent-tasks design §1.3): a request cancelled while the rebuild
+/// it caused builds the sited graph ends that graph's build; the revision
+/// is published without it (the build completes for later requests), and
+/// the next question builds it.
+///
+/// DISCRIMINATION (2026-11-05): ignoring the cancel (`build_sited(p, &||
+/// false)` in `build_locked`) fails "no graph published".
+#[test]
+fn a_cancelled_sited_rebuild_publishes_no_graph() {
+    let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
+    let ws = dir.path();
+    let reads = Arc::new(AtomicUsize::new(0));
+    let stop_now = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (r, f) = (Arc::clone(&reads), Arc::clone(&stop_now));
+    let s = Arc::new(
+        ResidentSession::new(ws.to_path_buf(), false, "test".into()).with_hook(Box::new(
+            move |point, _| {
+                // The second build (the rebuild for the graph) is cancelled
+                // once its read is in hand.
+                if point == BuildPoint::AfterRead && r.fetch_add(1, Ordering::SeqCst) == 1 {
+                    f.store(true, Ordering::SeqCst);
+                }
+            },
+        )),
+    );
+    s.pin(Freshness::Fresh, &never).unwrap();
+    let stop = || stop_now.load(Ordering::SeqCst).then_some(Stop::Cancelled);
+    let p = s.pin_sited(Freshness::Fresh, &stop).unwrap();
+    assert_eq!(revision(&p).id.generation, 2, "the build completed");
+    assert!(revision(&p).sited().is_none(), "no graph published");
+    assert_eq!(s.stats().sited_builds, 0);
+    stop_now.store(false, Ordering::SeqCst);
+    let p = s.pin_sited(Freshness::Fresh, &never).unwrap();
+    assert_eq!(p.rebuilt_for, Some("sited"));
+    assert!(revision(&p).sited().is_some());
+}

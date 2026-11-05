@@ -221,6 +221,51 @@ impl SitedGraph {
             .collect()
     }
 
+    /// The routine nodes whose (folded) name is `name_lc`.
+    #[must_use]
+    pub fn routines_named(&self, name_lc: &str) -> Vec<u32> {
+        (0..self.nodes.len() as u32)
+            .filter(|i| {
+                matches!(&self.nodes[*i as usize], Key::Routine(r) if r.name_lc.as_str() == name_lc)
+            })
+            .collect()
+    }
+
+    /// Every site, one line each in site order: its ends' ids, kind,
+    /// confidence, `via`, line, conditions and boundary (the cold-equality
+    /// comparisons' text).
+    #[must_use]
+    pub fn text(&self) -> String {
+        use std::fmt::Write;
+        let mut out = String::new();
+        for s in &self.sites {
+            let conds: Vec<&str> = condition_names(s.conditions).collect();
+            let anchor = s.anchor.map(|a| {
+                format!(
+                    "{}:{}:{}-{}:{}",
+                    self.unit(a.unit),
+                    a.start_line,
+                    a.start_col,
+                    a.end_line,
+                    a.end_col
+                )
+            });
+            let _ = writeln!(
+                out,
+                "{} {} {:?} {:?} {} {:?} {:?} {:?}",
+                self.node_id(s.from),
+                self.node_id(s.to),
+                s.kind,
+                s.conf,
+                s.via(),
+                anchor,
+                conds,
+                s.boundary
+            );
+        }
+        out
+    }
+
     /// The `hiddenCallers` flags of a node.
     #[must_use]
     pub fn hidden_callers(&self, ix: u32) -> &[&'static str] {

@@ -278,7 +278,20 @@ pub fn sited_from_program(
     let ctx = &body.ctx;
     let graph = ctx.graph();
     let index = crate::program::resolve::index::ResolveIndex::build(graph);
-    let facts = extract_source_facts(graph, &index, &ctx.all_units());
+    // The source facts read every body the program has: under `OnDemand`
+    // (`--low-mem`) the dependency trees are parsed again here, as the model
+    // assembly does when it needs them; a `Summary` program (single-app) has
+    // the workspace's alone.
+    use crate::program::profile::DependencyBodies;
+    let units = match ctx.profile().dependency_bodies {
+        DependencyBodies::Summary => ctx.parsed().iter().collect(),
+        DependencyBodies::OnDemand => {
+            ctx.ensure_dep_bodies();
+            ctx.all_units()
+        }
+        DependencyBodies::Keep => ctx.all_units(),
+    };
+    let facts = extract_source_facts(graph, &index, &units);
     let surface = ctx.decl_surface();
     let recovered: HashSet<String> = pm.recovered_files.iter().cloned().collect();
     sited_graph(

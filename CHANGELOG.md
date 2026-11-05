@@ -25,6 +25,22 @@ test selection, adding an effect, impact) build on. Spec:
   trigger's temporary state) are body facts the program edges do not carry; R0 and A refine a
   `Run` or `TriggerOf` site by its anchor. Measured on CDO cross-app: 134,385 nodes, 318,084 sites,
   48 MB resident.
+- **The sited graph as a revision artifact** (`ArtifactKey::Sited`). It can only be built where the
+  program exists, so it is built inside the revision's build (the workspace session lends the
+  program between its build and the model's, `refresh_lending`; single-app through
+  `build_single_app_model_lending`) and seeded into the store before the revision publishes; it is
+  never filled afterwards and never evicted. Under `--low-mem` its source facts parse the
+  dependency trees again, as the model assembly does. **Built only when a question needs it**
+  (owner decision, agent-tasks §13.3 answer 1): on CDO cross-app its build costs about 1.0-1.2 s
+  per body edit (measured with `aldump --session-refresh --sited` on a loaded machine), over the
+  300 ms bar. `ResidentSession::pin_sited` pins as usual; when the revision has no graph it turns
+  the graph on for every later revision and rebuilds once for this request
+  (`Pinned::rebuilt_for: "sited"`). `alsem engine-host --graph` turns it on from the start. The
+  request's cancellation stops that graph's build (polled every 4,096 sites): the revision is then
+  published without it, and the next question builds it. `session/status` counts `sitedBuilds`,
+  `lastSitedMs`, `lastSitedBytes`.
+- `aldump --session-refresh --sited` builds and keeps the sited graph at every step and prints its
+  wall and CPU time, nodes, sites and bytes.
 
 ### Fixed (MCP output, the final hands-on CDO review)
 

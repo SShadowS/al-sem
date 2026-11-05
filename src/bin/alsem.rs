@@ -254,6 +254,12 @@ struct EngineHostCli {
     #[arg(long = "low-mem", default_value_t = false)]
     low_mem: bool,
 
+    /// Build the sited graph (the may-execute graph, one edge per site) with
+    /// every revision, for the questions about a routine's callers
+    /// (agent-tasks design §1.2 M0-1).
+    #[arg(long = "graph", default_value_t = false)]
+    graph: bool,
+
     /// End after this many seconds with no request and no work (the front
     /// end starts a new child on its next request); 0 never ends.
     #[arg(long = "idle-timeout", default_value_t = al_sem::engine::resident::budget::DEFAULT_IDLE_TIMEOUT_SECS)]
@@ -2990,6 +2996,7 @@ mod engine {
         let engine = HostEngine {
             memory_budget,
             low_mem: h.low_mem,
+            graph: h.graph,
             idle_timeout_secs: idle_timeout.map(|d| d.as_secs()),
             estimate_per_al_byte: h.estimate_per_al_byte,
             estimate_floor: h.estimate_floor,
@@ -3032,6 +3039,8 @@ mod engine {
         asks: std::sync::atomic::AtomicU64,
         memory_budget: Option<u64>,
         low_mem: bool,
+        /// `--graph`: every revision builds the sited graph.
+        graph: bool,
         idle_timeout_secs: Option<u64>,
         estimate_per_al_byte: Option<u64>,
         estimate_floor: Option<u64>,
@@ -3071,6 +3080,7 @@ mod engine {
             let session =
                 ResidentSession::new(params.workspace.clone(), single, instance.to_string())
                     .with_low_mem(self.low_mem)
+                    .with_sited(self.graph)
                     .with_budget(Arc::clone(&budget));
             *self.open.lock().unwrap_or_else(|p| p.into_inner()) = Some(Open {
                 workspace: params.workspace.clone(),

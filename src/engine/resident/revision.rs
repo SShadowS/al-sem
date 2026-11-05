@@ -101,6 +101,12 @@ pub enum ArtifactKey {
     /// each request walks it with a walk of its own. Never carried to the
     /// next revision.
     ExplainIndexes,
+    /// The program's sited graph (agent-tasks design §1.2 M0-1): built in
+    /// the revision's build, where the program is lent, and seeded into the
+    /// store before the revision publishes. It depends on nothing in the
+    /// store (phase 0) and is never filled or evicted: without the program
+    /// it cannot be built again.
+    Sited,
 }
 
 impl StoreKey for ArtifactKey {
@@ -113,7 +119,8 @@ impl StoreKey for ArtifactKey {
             | ArtifactKey::Rules
             | ArtifactKey::Fold
             | ArtifactKey::L4
-            | ArtifactKey::ExplainIndexes => 0,
+            | ArtifactKey::ExplainIndexes
+            | ArtifactKey::Sited => 0,
             ArtifactKey::Raw(_) | ArtifactKey::Det | ArtifactKey::TreeBase => 1,
             ArtifactKey::Run { .. } | ArtifactKey::Tree(_) => 2,
             ArtifactKey::Witness { .. } => 3,
@@ -222,6 +229,7 @@ pub enum ArtifactValue {
     /// mutates its entries), never the stored value.
     Witness(Arc<Option<DigestEntryResult>>),
     ExplainIndexes(Arc<ExplainIndexes>),
+    Sited(Arc<crate::program::impact_graph::SitedGraph>),
 }
 
 /// A request's batch of witness entries (plan 2026-11-03, W item 3): the
@@ -328,6 +336,7 @@ impl ArtifactKey {
             ArtifactKey::Run { .. } => "run",
             ArtifactKey::Witness { .. } => "witness",
             ArtifactKey::ExplainIndexes => "explain_indexes",
+            ArtifactKey::Sited => "sited",
         }
     }
 }
@@ -380,6 +389,31 @@ impl Revision {
             raw_seed,
             raw_counts: RawCounts::default(),
             witness: WitnessCounts::default(),
+        }
+    }
+
+    /// The revision with its sited graph seeded into the store (agent-tasks
+    /// design §1.2 M0-1), before it is published.
+    #[must_use]
+    pub fn with_sited(self, g: Arc<crate::program::impact_graph::SitedGraph>) -> Revision {
+        let bytes = g.bytes();
+        self.store.seed(
+            ArtifactKey::Sited,
+            Artifact {
+                value: ArtifactValue::Sited(g),
+                lines: Vec::new(),
+            },
+            bytes,
+        );
+        self
+    }
+
+    /// The revision's sited graph, when its build made one.
+    #[must_use]
+    pub fn sited(&self) -> Option<Arc<crate::program::impact_graph::SitedGraph>> {
+        match self.store.load().get(&ArtifactKey::Sited).map(|a| &a.value) {
+            Some(ArtifactValue::Sited(g)) => Some(Arc::clone(g)),
+            _ => None,
         }
     }
 
@@ -782,6 +816,13 @@ impl Revision {
             Ok(match cx.key {
                 ArtifactKey::Witness { .. } => {
                     ArtifactValue::Witness(self.fill_witness(plan, cx.key, cx.snapshot, scratch)?)
+                }
+                ArtifactKey::Sited => {
+                    return Err(
+                        "the sited graph is built with the revision's program and cannot be \
+                         filled after it (the session builds it on its next refresh)"
+                            .into(),
+                    );
                 }
                 ArtifactKey::ExplainIndexes => {
                     let _s = crate::engine::perf_trace::span("revision", "explain.indexes");
