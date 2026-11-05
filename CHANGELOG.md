@@ -31,9 +31,12 @@ test selection, adding an effect, impact) build on. Spec:
   `build_single_app_model_lending`) and seeded into the store before the revision publishes; it is
   never filled afterwards and never evicted. Under `--low-mem` its source facts parse the
   dependency trees again, as the model assembly does. **Built only when a question needs it**
-  (owner decision, agent-tasks §13.3 answer 1): on CDO cross-app its build costs about 1.0-1.2 s
-  per body edit (measured with `aldump --session-refresh --sited` on a loaded machine), over the
-  300 ms bar. `ResidentSession::pin_sited` pins as usual; when the revision has no graph it turns
+  (owner decision, agent-tasks §13.3 answer 1): on CDO cross-app its build costs 0.93-1.19 s per
+  body or declaration edit (CPU time equal to wall time: one thread), 0.84 s cold, and 45 MiB
+  resident (`aldump --session-refresh --sited`, 2026-11-05), over the 300 ms bar. Under
+  `--low-mem` it costs 2.1-2.4 s wall (about 26 s of CPU) per B or S edit, because its source facts
+  parse the 10,881 dependency files again. `alsem graph` on CDO is byte-identical before and after
+  (27.4 MB). `ResidentSession::pin_sited` pins as usual; when the revision has no graph it turns
   the graph on for every later revision and rebuilds once for this request
   (`Pinned::rebuilt_for: "sited"`). `alsem engine-host --graph` turns it on from the start. The
   request's cancellation stops that graph's build (polled every 4,096 sites): the revision is then
