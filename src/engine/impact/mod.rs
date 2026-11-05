@@ -5,10 +5,13 @@
 //!   variables, properties, actions, layout, enum values, the object header).
 //! - [`accounting`]: every changed line of a diff in exactly one bucket, and
 //!   the diff checked against the analyzed text.
+//! - [`compare`]: the comparison tuple, resolved once (`--base REV`: the
+//!   merge base, every working-tree layer, untracked `.al` files).
 //!
 //! B1 reports CURRENT effects only: no base revision is built, so there is no
 //! before/after and no routine is called added or deleted (that needs both
 //! sides' complete inventories, milestone B2).
 
 pub mod accounting;
+pub mod compare;
 pub mod scan;

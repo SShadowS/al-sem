@@ -31,6 +31,13 @@ The blast radius of a change, current effects only. Spec:
   first differing line, and its routines' positions are uncertain.
 - The unified-diff parser keeps each deletion run's text (`DiffHunk::deleted`) and the new-side
   lines a hunk shows (`DiffHunk::new_side`); digest's output does not change.
+- **The comparison tuple** (`engine::impact::compare`, B-3): `requestedRef`, `resolvedCommit`,
+  `mergeBase`, `comparisonBase`, `head` (commit and the revision's `inputsStamp`) and `diffHash`
+  (blake3 of the diff text used), resolved once and printed. `--base REV` alone compares the
+  MERGE BASE of `REV` and `HEAD` with the working tree: committed, staged and unstaged changes
+  (each layer's files listed) and every untracked `.al` file under the workspace (listed, and read
+  as a new file so its routines resolve). Git is only read; a diff alone names no base, and says
+  so.
 
 ### Added (agent tasks, milestone C: test selection)
 
