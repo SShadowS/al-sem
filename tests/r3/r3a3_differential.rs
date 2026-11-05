@@ -466,7 +466,7 @@ fn differential_r3a3_cone_coverage_match_goldens() {
             let expanded = String::from_utf8(buf).expect("utf8");
             let mut s = inline_short_string_arrays(&expanded);
             s.push('\n');
-            std::fs::write(golden_path, s)
+            regen::write_golden(golden_path, s)
                 .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
             eprintln!(
                 "REGEN r3a3 golden (CONTENT CHANGED): {}",

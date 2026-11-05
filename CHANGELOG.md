@@ -82,6 +82,76 @@ test selection, adding an effect, impact) build on. Spec:
 - `aldump --session-refresh --sited` builds and keeps the sited graph at every step and prints its
   wall and CPU time, nodes, sites and bytes.
 
+### Fixed (test infrastructure: golden regeneration raced its readers)
+
+- **A golden regen no longer rewrites committed files in place.** Under `scripts/check-goldens
+  --regen`, cargo-nextest runs every test in its own process at once, and
+  `output_fixture::fixture_app_matches_its_sources` rewrote
+  `tests/fixtures/mcp-output/ws/.alpackages/probe_Out Base_1.0.0.0.app` with a truncate-then-fill
+  write while other tests read it. One regen run loaded the dependency as symbol-only and wrote a
+  wrong `tests/cli-output-goldens/explain.issuedoc.json`; the same race once failed
+  `output_invariants::a_commit_beyond_an_entry_point_has_its_own_terminal_witness`. Every write
+  into the tree during a test run (about 55 golden, fixture and record writers, including the
+  `r3a*` goldens their `*_oracles` read and the `emit.policy-pins.yaml` golden `cli_policy_pins`
+  uses as a policy) now goes through one helper, `tests/common/regen.rs::write_golden`: it writes
+  nothing when the file already holds the bytes, and otherwise writes a temp file in the same
+  directory and renames it over the target, so a reader sees the old file or the new one, never a
+  part. The two shard regens (`cli_b_snapshot`, `cli_b_fingerprint`) no longer delete their
+  directory before rewriting it; they drop stale files afterwards (`regen::remove_stale`). The
+  dependency `.app` builder gained `symbol_app::source_app_bytes`, so the fixture test builds
+  bytes instead of writing a file. A new `cli` member, `regen_atomic_writes`, pins the helper (a
+  reader thread never sees a partial file while a writer swaps it 200 times; equal bytes keep the
+  file's modification time) and the use: it scans every test source and fails when a function
+  that consults the regen switch writes any other way, directly or through a same-file helper.
+
+### Fixed (MCP output, step 1b: correctness and wording of agent answers)
+
+- **`query touches` turned an index miss into a whole-cone "no".** `down` printed `no — this
+  routine's cone does not touch the table` whenever the per-operation index (one routine into
+  dependency code) held no operation on the table, and then warned on the next line that
+  operations on a RecordRef may be that table. On CDO, IssueReminder vs `Data Exch.` said `no`
+  beside 69 RecordRef operations, a cone that enters Base Application and calls not resolved. Now
+  the answer is `no` only when nothing leaves room for an unseen touch (no operation on a table
+  not resolved, no dependency code entered, every call resolved, the cone read and complete);
+  otherwise `unknown — no indexed touch observed`, with each reason on its own line. JSON:
+  `down.absence {answer: no | unknown | beyond, index, reasons[]}` (query schema 3.2.0,
+  additive). The workspace-global list states the depth it stands on (`index` in JSON).
+- **`query touches` called a hub's callers "not a finding".** RunReportID vs `CDO File` said `883
+  transitive callers … not a finding`. Those callers inherit the touch and are its consumers: the
+  line now says `883 transitive callers inherit this touch through this routine`, and the new
+  `--callers` (MCP `callers: true`) names every caller with its depth and location without
+  building `--all`'s caller × witness product (JSON `up.callers[]` with each caller's outcome).
+- **`query effects` showed routes the root's literal arguments rule out, unmarked.** IssueReminder
+  listed `CDO Queue Entry` through `DocHandle`, while explain shows that route cannot run with
+  IssueReminder's literal arguments and the only live one re-enters from Base Application. Rows
+  are still all kept and `via` is unchanged (ConTinAI reads them); each row the cone can judge now
+  carries `literalRoute` (`ruledOut`: an effect it originates from is literal-dead; `notInCone`:
+  the cone keeps no live write of that kind on that table; `otherRoute`: the cone keeps no live
+  route through the row's first hop, and names the first hop its live route takes; `coneRoute`),
+  and the human table line says so on the row it qualifies, with how many of the table's rows
+  are ruled out. `summary.literalRoutes` counts them (query schema 3.2.0, additive).
+- **An overloaded routine could not be selected.** `prove <ws> "CDO File::CreateDocumentFromReport"
+  …` answered `routine-ambiguous … names 4 routines (Table CDO File::CreateDocumentFromReport, x4)`
+  and told the agent to pass a stable id it never printed. Each candidate is now printed as the
+  selector that picks it, with its location and stable id (`Table CDO
+  File::CreateDocumentFromReport(Integer, Integer, Code[20], Text, Text, var RecordRef) at
+  ws:src/Foundation/CDOFile.Table.al:132 (stable id …)`; JSON `candidateRoutines`), and the one
+  selector grammar of explain, prove, digest and query takes a parameter list:
+  `Owner::Routine(Integer, Text)`, by types (a length, `var` and AL quotes optional, or the type
+  word alone) or by parameter names (`name: type` too). The tool descriptions and the server
+  instructions say so.
+- **"tests: none reach it" read the same with and without test code.** CDO holds no `[Test]`
+  procedure, yet every explain said `tests: none reach it`, as if the routine were untested in a
+  tested app. Explain now says `tests: no test code loaded (0 [Test] procedures in the workspace
+  app); that is not a reason to skip tests` or `tests: N [Test] procedures loaded; none reaches it
+  (not a reason to skip tests)`; the summary says `tests: none (no test code loaded)` or `tests:
+  none of N loaded`, and JSON `summary.testsLoaded` gives N. Digest's `--tests` line says the same
+  (`test coverage: no test code loaded …`, or `… loaded and considered; an unreached routine is
+  not a reason to skip tests`).
+- **Touch counts read as if the operation persisted.** `[CalcFields] read` rows were listed under
+  "possibly persistent". The classes are the record's temp state, so they now read `on persistent
+  records`, `on possibly persistent records` and `on temporary records`.
+
 ### Fixed (MCP output, the final hands-on CDO review)
 
 - **`prove`'s human `unknown` no longer lists every blocker.** IssueReminder's

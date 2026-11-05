@@ -1999,6 +1999,24 @@ Three output bugs, each with its root cause and the rule it now follows.
    `summary.entryPoints` keeps `count` / `sites` (now every entry point) and adds `withWrites` /
    `withWritesSites`. `commits`' "commit-bearing entry points" still count crossings (§3.6).
 
+## 14. Output step 1b: query marks rows, it still drops none (2026-11-05)
+
+§12.2 kept query's rows L4's and stated the substrate difference once, on the coverage line. The
+second review (astra top 5) showed that is too far from the row: IssueReminder's `CDO Queue Entry`
+row said `through DocHandle`, a route the root's literal arguments rule out. Query now **marks**
+each row the cone can judge (`literalRoute`), and still drops none; `via` is unchanged. Because
+the cone keeps no per-operation identity for every row (one effect per kind and table, one
+evidence operation; `origin_operation_ids` need not hold every operation of the kind), a row is
+judged by operation only where the cone names its operation (origin or evidence anchor), and by
+kind only to say the cone keeps no live write of that kind on that table (`notInCone`; no group
+lists it for that kind; the cone search was not truncated). Measured on CDO `bc3ccb18`:
+IssueReminder 652 rows, 34 `coneRoute`, 3 `notInCone` (the three `CDO Log Attachment` `Modify`
+operations of §12.2), 1 `otherRoute` (`CDO Queue Entry`, the cone's live route entering through
+`Reminder-Issue::OnRun`), 614 not judged (reads, locks, temporary records, dependency rows, and
+writes whose kind the cone keeps live but whose operation it does not name); RunReportID 629
+rows, 22 / 3 / 0 / 604. A first cut judged `notInCone` per operation id and marked 12 IssueReminder
+rows, among them `CDO E-Mail Log` inserts explain shows live: that is the identity gap above.
+
 ---
 
 ## Appendix A. How the numbers were produced

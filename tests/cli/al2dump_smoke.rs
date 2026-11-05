@@ -109,7 +109,7 @@ fn ws_d2_l2_features_match_golden_and_have_no_forbidden_fields() {
         pretty.push('\n');
         std::fs::create_dir_all(golden_path.parent().expect("golden has a parent"))
             .expect("create al2dump-smoke-goldens dir");
-        std::fs::write(&golden_path, pretty)
+        regen::write_golden(&golden_path, pretty)
             .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
         eprintln!("REGEN al2dump-smoke l2 golden: {}", golden_path.display());
         return;

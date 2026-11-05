@@ -155,7 +155,8 @@ fn maybe_regen(name: &str, rust: &str) -> bool {
         return false;
     }
     let path = goldens_dir().join(name);
-    std::fs::write(&path, rust).unwrap_or_else(|e| panic!("regen write {}: {e}", path.display()));
+    regen::write_golden(&path, rust)
+        .unwrap_or_else(|e| panic!("regen write {}: {e}", path.display()));
     eprintln!("REGEN gate-prsummary golden: {}", path.display());
     true
 }
@@ -451,7 +452,7 @@ fn gate_exit_code_matrix_matches() {
         }
 
         let path = goldens_dir().join("exit-codes.json");
-        std::fs::write(&path, out)
+        regen::write_golden(&path, out)
             .unwrap_or_else(|e| panic!("regen write {}: {e}", path.display()));
         eprintln!("REGEN gate-prsummary golden: {}", path.display());
         return;

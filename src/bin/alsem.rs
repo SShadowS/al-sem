@@ -372,6 +372,12 @@ struct QueryTouchesCli {
     #[arg(long = "all", default_value_t = false)]
     all: bool,
 
+    /// Name every transitive caller (depth and location) without building
+    /// their witnesses: the consumers of the touch, which `--all` lists only
+    /// with every witness.
+    #[arg(long = "callers", default_value_t = false)]
+    callers: bool,
+
     /// Output format: human | json. Defaults to human.
     #[arg(long = "format", default_value = "human")]
     format: String,
@@ -1755,6 +1761,7 @@ fn plan_query_touches(t: QueryTouchesCli) -> Planned {
                     t.deterministic,
                     t.single_app,
                 )
+                .list_callers(t.callers)
                 .show_source(t.show_source)
                 .written(t.format == "json", t.out.as_deref()),
             )

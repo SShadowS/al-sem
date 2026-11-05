@@ -424,7 +424,7 @@ fn differential_r3a2_summary_core_match_goldens() {
             let mut pretty = serde_json::to_string_pretty(&projection)
                 .unwrap_or_else(|e| panic!("regen serialize R3a-2 {fixture}: {e}"));
             pretty.push('\n');
-            std::fs::write(golden_path, pretty)
+            regen::write_golden(golden_path, pretty)
                 .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
             eprintln!("REGEN r3a2 golden: {}", golden_path.display());
             continue;

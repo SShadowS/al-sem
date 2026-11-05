@@ -32,7 +32,7 @@ pub(crate) fn write_golden(path: &Path, bytes: &[u8]) {
         "refusing to rewrite a base-binary record: {}",
         path.display()
     );
-    std::fs::write(path, bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    crate::regen::write_golden(path, bytes).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
 }
 
 /// The guard itself: a write into a `RECORD` directory panics and leaves the

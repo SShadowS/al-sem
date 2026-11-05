@@ -21,7 +21,7 @@
 //!   caller and one `[Test]` procedure that reaches `WriteLog`.
 //!
 //! The dependency `.app` under `ws/.alpackages/` is built from `dep/` by
-//! `tests/common/symbol_app.rs::write_source_app`; [`fixture_app_matches_its_sources`]
+//! `tests/common/symbol_app.rs::source_app_bytes`; [`fixture_app_matches_its_sources`]
 //! checks the committed archive holds exactly those sources (and rewrites it under
 //! `REGEN_TEMP_GOLDENS=1`).
 //!
@@ -73,26 +73,24 @@ fn dep_symbols() -> String {
         .replace('\r', "")
 }
 
-fn write_dep_app(path: &Path) {
+/// The dependency `.app`'s bytes, built from `dep/` (a pure function of those files:
+/// the zip carries a fixed timestamp).
+fn dep_app_bytes() -> Vec<u8> {
     let sources = dep_sources();
     let pairs: Vec<(&str, &str)> = sources
         .iter()
         .map(|(n, t)| (n.as_str(), t.as_str()))
         .collect();
-    crate::symbol_app::write_source_app(
-        path,
-        DEP_GUID,
-        "Out Base",
-        "1.0.0.0",
-        &dep_symbols(),
-        &pairs,
-        "",
-    );
+    crate::symbol_app::source_app_bytes(DEP_GUID, "Out Base", "1.0.0.0", &dep_symbols(), &pairs, "")
 }
 
 /// Every entry of a `.app` (40-byte NAVX header, then a zip), sorted by name.
 fn app_entries(path: &Path) -> Vec<(String, String)> {
     let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    app_bytes_entries(&bytes)
+}
+
+fn app_bytes_entries(bytes: &[u8]) -> Vec<(String, String)> {
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes[40..])).unwrap();
     let mut out = Vec::new();
     for i in 0..zip.len() {
@@ -107,19 +105,23 @@ fn app_entries(path: &Path) -> Vec<(String, String)> {
 
 /// The committed dependency `.app` holds exactly the files under `dep/` (a fresh build
 /// from them has the same entries); `REGEN_TEMP_GOLDENS=1` rewrites it.
+///
+/// Every other test of this fixture reads that `.app` WHILE this one runs, so the
+/// regen goes through [`regen::write_golden`]: no write when the bytes are equal, and
+/// otherwise a temp file renamed over it, never a truncate-and-fill in place (which
+/// once let a concurrent `explain` load the dependency as symbol-only and mint a
+/// wrong golden).
 #[test]
 fn fixture_app_matches_its_sources() {
     let committed = workspace().join(".alpackages").join(DEP_APP_FILE);
     if regen::regen_mode() {
-        write_dep_app(&committed);
+        regen::write_golden(&committed, dep_app_bytes())
+            .unwrap_or_else(|e| panic!("regen write {}: {e}", committed.display()));
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
-    let fresh = dir.path().join(DEP_APP_FILE);
-    write_dep_app(&fresh);
     assert_eq!(
         app_entries(&committed),
-        app_entries(&fresh),
+        app_bytes_entries(&dep_app_bytes()),
         "{} is stale: run REGEN_TEMP_GOLDENS=1 cargo test --test cli output_fixture::",
         committed.display()
     );
@@ -297,7 +299,7 @@ fn check_case(c: &Case) -> Option<String> {
         let golden = goldens_dir().join(format!("{}.{ext}", c.slug));
         if regen::regen_mode() {
             std::fs::create_dir_all(goldens_dir()).unwrap();
-            std::fs::write(&golden, &got).unwrap();
+            regen::write_golden(&golden, &got).unwrap();
             continue;
         }
         match std::fs::read_to_string(&golden) {

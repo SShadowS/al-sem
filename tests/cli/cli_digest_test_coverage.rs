@@ -492,8 +492,8 @@ fn human_line_with_tests() {
         lines,
         vec![
             "test coverage: 6 of 10 changed routines reached; 11 [Test] procedures \
-             considered (partial: dynamic-target, object-run-unresolved, test-page, \
-             unresolved-receiver-type)"
+             loaded and considered (partial: dynamic-target, object-run-unresolved, test-page, \
+             unresolved-receiver-type); an unreached routine is not a reason to skip tests"
         ],
         "{on}"
     );

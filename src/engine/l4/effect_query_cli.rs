@@ -74,8 +74,15 @@ use crate::program::resolve::full::LoadedDependencies;
 /// `receiver: "RecordRef"`, and the summaries count them
 /// (`tableNotResolved.recordRef`, `down.counts.tableNotResolvedRecordRef`);
 /// the reserved `beyond` fields and `summary.scope` are filled from the
-/// capability cone.
-const QUERY_SCHEMA_VERSION: &str = "3.1.0";
+/// capability cone. 3.2.0 (output step 1b, additive): a touches `down` with
+/// no indexed touch says what that means (`down.absence {answer: no |
+/// unknown | beyond, index, reasons[]}`), the workspace-global list states
+/// its `index` depth, and `--callers` adds the trivial case's `up.callers[]`
+/// (`{depth, routine, outcome}`); `query effects` marks each row the cone
+/// judges (`literalRoute {status, coneFirstHop?}`, `byTable[].first.literalRoute`,
+/// `byTable[].literalRuledOut`, `summary.literalRoutes`), rows and `via`
+/// unchanged.
+const QUERY_SCHEMA_VERSION: &str = "3.2.0";
 
 /// Which direction(s) a `query touches` run reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,6 +229,8 @@ enum QueryAsk<'a> {
         from: Option<&'a str>,
         direction: Direction,
         all: bool,
+        /// `--callers` (step 1b): every caller named, no witness product.
+        callers: bool,
     },
     Effects {
         routine: &'a str,
@@ -266,8 +275,19 @@ impl<'a> QueryJob<'a> {
             from,
             direction,
             all,
+            callers: false,
         };
         Self::with(inputs, ask, alsem_ver, deterministic, single_app)
+    }
+
+    /// `query touches --callers` (step 1b): name every transitive caller,
+    /// with its depth and location, without `--all`'s witness product.
+    #[must_use]
+    pub fn list_callers(mut self, list: bool) -> QueryJob<'a> {
+        if let QueryAsk::Touches { callers, .. } = &mut self.ask {
+            *callers = list;
+        }
+        self
     }
 
     /// `alsem query effects` (see [`run_query_effects_pipeline`]).
@@ -378,12 +398,14 @@ impl Job for QueryJob<'_> {
                 from,
                 direction,
                 all,
+                callers,
             } => render_query_touches_body(
                 &substrate,
                 table,
                 from,
                 direction,
                 all,
+                callers,
                 self.alsem_ver,
                 self.deterministic,
                 cone,
@@ -519,6 +541,165 @@ impl<'c> Beyond<'c> {
             &self.rcx,
             crate::engine::l5::routine_rollup::RenderOpts::new(all, None),
         )
+    }
+}
+
+/// Step 1b (astra top 5): how the root's cone, after the literal pass,
+/// judges one `query effects` row's route. The rows stay L4's (spec §12.2:
+/// never dropped, `via` unchanged); this only marks them, and only where the
+/// cone can say something sound. The cone keeps no per-operation identity
+/// for every row (one effect per kind and table carries one evidence
+/// operation, and its `origin_operation_ids` need not hold every operation
+/// of that kind), so a row is judged by operation only when the cone names
+/// its operation (origin or evidence), and by kind and table only to say
+/// the cone has no live write of that kind on that table at all. A row the
+/// cone does not carry (a read, a lock, a temporary record, an operation
+/// one routine into dependency code that the cone groups beyond an entry
+/// point) is not judged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiteralRoute<'c> {
+    /// Every route is ruled out: an effect the operation originates from is
+    /// literal-dead (an effect is dead only when every operation it
+    /// originates from is, `literal_reach`).
+    RuledOut,
+    /// The cone keeps a live route entering through the row's first hop.
+    ConeRoute,
+    /// The cone keeps no live listed route for it; its searched live
+    /// witness enters through this other first hop (a stable id). The row's
+    /// first hop is the index's, which these literal arguments may rule out.
+    OtherRoute(&'c str),
+    /// A write of workspace code whose kind the cone (it follows the root's
+    /// literal arguments through its parameter guards, and its search was
+    /// not cut short) never performs on this table: no own effect of that
+    /// kind on it stays live, and no dependency group lists it for that
+    /// kind.
+    NotInCone,
+}
+
+type ConeEffect = crate::engine::l5::digest_cli::DigestEffectFull;
+
+/// The cone's effect type of an L4 write kind (`digest::map_op`: `Rename`
+/// is a modify); `None` for a kind the kind-level judgement does not map
+/// (`ModifyAll`, whose cone fact kind is not pinned here): it then judges
+/// nothing.
+fn write_effect_type(op: &str) -> Option<&'static str> {
+    match op {
+        "Insert" => Some("DB_INSERT"),
+        "Modify" | "Rename" => Some("DB_MODIFY"),
+        "Delete" | "DeleteAll" => Some("DB_DELETE"),
+        _ => None,
+    }
+}
+
+/// The cone's effects by origin operation and by evidence anchor, and the
+/// (effect type, table) pairs it may write, for [`LiteralRoute`].
+struct ConeRoutes<'c> {
+    by_op: HashMap<&'c str, Vec<&'c ConeEffect>>,
+    /// `(file, 0-based line, column)` of an own effect's evidence.
+    by_anchor: HashMap<(&'c str, u32, u32), Vec<&'c ConeEffect>>,
+    /// Live own writes, and every group's listed resources (dead or not):
+    /// `(effect type, table id)`.
+    kinds: std::collections::HashSet<(&'c str, &'c str)>,
+    /// The cone's search was cut short: no `NotInCone`.
+    truncated: bool,
+}
+
+impl<'c> ConeRoutes<'c> {
+    fn new(entry: &'c crate::engine::l5::digest_cli::DigestEntryFull) -> Self {
+        let mut by_op: HashMap<&str, Vec<_>> = HashMap::new();
+        let mut by_anchor: HashMap<_, Vec<_>> = HashMap::new();
+        let mut kinds = std::collections::HashSet::new();
+        for e in &entry.effects {
+            let ty = e.effect_type.as_str();
+            if e.crossing.is_some() {
+                for (id, _) in &e.group_resources {
+                    kinds.insert((ty, id.as_str()));
+                }
+                continue;
+            }
+            for op in &e.origin_operation_ids {
+                by_op.entry(op.as_str()).or_default().push(e);
+            }
+            if let (Some(f), Some(l), Some(c)) = (
+                e.evidence.file.as_deref(),
+                e.evidence.line,
+                e.evidence.column,
+            ) {
+                by_anchor.entry((f, l, c)).or_default().push(e);
+            }
+            if !e.literal_unreachable
+                && let Some((_, id)) = e.detail.iter().find(|(k, _)| k == "resourceId")
+            {
+                kinds.insert((ty, id.as_str()));
+            }
+        }
+        ConeRoutes {
+            by_op,
+            by_anchor,
+            kinds,
+            truncated: entry.unresolved_traversal.truncated,
+        }
+    }
+
+    /// `anchor`: the operation's `(file, 0-based line, column)`.
+    /// `first_hop`: the row's first hop's stable id (`None` on the root's own
+    /// row, which only `RuledOut` and `NotInCone` can mark). `write`: the
+    /// row's `(effect type, table id)` when it is a write a workspace routine
+    /// performs. `None`: not judged.
+    fn judge(
+        &self,
+        operation_id: &str,
+        anchor: Option<(&str, u32, u32)>,
+        first_hop: Option<&str>,
+        write: Option<(&str, &str)>,
+    ) -> Option<LiteralRoute<'c>> {
+        let by_op = self.by_op.get(operation_id).map_or(&[][..], Vec::as_slice);
+        if by_op.iter().any(|e| e.literal_unreachable) {
+            return Some(LiteralRoute::RuledOut);
+        }
+        let by_anchor = anchor
+            .and_then(|a| self.by_anchor.get(&a))
+            .map_or(&[][..], Vec::as_slice);
+        let effects: Vec<&ConeEffect> = by_op
+            .iter()
+            .chain(by_anchor)
+            .copied()
+            .filter(|e| !e.literal_unreachable)
+            .collect();
+        if effects.is_empty() {
+            return match write {
+                Some(k) if !self.truncated && !self.kinds.contains(&k) => {
+                    Some(LiteralRoute::NotInCone)
+                }
+                _ => None,
+            };
+        }
+        let hop = first_hop?;
+        let (mut listed, mut witness) = (false, None);
+        for e in effects {
+            for p in &e.via_paths {
+                if let Some(h) = p.first() {
+                    listed = true;
+                    if h.inner.to_routine_id.as_deref() == Some(hop) {
+                        return Some(LiteralRoute::ConeRoute);
+                    }
+                }
+            }
+            if let Some(Ok(w)) = &e.own_path
+                && let Some(s) = w.steps.first()
+            {
+                if s.to == hop {
+                    return Some(LiteralRoute::ConeRoute);
+                }
+                witness.get_or_insert(s.to.as_str());
+            }
+        }
+        // A live listed route through another first hop says nothing about
+        // this one (the listing is capped): not judged.
+        if listed {
+            return None;
+        }
+        witness.map(LiteralRoute::OtherRoute)
     }
 }
 
@@ -685,6 +866,15 @@ pub fn resolve_routine_selector<'a>(
         return Resolution::Resolved(r);
     }
 
+    // Output step 1b (fable #7): an `(…)` parameter list picks among
+    // overloads, in every tool's one grammar.
+    let (selector, wanted) = crate::engine::l5::selector_index::split_signature(selector);
+    let signature_ok = |r: &ModelRoutine| {
+        wanted
+            .as_ref()
+            .is_none_or(|w| crate::engine::l5::selector_index::signature_matches(w, &r.parameters))
+    };
+    let routines = || routines().filter(|r| signature_ok(r));
     let want = selector.to_lowercase();
     // `Object.Routine` as written, or (MCP output plan 3b: one selector
     // grammar for every tool) `Owner::Routine` / `Owner.Routine` with the
@@ -715,9 +905,16 @@ pub fn resolve_routine_selector<'a>(
     match hits.len() {
         0 => Resolution::Unmatched,
         1 => Resolution::Resolved(hits[0]),
+        // Step 1b: each candidate by the selector that picks it, its
+        // location and stable id (overloads share owner and name).
         _ => Resolution::Ambiguous(
             hits.iter()
-                .map(|r| format!("{}.{} ({})", object_name(r), r.name, r.stable_routine_id))
+                .map(|r| {
+                    crate::engine::l5::selector_index::candidate_label(
+                        &owner_qualified(&object_display(&r.object_type, object_name(r)), &r.name),
+                        r,
+                    )
+                })
                 .collect(),
         ),
     }
@@ -939,6 +1136,16 @@ impl<'a> OperationJoin<'a> {
         self.index
             .last_record_operation(operation_id)
             .is_some_and(|(_, op)| op.receiver_is_record_ref)
+    }
+
+    /// The operation is dependency code's: its owning row is not a
+    /// workspace routine, or the model holds no owner for it (a retained
+    /// dependency leaf). Touches' absence reasons count these (the cone
+    /// entered dependency code, which the index follows one routine deep).
+    fn in_dependency(&self, operation_id: &str, resolved: &Model) -> bool {
+        self.index
+            .last_record_operation(operation_id)
+            .is_none_or(|(r, _)| !is_primary_routine(resolved, r))
     }
 }
 
@@ -1179,6 +1386,9 @@ fn selector_failure_doc<T>(
         for c in &candidates {
             s.push_str(&format!("  - {c}\n"));
         }
+        if selector_field != "table" {
+            s.push_str("  pass one as <owner>::<routine>(<parameter types>) or its stable id\n");
+        }
         s
     };
     QueryRunResult {
@@ -1244,12 +1454,14 @@ pub fn run_query_touches_pipeline(
 /// returning this exit-2 error. That is the TESTED behaviour (the
 /// `d1-multi-caller.down-without-from` golden depends on it), so a pre-check
 /// would be a perf fix here, not a doc fix.
+#[allow(clippy::too_many_arguments)]
 pub fn render_query_touches(
     substrate: &QuerySubstrate,
     table_selector: &str,
     from: Option<&str>,
     direction: Direction,
     all: bool,
+    callers: bool,
     alsem_ver: &str,
     deterministic: bool,
 ) -> QueryRunResult {
@@ -1260,6 +1472,7 @@ pub fn render_query_touches(
             from,
             direction,
             all,
+            callers,
             alsem_ver,
             deterministic,
             None,
@@ -1314,6 +1527,7 @@ fn render_query_touches_body(
     from: Option<&str>,
     direction: Direction,
     all: bool,
+    callers: bool,
     alsem_ver: &str,
     deterministic: bool,
     cone: Option<&crate::engine::l5::digest_cli::DigestEntryFull>,
@@ -1419,20 +1633,33 @@ fn render_query_touches_body(
                     }
                 })
                 .collect();
+            // Step 1b: the depth the list stands on, in both forms.
+            let unseen = if is_unknown_table(&table.id) {
+                ""
+            } else {
+                ", or on a table not resolved,"
+            };
             payload.insert(
                 "up".into(),
                 json!({
                     "scoped": false,
                     "routineCount": rows.len(),
                     "routines": rows,
-                    "note": "workspace-global: every routine whose transitive cone touches this \
-                             table. Scope it with --from <routine> --direction up.",
+                    "note": format!(
+                        "workspace-global: every workspace routine whose transitive cone touches \
+                         this table, by the per-operation index (one routine into dependency \
+                         code). A routine whose only touch is deeper in dependency code{unseen} \
+                         is not listed. Scope it with --from <routine> --direction up."
+                    ),
+                    // 3.2.0, additive.
+                    "index": "operations-one-routine-deep",
                 }),
             );
             human.push_str(&format!("--- touches {table_label} ---\n"));
             human.push_str(&format!(
-                "  workspace-global: {} routine(s) touch it\n",
-                routines.len()
+                "  workspace-global: {} it (per operation, one routine into dependency code: a \
+                 routine whose only touch is deeper in dependency code{unseen} is not listed)\n",
+                plural(routines.len(), "routine touches", "routines touch"),
             ));
             let shown_n = fold_len(routines.len(), GLOBAL_LIST_CAP, all);
             for &ix in &routines[..shown_n] {
@@ -1509,6 +1736,7 @@ fn render_query_touches_body(
                 join: &join,
                 ops: &ops,
                 hops: FirstHops::new(&query),
+                resolved: substrate.resolved(),
             };
             let touches_down = query.touches_table(rix, &table.id);
             if direction.wants_down() {
@@ -1529,6 +1757,7 @@ fn render_query_touches_body(
                     &table.id,
                     touches_down,
                     all,
+                    callers,
                     &mut payload,
                     &mut human,
                 );
@@ -1623,6 +1852,9 @@ struct TouchCx<'q, 'a> {
     ops: &'q OperationJoin<'a>,
     /// W2-2: `through <first hop>` by the shared §4.5 rule.
     hops: FirstHops<'q, 'a>,
+    /// The model the operations belong to (whose routines are the
+    /// workspace's, for the absence reasons).
+    resolved: &'q Model,
 }
 
 impl<'a> TouchCx<'_, 'a> {
@@ -1687,6 +1919,15 @@ impl<'a> TouchCx<'_, 'a> {
             None => internal.to_string(),
         }
     }
+
+    /// `--callers`' line: the caller and where it is declared.
+    fn caller_line(&self, ix: crate::engine::l4::routine_interner::SolveIx) -> String {
+        let internal = self.query.bundle().routine_id(ix);
+        match self.join.get(internal) {
+            Some(x) => format!("{} — {}:{}", x.qualified(), x.file, shown(x.line)),
+            None => internal.to_string(),
+        }
+    }
 }
 
 fn counts_json(c: &TouchCounts) -> Value {
@@ -1700,9 +1941,20 @@ fn counts_json(c: &TouchCounts) -> Value {
     })
 }
 
-/// `a known persistent, b possibly persistent (...), c on temporary records`.
+/// `a on persistent records, b on possibly persistent records (...), c on
+/// temporary records`. The class is the RECORD's (its temp state), not the
+/// operation's: a `CalcFields` read on a persistent record persists nothing
+/// (fable #8, astra Task 4), so no class says the touch itself persists.
 fn counts_human(c: &TouchCounts) -> String {
-    let mut parts = vec![format!("{} known persistent", c.known_persistent)];
+    let mut parts = vec![format!(
+        "{} on {}",
+        c.known_persistent,
+        if c.known_persistent == 1 {
+            "a persistent record"
+        } else {
+            "persistent records"
+        }
+    )];
     let pp = match (c.temp_state_unknown, c.caller_dependent) {
         (0, 0) => String::new(),
         (_, 0) => " (temp state unknown)".to_string(),
@@ -1710,11 +1962,97 @@ fn counts_human(c: &TouchCounts) -> String {
         (u, d) => format!(" (temp state unknown {u}, caller-dependent {d})"),
     };
     parts.push(format!(
-        "{} possibly persistent{pp}",
-        c.possibly_persistent()
+        "{} on {}{pp}",
+        c.possibly_persistent(),
+        if c.possibly_persistent() == 1 {
+            "a possibly persistent record"
+        } else {
+            "possibly persistent records"
+        }
     ));
     parts.push(format!("{} on temporary records", c.temporary));
     parts.join(", ")
+}
+
+/// Why a touches `down` that found no indexed operation on the table is not
+/// a whole-cone "no" (astra Task 4, top 1). The per-operation index holds the
+/// cone's operations one routine into dependency code; an operation on a
+/// table not resolved may be this table, a call not resolved may reach it,
+/// and code deeper in dependency code than one routine is followed only for
+/// physical writes (the `beyond` section). Each is `(json, human)`.
+fn absence_reasons(
+    cone: Option<&Beyond<'_>>,
+    not_resolved: usize,
+    not_resolved_ref: usize,
+    dependency_ops: usize,
+) -> Vec<(Value, String)> {
+    let mut out = Vec::new();
+    if not_resolved > 0 {
+        let refs = if not_resolved_ref > 0 {
+            format!(", {not_resolved_ref} of them on a RecordRef (table decided at run time)")
+        } else {
+            String::new()
+        };
+        out.push((
+            json!({"kind": "table-not-resolved", "operations": not_resolved,
+                   "recordRef": not_resolved_ref}),
+            format!(
+                "{} on a table not resolved may be this table{refs} — --table unknown lists them",
+                plural(not_resolved, "operation", "operations")
+            ),
+        ));
+    }
+    let entry_points = cone.map_or(0, |b| b.rollup.totals.entry_points);
+    if entry_points > 0 || dependency_ops > 0 {
+        let at = if entry_points > 0 {
+            format!(
+                " at {}",
+                plural(entry_points, "entry point", "entry points")
+            )
+        } else {
+            String::new()
+        };
+        out.push((
+            json!({"kind": "dependency-depth", "entryPoints": entry_points,
+                   "dependencyOperations": dependency_ops}),
+            format!(
+                "the cone enters dependency code{at}; operations there are indexed one routine \
+                 deep, and deeper only physical writes are followed"
+            ),
+        ));
+    }
+    match cone {
+        None => out.push((
+            json!({"kind": "cone-not-read"}),
+            "this answer did not read the whole cone: calls not resolved and code deeper than \
+             one routine into dependency code were not checked"
+                .to_string(),
+        )),
+        Some(b) => {
+            let unresolved = b.entry.unresolved.len();
+            if unresolved > 0 {
+                out.push((
+                    json!({"kind": "calls-not-resolved", "calls": unresolved}),
+                    format!(
+                        "{} in the cone not resolved may reach it — alsem explain lists them",
+                        plural(unresolved, "call", "calls")
+                    ),
+                ));
+            }
+            if unresolved == 0 && b.entry.coverage_status != "complete" {
+                out.push((
+                    json!({"kind": "coverage-incomplete", "status": b.entry.coverage_status,
+                           "reasons": b.entry.coverage_reasons}),
+                    format!(
+                        "the cone's coverage is {} ({})",
+                        b.entry.coverage_status,
+                        b.entry.coverage_reasons.join(", ")
+                    ),
+                ));
+            }
+        }
+    }
+    out
 }
 
 fn plural(n: usize, one: &str, many: &str) -> String {
@@ -1774,23 +2112,63 @@ fn render_touches_down(
         m.insert("tableNotResolvedRecordRef".into(), not_resolved_ref.into());
         m.insert("byOp".into(), json!(by_op));
     }
-    payload.insert(
-        "down".into(),
-        json!({
-            "answerable": true,
-            "touches": touches_down,
-            "witnessCount": witnesses.len(),
-            "counts": counts_v,
-            "beyond": beyond,
-            "witnesses": witnesses.iter().map(|t| cx.witness_json(t)).collect::<Vec<_>>(),
-        }),
-    );
     let beyond_n = beyond.as_array().map_or(0, Vec::len);
+    // Step 1b (astra Task 4, top 1): an index miss is a whole-cone "no" only
+    // when nothing leaves room for a touch the index cannot see. The table
+    // bucket itself has no "may be this table" reason (its rows ARE them).
+    let reasons = if touches_down {
+        Vec::new()
+    } else {
+        let dependency_ops = query
+            .bundle()
+            .db_effects(rix)
+            .filter(|e| cx.ops.in_dependency(e.operation_id, cx.resolved))
+            .count();
+        let (nr, nr_ref) = if is_unknown_table(table_id) {
+            (0, 0)
+        } else {
+            (not_resolved, not_resolved_ref)
+        };
+        absence_reasons(cone, nr, nr_ref, dependency_ops)
+    };
+    let mut down = json!({
+        "answerable": true,
+        "touches": touches_down,
+        "witnessCount": witnesses.len(),
+        "counts": counts_v,
+        "beyond": beyond,
+        "witnesses": witnesses.iter().map(|t| cx.witness_json(t)).collect::<Vec<_>>(),
+    });
+    if !touches_down {
+        // 3.2.0, additive: what the miss means. `no` only with no reason;
+        // `beyond` when the whole cone may write it past an entry point.
+        down["absence"] = json!({
+            "answer": if beyond_n > 0 { "beyond" } else if reasons.is_empty() { "no" } else { "unknown" },
+            "index": "operations-one-routine-deep",
+            "reasons": reasons.iter().map(|r| r.0.clone()).collect::<Vec<_>>(),
+        });
+    }
+    payload.insert("down".into(), down);
 
-    if !touches_down && beyond_n > 0 {
-        human.push_str("  down: no operation one routine into dependency code touches the table\n");
-    } else if !touches_down {
-        human.push_str("  down: no — this routine's cone does not touch the table\n");
+    if !touches_down {
+        human.push_str(&if beyond_n > 0 {
+            "  down: no indexed touch (per operation, one routine into dependency code); the \
+             whole cone may write it beyond dependency entry points (below)\n"
+                .to_string()
+        } else if reasons.is_empty() {
+            "  down: no — no operation in this routine's cone touches the table (the cone stays \
+             in workspace code, every call resolved, no table left unresolved)\n"
+                .to_string()
+        } else {
+            "  down: unknown — no indexed touch observed (per operation, one routine into \
+             dependency code), which is not proof of absence:\n"
+                .to_string()
+        });
+        if beyond_n == 0 {
+            for (_, text) in &reasons {
+                human.push_str(&format!("    {text}\n"));
+            }
+        }
     } else {
         human.push_str(&format!(
             "  down: yes — {}: {}\n",
@@ -1811,7 +2189,7 @@ fn render_touches_down(
         }
         if shown_n < listed.len() {
             human.push_str(&format!(
-                "    … +{} (persistent or possibly persistent) — --all lists them\n",
+                "    … +{} on persistent or possibly persistent records — --all lists them\n",
                 plural(listed.len() - shown_n, "touch", "touches")
             ));
         }
@@ -1846,7 +2224,8 @@ fn render_touches_down(
             ));
         }
     }
-    if not_resolved > 0 && !is_unknown_table(table_id) {
+    // On a miss with no `beyond` answer the operations are a reason above.
+    if not_resolved > 0 && !is_unknown_table(table_id) && (touches_down || beyond_n > 0) {
         let refs = if not_resolved_ref > 0 {
             format!(", {not_resolved_ref} of them on a RecordRef (table decided at run time)")
         } else {
@@ -1893,12 +2272,17 @@ fn render_touches_down(
 /// no caller witness is built: one counted line. Otherwise each touching
 /// caller's witnesses are streamed into its first witness and counts. `--all`
 /// adds every caller witness (the full product, as before W2-3).
+/// `list_callers` (`--callers`, step 1b): every caller named, with its depth
+/// and location, without that product; in the trivial case JSON `callers[]`
+/// then holds `{depth, routine, outcome}`.
+#[allow(clippy::too_many_arguments)]
 fn render_touches_up(
     cx: &TouchCx<'_, '_>,
     rix: crate::engine::l4::routine_interner::SolveIx,
     table_id: &str,
     touches_down: bool,
     all: bool,
+    list_callers: bool,
     payload: &mut Map<String, Value>,
     human: &mut String,
 ) {
@@ -1913,11 +2297,13 @@ fn render_touches_up(
     let not_touching: Vec<&CallerTouch<'_>> = of(CallerOutcome::DoesNotTouch).collect();
     let unknown: Vec<&CallerTouch<'_>> = of(CallerOutcome::NoRow).collect();
     let note = if touches_down {
-        "this routine itself touches the table, so its callers touch it through this routine \
-         (summaries are transitive-down) — not a finding; each caller is still probed, and one \
-         without a summary row is unknown"
+        "this routine itself touches the table, so its callers inherit the touch through this \
+         routine (summaries are transitive-down): they consume it, and no caller adds an \
+         operation of its own here; each caller is still probed, and one without a summary row \
+         is unknown"
     } else {
-        "this routine does NOT touch the table; the touching callers reach it through other \
+        "the index holds no touch of the table in this routine's cone (one routine into \
+         dependency code; not proof of absence); the touching callers reach it through other \
          branches"
     };
     let mut up = Map::new();
@@ -1950,6 +2336,26 @@ fn render_touches_up(
             .collect::<Vec<_>>()
             .into(),
     );
+    if touches_down && list_callers {
+        up.insert(
+            "callers".into(),
+            callers
+                .iter()
+                .map(|c| {
+                    json!({
+                        "depth": c.depth,
+                        "routine": cx.routine_json(c.routine),
+                        "outcome": match c.outcome {
+                            CallerOutcome::Touches => "touches",
+                            CallerOutcome::DoesNotTouch => "doesNotTouch",
+                            CallerOutcome::NoRow => "unknown",
+                        },
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into(),
+        );
+    }
     if !touches_down {
         up.insert(
             "callers".into(),
@@ -1996,7 +2402,7 @@ fn render_touches_up(
     payload.insert("up".into(), Value::Object(up));
 
     let names = |list: &[&CallerTouch<'_>]| -> String {
-        let n = fold_len(list.len(), 3, all);
+        let n = fold_len(list.len(), 3, all || list_callers);
         let mut v: Vec<String> = list[..n]
             .iter()
             .map(|c| cx.routine_label(c.routine))
@@ -2023,14 +2429,27 @@ fn render_touches_up(
         } else {
             String::new()
         };
+        // Step 1b (astra Task 4): the callers are this touch's consumers
+        // (they inherit it), not a dismissed non-finding; `--callers` names
+        // them without the witness product `--all` builds.
+        let more = match (list_callers || all, all) {
+            (true, true) => "",
+            (true, false) => " — --all lists their witnesses",
+            (false, _) => " — --callers lists them, --all their witnesses",
+        };
         human.push_str(&format!(
-            "  up: {}{who}: {} it, {}, {} unknown — through this routine; not a finding{anomalies}{}\n",
+            "  up: {}{who} inherit{} this touch through this routine: {} it, {}, {} unknown{anomalies}{more}\n",
             plural(callers.len(), "transitive caller", "transitive callers"),
+            if callers.len() == 1 { "s" } else { "" },
             plural(touching, "touches", "touch"),
             plural(not_touching.len(), "does not", "do not"),
             unknown.len(),
-            if all { "" } else { " — --all lists their witnesses" },
         ));
+        if list_callers && !all {
+            for c in &callers {
+                human.push_str(&format!("    +{} {}\n", c.depth, cx.caller_line(c.routine)));
+            }
+        }
     } else {
         human.push_str(&format!(
             "  up: {touching} of {} {} it through other branches, {}, {} unknown{anomalies}\n",
@@ -2041,7 +2460,7 @@ fn render_touches_up(
         ));
         let touchers: Vec<&CallerTouch<'_>> =
             callers.iter().filter(|c| c.witnesses.is_some()).collect();
-        let shown_n = fold_len(touchers.len(), TOUCHES_LIST_CAP, all);
+        let shown_n = fold_len(touchers.len(), TOUCHES_LIST_CAP, all || list_callers);
         for c in &touchers[..shown_n] {
             let w = c.witnesses.as_ref().expect("filtered");
             if all {
@@ -2068,7 +2487,7 @@ fn render_touches_up(
         }
         if shown_n < touchers.len() {
             human.push_str(&format!(
-                "    … +{} — --all lists them\n",
+                "    … +{} — --callers lists them\n",
                 plural(touchers.len() - shown_n, "caller", "callers")
             ));
         }
@@ -2278,11 +2697,59 @@ fn render_query_effects_body(
             .map_or_else(|| internal.to_string(), |x| x.qualified())
     };
 
-    // Rows: every field unchanged, plus `firstHop` (or why none) on a row
-    // that is not the routine's own (ConTinAI reads `via == "direct"`).
-    let rows: Vec<Value> = effects
+    // Step 1b: each row's route as the cone judges it after the literal pass
+    // (`None`: not judged, or the cone was not read).
+    let cone_routes = beyond.as_ref().map(|b| ConeRoutes::new(b.entry));
+    let literal: Vec<Option<LiteralRoute<'_>>> = effects
         .iter()
         .map(|t| {
+            let routes = cone_routes.as_ref()?;
+            let hop = match t.via {
+                crate::engine::l4::effect_store::ViaRank::Direct => None,
+                _ => hops
+                    .of(t)
+                    .ok()
+                    .and_then(|c| join.get(query.bundle().routine_id(c)))
+                    .map(|r| r.stable_id),
+            };
+            let origin = ops.get(t.operation_id, &join);
+            let anchor = origin.as_ref().map(|o| (o.file.as_str(), o.line, o.column));
+            let write = (matches!(bucket(t), "writes" | "callerDependent")
+                && !ops.in_dependency(t.operation_id, substrate.resolved()))
+            .then(|| write_effect_type(t.op))
+            .flatten()
+            .map(|ty| (ty, t.table_id));
+            routes.judge(t.operation_id, anchor, hop.as_deref(), write)
+        })
+        .collect();
+    let route_display = |stable: &str| -> String {
+        beyond
+            .as_ref()
+            .map_or_else(|| stable.to_string(), |b| b.rcx.qualified(stable))
+    };
+    let literal_json = |r: LiteralRoute<'_>| -> Value {
+        match r {
+            LiteralRoute::RuledOut => json!({"status": "ruledOut"}),
+            LiteralRoute::ConeRoute => json!({"status": "coneRoute"}),
+            LiteralRoute::OtherRoute(s) => json!({
+                "status": "otherRoute",
+                "coneFirstHop": {"display": route_display(s), "stableId": s},
+            }),
+            LiteralRoute::NotInCone => json!({"status": "notInCone"}),
+        }
+    };
+    // Both mean no route runs under the root's literal arguments.
+    let ruled_out_row = |r: &Option<LiteralRoute<'_>>| {
+        matches!(r, Some(LiteralRoute::RuledOut | LiteralRoute::NotInCone))
+    };
+
+    // Rows: every field unchanged, plus `firstHop` (or why none) on a row
+    // that is not the routine's own (ConTinAI reads `via == "direct"`), and
+    // (step 1b, additive) `literalRoute` on a row the cone judges.
+    let rows: Vec<Value> = effects
+        .iter()
+        .zip(&literal)
+        .map(|(t, lit)| {
             let mut v = touch_json(
                 t,
                 ops.get(t.operation_id, &join).as_ref(),
@@ -2323,6 +2790,9 @@ fn render_query_effects_body(
                         m.insert("firstHopUnavailable".into(), why.into());
                     }
                 }
+            }
+            if let (Some(r), Value::Object(m)) = (lit, &mut v) {
+                m.insert("literalRoute".into(), literal_json(*r));
             }
             v
         })
@@ -2413,6 +2883,15 @@ fn render_query_effects_body(
             {
                 v["first"]["firstHop"] = json!(hop_label(c));
             }
+            // Step 1b, additive: the first row's route and the table's rows
+            // the literal arguments rule out.
+            if let Some(r) = literal[rows[0]] {
+                v["first"]["literalRoute"] = literal_json(r);
+            }
+            let ruled_out = rows.iter().filter(|&&i| ruled_out_row(&literal[i])).count();
+            if cone_routes.is_some() {
+                v["literalRuledOut"] = ruled_out.into();
+            }
             v
         })
         .collect();
@@ -2470,6 +2949,20 @@ fn render_query_effects_body(
         "beyondEntryPoints": beyond_entry_points,
         "scope": scope_value(beyond.is_some()),
     });
+    // Step 1b, additive: how many rows each route judgement marks.
+    let mut summary = summary;
+    if cone_routes.is_some() {
+        let n = |want: fn(&LiteralRoute<'_>) -> bool| {
+            literal.iter().flatten().filter(|r| want(r)).count()
+        };
+        summary["literalRoutes"] = json!({
+            "ruledOut": n(|r| *r == LiteralRoute::RuledOut),
+            "notInCone": n(|r| *r == LiteralRoute::NotInCone),
+            "otherRoute": n(|r| matches!(r, LiteralRoute::OtherRoute(_))),
+            "coneRoute": n(|r| *r == LiteralRoute::ConeRoute),
+            "notJudged": literal.iter().filter(|r| r.is_none()).count(),
+        });
+    }
 
     let payload = json!({
         "routine": {
@@ -2543,10 +3036,10 @@ fn render_query_effects_body(
         // Wave 3a: the writes beyond each entry point are the cone's, read
         // as explain reads them; the per-operation rows keep L4's depth.
         human.push_str(
-            "  coverage: per operation, one routine into dependency code, and operations ruled \
-             out by literal arguments are listed (alsem explain and prove drop them); writes \
-             beyond dependency entry points follow the whole cone with literal arguments, as \
-             alsem explain does; lines are 1-based\n",
+            "  coverage: per operation, one routine into dependency code; operations and routes \
+             the root's literal arguments rule out are listed and marked (alsem explain and \
+             prove drop them); writes beyond dependency entry points follow the whole cone with \
+             literal arguments, as alsem explain does; lines are 1-based\n",
         );
         human.push_str(&format!(
             "  scope: dependency code: full cone for physical writes, grouped per entry point; \
@@ -2619,12 +3112,35 @@ fn render_query_effects_body(
                     Err(_) => via_note(v).to_string(),
                 },
             };
+            // Step 1b (astra top 5): the mark sits on the row it qualifies.
+            let mark = match literal[rows[0]] {
+                Some(LiteralRoute::RuledOut) => {
+                    " (ruled out by the root's literal arguments: no route runs)".to_string()
+                }
+                Some(LiteralRoute::NotInCone) => " (ruled out by the root's literal arguments: \
+                     the cone, which follows them, has no route to it)"
+                    .to_string(),
+                Some(LiteralRoute::OtherRoute(s)) => format!(
+                    " (the index's route; the cone keeps no live route through it with the root's \
+                     literal arguments, and its live route enters through {})",
+                    route_display(s)
+                ),
+                _ => String::new(),
+            };
+            let ruled_out = rows.iter().filter(|&&i| ruled_out_row(&literal[i])).count();
+            let ruled_out = match (ruled_out, rows.len()) {
+                (0, _) => String::new(),
+                // Every row, so the first one's mark says it.
+                (k, n) if k == n && n == 1 => String::new(),
+                (k, n) if k == n => format!("; all {n} ruled out by literal arguments"),
+                (k, n) => format!("; {k} of {n} ruled out by literal arguments"),
+            };
             let locks = locks_on
                 .get(id)
                 .map(|n| format!(" (+ LockTable {n})"))
                 .unwrap_or_default();
             human.push_str(&format!(
-                "    {}: {}{locks}{} — first {} {at}{through}\n",
+                "    {}: {}{locks}{} — first {} {at}{through}{mark}{ruled_out}\n",
                 table_name(id),
                 ops_text(&op_counts(rows)),
                 temp_note(first.temp_state),
@@ -2764,7 +3280,7 @@ fn render_query_effects_body(
     if all {
         human.push_str(&format!("  every operation ({}):\n", effects.len()));
     }
-    for e in effects.iter().filter(|_| all) {
+    for (e, lit) in effects.iter().zip(&literal).filter(|_| all) {
         let table = if is_unknown_table(e.table_id) {
             unresolved_label(ops.receiver_is_record_ref(e.operation_id)).to_string()
         } else {
@@ -2773,8 +3289,20 @@ fn render_query_effects_body(
                 None => e.table_id.to_string(),
             }
         };
+        let mark = match lit {
+            Some(LiteralRoute::RuledOut | LiteralRoute::NotInCone) => {
+                " [ruled out by literal arguments]".to_string()
+            }
+            Some(LiteralRoute::OtherRoute(s)) => {
+                format!(
+                    " [the cone's live route enters through {}]",
+                    route_display(s)
+                )
+            }
+            _ => String::new(),
+        };
         human.push_str(&format!(
-            "    [{}] on {} via {}, temp {} — {}\n",
+            "    [{}] on {} via {}, temp {} — {}{mark}\n",
             e.op,
             table,
             e.via.as_str(),
@@ -2791,6 +3319,11 @@ fn render_query_effects_body(
         m.insert(
             "beyondWrites".into(),
             json!({"tables": beyond_tables.len(), "entryPoints": beyond_writes.len()}),
+        );
+        // Step 1b: and how many rows the root's literal arguments mark.
+        m.insert(
+            "literalRoutes".into(),
+            payload["summary"]["literalRoutes"].clone(),
         );
     }
     QueryRunResult {
