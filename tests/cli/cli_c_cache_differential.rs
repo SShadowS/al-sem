@@ -195,7 +195,7 @@ fn classification_oracle_all_vs_golden_json() {
         let cache_dir = fixture_cache_dir();
         let result = prune_cache(Some(&cache_dir.to_string_lossy()), true);
         let golden_path = cache_goldens_dir().join("classification.json");
-        std::fs::write(&golden_path, classification_json_text(&result.entries))
+        regen::write_golden(&golden_path, classification_json_text(&result.entries))
             .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
         eprintln!(
             "REGEN cli-c cache classification golden: {}",
@@ -274,7 +274,7 @@ fn dry_run_differential_vs_golden() {
     // the golden file instead of comparing.
     if regen::regen_mode() {
         let golden_path = cache_goldens_dir().join("dry-run.txt");
-        std::fs::write(&golden_path, &normalized)
+        regen::write_golden(&golden_path, &normalized)
             .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
         eprintln!(
             "REGEN cli-c cache dry-run golden: {}",

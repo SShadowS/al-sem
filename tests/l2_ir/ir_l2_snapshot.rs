@@ -118,7 +118,7 @@ fn ir_l2_features_snapshot_over_r0_corpus() {
 
     if regen::regen_mode() {
         std::fs::create_dir_all(golden.parent().unwrap()).unwrap();
-        std::fs::write(&golden, &lines).unwrap();
+        regen::write_golden(&golden, &lines).unwrap();
         return;
     }
 

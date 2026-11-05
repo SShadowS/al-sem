@@ -411,6 +411,120 @@ pub(crate) fn split_qualified(selector: &str) -> Option<QualifiedSelector> {
     })
 }
 
+/// Output step 1b (fable #7): a selector's trailing parameter list, split
+/// off: `Owner::Routine(Integer, Text)` -> (`Owner::Routine`, `["Integer",
+/// "Text"]`); `Routine()` names the overload with no parameter. The list is
+/// the last unquoted `(`…`)` that ends the selector; its items are split at
+/// unquoted `,` or `;`. Every other selector comes back whole, with `None`,
+/// so nothing that resolved before resolves differently.
+pub(crate) fn split_signature(selector: &str) -> (&str, Option<Vec<String>>) {
+    let s = selector.trim_end();
+    if !s.ends_with(')') {
+        return (selector, None);
+    }
+    let (mut quoted, mut open) = (false, None);
+    for (i, c) in s.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            '(' if !quoted => open = Some(i),
+            _ => {}
+        }
+    }
+    let Some(open) = open else {
+        return (selector, None);
+    };
+    let base = s[..open].trim_end();
+    if base.is_empty() || quoted {
+        return (selector, None);
+    }
+    let inner = &s[open + 1..s.len() - 1];
+    let mut items = Vec::new();
+    let (mut quoted, mut start) = (false, 0);
+    for (i, c) in inner.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            ',' | ';' if !quoted => {
+                items.push(inner[start..i].trim().to_string());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let last = inner[start..].trim();
+    if !(items.is_empty() && last.is_empty()) {
+        items.push(last.to_string());
+    }
+    (base, Some(items))
+}
+
+/// A parameter type or name as a selector compares it: lowercase, AL quotes
+/// dropped, whitespace collapsed, a leading `var` dropped.
+fn signature_key(s: &str) -> String {
+    let k = normalize_display_key(&s.replace('"', ""));
+    k.strip_prefix("var ").map_or(k.clone(), str::to_string)
+}
+
+/// Whether `params` are the ones a [`split_signature`] list names, item by
+/// item: its type as declared (`Code[20]`, `Record "Sales Header"`), the
+/// type without its length (`Code`) or its type word (`Record`), its name,
+/// or `name: type`; `var` and AL quotes optional, case-insensitive.
+pub(crate) fn signature_matches(
+    wanted: &[String],
+    params: &[crate::program::model::workspace::ModelParameter],
+) -> bool {
+    wanted.len() == params.len()
+        && wanted.iter().zip(params).all(|(w, p)| {
+            let ty = signature_key(&p.type_text);
+            let ty_ok = |want: &str| {
+                want == ty
+                    || ty.split('[').next().is_some_and(|t| t.trim() == want)
+                    || ty.split(' ').next() == Some(want)
+            };
+            let name = signature_key(&p.name);
+            match w.split_once(':') {
+                Some((n, t)) => signature_key(n) == name && ty_ok(&signature_key(t)),
+                None => {
+                    let w = signature_key(w);
+                    w == name || ty_ok(&w)
+                }
+            }
+        })
+}
+
+/// A routine's parameter types as a selector takes them: `(Integer, var
+/// RecordRef)`.
+pub(crate) fn signature_text(
+    params: &[crate::program::model::workspace::ModelParameter],
+) -> String {
+    let items: Vec<String> = params
+        .iter()
+        .map(|p| {
+            if p.is_var {
+                format!("var {}", p.type_text)
+            } else {
+                p.type_text.clone()
+            }
+        })
+        .collect();
+    format!("({})", items.join(", "))
+}
+
+/// One ambiguous selector's candidate, as every tool prints it: the
+/// selector that names it (`qualified` + its parameter types), where it is
+/// declared, and its stable id.
+pub(crate) fn candidate_label(
+    qualified: &str,
+    r: &crate::program::model::workspace::ModelRoutine,
+) -> String {
+    format!(
+        "{qualified}{} at {}:{} (stable id {})",
+        signature_text(&r.parameters),
+        r.source_anchor.source_unit_id,
+        crate::engine::line_base::shown(r.source_anchor.start_line),
+        r.stable_routine_id
+    )
+}
+
 /// The byte offset of the last `.` outside AL quotes.
 fn last_dot(s: &str) -> Option<usize> {
     let (mut quoted, mut last) = (false, None);

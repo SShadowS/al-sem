@@ -1,5 +1,5 @@
 Codeunit CDO E-Mail Handler::RunReportID  ws:src/Features/Email/Sending/CDOEMailHandler.Codeunit.al:283
-  summary: may write 406 tables (11 owned by this app, 395 by dependencies) and 2 writes on a table not resolved; caller-dependent: none; commits: may (1 site); events: 7,393 (72 raised in workspace code); UI at 5 places; HTTP at 2 places; file at 2 places; background tasks at 2 places; isolated storage at 2 places; telemetry at 1 place; errors at 5 places; callers: 2, reached from 647 page actions; tests: none; gaps: 16 in workspace code, 265 in dependency code, 7 not placed
+  summary: may write 406 tables (11 owned by this app, 395 by dependencies) and 2 writes on a table not resolved; caller-dependent: none; commits: may (1 site); events: 7,393 (72 raised in workspace code); UI at 5 places; HTTP at 2 places; file at 2 places; background tasks at 2 places; isolated storage at 2 places; telemetry at 1 place; errors at 5 places; callers: 2, reached from 647 page actions; tests: none (no test code loaded); gaps: 16 in workspace code, 265 in dependency code, 7 not placed
   coverage: partial (interface-open-world, object-run-unresolved) — 267 interface calls open world, 21 dynamic calls not resolved
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
@@ -116,7 +116,7 @@ Codeunit CDO E-Mail Handler::RunReportID  ws:src/Features/Email/Sending/CDOEMail
   isolated storage at 2 places: ISOLATED_STORAGE at ws:src/Features/ESeal/CDOeSealSetup.Table.al:220 (guarded-by-IsHandled); ISOLATED_STORAGE beyond Codeunit Sales-Calc. Discount::OnRun
   telemetry at 1 place: TELEMETRY beyond Codeunit CTS-SYS Telemetry::LogMessage(EventId, Message, CustomDimensions)
   errors at 5 places: ERROR_IMPLICIT at ws:src/Features/Email/Sending/CDOEMailHandler.Codeunit.al:323 (unconditional-on-success); ERROR_IMPLICIT at ws:src/Features/Email/Sending/CDOEMailHandler.Codeunit.al:348 (conditional); ERROR_IMPLICIT at ws:src/Features/Email/Sending/CDOEMailHandler.Codeunit.al:450 (loop-body); ERROR_IMPLICIT at ws:src/Features/MergeFields/CDOTableFieldArrayMgt.Codeunit.al:445 (guarded-by-IsHandled); ERROR_THROW at ws:src/Features/Email/Sending/CDOEMailHandler.Codeunit.al:1013 (unknown)
-  tests: none reach it
+  tests: no test code loaded (0 [Test] procedures in the workspace app); that is not a reason to skip tests
   gaps in workspace code (16 gaps):
     gap: unresolved-call (callee DispatcherFactory.CreateeDocumentDispatcher, status polymorphic) at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:80
     gap: unresolved-call (callee DispatcherFactory.CreateLegacyeDocDispatcher, status polymorphic) at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:81

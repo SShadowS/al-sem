@@ -68,6 +68,18 @@ fn descriptions_name_exactly_the_inputs_the_schemas_take() {
             .map(String::as_str)
             .collect();
         every_input.extend(props.iter().map(|p| p.to_string()));
+        // Output step 1b (fable #7): every routine-selector input states the
+        // overload form.
+        for (p, schema) in t["inputSchema"]["properties"].as_object().unwrap() {
+            // The property's whole schema text (an array's item description
+            // included).
+            let pd = schema.to_string();
+            if pd.contains("stable routine id") && !pd.contains("`Owner::Routine(Integer, Text)`") {
+                failures.push(format!(
+                    "{name}: selector input `{p}` omits the overload form"
+                ));
+            }
+        }
         let mentioned: BTreeSet<&str> = backticked(d)
             .into_iter()
             .filter_map(named)
@@ -119,6 +131,8 @@ fn descriptions_name_exactly_the_inputs_the_schemas_take() {
         "1-based",
         "`Owner::Routine`",
         "`Owner.Routine`",
+        // Output step 1b (fable #7): the overload form.
+        "`Owner::Routine(Integer, Text)`",
         "`unknown`",
         "`coverage`",
         "`assumptions`",
@@ -130,6 +144,58 @@ fn descriptions_name_exactly_the_inputs_the_schemas_take() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Output step 1b (astra Task 5, fable fact 2): explain's tests line tells
+/// "no test code loaded" from "tests loaded, none reaches it", in the
+/// summary, the section and JSON (`summary.testsLoaded`), and says neither
+/// is a reason to skip tests. The fixture holds one `[Test]` procedure that
+/// does not reach `IssueDoc`; a workspace with none says so.
+///
+/// Discrimination (2026-11-05): `CoverageGraph::test_procedures` returning
+/// 0 fails at the fixture's summary (`none (no test code loaded)` where
+/// `none of 1 loaded` is due); restored, passes.
+#[test]
+fn tests_line_tells_no_test_code_from_no_reaching_test() {
+    let ws = workspace().to_string_lossy().into_owned();
+    let (human, _, code) = run_alsem(&["explain", &ws, "--routine", ISSUE_DOC]);
+    assert_eq!(code, 0, "{human}");
+    assert!(human.contains("; tests: none of 1 loaded;"), "{human}");
+    assert!(
+        human.contains(
+            "  tests: 1 [Test] procedure loaded; none reaches it (not a reason to skip tests)"
+        ),
+        "{human}"
+    );
+    let (json, _, _) = run_alsem(&["explain", &ws, "--routine", ISSUE_DOC, "--format", "json"]);
+    let doc: Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(doc["cards"][0]["summary"]["testsLoaded"], 1, "{json}");
+    assert_eq!(doc["cards"][0]["summary"]["tests"], 0, "{json}");
+
+    let t = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(t.path().join("src")).unwrap();
+    std::fs::write(
+        t.path().join("app.json"),
+        r#"{"id":"1b1b1b1b-0000-4000-8000-00000000001b","name":"NoTests","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        t.path().join("src/a.al"),
+        "codeunit 50100 \"No Tests\"\n{\n    procedure Run()\n    begin\n        Message('x');\n    end;\n}\n",
+    )
+    .unwrap();
+    let w = t.path().to_string_lossy().into_owned();
+    let (human, _, code) = run_alsem(&["explain", &w, "--routine", "Run"]);
+    assert_eq!(code, 0, "{human}");
+    assert!(
+        human.contains("; tests: none (no test code loaded);"),
+        "{human}"
+    );
+    assert!(
+        human.contains("  tests: no test code loaded (0 [Test] procedures in the workspace app); that is not a reason to skip tests"),
+        "{human}"
+    );
+    assert!(!human.contains("none reach it"), "{human}");
 }
 
 /// MCP output plan 3b: one routine selector grammar for every tool. Each

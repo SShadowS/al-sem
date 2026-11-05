@@ -294,3 +294,88 @@ fn digest_marks_a_literal_dead_write_as_prove_judges_it() {
         "{live:?}"
     );
 }
+
+/// Output step 1b (astra top 5): `query effects` keeps every L4 row and its
+/// `via` (spec §12.2; ConTinAI reads them), and marks each row's route as
+/// the cone judges it after the literal pass (`literalRoute`):
+/// - `DocSaveRecursive`: the insert is literal-dead in the cone (recursive
+///   SCC, `literal_reach`): `ruledOut`;
+/// - `DocSave`: the cone's parameter guard drops it (singleton SCCs), so no
+///   cone effect originates from it: `notInCone`;
+/// - `DocBoth`: the index's first hop is the dead `RunReportRec(false, 0)`
+///   call, the cone's live route enters through `Hop1`: `otherRoute`;
+/// - `DocQueue`, `DocQueueRecursive`, `DocEither`: the cone's route enters
+///   through the row's first hop: `coneRoute`, no human mark.
+///
+/// Discrimination (2026-11-05), each break in `ConeRoutes::judge`, each
+/// restored: dropping the `literal_unreachable` check fails at
+/// `DocSaveRecursive` (`coneRoute`); dropping the `NotInCone` check fails at
+/// `DocSave` (not judged, `null`); comparing the witness's first step as
+/// always equal fails at `DocBoth` (`coneRoute`).
+#[test]
+fn query_effects_marks_routes_the_literal_arguments_rule_out() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"23232323-0000-4000-8000-000000000023","name":"G23","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(ws.join("src/Shapes.al"), SOURCE).unwrap();
+    let query = |routine: &str| -> serde_json::Value {
+        alsem(
+            t.path(),
+            &[
+                "query",
+                "effects",
+                "ws",
+                "--routine",
+                routine,
+                "--format",
+                "json",
+                "--deterministic",
+            ],
+        )["payload"]
+            .clone()
+    };
+    let human = |routine: &str| -> String {
+        let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+            .args(["query", "effects", "ws", "--routine", routine])
+            .current_dir(t.path())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    for (routine, status, hop, cone_hop) in [
+        ("DocSaveRecursive", "ruledOut", "RunReportRec", None),
+        ("DocSave", "notInCone", "RunReport", None),
+        (
+            "DocBoth",
+            "otherRoute",
+            "RunReportRec",
+            Some("Codeunit G23 Handler::Hop1"),
+        ),
+        ("DocQueue", "coneRoute", "RunReport", None),
+        ("DocQueueRecursive", "coneRoute", "RunReportRec", None),
+        ("DocEither", "coneRoute", "RunReport", None),
+    ] {
+        let p = query(routine);
+        let rows = p["effects"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "{routine}: the row is kept: {p}");
+        let row = &rows[0];
+        assert_eq!(row["op"], "Insert", "{routine}: {row}");
+        assert_eq!(row["via"], "inherited", "{routine}: `via` unchanged: {row}");
+        assert_eq!(row["firstHop"]["display"], hop, "{routine}: {row}");
+        assert_eq!(row["literalRoute"]["status"], status, "{routine}: {row}");
+        assert_eq!(
+            row["literalRoute"]["coneFirstHop"]["display"].as_str(),
+            cone_hop,
+            "{routine}: {row}"
+        );
+        let text = human(routine);
+        let marked = text.contains("ruled out by the root's literal arguments")
+            || text.contains("the cone keeps no live route through it");
+        assert_eq!(marked, status != "coneRoute", "{routine}: {text}");
+    }
+}

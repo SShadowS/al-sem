@@ -48,8 +48,11 @@ fn baseline_dir() -> PathBuf {
         .join("l4-summary-baseline")
 }
 
+#[path = "common/regen.rs"]
+mod regen_helper;
+
 fn regen() -> bool {
-    std::env::var("REGEN_TEMP_GOLDENS").as_deref() == Ok("1")
+    regen_helper::regen_mode()
 }
 
 /// Line-ending-insensitive compare (autocrlf=true checkouts; the baseline files
@@ -110,7 +113,7 @@ fn assert_parity_with_leaves(name: &str, leaves: &HashMap<String, RoutineSummary
 
     if regen() {
         std::fs::create_dir_all(baseline_dir()).expect("create l4-summary-baseline dir");
-        std::fs::write(&path, actual.as_bytes())
+        crate::regen_helper::write_golden(&path, actual.as_bytes())
             .unwrap_or_else(|e| panic!("[{name}] regen write {}: {e}", path.display()));
         eprintln!("REGEN l4-summary baseline: {}", path.display());
         return;
@@ -326,7 +329,7 @@ fn cdo_whole_program_v2_matches_frozen_digest() {
         // (pre-deletion commit for forensic re-differencing). A fresh re-freeze
         // now measures v2 alone.
         std::fs::create_dir_all(baseline_dir()).expect("create l4-summary-baseline dir");
-        std::fs::write(&path, digest.as_bytes())
+        crate::regen_helper::write_golden(&path, digest.as_bytes())
             .unwrap_or_else(|e| panic!("regen write {}: {e}", path.display()));
         eprintln!(
             "REGEN cdo-whole-program-digest ({} routines): {} -> {}",
@@ -1182,7 +1185,7 @@ fn cdo_reverse_index_matches_slow_oracle() {
 
     if regen() {
         std::fs::create_dir_all(baseline_dir()).expect("create l4-summary-baseline dir");
-        std::fs::write(&digest_path, digest.as_bytes())
+        crate::regen_helper::write_golden(&digest_path, digest.as_bytes())
             .unwrap_or_else(|e| panic!("regen write {}: {e}", digest_path.display()));
         eprintln!(
             "REGEN cdo-reverse-index-digest ({} tables): {} -> {}",

@@ -113,7 +113,7 @@ fn r4f_root_classifications_match_goldens() {
         // oracle retired). `pretty_with_newline` already produces the exact
         // on-disk form the assert path below reads.
         if regen::regen_mode() {
-            std::fs::write(&golden_path, &rust_text)
+            regen::write_golden(&golden_path, &rust_text)
                 .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
             eprintln!(
                 "REGEN r4f root-classification golden: {}",
@@ -171,7 +171,7 @@ fn root_classifications_whole_corpus_summary() {
 
     let golden_path = goldens_dir().join("corpus.rootclass.summary.txt");
     if regen::regen_mode() {
-        std::fs::write(&golden_path, &text)
+        regen::write_golden(&golden_path, &text)
             .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
         eprintln!(
             "REGEN whole-corpus rootclass summary: {}",

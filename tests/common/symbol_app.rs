@@ -32,6 +32,24 @@ fn write_app(
     sources: &[(&str, &str)],
     manifest_extra: &str,
 ) {
+    let bytes = source_app_bytes(guid, name, version, symbols, sources, manifest_extra);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
+/// The bytes [`write_source_app`] writes, for a caller that writes them itself. A
+/// COMMITTED `.app` (a fixture other tests read while it is regenerated) must go
+/// through `regen::write_golden`, never through [`write_source_app`], which writes
+/// in place.
+#[allow(dead_code)]
+pub fn source_app_bytes(
+    guid: &str,
+    name: &str,
+    version: &str,
+    symbols: &str,
+    sources: &[(&str, &str)],
+    manifest_extra: &str,
+) -> Vec<u8> {
     let manifest = format!(
         r#"<?xml version="1.0" encoding="utf-8"?><Package xmlns="http://schemas.microsoft.com/navx/2015/manifest"><App Id="{guid}" Name="{name}" Publisher="probe" Version="{version}" Runtime="13.0" />{manifest_extra}</Package>"#
     );
@@ -52,8 +70,7 @@ fn write_app(
         }
         zip.finish().unwrap();
     }
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let mut out = std::fs::File::create(path).unwrap();
-    out.write_all(&[0u8; 40]).unwrap();
-    out.write_all(bytes.get_ref()).unwrap();
+    let mut out = vec![0u8; 40];
+    out.extend_from_slice(bytes.get_ref());
+    out
 }

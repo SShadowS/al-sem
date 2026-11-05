@@ -1,5 +1,5 @@
 --- touches MC Customer (11111111-0000-0000-0000-00000000d01a/table/50101) ---
-  workspace-global: 4 routine(s) touch it
+  workspace-global: 4 routines touch it (per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code, or on a table not resolved, is not listed)
     Codeunit D1 Multi Caller::CallerB — ws:src/D1MultiCaller.al:30
     Codeunit D1 Multi Caller::CallerC — ws:src/D1MultiCaller.al:38
     Codeunit D1 Multi Caller::CallerA — ws:src/D1MultiCaller.al:22

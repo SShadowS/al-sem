@@ -765,6 +765,9 @@ pub struct RollupTotals {
     pub callers: Option<usize>,
     pub page_actions: Option<usize>,
     pub tests: Option<usize>,
+    /// Explain only (step 1b): the `[Test]` procedures the search started
+    /// from; `None` when no test search ran.
+    pub tests_loaded: Option<usize>,
 }
 
 impl RollupTotals {
@@ -809,6 +812,9 @@ impl RollupTotals {
         }
         if let Some(t) = self.tests {
             v["tests"] = json!(t);
+        }
+        if let Some(n) = self.tests_loaded {
+            v["testsLoaded"] = json!(n);
         }
         v
     }
@@ -888,10 +894,11 @@ impl RollupTotals {
             });
         }
         if let Some(t) = self.tests {
-            parts.push(if t == 0 {
-                "tests: none".to_string()
-            } else {
-                format!("tests: {t}")
+            parts.push(match (t, self.tests_loaded) {
+                (0, Some(0)) => "tests: none (no test code loaded)".to_string(),
+                (0, Some(n)) => format!("tests: none of {} loaded", thousands(n)),
+                (0, None) => "tests: not searched".to_string(),
+                (t, _) => format!("tests: {t}"),
             });
         }
         parts.push(format!(
@@ -1364,6 +1371,7 @@ impl RoutineRollup {
             callers: None,
             page_actions: None,
             tests: None,
+            tests_loaded: None,
         }
     }
 }

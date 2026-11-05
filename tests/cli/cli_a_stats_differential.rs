@@ -131,7 +131,7 @@ fn maybe_regen(name: &str, rust: &str) -> bool {
     let dir = local_stats_dir();
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("regen mkdir {}: {e}", dir.display()));
     let golden_path = dir.join(name);
-    std::fs::write(&golden_path, rust)
+    regen::write_golden(&golden_path, rust)
         .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
     eprintln!(
         "REGEN cli-a-stats vendored golden: {}",
@@ -338,7 +338,7 @@ fn refresh() {
         ] {
             let out = run_stats(fixture, names);
             let golden_path = stats_dir.join(format!("{fixture}.{slot}.json"));
-            std::fs::write(&golden_path, &out).unwrap_or_else(|e| {
+            regen::write_golden(&golden_path, &out).unwrap_or_else(|e| {
                 panic!("refresh: failed to write {}: {e}", golden_path.display())
             });
             eprintln!("refresh: wrote {}", golden_path.display());

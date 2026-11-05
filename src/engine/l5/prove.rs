@@ -2242,16 +2242,20 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         // no-root code digest and fingerprint share.
         use crate::engine::l5::digest_cli::ChangedRootsDiagnostic;
         let blocker = match changed_roots.diagnostics.iter().find_map(|d| match d {
-            ChangedRootsDiagnostic::SelectorAmbiguous { candidates, .. } => Some(candidates),
+            ChangedRootsDiagnostic::SelectorAmbiguous {
+                candidates,
+                routines,
+                ..
+            } => Some((candidates, routines)),
             _ => None,
         }) {
-            Some(candidates) => ProveBlocker {
+            Some((candidates, routines)) => ProveBlocker {
                 kind: "routine-ambiguous",
-                detail: format!(
-                    "'{routine_selector}' names {} routines ({}); qualify it as \
-                     <owner>::<routine> or pass a stable id",
-                    candidates.len(),
-                    candidates.join(", ")
+                detail: crate::engine::l5::explain::ambiguity_text(
+                    "",
+                    routine_selector,
+                    candidates,
+                    routines,
                 ),
                 anchor: None,
             },
