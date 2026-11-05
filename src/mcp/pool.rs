@@ -133,6 +133,75 @@ struct Snapshot {
     /// holds its `Arc` without asking the child.
     /// Keyed by `<engineInstanceId>/<generation>`.
     descriptor: Option<(String, Arc<Value>)>,
+    /// The last `alsem_refresh` (agent-tasks design §2.3 refresh state).
+    refresh: RefreshTrack,
+}
+
+/// An `alsem_refresh`'s state (agent-tasks design §2.3): `idle` (none yet),
+/// `queued` (waiting for its worker, or an unwaited one the child runs on
+/// its own until a later call shows its outcome), `running` (its worker
+/// runs it), `completed`, `failed`. Never inferred from a command.
+#[derive(Default)]
+struct RefreshTrack {
+    state: Option<&'static str>,
+    wait: bool,
+    queued_unix_ms: Option<u64>,
+    started_unix_ms: Option<u64>,
+    finished_unix_ms: Option<u64>,
+    /// `rebuilt` or `already-fresh`, once known.
+    did: Option<&'static str>,
+    class: Option<String>,
+    generation: Option<u64>,
+    duration_ms: Option<u64>,
+    error: Option<String>,
+    /// The child's builds counter when an unwaited refresh was handed to
+    /// it: a later status with more builds shows it rebuilt.
+    builds_before: Option<u64>,
+}
+
+impl RefreshTrack {
+    fn json(&self) -> Value {
+        json!({
+            "state": self.state.unwrap_or("idle"),
+            "waited": self.state.map(|_| self.wait),
+            "queuedAtUnixMs": self.queued_unix_ms,
+            "startedAtUnixMs": self.started_unix_ms,
+            "finishedAtUnixMs": self.finished_unix_ms,
+            "did": self.did,
+            "class": self.class,
+            "generation": self.generation,
+            "durationMs": self.duration_ms,
+            "error": self.error,
+        })
+    }
+}
+
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+/// A session's build class (`session/status`'s `lastBuildClass`) by the
+/// session's own class names.
+pub fn class_name(letter: &str) -> &str {
+    match letter {
+        "B" => "BodyOnly",
+        "S" => "Declaration",
+        "P" => "Package",
+        "cold" => "Cold",
+        "needs" => "Needs",
+        other => other,
+    }
+}
+
+/// One engine as a status reports it: its key, the snapshot's operator data
+/// and the published input descriptor.
+pub struct EngineRow {
+    pub workspace: String,
+    pub universe: Universe,
+    pub details: Value,
+    pub descriptor: Option<Arc<Value>>,
 }
 
 /// A running command's bookkeeping: when it was queued, its cancel flag and
@@ -591,6 +660,14 @@ impl Pool {
             .expect("cancels")
             .insert(id_key(&id), cancel);
         worker.pending.fetch_add(1, Ordering::SeqCst);
+        if let Job::Refresh { call, .. } = &job {
+            worker.snapshot.lock().expect("snapshot").refresh = RefreshTrack {
+                state: Some("queued"),
+                wait: call.wait,
+                queued_unix_ms: Some(now_unix_ms()),
+                ..RefreshTrack::default()
+            };
+        }
         if let Err(std::sync::mpsc::SendError(job)) = worker.tx.send(job) {
             worker.pending.fetch_sub(1, Ordering::SeqCst);
             if matches!(job, Job::Command { reply: Some(_), .. }) {
@@ -626,8 +703,19 @@ impl Pool {
     /// snapshots; starts nothing.
     #[must_use]
     pub fn engines(&self, call: &EngineCall) -> Vec<Value> {
+        self.engine_rows(call)
+            .into_iter()
+            .map(|r| r.details)
+            .collect()
+    }
+
+    /// [`Self::engines`] with each engine's key and published input
+    /// descriptor (`alsem_status`'s freshness check reads it), sorted by
+    /// workspace and universe.
+    #[must_use]
+    pub fn engine_rows(&self, call: &EngineCall) -> Vec<EngineRow> {
         let workers = self.workers();
-        let mut engines: Vec<Value> = workers
+        let mut engines: Vec<EngineRow> = workers
             .iter()
             .filter(|(k, _)| {
                 call.workspace
@@ -636,7 +724,7 @@ impl Pool {
             })
             .map(|(k, w)| {
                 let s = w.snapshot.lock().expect("snapshot");
-                json!({
+                let details = json!({
                     "workspace": k.0,
                     "universe": k.1.as_str(),
                     "queued": w.pending.load(Ordering::SeqCst),
@@ -665,12 +753,19 @@ impl Pool {
                     "backoffMs": s.backoff_ms,
                     "lastFailure": s.last_failure.as_ref().map(|(o, m)| json!({"outcome": o.as_str(), "message": m})),
                     "stderrTail": s.stderr_tail,
-                })
+                    "refresh": s.refresh.json(),
+                });
+                EngineRow {
+                    workspace: k.0.clone(),
+                    universe: k.1,
+                    details,
+                    descriptor: s.descriptor.as_ref().map(|(_, d)| Arc::clone(d)),
+                }
             })
             .collect();
         engines.sort_by(|a, b| {
-            (a["workspace"].as_str(), a["universe"].as_str())
-                .cmp(&(b["workspace"].as_str(), b["universe"].as_str()))
+            (a.workspace.as_str(), a.universe.as_str())
+                .cmp(&(b.workspace.as_str(), b.universe.as_str()))
         });
         engines
     }
@@ -853,11 +948,17 @@ fn work(
                 // `session/refresh {wait}` (design §8.2): a failed front end
                 // is reset first, then the child brings its revision up to
                 // date with the disk (with `wait`, before answering).
-                {
+                let builds_before = {
                     let mut s = snapshot.lock().expect("snapshot");
                     s.running_tool = Some("alsem_refresh".to_string());
                     s.activity = Some(("refresh", Instant::now()));
-                }
+                    s.refresh.state = Some("running");
+                    s.refresh.started_unix_ms = Some(now_unix_ms());
+                    s.child
+                        .as_ref()
+                        .and_then(|c| c.session.as_ref())
+                        .and_then(|s| s["builds"].as_u64())
+                };
                 let (outcome, is_error) = match front.as_mut() {
                     Some(front) => {
                         front.reset();
@@ -890,13 +991,60 @@ fn work(
                         )
                     }
                 };
-                let body = json!({
+                // What the refresh did (agent-tasks design §2.3): with
+                // `wait`, the child says whether it built; without, it was
+                // handed to the child, which runs it on its own.
+                let did = if is_error {
+                    None
+                } else if !call.wait {
+                    Some("queued")
+                } else if outcome["built"] == json!(true) {
+                    Some("rebuilt")
+                } else {
+                    Some("already-fresh")
+                };
+                let class = outcome["class"]
+                    .as_str()
+                    .map(class_name)
+                    .map(str::to_string);
+                let generation = outcome["revision"]["generation"].as_u64();
+                {
+                    let mut s = snapshot.lock().expect("snapshot");
+                    let r = &mut s.refresh;
+                    r.finished_unix_ms = Some(now_unix_ms());
+                    if is_error {
+                        r.state = Some("failed");
+                        r.error = Some(
+                            outcome["error"]
+                                .as_str()
+                                .map_or_else(|| outcome.to_string(), str::to_string),
+                        );
+                    } else if call.wait {
+                        r.state = Some("completed");
+                        r.did = did;
+                        r.class.clone_from(&class);
+                        r.generation = generation;
+                        r.duration_ms = outcome["wallMs"].as_u64();
+                    } else {
+                        r.state = Some("queued");
+                        r.finished_unix_ms = None;
+                        r.builds_before = builds_before;
+                    }
+                }
+                let mut body = json!({
                     "kind": "refresh",
+                    "did": did,
                     "workspace": call.workspace,
                     "universe": call.universe.as_str(),
                     "waited": call.wait,
                     "engine": outcome,
                 });
+                if call.wait && !is_error {
+                    body["class"] = json!(class);
+                    body["files"] = outcome["changedFiles"].clone();
+                    body["durationMs"] = outcome["wallMs"].clone();
+                    body["generation"] = json!(generation);
+                }
                 pending.fetch_sub(1, Ordering::SeqCst);
                 let msg = shared.transport.response(&id, &body, is_error, None);
                 if cancel.load(Ordering::SeqCst) {
@@ -957,6 +1105,31 @@ fn publish(front: &mut EngineFront, snapshot: &Mutex<Snapshot>, ask_status: bool
     let mut s = snapshot.lock().expect("snapshot");
     s.started = true;
     s.hello = front.hello().cloned();
+    // An unwaited refresh the child ran on its own (its heavy queue is in
+    // order, so the call just answered came after it): its outcome, from
+    // the child's builds counter.
+    if let (Some("queued"), false, Some(before), Some(session)) = (
+        s.refresh.state,
+        s.refresh.wait,
+        s.refresh.builds_before,
+        child.as_ref().and_then(|c| c.session.as_ref()),
+    ) {
+        let built = session["builds"].as_u64().is_some_and(|n| n > before);
+        let r = &mut s.refresh;
+        r.state = Some("completed");
+        r.finished_unix_ms = Some(now_unix_ms());
+        r.did = Some(if built { "rebuilt" } else { "already-fresh" });
+        if built {
+            r.class = session["lastBuildClass"]
+                .as_str()
+                .map(|c| class_name(c).to_string());
+            r.duration_ms = session["lastBuildMs"].as_u64();
+        }
+        r.generation = child
+            .as_ref()
+            .and_then(|c| c.revision.as_ref())
+            .map(|r| r.generation);
+    }
     if child.is_some() || s.hello.is_none() {
         s.child_read_at = child.as_ref().map(|_| Instant::now());
         s.child = child;

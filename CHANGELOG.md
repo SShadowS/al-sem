@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (agent tasks, milestone F: freshness)
+
+Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §2.
+
+- **Source dependencies are stat-cached inputs** (`engine::resident::manifest`). The input
+  manifest records each configured source folder (`al-sem.dependencies.json`) as its own entries:
+  its `app.json` (`srcapp:`), its `.al` listing (`srcwalk:`) and every `.al` file with its stat
+  (`src:<spelled>\0<rel>`), through the same walk and checks the read makes
+  (`program::source_deps::walk`, which `read` now uses too). A stat-cached freshness check now
+  reads and hashes only the dependency files whose length or modification time moved; before, it
+  read and hashed every file of every source dependency on every check. A workspace without
+  source dependencies has the same entries and the same stamp as before.
+- **Input categories** (`Manifest::changes`): every input that differs between two manifests, with
+  its category (`al-file`, `al-walk`, `app-json`, `app-json-paths`, `roots-config`,
+  `coverage-config`, `source-dependency`, `package`, `package-list`, `unreadable-package-folder`,
+  `meta`), its path when it is one file, and what changed when the path does not say it (a file
+  on one side only is `added` or `removed`). `Manifest::hashed` lists the files an observation
+  actually read. The spec's `injected-source` / `injected-packages` categories wait for the test
+  universes (milestone C), which are the only builds with injected inputs.
+
+### Changed (agent tasks, milestone F)
+
+- **`alsem_status` checks the disk** (`statusVersion: 2`, `mcp::freshness`). Before, it returned the
+  workers' snapshots and never looked at a file, so `revision` and `lastBuild` read as "current"
+  when nothing was checked. Now each engine's row has a `check`: the disk compared with the input
+  descriptor its worker published for the revision (stat-cached, or every input hashed with the new
+  `verify: true` argument), bound to `checkedRevision` (`generation`, `inputsStamp`) with start and
+  end times, `complete`/`incompleteReasons` (a check past its deadline, 5 s cached and 30 s verify,
+  or one that meets an unreadable input is never `fresh`), `fresh`, the `changes` by category with
+  their paths, `filesHashed`, and the `refreshClass` from the session's own classes (`Package` for
+  a package, the root `app.json` or a source dependency; `Declaration` for a `.al` file added,
+  removed or renamed; `BodyOnly` for `roots.config.json`, the coverage config or a nested
+  `app.json` alone; `BodyOnly|Declaration`, not certain, for `.al` edits). A `headline` per engine
+  and one for the whole answer say FRESH, STALE (what changed, the class, the next action), not
+  checked (no engine for the workspace: `noEngine`, `check: null`), or that the check did not
+  finish. The check runs on a checker thread in the MCP process: the reader loop keeps answering,
+  and a busy engine child, worker or build never delays it, since it never goes through the
+  engine's front end; it builds nothing and leaves the child's session alone. The old per-engine
+  fields move under `details`. `refresh` gives the last `alsem_refresh`'s state (`idle`, `queued`,
+  `running`, `completed`, `failed`) with what it did, its class and generation; an unwaited refresh
+  is `queued` until a later call shows its outcome.
+- **Measured on a copy of the CDO baseline** (cross-app, 582 `.al` files, 11 packages,
+  `release-fast`, 2026-11-05; the machine was shared, load average 187-215, so these are upper
+  bounds). Idle: a cached check took 2.6-4.7 ms, and the status answer arrived 4.0-6.5 ms after the
+  call (10 runs; the spec's bar is 10 ms). A `verify` check hashed 594 files in 38-40 ms (answer
+  40-42 ms). While a heavy `alsem_explain` ran on the same engine: 3.2-4.2 ms cached, 36 ms verify,
+  and a `ping` sent during the check answered in 0.05-0.16 ms. After a body edit: STALE, 1 file
+  hashed, category `al-file`, class `BodyOnly|Declaration`. With one source dependency of 579
+  `.al` files: a cached check took 10-46 ms (it stats 1,173 files) and hashed 0 of them; the edit
+  of one dependency file hashed exactly that file and was reported as `source-dependency` with its
+  path and class `Package`; `verify` hashed 1,173 files in 190-330 ms. Before this milestone every
+  cached check read and hashed all 579 dependency files.
+- **`alsem_refresh` says what it did**: `did` is `rebuilt` (with `class`, `files`, `durationMs`,
+  `generation`), `already-fresh`, or `queued` (`wait: false`). The child's `session/refresh`
+  answer carries `built`, `class` and `changedFiles`.
+- `changedPaths` (a `latest-built` answer's stale inputs) now also names a changed source
+  dependency file and `al-sem.dependencies.json`; before, a source-dependency change gave no path
+  at all. It is computed from `Manifest::changes`.
+
+### Fixed (agent tasks, milestone F)
+
+- **The `freshness: verify` description** said "answer from the built revision and report whether
+  it is stale", but `verify` hashes every input and rebuilds first when anything changed. It now
+  says so: "verify: like fresh, but hashes every input instead of trusting size and modification
+  time; rebuilds first when anything changed." `fresh`'s text now says it trusts an unchanged size
+  and modification time. A contract test pins the text and the behavior (a same-size,
+  same-mtime rewrite: `fresh` keeps generation 1, `verify` rebuilds to generation 2).
+
 ### Added (agent tasks, milestone M0: resident groundwork)
 
 Nothing an agent sees changes yet; these are the pieces the later milestones (the reverse cone,
