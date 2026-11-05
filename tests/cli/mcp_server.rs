@@ -291,6 +291,7 @@ fn a_transcript_answers_what_the_cli_answers() {
             "alsem_digest",
             "alsem_query_effects",
             "alsem_query_touches",
+            "alsem_tests",
             "alsem_status",
             "alsem_refresh"
         ]

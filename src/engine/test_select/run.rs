@@ -19,7 +19,7 @@ use super::render::{Part, RenderOpts, Rendered, render};
 use super::universe::TestUniverse;
 
 /// What `alsem tests` / `alsem_tests` asks.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TestsRequest {
     pub workspace: String,
     pub routines: Vec<String>,

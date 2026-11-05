@@ -469,6 +469,20 @@ impl LspEngines {
             }
             ToolCall::Refresh(c) => Request::Refresh(c),
             ToolCall::Command(call) => Request::Command { call, progress },
+            // A composite request: the editor front end has no method for it
+            // yet (the MCP tool and the CLI do).
+            ToolCall::Tests(_) => {
+                drop(state);
+                return self.reply(
+                    &id,
+                    Err((
+                        codes::INVALID_PARAMS,
+                        "alsem_tests is not served through the LSP front end; use the CLI \
+                         (alsem tests) or the MCP tool"
+                            .into(),
+                    )),
+                );
+            }
         };
         let universe = match &request {
             Request::Command { call, .. } => call.universe,

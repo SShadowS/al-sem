@@ -55,7 +55,16 @@ use crate::wire::RevisionId;
 /// model the revision built ([`crate::engine::batch::job::ViewNeeds::EXPLAIN`]
 /// covers each), no analyze extras, no program. Every other command runs the
 /// one-shot job path over the revision's inputs.
-pub const SERVED_COMMANDS: &[&str] = &["query", "digest", "explain", "prove"];
+pub const SERVED_COMMANDS: &[&str] = &[
+    "query",
+    "digest",
+    "explain",
+    "prove",
+    // `alsem tests`' parts (agent-tasks §4): the roots part off the model,
+    // the select part off the revision's sited graph.
+    "tests",
+    "tests-select",
+];
 
 /// A key of a revision's artifact store (see the module doc).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

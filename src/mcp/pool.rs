@@ -350,6 +350,9 @@ struct Shared {
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     closing: AtomicBool,
     children: ChildConfig,
+    /// The test universes' descriptors, by their engine's workspace (the
+    /// test app's folder), registered by `run_tests` before a part is queued.
+    test_universes: Mutex<HashMap<String, crate::engine::test_select::universe::TestUniverse>>,
 }
 
 fn log(line: &str) {
@@ -434,6 +437,7 @@ impl Pool {
                 cancels: Mutex::new(HashMap::new()),
                 closing: AtomicBool::new(false),
                 children,
+                test_universes: Mutex::new(HashMap::new()),
             }),
             workers: Mutex::new(HashMap::new()),
         }
@@ -561,6 +565,134 @@ impl Pool {
             });
         }
         out
+    }
+
+    /// `alsem_tests` (agent-tasks design §4.3, §4.7): the answer's parts as a
+    /// composite request, one part at a time, so a part never holds one child
+    /// while waiting for another. The roots part runs on the production
+    /// engine; each test app's select part on a test-universe engine (keyed by
+    /// the test app's folder, universe `tests`, opened with the descriptor
+    /// registered here), started on its first part; the workspace's own tests
+    /// on the production engine (its sited graph). The answer is rendered by
+    /// `test_select::run::orchestrate`, the CLI's own function, so its stdout
+    /// is `alsem tests`' bytes; the envelope carries the revision vector
+    /// (`revisions`: the production revision and each test universe's).
+    pub fn run_tests(&self, id: &Value, call: &tools::TestsCall) {
+        use crate::engine::test_select::run::{Target, orchestrate};
+        let shared = &self.shared;
+        shared
+            .in_flight
+            .lock()
+            .expect("in flight")
+            .insert(id_key(id));
+        let started = Instant::now();
+        let mut production_rev = Value::Null;
+        let mut test_revs: Vec<Value> = Vec::new();
+        let mut run = |t: Target<'_>, argv: Vec<String>| -> Result<Value, String> {
+            let base = &call.command;
+            let roots = matches!(t, Target::Production);
+            let (workspace, universe, key) = match t {
+                Target::Production => (base.workspace.clone(), base.universe, None),
+                Target::Tests(u) if u.is_workspace() => (
+                    base.workspace.clone(),
+                    base.universe,
+                    Some("workspace".to_string()),
+                ),
+                Target::Tests(u) => {
+                    let ws = u.test_root.to_string_lossy().into_owned();
+                    shared
+                        .test_universes
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .insert(ws.clone(), u.clone());
+                    (ws, Universe::Tests, Some(u.key()))
+                }
+            };
+            let part = CommandCall {
+                tool: base.tool,
+                workspace: workspace.clone(),
+                universe,
+                freshness: base.freshness,
+                argv,
+                diff_text: if roots { base.diff_text.clone() } else { None },
+                out: None,
+                max_inline_bytes: Some(crate::wire::MAX_INLINE_BYTES as u64),
+                always_file: false,
+                client_budget_chars: None,
+            };
+            let frame = match self.run_composite(id, vec![part]).pop() {
+                Some(SubOutcome::Answered(f)) => f,
+                Some(SubOutcome::NotComputed(m)) => return Err(m),
+                None => return Err("the part was not run".into()),
+            };
+            let (head, stdout) = part_answer(&frame)?;
+            let rev = json!({"workspace": workspace, "universe": key.unwrap_or_else(|| universe.as_str().to_string()),
+                             "revision": head.get("revision").cloned().unwrap_or(Value::Null)});
+            if roots {
+                production_rev = rev;
+            } else {
+                test_revs.push(rev);
+            }
+            serde_json::from_str(&stdout).map_err(|e| format!("a tests part is no JSON: {e}"))
+        };
+        let rendered = orchestrate(&call.request, call.opts, &mut run);
+        let compute_ms = started.elapsed().as_millis() as u64;
+        let mut envelope = match rendered {
+            Ok(r) => {
+                let inline = crate::wire::clamp_inline(call.command.max_inline_bytes);
+                let over_budget = call.command.client_budget_chars.is_some_and(|b| {
+                    client_chars(&r.text, None) + tools::MCP_ENVELOPE_ROOM_CHARS > b
+                });
+                let stdout = if (r.text.len() > inline || over_budget) && shared.sink.writable() {
+                    match shared.sink.write_new(
+                        "tests",
+                        extension(&call.command.argv),
+                        r.text.as_bytes(),
+                    ) {
+                        Ok(p) => Stdout::File(SpillFile::of(
+                            p.to_string_lossy().into_owned(),
+                            r.text.as_bytes(),
+                        )),
+                        Err(_) => Stdout::Text(r.text),
+                    }
+                } else {
+                    Stdout::Text(r.text)
+                };
+                match place_stdout(shared, &call.command, stdout) {
+                    Ok((stdout, _)) => {
+                        let mut e = json!({
+                            "kind": "cli", "exitCode": r.exit, "stderr": [],
+                            "stale": false, "changedPaths": [], "changedPathsTruncated": false,
+                            "lineBase": crate::engine::line_base::LINE_BASE,
+                        });
+                        match stdout {
+                            Stdout::Text(t) => e["stdoutText"] = json!(t),
+                            Stdout::File(f) => {
+                                e["stdoutFile"] = serde_json::to_value(f).unwrap_or(Value::Null)
+                            }
+                        }
+                        e
+                    }
+                    Err((o, m)) => json!({"kind": "failed", "outcome": o, "message": m}),
+                }
+            }
+            Err(m) => {
+                json!({"kind": "failed", "outcome": FailedOutcome::EngineError, "message": m})
+            }
+        };
+        envelope["revision"] = production_rev["revision"].clone();
+        envelope["revisions"] = json!({"production": production_rev, "tests": test_revs});
+        envelope["universe"] = json!(call.command.universe.as_str());
+        envelope["freshness"] =
+            json!({"requested": call.command.freshness.as_str(), "served": "fresh"});
+        envelope["timing"] = json!({"computeMs": compute_ms});
+        let is_error = envelope["kind"] == "failed";
+        let output = match (&envelope.get("stdoutText"), call.opts.json) {
+            (Some(Value::String(t)), true) => serde_json::from_str(t).ok(),
+            _ => None,
+        };
+        let msg = shared.transport.response(id, &envelope, is_error, output);
+        shared.finish(id, &encode_or_log(&msg));
     }
 
     /// Queue `request` on its engine's worker, after the children bound;
@@ -825,10 +957,20 @@ fn work(
     cfg.universe = match key.1 {
         Universe::CrossApp => crate::engine::host::Universe::CrossApp,
         Universe::SingleApp => crate::engine::host::Universe::SingleApp,
+        Universe::Tests => crate::engine::host::Universe::Tests,
     };
-    // Its memory budget (its share of --total-budget) and idle timeout.
+    if key.1 == Universe::Tests {
+        cfg.test_universe = shared
+            .test_universes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&key.0)
+            .cloned();
+    }
+    // Its memory budget (its share of --total-budget) and idle timeout. A
+    // test universe is a cross-app program (graph-only): the cross-app share.
     let budget = match key.1 {
-        Universe::CrossApp => shared.children.budgets.0,
+        Universe::CrossApp | Universe::Tests => shared.children.budgets.0,
         Universe::SingleApp => shared.children.budgets.1,
     };
     cfg.args.extend([
@@ -1150,6 +1292,44 @@ fn publish(front: &mut EngineFront, snapshot: &Mutex<Snapshot>, ask_status: bool
 
 /// Bytes of a file the engine spilled, checked against its length and
 /// hash, the file then removed.
+/// A part's answer from its response message: the envelope's head and its
+/// stdout (inline, or read from its file), or why it has none (a failed
+/// answer, a non-zero exit with its stderr).
+fn part_answer(frame: &Value) -> Result<(Value, String), String> {
+    let content = frame["result"]["content"]
+        .as_array()
+        .ok_or_else(|| format!("a tests part answered no result: {frame}"))?;
+    let head: Value = content
+        .first()
+        .and_then(|c| c["text"].as_str())
+        .and_then(|t| serde_json::from_str(t).ok())
+        .ok_or("a tests part's envelope does not decode")?;
+    if head["kind"] == "failed" {
+        return Err(head["message"].as_str().unwrap_or("failed").to_string());
+    }
+    let stdout = match content.get(1).and_then(|c| c["text"].as_str()) {
+        Some(t) => t.to_string(),
+        None => {
+            let path = head["stdoutFile"]["path"]
+                .as_str()
+                .ok_or("a tests part has no stdout")?;
+            let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+            let _ = std::fs::remove_file(path);
+            text
+        }
+    };
+    if head["exitCode"].as_u64() != Some(0) {
+        let stderr: Vec<&str> = head["stderr"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        return Err(stderr.join("; "));
+    }
+    Ok((head, stdout))
+}
+
 fn take_spill(f: &SpillFile) -> Result<Vec<u8>, String> {
     let bytes = std::fs::read(&f.path).map_err(|e| format!("{}: {e}", f.path))?;
     if bytes.len() as u64 != f.bytes || crate::engine::ids::sha256_bytes_hex(&bytes) != f.sha256 {

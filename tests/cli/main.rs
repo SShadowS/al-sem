@@ -196,6 +196,7 @@ mod ids_file_list_independence;
 mod ids_parent_baseline;
 mod mcp_composite;
 mod mcp_server;
+mod mcp_tests;
 mod output_cdo;
 mod output_fixture;
 mod output_invariants;

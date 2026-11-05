@@ -178,7 +178,9 @@ enum Commands {
     /// `maxInlineBytes` (default 64 KiB), else as a file. Tools:
     /// `alsem_explain` (default format human), `alsem_prove`, `alsem_digest`
     /// (always a file, with a summary), `alsem_query_effects`,
-    /// `alsem_query_touches`, `alsem_status`, `alsem_refresh`.
+    /// `alsem_query_touches`, `alsem_tests` (a composite request: the
+    /// production engine and one test-universe engine per test app),
+    /// `alsem_status`, `alsem_refresh`.
     ///
     /// Files go only into a private folder the server creates under
     /// `--output-root`; a tool's `out` must be inside it. The engine child
@@ -3405,7 +3407,16 @@ mod engine {
                 al_sem::engine::resident::budget::default_budget(single, self.low_mem)
             });
             let budget = Arc::new(Budget::new(bytes, Arc::new(ProcMeter), estimates));
-            let session = if params.universe == Universe::GraphOnly {
+            let session = if params.universe == Universe::Tests {
+                // A test universe (agent-tasks §4.3): graph-only, every read
+                // and observation with the descriptor's injected inputs.
+                let Some(u) = &params.test_universe else {
+                    return Err("session/open: universe tests names no test universe".into());
+                };
+                ResidentSession::graph_only(params.workspace.clone(), instance.to_string())
+                    .with_injected(u.injected())
+                    .with_universe_label(u.key())
+            } else if params.universe == Universe::GraphOnly {
                 ResidentSession::graph_only(params.workspace.clone(), instance.to_string())
             } else {
                 ResidentSession::new(params.workspace.clone(), single, instance.to_string())
@@ -3727,7 +3738,18 @@ mod engine {
         };
         // Freshness and pin: one state for the whole ask.
         (cx.progress)("pin");
-        let pinned = match open.session.pin(ask.freshness, cx.stop) {
+        // A tests select part on a model engine (the workspace's own tests)
+        // reads the sited graph: the revision must have it (M0's pin_sited,
+        // which turns the graph on once).
+        let reads_sited = ask.argv.first().is_some_and(|c| c == "tests")
+            && ask.argv.iter().any(|a| a == "--part=select")
+            && !open.session.is_graph_only();
+        let pin = if reads_sited {
+            open.session.pin_sited(ask.freshness, cx.stop)
+        } else {
+            open.session.pin(ask.freshness, cx.stop)
+        };
+        let pinned = match pin {
             Ok(p) => p,
             Err(PinError::Stopped(s)) => return stopped(s, &[]),
             Err(PinError::Unstable(m)) => return failed(FailedOutcome::InputsUnstable, &m),

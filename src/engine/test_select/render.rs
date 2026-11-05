@@ -58,7 +58,7 @@ impl TierPick {
 }
 
 /// How to render.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RenderOpts {
     pub tier: TierPick,
     pub max_tests: Option<usize>,

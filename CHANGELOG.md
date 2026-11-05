@@ -61,6 +61,20 @@ Which tests to run first for a change, as a first-class answer. Spec:
   they are "effectively the suite's posting tests, not specific to this change". When the test
   app declares Microsoft test libraries that are not loaded, a `next:` line says how to get their
   symbols. Static reachability is not coverage, said once at the end.
+- **MCP tool `alsem_tests`** (`routines` | `files` | `diff` [`diffRoot`], `testApps`, `tier`,
+  `maxTests`, `format`, and the common properties): a **composite request** (`Pool::run_tests`,
+  on a coordinator thread off the reader loop). The roots part runs on the production engine;
+  each test app's select part on a **test-universe engine** of its own (pool key: the test app's
+  folder, universe `tests`; the child opens a graph-only session with the descriptor's injected
+  inputs, `session/open {universe: "tests", testUniverse}`), started on its first part and kept;
+  the workspace's own tests' part on the production engine (`pin_sited` turns its sited graph
+  on). One part at a time, so a part never holds one child while waiting for another;
+  `--max-children 2` stays (with a third universe the least recently used idle child is evicted).
+  The stdout is `alsem tests`' bytes (the same `orchestrate` and render); the envelope carries
+  the revision vector `revisions: {production, tests: [{workspace, universe: "tests:<key>",
+  revision}]}`. explain starts no test engine (a test pins the engine count). The LSP front end
+  refuses `alsem_tests` with the reason. `tests` and `tests-select` join the commands a resident
+  revision serves.
 - **explain's `tests:` line reads the test scope** (C-7) without analyzing it: "no [Test]
   procedure in the workspace app; 1 test app discovered (…); not analyzed in this call — alsem
   tests (MCP: alsem_tests) selects them", or "no test code found (0 [Test] procedures in the
