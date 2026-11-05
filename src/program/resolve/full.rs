@@ -3517,6 +3517,101 @@ mod tests {
         );
     }
 
+    /// An event declared in a table or page extension is published on the base
+    /// object: a subscriber names the base, and the extension's publisher gets
+    /// the event-flow edge to it. Found on CDO: three Base Application
+    /// subscribers of events in its own `tableextension "Error Message
+    /// Extension"`, `pageextension "Error Messages Extension"` and `pageextension
+    /// "Reten. Pol. Setup Lines Ext."` were orphaned.
+    #[test]
+    fn extension_event_reaches_subscriber_that_names_the_base() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_minimal_workspace(dir.path());
+        std::fs::write(
+            dir.path().join("E.al"),
+            "table 50000 \"Error Message\"
+{
+    fields
+    {
+        field(1; ID; Integer) { }
+    }
+}
+page 50000 \"Error Messages\"
+{
+    SourceTable = \"Error Message\";
+}
+tableextension 50001 \"Error Message Ext\" extends \"Error Message\"
+{
+    procedure DrillDown()
+    var
+        IsHandled: Boolean;
+    begin
+        OnDrillDownSource(Rec, IsHandled);
+    end;
+
+    [IntegrationEvent(false, false)]
+    local procedure OnDrillDownSource(ErrorMessage: Record \"Error Message\"; var IsHandled: Boolean)
+    begin
+    end;
+}
+pageextension 50002 \"Error Messages Ext\" extends \"Error Messages\"
+{
+    [IntegrationEvent(false, false)]
+    local procedure OnOpenRelatedRecord(var IsHandled: Boolean)
+    begin
+    end;
+}
+codeunit 50003 \"Check Dimensions\"
+{
+    [EventSubscriber(ObjectType::Table, Database::\"Error Message\", 'OnDrillDownSource', '', false, false)]
+    local procedure OnErrorMessageDrillDown(ErrorMessage: Record \"Error Message\"; var IsHandled: Boolean)
+    begin
+    end;
+
+    [EventSubscriber(ObjectType::Page, Page::\"Error Messages\", 'OnOpenRelatedRecord', '', false, false)]
+    local procedure OnOpenRelatedRecord(var IsHandled: Boolean)
+    begin
+    end;
+}
+",
+        )
+        .expect("write E.al");
+
+        let report = resolve_full_program(dir.path()).expect("resolve_full_program");
+        let mut flows: Vec<(String, String, String)> = report
+            .edges
+            .iter()
+            .filter(|ce| ce.edge.kind == EdgeKind::EventFlow)
+            .flat_map(|ce| {
+                ce.edge.routes.iter().filter_map(move |r| match &r.target {
+                    RouteTarget::Routine(id) => Some((
+                        format!("{:?}", ce.edge.from.object.kind),
+                        ce.edge.from.name_lc.to_string(),
+                        id.name_lc.to_string(),
+                    )),
+                    _ => None,
+                })
+            })
+            .collect();
+        flows.sort();
+        assert_eq!(
+            flows,
+            vec![
+                (
+                    "PageExtension".to_string(),
+                    "onopenrelatedrecord".to_string(),
+                    "onopenrelatedrecord".to_string()
+                ),
+                (
+                    "TableExtension".to_string(),
+                    "ondrilldownsource".to_string(),
+                    "onerrormessagedrilldown".to_string()
+                ),
+            ],
+            "each extension event reaches the subscriber that names its base"
+        );
+    }
+
     /// S9.0c (found by the compiler oracle): a call inside a ternary, an `in` list
     /// or an `is`/`as` operand is a call site. The lowerer used to make those
     /// containers an opaque `Unknown`, so the calls had no edge.
