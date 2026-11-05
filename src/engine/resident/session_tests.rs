@@ -861,3 +861,49 @@ fn site_guards_read_the_pinned_bytes() {
         assert!(g.site_guards(i).is_err());
     }
 }
+
+/// M0-T6 (agent-tasks design §1.3): a session whose rows were built with
+/// fewer needs (no rules) rebuilds them for a request that needs rules: one
+/// rebuild of class `needs`, every workspace row projected again (none
+/// reused), and the new model holds the rules; a second such request
+/// reuses the revision.
+///
+/// DISCRIMINATION (2026-11-05): ignoring the recorded needs in the row
+/// cache (dropping `&& self.needs == i.needs` from `CachedFile::matches`)
+/// fails `rules_built(&p)` (the reused rows have none); ignoring them in the
+/// session (`covered` always true) fails "rebuilt once".
+#[test]
+fn rows_built_with_fewer_needs_are_rebuilt_for_a_request_that_needs_more() {
+    let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
+    let ws = dir.path();
+    let s = Arc::new(
+        ResidentSession::new(ws.to_path_buf(), false, "test".into())
+            .with_needs(crate::engine::batch::job::ViewNeeds::MODEL),
+    );
+    let rules_built = |p: &Pinned| {
+        revision(p)
+            .target()
+            .resolved()
+            .workspace
+            .routines
+            .iter()
+            .all(|r| r.rules.is_some())
+    };
+    let first = s.pin(Freshness::Fresh, &never).unwrap();
+    assert!(!rules_built(&first), "precondition: built without rules");
+    let explain = crate::program::model::workspace::AssemblyNeeds::EXPLAIN;
+    let p = s.pin_needs(Freshness::Fresh, explain, &never).unwrap();
+    assert_eq!(p.rebuilt_for, Some("needs"), "rebuilt once");
+    assert_eq!(s.stats().needs_rebuilds, 1);
+    assert_eq!(s.stats().last_build_class.as_deref(), Some("needs"));
+    assert!(rules_built(&p));
+    let rows = s.last_refresh().and_then(|r| r.rows).expect("row stats");
+    assert!(
+        rows.workspace_projected > 0 && rows.workspace_reused == 0,
+        "projected again: {rows:?}"
+    );
+    let again = s.pin_needs(Freshness::Fresh, explain, &never).unwrap();
+    assert_eq!(again.rebuilt_for, None);
+    assert_eq!(revision(&again).id, revision(&p).id);
+    assert_eq!(s.stats().needs_rebuilds, 1);
+}

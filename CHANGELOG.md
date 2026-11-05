@@ -54,6 +54,16 @@ test selection, adding an effect, impact) build on. Spec:
   package's embedded source when the package's bytes are still the ones the read acquired), parsed
   again and walked down to the site's anchor, so the text is the revision's even after the disk
   moved. Nothing is kept per site; it works the same under `--low-mem`.
+- **Needs-aware resident rows** (`ResidentSession::with_needs`, `pin_needs`). A published state
+  records the assembly needs its model's rows were built with. A request that needs more pins with
+  `pin_needs`: the session widens its needs and rebuilds once (`rebuilt_for: "needs"`, class
+  `needs`, `session/status` `needsRebuilds`); the row cache misses every file whose recorded needs
+  differ, so the rows are projected again; a rebuild the budget refuses is a `budget` refusal with
+  its reason. No command needs more than the default (`ViewNeeds::EXPLAIN`) today; this makes the
+  next gated need safe.
+- **Admission for the sited graph.** A build that makes the sited graph reserves its estimate
+  (`Case::Fill("sited")`, 120 MiB: 46 MiB measured resident on CDO plus its build's working set,
+  not measured apart) on top of the build's own.
 - `aldump --session-refresh --sited` builds and keeps the sited graph at every step and prints its
   wall and CPU time, nodes, sites and bytes.
 

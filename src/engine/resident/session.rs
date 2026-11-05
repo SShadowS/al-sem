@@ -105,6 +105,8 @@ impl Built {
 struct Published {
     built: Built,
     manifest: Manifest,
+    /// The assembly needs its model's rows were built with (M0-4).
+    needs: crate::program::model::workspace::AssemblyNeeds,
 }
 
 /// One request's pin: the state it is answered from, held for the whole
@@ -156,6 +158,9 @@ pub struct SessionStats {
     pub sited_builds: u64,
     pub last_sited_ms: Option<u64>,
     pub last_sited_bytes: Option<u64>,
+    /// Rebuilds a request whose model needs exceeded the published rows'
+    /// caused ([`ResidentSession::pin_needs`], M0-4).
+    pub needs_rebuilds: u64,
 }
 
 /// A point in a build where a test hook runs (T-acquire-*).
@@ -198,6 +203,9 @@ pub struct ResidentSession {
     sited: std::sync::atomic::AtomicBool,
     /// A graph-only session ([`Self::graph_only`], M0-2).
     graph_only: bool,
+    /// The model each build makes ([`REVISION_NEEDS`] unless
+    /// [`Self::with_needs`] or [`Self::pin_needs`] set it, M0-4).
+    needs: Mutex<ViewNeeds>,
 }
 
 impl ResidentSession {
@@ -221,7 +229,70 @@ impl ResidentSession {
             low_mem: false,
             sited: std::sync::atomic::AtomicBool::new(false),
             graph_only: false,
+            needs: Mutex::new(REVISION_NEEDS),
         }
+    }
+
+    /// The session building its models with `needs` (a smaller model than
+    /// [`REVISION_NEEDS`]: a request that needs more pins with
+    /// [`Self::pin_needs`]).
+    #[must_use]
+    pub fn with_needs(self, needs: ViewNeeds) -> ResidentSession {
+        *lock(&self.needs) = needs;
+        self
+    }
+
+    /// The state a request whose model needs `needs` is answered from (M0-4):
+    /// [`Self::pin`]; then, when the published model's rows were built with
+    /// fewer needs, the session's needs are widened to cover them and the
+    /// model is rebuilt once (`Pinned::rebuilt_for: "needs"`, class `needs`;
+    /// the row cache misses every file whose recorded needs differ). A
+    /// rebuild the budget refuses is `PinError::Budget`, with the reason.
+    pub fn pin_needs(
+        self: &Arc<Self>,
+        mode: Freshness,
+        needs: crate::program::model::workspace::AssemblyNeeds,
+        stop: &dyn Fn() -> Option<Stop>,
+    ) -> Result<Pinned, PinError> {
+        let pinned = self.pin(mode, stop)?;
+        let covered = |s: &Self| {
+            lock(&s.current)
+                .as_ref()
+                .is_some_and(|p| p.needs.covers(needs))
+        };
+        if self.graph_only || !matches!(pinned.built, Built::Revision(_)) || covered(self) {
+            return Ok(pinned);
+        }
+        if let Some(s) = stop() {
+            return Err(PinError::Stopped(s));
+        }
+        let start = Instant::now();
+        let mut b = lock(&self.builder);
+        {
+            let mut n = lock(&self.needs);
+            n.rules |= needs.rules;
+            n.card_text |= needs.card_text;
+        }
+        if covered(self) {
+            return Ok(Pinned {
+                built: self.published().expect("published"),
+                waited_for_build_ms: start.elapsed().as_millis() as u64,
+                ..pinned
+            });
+        }
+        let built = self.build_locked(&mut b, None, 1, &|| stop().is_some())?;
+        {
+            let mut s = lock(&self.stats);
+            s.needs_rebuilds += 1;
+            s.last_build_class = Some("needs".into());
+        }
+        Ok(Pinned {
+            built,
+            stale: false,
+            changed_paths: Vec::new(),
+            waited_for_build_ms: pinned.waited_for_build_ms + start.elapsed().as_millis() as u64,
+            rebuilt_for: Some("needs"),
+        })
     }
 
     /// A graph-only session (agent-tasks design §1.2 M0-2) for `workspace`,
@@ -607,7 +678,12 @@ impl ResidentSession {
                         Some(Built::Revision(_)) => Case::Incremental,
                         _ => Case::Cold,
                     };
-                    let estimate = budget.estimate(case, m_before.input_sizes());
+                    let mut estimate = budget.estimate(case, m_before.input_sizes());
+                    // The sited graph joins the build's reservation (M0-5):
+                    // it is built inside the build, beside the lent program.
+                    if self.graph_only || self.sited.load(Ordering::SeqCst) {
+                        estimate += budget.estimate(Case::Fill("sited"), m_before.input_sizes());
+                    }
                     Some(
                         self.reserve_or_reclaim(budget, case, estimate, mine, &|| false)
                             .map_err(PinError::Budget)?,
@@ -632,6 +708,7 @@ impl ResidentSession {
             self.hook(BuildPoint::AfterRead, attempt);
             let consumed = Manifest::consumed(&inputs, self.single_app);
             let want_sited = self.graph_only || self.sited.load(Ordering::SeqCst);
+            let needs = *lock(&self.needs);
             let mut sited: Option<SitedBuild> = None;
             let target = if self.graph_only {
                 // The program and its sited graph, no model (M0-2): the
@@ -650,11 +727,17 @@ impl ResidentSession {
                     }),
                 }
             } else {
-                build_target_with(&mut b.workspace, &inputs, self.single_app, &mut |p| {
-                    if want_sited {
-                        sited = build_sited(p, cancel_sited);
-                    }
-                })
+                build_target_with(
+                    &mut b.workspace,
+                    &inputs,
+                    self.single_app,
+                    needs,
+                    &mut |p| {
+                        if want_sited {
+                            sited = build_sited(p, cancel_sited);
+                        }
+                    },
+                )
                 .map(Some)
             };
             self.hook(BuildPoint::AfterBuild, attempt);
@@ -738,6 +821,7 @@ impl ResidentSession {
             *lock(&self.current) = Some(Arc::new(Published {
                 built: built.clone(),
                 manifest: m_after,
+                needs: needs.assembly(),
             }));
             self.clear_dirty(&dirty);
             if let Some(r) = reservation {
@@ -775,7 +859,7 @@ pub fn build_target(
     inputs: &Arc<WorkspaceInputs>,
     single_app: bool,
 ) -> Result<AnalysisTarget, ViewFailure> {
-    build_target_with(session, inputs, single_app, &mut |_| {})
+    build_target_with(session, inputs, single_app, REVISION_NEEDS, &mut |_| {})
 }
 
 /// What a revision's build made beside its target: the sited graph (agent-
@@ -804,28 +888,26 @@ pub fn build_sited(
 /// [`build_target`], lending the program to `on_program` between its build
 /// and the model's (agent-tasks design §1.2 M0-1). A workspace with no
 /// model-instance id builds no program here (its failure is the cold
-/// builder's).
+/// builder's). `needs` is the model the revision builds (the session's,
+/// [`REVISION_NEEDS`] unless a request widened them, M0-4).
 pub fn build_target_with(
     session: &mut WorkspaceSession,
     inputs: &Arc<WorkspaceInputs>,
     single_app: bool,
+    needs: ViewNeeds,
     on_program: &mut dyn FnMut(&crate::program::resolved::ResolvedProgram),
 ) -> Result<AnalysisTarget, ViewFailure> {
     if single_app {
-        return crate::engine::gate::run::build_single_app_model_lending(
-            inputs,
-            REVISION_NEEDS,
-            on_program,
-        );
+        return crate::engine::gate::run::build_single_app_model_lending(inputs, needs, on_program);
     }
     if inputs.model_instance_id.is_none() {
         let key = ViewKey::new(&inputs.workspace, single_app, false);
-        return build_view_model(inputs, &key, REVISION_NEEDS, |_| {})
+        return build_view_model(inputs, &key, needs, |_| {})
             .map(|m| m.expect("a model view builds a model").target);
     }
     let _s = crate::engine::perf_trace::span("crossapp", "crossapp.base_total");
     session
-        .refresh_lending(inputs, false, REVISION_NEEDS.assembly(), on_program)
+        .refresh_lending(inputs, false, needs.assembly(), on_program)
         .and_then(crate::engine::l4::capability_cone::cross_app_base_of)
         .map(|base| AnalysisTarget::CrossApp(Box::new(base)))
         .map_err(|e| ViewFailure {

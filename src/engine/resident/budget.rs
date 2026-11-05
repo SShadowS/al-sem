@@ -149,6 +149,12 @@ impl Case {
             // the live heap before it, +29.0 MiB on CDO, 25.7 MiB left
             // resident (`census-probe incr --witness`, 2026-11-03).
             Case::Fill("explain_indexes") => 30,
+            // The sited graph (agent-tasks M0-1/M0-5), built inside the
+            // revision's build: 46 MiB left resident on CDO cross-app
+            // (`aldump --session-refresh --sited`, 2026-11-05), plus its
+            // build's resolve index, source facts and collapse map, not
+            // measured apart.
+            Case::Fill("sited") => 120,
             Case::Fill(_) => 60,
             Case::Trees => 900,
         }
