@@ -1133,16 +1133,18 @@ fn render(
         .iter()
         .map(|rid| {
             let entry = full.iter().find(|e| &e.routine_id == rid);
-            let mut card = Card::build(
+            let card = Card::build(
                 &ix,
                 &cross,
                 rid,
                 entry,
                 &rcx,
-                tests_reaching.as_ref().map(|(t, n)| (t, *n)),
+                CardTests {
+                    reaching: tests_reaching.as_ref().map(|(t, n)| (t, *n)),
+                    scope: Some(test_scope),
+                },
                 opts,
             );
-            card.test_scope = Some(test_scope.clone());
             let (mut json, mut human) = (card.json(), card.human());
             // `--writes-table` (W2-2 gap (a)): prove's own answer per table,
             // before `next:`.
@@ -1591,6 +1593,15 @@ fn detail<'e>(e: &'e DigestEffectFull, key: &str) -> Option<&'e str> {
 /// Per routine, the `[Test]` procedures that reach it (`reaching_tests`).
 type ReachingTests = BTreeMap<String, Vec<(String, bool)>>;
 
+/// What a card knows about tests: the `[Test]` procedures that reach each
+/// routine with the number loaded (`None`: no test search ran), and the
+/// test scope discovery's result (C-7; the summary reads it too).
+#[derive(Clone, Copy)]
+struct CardTests<'a> {
+    reaching: Option<(&'a ReachingTests, usize)>,
+    scope: Option<&'a crate::engine::test_select::scope::Scope>,
+}
+
 impl Card {
     fn build(
         ix: &Indexes<'_>,
@@ -1598,9 +1609,13 @@ impl Card {
         rid: &str,
         full: Option<&DigestEntryFull>,
         rcx: &RollupCx<'_>,
-        tests_reaching: Option<(&ReachingTests, usize)>,
+        card_tests: CardTests<'_>,
         opts: RenderOpts,
     ) -> Card {
+        let CardTests {
+            reaching: tests_reaching,
+            scope: test_scope,
+        } = card_tests;
         let model = ix.model;
         let rows: Vec<usize> = ix.rows_of(rid).to_vec();
         let mut gaps: Vec<Gap> = Vec::new();
@@ -2359,6 +2374,13 @@ impl Card {
         totals.page_actions = Some(reached_from.len());
         totals.tests = Some(tests.len());
         totals.tests_loaded = tests_reaching.map(|(_, n)| n);
+        // The summary's `tests:` clause reads the same scope as the detail
+        // line (agent-tasks C, item 1).
+        totals.sibling_tests =
+            test_scope.map(|s| crate::engine::l5::routine_rollup::SiblingTests {
+                apps: s.apps.len(),
+                complete: s.complete,
+            });
         let mut limits: Vec<String> = Vec::new();
         let mut notes: BTreeMap<&str, usize> = BTreeMap::new();
         for g in &gaps {
@@ -2473,7 +2495,7 @@ impl Card {
             reached_from,
             extension_points,
             tests,
-            test_scope: None,
+            test_scope: test_scope.cloned(),
             gaps,
             totals,
             coverage,

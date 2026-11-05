@@ -93,6 +93,14 @@ Which tests to run first for a change, as a first-class answer. Spec:
   goldens move**: a fixture inside this repository reads "test app discovery incomplete (the cap
   of 64 app.json files was reached …)", which is the honest answer there. A workspace with no git
   top level searches no sibling and says so.
+- **explain's summary agrees with that line.** Its `callers and tests:` clause said `tests: none
+  (no test code loaded)` while the `tests:` line below named the discovered test app. It now
+  reads the same scope: `tests: none in the workspace; 1 test app discovered (not analyzed here;
+  alsem tests)`, `tests: none in the workspace; test app discovery incomplete`, or (with
+  workspace tests) `tests: none of N loaded; also …`; "no test code loaded" stays only when the
+  discovery finished and found none (or `testApps: []`). JSON cards: `summary.testApps
+  {discovered, discoveryComplete}`. The explain goldens and the three CDO explain rendering
+  goldens move by that clause.
 - **R0-3: explain's callers and the reverse cone agree.** `select::direct_callers` defines a
   direct caller over the sited graph the way the model's calls count it: a call, interface call,
   object run or record operation site (`via` call/interface/run/implicitTrigger, never a rule's

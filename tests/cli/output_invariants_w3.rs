@@ -166,7 +166,7 @@ fn tests_line_tells_no_test_code_from_no_reaching_test() {
         human
             .lines()
             .any(|l| l.trim_start().starts_with("callers and tests:")
-                && l.ends_with("; tests: none of 1 loaded")),
+                && l.contains("; tests: none of 1 loaded")),
         "{human}"
     );
     assert!(
@@ -199,7 +199,7 @@ fn tests_line_tells_no_test_code_from_no_reaching_test() {
         human
             .lines()
             .any(|l| l.trim_start().starts_with("callers and tests:")
-                && l.ends_with("; tests: none (no test code loaded)")),
+                && l.ends_with("; tests: none in the workspace; test app discovery incomplete")),
         "{human}"
     );
     // Agent-tasks C-7: with no git top level no sibling is searched, and the

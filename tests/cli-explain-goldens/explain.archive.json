@@ -139,6 +139,10 @@
         },
         "pageActions": 0,
         "temporaryOnlyTables": 0,
+        "testApps": {
+          "discovered": 0,
+          "discoveryComplete": false
+        },
         "tests": 0,
         "testsLoaded": 1,
         "unresolvedTableWrites": 0

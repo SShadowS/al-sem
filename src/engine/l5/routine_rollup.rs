@@ -919,6 +919,41 @@ pub struct RollupTotals {
     /// Explain only (step 1b): the `[Test]` procedures the search started
     /// from; `None` when no test search ran.
     pub tests_loaded: Option<usize>,
+    /// Explain only (agent-tasks C, item 1): the sibling test apps the
+    /// scope discovery found (`apps`) and whether it finished (`complete`),
+    /// so the summary agrees with the `tests:` detail line. `None` when no
+    /// discovery ran (digest).
+    pub sibling_tests: Option<SiblingTests>,
+}
+
+/// What explain's test scope discovery found, for the summary's `tests:`
+/// clause: the number of sibling test apps (not analyzed by explain) and
+/// whether the search finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SiblingTests {
+    pub apps: usize,
+    pub complete: bool,
+}
+
+impl SiblingTests {
+    /// The clause appended to the summary's `tests:` part, or `None` when
+    /// discovery finished and found no test app (then "no test code loaded"
+    /// is the whole truth).
+    fn clause(self) -> Option<String> {
+        match (self.apps, self.complete) {
+            (0, true) => None,
+            (0, false) => Some("test app discovery incomplete".to_string()),
+            (n, complete) => Some(format!(
+                "{} discovered (not analyzed here; alsem tests){}",
+                plural(n, "test app", "test apps"),
+                if complete {
+                    ""
+                } else {
+                    "; discovery incomplete"
+                }
+            )),
+        }
+    }
 }
 
 impl RollupTotals {
@@ -982,6 +1017,9 @@ impl RollupTotals {
         }
         if let Some(n) = self.tests_loaded {
             v["testsLoaded"] = json!(n);
+        }
+        if let Some(s) = self.sibling_tests {
+            v["testApps"] = json!({"discovered": s.apps, "discoveryComplete": s.complete});
         }
         v
     }
@@ -1109,11 +1147,22 @@ impl RollupTotals {
             });
         }
         if let Some(t) = self.tests {
-            parts.push(match (t, self.tests_loaded) {
-                (0, Some(0)) => "tests: none (no test code loaded)".to_string(),
-                (0, Some(n)) => format!("tests: none of {} loaded", thousands(n)),
-                (0, None) => "tests: not searched".to_string(),
-                (t, _) => format!("tests: {t}"),
+            // The sibling test apps explain discovered (item 1): with one
+            // found, "no test code loaded" alone read as "there are none".
+            let siblings = self.sibling_tests.and_then(SiblingTests::clause);
+            parts.push(match (t, self.tests_loaded, siblings) {
+                (0, Some(0), None) => "tests: none (no test code loaded)".to_string(),
+                (0, Some(0), Some(s)) => format!("tests: none in the workspace; {s}"),
+                (0, Some(n), s) => format!(
+                    "tests: none of {} loaded{}",
+                    thousands(n),
+                    s.map(|s| format!("; also {s}")).unwrap_or_default()
+                ),
+                (0, None, _) => "tests: not searched".to_string(),
+                (t, _, s) => format!(
+                    "tests: {t}{}",
+                    s.map(|s| format!("; also {s}")).unwrap_or_default()
+                ),
             });
         }
         if !parts.is_empty() {
@@ -1725,6 +1774,7 @@ impl RoutineRollup {
             page_actions: None,
             tests: None,
             tests_loaded: None,
+            sibling_tests: None,
         }
     }
 }

@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::regen;
 
@@ -266,6 +266,14 @@ fn no_test_scope_says_no_test_was_considered() {
 /// DISCRIMINATION (2026-11-05): dropping the `siblings` arm of explain's
 /// tests line (reverting to "no test code loaded") fails the first
 /// assertion.
+///
+/// The summary's `tests:` clause agrees with that line (milestone C item 1):
+/// "none in the workspace; 1 test app discovered (not analyzed here; alsem
+/// tests)", JSON `summary.testApps`; with `testApps: []` it is "none (no
+/// test code loaded)" again.
+/// DISCRIMINATION (2026-11-05): passing `None` for the summary's scope
+/// (`totals.sibling_tests = None` in `Card::build`) fails the summary
+/// assertion with "tests: none (no test code loaded)"; restored, passes.
 #[test]
 fn explain_names_the_discovered_test_apps_without_analyzing_them() {
     let t = universe_repo();
@@ -286,14 +294,35 @@ fn explain_names_the_discovered_test_apps_without_analyzing_them() {
         ),
         "{human}"
     );
+    let summary_tests = |human: &str| -> String {
+        let l = human
+            .lines()
+            .find(|l| l.trim_start().starts_with("callers and tests:"))
+            .unwrap_or_else(|| panic!("no callers and tests line: {human}"));
+        l[l.find("; tests: ").expect("a tests clause") + 2..].to_string()
+    };
+    assert_eq!(
+        summary_tests(&human),
+        "tests: none in the workspace; 1 test app discovered (not analyzed here; alsem tests)",
+        "{human}"
+    );
     let v: Value =
         serde_json::from_str(&run(&["--routine", "TU Core::Post", "--format", "json"])).unwrap();
     assert_eq!(v["cards"][0]["testScope"]["analyzed"], false);
     assert_eq!(v["cards"][0]["testScope"]["apps"][0], "TU Production Tests");
+    assert_eq!(
+        v["cards"][0]["summary"]["testApps"],
+        json!({"discovered": 1, "discoveryComplete": true})
+    );
     std::fs::write(ws.join(".al-sem.json"), r#"{"testApps": []}"#).unwrap();
     let human = run(&["--routine", "TU Core::Post"]);
     assert!(
         human.contains("sibling test apps turned off (testApps: [] in .al-sem.json)"),
+        "{human}"
+    );
+    assert_eq!(
+        summary_tests(&human),
+        "tests: none (no test code loaded)",
         "{human}"
     );
 }

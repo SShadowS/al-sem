@@ -2,7 +2,7 @@ Codeunit CDO Telemetry::UpdateLastUpload  ws:src/Platform/Telemetry/CDOTelemetry
   summary — writes: no observed write that may persist; caller-dependent: 1 table
     transaction, UI and errors: commits: none; UI and errors: none observed
     other effects: events: 0 (0 raised in workspace code)
-    callers and tests: callers: 1; tests: none (no test code loaded)
+    callers and tests: callers: 1; tests: none in the workspace; 1 test app discovered (not analyzed here; alsem tests)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated

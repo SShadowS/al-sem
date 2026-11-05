@@ -2,7 +2,7 @@ Codeunit CDO E-Mail Handler::RunReportID  ws:src/Features/Email/Sending/CDOEMail
   summary — writes: may write 406 tables (11 owned by this app, 395 by dependencies) and 2 writes on a table not resolved; 357 of them beyond Codeunit Sales-Calc. Discount::OnRun (entered at ws:src/Foundation/CDOFile.Table.al:125); caller-dependent: none
     transaction, UI and errors: commits: may (6 sites, 7 commit-bearing entry points); UI at 16 places; errors at 196 places
     other effects: events: 7,393 (72 raised in workspace code); HTTP at 20 places; file at 3 places; background tasks at 4 places; isolated storage at 16 places; telemetry at 22 places
-    callers and tests: callers: 2, reached from 647 page actions; tests: none (no test code loaded)
+    callers and tests: callers: 2, reached from 647 page actions; tests: none in the workspace; 1 test app discovered (not analyzed here; alsem tests)
     uncertainty: gaps: 16 in workspace code, 265 in dependency code, 7 not placed
   coverage: partial (interface-open-world, object-run-unresolved) — 267 interface calls open world, 21 dynamic calls not resolved
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
