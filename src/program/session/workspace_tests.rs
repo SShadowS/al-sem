@@ -901,6 +901,30 @@ fn package_change_rebuilds_and_roots_config_is_b(mode: MemoryMode) {
     assert_eq!((r.parsed, r.resolved), (0, 0));
 }
 
+/// The coverage config (`al-sem.coverage.yaml`) appearing, and a nested
+/// `app.json` added under the root (the manifest's `app.json-paths`), are
+/// each B alone: no file is parsed or resolved again (agent-tasks design
+/// §2.3: the freshness check's class for `coverage-config` and
+/// `app-json-paths` is the session's, pinned here).
+fn coverage_config_and_nested_app_json_are_b(mode: MemoryMode) {
+    let ws = base_ws();
+    let mut s = WorkspaceSession::with_mode(mode);
+    refresh_and_compare(&mut s, &ws, "cold");
+    std::fs::write(ws.root.join("al-sem.coverage.yaml"), "rules: []\n").unwrap();
+    let r = refresh_and_compare(&mut s, &ws, "coverage config");
+    assert_eq!(r.class, ChangeClass::BodyOnly);
+    assert_eq!((r.parsed, r.resolved), (0, 0));
+    std::fs::create_dir_all(ws.root.join("nested")).unwrap();
+    std::fs::write(
+        ws.root.join("nested/app.json"),
+        r#"{"id":"eeeeeeee-0000-4000-8000-000000000001","name":"N","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    let r = refresh_and_compare(&mut s, &ws, "nested app.json");
+    assert_eq!(r.class, ChangeClass::BodyOnly);
+    assert_eq!((r.parsed, r.resolved), (0, 0));
+}
+
 /// The root `app.json` is a P input: any change rebuilds (A-S is taken
 /// conservatively as P in this prefix).
 fn app_json_change_is_p(mode: MemoryMode) {
@@ -1470,6 +1494,7 @@ in_both_modes!(
     method_id_change_through_a_synthesized_dispatch,
     enum_extensibility_and_impls,
     package_change_rebuilds_and_roots_config_is_b,
+    coverage_config_and_nested_app_json_are_b,
     app_json_change_is_p,
     app_json_friend_reopens_an_internal_interface,
     abi_block_is_reused_while_its_inputs_hold,

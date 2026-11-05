@@ -3203,15 +3203,30 @@ mod engine {
                 return serde_json::json!({"revision": null, "error": "session/open first"});
             };
             let start = Instant::now();
+            let builds_before = o.session.stats().builds;
             match o
                 .session
                 .pin(al_sem::engine::resident::session::Freshness::Fresh, cx.stop)
             {
-                Ok(p) => serde_json::json!({
-                    "revision": p.built.revision_id(),
-                    "waitedForBuildMs": p.waited_for_build_ms,
-                    "wallMs": start.elapsed().as_millis() as u64,
-                }),
+                Ok(p) => {
+                    // Whether this refresh built (agent-tasks design §2.3:
+                    // `rebuilt` or `already-fresh`), its class and the
+                    // workspace files it found changed.
+                    let stats = o.session.stats();
+                    let built = stats.builds > builds_before;
+                    let mut v = serde_json::json!({
+                        "revision": p.built.revision_id(),
+                        "waitedForBuildMs": p.waited_for_build_ms,
+                        "wallMs": start.elapsed().as_millis() as u64,
+                        "built": built,
+                    });
+                    if built {
+                        v["class"] = serde_json::json!(stats.last_build_class);
+                        v["changedFiles"] =
+                            serde_json::json!(o.session.last_refresh().map(|r| r.changed.len()));
+                    }
+                    v
+                }
                 Err(e) => serde_json::json!({
                     "revision": null,
                     "error": match e {

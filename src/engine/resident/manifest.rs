@@ -12,9 +12,16 @@
 //! | `ws:app.json-paths` | every `app.json` under the root (the nested-app walk), sorted |
 //! | `ws:al-walk` | the `.al` walk's listing (every file's root-relative path), or its error |
 //! | `al:<rel>` | each `.al` file's decoded text (length and blake3), or its read error |
-//! | `ws:source-dependencies` | `al-sem.dependencies.json` read: each dependency's spelled path and content hash (which covers its `app.json` and every file), or the error |
+//! | `ws:source-dependencies` | `al-sem.dependencies.json` read: each configured folder's spelled path, in config order, or the error (any problem of the config or a folder, a file's read error included) |
+//! | `srcapp:<spelled>` | a configured folder's `app.json` bytes |
+//! | `srcwalk:<spelled>` | its `.al` walk's listing |
+//! | `src:<spelled>\0<rel>` | each of its `.al` files' decoded text (length and blake3), with its stat: a freshness check stats these like the workspace's own files and reads only a changed one (agent-tasks design §2.2) |
 //! | `pkg:list`, `pkg:unreadable-folders` | the package discovery's results (each candidate `.alpackages` folder up to the `.git` boundary, as `discover_app_files` walks them) |
 //! | `pkg:<path>` | each `.app`'s bytes (length and blake3), or why it is unreadable |
+//!
+//! [`Manifest::changes`] names what differs between two manifests by input
+//! category (agent-tasks design §2.3), for every key, also those that name
+//! no single path.
 //!
 //! **Three observations.** `M_consumed` is computed from the acquired read
 //! itself ([`Manifest::consumed`]): the bytes the build actually used.
@@ -81,6 +88,30 @@ pub struct Manifest {
     entries: BTreeMap<String, Ident>,
     /// The stat of every file entry this observation hashed or reused.
     stats: BTreeMap<String, Stat>,
+    /// The file entries this observation read and hashed (the others
+    /// reused the previous hash): a cached check's cost, in files.
+    hashed: Vec<String>,
+}
+
+/// One input that differs between two manifests ([`Manifest::changes`]).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputChange {
+    /// `al-file`, `al-walk`, `app-json`, `app-json-paths`, `roots-config`,
+    /// `coverage-config`, `source-dependency`, `package`, `package-list`,
+    /// `unreadable-package-folder`, `meta` or `other`.
+    pub category: &'static str,
+    /// The path, spelled as [`Manifest::changed_paths`] spells it, when the
+    /// input is one file.
+    pub path: Option<String>,
+    /// What changed, when the category and path do not say it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// The manifest key of a source dependency's file.
+fn src_key(spelled: &str, rel: &str) -> String {
+    format!("src:{spelled}\u{0}{rel}")
 }
 
 impl PartialEq for Manifest {
@@ -121,14 +152,34 @@ fn meta(entries: &mut BTreeMap<String, Ident>, single_app: bool) {
     );
 }
 
-fn source_deps_ident(deps: &crate::program::source_deps::SourceDependencies) -> Ident {
+/// One configured source folder as the manifest records it: its spelled
+/// path, its `app.json` identity, and each file's `rel_posix` and identity
+/// in walk order.
+type SourceDepIdents = (String, Ident, Vec<(String, Ident)>);
+
+/// The source-dependency entries (see the module doc): every folder's
+/// `app.json`, listing and files, or only the error.
+fn source_dep_entries(e: &mut BTreeMap<String, Ident>, deps: Result<Vec<SourceDepIdents>, String>) {
     match deps {
-        Ok(deps) => Ident::List(
-            deps.iter()
-                .map(|d| format!("{}\u{0}{}", d.spelled, d.content_hash))
-                .collect(),
-        ),
-        Err(e) => Ident::Unreadable(e.clone()),
+        Err(err) => {
+            e.insert("ws:source-dependencies".into(), Ident::Unreadable(err));
+        }
+        Ok(deps) => {
+            e.insert(
+                "ws:source-dependencies".into(),
+                Ident::List(deps.iter().map(|d| d.0.clone()).collect()),
+            );
+            for (spelled, app, files) in deps {
+                e.insert(format!("srcapp:{spelled}"), app);
+                e.insert(
+                    format!("srcwalk:{spelled}"),
+                    Ident::List(files.iter().map(|(rel, _)| rel.clone()).collect()),
+                );
+                for (rel, id) in files {
+                    e.insert(src_key(&spelled, &rel), id);
+                }
+            }
+        }
     }
 }
 
@@ -340,9 +391,28 @@ impl Manifest {
                 }
             }
         }
-        e.insert(
-            "ws:source-dependencies".into(),
-            source_deps_ident(&inputs.source_dependencies),
+        source_dep_entries(
+            &mut e,
+            inputs
+                .source_dependencies
+                .as_ref()
+                .map(|deps| {
+                    deps.iter()
+                        .map(|d| {
+                            (
+                                d.spelled.clone(),
+                                Ident::bytes(&d.app_json_bytes),
+                                d.files
+                                    .iter()
+                                    .map(|f| {
+                                        (f.virtual_path.clone(), Ident::bytes(f.text.as_bytes()))
+                                    })
+                                    .collect(),
+                            )
+                        })
+                        .collect()
+                })
+                .map_err(Clone::clone),
         );
         let consumed = inputs.closure.consumed();
         e.insert(
@@ -366,6 +436,7 @@ impl Manifest {
         Manifest {
             entries: e,
             stats: BTreeMap::new(),
+            hashed: Vec::new(),
         }
     }
 
@@ -376,26 +447,38 @@ impl Manifest {
         let _s = crate::engine::perf_trace::span("resident", "manifest.observe");
         let mut e = BTreeMap::new();
         let mut stats = BTreeMap::new();
+        let mut hashed = Vec::new();
         meta(&mut e, single_app);
         // A file's identity: the previous hash when its stat is unchanged
         // (and it is not dirty), else `read`'s.
-        let mut file = |e: &mut BTreeMap<String, Ident>,
-                        key: String,
-                        path: &Path,
-                        read: &dyn Fn() -> Ident| {
+        let mut cached = |key: &str, path: &Path, read: &dyn Fn() -> Ident| -> Ident {
             let now = stat(path);
             let reused = match (hashing, now) {
                 (Hashing::Cached { prev, dirty }, Some(now)) if !dirty.contains(path) => prev
                     .stats
-                    .get(&key)
+                    .get(key)
                     .filter(|s| **s == now)
-                    .and_then(|_| prev.entries.get(&key).cloned()),
+                    .and_then(|_| prev.entries.get(key).cloned()),
                 _ => None,
             };
-            let ident = reused.unwrap_or_else(read);
+            let ident = reused.unwrap_or_else(|| {
+                // A file that is not there is not read (its probe is the
+                // stat).
+                if now.is_some() {
+                    hashed.push(key.to_string());
+                }
+                read()
+            });
             if let Some(now) = now {
-                stats.insert(key.clone(), now);
+                stats.insert(key.to_string(), now);
             }
+            ident
+        };
+        let mut file = |e: &mut BTreeMap<String, Ident>,
+                        key: String,
+                        path: &Path,
+                        read: &dyn Fn() -> Ident| {
+            let ident = cached(&key, path, read);
             e.insert(key, ident);
         };
         let app_json = workspace.join("app.json");
@@ -454,9 +537,34 @@ impl Manifest {
                 },
             );
         }
-        e.insert(
-            "ws:source-dependencies".into(),
-            source_deps_ident(&crate::program::source_deps::read(workspace)),
+        // The source dependencies: the same walk and checks as the read,
+        // each file stat-cached like the workspace's own (a file's read
+        // error is the walk's error, as the read reports it).
+        let walked =
+            crate::program::source_deps::walk(workspace, &mut |spelled, rel, path| match cached(
+                &src_key(spelled, rel),
+                path,
+                &|| match crate::source_text::read_al_source(path) {
+                    Ok(t) => Ident::bytes(t.as_bytes()),
+                    Err(err) => Ident::Unreadable(err.to_string()),
+                },
+            ) {
+                Ident::Unreadable(why) => Err(why),
+                id => Ok(id),
+            });
+        source_dep_entries(
+            &mut e,
+            walked.map(|deps| {
+                deps.into_iter()
+                    .map(|d| {
+                        (
+                            d.spelled,
+                            Ident::bytes(&d.app_json_bytes),
+                            d.files.into_iter().map(|(rel, _, id)| (rel, id)).collect(),
+                        )
+                    })
+                    .collect()
+            }),
         );
         e.insert(
             "pkg:list".into(),
@@ -466,7 +574,63 @@ impl Manifest {
             "pkg:unreadable-folders".into(),
             Ident::List(unreadable.iter().map(|(p, _)| path_text(p)).collect()),
         );
-        Manifest { entries: e, stats }
+        Manifest {
+            entries: e,
+            stats,
+            hashed,
+        }
+    }
+
+    /// A freshness check of the disk against `published` (a revision's
+    /// manifest, as its input descriptor carries it; agent-tasks design
+    /// §2.2): an observation, stat-cached against it unless `verify`, with
+    /// no change notification (the checker does not hold the session's
+    /// dirty set). The `meta:` entries are the revision's own: the engine
+    /// and grammar that built it are not disk inputs, and the checking
+    /// process may be another binary.
+    #[must_use]
+    pub fn check_against(
+        published: &Manifest,
+        workspace: &Path,
+        single_app: bool,
+        verify: bool,
+    ) -> Manifest {
+        let no_dirty = BTreeSet::new();
+        let hashing = if verify {
+            Hashing::All
+        } else {
+            Hashing::Cached {
+                prev: published,
+                dirty: &no_dirty,
+            }
+        };
+        let mut m = Manifest::observe(workspace, single_app, hashing);
+        m.entries.retain(|k, _| !k.starts_with("meta:"));
+        for (k, v) in &published.entries {
+            if k.starts_with("meta:") {
+                m.entries.insert(k.clone(), v.clone());
+            }
+        }
+        m
+    }
+
+    /// The entries whose input could not be read: `(key, why)`.
+    #[must_use]
+    pub fn unreadable(&self) -> Vec<(String, String)> {
+        self.entries
+            .iter()
+            .filter_map(|(k, v)| match v {
+                Ident::Unreadable(why) => Some((k.clone(), why.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The file entries this observation read and hashed, in the order it
+    /// read them (the others reused the previous observation's hash).
+    #[must_use]
+    pub fn hashed(&self) -> &[String] {
+        &self.hashed
     }
 
     /// The inputs stamp (§4.7): `al-sem-manifest-v1:` + blake3 over the
@@ -507,28 +671,143 @@ impl Manifest {
         format!("{STAMP_PREFIX}{}", h.finalize().to_hex())
     }
 
-    /// The keys whose identities differ between the two manifests, as
-    /// paths where the key names one (`al:` and `pkg:` entries), sorted.
+    /// The paths of the inputs that differ between the two manifests (the
+    /// [`Self::changes`] that name one file), in key order.
     #[must_use]
     pub fn changed_paths(&self, other: &Manifest, workspace: &Path) -> Vec<String> {
-        let keys: BTreeSet<&String> = self.entries.keys().chain(other.entries.keys()).collect();
-        keys.into_iter()
-            .filter(|k| self.entries.get(*k) != other.entries.get(*k))
-            .filter_map(|k| {
-                if let Some(rel) = k.strip_prefix("al:") {
-                    Some(path_text(&workspace.join(rel)))
-                } else if let Some(p) = k.strip_prefix("pkg:") {
-                    (p != "list" && p != "unreadable-folders").then(|| p.to_string())
-                } else if let Some(name) = k.strip_prefix("ws:") {
-                    match name {
-                        "app.json-paths" | "al-walk" | "source-dependencies" => None,
-                        _ => Some(path_text(&workspace.join(name))),
-                    }
-                } else {
-                    None
-                }
-            })
+        self.changes(other, workspace)
+            .into_iter()
+            .filter_map(|c| c.path)
             .collect()
+    }
+
+    /// Every input that differs between `self` (the earlier manifest) and
+    /// `other`, by category (agent-tasks design §2.3), in key order. A file
+    /// on one side only is a listing change (`al-walk`, a source
+    /// dependency's walk, `package-list`) with its path and `added` or
+    /// `removed`; a listing entry is reported on its own only when no such
+    /// file explains it (a walk that failed, a renamed `.app`'s folder).
+    #[must_use]
+    pub fn changes(&self, other: &Manifest, workspace: &Path) -> Vec<InputChange> {
+        let keys: BTreeSet<&String> = self.entries.keys().chain(other.entries.keys()).collect();
+        let differs: Vec<&String> = keys
+            .into_iter()
+            .filter(|k| self.entries.get(*k) != other.entries.get(*k))
+            .collect();
+        let one_sided = |k: &str| self.entries.contains_key(k) != other.entries.contains_key(k);
+        let side = |k: &str| {
+            Some(
+                if other.entries.contains_key(k) {
+                    "added"
+                } else {
+                    "removed"
+                }
+                .to_string(),
+            )
+        };
+        let any_one_sided = |prefix: &str| {
+            differs
+                .iter()
+                .any(|k| k.starts_with(prefix) && one_sided(k.as_str()))
+        };
+        let change =
+            |category: &'static str, path: Option<String>, detail: Option<String>| InputChange {
+                category,
+                path,
+                detail,
+            };
+        let mut out = Vec::new();
+        for k in &differs {
+            let k = k.as_str();
+            let c = if let Some(rel) = k.strip_prefix("al:") {
+                let path = Some(path_text(&workspace.join(rel)));
+                if one_sided(k) {
+                    change("al-walk", path, side(k))
+                } else {
+                    change("al-file", path, None)
+                }
+            } else if let Some(rest) = k.strip_prefix("src:") {
+                let (spelled, rel) = rest.split_once('\u{0}').unwrap_or((rest, ""));
+                let path = Some(path_text(&workspace.join(spelled).join(rel)));
+                change(
+                    "source-dependency",
+                    path,
+                    if one_sided(k) { side(k) } else { None },
+                )
+            } else if let Some(spelled) = k.strip_prefix("srcapp:") {
+                change(
+                    "source-dependency",
+                    Some(path_text(&workspace.join(spelled).join("app.json"))),
+                    None,
+                )
+            } else if let Some(spelled) = k.strip_prefix("srcwalk:") {
+                if any_one_sided(&format!("src:{spelled}\u{0}")) {
+                    continue;
+                }
+                change(
+                    "source-dependency",
+                    None,
+                    Some(format!("the .al listing of source dependency {spelled}")),
+                )
+            } else if k == "pkg:list" {
+                if differs.iter().any(|d| {
+                    d.starts_with("pkg:")
+                        && *d != "pkg:list"
+                        && *d != "pkg:unreadable-folders"
+                        && one_sided(d.as_str())
+                }) {
+                    continue;
+                }
+                change("package-list", None, Some("the package list".into()))
+            } else if k == "pkg:unreadable-folders" {
+                change(
+                    "unreadable-package-folder",
+                    None,
+                    Some("the package folders that could not be read".into()),
+                )
+            } else if let Some(p) = k.strip_prefix("pkg:") {
+                if one_sided(k) {
+                    change("package-list", Some(p.to_string()), side(k))
+                } else {
+                    change("package", Some(p.to_string()), None)
+                }
+            } else if let Some(name) = k.strip_prefix("ws:") {
+                let path = || Some(path_text(&workspace.join(name)));
+                match name {
+                    "al-walk" => {
+                        if any_one_sided("al:") {
+                            continue;
+                        }
+                        change("al-walk", None, Some("the .al file listing".into()))
+                    }
+                    "app.json" => change("app-json", path(), None),
+                    "app.json-paths" => change(
+                        "app-json-paths",
+                        None,
+                        Some("the app.json files under the root".into()),
+                    ),
+                    "roots.config.json" => change("roots-config", path(), None),
+                    "al-sem.coverage.yaml" => change("coverage-config", path(), None),
+                    "source-dependencies" => change(
+                        "source-dependency",
+                        Some(path_text(
+                            &workspace.join(crate::program::source_deps::CONFIG_FILE),
+                        )),
+                        Some(match other.entries.get(k) {
+                            Some(Ident::Unreadable(why)) => why.clone(),
+                            _ => "the configured source folders".to_string(),
+                        }),
+                    ),
+                    _ => change("other", path(), Some(k.to_string())),
+                }
+            } else if k.starts_with("meta:") {
+                change("meta", None, Some(k.to_string()))
+            } else {
+                change("other", None, Some(k.to_string()))
+            };
+            out.push(c);
+        }
+        out
     }
 }
 

@@ -58,6 +58,7 @@
 //! defines none), and the server sends no `session/notifyChanged`: it
 //! watches no files; the default `fresh` check per call sees every edit.
 
+pub mod freshness;
 pub mod output;
 pub mod pool;
 mod server;
