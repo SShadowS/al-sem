@@ -43,6 +43,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Owner::Routine(Integer, Text)`, by types (a length, `var` and AL quotes optional, or the type
   word alone) or by parameter names (`name: type` too). The tool descriptions and the server
   instructions say so.
+- **"tests: none reach it" read the same with and without test code.** CDO holds no `[Test]`
+  procedure, yet every explain said `tests: none reach it`, as if the routine were untested in a
+  tested app. Explain now says `tests: no test code loaded (0 [Test] procedures in the workspace
+  app); that is not a reason to skip tests` or `tests: N [Test] procedures loaded; none reaches it
+  (not a reason to skip tests)`; the summary says `tests: none (no test code loaded)` or `tests:
+  none of N loaded`, and JSON `summary.testsLoaded` gives N. Digest's `--tests` line says the same
+  (`test coverage: no test code loaded …`, or `… loaded and considered; an unreached routine is
+  not a reason to skip tests`).
 - **Touch counts read as if the operation persisted.** `[CalcFields] read` rows were listed under
   "possibly persistent". The classes are the record's temp state, so they now read `on persistent
   records`, `on possibly persistent records` and `on temporary records`.

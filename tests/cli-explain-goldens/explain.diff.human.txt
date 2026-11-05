@@ -21,7 +21,7 @@ Codeunit Explain Post::PostOrder  ws:src/post.al:5
   next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 
 Codeunit Explain Post::Archive  ws:src/post.al:23
-  summary: no observed write that may persist; caller-dependent: 1 table; commits: yes (1 site); events: 0 (0 raised in workspace code); callers: none; tests: none; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  summary: no observed write that may persist; caller-dependent: 1 table; commits: yes (1 site); events: 0 (0 raised in workspace code); callers: none; tests: none of 1 loaded; gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
   assumptions: loaded program; unloaded implementations/subscribers are not enumerated
   limits: none
@@ -35,7 +35,7 @@ Codeunit Explain Post::Archive  ws:src/post.al:23
     Explain Order: Modify — depends on the caller's record argument at ws:src/post.al:26
   events: 0 raised in workspace code; 0 more only beyond entry points
   extension points: none (the routine publishes no event itself)
-  tests: none reach it
+  tests: 1 [Test] procedure loaded; none reaches it (not a reason to skip tests)
   next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 
 changed-roots: hunk-outside-routines src/order.al:1-5
