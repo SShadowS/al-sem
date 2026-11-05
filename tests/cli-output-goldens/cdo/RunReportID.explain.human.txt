@@ -116,7 +116,7 @@ Codeunit CDO E-Mail Handler::RunReportID  ws:src/Features/Email/Sending/CDOEMail
   isolated storage at 2 places: ISOLATED_STORAGE at ws:src/Features/ESeal/CDOeSealSetup.Table.al:220 (guarded-by-IsHandled); ISOLATED_STORAGE beyond Codeunit Sales-Calc. Discount::OnRun
   telemetry at 1 place: TELEMETRY beyond Codeunit CTS-SYS Telemetry::LogMessage(EventId, Message, CustomDimensions)
   errors at 5 places: ERROR_IMPLICIT at ws:src/Features/Email/Sending/CDOEMailHandler.Codeunit.al:323 (unconditional-on-success); ERROR_IMPLICIT at ws:src/Features/Email/Sending/CDOEMailHandler.Codeunit.al:348 (conditional); ERROR_IMPLICIT at ws:src/Features/Email/Sending/CDOEMailHandler.Codeunit.al:450 (loop-body); ERROR_IMPLICIT at ws:src/Features/MergeFields/CDOTableFieldArrayMgt.Codeunit.al:445 (guarded-by-IsHandled); ERROR_THROW at ws:src/Features/Email/Sending/CDOEMailHandler.Codeunit.al:1013 (unknown)
-  tests: no test code loaded (0 [Test] procedures in the workspace app); that is not a reason to skip tests
+  tests: no [Test] procedure in the workspace app; 1 test app discovered (Continia Document Output 365 - Test); not analyzed in this call — alsem tests (MCP: alsem_tests) selects them
   gaps in workspace code (16 gaps):
     gap: unresolved-call (callee DispatcherFactory.CreateeDocumentDispatcher, status polymorphic) at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:80
     gap: unresolved-call (callee DispatcherFactory.CreateLegacyeDocDispatcher, status polymorphic) at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:81

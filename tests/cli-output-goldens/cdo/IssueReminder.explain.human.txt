@@ -105,7 +105,7 @@ Codeunit CDO Issue Document::IssueReminder  ws:src/DocumentTypes/Finance/General
   isolated storage at 1 place: ISOLATED_STORAGE at ws:src/Features/ESeal/CDOeSealSetup.Table.al:220 (unknown)
   telemetry at 1 place: TELEMETRY beyond Codeunit CSC Core::IsAppActiveOrAskToActivate
   errors at 1 place: ERROR_IMPLICIT, ERROR_THROW, UI_ERROR beyond Codeunit Reminder-Issue::OnRun
-  tests: no test code loaded (0 [Test] procedures in the workspace app); that is not a reason to skip tests
+  tests: no [Test] procedure in the workspace app; 1 test app discovered (Continia Document Output 365 - Test); not analyzed in this call — alsem tests (MCP: alsem_tests) selects them
   gaps in workspace code (16 gaps):
     gap: unresolved-call (callee DispatcherFactory.CreateeDocumentDispatcher, status polymorphic) at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:80
     gap: unresolved-call (callee DispatcherFactory.CreateLegacyeDocDispatcher, status polymorphic) at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:81

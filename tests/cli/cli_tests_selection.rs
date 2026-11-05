@@ -375,8 +375,9 @@ fn named_test_apps_and_unresolved_routines() {
 /// pinned baseline (`DO-cdo-baseline/Test`). Also RunReportID's 68 local
 /// tests in 7 codeunits and IssueReminder's 0 local with a nearest test
 /// through dependency code; `selectionComplete` false with its reasons.
-#[test]
-fn cdo_selection_ratchets() {
+/// Run by `output_cdo::cdo_test_selection_ratchets` (the module `cdo-gate`
+/// runs).
+pub(crate) fn cdo_selection_ratchets() {
     let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
         return;
     };
