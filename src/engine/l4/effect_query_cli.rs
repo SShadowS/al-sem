@@ -2469,7 +2469,8 @@ fn render_touches_up(
 ///
 /// Human: one count line (the configured callers' arms by frequency); the 3
 /// nearest code callers by default; `--callers` every caller with a path of
-/// at most [`dep_callers::HUMAN_HOP_FOLD`] hops, the rest counted; `--all`
+/// at most [`dep_callers::HUMAN_HOP_FOLD`] hops and the 3 nearest code callers
+/// whatever their length, the rest counted; `--all`
 /// every caller and every hop. JSON always has every caller and every hop.
 fn render_through_dependency(
     cx: &TouchCx<'_, '_>,
@@ -2665,9 +2666,17 @@ fn render_through_dependency(
             human.push_str(&row(c, label));
         }
     } else if list_callers {
-        let (short, long): (Vec<_>, Vec<_>) = listed
+        // Every path of at most HUMAN_HOP_FOLD hops, and always the nearest
+        // 3 code callers (the default view's), so the fold never hides them.
+        let nearest: std::collections::HashSet<&str> = code
             .iter()
-            .partition(|c| c.0.hops.len() <= dep_callers::HUMAN_HOP_FOLD);
+            .take(3)
+            .map(|c| c.0.stable_id.as_str())
+            .collect();
+        let (short, long): (Vec<_>, Vec<_>) = listed.iter().partition(|c| {
+            c.0.hops.len() <= dep_callers::HUMAN_HOP_FOLD
+                || nearest.contains(c.0.stable_id.as_str())
+        });
         for (c, label) in short {
             human.push_str(&row(c, label));
         }

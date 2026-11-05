@@ -167,6 +167,12 @@ routines with a stable id and a body. The through-dependency block sits beside
 `up.transitiveCallers` and is disjoint from it by construction (§3.2); the implementation
 re-measures the split of 967 on CDO and records it (§8).
 
+As built (v1, measured): 967 = 964 workspace routines + 3 dependency publishers
+(`Document Sending Profile::OnBeforeSend`, `Service-Post::OnAfterPostServiceDoc`,
+`Sales-Post::OnAfterFinalizePosting`); "966 of 967" is the touching count. The block lists the 2
+code callers (17 hops each, entering at `OnBeforeSendCustomer`, 12 workspace hops before the
+root) and 84 configured callers, all through `ExecuteResponse`'s `PostDocumentCode()` arm.
+
 ## 3. Decision 1: relation design
 
 ### 3.1 Why not one graph

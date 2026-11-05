@@ -239,6 +239,58 @@ fn query_touches_up_lists_the_callers_through_dependency_code() {
     assert_eq!(list[3]["witness"][0]["kind"], "recordTrigger");
 }
 
+/// `alsem explain <ws> --routine "DC Target.Target" [extra] --format json`,
+/// its one card.
+fn explain_card(extra: &[&str]) -> Value {
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("explain")
+        .arg(fixture().join("ws"))
+        .args(["--routine", "DC Target.Target", "--format", "json"])
+        .args(extra)
+        .output()
+        .expect("spawn alsem");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: Value = serde_json::from_slice(&out.stdout).expect("json");
+    let cards = v["cards"].as_array().expect("cards");
+    assert_eq!(cards.len(), 1);
+    cards[0].clone()
+}
+
+#[test]
+fn explain_counts_the_callers_through_dependency_code_only_when_asked() {
+    // Without `--callers-context` the card builds no sited graph and says
+    // nothing new.
+    assert_eq!(explain_card(&[])["throughDependency"], Value::Null);
+    let td = explain_card(&["--callers-context"])["throughDependency"].clone();
+    assert_eq!(td["relation"], "code-calls-through-dependency");
+    assert_eq!(td["callers"], 4);
+    assert_eq!(td["configured"], 1);
+    assert_eq!(td["catalog"]["entries"][0]["status"], "matched");
+    let nearest: Vec<&str> = td["nearest"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["routine"].as_str().unwrap())
+        .collect();
+    assert_eq!(nearest.len(), 3, "{td}");
+    assert!(
+        nearest.contains(&"Codeunit DC Caller::Start"),
+        "the nearest code callers: {nearest:?}"
+    );
+    assert_eq!(
+        td["nearest"][0]["witness"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["to"],
+        "Codeunit DC Target::Target"
+    );
+}
+
 #[test]
 fn query_touches_up_single_app_is_not_applicable() {
     let up = touches_up(&["--single-app"]);

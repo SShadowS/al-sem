@@ -50,12 +50,53 @@ Design: `docs/superpowers/specs/2026-11-06-dependency-callers-design.md` (revisi
   `up.transitiveCallers` and labelled "potential callers by code calls, path feasibility not
   checked"; single-app, and cross-app with no dependency loaded (the no-dependency contract),
   answer `notApplicable: "no dependency code loaded"`; a walk that hits its budget says `limited`. Human
-  output: one count line (configured callers' arms by frequency) and the 3 nearest callers;
-  `--callers` every caller with a path of at most 12 hops (longer ones counted); `--all`
+  output: one count line (configured callers' arms by frequency) and the 3 nearest callers, each
+  witness folded around where it enters the workspace; `--callers` every caller with a path of
+  at most 12 hops plus the 3 nearest whatever their length (the rest counted); `--all`
   everything. The `callers:` line now says "paths through dependency code are listed apart below".
   The job declares the sited graph for this question (the engine host's `reads_sited` pins it).
   `up.relation`, `transitiveCallers` and every other field are unchanged; no detector, summary,
   solver or prove answer reads the walk.
+- The MCP `alsem_query_touches` description says so (no parameter changed).
+
+### Added (callers through dependency code, v1: explain)
+
+- **`alsem explain --callers-context`** adds, on the line after each card's `callers:`, the
+  callers through dependency code: their count, the 3 nearest with hops, the first dependency
+  routine and where the path enters the workspace, and the configured count with its arms; JSON
+  `throughDependency` per card (counts, the catalog, the nearest with witnesses). Only with
+  `--callers-context`, which already declares the sited graph: without it the card builds no
+  sited graph and is unchanged (M0's lazy rule, and an answer never depends on whether a
+  resident engine happens to hold the graph).
+
+### Measured (callers through dependency code v1, CDO baseline `bc3ccb18`, release-fast)
+
+Base `master` `5c05092b` against this branch, same machine, loaded (load average 5-97, so wall
+times are noisy).
+
+- `WaitForMailLimit` (`query touches --table "CDO E-Mail Log" --from "CDO Send Mail
+  Management.WaitForMailLimit" --direction up --callers`): `up.throughDependency` lists **2 code
+  callers**, the two "Send" actions (`Page CDO UnhandledPostedSalesInv.` / `Page CDO Unhandled
+  Posted Cr. Memo`, `OnAction`, 17 hops each) through `Sales Invoice Header::SendRecords` /
+  `Sales Cr.Memo Header::SendRecords` -> `Document Sending Profile::SendCustomerRecords` -> `Send`
+  -> `OnBeforeSend` -[event]-> `CDO eDocs Sending Profile Subs::OnBeforeSendCustomer`, which is
+  where they enter the workspace (12 workspace hops before the root); and **84 configured
+  callers**, every one through `ExecuteResponse`'s `PostDocumentCode()` arm (31-47 hops). Catalog
+  1 matched (Base Application 28.1.49838.50268). Every other byte of the answer equals the base's
+  (`up.transitiveCallers` 967 = 964 workspace routines + 3 dependency publishers in the solve
+  graph: `Document Sending Profile::OnBeforeSend`, `Service-Post::OnAfterPostServiceDoc`,
+  `Sales-Post::OnAfterFinalizePosting`; its `--callers` list has 966 rows on both sides).
+- Unchanged: `alsem analyze --deterministic --format json` byte-identical at `--scope primary`
+  and `--scope all`; `aldump --program-call-graph-stats` byte-identical; 28 prove answers (6
+  routines × `may-commit`, `reaches-ui`, `throws-error`, `writes-table:CDO E-Mail Log` and the
+  three callers' context questions) byte-identical. `alsem graph`: 109,778 lines on both sides;
+  27 edges gain `configuredDispatch` and nothing else changes.
+- Cost: the one-shot `query touches` up above 15.6 s wall / 101 s user / 3.19 GB peak RSS,
+  against 17.7 s / 111 s / 3.15 GB on the base (the sited graph adds about 40 MB; time within
+  noise). `explain --callers-context` 25.7 s / 3.21 GB against 27.1 s / 3.23 GB (the graph was
+  already built there; the walk is not measurable). `aldump --configured-dispatch-candidates`:
+  10.3 s, 2.27 GB; 47 cases with at least 12 call-making arms, `ExecuteResponse` the only one
+  catalogued.
 
 ### Added (agent tasks, milestone B2: impact before/after against a base)
 

@@ -439,8 +439,10 @@ pub fn caller_json(
 }
 
 /// The witness in one line: ` -> X -[event]-> Y -[run]-> Z …` (an event hop
-/// leaves the publisher, the routine before it), folded to its first and
-/// last 3 hops unless `all`.
+/// leaves the publisher, the routine before it). Unless `all`, a long one is
+/// folded around what a reader needs: every hop up to where the path enters
+/// the workspace for the last time (its first 2 and last 3 when longer than
+/// 6), then the workspace tail as a count and its last hop.
 #[must_use]
 pub fn witness_human(c: &DepCaller, name: &dyn Fn(NodeIx) -> String, all: bool) -> String {
     let hop = |h: &Hop| {
@@ -458,9 +460,26 @@ pub fn witness_human(c: &DepCaller, name: &dyn Fn(NodeIx) -> String, all: bool) 
     if all || n <= 6 {
         return c.hops.iter().map(hop).collect();
     }
-    let mut s: String = c.hops[..3].iter().map(hop).collect();
-    s.push_str(&format!(" … {} more …", n - 6));
-    s.extend(c.hops[n - 3..].iter().map(hop));
+    // The hop that enters the workspace for the last time.
+    let entry = c
+        .enters_at
+        .and_then(|e| c.hops.iter().rposition(|h| h.to == e))
+        .unwrap_or(n - 1);
+    let (head, tail) = c.hops.split_at(entry + 1);
+    let mut s = String::new();
+    if head.len() > 6 {
+        s.extend(head[..2].iter().map(hop));
+        s.push_str(&format!(" … {} more …", head.len() - 5));
+        s.extend(head[head.len() - 3..].iter().map(hop));
+    } else {
+        s.extend(head.iter().map(hop));
+    }
+    if tail.len() > 2 {
+        s.push_str(&format!(" … {} more workspace hops …", tail.len() - 1));
+        s.push_str(&hop(&tail[tail.len() - 1]));
+    } else {
+        s.extend(tail.iter().map(hop));
+    }
     s
 }
 
