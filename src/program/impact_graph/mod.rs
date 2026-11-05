@@ -69,8 +69,10 @@
 //! a caller of every node), plus every node with `hiddenCallers` that reaches a
 //! workspace routine.
 
+pub mod cone_probe;
 pub(crate) mod facts;
 mod project;
+pub mod reverse;
 pub mod sited;
 
 use std::collections::{HashMap, HashSet};
@@ -294,6 +296,23 @@ pub fn sited_from_program(
     let facts = extract_source_facts(graph, &index, &units);
     let surface = ctx.decl_surface();
     let recovered: HashSet<String> = pm.recovered_files.iter().cloned().collect();
+    // The apps whose manifest names an `internalsVisibleTo` friend, loaded or
+    // not (agent-tasks design §3.5: their `internal` routines are callable
+    // from outside the program).
+    let friended: HashSet<AppRef> = ctx
+        .snapshot()
+        .apps
+        .iter()
+        .filter(|u| !u.internals_visible_to.is_empty())
+        .filter_map(|u| graph.apps.find(&u.id))
+        .chain(
+            graph
+                .friends
+                .iter()
+                .filter(|(_, f)| !f.is_empty())
+                .map(|(a, _)| *a),
+        )
+        .collect();
     sited_graph(
         &Inputs {
             graph,
@@ -304,6 +323,7 @@ pub fn sited_from_program(
             missing_obligations: &pm.coverage_contract.missing,
             recovered_files: &recovered,
         },
+        &friended,
         cancel,
     )
 }

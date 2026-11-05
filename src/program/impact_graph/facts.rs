@@ -33,6 +33,11 @@ pub enum RunTarget {
 pub struct RoutineFacts {
     /// Carries `[Test]`.
     pub test: bool,
+    /// The routine's root kinds from its source, a mask over
+    /// `root_classification::ROOT_KIND_VALUES` (the model's AST classifier,
+    /// `root_kind_mask`; the config-only kinds are never set here). Union
+    /// over `#if` arms.
+    pub root_kinds: u16,
     /// `[HandlerFunctions('A,B')]` names, folded.
     pub handlers: Vec<String>,
     /// Parameters and locals of a runnable type (`Page`, `Report`, `XmlPort`,
@@ -47,6 +52,9 @@ pub struct ObjectFacts {
     pub runs: Vec<RunTarget>,
     /// Objects its members open: `RunObject` and `CardPageId`.
     pub opens: Vec<RunTarget>,
+    /// The `RunObject` subset of [`Self::opens`]: what its actions run (an
+    /// entry a user starts, agent-tasks design §3.3).
+    pub action_runs: Vec<RunTarget>,
     /// A table's `LookupPageId` and `DrillDownPageId` pages.
     pub lookup_pages: Vec<RunTarget>,
     /// An XmlPort's table elements: an import inserts their records.
@@ -85,11 +93,49 @@ pub fn extract_source_facts(
                     let slot = out.objects.entry(obj_id.clone()).or_default();
                     slot.runs.extend(of.runs);
                     slot.opens.extend(of.opens);
+                    slot.action_runs.extend(of.action_runs);
                     slot.lookup_pages.extend(of.lookup_pages);
                     slot.tables.extend(of.tables);
                 }
+                let object_type =
+                    crate::program::body::ir_walk::ir_object_type(&obj.kind).unwrap_or("Unknown");
+                let obj_prop = |name: &str| {
+                    obj.properties
+                        .iter()
+                        .find(|p| p.name == name)
+                        .map(|p| p.value.as_str())
+                };
+                let (subtype, page_type) = (obj_prop("subtype"), obj_prop("pagetype"));
                 for routine in &obj.routines {
+                    // An interface's methods are declarations, not routines
+                    // the model rows (or a run) can start.
+                    let root_kinds = if obj.kind == ObjectKind::Interface {
+                        0
+                    } else {
+                        crate::engine::root_classification::root_kind_mask(
+                            &crate::engine::root_classification::RootShape {
+                                routine_kind: crate::program::body::ir_walk::ir_routine_kind(
+                                    routine,
+                                ),
+                                routine_name: &routine.name,
+                                object_type,
+                                member_wrapper: routine
+                                    .enclosing_member
+                                    .as_ref()
+                                    .map(|m| m.1.kind_text),
+                                object_subtype: subtype.filter(|_| object_type == "Codeunit"),
+                                page_type: page_type
+                                    .filter(|_| matches!(object_type, "Page" | "PageExtension")),
+                                test_attribute: routine
+                                    .attributes_parsed
+                                    .iter()
+                                    .any(|a| a.name.to_lowercase() == "test"),
+                                default_access: routine.access_modifier.is_none(),
+                            },
+                        )
+                    };
                     let rf = RoutineFacts {
+                        root_kinds,
                         test: routine
                             .attributes
                             .iter()
@@ -113,6 +159,7 @@ pub fn extract_source_facts(
                         let id = source_routine_node_id(obj_id.clone(), routine);
                         let slot = out.routines.entry(id).or_default();
                         slot.test |= rf.test;
+                        slot.root_kinds |= rf.root_kinds;
                         slot.handlers.extend(rf.handlers);
                         slot.runs.extend(rf.runs);
                     }
@@ -127,7 +174,12 @@ pub fn extract_source_facts(
         f.runs.dedup();
     }
     for f in out.objects.values_mut() {
-        for v in [&mut f.runs, &mut f.opens, &mut f.lookup_pages] {
+        for v in [
+            &mut f.runs,
+            &mut f.opens,
+            &mut f.action_runs,
+            &mut f.lookup_pages,
+        ] {
             v.sort();
             v.dedup();
         }
@@ -158,11 +210,12 @@ fn object_facts(
             index,
         )
     };
-    let mut opens: Vec<RunTarget> = obj
+    let action_runs: Vec<RunTarget> = obj
         .run_objects
         .iter()
         .filter_map(|v| runnable_type(v, obj_id, graph, index))
         .collect();
+    let mut opens = action_runs.clone();
     opens.extend(prop("cardpageid").filter_map(page_ref));
     let lookup_pages = if matches!(obj.kind, ObjectKind::Table | ObjectKind::TableExtension) {
         prop("lookuppageid")
@@ -199,6 +252,7 @@ fn object_facts(
             .filter_map(|t| declared_runnable(t, obj_id, graph, index))
             .collect(),
         opens,
+        action_runs,
         lookup_pages,
         tables,
     }

@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (agent tasks, milestone R0: the reverse cone)
+
+The shared up-walker ("who reaches this routine") that test selection, "what context does R run
+in" and impact build on. A library API and a measurement probe; the agent-facing tools come with
+milestones C, A and B1. Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §3.
+
+- **`program::impact_graph::reverse`**: `walk_one` (one root, streaming, its scratch reused across
+  roots) and `walk_multi` (all roots in one breadth-first walk, each state labelled with its
+  nearest root). The walk keeps the shortest hop count per **state** `(node, tier, crossedEvent,
+  ext)`, not per node, so a node reached locally and, shorter, through dependency code keeps both.
+  Tiers: `Local` (every node in the workspace or an app loaded from local source),
+  `ThroughDependency`, `OnlyOpen` (the path uses a hub). The universal hub `h:any` is walked once,
+  one hop from the roots, as `OnlyOpen`, and reported once as a hidden channel; its callers are
+  never dropped. `hiddenCallers` flags are reported per node. A state budget (2,000,000) and the
+  cancellation are reported as limits. The visitor (`ConeVisitor`) gets each state once with the
+  site and state it came from; `ConeVisitor::step` is the hook where a consumer sets its own state
+  bits per site and refines a `Run` or `TriggerOf` site by its anchor (checked or unchecked
+  `Codeunit.Run`, background starts, a trigger's temporary state: body facts the sited graph does
+  not carry). The walk keeps no path and nothing per root.
+- **Entry kinds from source**, not from the graph having no caller: the model's root classifier
+  is now one shape-based function (`root_classification::root_kind_mask`) that the model and the
+  sited graph's source facts both call, so they classify alike (a test checks the fixture's every
+  routine). A page action reached by a lifecycle edge is still a `page-action` entry; a page whose
+  action's `RunObject` runs the cone is one too. Graph sources are reported apart. The
+  roots.config kinds come from a model (`reverse::config_entries`) or not at all (graph-only).
+- **External callers**: a workspace (or local-source) procedure that apps outside the program may
+  call: `public` (public access, object not internal), `protected`, or `friend` (internal, and the
+  app's manifest names an `internalsVisibleTo` friend, loaded or not). `assumeNoDependents` is its
+  own walk option.
+- **The sited graph's node table** now holds each source routine's StableRoutineId (interned;
+  `SitedGraph::nodes_with_stable_id` is the test universe's lookup of a production routine), its
+  root kinds, flag bits and a reverse index. On CDO cross-app the graph is 57.0 MB by its own
+  estimate (`bytes()`), up from about 48 MB.
+- `aldump --reverse-cone <ws> (--routine <Object::Routine|stableId>)... [--roots-file F] [--multi]
+  [--no-dependents]` measures walks. Measured 2026-11-05 (release-fast):
+  - **Test universe** (the design's scratch `TestApp`, CDO as a source dependency): RunReportID
+    is reached by 68 tests in 7 codeunits by a local path at 3-7 hops, 369 tests without hubs and
+    622 with them; IssueReminder by 0 locally, nearest `CDO Setup Tests` at 6 hops through Base
+    Application; UpdateLastUpload by the 3 `CDO Telemetry Tests` tests at 1 hop (the pruned export
+    has no such routine). These equal the design's walks over the export, except one hidden node
+    more in RunReportID's resolved cone (48, not 47): `Check Dimensions::OnErrorMessageDrillDown`,
+    whose every out-edge the export prunes.
+  - **CDO cross-app**: 134,385 nodes, 318,084 sites. RunReportID's cone 27,957 nodes, 98,504
+    states, 68 ms with the probe's summarizing visitor. The 699 roots of the 94-file range as one
+    `walk_multi`: 100,090 states, 25 ms bare (48 ms with the visitor), 1.6 MB of scratch, no RSS
+    change. The same roots as 699 `walk_one` calls with one scratch: 33 s in all, most of it the
+    probe's per-root summaries; the scratch stays 1.6 MB.
+
 ### Added (agent tasks, milestone F: freshness)
 
 Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §2.
