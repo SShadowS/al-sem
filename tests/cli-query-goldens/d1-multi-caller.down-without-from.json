@@ -12,5 +12,5 @@
     "error": "a `down` query is about one routine's cone — pass --from <routine>, or omit --direction for the workspace-global list",
     "lineBase": 1
   },
-  "schemaVersion": "3.3.0"
+  "schemaVersion": "3.4.0"
 }

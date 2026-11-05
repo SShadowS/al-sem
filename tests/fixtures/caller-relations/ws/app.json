@@ -1,0 +1,13 @@
+{
+  "id": "0b7e5d3a-6c1f-4e8a-9d2b-5a4c3e2f1d0c",
+  "name": "Caller Relations Fixture",
+  "publisher": "al-sem tests",
+  "version": "1.0.0.0",
+  "runtime": "17.0",
+  "idRanges": [
+    {
+      "from": 51000,
+      "to": 51099
+    }
+  ]
+}

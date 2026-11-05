@@ -84,8 +84,10 @@ use crate::program::resolve::full::LoadedDependencies;
 /// unchanged. 3.3.0 (agent-tasks milestone D, additive): `touches --field`
 /// answers with `field`, `searched`, `fieldSummary`, `fieldTouches[]`,
 /// `declaredKeys[]`, `reasons[]` and, with no site, `absence`; a touches
-/// answer without `--field` keeps its shape.
-const QUERY_SCHEMA_VERSION: &str = "3.3.0";
+/// answer without `--field` keeps its shape. 3.4.0 (additive): a touches
+/// `up` names the caller relation its `transitiveCallers` counts
+/// (`up.relation: "code-calls"`, [`UP_RELATION`]).
+const QUERY_SCHEMA_VERSION: &str = "3.4.0";
 
 /// Which direction(s) a `query touches` run reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2368,6 +2370,18 @@ fn render_touches_down(
     }
 }
 
+/// Which callers `up` names: the code-call relation of the solve graph
+/// (`program::impact_graph::reverse::is_code_call_site`), never R0's
+/// may-execute walk, which `alsem tests` and impact read. On local code the two
+/// differ only by what a user starts on a page a caller opens (CDO
+/// `WaitForMailLimit`: 964 against 1,030); the solve graph also does not
+/// follow a path through dependency code (86 more workspace callers there).
+/// Pinned by `reverse::caller_agreement_tests`.
+const UP_RELATION: &str = "code-calls";
+const UP_RELATION_LINE: &str = "  callers: by code calls of workspace code (calls, object runs and \
+     the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a \
+     caller opens, nor a path through dependency code (alsem tests and impact follow both)\n";
+
 /// `up`: every transitive caller probed ("has a summary row?", then
 /// "touches?"). When the routine touches the table itself (the trivial case)
 /// no caller witness is built: one counted line. Otherwise each touching
@@ -2409,6 +2423,8 @@ fn render_touches_up(
     };
     let mut up = Map::new();
     up.insert("scoped".into(), true.into());
+    // 3.4.0, additive: which caller relation `transitiveCallers` counts.
+    up.insert("relation".into(), UP_RELATION.into());
     up.insert("transitiveCallers".into(), callers.len().into());
     up.insert("callersTouching".into(), touching.into());
     up.insert("callersNotTouching".into(), not_touching.len().into());
@@ -2501,6 +2517,7 @@ fn render_touches_up(
         );
     }
     payload.insert("up".into(), Value::Object(up));
+    human.push_str(UP_RELATION_LINE);
 
     let names = |list: &[&CallerTouch<'_>]| -> String {
         let n = fold_len(list.len(), 3, all || list_callers);
