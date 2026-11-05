@@ -429,3 +429,37 @@ fn table_facts_are_unresolved_not_static_at_l2() {
         );
     }
 }
+
+/// Every background start (`program::resolve::background::STARTERS`) is one
+/// `start` fact whose resource argument is the started codeunit:
+/// `CurrPage.EnqueueBackgroundTask(T, Codeunit::X)` too (it had none), with the
+/// codeunit at argument 1. A procedure call that is no start is none.
+///
+/// DISCRIMINATION (2026-11-05): leaving `CurrPage.EnqueueBackgroundTask` out
+/// of `dispatch_background::extract_background`'s starters (the old receiver
+/// test) fails the page's count (0 facts).
+#[test]
+fn every_background_start_is_one_start_fact() {
+    let src = "page 50100 P\n{\n    trigger OnOpenPage()\n    var\n        T: Integer;\n    begin\n        CurrPage.EnqueueBackgroundTask(T, Codeunit::\"Bg Job\");\n    end;\n}\n\
+               codeunit 50101 C\n{\n    procedure Go()\n    var\n        S: Integer;\n    begin\n        StartSession(S, 50102);\n        Session.StartSession(S, Codeunit::\"Bg Job\");\n        TaskScheduler.CreateTask(Codeunit::\"Bg Job\", 0);\n        Message('no start');\n    end;\n}";
+    let starts = |routine: &str| -> Vec<String> {
+        facts(src, routine)
+            .iter()
+            .filter(|f| f.op == "start")
+            .map(|f| {
+                assert_eq!(f.resource_kind, "background");
+                serde_json::to_string(&f.resource_arg_source).expect("serializes")
+            })
+            .collect()
+    };
+    let page = starts("OnOpenPage");
+    assert_eq!(page.len(), 1, "{page:?}");
+    assert!(page[0].contains("Bg Job"), "{page:?}");
+    let go = starts("Go");
+    assert_eq!(go.len(), 3, "{go:?}");
+    assert!(go[0].contains("50102"), "{go:?}");
+    assert!(
+        go[1].contains("Bg Job") && go[2].contains("Bg Job"),
+        "{go:?}"
+    );
+}

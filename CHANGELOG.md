@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (F3, the effect side: every background start, named)
+
+- **`CurrPage.EnqueueBackgroundTask` is a `BACKGROUND_TASK` effect.** The `start` capability fact
+  (both extractors: the cone's `direct_facts_for_routine` and the L2 `extract_background`) now reads
+  `program::resolve::background::STARTERS`, the table F3's edges use, instead of its own list of
+  three; the page task had no fact, so explain, digest and prove never saw it.
+- **explain's and digest's `BACKGROUND_TASK` line names what the start starts**: `BACKGROUND_TASK at
+  ws:src/a.al:12 (unconditional-on-success), starts Codeunit BS Job`, and for a task with a failure
+  codeunit `…, starts Codeunit BS Job, on failure Codeunit BS Fail`. A literal is named by the object
+  the program engine resolved it to (a number by its declared name); a codeunit that is not a
+  literal is `a codeunit decided at run time`; a literal the start's edge reaches no routine of (an
+  id no object declares, a codeunit without `OnRun`) keeps its spelling (`Codeunit 59999`); a
+  failure codeunit of `0` is none. The model keeps the names in a side table,
+  `ResolvedCalls::background_starts` (call-site id → `BackgroundStart`), filled by the adapter from
+  each start's `ObligationId::Background` edge; the model's edges still never follow a start. The
+  digest JSON carries it as the effect's `detail.starts` (CLI layer only, like `tempState`: no
+  `factId`, dedupe key or fingerprint moves).
+- **CDO** (release-fast, 2026-11-05): the workspace has no background start; `alsem analyze` findings
+  identical at `--scope primary` (2,240) and `--scope all` (31,313), call-graph statistics as above.
+
 ### Fixed (an integer object id runs its object)
 
 - **`Codeunit.Run(50000)` resolves as `Codeunit.Run(Codeunit::50000)` does.** A positive integer
