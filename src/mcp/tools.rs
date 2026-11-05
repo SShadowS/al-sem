@@ -186,7 +186,7 @@ fn common_properties() -> Map<String, Value> {
 
 /// The one selector grammar every routine argument takes (MCP output plan
 /// 3b; the server instructions state it once).
-const SELECTOR: &str = "a stable routine id, `Owner::Routine` or `Owner.Routine` (type word and AL quotes optional), or a bare routine name unique in the workspace";
+const SELECTOR: &str = "a stable routine id, `Owner::Routine` or `Owner.Routine` (type word and AL quotes optional), or a bare routine name unique in the workspace; an overloaded name takes its parameter types in parentheses, `Owner::Routine(Integer, Text)` (or the parameter names), as an ambiguity answer prints each candidate";
 
 fn string_array(description: &str) -> Value {
     json!({"type": "array", "items": {"type": "string"}, "minItems": 1, "description": description})
@@ -364,7 +364,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_query_effects",
-            "Every record operation one routine (`routine`, a selector) performs transitively, each with its temp state and `via` provenance: reads, locks, validates, temporary records and caller-dependent writes included, each operation in exactly one bucket. Default (`format: human`): a summary line (writes that may persist, writes beyond dependency entry points, caller-dependent writes, locks, validate, reads, temporary records, on a RecordRef (table decided at run time), table not resolved), then writes per table with the first operation's location and first hop, then the writes beyond dependency entry points (alsem_explain's own section); about 20-25 KB for a routine that reaches Base Application. Ask for more: `all: true` (one line per operation, temporary records and reads included), `showSource: true` (the cited source line ±2 under each location), `format: json` (every row with its `firstHop`, and a `summary`; about 900 KB for such a routine, so a file with a summary of counts by operation and temp state). Lines are 1-based. Dependency code: per operation one routine deep (the operations of the first dependency routine entered); physical writes beyond each dependency entry point follow the whole cone with literal arguments, as alsem_explain does (`summary.beyondEntryPoints` in JSON); operations the cone rules out under literal arguments are still listed here. Next: alsem_prove writes-table:<T> for one table's witness. Returns the exact `alsem query effects` stdout.",
+            "Every record operation one routine (`routine`, a selector) performs transitively, each with its temp state and `via` provenance: reads, locks, validates, temporary records and caller-dependent writes included, each operation in exactly one bucket. Default (`format: human`): a summary line (writes that may persist, writes beyond dependency entry points, caller-dependent writes, locks, validate, reads, temporary records, on a RecordRef (table decided at run time), table not resolved), then writes per table with the first operation's location and first hop, then the writes beyond dependency entry points (alsem_explain's own section); about 20-25 KB for a routine that reaches Base Application. Ask for more: `all: true` (one line per operation, temporary records and reads included), `showSource: true` (the cited source line ±2 under each location), `format: json` (every row with its `firstHop`, and a `summary`; about 900 KB for such a routine, so a file with a summary of counts by operation and temp state). Lines are 1-based. Dependency code: per operation one routine deep (the operations of the first dependency routine entered); physical writes beyond each dependency entry point follow the whole cone with literal arguments, as alsem_explain does (`summary.beyondEntryPoints` in JSON); operations the cone rules out under literal arguments are still listed here, each row marked as the cone judges its route (`literalRoute`: ruledOut and notInCone, no route runs; otherRoute, the index's first hop is not the cone's live route, which it names; coneRoute; absent, not judged), and the human table lines say so. Next: alsem_prove writes-table:<T> for one table's witness. Returns the exact `alsem query effects` stdout.",
             schema(
                 vec![
                     (
@@ -391,7 +391,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_query_touches",
-            "Is a table touched by any record operation, transitively? `table`: a number, a name, an internal table id, or unknown (operations whose table is decided at run time). Without `from`: every workspace routine that touches it. With `from` (a routine selector), `direction`: down (does it touch the table, and through which operations), up (its transitive callers: how many touch it, do not, or are unknown), or both (the default). Touches are counted as known persistent, possibly persistent and on temporary records (a temporary-record touch persists nothing but uses the table's schema and runs its triggers); when the routine touches the table itself its callers are counted, not listed. Default (`format: human`): a few lines to about 10 KB, lists folded. Ask for more: `all: true` (every witness, the callers' included, no fold; tens of megabytes on a hub routine), `showSource: true` (the cited source line ±2), `format: json` (every down witness, about 200 KB on a hub routine; over the cap a file with a summary of the down and up headlines). Lines are 1-based. Dependency code: per operation one routine deep; with `from` asked down, the dependency entry points beyond which the whole cone may write the table are listed too (`down.beyond`). Next: alsem_query_effects for the routine's other tables. Returns the exact `alsem query touches` stdout.",
+            "Is a table touched by any record operation, transitively? `table`: a number, a name, an internal table id, or unknown (operations whose table is decided at run time). Without `from`: every workspace routine that touches it, by the per-operation index. With `from` (a routine selector), `direction`: down (does it touch the table, and through which operations; when no indexed operation does, the answer is `unknown` with its reasons, such as operations on a RecordRef, calls not resolved or dependency code deeper than one routine, and `no` only when none applies), up (its transitive callers: how many touch it, do not, or are unknown), or both (the default). Touches are counted on persistent records, on possibly persistent records and on temporary records (a temporary-record touch persists nothing but uses the table's schema and runs its triggers); when the routine touches the table itself its callers inherit the touch and are counted, not listed. Default (`format: human`): a few lines to about 10 KB, lists folded. Ask for more: `callers: true` (every caller by name, depth and location, without witnesses), `all: true` (every witness, the callers' included, no fold; tens of megabytes on a hub routine), `showSource: true` (the cited source line ±2), `format: json` (every down witness, about 200 KB on a hub routine; over the cap a file with a summary of the down and up headlines). Lines are 1-based. Dependency code: per operation one routine deep; with `from` asked down, the dependency entry points beyond which the whole cone may write the table are listed too (`down.beyond`). Next: alsem_query_effects for the routine's other tables. Returns the exact `alsem query touches` stdout.",
             schema(
                 vec![
                     (
@@ -409,6 +409,10 @@ pub fn tool_list() -> Vec<Value> {
                     (
                         "all",
                         json!({"type": "boolean", "description": "Every witness, the callers' included, and no folded list (`--all`). Large on a hub routine."}),
+                    ),
+                    (
+                        "callers",
+                        json!({"type": "boolean", "description": "Name every transitive caller with its depth and location, without their witnesses (`--callers`)."}),
                     ),
                     (
                         "showSource",
@@ -834,6 +838,7 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
                 &a.enumerated("direction", &["down", "up", "both"], "both")?,
             );
             v.switch("all", a.flag("all")?);
+            v.switch("callers", a.flag("callers")?);
             v.switch("show-source", a.flag("showSource")?);
             v.opt(
                 "format",

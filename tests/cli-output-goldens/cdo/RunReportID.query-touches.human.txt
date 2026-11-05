@@ -1,6 +1,6 @@
 --- Codeunit CDO E-Mail Handler::RunReportID vs CDO File (f4b69b55-c90d-4937-8f53-2742898fa948/table/6175301) ---
   scope: dependency code: full cone for physical writes, grouped per entry point; per-operation detail one routine deep; temporary-record touches persist nothing but use the table's schema and run its triggers; lines are 1-based; dependencies: 11 apps (--all lists them)
-  down: yes — 204 record touches: 1 known persistent, 4 possibly persistent (temp state unknown), 199 on temporary records
+  down: yes — 204 record touches: 1 on a persistent record, 4 on possibly persistent records (temp state unknown), 199 on temporary records
     [CalcFields] read at ws:src/Features/ESeal/CDOUniversigneSealService.Codeunit.al:122 in Codeunit CDO Universign eSeal Service::SendSealRequest (temp state unknown), through Table CDO Document Template Line::SendElectronicDocument
     [CalcFields] read at ws:src/Foundation/CDOFile.Table.al:704 in Table CDO File::CreateZip, through Table CDO Document Template Line::SendElectronicDocument
     [Insert] write at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:319 in Codeunit CDO Legacy eDoc Dispatcher::GetFile (temp state unknown), through Table CDO Document Template Line::SendElectronicDocument
@@ -8,4 +8,4 @@
     [Modify] write at ws:src/Features/ESeal/CDOUniversigneSealService.Codeunit.al:183 in Codeunit CDO Universign eSeal Service::ProcessSealResponse (temp state unknown), through Table CDO Document Template Line::SendElectronicDocument
     temporary records: 199 touches in 55 routines (Codeunit CDO E-Mail Template Management::CreateDocumentsForRecord 14, Table CDO File::MergeAndReplacePDF 14, Codeunit CDO E-Mail Template Management::CreateDocuments 11, Codeunit CDO E-Mail Template Management::CreateReportsForRecord 11, … +51 routines) — --all lists them
   table not resolved: 68 operations in this cone, 68 of them on a RecordRef (table decided at run time) (they may be this table) — --table unknown lists them
-  up: 883 transitive callers: 883 touch it, 0 do not, 0 unknown — through this routine; not a finding — --all lists their witnesses
+  up: 883 transitive callers inherit this touch through this routine: 883 touch it, 0 do not, 0 unknown — --callers lists them, --all their witnesses

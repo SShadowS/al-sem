@@ -25,6 +25,9 @@
           "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
         },
         "isUnknownBucket": false,
+        "literalRoute": {
+          "status": "coneRoute"
+        },
         "op": "DeleteAll",
         "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op0",
         "origin": {
@@ -118,6 +121,9 @@
           "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
         },
         "isUnknownBucket": false,
+        "literalRoute": {
+          "status": "coneRoute"
+        },
         "op": "Insert",
         "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op1",
         "origin": {
@@ -371,6 +377,7 @@
             "firstHop": "Codeunit Base Poster::OnRun",
             "operationId": "9c6111a83a31bbff/810777ec24f485a082352742d1ed938ac54d03e97272675493521d2830e28aba/op0"
           },
+          "literalRuledOut": 0,
           "ops": {
             "DeleteAll": 1
           },
@@ -382,8 +389,12 @@
           "class": "physical",
           "first": {
             "firstHop": "Codeunit Out Log Mgt::WriteLog",
+            "literalRoute": {
+              "status": "coneRoute"
+            },
             "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op1"
           },
+          "literalRuledOut": 0,
           "ops": {
             "Insert": 1
           },
@@ -396,6 +407,7 @@
           "first": {
             "operationId": "51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/op1"
           },
+          "literalRuledOut": 0,
           "ops": {
             "Modify": 1
           },
@@ -406,6 +418,13 @@
       "callerDependent": {
         "operations": 1,
         "tables": 1
+      },
+      "literalRoutes": {
+        "coneRoute": 2,
+        "notInCone": 0,
+        "notJudged": 4,
+        "otherRoute": 0,
+        "ruledOut": 0
       },
       "locks": {
         "operations": 0,
@@ -445,5 +464,5 @@
       }
     }
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.2.0"
 }

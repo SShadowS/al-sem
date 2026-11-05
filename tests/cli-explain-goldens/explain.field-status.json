@@ -310,6 +310,7 @@
         "pageActions": 1,
         "temporaryOnlyTables": 0,
         "tests": 1,
+        "testsLoaded": 1,
         "unresolvedTableWrites": 0
       },
       "tests": [
@@ -467,6 +468,7 @@
         "pageActions": 0,
         "temporaryOnlyTables": 0,
         "tests": 0,
+        "testsLoaded": 1,
         "unresolvedTableWrites": 0
       },
       "tests": []
@@ -601,6 +603,7 @@
         "pageActions": 0,
         "temporaryOnlyTables": 0,
         "tests": 0,
+        "testsLoaded": 1,
         "unresolvedTableWrites": 0
       },
       "tests": []
