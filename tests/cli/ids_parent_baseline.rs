@@ -327,7 +327,7 @@ fn fingerprints_and_stable_ids_are_unchanged() {
         std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
         let mut text = serde_json::to_string_pretty(&record).expect("serialize");
         text.push('\n');
-        std::fs::write(&path, text).expect("write record");
+        crate::regen::write_golden(&path, text).expect("write record");
         eprintln!(
             "MINTED {} ({n_findings} findings, {n_stable} stable ids)",
             path.display()

@@ -381,7 +381,7 @@ fn differential_identity_subset_matches_goldens() {
             let mut pretty = serde_json::to_string_pretty(&rust)
                 .unwrap_or_else(|e| panic!("regen serialize R0 identity {fixture}: {e}"));
             pretty.push('\n');
-            std::fs::write(golden_path, pretty)
+            regen::write_golden(golden_path, pretty)
                 .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
             continue;
         }
@@ -739,7 +739,7 @@ fn differential_l2_features_match_goldens() {
             let mut pretty = serde_json::to_string_pretty(&projection)
                 .unwrap_or_else(|e| panic!("regen serialize L2 {fixture}: {e}"));
             pretty.push('\n');
-            std::fs::write(golden_path, pretty)
+            regen::write_golden(golden_path, pretty)
                 .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
             eprintln!("REGEN l2 golden: {}", golden_path.display());
             continue;
@@ -1040,7 +1040,7 @@ fn differential_l3_record_types_match_goldens() {
             let mut pretty = serde_json::to_string_pretty(&projection)
                 .unwrap_or_else(|e| panic!("regen serialize L3 {fixture}: {e}"));
             pretty.push('\n');
-            std::fs::write(golden_path, pretty)
+            regen::write_golden(golden_path, pretty)
                 .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
             eprintln!("REGEN l3rt golden: {}", golden_path.display());
             continue;
@@ -1520,7 +1520,7 @@ fn differential_l3_event_graph_match_goldens() {
             let mut pretty = serde_json::to_string_pretty(&projection)
                 .unwrap_or_else(|e| panic!("regen serialize L3eg {fixture}: {e}"));
             pretty.push('\n');
-            std::fs::write(golden_path, pretty)
+            regen::write_golden(golden_path, pretty)
                 .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
             eprintln!("REGEN l3eg golden: {}", golden_path.display());
             continue;
@@ -1580,7 +1580,7 @@ fn differential_l3_event_graph_match_goldens() {
                 let mut pretty = serde_json::to_string_pretty(&proj)
                     .unwrap_or_else(|e| panic!("regen serialize NEW l3eg golden {fixture}: {e}"));
                 pretty.push('\n');
-                std::fs::write(&new_golden_path, pretty).unwrap_or_else(|e| {
+                regen::write_golden(&new_golden_path, pretty).unwrap_or_else(|e| {
                     panic!("regen write NEW {}: {e}", new_golden_path.display())
                 });
                 eprintln!("REGEN NEW l3eg golden: {}", new_golden_path.display());
@@ -2025,7 +2025,7 @@ fn differential_l3_coverage_match_goldens() {
             let mut pretty = serde_json::to_string_pretty(&projection)
                 .unwrap_or_else(|e| panic!("regen serialize L3cov {fixture}: {e}"));
             pretty.push('\n');
-            std::fs::write(golden_path, pretty)
+            regen::write_golden(golden_path, pretty)
                 .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
             eprintln!("REGEN l3cov golden: {}", golden_path.display());
             continue;

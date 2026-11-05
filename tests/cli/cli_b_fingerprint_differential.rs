@@ -105,7 +105,7 @@ fn regen_golden(golden_path: &std::path::Path, got: &[u8]) -> bool {
         std::fs::create_dir_all(parent)
             .unwrap_or_else(|e| panic!("regen mkdir {}: {e}", parent.display()));
     }
-    std::fs::write(golden_path, got)
+    regen::write_golden(golden_path, got)
         .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
     true
 }
@@ -516,13 +516,15 @@ fn shard_output_matches_goldens() {
     let shard_dir = goldens_dir().join("shards").join(SHARD_FIXTURE);
 
     if regen::regen_mode() {
-        let _ = std::fs::remove_dir_all(&shard_dir);
+        // Write the exact shard set, then drop stale files. Never clear the
+        // directory first: a reader would see it missing.
         std::fs::create_dir_all(&shard_dir)
             .unwrap_or_else(|e| panic!("regen mkdir {}: {e}", shard_dir.display()));
         for shard in &shards {
-            std::fs::write(shard_dir.join(&shard.name), &shard.bytes)
+            regen::write_golden(shard_dir.join(&shard.name), &shard.bytes)
                 .unwrap_or_else(|e| panic!("regen write shard {}: {e}", shard.name));
         }
+        regen::remove_stale(&shard_dir, shards.iter().map(|s| s.name.as_str()));
         drop((resolved, ws_path));
         drop(ws);
         return;

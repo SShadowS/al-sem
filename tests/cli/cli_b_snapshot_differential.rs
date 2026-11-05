@@ -120,7 +120,7 @@ fn check_or_regen(golden_path: &Path, got: &[u8], label: &str) {
             std::fs::create_dir_all(parent)
                 .unwrap_or_else(|e| panic!("regen mkdir {}: {e}", parent.display()));
         }
-        std::fs::write(golden_path, got)
+        regen::write_golden(golden_path, got)
             .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
         return;
     }
@@ -230,7 +230,7 @@ fn cbor_matches_goldens() {
             if let Some(p) = golden_path.parent() {
                 std::fs::create_dir_all(p).ok();
             }
-            std::fs::write(&golden_path, &got)
+            regen::write_golden(&golden_path, &got)
                 .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
             assert_eq!(
                 got[0], 0xb9,
@@ -270,7 +270,7 @@ fn cbor_gz_matches_goldens() {
             if let Some(p) = golden_path.parent() {
                 std::fs::create_dir_all(p).ok();
             }
-            std::fs::write(&golden_path, &got)
+            regen::write_golden(&golden_path, &got)
                 .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
             continue;
         }
@@ -306,14 +306,15 @@ fn shards_match_goldens() {
         let files = serialize_sharded(&tree, &resolved, VERSION_OVERRIDE, primary_only);
         let dir = shards_base.join(variant);
         if regen::regen_mode() {
-            // Fresh write of the exact shard set (clear stale files first).
-            let _ = std::fs::remove_dir_all(&dir);
+            // Write the exact shard set, then drop stale files. Never clear the
+            // directory first: a reader would see it missing.
             std::fs::create_dir_all(&dir)
                 .unwrap_or_else(|e| panic!("regen mkdir {}: {e}", dir.display()));
             for f in &files {
-                std::fs::write(dir.join(&f.name), &f.bytes)
+                regen::write_golden(dir.join(&f.name), &f.bytes)
                     .unwrap_or_else(|e| panic!("regen write shard {}: {e}", f.name));
             }
+            regen::remove_stale(&dir, files.iter().map(|f| f.name.as_str()));
             continue;
         }
         for f in &files {

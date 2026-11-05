@@ -95,7 +95,7 @@ fn check_or_regen_bytes(name: &str, actual: &str) {
     if regen_mode() {
         std::fs::create_dir_all(path.parent().expect("golden has a parent dir"))
             .unwrap_or_else(|e| panic!("regen mkdir for {}: {e}", path.display()));
-        std::fs::write(&path, actual)
+        regen::write_golden(&path, actual)
             .unwrap_or_else(|e| panic!("regen write {}: {e}", path.display()));
         eprintln!("REGEN cli-b diff golden: {}", path.display());
         return;

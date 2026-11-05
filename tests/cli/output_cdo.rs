@@ -758,7 +758,8 @@ fn stamp_matches(ws: &std::path::Path) -> bool {
     let now = cdo_stamp(ws);
     if crate::regen::regen_mode() {
         std::fs::create_dir_all(goldens_dir()).unwrap();
-        std::fs::write(&path, serde_json::to_string_pretty(&now).unwrap() + "\n").unwrap();
+        crate::regen::write_golden(&path, serde_json::to_string_pretty(&now).unwrap() + "\n")
+            .unwrap();
         return true;
     }
     let minted: Value = std::fs::read_to_string(&path)
@@ -1033,7 +1034,7 @@ fn cdo_rendering_goldens() {
         for (name, text) in files {
             let path = goldens_dir().join(&name);
             if regen {
-                std::fs::write(&path, &text).unwrap();
+                crate::regen::write_golden(&path, &text).unwrap();
                 continue;
             }
             match std::fs::read_to_string(&path) {
