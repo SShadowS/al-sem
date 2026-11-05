@@ -31,6 +31,14 @@ pub struct DiffHunk {
     pub old_count: i32,
     /// The changes the hunk body records, in body order.
     pub changes: Vec<HunkChange>,
+    /// Per deletion run, in order (one per `DeletedAfter` /
+    /// `DeletedAttributesAfter` change): the deleted lines' text, marker
+    /// removed. `alsem impact` counts and classifies them (agent-tasks §8.3).
+    pub deleted: Vec<Vec<String>>,
+    /// The new-file lines the body shows, context and added, with their
+    /// 1-based numbers: what `alsem impact` compares with the analyzed text
+    /// (a diff that does not match the working tree, agent-tasks §8.2).
+    pub new_side: Vec<(i32, String)>,
 }
 
 /// One change of a hunk body. 1-based new-file numbers; `DeletedAfter(L)` = a
@@ -373,6 +381,8 @@ fn parse_hunk_header(line: &str) -> Option<Result<DiffHunk, String>> {
         new_count: new_count as i32,
         old_count: old_count as i32,
         changes: Vec::new(),
+        deleted: Vec::new(),
+        new_side: Vec::new(),
     }))
 }
 
@@ -415,12 +425,15 @@ impl OpenHunk {
     /// Consume one line as body, recording its change in `changes` (the open
     /// hunk's). `false`: the line is not body (its side has no count left, or it
     /// is not a body line), so the hunk ends INCOMPLETE.
-    fn accept(&mut self, line: &str, changes: &mut Vec<HunkChange>) -> bool {
+    fn accept(&mut self, line: &str, hunk: &mut DiffHunk) -> bool {
+        let changes = &mut hunk.changes;
         match line.as_bytes().first() {
             Some(b'\\') => true,
             None | Some(b' ') if self.old_left > 0 && self.new_left > 0 => {
                 self.old_left -= 1;
                 self.new_left -= 1;
+                hunk.new_side
+                    .push((self.cursor, line.get(1..).unwrap_or("").to_string()));
                 self.cursor += 1;
                 self.in_deletion_run = false;
                 true
@@ -432,6 +445,10 @@ impl OpenHunk {
                     self.attribute_run = true;
                     self.attribute_depth = 0;
                     changes.push(HunkChange::DeletedAfter(self.cursor - 1));
+                    hunk.deleted.push(Vec::new());
+                }
+                if let Some(run) = hunk.deleted.last_mut() {
+                    run.push(line[1..].to_string());
                 }
                 // The run is attribute-only while it is a sequence of complete
                 // attribute groups: each starts with `[` (at depth 0) and runs
@@ -473,6 +490,7 @@ impl OpenHunk {
                 self.new_left -= 1;
                 self.in_deletion_run = false;
                 changes.push(HunkChange::Added(self.cursor));
+                hunk.new_side.push((self.cursor, line[1..].to_string()));
                 self.cursor += 1;
                 true
             }
@@ -586,7 +604,7 @@ pub fn parse_unified_diff(text: &str) -> DiffParseResult {
             // always finds the hunk. Should that ever break, drop the open hunk
             // instead of panicking.
             if let Some(hunk) = current_file.as_mut().and_then(|f| f.hunks.last_mut()) {
-                if h.accept(line, &mut hunk.changes) {
+                if h.accept(line, hunk) {
                     if h.is_complete() {
                         open = None;
                     }

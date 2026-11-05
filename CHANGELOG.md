@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (agent tasks, milestone B1: impact on the current revision)
+
+The blast radius of a change, current effects only. Spec:
+`docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §8.
+
+- **Every changed line accounted** (`engine::impact::accounting`, B-1b): each added or removed
+  line of a diff lands in exactly one bucket: a routine's body or signature (split at the body's
+  first `var` or `begin` line; the attributes and header above are the signature), an
+  object-level declaration by kind (field, key, field group, global variable, property, action,
+  layout, trigger declaration, enum value, object header, comment or blank, other), outside any
+  object, removed routine text (removed lines that held a routine no new-side span holds: named
+  from their header lines, never called deleted without a base), routine text the model holds no
+  span for, or unmapped with the reason (not in the workspace, two workspace files, not AL, a
+  deleted file, a rejected hunk header, a line past the end of the analyzed file). Per file the
+  buckets sum to the file's changed lines, and a hunk that touches a global and a routine reports
+  both (digest's `hunk-outside-routines` names only hunks that hit no routine). The declaration
+  kinds come from a line scanner (`engine::impact::scan`) over the analyzed text: braces outside
+  comments and strings, the head before each `{`, `var` sections and routine headers; a removed
+  run is scanned from the scanner's state at its gap, so it is classified by what it was.
+- **The diff is checked against the analyzed text**: each new-side line a hunk shows (context and
+  added) must be the analyzed file's line at that number; a file that fails is reported with its
+  first differing line, and its routines' positions are uncertain.
+- The unified-diff parser keeps each deletion run's text (`DiffHunk::deleted`) and the new-side
+  lines a hunk shows (`DiffHunk::new_side`); digest's output does not change.
+
 ### Added (agent tasks, milestone C: test selection)
 
 Which tests to run first for a change, as a first-class answer. Spec:
