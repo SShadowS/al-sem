@@ -58,6 +58,7 @@
 //! defines none), and the server sends no `session/notifyChanged`: it
 //! watches no files; the default `fresh` check per call sees every edit.
 
+pub mod freshness;
 pub mod output;
 pub mod pool;
 mod server;
@@ -85,7 +86,7 @@ pub const DEFAULT_MAX_CHILDREN: usize = 2;
 /// The server's `instructions` in its `initialize` result.
 pub const INSTRUCTIONS: &str = "al-sem answers questions about Microsoft Dynamics 365 Business Central AL code by whole-program analysis of the workspace and the dependencies it loads. Every answer is the exact stdout of the alsem CLI.\n\
 Which tool: before editing or reviewing a routine (its rules, what it writes, commits and raises, who calls it, which tests reach it, what the engine could not see): alsem_explain. A yes/no question about one routine (may it commit, does it write table T, raise event E, reach UI, throw): alsem_prove. The effects of a change (a diff or changed files) or of several roots at once: alsem_digest. Every record operation of one routine, reads, locks and temporary records included: alsem_query_effects. Who touches table T, or does routine R touch it, up or down the call stack: alsem_query_touches. Is the engine current or busy: alsem_status; rebuild now: alsem_refresh.\n\
-Routine selectors, one grammar for every tool: a stable routine id (as JSON answers print it), `Owner::Routine` or `Owner.Routine` (the owner's type word and AL quotes optional: `Codeunit \"Sales-Post\"::OnRun`), or a bare routine name when it is unique in the workspace. A name selects workspace routines only; explain, prove and digest also take a dependency routine's stable id.\n\
+Routine selectors, one grammar for every tool: a stable routine id (as JSON answers print it), `Owner::Routine` or `Owner.Routine` (the owner's type word and AL quotes optional: `Codeunit \"Sales-Post\"::OnRun`), or a bare routine name when it is unique in the workspace. An overloaded routine takes its parameter list: `Owner::Routine(Integer, Text)` by types (a type's length and `var` optional) or by parameter names; a `routine-ambiguous` answer prints each candidate in that form with its location and stable id. A name selects workspace routines only; explain, prove and digest also take a dependency routine's stable id.\n\
 Lines are 1-based everywhere (every envelope and JSON document states `\"lineBase\": 1`). `ws:<path>:<line>` is relative to the workspace; `dep:<app name>:<path>:<line>` is inside a dependency (JSON writes `dep:<app guid>:<path>`).\n\
 Size: an answer over 40 KiB (`maxInlineBytes`), or one over the client's 50,000 characters once escaped, goes to a file in the server's output folder; the envelope then has `stdoutFile` and a `summary` of at most 8 KiB. Read the summary first and open the file only for what it does not say. A digest always goes to a file. Human answers are 1-40 KB; JSON for a routine that calls Base Application is 100 KB-1 MB.\n\
 Every command tool also takes `workspace` (default: the server's), `freshness` (fresh by default, the files as they are now; `freshness: latest-built` answers at once from the last built revision; verify answers from it and says whether it is stale), `singleApp: true` (the workspace without its dependencies), `out` (a file in the output folder) and `maxInlineBytes`.\n\

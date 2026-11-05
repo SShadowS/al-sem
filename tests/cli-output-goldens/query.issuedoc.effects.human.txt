@@ -1,6 +1,6 @@
 --- effects of Codeunit Out Issue Document::IssueDoc ---
   summary: 6 operations — writes that may persist 2 on 2 tables (2 known persistent, 0 temp state unknown); writes beyond dependency entry points on 15 tables through 2 entry points (14 only there); caller-dependent writes 1 on 1 table; temporary records 1 on 1 table in 1 routine; on a RecordRef (table decided at run time) 2 in 1 routine
-  coverage: per operation, one routine into dependency code, and operations ruled out by literal arguments are listed (alsem explain and prove drop them); writes beyond dependency entry points follow the whole cone with literal arguments, as alsem explain does; lines are 1-based
+  coverage: per operation, one routine into dependency code; operations and routes the root's literal arguments rule out are listed and marked (alsem explain and prove drop them); writes beyond dependency entry points follow the whole cone with literal arguments, as alsem explain does; lines are 1-based
   scope: dependency code: full cone for physical writes, grouped per entry point; per-operation detail one routine deep; temporary records are not writes; dependencies: 1 app (--all lists them)
   writes that may persist (2 tables):
     Base Doc Line: DeleteAll 1 — first DeleteAll at dep:Out Base:src/BasePoster.Codeunit.al:7 in Codeunit Base Poster::OnRun, through Codeunit Base Poster::OnRun

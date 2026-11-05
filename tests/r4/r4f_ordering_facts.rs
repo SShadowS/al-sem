@@ -90,7 +90,7 @@ fn r4f_ordering_facts_matches_goldens() {
         // oracle retired). `run_rust` already returns the exact on-disk pretty +
         // trailing-newline form the assert path below reads.
         if regen::regen_mode() {
-            std::fs::write(&golden_path, &rust_text)
+            regen::write_golden(&golden_path, &rust_text)
                 .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
             eprintln!("REGEN r4f ordering-facts golden: {}", golden_path.display());
             continue;

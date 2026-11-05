@@ -70,7 +70,7 @@ fn regen_golden(golden_path: &std::path::Path, got: &str) -> bool {
         std::fs::create_dir_all(parent)
             .unwrap_or_else(|e| panic!("regen mkdir {}: {e}", parent.display()));
     }
-    std::fs::write(golden_path, got)
+    regen::write_golden(golden_path, got)
         .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
     true
 }
@@ -581,6 +581,9 @@ fn touches_informative_up_aggregates_per_caller() {
 /// case no caller witness is built; the informative case builds one per
 /// touching caller; only `--all` builds the product. The counter is the
 /// query's own (`DbEffectQuery::ancestor_witnesses_built`).
+///
+/// Step 1b discrimination (2026-11-05): skipping the trivial case's
+/// `--callers` list fails at "--callers lists them"; restored, passes.
 #[test]
 fn touches_default_never_builds_the_caller_witness_product() {
     use al_sem::engine::l4::effect_query_cli::{
@@ -590,16 +593,106 @@ fn touches_default_never_builds_the_caller_witness_product() {
     let inputs = al_sem::program::inputs::WorkspaceInputs::read(&ws, &crate::fingerprint_needs());
     let view = query_view(&inputs, true).expect("query view");
     let substrate = QuerySubstrate::of(&view);
-    let built = |from: &str, direction: Direction, all: bool| {
-        let r = render_query_touches(&substrate, "QT Item", Some(from), direction, all, "t", true);
+    let render = |from: &str, direction: Direction, all: bool, callers: bool| {
+        let r = render_query_touches(
+            &substrate,
+            "QT Item",
+            Some(from),
+            direction,
+            all,
+            callers,
+            "t",
+            true,
+        );
         assert_eq!(r.exit_code, 0);
-        r.ancestor_witnesses_built
+        r
+    };
+    let built = |from: &str, direction: Direction, all: bool| {
+        render(from, direction, all, false).ancestor_witnesses_built
     };
     assert_eq!(built("WriteItem", Direction::Both, false), 0);
     assert_eq!(built("WriteItem", Direction::Up, false), 0);
     assert_eq!(built("WriteItem", Direction::Both, true), 14);
     assert_eq!(built("Leaf", Direction::Up, false), 3);
     assert!(built("Leaf", Direction::Up, true) > 3);
+    // Step 1b: `--callers` names every caller of the trivial case (each
+    // with its outcome) and still builds no caller witness.
+    let named = render("WriteItem", Direction::Up, false, true);
+    assert_eq!(named.ancestor_witnesses_built, 0);
+    let doc: serde_json::Value = serde_json::from_str(&named.json_text).unwrap();
+    let up = &doc["payload"]["up"];
+    let listed = up["callers"].as_array().expect("--callers lists them");
+    assert_eq!(
+        listed.len() as u64,
+        up["transitiveCallers"].as_u64().unwrap()
+    );
+    assert!(listed.iter().all(|c| c["outcome"] == "touches"), "{up}");
+    assert!(up.get("witnesses").is_none(), "{up}");
+}
+
+/// Step 1b (astra Task 4, top 1): a touches `down` that finds no indexed
+/// operation on the table says `no` only when nothing leaves room for a
+/// touch the per-operation index cannot see. QT's `Leaf` stays in workspace
+/// code with every call resolved and no table left unresolved: `no`. The
+/// MCP-output fixture's `IssueDoc` vs `Out Item` (a table it never names)
+/// has two RecordRef operations, enters dependency code at two entry
+/// points and holds calls not resolved: `unknown`, each reason stated,
+/// and never the old `no — this routine's cone does not touch the table`.
+///
+/// Discrimination (2026-11-05): `absence_reasons` returning an empty list
+/// fails at the `IssueDoc` answer (`no`, reasons `[]`); the `cone-not-read`
+/// reason pushed for a read cone too fails at the `Leaf` answer (`unknown`);
+/// each restored, passes.
+#[test]
+fn touches_absence_is_no_only_when_nothing_is_unseen() {
+    let down = |ws: &str, table: &str, from: &str| {
+        let ws = fixtures_dir().join(ws).to_string_lossy().into_owned();
+        let argv = [
+            "query",
+            "touches",
+            &ws,
+            "--table",
+            table,
+            "--from",
+            from,
+            "--direction",
+            "down",
+        ];
+        let (json, code) = run_alsem(&argv, "json");
+        assert_eq!(code, 0, "{json}");
+        let (human, _) = run_alsem(&argv, "human");
+        let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
+        (doc["payload"]["down"].clone(), human)
+    };
+    let (leaf, human) = down(QT_WS, "QT Item", "Leaf");
+    assert_eq!(leaf["touches"], false, "{leaf}");
+    assert_eq!(leaf["absence"]["answer"], "no", "{leaf}");
+    assert_eq!(leaf["absence"]["reasons"], serde_json::json!([]), "{leaf}");
+    assert!(human.contains("  down: no — "), "{human}");
+
+    let (doc, human) = down("../fixtures/mcp-output/ws", "Out Item", "IssueDoc");
+    assert_eq!(doc["touches"], false, "{doc}");
+    assert_eq!(doc["absence"]["answer"], "unknown", "{doc}");
+    let kinds: Vec<&str> = doc["absence"]["reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "table-not-resolved",
+            "dependency-depth",
+            "calls-not-resolved"
+        ],
+        "{doc}"
+    );
+    assert!(
+        human.contains("  down: unknown — no indexed touch observed"),
+        "{human}"
+    );
+    assert!(!human.contains("does not touch the table"), "{human}");
 }
 
 // ---------------------------------------------------------------------------

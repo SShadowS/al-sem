@@ -18,7 +18,8 @@
       "selector": "QT Item"
     },
     "up": {
-      "note": "workspace-global: every routine whose transitive cone touches this table. Scope it with --from <routine> --direction up.",
+      "index": "operations-one-routine-deep",
+      "note": "workspace-global: every workspace routine whose transitive cone touches this table, by the per-operation index (one routine into dependency code). A routine whose only touch is deeper in dependency code, or on a table not resolved, is not listed. Scope it with --from <routine> --direction up.",
       "routineCount": 8,
       "routines": [
         {
@@ -105,5 +106,5 @@
       "scoped": false
     }
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.2.0"
 }

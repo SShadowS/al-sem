@@ -75,6 +75,15 @@ pub struct CoverageGraph {
     pub(crate) subscriber_facts: BTreeMap<String, SubscriberFacts>,
 }
 
+impl CoverageGraph {
+    /// How many `[Test]` procedures the search starts from (the workspace
+    /// app's): 0 means no test code was loaded, not that nothing is tested.
+    #[must_use]
+    pub fn test_procedures(&self) -> usize {
+        self.roots.len()
+    }
+}
+
 /// What a changed root is to the search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChangedShape {
@@ -177,8 +186,22 @@ impl TestCoverage {
             [] => "complete".to_string(),
             r => format!("partial: {}", r.join(", ")),
         };
+        // Output step 1b (astra, fable): say whether test code was loaded at
+        // all, and that an unreached routine is no reason to skip tests.
+        if self.test_procedures_considered == 0 {
+            return format!(
+                "test coverage: no test code loaded (0 [Test] procedures in the workspace app), \
+                 so no changed routine is reached; that is not a reason to skip tests ({status})"
+            );
+        }
+        let unreached = if self.covered_changed_routines < self.changed_routines {
+            "; an unreached routine is not a reason to skip tests"
+        } else {
+            ""
+        };
         format!(
-            "test coverage: {} of {} changed routines reached; {} [Test] procedures considered ({status})",
+            "test coverage: {} of {} changed routines reached; {} [Test] procedures loaded and \
+             considered ({status}){unreached}",
             self.covered_changed_routines, self.changed_routines, self.test_procedures_considered
         )
     }

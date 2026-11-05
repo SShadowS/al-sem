@@ -113,6 +113,9 @@ pub struct EngineCall {
     pub universe: Universe,
     /// Refresh: wait for the refresh to finish before answering.
     pub wait: bool,
+    /// Status: hash every input in the freshness check, not only those
+    /// whose size or modification time moved.
+    pub verify: bool,
 }
 
 /// A validated tool call.
@@ -158,6 +161,11 @@ pub const TOOL_NAMES: &[&str] = &[
     "alsem_refresh",
 ];
 
+/// The `freshness` argument's description (agent-tasks design §2.3: what
+/// `pin` does for each mode; `verify` rebuilds when stale, it does not
+/// merely report it).
+pub const FRESHNESS_DESCRIPTION: &str = "fresh (default): the answer reflects the files as they are now (a file whose size and modification time are unchanged is trusted). latest-built: the newest built revision may answer, even if files changed since. verify: like fresh, but hashes every input instead of trusting size and modification time; rebuilds first when anything changed.";
+
 /// The properties every command tool takes (design r7 §8.2).
 fn common_properties() -> Map<String, Value> {
     let mut m = Map::new();
@@ -167,7 +175,7 @@ fn common_properties() -> Map<String, Value> {
     );
     m.insert(
         "freshness".into(),
-        json!({"type": "string", "enum": ["fresh", "latest-built", "verify"], "description": "fresh (default): the answer reflects the files as they are now. latest-built: the newest built revision may answer. verify: answer from the built revision and report whether it is stale."}),
+        json!({"type": "string", "enum": ["fresh", "latest-built", "verify"], "description": FRESHNESS_DESCRIPTION}),
     );
     m.insert(
         "singleApp".into(),
@@ -186,7 +194,7 @@ fn common_properties() -> Map<String, Value> {
 
 /// The one selector grammar every routine argument takes (MCP output plan
 /// 3b; the server instructions state it once).
-const SELECTOR: &str = "a stable routine id, `Owner::Routine` or `Owner.Routine` (type word and AL quotes optional), or a bare routine name unique in the workspace";
+const SELECTOR: &str = "a stable routine id, `Owner::Routine` or `Owner.Routine` (type word and AL quotes optional), or a bare routine name unique in the workspace; an overloaded name takes its parameter types in parentheses, `Owner::Routine(Integer, Text)` (or the parameter names), as an ambiguity answer prints each candidate";
 
 fn string_array(description: &str) -> Value {
     json!({"type": "array", "items": {"type": "string"}, "minItems": 1, "description": description})
@@ -364,7 +372,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_query_effects",
-            "Every record operation one routine (`routine`, a selector) performs transitively, each with its temp state and `via` provenance: reads, locks, validates, temporary records and caller-dependent writes included, each operation in exactly one bucket. Default (`format: human`): a summary line (writes that may persist, writes beyond dependency entry points, caller-dependent writes, locks, validate, reads, temporary records, on a RecordRef (table decided at run time), table not resolved), then writes per table with the first operation's location and first hop, then the writes beyond dependency entry points (alsem_explain's own section); about 20-25 KB for a routine that reaches Base Application. Ask for more: `all: true` (one line per operation, temporary records and reads included), `showSource: true` (the cited source line ±2 under each location), `format: json` (every row with its `firstHop`, and a `summary`; about 900 KB for such a routine, so a file with a summary of counts by operation and temp state). Lines are 1-based. Dependency code: per operation one routine deep (the operations of the first dependency routine entered); physical writes beyond each dependency entry point follow the whole cone with literal arguments, as alsem_explain does (`summary.beyondEntryPoints` in JSON); operations the cone rules out under literal arguments are still listed here. Next: alsem_prove writes-table:<T> for one table's witness. Returns the exact `alsem query effects` stdout.",
+            "Every record operation one routine (`routine`, a selector) performs transitively, each with its temp state and `via` provenance: reads, locks, validates, temporary records and caller-dependent writes included, each operation in exactly one bucket. Default (`format: human`): a summary line (writes that may persist, writes beyond dependency entry points, caller-dependent writes, locks, validate, reads, temporary records, on a RecordRef (table decided at run time), table not resolved), then writes per table with the first operation's location and first hop, then the writes beyond dependency entry points (alsem_explain's own section); about 20-25 KB for a routine that reaches Base Application. Ask for more: `all: true` (one line per operation, temporary records and reads included), `showSource: true` (the cited source line ±2 under each location), `format: json` (every row with its `firstHop`, and a `summary`; about 900 KB for such a routine, so a file with a summary of counts by operation and temp state). Lines are 1-based. Dependency code: per operation one routine deep (the operations of the first dependency routine entered); physical writes beyond each dependency entry point follow the whole cone with literal arguments, as alsem_explain does (`summary.beyondEntryPoints` in JSON); operations the cone rules out under literal arguments are still listed here, each row marked as the cone judges its route (`literalRoute`: ruledOut and notInCone, no route runs; otherRoute, the index's first hop is not the cone's live route, which it names; coneRoute; absent, not judged), and the human table lines say so. Next: alsem_prove writes-table:<T> for one table's witness. Returns the exact `alsem query effects` stdout.",
             schema(
                 vec![
                     (
@@ -391,7 +399,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_query_touches",
-            "Is a table touched by any record operation, transitively? `table`: a number, a name, an internal table id, or unknown (operations whose table is decided at run time). Without `from`: every workspace routine that touches it. With `from` (a routine selector), `direction`: down (does it touch the table, and through which operations), up (its transitive callers: how many touch it, do not, or are unknown), or both (the default). Touches are counted as known persistent, possibly persistent and on temporary records (a temporary-record touch persists nothing but uses the table's schema and runs its triggers); when the routine touches the table itself its callers are counted, not listed. Default (`format: human`): a few lines to about 10 KB, lists folded. Ask for more: `all: true` (every witness, the callers' included, no fold; tens of megabytes on a hub routine), `showSource: true` (the cited source line ±2), `format: json` (every down witness, about 200 KB on a hub routine; over the cap a file with a summary of the down and up headlines). Lines are 1-based. Dependency code: per operation one routine deep; with `from` asked down, the dependency entry points beyond which the whole cone may write the table are listed too (`down.beyond`). Next: alsem_query_effects for the routine's other tables. Returns the exact `alsem query touches` stdout.",
+            "Is a table touched by any record operation, transitively? `table`: a number, a name, an internal table id, or unknown (operations whose table is decided at run time). Without `from`: every workspace routine that touches it, by the per-operation index. With `from` (a routine selector), `direction`: down (does it touch the table, and through which operations; when no indexed operation does, the answer is `unknown` with its reasons, such as operations on a RecordRef, calls not resolved or dependency code deeper than one routine, and `no` only when none applies), up (its transitive callers: how many touch it, do not, or are unknown), or both (the default). Touches are counted on persistent records, on possibly persistent records and on temporary records (a temporary-record touch persists nothing but uses the table's schema and runs its triggers); when the routine touches the table itself its callers inherit the touch and are counted, not listed. Default (`format: human`): a few lines to about 10 KB, lists folded. Ask for more: `callers: true` (every caller by name, depth and location, without witnesses), `all: true` (every witness, the callers' included, no fold; tens of megabytes on a hub routine), `showSource: true` (the cited source line ±2), `format: json` (every down witness, about 200 KB on a hub routine; over the cap a file with a summary of the down and up headlines). Lines are 1-based. Dependency code: per operation one routine deep; with `from` asked down, the dependency entry points beyond which the whole cone may write the table are listed too (`down.beyond`). Next: alsem_query_effects for the routine's other tables. Returns the exact `alsem query touches` stdout.",
             schema(
                 vec![
                     (
@@ -411,6 +419,10 @@ pub fn tool_list() -> Vec<Value> {
                         json!({"type": "boolean", "description": "Every witness, the callers' included, and no folded list (`--all`). Large on a hub routine."}),
                     ),
                     (
+                        "callers",
+                        json!({"type": "boolean", "description": "Name every transitive caller with its depth and location, without their witnesses (`--callers`)."}),
+                    ),
+                    (
                         "showSource",
                         json!({"type": "boolean", "description": "Human output: the cited source line ±2 under each location (`--show-source`)."}),
                     ),
@@ -426,7 +438,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_status",
-            "Is the engine's answer current, and what is it doing? Per workspace and universe, `freshness` gives the revision that answers (`generation`, which a rebuild raises, and `inputsStamp`, the hash of the inputs it was built from, the same `revision` every answer's envelope carries), the last build (`class`: cold, P package, S declaration, B body; `startedAtUnixMs`, `durationMs`), `building` (true while a call checks freshness or builds, or a refresh runs; null after an unwaited refresh until the next call), `activity` (idle, asking, pin, prepare, compute, refresh) and the engine child's memory (`rssBytes`, `peakRssBytes`, read live where the OS allows). Also the child (pid, version), its counters, its last failure and stderr tail, and the server's output folder. Starts nothing; answers at once, even while a call runs.",
+            "Is the engine current with the files on disk, and what is it doing? Read `headline` first: per engine, FRESH (no input changed since the revision that answers), STALE (what changed, the refresh class, what to do next), not checked (no engine yet, and why), or the check did not finish. It checks the disk now, against the inputs of the last published revision, without waiting for a busy engine and without building anything. Per engine: `check` (`checkedRevision` with `generation` and `inputsStamp`, the same `revision` every answer's envelope carries; `fresh`; `complete` and `incompleteReasons`; `changes`, each input with its `category` (al-file, al-walk, app-json, app-json-paths, roots-config, coverage-config, source-dependency, package, package-list, unreadable-package-folder) and `path`; `refreshClass`: Package, Declaration, BodyOnly, or BodyOnly|Declaration when only .al contents changed (known after parsing them)); `refresh` (the last alsem_refresh: idle, queued, running, completed or failed, with what it did); `details` (the last build, `activity`, the child's memory, pid and counters, its last failure and stderr tail). The default check trusts a file's size and modification time; `verify: true` hashes every input. Starts nothing; answers at once, even while a call runs.",
             schema(
                 vec![
                     (
@@ -436,6 +448,10 @@ pub fn tool_list() -> Vec<Value> {
                     (
                         "singleApp",
                         json!({"type": "boolean", "description": "With workspace: only the single-app engine (default: the cross-app one)."}),
+                    ),
+                    (
+                        "verify",
+                        json!({"type": "boolean", "description": "Hash every input instead of trusting size and modification time (slower; default false)."}),
                     ),
                 ],
                 &[],
@@ -651,6 +667,7 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             workspace: workspace.as_deref().map(absolute),
             universe,
             wait: a.bool("wait")?.unwrap_or(true),
+            verify: a.bool("verify")?.unwrap_or(false),
         };
         return Ok(if tool == "alsem_status" {
             ToolCall::Status(call)
@@ -834,6 +851,7 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
                 &a.enumerated("direction", &["down", "up", "both"], "both")?,
             );
             v.switch("all", a.flag("all")?);
+            v.switch("callers", a.flag("callers")?);
             v.switch("show-source", a.flag("showSource")?);
             v.opt(
                 "format",

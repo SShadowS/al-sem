@@ -181,6 +181,136 @@ fn every_input_kind_moves_the_manifest() {
     }
 }
 
+/// F-6 (agent-tasks design §2.5): a source dependency's file is an input
+/// with its own stat. Editing one is reported as category
+/// `source-dependency` with that file's path, and the stat-cached check
+/// reads and hashes only that file (the other dependency file and every
+/// workspace file reuse their hash). The read's manifest equals the
+/// observation before and after the edit.
+///
+/// DISCRIMINATION (2026-11-05): dropping the `src:` entries (no per-file
+/// entry) fails at the precondition "the file is its own entry"; reading
+/// every dependency file in the cached check (a key `prev` never holds)
+/// fails at "only the edited file is hashed" (both files); dropping the
+/// `src:` keys from `changes`, as `changed_paths` dropped
+/// `ws:source-dependencies` before, fails at "the edited file's path"
+/// (no change). Each restored, it passes.
+#[test]
+fn a_source_dependency_file_edit_is_its_own_change_and_only_it_is_hashed() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    let write = |p: &Path, text: &str| {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write(
+        &ws.join("app.json"),
+        r#"{"id":"aaaaaaaa-0000-4000-8000-000000000001","name":"W","publisher":"t","version":"1.0.0.0"}"#,
+    );
+    write(&ws.join("W.Codeunit.al"), "codeunit 50100 \"W\" { }\n");
+    write(
+        &ws.join(crate::program::source_deps::CONFIG_FILE),
+        r#"{ "sources": ["../dep"] }"#,
+    );
+    write(
+        &t.path().join("dep/app.json"),
+        r#"{"id":"dddddddd-0000-4000-8000-000000000001","name":"D","publisher":"t","version":"1.0.0.0"}"#,
+    );
+    let a = t.path().join("dep/A.Codeunit.al");
+    write(&a, "codeunit 50200 \"D A\" { }\n");
+    write(
+        &t.path().join("dep/B.Codeunit.al"),
+        "codeunit 50201 \"D B\" { }\n",
+    );
+
+    let before = observe_all(&ws);
+    let consumed = Manifest::consumed(&WorkspaceInputs::read(&ws, &READ), false);
+    assert_eq!(
+        consumed, before,
+        "consumed equals observed with a source dependency"
+    );
+    let key = "src:../dep\u{0}A.Codeunit.al";
+    assert!(
+        before.entries().contains_key(key),
+        "precondition: the file is its own entry: {:?}",
+        before.entries().keys().collect::<Vec<_>>()
+    );
+
+    write(&a, "codeunit 50200 \"D A\" { procedure X() begin end; }\n");
+    let dirty = BTreeSet::new();
+    let after = Manifest::observe(
+        &ws,
+        false,
+        Hashing::Cached {
+            prev: &before,
+            dirty: &dirty,
+        },
+    );
+    assert_eq!(
+        after.hashed(),
+        [key.to_string()],
+        "only the edited file is hashed"
+    );
+    let changes = before.changes(&after, &ws);
+    assert_eq!(
+        changes,
+        vec![InputChange {
+            category: "source-dependency",
+            path: Some(
+                ws.join("../dep")
+                    .join("A.Codeunit.al")
+                    .to_string_lossy()
+                    .into_owned()
+            ),
+            detail: None,
+        }],
+        "the edited file's path"
+    );
+    let consumed = Manifest::consumed(&WorkspaceInputs::read(&ws, &READ), false);
+    assert_eq!(consumed, after, "consumed equals observed after the edit");
+}
+
+/// The categories of every kind of change (agent-tasks design §2.3): a
+/// file on one side only is a listing change with `added`/`removed`, an
+/// edit is its file's category, and the listing entry itself is not
+/// reported again beside the files that explain it.
+#[test]
+fn changes_name_each_inputs_category() {
+    let dir = copy_fixture("tests/fixtures/lsp-diff-deps");
+    let ws = dir.path();
+    let before = observe_all(ws);
+    let p = ws.join("Caller.al");
+    let t = std::fs::read_to_string(&p).unwrap();
+    std::fs::write(&p, t.replace("Compute(5)", "Compute(6)")).unwrap();
+    std::fs::write(ws.join("New.al"), "codeunit 50001 New {}\n").unwrap();
+    std::fs::write(ws.join("roots.config.json"), "{}").unwrap();
+    std::fs::copy(
+        ws.join(".alpackages/bbbbbbbb-0000-0000-0000-000000000002.app"),
+        ws.join(".alpackages/cccc.app"),
+    )
+    .unwrap();
+    let after = observe_all(ws);
+    let got: Vec<(&str, Option<String>, Option<String>)> = before
+        .changes(&after, ws)
+        .into_iter()
+        .map(|c| (c.category, c.path, c.detail))
+        .collect();
+    let path = |rel: &str| Some(ws.join(rel).to_string_lossy().into_owned());
+    assert_eq!(
+        got,
+        vec![
+            ("al-file", path("Caller.al"), None),
+            ("al-walk", path("New.al"), Some("added".into())),
+            (
+                "package-list",
+                path(".alpackages/cccc.app"),
+                Some("added".into())
+            ),
+            ("roots-config", path("roots.config.json"), None),
+        ]
+    );
+}
+
 /// A read of B between observations of A fails the three-way check, though
 /// before and after are equal (§5.1).
 #[test]

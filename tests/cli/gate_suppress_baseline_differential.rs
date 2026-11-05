@@ -58,7 +58,8 @@ fn maybe_regen(name: &str, rust: &str) -> bool {
         return false;
     }
     let path = goldens_dir().join(name);
-    std::fs::write(&path, rust).unwrap_or_else(|e| panic!("regen write {}: {e}", path.display()));
+    regen::write_golden(&path, rust)
+        .unwrap_or_else(|e| panic!("regen write {}: {e}", path.display()));
     eprintln!("REGEN gate-suppress golden: {}", path.display());
     true
 }

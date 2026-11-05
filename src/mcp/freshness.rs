@@ -1,0 +1,522 @@
+//! `alsem_status`'s freshness check (agent-tasks design §2): the disk
+//! compared with the input descriptor each engine's worker published for
+//! its revision (§1.2 M0-6), in the MCP process, on a checker thread.
+//!
+//! **Control path (§2.2).** The reader loop takes the published
+//! descriptors from the workers' snapshots and hands them to a checker
+//! thread, which answers the status call when every check is done; the
+//! reader loop keeps reading meanwhile. The check never goes through an
+//! engine's front end, so a busy child, a busy worker or a running build
+//! cannot delay it, and it never touches the child's session: it is not a
+//! `pin` (it builds nothing, clears no `dirty` path, counts no fresh hit).
+//!
+//! **The check.** [`Manifest::check_against`] the descriptor's manifest:
+//! stat-cached (`hashing: cached`, a file is read only when its length or
+//! modification time moved), or every file hashed with `verify`. Each check
+//! has a deadline (5 s cached, 30 s verify); one that does not finish, or
+//! that meets an input it cannot read, is `complete: false` with the reason
+//! and never `fresh`.
+//!
+//! **Honesty (§2.4).** `fresh: true` only after a complete check in this
+//! call, bound to `checkedRevision`. The check sees the disk: unsaved
+//! editor buffers are not inputs, and a rewrite that keeps a file's length
+//! and modification time is seen only with `verify`. While a call builds,
+//! the check compares with the last published revision and says so.
+
+use std::collections::BTreeSet;
+use std::time::{Duration, Instant, SystemTime};
+
+use serde_json::{Value, json};
+
+use crate::engine::resident::manifest::{InputChange, Manifest};
+use crate::engine::resident::session::InputDescriptor;
+
+/// The status JSON's version (§2.3).
+pub const STATUS_VERSION: u64 = 2;
+
+/// A cached check's deadline.
+pub const CACHED_DEADLINE: Duration = Duration::from_secs(5);
+/// A `verify` check's deadline.
+pub const VERIFY_DEADLINE: Duration = Duration::from_secs(30);
+
+/// The most changes listed per engine.
+pub const MAX_CHANGES: usize = 50;
+
+/// How one check runs.
+#[derive(Clone, Copy, Debug)]
+pub struct CheckOptions {
+    /// Hash every input (`verify: true`), not only those whose stat moved.
+    pub verify: bool,
+    pub deadline: Duration,
+    /// A test's delay before the observation (the `status-check` hook).
+    pub delay: Duration,
+}
+
+impl CheckOptions {
+    /// The defaults for `verify`, with the test hook's delay and deadline
+    /// when one is set.
+    #[must_use]
+    pub fn new(verify: bool) -> CheckOptions {
+        let mut o = CheckOptions {
+            verify,
+            deadline: if verify {
+                VERIFY_DEADLINE
+            } else {
+                CACHED_DEADLINE
+            },
+            delay: Duration::ZERO,
+        };
+        #[cfg(any(feature = "engine-test-hooks", debug_assertions))]
+        if let Some(crate::engine::host::test_hooks::Hook::StatusCheck {
+            delay_ms,
+            deadline_ms,
+        }) = crate::engine::host::test_hooks::from_env()
+        {
+            o.delay = Duration::from_millis(delay_ms);
+            o.deadline = Duration::from_millis(deadline_ms);
+        }
+        o
+    }
+}
+
+fn unix_ms(t: SystemTime) -> u64 {
+    t.duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+/// The refresh class the changed categories imply (§2.3's table), from the
+/// session's own rules (`program::session`): a package, the root `app.json`
+/// or a source dependency is `Package` (the dependency key or the app's
+/// identity moves); a `.al` file added, removed or renamed is
+/// `Declaration`; a `roots.config.json`, coverage config or nested
+/// `app.json` change alone is `BodyOnly` (no file's projection moves); a
+/// `.al` edit is `BodyOnly` or `Declaration`, known only after parsing it.
+/// `None` when nothing changed.
+#[must_use]
+pub fn refresh_class(categories: &BTreeSet<&str>) -> Option<Value> {
+    if categories.is_empty() {
+        return None;
+    }
+    let package: Vec<&str> = categories
+        .iter()
+        .copied()
+        .filter(|c| {
+            matches!(
+                *c,
+                "package"
+                    | "package-list"
+                    | "unreadable-package-folder"
+                    | "app-json"
+                    | "source-dependency"
+                    | "meta"
+                    | "other"
+            )
+        })
+        .collect();
+    let (class, certain, reason) = if !package.is_empty() {
+        (
+            "Package",
+            true,
+            format!(
+                "{} changed: the dependencies or the app's identity are read again",
+                package.join(", ")
+            ),
+        )
+    } else if categories.contains("al-walk") {
+        (
+            "Declaration",
+            true,
+            "a .al file was added, removed or renamed".to_string(),
+        )
+    } else if categories.contains("al-file") {
+        (
+            "BodyOnly|Declaration",
+            false,
+            "only .al file contents changed; whether a declaration changed is known after parsing them"
+                .to_string(),
+        )
+    } else {
+        let names: Vec<&str> = categories.iter().copied().collect();
+        (
+            "BodyOnly",
+            true,
+            format!(
+                "only {} changed: no file is parsed or resolved again",
+                names.join(", ")
+            ),
+        )
+    };
+    Some(json!({"class": class, "certain": certain, "reason": reason}))
+}
+
+/// The class as a headline says it.
+fn class_words(class: &str) -> &str {
+    match class {
+        "BodyOnly|Declaration" => "BodyOnly or Declaration (known after parsing them)",
+        c => c,
+    }
+}
+
+/// What changed, in a few words per category, for the headline.
+fn summary(changes: &[InputChange]) -> String {
+    let mut by: Vec<(&str, usize)> = Vec::new();
+    for c in changes {
+        match by.iter_mut().find(|(k, _)| *k == c.category) {
+            Some((_, n)) => *n += 1,
+            None => by.push((c.category, 1)),
+        }
+    }
+    let plural = |n: usize, one: &str, many: &str| {
+        if n == 1 {
+            format!("1 {one}")
+        } else {
+            format!("{n} {many}")
+        }
+    };
+    let words: Vec<String> = by
+        .into_iter()
+        .map(|(cat, n)| match cat {
+            "al-file" => plural(n, ".al file", ".al files"),
+            "al-walk" => plural(n, ".al file added or removed", ".al files added or removed"),
+            "app-json" => "app.json".to_string(),
+            "app-json-paths" => "the app.json files under the root".to_string(),
+            "roots-config" => "roots.config.json".to_string(),
+            "coverage-config" => "al-sem.coverage.yaml".to_string(),
+            "source-dependency" => plural(n, "source-dependency input", "source-dependency inputs"),
+            "package" => plural(n, "package", "packages"),
+            "package-list" => plural(n, "package added or removed", "packages added or removed"),
+            "unreadable-package-folder" => "the unreadable package folders".to_string(),
+            "meta" => "the engine or grammar version".to_string(),
+            other => format!("{n} {other}"),
+        })
+        .collect();
+    words.join(", ")
+}
+
+/// One engine's check against its published `descriptor` (§2.3's `check`).
+#[must_use]
+pub fn check(descriptor: &InputDescriptor, opts: CheckOptions) -> Value {
+    let started_at = SystemTime::now();
+    let start = Instant::now();
+    let checked = json!({
+        "generation": descriptor.generation,
+        "inputsStamp": descriptor.inputs_stamp,
+    });
+    let hashing = if opts.verify { "all" } else { "cached" };
+    let incomplete = |reason: String| {
+        json!({
+            "checkedRevision": checked,
+            "startedAtUnixMs": unix_ms(started_at),
+            "finishedAtUnixMs": unix_ms(SystemTime::now()),
+            "checkMs": start.elapsed().as_secs_f64() * 1000.0,
+            "hashing": hashing,
+            "complete": false,
+            "incompleteReasons": [reason],
+            "fresh": false,
+        })
+    };
+    let published = match Manifest::from_descriptor_entries(&descriptor.manifest) {
+        Ok(m) => m,
+        Err(e) => return incomplete(format!("the published descriptor does not decode: {e}")),
+    };
+    let single_app = descriptor.universe == "singleApp";
+    let workspace = descriptor.workspace.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let observer = std::thread::Builder::new()
+        .name("alsem-status-check".into())
+        .spawn({
+            let published = published.clone();
+            let workspace = workspace.clone();
+            move || {
+                std::thread::sleep(opts.delay);
+                let _ = tx.send(Manifest::check_against(
+                    &published,
+                    &workspace,
+                    single_app,
+                    opts.verify,
+                ));
+            }
+        });
+    if let Err(e) = observer {
+        return incomplete(format!("the check could not start: {e}"));
+    }
+    // A check past its deadline answers now; its thread finishes on its own.
+    let observed = match rx.recv_timeout(opts.deadline) {
+        Ok(m) => m,
+        Err(_) => {
+            return incomplete(format!(
+                "the check did not finish within {} ms",
+                opts.deadline.as_millis()
+            ));
+        }
+    };
+    let mut reasons: Vec<String> = observed
+        .unreadable()
+        .into_iter()
+        .map(|(k, why)| format!("{k} could not be read: {why}"))
+        .collect();
+    reasons.truncate(10);
+    let complete = reasons.is_empty();
+    let all = published.changes(&observed, &workspace);
+    let categories: BTreeSet<&str> = all.iter().map(|c| c.category).collect();
+    let class = refresh_class(&categories);
+    let truncated = all.len() > MAX_CHANGES;
+    let headline_summary = summary(&all);
+    let changes: Vec<&InputChange> = all.iter().take(MAX_CHANGES).collect();
+    let counts = counts(&observed);
+    json!({
+        "checkedRevision": checked,
+        "startedAtUnixMs": unix_ms(started_at),
+        "finishedAtUnixMs": unix_ms(SystemTime::now()),
+        "checkMs": start.elapsed().as_secs_f64() * 1000.0,
+        "hashing": hashing,
+        "filesHashed": observed.hashed().len(),
+        "complete": complete,
+        "incompleteReasons": reasons,
+        "fresh": complete && all.is_empty(),
+        "changeCount": all.len(),
+        "categories": categories,
+        "changes": changes,
+        "changesTruncated": truncated,
+        "refreshClass": class,
+        "inputs": {"alFiles": counts.0, "packages": counts.1, "sourceDependencyFiles": counts.2},
+        "summary": headline_summary,
+        "residual": if opts.verify {
+            "unsaved editor buffers are not inputs"
+        } else {
+            "a rewrite that keeps size and modification time is seen only with verify: true; unsaved editor buffers are not inputs"
+        },
+    })
+}
+
+/// `(.al files, packages, source-dependency files)` an observation names.
+fn counts(m: &Manifest) -> (usize, usize, usize) {
+    let mut c = (0, 0, 0);
+    for k in m.entries().keys() {
+        if k.starts_with("al:") {
+            c.0 += 1;
+        } else if k.starts_with("pkg:") && k != "pkg:list" && k != "pkg:unreadable-folders" {
+            c.1 += 1;
+        } else if k.starts_with("src:") {
+            c.2 += 1;
+        }
+    }
+    c
+}
+
+/// What the headline of one engine needs beside its check.
+pub struct EngineState<'a> {
+    pub workspace: &'a str,
+    /// `cross-app` or `single-app`.
+    pub universe: &'a str,
+    /// The check, or `None` with why it did not run.
+    pub check: Result<&'a Value, &'a str>,
+    /// `activity` and its age in ms (`pin`, `refresh`, ...), when busy.
+    pub activity: Option<(&'a str, u64)>,
+    /// The refresh state (`refresh.state`).
+    pub refresh_state: &'a str,
+    /// The last failure's message and the deaths, when the engine failed.
+    pub failed: Option<(&'a str, u64)>,
+}
+
+/// One engine's headline (§2.3's table; the texts are a contract).
+#[must_use]
+pub fn headline(e: &EngineState<'_>) -> String {
+    let who = format!("{} engine for {}", e.universe, e.workspace);
+    let check = match e.check {
+        Err(why) => {
+            if let Some((last, deaths)) = e.failed {
+                return format!(
+                    "{} engine failed {deaths} time{} (last: {last}). The next command starts a new one.",
+                    e.universe,
+                    if deaths == 1 { "" } else { "s" }
+                );
+            }
+            return format!("{who}: {why}, so nothing was checked.");
+        }
+        Ok(c) => c,
+    };
+    if check["complete"] != json!(true) {
+        let reason = check["incompleteReasons"][0].as_str().unwrap_or("unknown");
+        return format!(
+            "{} engine: the check did not finish ({reason}); freshness unknown.",
+            e.universe
+        );
+    }
+    let generation = match check["checkedRevision"]["generation"].as_u64() {
+        Some(n) => format!("generation {n}"),
+        None => "the failed build".to_string(),
+    };
+    let verdict = if check["fresh"] == json!(true) {
+        format!(
+            "FRESH: no input changed since {generation} (checked just now: {} files, {} packages).",
+            check["inputs"]["alFiles"], check["inputs"]["packages"]
+        )
+    } else {
+        let class = check["refreshClass"]["class"].as_str().unwrap_or("Package");
+        format!(
+            "STALE. {} changed on disk since {generation}. Refresh class: {}. Next: any command with freshness fresh (the default) refreshes first; or call alsem_refresh.",
+            check["summary"].as_str().unwrap_or("inputs"),
+            class_words(class)
+        )
+    };
+    let busy = match (e.refresh_state, e.activity) {
+        ("running", _) | (_, Some(("refresh", _))) => Some(format!(
+            "a refresh is running (started {} s ago)",
+            e.activity.map_or(0, |a| a.1 / 1000)
+        )),
+        (_, Some(("pin", ms))) => Some(format!(
+            "a call is checking freshness or building (started {} s ago)",
+            ms / 1000
+        )),
+        _ => None,
+    };
+    match busy {
+        Some(b) => {
+            let gen_n = check["checkedRevision"]["generation"]
+                .as_u64()
+                .map_or("none".to_string(), |n| n.to_string());
+            format!(
+                "{} engine: {b}. Disk compared with the last published revision (generation {gen_n}): {verdict}",
+                e.universe
+            )
+        }
+        None => format!("{who}: {verdict}"),
+    }
+}
+
+/// The headline of a workspace with no engine (§2.3).
+#[must_use]
+pub fn no_engine_headline(workspace: &str, universe: &str) -> String {
+    let estimate = if universe == "cross-app" {
+        " (about 25 s cross-app on CDO)"
+    } else {
+        ""
+    };
+    format!(
+        "no engine is running for {workspace} ({universe}), so nothing was checked. The next command builds it{estimate}."
+    )
+}
+
+/// The descriptor a worker published, decoded.
+pub fn decode_descriptor(v: &Value) -> Result<InputDescriptor, String> {
+    serde_json::from_value(v.clone()).map_err(|e| e.to_string())
+}
+
+/// `alsem_status`'s body (§2.3): `server`, then every engine `rows` names
+/// with its check (run here, each engine's on its own thread), its refresh
+/// state and its operator `details`; a `headline` first. With no engine for
+/// the workspace asked (or the default one), `noEngine` says so and
+/// nothing is checked. Runs on the checker thread, never the reader loop.
+#[must_use]
+pub fn status_body(
+    server: Value,
+    rows: Vec<crate::mcp::pool::EngineRow>,
+    asked: Option<(&str, &str)>,
+    opts: CheckOptions,
+) -> Value {
+    let checks: Vec<Result<Value, String>> = std::thread::scope(|sc| {
+        let handles: Vec<_> = rows
+            .iter()
+            .map(|r| {
+                sc.spawn(move || match &r.descriptor {
+                    None => Err(String::new()),
+                    Some(d) => decode_descriptor(d)
+                        .map(|d| check(&d, opts))
+                        .map_err(|e| format!("its published descriptor does not decode ({e})")),
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| {
+                h.join()
+                    .unwrap_or_else(|_| Err("the check failed".to_string()))
+            })
+            .collect()
+    });
+    let mut headlines = Vec::new();
+    let mut engines = Vec::new();
+    for (row, checked) in rows.into_iter().zip(checks) {
+        let mut details = row.details;
+        let refresh = details
+            .as_object_mut()
+            .and_then(|m| m.remove("refresh"))
+            .unwrap_or(Value::Null);
+        let activity = details["freshness"]["activity"]
+            .as_str()
+            .filter(|a| *a != "idle")
+            .map(|a| (a, details["freshness"]["activityMs"].as_u64().unwrap_or(0)));
+        let running_child = !details["engine"].is_null();
+        let reason = match &checked {
+            Ok(_) => None,
+            Err(e) if !e.is_empty() => Some(e.clone()),
+            Err(_) if activity.is_some() => {
+                Some("no revision is published yet (the first build is running)".to_string())
+            }
+            Err(_) => Some("no revision is published yet".to_string()),
+        };
+        let failed = (!running_child && checked.is_err())
+            .then(|| {
+                details["lastFailure"]["message"]
+                    .as_str()
+                    .map(|m| (m, details["deaths"].as_u64().unwrap_or(0)))
+            })
+            .flatten();
+        let universe = row.universe.as_str();
+        let mut line = headline(&EngineState {
+            workspace: &row.workspace,
+            universe,
+            check: match (&checked, &reason) {
+                (Ok(c), _) => Ok(c),
+                (Err(_), Some(r)) => Err(r.as_str()),
+                (Err(_), None) => Err("no revision is published yet"),
+            },
+            activity,
+            refresh_state: refresh["state"].as_str().unwrap_or("idle"),
+            failed,
+        });
+        if checked.is_ok() && !running_child {
+            line.push_str(
+                " Its engine child is not running (it ended idle or by the children bound), so the next command builds again.",
+            );
+        }
+        headlines.push(line.clone());
+        engines.push(json!({
+            "workspace": row.workspace,
+            "universe": universe,
+            "headline": line,
+            "check": checked.ok(),
+            "checkNotRun": reason,
+            "refresh": refresh,
+            "details": details,
+        }));
+    }
+    let mut body = json!({
+        "kind": "status",
+        "statusVersion": STATUS_VERSION,
+        "headline": Value::Null,
+        "server": server,
+        "engines": engines,
+    });
+    if headlines.is_empty() {
+        let line = match asked {
+            Some((ws, universe)) => no_engine_headline(ws, universe),
+            None => "no engine is running, so nothing was checked. The next command builds one."
+                .to_string(),
+        };
+        body["noEngine"] = json!({
+            "workspace": asked.map(|a| a.0),
+            "universe": asked.map(|a| a.1),
+            "check": Value::Null,
+            "reason": "no engine is running",
+        });
+        headlines.push(line);
+    }
+    body["headline"] = json!(headlines.join("\n"));
+    body
+}
+
+#[cfg(test)]
+#[path = "freshness_tests.rs"]
+mod tests;

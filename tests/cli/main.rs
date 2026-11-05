@@ -199,4 +199,5 @@ mod output_cdo;
 mod output_fixture;
 mod output_invariants;
 mod output_invariants_w3;
+mod regen_atomic_writes;
 mod temp_storage_failure;

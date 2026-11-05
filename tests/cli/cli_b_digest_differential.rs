@@ -85,7 +85,7 @@ fn regen_golden(golden_path: &std::path::Path, got: &str) -> bool {
         std::fs::create_dir_all(parent)
             .unwrap_or_else(|e| panic!("regen mkdir {}: {e}", parent.display()));
     }
-    std::fs::write(golden_path, got)
+    regen::write_golden(golden_path, got)
         .unwrap_or_else(|e| panic!("regen write {}: {e}", golden_path.display()));
     true
 }
