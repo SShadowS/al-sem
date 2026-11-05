@@ -74,13 +74,37 @@ impl ExecRelation {
         dependency: &[CallEdge],
         events: &EventGraph,
     ) -> ExecRelation {
+        Self::new_cross_app(ws, primary, dependency, events, None)
+    }
+
+    /// [`ExecRelation::new`], told which routines are dependency code.
+    ///
+    /// PROTOTYPE (proto/dep-callers): with `ALSEM_PROTO_DEP_CALLERS=1` and
+    /// `dep_ids` given, the Primary payload also gains one `via-dependency`
+    /// edge from each workspace routine X to each workspace routine W that X
+    /// reaches only through dependency code (X calls dependency routine D; D
+    /// reaches W by dependency calls and event dispatch from dependency
+    /// publishers, without passing another workspace routine). See
+    /// [`dependency_shortcuts`].
+    pub fn new_cross_app(
+        ws: &ModelEntities,
+        primary: &[CallEdge],
+        dependency: &[CallEdge],
+        events: &EventGraph,
+        dep_ids: Option<&std::collections::BTreeSet<String>>,
+    ) -> ExecRelation {
         pt::counter_delta("build.combined_graph", 1);
         let _s = pt::span("rel", "rel.build");
         let graph = assemble(ws, primary, events);
-        let (primary, mut typed) = (graph.primary, graph.typed_edges);
+        let (mut primary, mut typed) = (graph.primary, graph.typed_edges);
         let mut dependency_uncertainty = Vec::new();
         if !dependency.is_empty() {
             let d = assemble(ws, dependency, &EventGraph::default());
+            if let Some(dep_ids) = dep_ids
+                && proto_dep_callers_enabled()
+            {
+                dependency_shortcuts(&mut primary, &d.primary, dep_ids, ws);
+            }
             typed.extend(d.typed_edges);
             dependency_uncertainty = d.primary.uncertainty_edges;
         }
@@ -147,6 +171,298 @@ impl ExecRelation {
             .uncertainty_edges
             .iter()
             .chain(&self.dependency_uncertainty)
+    }
+}
+
+/// PROTOTYPE switch: `ALSEM_PROTO_DEP_CALLERS=1` turns the dependency
+/// shortcuts on. Off by default, so every golden and gate keeps today's graph.
+fn proto_dep_callers_enabled() -> bool {
+    std::env::var("ALSEM_PROTO_DEP_CALLERS").is_ok_and(|v| v == "1")
+}
+
+/// PROTOTYPE (proto/dep-callers): add to `primary` one `via-dependency` edge
+/// X -> W for every workspace routine X and workspace routine W such that X
+/// calls a dependency routine D and D reaches W through dependency code only:
+/// dependency routines' resolved calls (`dep_half`, the dependency half
+/// assembled without events) and event dispatch from a dependency publisher
+/// (already in `primary`). The walk stops at the first workspace routine; that
+/// routine's own edges are in `primary` already.
+///
+/// Dependency routines stay what they are today (fixed solver leaves with
+/// their own direct effects): only workspace-to-workspace reachability is
+/// added, so the solve, the reverse graph and the SCC all see X -> W.
+///
+/// An edge is skipped when X already has an edge to W. One edge per (X, W),
+/// with the callsite of X's first (sort-key order) edge into dependency code
+/// that reaches W. `resolution` is that first hop's.
+fn dependency_shortcuts(
+    primary: &mut PrimaryGraph,
+    dep_half: &PrimaryGraph,
+    dep_ids: &std::collections::BTreeSet<String>,
+    ws: &ModelEntities,
+) {
+    use super::combined_graph::{CombinedEdge, edge_sort_key};
+    use super::scc::{SccInputGraph, tarjan_scc};
+    use std::collections::{BTreeSet, HashMap};
+    let t0 = std::time::Instant::now();
+    let is_dep = |id: &str| dep_ids.contains(id);
+    // Measurement variant: `ALSEM_PROTO_DEP_CALLERS_CUT="Obj A,Obj B"` drops
+    // the dependency routines of those objects from the walk (a hub cut).
+    let cut_objects: Vec<String> = std::env::var("ALSEM_PROTO_DEP_CALLERS_CUT")
+        .map(|v| v.split(',').map(|s| s.trim().to_lowercase()).collect())
+        .unwrap_or_default();
+    let cut: std::collections::HashSet<&str> = if cut_objects.is_empty() {
+        Default::default()
+    } else {
+        let objs: std::collections::HashSet<&str> = ws
+            .objects
+            .iter()
+            .filter(|o| cut_objects.contains(&o.name.to_lowercase()))
+            .map(|o| o.id.as_str())
+            .collect();
+        ws.routines
+            .iter()
+            .filter(|r| is_dep(&r.id) && objs.contains(r.object_id.as_str()))
+            .map(|r| r.id.as_str())
+            .collect()
+    };
+
+    // Workspace target interning.
+    let mut ws_ix: HashMap<String, u32> = HashMap::new();
+    let mut ws_names: Vec<String> = Vec::new();
+    let mut intern = |id: &str, ws_ix: &mut HashMap<String, u32>| -> u32 {
+        if let Some(&i) = ws_ix.get(id) {
+            return i;
+        }
+        let i = ws_names.len() as u32;
+        ws_names.push(id.to_string());
+        ws_ix.insert(id.to_string(), i);
+        i
+    };
+
+    // The dependency subgraph: dep -> dep edges, and dep -> workspace targets.
+    let mut dep_succ: HashMap<String, Vec<String>> = HashMap::new();
+    let mut ws_direct: HashMap<String, Vec<u32>> = HashMap::new();
+    let mut dep_nodes: BTreeSet<String> = BTreeSet::new();
+    let dep_sources = dep_half
+        .edges_by_from
+        .iter()
+        .chain(primary.edges_by_from.iter().filter(|(f, _)| is_dep(f)));
+    for (from, es) in dep_sources {
+        if cut.contains(from.as_str()) {
+            continue;
+        }
+        dep_nodes.insert(from.clone());
+        for e in es {
+            if cut.contains(e.to.as_str()) {
+                continue;
+            }
+            if is_dep(&e.to) {
+                dep_nodes.insert(e.to.clone());
+                dep_succ.entry(from.clone()).or_default().push(e.to.clone());
+            } else {
+                let i = intern(&e.to, &mut ws_ix);
+                ws_direct.entry(from.clone()).or_default().push(i);
+            }
+        }
+    }
+    let nodes: Vec<String> = dep_nodes.into_iter().collect();
+    let scc = tarjan_scc(&SccInputGraph {
+        nodes: &nodes,
+        edges_by_from: &dep_succ,
+    });
+
+    // reach[s] = workspace routines SCC s reaches through dependency code,
+    // callees first (Tarjan's reverse-topological order).
+    let mut reach: Vec<std::sync::Arc<Vec<u32>>> = Vec::with_capacity(scc.sccs.len());
+    let empty: std::sync::Arc<Vec<u32>> = std::sync::Arc::new(Vec::new());
+    let mut set_elems: u64 = 0;
+    for (s, comp) in scc.sccs.iter().enumerate() {
+        let mut own: Vec<u32> = Vec::new();
+        let mut succ_sets: Vec<&std::sync::Arc<Vec<u32>>> = Vec::new();
+        for m in &comp.members {
+            if let Some(w) = ws_direct.get(m) {
+                own.extend_from_slice(w);
+            }
+            for t in dep_succ.get(m).map(Vec::as_slice).unwrap_or(&[]) {
+                let ts = scc.scc_id_by_routine[t];
+                if ts != s && !reach[ts].is_empty() {
+                    succ_sets.push(&reach[ts]);
+                }
+            }
+        }
+        succ_sets.sort_by_key(|a| std::sync::Arc::as_ptr(a));
+        succ_sets.dedup_by(|a, b| std::sync::Arc::ptr_eq(a, b));
+        let set = if own.is_empty() && succ_sets.len() == 1 {
+            std::sync::Arc::clone(succ_sets[0])
+        } else if own.is_empty() && succ_sets.is_empty() {
+            std::sync::Arc::clone(&empty)
+        } else {
+            for ss in &succ_sets {
+                own.extend_from_slice(ss);
+            }
+            own.sort_unstable();
+            own.dedup();
+            set_elems += own.len() as u64;
+            std::sync::Arc::new(own)
+        };
+        reach.push(set);
+    }
+
+    // The shortcuts.
+    let mut added = 0u64;
+    let mut self_loops = 0u64;
+    let mut callers: BTreeSet<&str> = BTreeSet::new();
+    let mut targets: BTreeSet<u32> = BTreeSet::new();
+    let mut new_edges: Vec<(String, CombinedEdge)> = Vec::new();
+    for (from, es) in &primary.edges_by_from {
+        if is_dep(from) {
+            continue;
+        }
+        let direct: BTreeSet<&str> = es.iter().map(|e| e.to.as_str()).collect();
+        let mut seen: BTreeSet<u32> = BTreeSet::new();
+        for e in es {
+            if e.kind == "event-dispatch" || !is_dep(&e.to) {
+                continue;
+            }
+            let Some(&s) = scc.scc_id_by_routine.get(&e.to) else {
+                continue;
+            };
+            for &w in reach[s].iter() {
+                let wid = &ws_names[w as usize];
+                if direct.contains(wid.as_str()) || !seen.insert(w) {
+                    continue;
+                }
+                if wid == from {
+                    self_loops += 1;
+                }
+                added += 1;
+                callers.insert(from.as_str());
+                targets.insert(w);
+                new_edges.push((
+                    from.clone(),
+                    CombinedEdge {
+                        from: from.clone(),
+                        to: wid.clone(),
+                        kind: "via-dependency".to_string(),
+                        callsite_id: e.callsite_id.clone(),
+                        operation_id: e.operation_id.clone(),
+                        event_id: None,
+                        subscriber_app_id: None,
+                        resolution: e.resolution.clone(),
+                        dispatch: None,
+                    },
+                ));
+            }
+        }
+    }
+    let n_callers = callers.len();
+    if let Ok(path) = std::env::var("ALSEM_PROTO_DEP_CALLERS_DUMP") {
+        dump_shortcuts(&path, &new_edges, primary, dep_half, dep_ids, ws);
+    }
+    for (from, e) in new_edges {
+        primary.edges_by_from.entry(from).or_default().push(e);
+    }
+    for list in primary.edges_by_from.values_mut() {
+        if list.iter().any(|e| e.kind == "via-dependency") {
+            list.sort_by_key(edge_sort_key);
+        }
+    }
+    eprintln!(
+        "proto.dep_callers: dep_nodes={} dep_sccs={} ws_targets_reachable={} reach_set_elems={} \
+         shortcuts={} callers={} targets={} self_loops={} ms={}",
+        nodes.len(),
+        scc.sccs.len(),
+        ws_names.len(),
+        set_elems,
+        added,
+        n_callers,
+        targets.len(),
+        self_loops,
+        t0.elapsed().as_millis()
+    );
+}
+
+/// PROTOTYPE measurement aid: one JSON line per shortcut, with a shortest
+/// dependency witness path (first hop's dependency routine to the target).
+fn dump_shortcuts(
+    path: &str,
+    new_edges: &[(String, super::combined_graph::CombinedEdge)],
+    primary: &PrimaryGraph,
+    dep_half: &PrimaryGraph,
+    dep_ids: &std::collections::BTreeSet<String>,
+    ws: &ModelEntities,
+) {
+    use std::collections::{HashMap, VecDeque};
+    use std::io::Write;
+    let obj: HashMap<&str, (&str, &str)> = ws
+        .objects
+        .iter()
+        .map(|o| (o.id.as_str(), (o.object_type.as_str(), o.name.as_str())))
+        .collect();
+    let name: HashMap<&str, String> = ws
+        .routines
+        .iter()
+        .map(|r| {
+            let (t, n) = obj.get(r.object_id.as_str()).copied().unwrap_or(("?", "?"));
+            (r.id.as_str(), format!("{t} {n}::{}", r.name))
+        })
+        .collect();
+    let nm = |id: &str| name.get(id).cloned().unwrap_or_else(|| id.to_string());
+    // dep adjacency with kinds
+    let mut adj: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
+    for (from, es) in dep_half.edges_by_from.iter().chain(
+        primary
+            .edges_by_from
+            .iter()
+            .filter(|(f, _)| dep_ids.contains(*f)),
+    ) {
+        for e in es {
+            adj.entry(from.as_str())
+                .or_default()
+                .push((e.to.as_str(), e.kind.as_str()));
+        }
+    }
+    // first dependency hop of each shortcut: X's edge with that callsite into dep code
+    let mut out = std::fs::File::create(path).expect("dump file");
+    for (from, e) in new_edges {
+        let starts: Vec<&str> = primary.edges_by_from[from]
+            .iter()
+            .filter(|x| x.callsite_id == e.callsite_id && dep_ids.contains(&x.to))
+            .map(|x| x.to.as_str())
+            .collect();
+        let mut parent: HashMap<&str, (&str, &str)> = HashMap::new();
+        let mut dq: VecDeque<&str> = starts.iter().copied().collect();
+        let mut found = None;
+        let mut seen: std::collections::HashSet<&str> = starts.iter().copied().collect();
+        while let Some(n) = dq.pop_front() {
+            for &(t, k) in adj.get(n).map(Vec::as_slice).unwrap_or(&[]) {
+                if t == e.to {
+                    parent.insert(t, (n, k));
+                    found = Some(t);
+                    break;
+                }
+                if dep_ids.contains(t) && seen.insert(t) {
+                    parent.insert(t, (n, k));
+                    dq.push_back(t);
+                }
+            }
+            if found.is_some() {
+                break;
+            }
+        }
+        let mut hops = Vec::new();
+        let mut at = e.to.as_str();
+        while let Some(&(p, k)) = parent.get(at) {
+            hops.push(format!("{} -[{k}]->", nm(p)));
+            at = p;
+        }
+        hops.reverse();
+        let line = serde_json::json!({
+            "from": nm(from), "to": nm(&e.to), "firstHop": starts.first().map(|s| nm(s)),
+            "depPathLen": hops.len(), "depPath": hops,
+        });
+        let _ = writeln!(out, "{line}");
     }
 }
 

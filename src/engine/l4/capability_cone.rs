@@ -4963,11 +4963,12 @@ pub(crate) fn cross_app_base_of(
         .into_iter()
         .partition(|e| dep_routine_ids.contains(&e.from));
     let ws: &ModelEntities = &x.resolved.workspace;
-    let rel = crate::engine::l4::exec_relation::ExecRelation::new(
+    let rel = crate::engine::l4::exec_relation::ExecRelation::new_cross_app(
         ws,
         &primary_calls,
         &dependency_calls,
         &x.resolved.events.graph,
+        Some(&dep_routine_ids),
     );
     let calls = crate::program::model::calls::ResolvedCalls {
         edges: primary_calls,

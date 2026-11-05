@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (prototype, proto/dep-callers; not for merge)
+
+- **`ALSEM_PROTO_DEP_CALLERS=1`: the solve graph follows callers through dependency code.**
+  Off by default (every golden and gate unchanged). When on, the cross-app relation adds one
+  `via-dependency` edge X -> W for each workspace routine X that calls dependency code which
+  reaches workspace routine W through dependency calls and dependency event dispatch only.
+  Dependency routines stay fixed solver leaves. Measurement aids: `ALSEM_PROTO_DEP_CALLERS_DUMP`
+  (one JSON line per shortcut with a dependency witness path) and `ALSEM_PROTO_DEP_CALLERS_CUT`
+  (drop the named dependency objects from the walk). Measurement report:
+  `target/tmp/dep-callers-measurement.md`.
+
 ### Added (caller relations)
 
 - **Two caller relations, named and pinned.** The solve graph (`query touches` up,
