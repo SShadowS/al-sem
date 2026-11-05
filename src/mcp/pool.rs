@@ -825,15 +825,20 @@ impl Pool {
                         always_file: false,
                         client_budget_chars: None,
                     };
+                    let part_started = Instant::now();
                     let frame = match self.run_composite(id, vec![part]).pop() {
                         Some(SubOutcome::Answered(f)) => f,
                         Some(SubOutcome::NotComputed(m)) => return Err(m),
                         None => return Err("the part was not run".into()),
                     };
                     let (head, stdout) = part_answer(&frame)?;
+                    // Each part's wall time and the engine's own timing: where
+                    // an answer's time went.
                     let rev = json!({"workspace": workspace,
                                      "universe": key.unwrap_or_else(|| universe.as_str().to_string()),
                                      "part": argv.get(2).cloned().unwrap_or_default(),
+                                     "ms": part_started.elapsed().as_millis() as u64,
+                                     "timing": head.get("timing").cloned().unwrap_or(Value::Null),
                                      "revision": head.get("revision").cloned().unwrap_or(Value::Null)});
                     let v: Value = serde_json::from_str(&stdout)
                         .map_err(|e| format!("an impact part is no JSON: {e}"))?;

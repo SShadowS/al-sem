@@ -70,7 +70,7 @@ The blast radius of a change, current effects only. Spec:
   parts on the production engine, which builds its sited graph on the first up part; the select
   parts on the test engines, as `alsem_tests`). The stdout is `alsem impact`'s bytes except the
   tuple's inputs stamp, which is the main part's revision (a one-shot CLI run has none); the
-  envelope's `revisions` names every part's revision. Over the inline cap (40 KiB) or the client's
+  envelope's `revisions` names every part's revision, wall time (`ms`) and engine timing. Over the inline cap (40 KiB) or the client's
   50,000-character budget the answer goes to a file with a `summary` (the comparison, the
   accounting line, the first five routines, the tests line). The LSP front end refuses it, as it
   refuses `alsem_tests`. The server instructions name it for reviewing a diff or a PR.
