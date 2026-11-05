@@ -48,6 +48,17 @@ Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §2.
   fields move under `details`. `refresh` gives the last `alsem_refresh`'s state (`idle`, `queued`,
   `running`, `completed`, `failed`) with what it did, its class and generation; an unwaited refresh
   is `queued` until a later call shows its outcome.
+- **Measured on a copy of the CDO baseline** (cross-app, 582 `.al` files, 11 packages,
+  `release-fast`, 2026-11-05; the machine was shared, load average 187-215, so these are upper
+  bounds). Idle: a cached check took 2.6-4.7 ms, and the status answer arrived 4.0-6.5 ms after the
+  call (10 runs; the spec's bar is 10 ms). A `verify` check hashed 594 files in 38-40 ms (answer
+  40-42 ms). While a heavy `alsem_explain` ran on the same engine: 3.2-4.2 ms cached, 36 ms verify,
+  and a `ping` sent during the check answered in 0.05-0.16 ms. After a body edit: STALE, 1 file
+  hashed, category `al-file`, class `BodyOnly|Declaration`. With one source dependency of 579
+  `.al` files: a cached check took 10-46 ms (it stats 1,173 files) and hashed 0 of them; the edit
+  of one dependency file hashed exactly that file and was reported as `source-dependency` with its
+  path and class `Package`; `verify` hashed 1,173 files in 190-330 ms. Before this milestone every
+  cached check read and hashed all 579 dependency files.
 - **`alsem_refresh` says what it did**: `did` is `rebuilt` (with `class`, `files`, `durationMs`,
   `generation`), `already-fresh`, or `queued` (`wait: false`). The child's `session/refresh`
   answer carries `built`, `class` and `changedFiles`.
