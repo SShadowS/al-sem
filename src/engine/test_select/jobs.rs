@@ -187,6 +187,9 @@ pub fn scope_json(s: &Scope) -> Value {
             "detail": k.reason.human(),
         })).collect::<Vec<_>>(),
         "summary": s.sibling_summary(),
+        // What `.al-sem.json` `testApps` said when this scope was found
+        // (milestone C item 3: `alsem_status` compares it with the disk).
+        "testConfig": s.test_config,
     })
 }
 

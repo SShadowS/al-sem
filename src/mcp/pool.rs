@@ -202,6 +202,10 @@ pub struct EngineRow {
     pub universe: Universe,
     pub details: Value,
     pub descriptor: Option<Arc<Value>>,
+    /// A production engine's: the `.al-sem.json` `testApps` identity its
+    /// workspace's last `alsem_tests` answer was discovered under (`None`
+    /// before one, and for a test-universe engine).
+    pub test_config: Option<Value>,
 }
 
 /// A running command's bookkeeping: when it was queued, its cancel flag and
@@ -353,6 +357,11 @@ struct Shared {
     /// The test universes' descriptors, by their engine's workspace (the
     /// test app's folder), registered by `run_tests` before a part is queued.
     test_universes: Mutex<HashMap<String, crate::engine::test_select::universe::TestUniverse>>,
+    /// The `.al-sem.json` `testApps` identity each production workspace's
+    /// last `alsem_tests` answer was discovered under (its roots part's
+    /// `scope.testConfig`): `alsem_status` compares it with the disk
+    /// (category `test-config`, milestone C item 3).
+    test_configs: Mutex<HashMap<String, Value>>,
 }
 
 fn log(line: &str) {
@@ -438,6 +447,7 @@ impl Pool {
                 closing: AtomicBool::new(false),
                 children,
                 test_universes: Mutex::new(HashMap::new()),
+                test_configs: Mutex::new(HashMap::new()),
             }),
             workers: Mutex::new(HashMap::new()),
         }
@@ -657,12 +667,15 @@ impl Pool {
             let (head, stdout) = part_answer(&frame)?;
             let rev = json!({"workspace": workspace, "universe": key.unwrap_or_else(|| universe.as_str().to_string()),
                              "revision": head.get("revision").cloned().unwrap_or(Value::Null)});
+            let v: Value = serde_json::from_str(&stdout)
+                .map_err(|e| format!("a tests part is no JSON: {e}"))?;
             if roots {
                 production_rev = rev;
+                self.record_test_scope(&workspace, &v["scope"]);
             } else {
                 test_revs.push(rev);
             }
-            serde_json::from_str(&stdout).map_err(|e| format!("a tests part is no JSON: {e}"))
+            Ok(v)
         };
         let rendered = orchestrate(&call.request, call.opts, &mut run);
         let compute_ms = started.elapsed().as_millis() as u64;
@@ -727,6 +740,61 @@ impl Pool {
             shared.end_cancelled(id, Some(&encode_or_log(&msg)));
         } else {
             shared.finish(id, &encode_or_log(&msg));
+        }
+    }
+
+    /// A tests answer's roots part discovered `scope` for `workspace`
+    /// (milestone C item 3): record what `.al-sem.json` `testApps` said, for
+    /// `alsem_status`'s `test-config` check, and drop what an earlier
+    /// discovery left that this one no longer has: the descriptor of each
+    /// test universe of this workspace whose test app is out of the scope,
+    /// and its engine child when idle (it would hold a child slot until the
+    /// least-recently-used eviction reached it).
+    fn record_test_scope(&self, workspace: &str, scope: &Value) {
+        let shared = &self.shared;
+        shared
+            .test_configs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(workspace.to_string(), scope["testConfig"].clone());
+        let abs = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf());
+        let production = abs(Path::new(workspace));
+        let in_scope: HashSet<PathBuf> = scope["apps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|a| a["root"].as_str())
+            .map(|r| abs(Path::new(r)))
+            .collect();
+        let dropped: Vec<String> = {
+            let mut unis = shared
+                .test_universes
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            let gone: Vec<String> = unis
+                .iter()
+                .filter(|(_, u)| {
+                    u.production_root == production && !in_scope.contains(&u.test_root)
+                })
+                .map(|(k, _)| k.clone())
+                .collect();
+            for k in &gone {
+                unis.remove(k);
+            }
+            gone
+        };
+        if dropped.is_empty() {
+            return;
+        }
+        let workers = self.workers();
+        for root in dropped {
+            if let Some(w) = workers.get(&(root, Universe::Tests))
+                && w.pending.load(Ordering::SeqCst) == 0
+            {
+                // As the children bound retires one: marked gone at once.
+                w.snapshot.lock().expect("snapshot").hello = None;
+                let _ = w.tx.send(Job::Retire);
+            }
         }
     }
 
@@ -930,6 +998,16 @@ impl Pool {
                     universe: k.1,
                     details,
                     descriptor: s.descriptor.as_ref().map(|(_, d)| Arc::clone(d)),
+                    test_config: (k.1 != Universe::Tests)
+                        .then(|| {
+                            self.shared
+                                .test_configs
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .get(&k.0)
+                                .cloned()
+                        })
+                        .flatten(),
                 }
             })
             .collect();

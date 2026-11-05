@@ -121,6 +121,92 @@ fn alsem_tests_answers_the_clis_bytes_through_two_engines() {
     assert!(s.finish().success());
 }
 
+/// Milestone C item 3, the `test-config` freshness category: after an
+/// `alsem_tests` answer, a change of `.al-sem.json` `testApps` shows in
+/// `alsem_status` on the production engine (category `test-config`, the
+/// headline's "Test scope changed"), while the engine itself stays fresh
+/// (it is no input of its revision). The next `alsem_tests` rediscovers (the
+/// scope is off: no test universe is asked), the status agrees again, and
+/// the test engine the earlier discovery started is retired with its
+/// descriptor (the cached discovery is invalidated).
+///
+/// DISCRIMINATION (2026-11-05): (a) not recording the scope
+/// (`record_test_scope` returning at its start) fails at the first status
+/// call (no `testScope` on the check: `null` where `false` is due); (c)
+/// `apply_test_config` never seeing a change (`changed` forced false) fails
+/// at "the testApps change shows"; (b)
+/// skipping the retire (`dropped` forced empty) fails at "the out-of-scope
+/// test engine is retired"; each restored, passes.
+#[test]
+fn a_test_apps_change_shows_in_status_and_is_rediscovered() {
+    let t = repo();
+    let ws = t.path().join("App");
+    let mut s = Server::ready(&ws, None);
+    let production = |list: &[Value]| -> Value {
+        list.iter()
+            .find(|e| e["universe"] != "tests")
+            .cloned()
+            .unwrap_or_else(|| panic!("a production engine: {list:?}"))
+    };
+    let env = envelope(&s.call(1, "alsem_tests", json!({"routines": ["TU Core::Post"]})));
+    assert_eq!(
+        env["revisions"]["tests"].as_array().map(Vec::len),
+        Some(1),
+        "{env}"
+    );
+    let p = production(&engines(&mut s, 2));
+    assert_eq!(p["check"]["testScope"]["changed"], false, "{p}");
+    assert_eq!(p["check"]["fresh"], true, "{p}");
+
+    std::fs::write(ws.join(".al-sem.json"), r#"{"testApps": []}"#).unwrap();
+    let p = production(&engines(&mut s, 3));
+    let check = &p["check"];
+    assert_eq!(
+        check["testScope"]["changed"], true,
+        "the testApps change shows: {p}"
+    );
+    assert_eq!(check["testScope"]["now"], json!([]), "{p}");
+    assert!(
+        check["categories"]
+            .as_array()
+            .is_some_and(|c| c.contains(&json!("test-config"))),
+        "{p}"
+    );
+    assert_eq!(
+        check["fresh"], true,
+        "the engine's own inputs did not move: {p}"
+    );
+    assert!(
+        check["refreshClass"]["class"].is_null(),
+        "no refresh of this engine: {p}"
+    );
+    assert!(
+        p["headline"]
+            .as_str()
+            .is_some_and(|h| h.contains("Test scope changed")),
+        "{p}"
+    );
+
+    let env = envelope(&s.call(4, "alsem_tests", json!({"routines": ["TU Core::Post"]})));
+    assert_eq!(
+        env["revisions"]["tests"],
+        json!([]),
+        "rediscovered: off: {env}"
+    );
+    let list = engines(&mut s, 5);
+    let p = production(&list);
+    assert_eq!(p["check"]["testScope"]["changed"], false, "{p}");
+    let test_engine = list
+        .iter()
+        .find(|e| e["universe"] == "tests")
+        .expect("the test worker is still listed");
+    assert!(
+        test_engine["details"]["engine"].is_null(),
+        "the out-of-scope test engine is retired: {test_engine}"
+    );
+    assert!(s.finish().success());
+}
+
 /// Milestone C item 2: a client's cancel of `alsem_tests` reaches its parts.
 /// The parts are sub-requests with ids of their own; the cancel names the
 /// call's id. Every child sleeps 1.5 s on each ask (`sleep-on-ask`), so the

@@ -155,6 +155,33 @@ pub struct Scope {
     pub search_root: Option<(PathBuf, bool)>,
     /// The `app.json` files auto-discovery read (the workspace's excluded).
     pub searched: usize,
+    /// The `.al-sem.json` `testApps` this discovery read
+    /// ([`test_config_identity`]), also when the call named its own test
+    /// apps: `alsem_status` compares it with the disk (the `test-config`
+    /// category, milestone C item 3).
+    pub test_config: serde_json::Value,
+}
+
+/// The identity of the `.al-sem.json` `testApps` key as
+/// [`configured_test_apps`] reads it: `null` when absent (or the file does
+/// not parse), else the resolved folders in order. One function for the
+/// discovery that recorded it and the status check that compares it.
+#[must_use]
+pub fn test_config_identity(config: Option<&[PathBuf]>) -> serde_json::Value {
+    match config {
+        None => serde_json::Value::Null,
+        Some(list) => serde_json::Value::Array(
+            list.iter()
+                .map(|p| serde_json::Value::String(p.to_string_lossy().into_owned()))
+                .collect(),
+        ),
+    }
+}
+
+/// [`test_config_identity`] of the workspace's `.al-sem.json` now.
+#[must_use]
+pub fn read_test_config_identity(workspace: &Path) -> serde_json::Value {
+    test_config_identity(configured_test_apps(workspace).as_deref())
 }
 
 /// What the call asks (`None`: the call names no test app).
@@ -190,6 +217,8 @@ pub fn discover(workspace: &Path, req: &ScopeRequest) -> Scope {
         .ok()
         .map(|v| str_field(&v, "id").to_ascii_lowercase())
         .filter(|s| !s.is_empty());
+    // Read once: the scope records what it was discovered under.
+    let configured = configured_test_apps(workspace);
     let mut scope = Scope {
         origin: Origin::Auto,
         workspace_app_id,
@@ -199,10 +228,11 @@ pub fn discover(workspace: &Path, req: &ScopeRequest) -> Scope {
         incomplete: Vec::new(),
         search_root: None,
         searched: 0,
+        test_config: test_config_identity(configured.as_deref()),
     };
     let named = match &req.test_apps {
         Some(list) => Some((Origin::Call, list.clone())),
-        None => configured_test_apps(workspace).map(|l| {
+        None => configured.map(|l| {
             if l.is_empty() {
                 (Origin::Off, l)
             } else {
