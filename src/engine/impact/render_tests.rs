@@ -132,3 +132,37 @@ fn a_root_line_carries_its_handle() {
         "{text}"
     );
 }
+
+/// A witness only an open site (a hub) reaches says so, and so does the
+/// count of such entries (round-1 c20: a `run:report` hub's witness was
+/// printed beside the real path as a plain "reached from" entry). A path
+/// through dependency code is named too; a local one carries no label.
+///
+/// Break: drop the tier from `node_short` → the "only over open sites"
+/// witness assert fails.
+#[test]
+fn an_open_site_witness_is_labelled_with_its_tier() {
+    let (main, mut up, delta) = parts(1, 0);
+    up["roots"][0]["entries"] = json!([{"kind": "report-trigger", "count": 3, "onlyOpen": 1,
+        "userOrJob": true, "first": [
+            {"display": "Report 357::company::onpostdataitem", "hops": 2, "tier": "local"},
+            {"display": "Report 202::header::onaftergetrecord", "hops": 3, "tier": "throughDependency"},
+            {"display": "Report 50100::onprereport", "hops": 5, "tier": "onlyOpen"}]}]);
+    let text = human(&main, &up, delta, RenderOpts::new(false, None, true));
+    assert!(
+        text.contains("3 report triggers (1 only over open sites) (first: "),
+        "{text}"
+    );
+    assert!(
+        text.contains("Report 357::company::onpostdataitem (2 hops); "),
+        "{text}"
+    );
+    assert!(
+        text.contains("Report 202::header::onaftergetrecord (3 hops, through dependency code)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Report 50100::onprereport (5 hops, only over open sites)"),
+        "{text}"
+    );
+}

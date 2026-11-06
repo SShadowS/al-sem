@@ -449,7 +449,10 @@ pub(crate) fn cdo_impact_ratchets() {
     let (human, _, code) = impact(&ws, &["--diff", "-", "--diff-root", &root], Some(&diff));
     assert_eq!(code, 0);
     assert!(human.len() <= 40 * 1024, "{} bytes", human.len());
-    assert!(human.contains("  … +679 routines"), "{human}");
+    // +681 since 2026-11-06 (was +679): each `reached from` list now names
+    // its open-only count and non-local witnesses' tiers (round-1 c20), so
+    // two fewer routines fit the 40 KiB budget.
+    assert!(human.contains("  … +681 routines"), "{human}");
 
     let v = json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"], None);
     let r = &v["roots"][0];

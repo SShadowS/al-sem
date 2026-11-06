@@ -400,7 +400,7 @@ pub fn tool_list() -> Vec<Value> {
                     ),
                     (
                         "tests",
-                        json!({"type": "boolean", "description": "Add a testCoverage block: which changed routines a [Test] procedure reaches."}),
+                        json!({"type": "boolean", "description": "Add a testCoverage block: which changed routines a [Test] procedure of the workspace app reaches. Sibling test apps are named, not loaded: alsem_tests selects from them."}),
                     ),
                     (
                         "includeReads",

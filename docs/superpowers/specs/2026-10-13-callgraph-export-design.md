@@ -293,13 +293,35 @@ are exact derivations from parsed declarations, not new dispatch resolution.
    and action triggers and its record's triggers; a report run fires its dataitem and
    request-page triggers. Targeting only the entry trigger would report changes to
    those triggers as uncoverable.
-2. **Declared runnable variables.** A routine that declares a parameter or local of
-   type `Page`, `Report`, `XmlPort`, `Query`, `TestPage` or `TestRequestPage` X (or
-   whose object declares such a global) gets a `Run` edge (`OverApprox`,
+
+   **Control add-in events (2026-11-06, round-1 c21).** A page trigger whose
+   enclosing member is a `usercontrol` of the page or of an extension of it (an
+   add-in event such as `EditorInitialized`) gets its lifecycle edge with
+   `via: "clientEvent"` instead of `"lifecycle"` (same `Trigger` kind, `OverApprox`).
+   Only the add-in's JavaScript raises it, in a real client: a user's page run may
+   fire it, a `TestPage` cannot (it hosts no add-in, and no AL statement raises one).
+   So the edge stays for production reach (impact, callers) and test selection does
+   not walk it (`alsem tests` refuses the site). **Consumer note (bc-dev-mcp):** a
+   test-selection walk over the export should skip `clientEvent` edges too; one that
+   treats it as any edge selects exactly what it selected before.
+2. **Declared test pages, and typed runnable receivers.** A routine that declares a
+   parameter or local of type `TestPage` or `TestRequestPage` X (or whose object
+   declares such a global) gets a `Run` edge (`OverApprox`,
    `via: "declaredRunnable"`) to X's object node; a `TestRequestPage` maps to its
-   report. Why: `TestPage.OpenEdit()`, `TestField.SetValue()`, `TestAction.Invoke()`,
-   `ReportVar.SaveAsPdf()` and `QueryVar.Open()` all resolve as catalog builtins, yet
-   they run X's triggers. Codeunit variables are excluded: the engine already models
+   report. Why: `TestPage.OpenEdit()`, `TestField.SetValue()` and
+   `TestAction.Invoke()` resolve as catalog builtins, yet they run X's triggers.
+   For a `Page`, `Report`, `XmlPort` or `Query` variable the run is a **site**, not
+   the declaration: a typed `.Run()`/`.RunModal()` (XmlPort also `Import`/`Export`) is
+   already an engine `run` edge, and a call site whose route is a dispatching builtin
+   that runs an object of kind K (`member_catalog::DISPATCHING_BUILTINS`, e.g.
+   `ReportVar.SaveAsPdf()`, `QueryVar.Open()`) on a receiver the resolver typed as an
+   object X of kind K gets the same `declaredRunnable` edge to X, from that routine,
+   at that line. **Narrowed 2026-11-06 (round-1 c12):** before, every routine of an
+   object whose globals declared `Page "Sales Invoice"` ran that page, so `Document
+   Errors Mgt.`'s empty `OnRun` "ran" Page 43 because the codeunit calls
+   `GlobalSalesInvoicePage.RunBackgroundCheck()`. **Consumer note (bc-dev-mcp):** no
+   schema change; the export has fewer `declaredRunnable` edges, each one now
+   witnessed by a site. Codeunit variables are excluded: the engine already models
    `CuVar.Run()` precisely, and codeunit variables mostly serve procedure calls.
 3. **Test handlers.** A routine with `[HandlerFunctions('A,B')]` gets an `Event` edge
    (`OverApprox`, `via: "testHandler"`) to each named handler in the same codeunit
@@ -491,7 +513,7 @@ arrives with Stage C.
 | `caller`, `callee` | string | node ids |
 | `kind` | `Direct` \| `Event` \| `Interface` \| `Run` \| `Trigger` | 4.3 |
 | `confidence` | `Resolved` \| `OverApprox` \| `Open` | 4.3 |
-| `via` | string | provenance: `call`, `run`, `implicitTrigger`, `eventFlow`, `interface`, `lifecycle`, `declaredRunnable`, `testHandler`, `testRunner`, `opaqueBody`, `unresolved`, `dynamic`, `dispatchingBuiltin`, `parseRecovered`, `hubExpansion`, `backgroundStart` (additive, F3: a `Run` edge from a static background start to the started codeunit's object; the target runs in a new session or task) |
+| `via` | string | provenance: `call`, `run`, `implicitTrigger`, `eventFlow`, `interface`, `lifecycle`, `declaredRunnable`, `testHandler`, `testRunner`, `opaqueBody`, `unresolved`, `dynamic`, `dispatchingBuiltin`, `parseRecovered`, `hubExpansion`, `backgroundStart` (additive, F3: a `Run` edge from a static background start to the started codeunit's object; the target runs in a new session or task), `clientEvent` (additive, 2026-11-06: a `Trigger` edge from a page's object node to an event trigger of one of its `usercontrol` add-ins; only a client's JavaScript raises it, so test selection must not walk it — see rule 1) |
 | `line` | number | first call-site line in the caller's file, for engine edges |
 | `conditions` | string[] | `manualBinding`, `ambiguousDispatch`, `runTriggerGuarded`, `onTaskFailure` (additive, F3: `TaskScheduler.CreateTask`'s failure codeunit, which runs only when the task fails; the edge is `OverApprox`), `configuredDispatch` (additive, 2026-11-06: see below), ...; omitted when empty |
 

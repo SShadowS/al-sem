@@ -328,7 +328,7 @@ impl<'a> Builder<'a> {
             },
             ("eventFlow", _, _) => Boundary::EventDispatch,
             ("backgroundStart", _, _) => Boundary::Background,
-            ("lifecycle", _, _) => Boundary::Lifecycle,
+            ("lifecycle" | "clientEvent", _, _) => Boundary::Lifecycle,
             ("testRunner", _, _) => Boundary::TestRunner,
             ("testHandler", _, _) => Boundary::TestHandler,
             _ => Boundary::Open,
@@ -477,6 +477,24 @@ impl<'a> Builder<'a> {
                     BTreeSet::new(),
                 );
             }
+            // Rule 2: a dispatching builtin that runs an object, called on a
+            // receiver typed as one object (`ReportVar.SaveAsPdf()`,
+            // `QueryVar.Open()`), runs that object. The site's open bound
+            // below still names the kind's hub.
+            if let ObligationId::CallSite { .. } = ce.obligation_id
+                && let Some(t) = self.receiver_run(e, &ce.obligation_id)
+            {
+                let to = self.run_target_key(&t);
+                self.add(
+                    from.clone(),
+                    to,
+                    Kind::Run,
+                    Conf::OverApprox,
+                    "declaredRunnable",
+                    line,
+                    BTreeSet::new(),
+                );
+            }
             let bounds: &[OpenBound] = match ce.obligation_id {
                 ObligationId::CallSite { .. } => inp
                     .edges
@@ -536,6 +554,46 @@ impl<'a> Builder<'a> {
                 );
             }
         }
+    }
+
+    /// What a call site runs through a dispatching builtin on a typed
+    /// receiver (rule 2): the site resolved to a builtin that runs an object
+    /// of kind K ([`dispatching_builtin`], `Run(K)`, a `Page`, `Report`,
+    /// `XmlPort` or `Query` instance method) and the resolver typed its
+    /// receiver as an object of kind K; the receiver's name resolves from the
+    /// caller's object. `None` for every other site, and for a receiver the
+    /// caller's closure does not resolve (its open bound still names the hub).
+    fn receiver_run(
+        &self,
+        e: &crate::program::resolve::edge::Edge,
+        ob: &ObligationId,
+    ) -> Option<RunTarget> {
+        use crate::program::resolve::full::ReceiverFactType;
+        use crate::program::resolve::member_catalog::{DispatchingBuiltin, dispatching_builtin};
+        let kind = e.routes.iter().find_map(|r| match &r.target {
+            RouteTarget::Builtin(bid) => match dispatching_builtin(bid) {
+                Some(DispatchingBuiltin::Run(
+                    k @ (ObjectKind::Page
+                    | ObjectKind::Report
+                    | ObjectKind::XmlPort
+                    | ObjectKind::Query),
+                )) => Some(k),
+                _ => None,
+            },
+            _ => None,
+        })?;
+        let facts = self.inp.edges.site_facts.get(ob)?;
+        let ReceiverFactType::Object { kind: rk, name } = &facts.receiver.as_ref()?.ty else {
+            return None;
+        };
+        if *rk != kind {
+            return None;
+        }
+        self.resolve_ref(
+            &e.from.object,
+            kind,
+            &super::facts::property_object_ref(name),
+        )
     }
 
     fn engine_route(
@@ -671,6 +729,23 @@ impl<'a> Builder<'a> {
         out
     }
 
+    /// The folded names of the `usercontrol` (control add-in) layout controls
+    /// of `oid` and of each extension of it: a trigger whose enclosing member
+    /// is one of them is an add-in event. AL control names are unique within
+    /// a page and its extensions, so no field or action shares one.
+    fn usercontrol_names(&self, oid: &ObjectNodeId) -> HashSet<&'a str> {
+        let mut objs: Vec<&ObjectNodeId> = vec![oid];
+        if let Some(exts) = self.exts_of.get(oid) {
+            objs.extend(exts.iter().copied());
+        }
+        objs.into_iter()
+            .filter_map(|o| self.obj_by_id.get(o).copied())
+            .flat_map(|o| o.page_controls.iter())
+            .filter(|c| c.kind == crate::program::node_extract::PageControlKind::UserControl)
+            .map(|c| c.name_lc.as_str())
+            .collect()
+    }
+
     /// Rule 1 (lifecycle) for one object node.
     fn lifecycle(&mut self, oid: &ObjectNodeId) {
         let from = Key::Object(oid.clone());
@@ -678,6 +753,7 @@ impl<'a> Builder<'a> {
             return;
         };
         let entry = entry_trigger(oid.kind);
+        let addin_controls = self.usercontrol_names(oid);
         for t in self.triggers_with_extensions(oid) {
             let conf = if t.id.object == *oid
                 && t.id.enclosing_member_lc.is_none()
@@ -687,12 +763,28 @@ impl<'a> Builder<'a> {
             } else {
                 Conf::OverApprox
             };
+            // A control add-in's event trigger (`usercontrol(Body; X) {
+            // trigger EditorInitialized() … }`) runs only when the add-in's
+            // JavaScript raises it in a client: a user's page run may, a
+            // `TestPage` cannot (it hosts no add-in). Its own `via` lets a
+            // test walk refuse it (`test_select::select`) while impact keeps
+            // it (round-1 c21).
+            let via = if t
+                .id
+                .enclosing_member_lc
+                .as_ref()
+                .is_some_and(|m| addin_controls.contains(m.as_str()))
+            {
+                "clientEvent"
+            } else {
+                "lifecycle"
+            };
             self.simple(
                 from.clone(),
                 Key::Routine(t.id.clone()),
                 Kind::Trigger,
                 conf,
-                "lifecycle",
+                via,
             );
         }
         // The object's own synthetic platform events (a page's OnOpenPageEvent, …).
@@ -814,9 +906,11 @@ impl<'a> Builder<'a> {
                 }
                 continue;
             }
+            // The test pages it (or, for a global, its object) declares; the
+            // other runnable variables run at their sites (`receiver_run`).
             let mut runs: Vec<RunTarget> = Vec::new();
             if let Some(f) = inp.facts.routines.get(&r.id) {
-                runs.extend(f.runs.iter().cloned());
+                runs.extend(f.test_pages.iter().cloned());
                 if f.test {
                     self.simple(
                         from.clone(),
@@ -847,7 +941,7 @@ impl<'a> Builder<'a> {
                 }
             }
             if let Some(of) = inp.facts.objects.get(&r.id.object) {
-                runs.extend(of.runs.iter().cloned());
+                runs.extend(of.test_pages.iter().cloned());
             }
             runs.sort();
             runs.dedup();
@@ -1920,7 +2014,7 @@ pub(crate) mod tests {
             RoutineFacts {
                 test: true,
                 handlers: vec!["modalhandler".into()],
-                runs: vec![RunTarget::Object(page.clone())],
+                test_pages: vec![RunTarget::Object(page.clone())],
                 ..Default::default()
             },
         );
@@ -1942,6 +2036,97 @@ pub(crate) mod tests {
             ("Trigger", "Resolved", "lifecycle")
         );
         assert_eq!(o.node("Tests.TestIt").test, Some(true));
+    }
+
+    /// Rule 2 for a `Page`/`Report`/`XmlPort`/`Query` variable is a SITE, not a
+    /// declaration (round-1 c12): `Document Errors Mgt.` declares a global
+    /// `Page "Sales Invoice"` and only calls `RunBackgroundCheck()` on it, so
+    /// neither that routine nor its empty `OnRun` runs the page. A dispatching
+    /// builtin that runs a report, called on a receiver the resolver typed as
+    /// that report, does run it; a builtin that runs nothing (`SetTableView`)
+    /// on the same receiver does not; a receiver the caller's closure does not
+    /// resolve gives no precise edge. Every site is stated by hand.
+    ///
+    /// DISCRIMINATION (2026-11-06): `receiver_run` returning `None` fails
+    /// "Print runs Rep"; dropping its `dispatching_builtin` filter (any
+    /// builtin route counts) fails "SetTableView runs nothing". Restoring the
+    /// old declaration rule (an object's globals run from every routine) is
+    /// no longer expressible: the facts no longer carry a `Page` global.
+    #[test]
+    fn a_runnable_variable_runs_only_where_a_site_runs_it() {
+        use crate::program::resolve::edge::BuiltinId;
+        use crate::program::resolve::full::{ReceiverFact, ReceiverFactType};
+        let mut w = World::default();
+        let a = w.app("A");
+        let errs = w.obj(a, ObjectKind::Codeunit, 1, "Errs", TrustTier::Workspace);
+        let card = w.obj(a, ObjectKind::Page, 2, "Card", TrustTier::Workspace);
+        let rep = w.obj(a, ObjectKind::Report, 3, "Rep", TrustTier::Workspace);
+        let sink = w.rtn(&errs, "Sink");
+        let card_open = w.trigger(&card, "OnOpenPage");
+        let rep_pre = w.trigger(&rep, "OnPreReport");
+        w.call(&card_open, &sink, 1);
+        w.call(&rep_pre, &sink, 2);
+        let bg = w.rtn(&card, "RunBackgroundCheck");
+        w.call(&bg, &sink, 3);
+        w.trigger(&errs, "OnRun");
+        let check = w.rtn(&errs, "Check");
+        w.call(&check, &bg, 4);
+        let builtin = |id: &str| Route {
+            target: RouteTarget::Builtin(BuiltinId(id.into())),
+            evidence: Evidence::Catalog,
+            conditions: vec![],
+            witness: Witness::None,
+            receiver_tier: None,
+        };
+        let typed = |kind: ObjectKind, name: &str| SiteFacts {
+            receiver: Some(ReceiverFact {
+                type_text: Some(format!("{kind:?} {name}")),
+                ty: ReceiverFactType::Object {
+                    kind,
+                    name: name.into(),
+                },
+            }),
+            ..Default::default()
+        };
+        for (name, bid, recv, line) in [
+            ("Print", "ReportInstance::saveaspdf", "Rep", 5),
+            ("Filter", "ReportInstance::settableview", "Rep", 6),
+            ("Lost", "ReportInstance::saveaspdf", "Nope", 7),
+        ] {
+            let r = w.rtn(&errs, name);
+            let s = w.edge(
+                &r,
+                EdgeKind::Call,
+                DispatchShape::Exact,
+                vec![builtin(bid)],
+                line,
+            );
+            w.site_facts.insert(s, typed(ObjectKind::Report, recv));
+        }
+        let o = w.project(a);
+        assert_eq!(
+            o.edge("Errs.Print", "Rep"),
+            ("Run", "OverApprox", "declaredRunnable"),
+            "Print runs Rep"
+        );
+        assert_eq!(
+            o.edge("Errs.Check", "Card.RunBackgroundCheck"),
+            ("Direct", "Resolved", "call")
+        );
+        let runs_from = |from: &str| -> Vec<&Edge> {
+            let f = o.node(from).id.clone();
+            o.0.edges
+                .iter()
+                .filter(|e| e.caller == f && e.kind == "Run")
+                .collect()
+        };
+        assert!(
+            runs_from("Errs.Filter").is_empty(),
+            "SetTableView runs nothing"
+        );
+        for r in ["Errs.OnRun", "Errs.Check", "Errs.Lost"] {
+            assert!(runs_from(r).is_empty(), "{r} runs no object");
+        }
     }
 
     /// Open sites become hub edges; each hub expands to what it stands for.
@@ -2140,11 +2325,11 @@ pub(crate) mod tests {
         let s2 = w.rtn(&cu, "S2");
         w.event(&tsynth, &[&s1]);
         w.event(&psynth, &[&s2]);
-        // The caller may run the page (a page variable).
+        // The caller may run the page (a `TestPage` variable).
         w.facts.routines.insert(
             caller.clone(),
             RoutineFacts {
-                runs: vec![RunTarget::Object(page.clone())],
+                test_pages: vec![RunTarget::Object(page.clone())],
                 ..Default::default()
             },
         );
