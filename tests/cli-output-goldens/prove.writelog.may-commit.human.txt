@@ -1,6 +1,4 @@
---- Codeunit "Out Log Mgt"::WriteLog ---
-  question: may-commit — existing effects (what the routine and its callees already do)
-  answer:   no
-  analysis complete
-  assumptions: loaded-subscribers
-  limits: none
+prove Codeunit "Out Log Mgt"::WriteLog may-commit   [cross-app]
+answer: no
+analysis complete · assumptions: loaded-subscribers · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 1 app
+more: --format json for every evidence row and its hops

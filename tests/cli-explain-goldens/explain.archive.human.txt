@@ -1,24 +1,18 @@
-Codeunit "Explain Post"::Archive  ws:src/post.al:23
-  summary — writes: may modify persistent Explain Order records (Modify at :26) when the record its caller passes (parameter 1) is not temporary; otherwise it changes a temporary record; no other write (every candidate decided)
-    transaction, UI and errors: commits: yes (1 site); errors at 1 place
-    other effects: events: 0 (0 raised in workspace code)
-    callers and tests: callers: none; tests: none of 1 loaded
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+explain Codeunit "Explain Post"::Archive   [cross-app]
+answer: writes: may modify persistent Explain Order records (Modify at :26) when the record its caller passes (parameter 1) is not temporary; otherwise it changes a temporary record; no other write (every candidate decided)
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: none reached; no lock facts; dependencies: 0 apps
+more: --detail lists every list complete; --format json for every row
+Codeunit "Explain Post"::Archive  defined at ws:src/post.al:23
+  transaction, UI and errors: commits: yes (1 site); errors at 1 place
+  other effects: events: 0 (0 raised in workspace code)
+  callers and tests: callers: none; tests: none of 1 loaded
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   calls: none (no call to a routine; builtins aside)
   doc: Archives without any check.
-  rules: none of its own; inherited: none
-  callers: none
   commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/post.al:27 (unconditional on success)
-  caller-dependent writes (1 table): written only if the caller passes a record that is not temporary; alsem prove names the caller
+  caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
     Explain Order: Modify — depends on the caller's record argument at ws:src/post.al:26
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
-  extension points: none (the routine publishes no event itself)
   errors at 1 place: ERROR_IMPLICIT at ws:src/post.al:26 (unconditional on success)
   tests: 1 [Test] procedure loaded; none reaches it (not a reason to skip tests)
-  next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

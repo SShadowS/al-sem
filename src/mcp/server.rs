@@ -365,7 +365,12 @@ pub fn serve(
                                     asked.as_ref().map(|(w, u)| (w.as_str(), *u)),
                                     opts,
                                 );
-                                out2.send(&transport2.response(&id2, &body, false, None));
+                                // §5.4 (F33): one copy — the compact text,
+                                // the full document as structuredContent.
+                                out2.send(&result(
+                                    &id2,
+                                    status_result(transport2.version(), &body),
+                                ));
                             });
                         match spawned {
                             Ok(h) => checkers.push(h),
@@ -450,6 +455,23 @@ fn server_status(transport: &McpTransport, pool: &Pool, defaults: &Defaults) -> 
             "idleTimeoutSecs": children.idle_timeout_secs,
             "lowMem": children.low_mem,
     })
+}
+
+/// `alsem_status`'s `tools/call` result (output validation §5.4, F33): the
+/// answer in one copy. The text block is the compact status (headlines,
+/// check, refresh; about 500 bytes); `structuredContent` is the full
+/// document, operator data under `details`. A client without
+/// `structuredContent` gets the full document as its text instead.
+fn status_result(version: &str, body: &Value) -> Value {
+    if has_structured(version) {
+        json!({
+            "content": [{"type": "text", "text": super::freshness::status_text(body)}],
+            "isError": false,
+            "structuredContent": body,
+        })
+    } else {
+        json!({"content": [{"type": "text", "text": body.to_string()}], "isError": false})
+    }
 }
 
 /// A `tools/call` result around `envelope`: its JSON as the first text

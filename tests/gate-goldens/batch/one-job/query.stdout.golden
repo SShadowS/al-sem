@@ -18,13 +18,15 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/D1MultiCaller.al",
-            "line": 25
+            "line": 25,
+            "role": "operation"
           },
           "routine": {
             "anchor": {
               "column": 4,
               "file": "ws:src/D1MultiCaller.al",
-              "line": 22
+              "line": 22,
+              "role": "definition"
             },
             "display": "CallerA",
             "objectDisplay": "Codeunit D1 Multi Caller",
@@ -48,13 +50,15 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/D1MultiCaller.al",
-            "line": 19
+            "line": 19,
+            "role": "operation"
           },
           "routine": {
             "anchor": {
               "column": 4,
               "file": "ws:src/D1MultiCaller.al",
-              "line": 17
+              "line": 17,
+              "role": "definition"
             },
             "display": "ModifyHelper",
             "objectDisplay": "Codeunit D1 Multi Caller",
@@ -73,6 +77,10 @@
     "lineBase": 1,
     "result": {
       "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
         "families": {
           "beyondDependencyCalls": {
             "blockers": {
@@ -127,7 +135,11 @@
               "dependency code deeper than one routine is not inventoried for writes"
             ]
           }
-        }
+        },
+        "limits": [],
+        "reasons": [],
+        "scope": "reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes beyond dependency calls: whole cone with literal arguments; dependencies: 0 apps",
+        "universe": "cross-app"
       }
     },
     "routine": {
@@ -136,7 +148,8 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/D1MultiCaller.al",
-          "line": 22
+          "line": 22,
+          "role": "definition"
         },
         "display": "CallerA",
         "objectDisplay": "Codeunit D1 Multi Caller",
@@ -219,5 +232,5 @@
       }
     }
   },
-  "schemaVersion": "3.8.0"
+  "schemaVersion": "3.10.0"
 }

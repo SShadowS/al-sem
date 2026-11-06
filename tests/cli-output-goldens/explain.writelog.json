@@ -22,6 +22,7 @@
               "excerpt": "Log.Insert",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 61,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -42,6 +43,7 @@
               "excerpt": "TempLog.DeleteAll",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 58,
+              "role": "operation",
               "sourceKind": "source"
             },
             "class": "temporary",
@@ -66,6 +68,7 @@
               "excerpt": "Log.Insert",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 61,
+              "role": "operation",
               "sourceKind": "source"
             },
             "class": "physical",
@@ -92,6 +95,19 @@
         ]
       },
       "extensionPoints": [],
+      "followUps": [
+        {
+          "arguments": {
+            "callersContext": true,
+            "routines": [
+              "Codeunit \"Out Log Mgt\"::WriteLog"
+            ]
+          },
+          "kind": "ordinary",
+          "tool": "alsem_explain",
+          "why": "its callers' pending writes, intercepted errors and non-interactive entries"
+        }
+      ],
       "gaps": [],
       "gapsInDependencies": {
         "dynamicTarget": 0,
@@ -108,6 +124,7 @@
             "column": 12,
             "file": "ws:src/Pages.al",
             "line": 18,
+            "role": "operation",
             "sourceKind": "source"
           },
           "caption": "Issue",
@@ -138,6 +155,7 @@
           "column": 4,
           "file": "ws:src/OutIssueDocument.Codeunit.al",
           "line": 53,
+          "role": "definition",
           "sourceKind": "source"
         },
         "display": "Codeunit \"Out Log Mgt\"::WriteLog",
@@ -157,6 +175,7 @@
               "column": 8,
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 12,
+              "role": "operation",
               "sourceKind": "source"
             },
             "appliedBy": [
@@ -263,6 +282,7 @@
             "column": 4,
             "file": "ws:src/Pages.al",
             "line": 38,
+            "role": "operation",
             "sourceKind": "source"
           },
           "asserts": 0,
@@ -276,6 +296,18 @@
   "diagnostics": [],
   "lineBase": 1,
   "mode": "routine",
+  "result": {
+    "scope": {
+      "analysis": "complete",
+      "assumptions": [
+        "loaded program; unloaded implementations and subscribers are not enumerated"
+      ],
+      "limits": [],
+      "reasons": [],
+      "scope": "dependency code: none reached; no lock facts; dependencies: 1 app",
+      "universe": "cross-app"
+    }
+  },
   "schema": "al-sem.explain/4",
   "selector": "Out Log Mgt::WriteLog"
 }

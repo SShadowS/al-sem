@@ -23,12 +23,12 @@
 //! and modification time is seen only with `verify`. While a call builds,
 //! the check compares with the last published revision and says so.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant, SystemTime};
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
-use crate::engine::resident::manifest::{InputChange, Manifest};
+use crate::engine::resident::manifest::{Ident, InputChange, Manifest};
 use crate::engine::resident::session::InputDescriptor;
 
 /// The status JSON's version (§2.3).
@@ -298,7 +298,8 @@ pub fn check(descriptor: &InputDescriptor, opts: CheckOptions) -> Value {
         "changes": changes,
         "changesTruncated": truncated,
         "refreshClass": class,
-        "inputs": {"alFiles": counts.0, "packages": counts.1, "sourceDependencyFiles": counts.2},
+        // §9.6 (F65, additive, statusVersion stays 2): every category.
+        "inputs": counts,
         "summary": headline_summary,
         "residual": if opts.verify {
             "unsaved editor buffers are not inputs"
@@ -360,19 +361,77 @@ pub fn apply_test_config(check: &mut Value, workspace: &str, recorded: &Value) {
     }
 }
 
-/// `(.al files, packages, source-dependency files)` an observation names.
-fn counts(m: &Manifest) -> (usize, usize, usize) {
-    let mut c = (0, 0, 0);
-    for k in m.entries().keys() {
-        if k.starts_with("al:") {
-            c.0 += 1;
-        } else if k.starts_with("pkg:") && k != "pkg:list" && k != "pkg:unreadable-folders" {
-            c.1 += 1;
-        } else if k.starts_with("src:") {
-            c.2 += 1;
+/// The input category of a manifest key that names one file, by its JSON
+/// name, or `None` for a key that is no file (a listing, `meta:`, the
+/// injected roots).
+fn input_category(key: &str) -> Option<&'static str> {
+    match key {
+        "pkg:list" | "pkg:unreadable-folders" => None,
+        "ws:app.json" => Some("appJson"),
+        "ws:roots.config.json" => Some("rootsConfig"),
+        "ws:al-sem.coverage.yaml" => Some("coverageConfig"),
+        k if k.starts_with("al:") => Some("alFiles"),
+        k if k.starts_with("pkg:") => Some("packages"),
+        k if k.starts_with("src:") => Some("sourceDependencyFiles"),
+        k if k.starts_with("srcapp:") => Some("sourceDependencyAppJson"),
+        _ => None,
+    }
+}
+
+/// The JSON names of [`input_category`] in print order, with their human
+/// words.
+const INPUT_CATEGORIES: &[(&str, &str)] = &[
+    ("alFiles", ".al files"),
+    ("packages", "packages"),
+    ("sourceDependencyFiles", "source-dependency files"),
+    ("appJson", "app.json"),
+    ("rootsConfig", "roots.config.json"),
+    ("coverageConfig", "al-sem.coverage.yaml"),
+    ("sourceDependencyAppJson", "source-dependency app.json"),
+];
+
+/// The files an observation names, counted by category (output validation
+/// §9.6, F65): every category of a file that is there (a file that is not
+/// there is compared by its absence, never hashed, and not counted). Under
+/// `verify` every counted file is hashed, so the counts add up to
+/// `filesHashed`. The first three keys are always present (the 1.x shape);
+/// the others when non-zero.
+fn counts(m: &Manifest) -> Map<String, Value> {
+    let mut c: BTreeMap<&str, usize> = BTreeMap::new();
+    for (k, ident) in m.entries() {
+        if matches!(ident, Ident::Absent) {
+            continue;
+        }
+        if let Some(cat) = input_category(k) {
+            *c.entry(cat).or_default() += 1;
         }
     }
-    c
+    INPUT_CATEGORIES
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (cat, _))| {
+            let n = c.get(cat).copied().unwrap_or(0);
+            (i < 3 || n > 0).then(|| ((*cat).to_string(), Value::from(n)))
+        })
+        .collect()
+}
+
+/// `inputs` in words: each category with a file, and the total.
+fn inputs_human(inputs: &Value) -> String {
+    let mut total = 0;
+    let parts: Vec<String> = INPUT_CATEGORIES
+        .iter()
+        .filter_map(|(cat, words)| {
+            let n = inputs[*cat].as_u64().filter(|n| *n > 0)?;
+            total += n;
+            Some(format!("{words} {n}"))
+        })
+        .collect();
+    if parts.is_empty() {
+        "none".to_string()
+    } else {
+        format!("{} ({total} files)", parts.join(", "))
+    }
 }
 
 /// What the headline of one engine needs beside its check.
@@ -472,8 +531,17 @@ pub fn no_engine_headline(workspace: &str, universe: &str) -> String {
     } else {
         ""
     };
+    // Output validation §6.1 (F37): the call that builds it, not "any
+    // command" (a second status call builds nothing).
+    let single = if universe == "single-app" {
+        ", \"singleApp\": true"
+    } else {
+        ""
+    };
     format!(
-        "no engine is running for {workspace} ({universe}), so nothing was checked. The next command builds it{estimate}."
+        "no engine is running for {workspace} ({universe}), so nothing was checked. An analysis \
+         call builds it{estimate}, for instance alsem_explain {{\"routines\": [\"<routine>\"]{single}}}; \
+         a status call builds nothing."
     )
 }
 
@@ -595,7 +663,9 @@ pub fn status_body(
     if headlines.is_empty() {
         let line = match asked {
             Some((ws, universe)) => no_engine_headline(ws, universe),
-            None => "no engine is running, so nothing was checked. The next command builds one."
+            None => "no engine is running, so nothing was checked. An analysis call (for \
+                     instance alsem_explain {\"routines\": [\"<routine>\"]}) builds one; a status \
+                     call builds nothing."
                 .to_string(),
         };
         body["noEngine"] = json!({
@@ -608,6 +678,90 @@ pub fn status_body(
     }
     body["headline"] = json!(headlines.join("\n"));
     body
+}
+
+/// The status answer's text block (output validation §5.4, F33): one copy,
+/// about 500 bytes. Per engine its headline, then `check` (fresh, strength,
+/// complete, the checked revision and when, the inputs by category, the
+/// residual) and `refresh`; with no engine the headline and `not checked`.
+/// The full document (operator data under `details`) is the
+/// `structuredContent`.
+#[must_use]
+pub fn status_text(body: &Value) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for e in body["engines"].as_array().into_iter().flatten() {
+        out.push(e["headline"].as_str().unwrap_or("").to_string());
+        let c = &e["check"];
+        if c.is_object() {
+            let changes = c["changeCount"].as_u64().unwrap_or(0);
+            let fresh = if c["fresh"] == json!(true) {
+                "fresh".to_string()
+            } else if changes > 0 {
+                format!(
+                    "stale ({} changed: {})",
+                    changes,
+                    c["summary"].as_str().unwrap_or("")
+                )
+            } else {
+                "not established".to_string()
+            };
+            let strength = match c["strength"].as_str() {
+                Some("hashed") => "every input hashed",
+                _ => "size and modification time trusted",
+            };
+            let complete = if c["complete"] == json!(true) {
+                "freshness check complete".to_string()
+            } else {
+                format!(
+                    "freshness check incomplete ({})",
+                    c["incompleteReasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )
+            };
+            let when = c["finishedAtUnixMs"]
+                .as_u64()
+                .map(crate::engine::gate::format_json::iso8601_of_unix_ms)
+                .unwrap_or_default();
+            out.push(format!(
+                "  check: {fresh}; {strength}; {complete}; generation {} checked at {when}; \
+                 inputs: {}; residual: {}",
+                c["checkedRevision"]["generation"],
+                inputs_human(&c["inputs"]),
+                c["residual"].as_str().unwrap_or("")
+            ));
+        } else {
+            out.push(format!(
+                "  not checked: {}",
+                e["checkNotRun"]
+                    .as_str()
+                    .unwrap_or("no revision is published yet")
+            ));
+        }
+        let r = &e["refresh"];
+        let mut refresh = format!("  refresh: {}", r["state"].as_str().unwrap_or("idle"));
+        if let Some(did) = r["did"].as_str() {
+            refresh.push_str(&format!(" ({did})"));
+        }
+        if let Some(err) = r["error"].as_str() {
+            refresh.push_str(&format!(" — {err}"));
+        }
+        out.push(refresh);
+    }
+    if out.is_empty() {
+        out.push(body["headline"].as_str().unwrap_or("").to_string());
+        out.push(format!(
+            "  not checked: {}",
+            body["noEngine"]["reason"]
+                .as_str()
+                .unwrap_or("no engine is running")
+        ));
+    }
+    out.join("\n") + "\n"
 }
 
 #[cfg(test)]

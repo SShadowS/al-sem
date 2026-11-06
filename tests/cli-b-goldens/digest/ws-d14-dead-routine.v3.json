@@ -248,6 +248,18 @@
     ],
     "lineBase": 1,
     "pathCap": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "dependency code followed through every resolved call with literal arguments; no lock facts; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "routines": {
       "r:5ef0dce1522f": {
         "display": "Codeunit D14EntryPoints::DeadHelper",
@@ -279,5 +291,5 @@
     },
     "workspaceFingerprint": "27982e562e0f7d50b80b3135bd69215672059411d7f470a27618b9037ee83d05"
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.3.0"
 }

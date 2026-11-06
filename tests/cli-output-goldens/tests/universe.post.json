@@ -37,9 +37,28 @@
   "hidden": [],
   "limits": [],
   "lineBase": 1,
-  "next": "next: the test app depends on Microsoft's Library Assert, not loaded here. Put their symbols in the test app's .alpackages (in VS Code: open the test app and run \"AL: Download symbols\"; or copy Microsoft_<name>_<version>.app from a BC artifact's Applications folder), then ask again: calls into them then resolve",
+  "next": "missing test-library symbols: 1 app (Library Assert) — add them to Test/.alpackages (\"AL: Download symbols\" in the test app), then ask again",
   "productionSourceStamp": "prod-v1:cdd0f9df16e015bd87135e0b21d0bfb1",
   "requiredFallback": [],
+  "result": {
+    "scope": {
+      "analysis": "complete",
+      "assumptions": [
+        "static reachability, not coverage: a reached test may not exercise the changed lines"
+      ],
+      "limits": [],
+      "reasons": [],
+      "scope": "tests on a local path",
+      "universe": "cross-app"
+    },
+    "selection": {
+      "capAsked": null,
+      "complete": true,
+      "fallback": [],
+      "returned": 1,
+      "total": 1
+    }
+  },
   "runFirst": [
     {
       "class": "direct",

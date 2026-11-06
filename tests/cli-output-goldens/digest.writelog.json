@@ -203,6 +203,18 @@
     ],
     "lineBase": 1,
     "pathCap": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "dependency code: none reached; no lock facts; dependencies: 1 app",
+        "universe": "cross-app"
+      }
+    },
     "routines": {
       "r:aeacadfe0cb1": {
         "display": "Codeunit \"Out Log Mgt\"::WriteLog",
@@ -220,5 +232,5 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.3.0"
 }

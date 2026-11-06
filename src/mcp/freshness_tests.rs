@@ -69,6 +69,10 @@ fn descriptor_of(ws: &std::path::Path) -> InputDescriptor {
 /// The check against a published descriptor: fresh on an unchanged disk
 /// (stat-cached: nothing read), stale naming the edited file, its category
 /// and the uncertain class after an edit; `verify` reads every file.
+///
+/// DISCRIMINATION (2026-11-06, F65): dropping app.json's category
+/// (`input_category` mapping `ws:app.json` to `None`) fails at "inputs add
+/// up"; restored, it passes.
 #[test]
 fn a_check_compares_the_disk_with_the_descriptor() {
     let dir =
@@ -83,6 +87,20 @@ fn a_check_compares_the_disk_with_the_descriptor() {
     let v = check(&d, CheckOptions::new(true));
     assert_eq!(v["fresh"], true, "{v}");
     assert!(v["filesHashed"].as_u64().unwrap() > 0, "verify reads: {v}");
+    // §9.6 (F65): `inputs` names every category the check hashed, so under
+    // verify the counts add up to `filesHashed` (app.json included).
+    let sum: u64 = v["inputs"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|n| n.as_u64().unwrap())
+        .sum();
+    assert_eq!(
+        sum,
+        v["filesHashed"].as_u64().unwrap(),
+        "inputs add up: {v}"
+    );
+    assert_eq!(v["inputs"]["appJson"], 1, "{v}");
 
     let p = ws.join("Caller.al");
     let t = std::fs::read_to_string(&p).unwrap();

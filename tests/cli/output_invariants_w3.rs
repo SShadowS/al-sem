@@ -133,11 +133,16 @@ fn descriptions_name_exactly_the_inputs_the_schemas_take() {
         "`Owner.Routine`",
         // Output step 1b (fable #7): the overload form.
         "`Owner::Routine(Integer, Text)`",
-        "`unknown`",
-        "`coverage`",
+        // Output validation V4: the header's words (§5.2), the temporary
+        // records sentence (§5.3) and the exit-code outcomes (§6.3).
+        "`unknown (blocked by: …)`",
+        "`analysis partial (<reasons>)`",
         "`assumptions`",
-        "Temporary records are never counted as writes",
+        "Writes to temporary records do not directly persist those records",
         "summary",
+        "`outcome`",
+        "`no-routine-changed`",
+        "`input-not-mapped`",
     ]) {
         if !i.contains(want) {
             failures.push(format!("INSTRUCTIONS: says nothing of {want:?}"));
@@ -487,7 +492,8 @@ fn kind_line(ty: &str) -> Option<&'static str> {
     Some(match ty {
         t if t.starts_with("DB_") || t == "UI_ERROR" => return None,
         "COMMIT" => "commits: ",
-        "EVENT_PUBLISH" => "events: ",
+        // Output validation §9.1 (F72): `events raised (N …, downstream)`.
+        "EVENT_PUBLISH" => "events raised (",
         t if t.starts_with("UI_") => "UI at ",
         "HTTP" => "HTTP at ",
         "FILE" => "file at ",
@@ -515,11 +521,19 @@ pub(crate) fn kind_failures(label: &str, effects: &[Value], card: &str) -> Vec<S
         let Some(prefix) = kind_line(ty) else {
             continue;
         };
-        let line = card.lines().map(str::trim).find(|l| l.starts_with(prefix));
+        // Output validation V4 (§5.3, F81): telemetry is a count on the
+        // summary's `other effects:` line, not a section.
+        let line = card.lines().map(str::trim).find(|l| {
+            l.starts_with(prefix)
+                || (ty == "TELEMETRY"
+                    && l.starts_with("other effects:")
+                    && l.contains("telemetry at"))
+        });
         let ok = match (ty, line) {
+            ("TELEMETRY", Some(l)) if l.starts_with("other effects:") => true,
             (_, None) => false,
             ("COMMIT", Some(l)) => !l.starts_with("commits: none"),
-            ("EVENT_PUBLISH", Some(l)) => !l.starts_with("events: none"),
+            ("EVENT_PUBLISH", Some(l)) => !l.starts_with("events raised (0 "),
             (_, Some(l)) => l.contains(ty) || l.contains("… +"),
         };
         if !ok {
@@ -1259,10 +1273,13 @@ pub(crate) fn entry_point_lines(text: &str) -> EntryPointLines {
     let mut out = EntryPointLines::default();
     for l in text.lines() {
         let t = l.trim_start();
-        if t.starts_with("scope: ") {
-            out.scope = out
-                .scope
-                .or(points_at(t, "grouped per dependency routine entered ("));
+        // Output validation V4 (§5.2): the scope clause is on the header's
+        // third line: `(N dependency routines entered at S dependency
+        // calls)`, or `dependency code: none reached`.
+        if t.starts_with("analysis ") {
+            out.scope = out.scope.or(points_at(t, "with literal arguments (")).or(t
+                .contains("dependency code: none reached")
+                .then_some((0, 0)));
         } else if t.starts_with("writes beyond dependency calls (") {
             out.writing = out.writing.or(points_at(t, " through "));
         } else if t.contains(" write only temporary records or no table") {

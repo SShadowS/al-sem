@@ -179,6 +179,9 @@
               "COMMIT_DOMINATES_RETURN"
             ],
             "provenance": "direct",
+            "refutableGuarantees": [
+              "COMMIT_DOMINATES_RETURN"
+            ],
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",
@@ -340,6 +343,9 @@
               "COMMIT_DOMINATES_RETURN"
             ],
             "provenance": "direct",
+            "refutableGuarantees": [
+              "COMMIT_DOMINATES_RETURN"
+            ],
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",
@@ -405,5 +411,5 @@
     },
     "workspaceFingerprint": "18bd295463f855581d92f3e2f4f696aec9575f2eee33c1469df6c45ca2d35d4e"
   },
-  "schemaVersion": "2.2.0"
+  "schemaVersion": "2.3.0"
 }

@@ -23,6 +23,7 @@
             "excerpt": "Log.Insert",
             "file": "ws:src/OutIssueDocument.Codeunit.al",
             "line": 61,
+            "role": "operation",
             "sourceKind": "source"
           },
           "factId": "369cf30301f856c2",
@@ -38,6 +39,7 @@
                   "column": 8,
                   "file": "ws:src/OutIssueDocument.Codeunit.al",
                   "line": 17,
+                  "role": "operation",
                   "sourceKind": "source"
                 },
                 "calleeDisplay": "LogMgt.WriteLog",
@@ -53,6 +55,18 @@
             ]
           ],
           "viaPathsTruncated": false
+        }
+      ],
+      "followUps": [
+        {
+          "arguments": {
+            "routines": [
+              "Codeunit \"Out Issue Document\"::IssueDoc"
+            ]
+          },
+          "kind": "ordinary",
+          "tool": "alsem_explain",
+          "why": "lists the workspace ones under gaps"
         }
       ],
       "obligations": {
@@ -76,6 +90,18 @@
           "openWorld": 1
         }
       },
+      "scope": {
+        "analysis": "partial",
+        "assumptions": [
+          "none (default world: an interface call may reach an implementation that is not loaded)"
+        ],
+        "limits": [],
+        "reasons": [
+          "2 calls not resolved (1 in this workspace), 1 interface call open world (1 in this workspace)"
+        ],
+        "scope": "existing effects (what the routine and its callees already do); dependencies: 1 app",
+        "universe": "cross-app"
+      },
       "table": {
         "app": "Out Ws",
         "appId": "a0a00001-0000-4000-8000-0000000000a1",
@@ -89,6 +115,7 @@
         "column": 4,
         "file": "ws:src/OutIssueDocument.Codeunit.al",
         "line": 3,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "IssueDoc",
@@ -100,5 +127,5 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "2.8.0"
+  "schemaVersion": "2.10.0"
 }

@@ -317,6 +317,8 @@ fn tests_outcome(
             tier: crate::engine::test_select::render::TierPick::Local,
             max_tests: None,
             json: true,
+            surface: Default::default(),
+            single_app: false,
         },
     );
     let mut doc: Value =

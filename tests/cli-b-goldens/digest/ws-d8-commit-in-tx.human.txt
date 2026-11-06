@@ -1,13 +1,13 @@
-computed: current effects of the 3 routines these files touches, in the working tree (every routine in the files); no before/after computed — alsem_impact with base compares two revisions
+digest files src/posting.al, src/subscriber.al → 3 roots: Codeunit D8PostingChain::PostSalesDoc, Codeunit D8PostingChain::OnAfterPostSalesDoc, Codeunit D8BadSubscriber::HandlePosted   [cross-app]
+answer: 3 roots, one card each; each card leads with its summary line
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code followed through every resolved call with literal arguments; no lock facts; dependencies: 0 apps
+more: --detail lists every list complete; --format json for every effect row
+computed: current effects of the 3 routines these files touches, in the working tree (every routine in the files); no before/after computed — alsem impact --base compares two revisions
 --- Codeunit D8PostingChain::PostSalesDoc ---
   summary — writes: may write 3 tables (3 owned by this app, 0 by dependencies): Sales Header (Modify at :10), Sales Line (ModifyAll at :12), Audit Entry (Insert)
-    transaction, UI and errors: commits: may (1 site); errors at 4 places
-    other effects: events: 1 (1 raised in workspace code)
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  transaction, UI and errors: commits: may (1 site); errors at 4 places
+  other effects: events: 1 (1 raised in workspace code)
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   commits: may — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/subscriber.al:11 (condition not resolved)
       path: PostSalesDoc → OnAfterPostSalesDoc → [event] Codeunit D8BadSubscriber::HandlePosted
@@ -21,18 +21,14 @@ computed: current effects of the 3 routines these files touches, in the working 
     Sales Line: ModifyAll 1 — known persistent
       ModifyAll at ws:src/posting.al:12
       path: PostSalesDoc (in the routine itself)
-  events: 1 raised in workspace code, by publisher: Codeunit D8PostingChain 1; 0 more only beyond dependency calls
+  events raised (1 in workspace code, downstream): Codeunit D8PostingChain: OnAfterPostSalesDoc; 0 more only beyond dependency calls
   errors at 4 places: ERROR_IMPLICIT at ws:src/posting.al:8 (unconditional on success); ERROR_IMPLICIT at ws:src/posting.al:10 (unconditional on success); ERROR_IMPLICIT at ws:src/posting.al:15 (unconditional on success); ERROR_IMPLICIT at ws:src/subscriber.al:10 (condition not resolved)
 
 --- Codeunit D8PostingChain::OnAfterPostSalesDoc ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): Audit Entry (Insert)
-    transaction, UI and errors: commits: may (1 site); errors at 1 place
-    other effects: events: 1 (1 raised in workspace code)
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  transaction, UI and errors: commits: may (1 site); errors at 1 place
+  other effects: events: 1 (1 raised in workspace code)
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   commits: may — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/subscriber.al:11 (condition not resolved)
       path: OnAfterPostSalesDoc → [event] Codeunit D8BadSubscriber::HandlePosted
@@ -40,24 +36,19 @@ computed: current effects of the 3 routines these files touches, in the working 
     Audit Entry: Insert 1 — known persistent
       Insert at ws:src/subscriber.al:10
       path: OnAfterPostSalesDoc → [event] Codeunit D8BadSubscriber::HandlePosted
-  events: 1 raised in workspace code, by publisher: Codeunit D8PostingChain 1; 0 more only beyond dependency calls
+  events raised (1 in workspace code, downstream): Codeunit D8PostingChain: OnAfterPostSalesDoc; 0 more only beyond dependency calls
   errors at 1 place: ERROR_IMPLICIT at ws:src/subscriber.al:10 (condition not resolved)
   diagnostics: evidence-unavailable 1 (--detail lists each with its operation)
 
 --- Codeunit D8BadSubscriber::HandlePosted ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): Audit Entry (Insert at :10)
-    transaction, UI and errors: commits: yes (1 site); errors at 1 place
-    other effects: events: 0 (0 raised in workspace code)
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  transaction, UI and errors: commits: yes (1 site); errors at 1 place
+  other effects: events: 0 (0 raised in workspace code)
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/subscriber.al:11 (unconditional on success)
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     Audit Entry: Insert 1 — known persistent
       Insert at ws:src/subscriber.al:10
       path: HandlePosted (in the routine itself)
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
   errors at 1 place: ERROR_IMPLICIT at ws:src/subscriber.al:10 (unconditional on success)

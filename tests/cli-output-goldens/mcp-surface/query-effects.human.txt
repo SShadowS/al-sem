@@ -1,0 +1,17 @@
+query effects Codeunit "Out Issue Document"::IssueDoc   [cross-app]
+answer: 6 operations — writes that may persist 2 on 2 tables (2 not temporary, 0 temp state not resolved); may modify persistent Out Doc records (Modify at ws:src/OutIssueDocument.Codeunit.al:14) when the record its caller passes (parameter 1, Doc) is not temporary; writes beyond dependency calls on 15 tables through 2 dependency routines entered (14 only there); caller-dependent writes 1 on 1 table; locks: none observed (one dependency routine deep; deeper dependency locks are not inventoried); reads: none observed (one dependency routine deep; deeper dependency reads are not inventoried); temporary records 1 on 1 table in 1 routine; on a RecordRef (table not resolved: RecordRef) 2 in 1 routine
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes beyond dependency calls: whole cone with literal arguments, grouped per dependency routine entered; operations and routes the literal arguments rule out are listed and marked (explain and prove drop them); dependencies: 1 app
+more: all: true lists every operation; format: "json" for every row
+  writes that may persist (2 tables):
+    Base Doc Line: DeleteAll 1 — first DeleteAll at dep:Out Base:src/BasePoster.Codeunit.al:7 in Codeunit "Base Poster" (70100)::OnRun, through Codeunit "Base Poster" (70100)::OnRun
+    Out Log: Insert 1 — first Insert at ws:src/OutIssueDocument.Codeunit.al:61 in Codeunit "Out Log Mgt"::WriteLog, through Codeunit "Out Log Mgt"::WriteLog
+  caller-dependent writes (1 table; written only if the caller passes a record that is not temporary):
+    Out Doc: Modify 1 (caller-dependent: parameter 1 (Doc)) — first Modify at ws:src/OutIssueDocument.Codeunit.al:14 in Codeunit "Out Issue Document"::IssueDoc
+  writes beyond dependency calls (15 tables through 2 dependency routines entered at 2 dependency calls):
+    Codeunit "Base Poster" (70100)::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15 — 14 tables (Delete on 1, Insert on 12, Modify on 1): Base Doc Line, Base Ledger 01, Base Ledger 02, Base Ledger 03, Base Ledger 04, Base Ledger 05, Base Ledger 06, Base Ledger 07, Base Ledger 08, Base Ledger 09, Base Ledger 10, Base Ledger 11, Base Ledger 12, Base Register; also COMMIT, ERROR_IMPLICIT; 1 event
+      representative path (Base Doc Line, the nearest of 14 tables): IssueDoc → [run] Codeunit "Base Poster" (70100)::OnRun (DeleteAll at dep:Out Base:src/BasePoster.Codeunit.al:7)
+    Codeunit "Base Calc" (70101)::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:16 — 1 table (Modify on 1): Base Price; also ERROR_IMPLICIT
+      representative path (Base Price): IssueDoc → [run] Codeunit "Base Calc" (70101)::OnRun → UpdatePrice (Modify at dep:Out Base:src/BasePoster.Codeunit.al:68)
+  temporary records: 1 operation on 1 table in 1 routine — all: true lists them
+  on a RecordRef (table not resolved: RecordRef): 2 operations in 1 routine (FindSet 1, Next 1) — all: true lists them
+  next: alsem_prove {"routine": "Codeunit \"Out Issue Document\"::IssueDoc", "question": "writes-table:Out Log"} — follows the whole cone for one table, with its witness

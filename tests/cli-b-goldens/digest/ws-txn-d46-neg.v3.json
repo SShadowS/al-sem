@@ -59,6 +59,9 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
+            "refutableGuarantees": [
+              "COMMIT_DOMINATES_RETURN"
+            ],
             "scopedGuarantees": [
               {
                 "commitOccurrenceId": "49f3a3a18ca24731",
@@ -261,6 +264,9 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "transitive",
+            "refutableGuarantees": [
+              "COMMIT_DOMINATES_RETURN"
+            ],
             "scopedGuarantees": [
               {
                 "commitOccurrenceId": "da953d8ae0f202d0",
@@ -430,6 +436,18 @@
     ],
     "lineBase": 1,
     "pathCap": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "dependency code followed through every resolved call with literal arguments; no lock facts; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "routines": {
       "r:21fb742fc01a": {
         "display": "Codeunit \"Normal Handler\"::RunSetup",
@@ -454,5 +472,5 @@
     },
     "workspaceFingerprint": "153dd1f50142677bb6b39ef22a0e7e2e23f75e2a3c9f1a1a81e883dd47ae93a7"
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.3.0"
 }

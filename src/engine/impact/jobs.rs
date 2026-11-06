@@ -158,6 +158,15 @@ fn accounting_json(a: &Accounting) -> Value {
                 "unmapped": f.unmapped.map(|u| u.as_str()),
                 "removedRoutineNames": f.removed_routines,
                 "mismatch": f.mismatch.as_ref().map(|m| json!({"firstLine": m.line, "lines": m.lines})),
+                // Output validation §9.4 (F62, additive): what the changed
+                // object-header lines changed, with both texts.
+                "objectHeaderChange": f.header_change.as_ref().map(|h| json!({
+                    "kind": h.kind.as_str(),
+                    "declarationUnchanged": h.kind.declaration_unchanged(),
+                    "lines": h.lines,
+                    "old": h.old,
+                    "new": h.new,
+                })),
                 "hunks": f.hunks.iter().map(|h| json!({
                     "startLine": h.start, "endLine": h.end,
                     "buckets": h.buckets.to_json(),

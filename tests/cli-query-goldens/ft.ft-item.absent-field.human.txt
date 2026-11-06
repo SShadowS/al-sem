@@ -1,1 +1,4 @@
-query.touches: field "No Such Field" matched no field
+query touches FT Item field No Such Field   [cross-app]
+answer: no answer — query.touches: field "No Such Field" matched no field
+not analyzed (the input did not resolve) · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependencies: 0 apps
+more: --format json for every row

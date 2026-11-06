@@ -719,7 +719,10 @@ impl Pool {
         let rendered = orchestrate(&call.request, call.opts, &mut run);
         let compute_ms = started.elapsed().as_millis() as u64;
         let mut envelope = match rendered {
-            Ok(r) => {
+            Ok(mut r) => {
+                // §6.3 (F36): what the exit code means.
+                let cli_outcome = crate::engine::result_header::outcome(r.exit, Some(&r.text), &[]);
+                let mut summary = std::mem::take(&mut r.summary);
                 let inline = crate::wire::clamp_inline(call.command.max_inline_bytes);
                 let over_budget = call.command.client_budget_chars.is_some_and(|b| {
                     client_chars(&r.text, None) + tools::MCP_ENVELOPE_ROOM_CHARS > b
@@ -745,10 +748,14 @@ impl Pool {
                             "kind": "cli", "exitCode": r.exit, "stderr": [],
                             "stale": false, "changedPaths": [], "changedPathsTruncated": false,
                             "lineBase": crate::engine::line_base::LINE_BASE,
+                            "outcome": cli_outcome,
                         });
                         match stdout {
                             Stdout::Text(t) => e["stdoutText"] = json!(t),
                             Stdout::File(f) => {
+                                // §5.2: the summary and its result index.
+                                place_index(shared, call.command.tool, &f, &mut summary);
+                                e["summary"] = bounded_summary(summary);
                                 e["stdoutFile"] = serde_json::to_value(f).unwrap_or(Value::Null)
                             }
                         }
@@ -968,16 +975,21 @@ impl Pool {
                 };
                 match place_stdout(shared, &call.command, stdout) {
                     Ok((stdout, _)) => {
+                        // §6.3 (F36): the renderer's outcome.
                         let mut e = json!({
                             "kind": "cli", "exitCode": r.exit, "stderr": [],
                             "stale": false, "changedPaths": [], "changedPathsTruncated": false,
                             "lineBase": crate::engine::line_base::LINE_BASE,
+                            "outcome": r.outcome,
                         });
                         match stdout {
                             Stdout::Text(t) => e["stdoutText"] = json!(t),
                             Stdout::File(f) => {
+                                // §5.2: the summary and its result index.
+                                let mut summary = r.summary;
+                                place_index(shared, call.command.tool, &f, &mut summary);
+                                e["summary"] = bounded_summary(summary);
                                 e["stdoutFile"] = serde_json::to_value(f).unwrap_or(Value::Null);
-                                e["summary"] = bounded_summary(json!({"text": r.summary}));
                             }
                         }
                         e
@@ -1912,6 +1924,37 @@ fn bounded_summary(summary: Value) -> Value {
     }
 }
 
+/// Output validation §5.2 (F42): move a summary's index rows into the
+/// result index file beside the answer file `answer` (`<stem>.index.json`,
+/// schema `al-sem.result-index/1`) and name it in the summary (`index:
+/// {path, rows, sha256}`). A summary with no rows is left as it is; a file
+/// that cannot be written leaves `index: {notWritten: <why>}`.
+fn place_index(shared: &Shared, tool: &str, answer: &SpillFile, summary: &mut Value) {
+    use crate::engine::result_index::{ROWS_KEY, file_bytes};
+    let Some(rows) = summary.as_object_mut().and_then(|m| m.remove(ROWS_KEY)) else {
+        return;
+    };
+    let rows: Vec<Value> = rows.as_array().cloned().unwrap_or_default();
+    let bytes = file_bytes(tool, &answer.path, &rows);
+    let answer_path = Path::new(&answer.path);
+    let rel = answer_path
+        .strip_prefix(shared.sink.instance())
+        .unwrap_or(answer_path)
+        .with_extension("index.json");
+    let written = shared
+        .sink
+        .write_out(&rel.to_string_lossy(), &bytes)
+        .map_err(|e| e.to_string());
+    summary["index"] = match written {
+        Ok(p) => json!({
+            "path": p.to_string_lossy(),
+            "rows": rows.len(),
+            "sha256": crate::engine::ids::sha256_bytes_hex(&bytes),
+        }),
+        Err(why) => json!({"notWritten": why, "rows": rows.len()}),
+    };
+}
+
 /// The characters an inline stdout takes in what the client reads: the
 /// parsed JSON re-serialized as `output` when there is one, else the text
 /// escaped as `stdoutText`; in UTF-16 units, as a JavaScript client counts.
@@ -2045,6 +2088,7 @@ fn run_command(
     let revision = answer.revision.clone();
     let meta = answer.meta.clone();
     let mut parsed = None;
+    let mut cli_outcome: Option<&'static str> = None;
     let outcome = match answer.outcome {
         Outcome::Cli {
             exit_code,
@@ -2070,6 +2114,20 @@ fn run_command(
                     if let (Stdout::Text(t), true) = (&stdout, json_format) {
                         parsed = serde_json::from_str::<Value>(t).ok();
                     }
+                    // Output validation §6.3 (F36): what the exit code means.
+                    let stderr_lines = match &stderr {
+                        Stderr::Lines(l) => l.lines(),
+                        Stderr::File(_) => Vec::new(),
+                    };
+                    let text = match &stdout {
+                        Stdout::Text(t) => Some(t.as_str()),
+                        Stdout::File(_) => None,
+                    };
+                    cli_outcome = Some(crate::engine::result_header::outcome(
+                        exit_code,
+                        text,
+                        &stderr_lines,
+                    ));
                     // Item T, T-W2-23: an inline answer the client would file
                     // anyway (its escaped form over the client's budget) goes
                     // to a file now, with its summary.
@@ -2106,9 +2164,15 @@ fn run_command(
                     // own data before the frame is bounded, so `bound_frame`
                     // counts it; kept when the stdout is a file, the only case
                     // an agent needs it.
-                    let summary = summary
-                        .filter(|_| matches!(stdout, Stdout::File(_)))
-                        .map(bounded_summary);
+                    // §5.2 (F42): the index rows go to their file beside
+                    // the answer, the summary names it.
+                    let summary = match (&stdout, summary) {
+                        (Stdout::File(f), Some(mut s)) => {
+                            place_index(shared, call.tool, f, &mut s);
+                            Some(bounded_summary(s))
+                        }
+                        _ => None,
+                    };
                     Outcome::Cli {
                         exit_code,
                         stdout,
@@ -2167,6 +2231,9 @@ fn run_command(
                     "lineBase".into(),
                     json!(crate::engine::line_base::LINE_BASE),
                 );
+                if let Some(o) = cli_outcome {
+                    m.insert("outcome".into(), json!(o));
+                }
             }
             if let Some(e) = extras.as_object() {
                 for (k, v) in e {

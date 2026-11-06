@@ -46,6 +46,7 @@ use crate::engine::batch::job::{
     ViewNeeds, WorkspaceRead,
 };
 use crate::engine::batch::output::JobOutput;
+use crate::engine::follow_up::{Input, Surface};
 use crate::engine::gate::format_json::{pinned_or_now_iso8601, serialize_document_value};
 use crate::engine::gate::run::AnalysisTarget;
 use crate::engine::l4::effect_lattice::TempStateKind;
@@ -107,7 +108,14 @@ use crate::program::resolve::full::LoadedDependencies;
 /// `beyondDependencyCalls`, each `{depth, inventory, reasons, blockers}`);
 /// `touches --field` splits its inventory (`fieldSummary.confirmed`,
 /// `fieldSummary.numericCandidates`) and adds `filters`.
-const QUERY_SCHEMA_VERSION: &str = "3.8.0";
+/// 3.9.0 (output validation V4, F76, additive): `payload.result.scope` in
+/// every query document (analysis, reasons, assumptions, limits, universe,
+/// scope), beside query effects' `families`.
+/// 3.10.0 (output validation V6, F59, additive): table mode's
+/// `up.directSites` adds `dependencyRoutines`, `workspaceByOp`,
+/// `dependencyByOp`, `workspaceByObject` and `keyRelevant`; field mode's
+/// `fieldSummary` adds `confirmedSites` and `candidateSites`.
+const QUERY_SCHEMA_VERSION: &str = "3.10.0";
 
 /// Which direction(s) a `query touches` run reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,9 +289,18 @@ pub struct QueryJob<'a> {
     out: Option<&'a str>,
     /// `--show-source` (W2-7): the cited line ±2 under each human location.
     show_source: bool,
+    /// `--surface` (output validation §6.1): the words of every follow-up.
+    surface: Surface,
 }
 
 impl<'a> QueryJob<'a> {
+    /// `--surface` (output validation §6.1).
+    #[must_use]
+    pub fn surface(mut self, surface: Surface) -> QueryJob<'a> {
+        self.surface = surface;
+        self
+    }
+
     /// `alsem query touches` (see [`run_query_touches_pipeline`]), written as
     /// JSON to stdout until [`QueryJob::written`]. `all` is `--all`: every
     /// witness, the callers' included, and no fold.
@@ -369,6 +386,7 @@ impl<'a> QueryJob<'a> {
             json: true,
             out: None,
             show_source: false,
+            surface: Surface::Cli,
         }
     }
 
@@ -483,6 +501,7 @@ impl Job for QueryJob<'_> {
                 from,
                 direction,
                 all,
+                surface: self.surface,
             };
             let body = if from.is_some() {
                 // `Some(None)`: declared, its build did not finish.
@@ -511,7 +530,8 @@ impl Job for QueryJob<'_> {
             let deps = cx.view().target().dependencies();
             let sources = (self.show_source && !self.json)
                 .then(|| crate::engine::source_excerpt::SourceTexts::read(&workspace));
-            let result = finish_human(body, &deps, sources.as_ref());
+            let hc = QueryHeaderCx::of(&self.ask, self.surface, self.single_app);
+            let result = finish_human(body, &deps, sources.as_ref(), &hc);
             return Ok(SideDoc::new(Ok::<_, String>(result)));
         }
         let root: Option<String> = cx.take_carry();
@@ -553,6 +573,8 @@ impl Job for QueryJob<'_> {
                 self.deterministic,
                 cone,
                 through,
+                self.surface,
+                self.single_app,
             ),
             QueryAsk::Effects { routine, all } => render_query_effects_body(
                 &substrate,
@@ -561,11 +583,14 @@ impl Job for QueryJob<'_> {
                 self.alsem_ver,
                 self.deterministic,
                 cone,
+                self.surface,
+                self.single_app,
             ),
         };
         let sources = (self.show_source && !self.json)
             .then(|| crate::engine::source_excerpt::SourceTexts::read(&workspace));
-        let result = finish_human(body, &substrate.dependencies, sources.as_ref());
+        let hc = QueryHeaderCx::of(&self.ask, self.surface, self.single_app);
+        let result = finish_human(body, &substrate.dependencies, sources.as_ref(), &hc);
         Ok(SideDoc::new(Ok::<_, String>(result)))
     }
 
@@ -678,12 +703,12 @@ impl<'c> Beyond<'c> {
     }
 
     /// Explain's `writes beyond dependency entry points` section, verbatim.
-    fn lines(&self, all: bool) -> Vec<String> {
+    fn lines(&self, all: bool, surface: Surface) -> Vec<String> {
         crate::engine::l5::routine_rollup::beyond_lines(
             &self.rollup,
             self.entry,
             &self.rcx,
-            crate::engine::l5::routine_rollup::RenderOpts::new(all, None),
+            crate::engine::l5::routine_rollup::RenderOpts::new(all, None).with_surface(surface),
         )
     }
 }
@@ -1525,7 +1550,34 @@ fn effects_summary(routine: &str, effects: &[TableTouch<'_>], tables: &TableName
             physical_writes += 1;
         }
     }
-    crate::engine::batch::output::capped_summary(
+    // Output validation §5.2 (F43): the writes that may persist by table
+    // (the first ten by operation count, with their counts), the table
+    // total, and the caller-dependent and table-not-resolved writes apart.
+    let mut by_table: BTreeMap<&str, BTreeMap<&str, u64>> = BTreeMap::new();
+    let (mut caller_dependent, mut unresolved_writes) = (0u64, 0u64);
+    for e in effects {
+        match bucket(e) {
+            "writes" => {
+                let name = tables.get(e.table_id).unwrap_or(e.table_id);
+                *by_table.entry(name).or_default().entry(e.op).or_default() += 1;
+            }
+            "callerDependent" => caller_dependent += 1,
+            "tableNotResolved" if op_family(e.op) == "write" => unresolved_writes += 1,
+            _ => {}
+        }
+    }
+    let mut ranked: Vec<(&str, BTreeMap<&str, u64>)> = by_table.into_iter().collect();
+    ranked.sort_by(|a, b| {
+        let n = |m: &BTreeMap<&str, u64>| m.values().sum::<u64>();
+        n(&b.1).cmp(&n(&a.1)).then(a.0.cmp(b.0))
+    });
+    let tables_written = ranked.len();
+    let top: Vec<Value> = ranked
+        .iter()
+        .take(10)
+        .map(|(t, ops)| json!({"table": t, "ops": ops}))
+        .collect();
+    crate::engine::result_index::with_index(
         json!({
             "kind": "query.effects",
             "routine": routine,
@@ -1535,8 +1587,18 @@ fn effects_summary(routine: &str, effects: &[TableTouch<'_>], tables: &TableName
             "notKnownTemporaryWrites": physical_writes,
             "tableCount": table_set.len(),
             "unknownTable": unknown,
+            "writes": {
+                "byTable": top,
+                "tables": tables_written,
+                "truncated": tables_written > 10,
+                "callerDependent": caller_dependent,
+                "tableNotResolved": unresolved_writes,
+            },
         }),
         "",
+        "",
+        vec![json!({"routine": routine, "effectCount": effects.len(),
+                    "tablesWritten": tables_written})],
     )
 }
 
@@ -1549,9 +1611,24 @@ fn envelope(
     alsem_ver: &str,
     deterministic: bool,
 ) -> String {
+    // Output validation V4 (F76, 3.9.0, additive): `payload.result.scope`, the
+    // header's facts as fields, beside query effects' `families` (V2).
+    let scope = query_scope_json(kind, &payload, deps);
     if let Value::Object(m) = &mut payload {
         m.insert("dependencies".into(), deps.to_json());
         m.insert("lineBase".into(), LINE_BASE.into());
+        let result = m
+            .entry("result")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .map(|r| r.entry("scope").or_insert_with(|| json!({})));
+        if let Some(Value::Object(s)) = result
+            && let Value::Object(add) = scope
+        {
+            for (k, v) in add {
+                s.insert(k, v);
+            }
+        }
     }
     let mut env = Map::new();
     env.insert("alsemVersion".into(), alsem_ver.into());
@@ -1563,7 +1640,40 @@ fn envelope(
     env.insert("kind".into(), kind.into());
     env.insert("payload".into(), payload);
     env.insert("schemaVersion".into(), QUERY_SCHEMA_VERSION.into());
-    serialize_document_value(Value::Object(env))
+    // §9.8 (F78): every location says what it is.
+    let mut env = Value::Object(env);
+    crate::engine::result_header::tag_location_roles(&mut env);
+    serialize_document_value(env)
+}
+
+/// `payload.result.scope` of a query document (F76): `analysis`
+/// (`notAnalyzed` for a selector failure or a refused question, `partial`
+/// for a `down` answer of `unknown`), `reasons`, `assumptions`, `limits`,
+/// `universe` and the `scope` clause the human header prints.
+fn query_scope_json(kind: &str, payload: &Value, deps: &LoadedDependencies) -> Value {
+    use crate::engine::result_header::{Analysis, Header, dependencies_clause};
+    let failed = payload.get("error").is_some()
+        || payload.as_object().is_some_and(|m| {
+            m.values().any(|v| {
+                v.get("resolution")
+                    .and_then(Value::as_str)
+                    .is_some_and(|r| r != "resolved")
+            })
+        });
+    let mut h = Header::new("query", String::new(), !deps.cross_app);
+    if failed {
+        h.analysis = Analysis::NotAnalyzed("the input did not resolve".to_string());
+    } else if payload.pointer("/down/answer").and_then(Value::as_str) == Some("unknown") {
+        h.analysis = Analysis::Partial(vec!["the answer names what it could not resolve".into()]);
+    }
+    let depth = if kind == "query.effects" {
+        "reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes \
+         beyond dependency calls: whole cone with literal arguments"
+    } else {
+        "per operation, one routine into dependency code"
+    };
+    h.scope = format!("{depth}; {}", dependencies_clause(deps.apps.len()));
+    h.scope_json(Map::new())
 }
 
 /// Render an unresolved/ambiguous selector as its own (exit-2) document, so a
@@ -1786,6 +1896,8 @@ pub fn render_query_touches(
             deterministic,
             None,
             UpThrough::NotRequested,
+            Surface::Cli,
+            !substrate.dependencies.cross_app,
         ),
         &substrate.dependencies,
     )
@@ -1810,38 +1922,201 @@ enum UpThrough<'g> {
 /// modes). An answer with a `scope:` line states them there instead (W2-2,
 /// design §4.5 Q6: `dependencies_clause`), so it gets no first line.
 fn with_dependencies_line(r: QueryRunResult, deps: &LoadedDependencies) -> QueryRunResult {
-    finish_human(r, deps, None)
+    let hc = QueryHeaderCx {
+        surface: Surface::Cli,
+        single_app: !deps.cross_app,
+        effects: r.json_text.contains("\"kind\": \"query.effects\""),
+        all: false,
+        callers: false,
+        up: false,
+        asked: String::new(),
+    };
+    finish_human(r, deps, None, &hc)
 }
 
-/// [`with_dependencies_line`], then (W2-7, 2g) `--show-source` excerpts
+/// What a query answer's header needs beyond its own lines (output
+/// validation §5.2).
+pub(crate) struct QueryHeaderCx {
+    pub surface: Surface,
+    pub single_app: bool,
+    /// `query effects` (else `query touches`).
+    pub effects: bool,
+    /// `--all`.
+    pub all: bool,
+    /// `--callers`.
+    pub callers: bool,
+    /// Asked up (or both) from a routine.
+    pub up: bool,
+    /// The inputs as given, for an answer with no title (a selector failure).
+    pub asked: String,
+}
+
+impl QueryHeaderCx {
+    fn of(ask: &QueryAsk<'_>, surface: Surface, single_app: bool) -> QueryHeaderCx {
+        match *ask {
+            QueryAsk::Effects { routine, all } => QueryHeaderCx {
+                surface,
+                single_app,
+                effects: true,
+                all,
+                callers: false,
+                up: false,
+                asked: routine.to_string(),
+            },
+            QueryAsk::Touches {
+                table,
+                from,
+                direction,
+                all,
+                callers,
+                field,
+            } => QueryHeaderCx {
+                surface,
+                single_app,
+                effects: false,
+                all,
+                callers,
+                up: from.is_some() && direction.wants_up() && field.is_none(),
+                asked: format!(
+                    "{table}{}{}",
+                    field.map(|f| format!(" field {f}")).unwrap_or_default(),
+                    from.map(|f| format!(" from {f} {}", direction.as_str()))
+                        .unwrap_or_default()
+                ),
+            },
+        }
+    }
+}
+
+/// A query answer as the four header lines and its body (output validation
+/// §5.2): the renderers print a `--- … ---` title, their result line
+/// (`summary:`, `down:`, `up:`, `transitively:`, `consumers:`) and a
+/// `scope:` line; the title is the header's inputs, the first result line
+/// its answer, the scope line its scope clause. Every other line stays, in
+/// order. An answer with no title (a selector failure) is `no answer`.
+fn query_with_header(text: &str, deps: usize, exit: u8, hc: &QueryHeaderCx) -> String {
+    use crate::engine::result_header::{Analysis, Header, dependencies_clause};
+    let tool = if hc.effects {
+        "query effects"
+    } else {
+        "query touches"
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    let title = lines
+        .first()
+        .and_then(|l| l.strip_prefix("--- "))
+        .and_then(|l| l.strip_suffix(" ---"));
+    let mut h = Header::new(tool, String::new(), hc.single_app);
+    let mut body: Vec<String> = Vec::new();
+    let mut scope: Vec<String> = Vec::new();
+    match title {
+        None => {
+            h.inputs = hc.asked.clone();
+            h.answer = format!(
+                "no answer — {}",
+                lines.first().map_or("", |l| l.trim()).trim_end_matches(':')
+            );
+            h.analysis = Analysis::NotAnalyzed(if exit == 0 {
+                "nothing to analyze".to_string()
+            } else {
+                "the input did not resolve".to_string()
+            });
+            body.extend(lines.iter().skip(1).map(|l| (*l).to_string()));
+        }
+        Some(t) => {
+            let t = t
+                .strip_prefix("effects of ")
+                .or_else(|| t.strip_prefix("touches "))
+                .unwrap_or(t);
+            h.inputs = t.to_string();
+            let result_labels: &[&str] = if hc.effects {
+                &["  summary: "]
+            } else {
+                &[
+                    "  down: ",
+                    "  up: ",
+                    "  workspace sites: ",
+                    "  consumers: ",
+                    "  not answerable: ",
+                ]
+            };
+            let mut answered = false;
+            for (i, l) in lines.iter().enumerate().skip(1) {
+                if let Some(s) = l.strip_prefix("  scope: ") {
+                    scope.push(s.to_string());
+                    continue;
+                }
+                if !answered && let Some(label) = result_labels.iter().find(|p| l.starts_with(**p))
+                {
+                    answered = true;
+                    let rest = &l[label.len()..];
+                    h.answer = if hc.effects {
+                        rest.to_string()
+                    } else {
+                        format!("{}: {rest}", label.trim().trim_end_matches(':'))
+                    };
+                    // A result line with detail lines under it stays.
+                    let next_deeper = lines
+                        .get(i + 1)
+                        .is_some_and(|n| n.starts_with("    ") && !n.starts_with("    ["));
+                    if !next_deeper {
+                        continue;
+                    }
+                }
+                body.push((*l).to_string());
+            }
+            // An `unknown` verdict (`down: unknown — …`), not a count of
+            // unknown callers.
+            if h.answer.split(" — ").next().is_some_and(|a| {
+                a.ends_with(": unknown") || a.starts_with("unknown") || a.contains(": unknown (")
+            }) {
+                h.analysis =
+                    Analysis::Partial(vec!["the answer names what it could not resolve".into()]);
+            }
+        }
+    }
+    scope.push(dependencies_clause(deps));
+    h.scope = scope.join("; ");
+    let s = hc.surface;
+    if title.is_some() && !hc.all {
+        h.more.push(if hc.effects {
+            format!("{} lists every operation", Input::All.on(s))
+        } else {
+            format!("{} lists every witness, no fold", Input::All.on(s))
+        });
+    }
+    if title.is_some() && hc.up && !hc.callers && !hc.all {
+        h.more
+            .push(format!("{} names every caller", Input::Callers.on(s)));
+    }
+    h.more
+        .push(format!("{} for every row", Input::FormatJson.on(s)));
+    while body.last().is_some_and(|l| l.is_empty()) {
+        body.pop();
+    }
+    let mut out = h.human();
+    for l in body {
+        out.push_str(&l);
+        out.push('\n');
+    }
+    out
+}
+
+/// [`query_with_header`], then (W2-7, 2g) `--show-source` excerpts
 /// while the locations still name their app by guid, then readable
 /// dependency locations (the JSON keeps the guid).
 fn finish_human(
     mut r: QueryRunResult,
     deps: &LoadedDependencies,
     sources: Option<&crate::engine::source_excerpt::SourceTexts>,
+    hc: &QueryHeaderCx,
 ) -> QueryRunResult {
-    if !r.human_text.contains("\n  scope: ") {
-        r.human_text = deps.prefix_human(r.human_text);
-    }
+    r.human_text = query_with_header(&r.human_text, deps.apps.len(), r.exit_code, hc);
     if let Some(s) = sources {
         r.human_text = crate::engine::source_excerpt::with_excerpts(&r.human_text, s);
     }
     r.human_text = deps.readable_locations(r.human_text);
     r
-}
-
-/// The scope line's dependencies clause (§4.5 Q6): a count, every app with
-/// `--all`; nothing when none was loaded.
-fn dependencies_clause(deps: &LoadedDependencies, all: bool) -> String {
-    match (deps.apps.len(), all) {
-        (0, _) => String::new(),
-        (n, false) => format!(
-            "; dependencies: {} (--all lists them)",
-            plural(n, "app", "apps")
-        ),
-        (_, true) => format!("; {}", deps.human_line().unwrap_or_default()),
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1856,6 +2131,8 @@ fn render_query_touches_body(
     deterministic: bool,
     cone: Option<&crate::engine::l5::digest_cli::DigestEntryFull>,
     through: UpThrough<'_>,
+    surface: Surface,
+    single_app: bool,
 ) -> QueryRunResult {
     let deps = &substrate.dependencies;
     if from.is_none() && direction == Direction::Down {
@@ -1989,9 +2266,29 @@ fn render_query_touches_body(
             let resolved = substrate.resolved();
             let names = crate::engine::l5::routine_rollup::RoutineNames::new(resolved, &[]);
             let unknown = is_unknown_table(&table.id);
-            let mut ws_sites: Vec<(String, u32, String, String)> = Vec::new();
+            // Output validation §9.3 (F59): the sites by operation and by
+            // object, and the key-relevant ones. The table's key fields, as
+            // `field_touches` compares names.
+            let key_fields: HashSet<String> = resolved
+                .workspace
+                .tables
+                .iter()
+                .filter(|t| t.id == table.id)
+                .flat_map(|t| {
+                    t.keys.iter().flat_map(move |k| {
+                        k.fields.iter().filter_map(move |f| {
+                            t.fields
+                                .iter()
+                                .find(|x| x.id == *f)
+                                .map(|x| super::field_touches::field_key(&x.name))
+                        })
+                    })
+                })
+                .collect();
+            let mut ws_sites: Vec<TableSite> = Vec::new();
             let mut ws_routines: BTreeSet<&str> = BTreeSet::new();
-            let mut dep_sites = 0usize;
+            let mut dep_by_op: BTreeMap<String, usize> = BTreeMap::new();
+            let mut dep_routines: BTreeSet<&str> = BTreeSet::new();
             for r in &resolved.workspace.routines {
                 let primary = is_primary_routine(resolved, r);
                 for o in &r.record_operations {
@@ -2004,55 +2301,175 @@ fn render_query_touches_body(
                     }
                     if primary {
                         ws_routines.insert(r.stable_routine_id.as_str());
-                        ws_sites.push((
-                            o.source_anchor.source_unit_id.clone(),
-                            o.source_anchor.start_line + 1,
-                            o.op.clone(),
-                            names.display(&r.stable_routine_id),
-                        ));
+                        ws_sites.push(TableSite {
+                            file: o.source_anchor.source_unit_id.clone(),
+                            line: o.source_anchor.start_line + 1,
+                            op: o.op.clone(),
+                            who: names.display(&r.stable_routine_id),
+                            object: join.of(r).object_display,
+                            key: key_relevance(
+                                &o.op,
+                                o.field_arguments
+                                    .as_ref()
+                                    .and_then(|a| a.first())
+                                    .map(String::as_str),
+                                &key_fields,
+                            ),
+                            record_ref: o.receiver_is_record_ref,
+                        });
                     } else {
-                        dep_sites += 1;
+                        dep_routines.insert(r.stable_routine_id.as_str());
+                        *dep_by_op.entry(o.op.clone()).or_default() += 1;
                     }
                 }
             }
-            ws_sites.sort();
+            ws_sites.sort_by(|a, b| (&a.file, a.line, &a.op).cmp(&(&b.file, b.line, &b.op)));
+            let dep_sites: usize = dep_by_op.values().sum();
+            let mut ws_by_op: BTreeMap<&str, usize> = BTreeMap::new();
+            let mut by_object: BTreeMap<&str, usize> = BTreeMap::new();
+            let mut by_key: BTreeMap<&str, usize> = BTreeMap::new();
+            for s in &ws_sites {
+                *ws_by_op.entry(s.op.as_str()).or_default() += 1;
+                *by_object.entry(s.object.as_str()).or_default() += 1;
+                if let Some(k) = s.key {
+                    *by_key.entry(k).or_default() += 1;
+                }
+            }
+            let ranked = |m: &BTreeMap<&str, usize>| -> Vec<(String, usize)> {
+                let mut v: Vec<(String, usize)> =
+                    m.iter().map(|(k, n)| ((*k).to_string(), *n)).collect();
+                v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                v
+            };
+            let dep_ranked = ranked(&dep_by_op.iter().map(|(k, n)| (k.as_str(), *n)).collect());
+            let by_op_text = |v: &[(String, usize)]| -> String {
+                v.iter()
+                    .map(|(k, n)| format!("{k} {}", thousands(*n)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
             if let Some(up) = payload.get_mut("up") {
                 up["directSites"] = json!({
                     "workspaceSites": ws_sites.len(),
                     "workspaceRoutines": ws_routines.len(),
                     "dependencySites": dep_sites,
+                    // §9.3 (F59, additive): by operation, by object, and the
+                    // key-relevant sites (not exhaustive).
+                    "dependencyRoutines": dep_routines.len(),
+                    "workspaceByOp": ws_by_op,
+                    "dependencyByOp": dep_by_op,
+                    "workspaceByObject": by_object,
+                    "keyRelevant": by_key,
                 });
             }
             human.push_str(&format!(
-                "  transitively: {} it (through workspace or dependency sites; per operation, one \
+                "  workspace sites: {} in {}{}\n",
+                thousands(ws_sites.len()),
+                plural(ws_routines.len(), "routine", "routines"),
+                if ws_sites.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — by op: {}", by_op_text(&ranked(&ws_by_op)))
+                }
+            ));
+            human.push_str(&format!(
+                "  dependency sites: {} in {} the analysis loads (those the workspace reaches, and \
+                 the callers of dependency events it subscribes to){}\n",
+                thousands(dep_sites),
+                plural(
+                    dep_routines.len(),
+                    "dependency routine",
+                    "dependency routines"
+                ),
+                if dep_sites == 0 {
+                    String::new()
+                } else {
+                    format!(", by op: {}", by_op_text(&dep_ranked))
+                }
+            ));
+            if unknown {
+                human.push_str(
+                    "  table not resolved: each site's table is decided by a value the analysis \
+                     does not resolve, and an unresolved write can be any table\n",
+                );
+            }
+            if !by_object.is_empty() {
+                let objects = ranked(&by_object);
+                let shown_o = fold_len(objects.len(), TOUCHES_LIST_CAP, all);
+                human.push_str(&format!(
+                    "  by object: {}{}\n",
+                    objects[..shown_o]
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (o, n))| if i == 0 {
+                            format!("{o} {}", plural(*n, "site", "sites"))
+                        } else {
+                            format!("{o} {}", thousands(*n))
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    if shown_o < objects.len() {
+                        format!(
+                            ", … +{} — {} lists them",
+                            plural(objects.len() - shown_o, "object", "objects"),
+                            Input::All.on(surface)
+                        )
+                    } else {
+                        String::new()
+                    }
+                ));
+            }
+            human.push_str(&format!(
+                "  transitive: {} one of the workspace or dependency sites (per operation, one \
                  routine into dependency code: a routine whose only touch is deeper in dependency \
                  code{unseen} is not counted)\n",
                 plural(
                     routines.len(),
-                    "workspace routine touches",
-                    "workspace routines touch"
+                    "workspace routine reaches",
+                    "workspace routines reach"
                 ),
             ));
-            human.push_str(&format!(
-                "  directly: {} in {} and {} touch it{}\n",
-                plural(ws_sites.len(), "workspace site", "workspace sites"),
-                plural(ws_routines.len(), "routine", "routines"),
-                plural(dep_sites, "dependency site", "dependency sites"),
-                if unknown {
-                    " — table not resolved: each such site's table is decided by a value the \
-                     analysis does not resolve, and an unresolved write can be any table"
-                } else {
-                    ""
-                }
-            ));
-            let shown_sites = fold_len(ws_sites.len(), GLOBAL_LIST_CAP, all);
-            for (file, line, op, who) in &ws_sites[..shown_sites] {
-                human.push_str(&format!("    [{op}] at {file}:{line} in {who}\n"));
-            }
-            if shown_sites < ws_sites.len() {
+            if !ws_sites.is_empty() {
+                let parts: Vec<String> = KEY_USES
+                    .iter()
+                    .filter(|k| !(unknown && **k == KEY_FILTER))
+                    .map(|k| {
+                        let n = by_key.get(k).copied().unwrap_or(0);
+                        match *k {
+                            KEY_GET => format!("{k} {} (primary key)", thousands(n)),
+                            _ => format!("{k} {}", thousands(n)),
+                        }
+                    })
+                    .collect();
                 human.push_str(&format!(
-                    "    … +{} — all: true lists them, and every routine\n",
-                    plural(ws_sites.len() - shown_sites, "site", "sites")
+                    "  key-relevant (not exhaustive; their sites listed first): {}\n",
+                    parts.join(", ")
+                ));
+            }
+            // The key-relevant sites first, then the others; `all` lists
+            // every site.
+            let mut listed: Vec<&TableSite> = ws_sites.iter().filter(|s| s.key.is_some()).collect();
+            listed.extend(ws_sites.iter().filter(|s| s.key.is_none()));
+            let shown_sites = fold_len(listed.len(), GLOBAL_LIST_CAP, all);
+            for s in &listed[..shown_sites] {
+                let table_note = if unknown {
+                    format!(
+                        " — table: not resolved ({})",
+                        if s.record_ref { "RecordRef" } else { "Record" }
+                    )
+                } else {
+                    String::new()
+                };
+                human.push_str(&format!(
+                    "    [{}] at {}:{} in {}{table_note}\n",
+                    s.op, s.file, s.line, s.who
+                ));
+            }
+            if shown_sites < listed.len() {
+                human.push_str(&format!(
+                    "    … +{} — {} lists them, and every routine\n",
+                    plural(listed.len() - shown_sites, "site", "sites"),
+                    Input::All.on(surface)
                 ));
             }
             let shown_n = if all { routines.len() } else { 0 };
@@ -2076,8 +2493,9 @@ fn render_query_touches_body(
             }
             if shown_n < routines.len() {
                 human.push_str(&format!(
-                    "  the {} that touch it transitively: --all lists them\n",
-                    plural(routines.len(), "routine", "routines")
+                    "  the {} that touch it transitively: {} lists them\n",
+                    plural(routines.len(), "routine", "routines"),
+                    Input::All.on(surface)
                 ));
             }
         }
@@ -2120,16 +2538,11 @@ fn render_query_touches_body(
 
             human.push_str(&format!("--- {} vs {table_label} ---\n", rr.header));
             let beyond = cone.map(|e| Beyond::new(e, substrate.resolved(), deps));
-            human.push_str(&format!(
-                "{}{}\n",
-                if beyond.is_some() {
-                    TOUCHES_SCOPE_LINE_CONE
-                } else {
-                    TOUCHES_SCOPE_LINE
-                }
-                .trim_end(),
-                dependencies_clause(deps, all)
-            ));
+            human.push_str(if beyond.is_some() {
+                TOUCHES_SCOPE_LINE_CONE
+            } else {
+                TOUCHES_SCOPE_LINE
+            });
 
             let cx = TouchCx {
                 query: &query,
@@ -2137,6 +2550,9 @@ fn render_query_touches_body(
                 ops: &ops,
                 hops: FirstHops::new(&query),
                 resolved: substrate.resolved(),
+                surface,
+                single_app,
+                follow: (from.unwrap_or(""), table_selector),
             };
             let touches_down = query.touches_table(rix, &table.id);
             if direction.wants_down() {
@@ -2183,17 +2599,59 @@ fn render_query_touches_body(
     }
 }
 
+/// A caller row's distance with its unit (output validation §8.2, F53):
+/// `1 hop`, `3 hops`.
+fn hops_unit(n: usize) -> String {
+    plural(n, "hop", "hops")
+}
+
+/// One operation on the asked table in a workspace routine's own body
+/// (table mode, output validation §9.3).
+struct TableSite {
+    file: String,
+    line: u32,
+    op: String,
+    who: String,
+    object: String,
+    key: Option<&'static str>,
+    record_ref: bool,
+}
+
+/// The key-relevant uses table mode counts (§9.3, F59; not exhaustive).
+const KEY_GET: &str = "Get";
+const KEY_CURRENT: &str = "SetCurrentKey";
+const KEY_FILTER: &str = "SetRange/SetFilter on key fields";
+const KEY_USES: [&str; 3] = [KEY_GET, KEY_CURRENT, KEY_FILTER];
+
+/// Why a site is key-relevant, or `None`: a `Get` (it reads by the primary
+/// key), a `SetCurrentKey`, or a `SetRange`/`SetFilter` whose field (the
+/// first argument) is in one of the table's declared keys (`key_fields`,
+/// [`super::field_touches::field_key`] spellings).
+fn key_relevance(
+    op: &str,
+    first_arg: Option<&str>,
+    key_fields: &HashSet<String>,
+) -> Option<&'static str> {
+    match op.to_ascii_lowercase().as_str() {
+        "get" => Some(KEY_GET),
+        "setcurrentkey" => Some(KEY_CURRENT),
+        "setrange" | "setfilter"
+            if first_arg
+                .is_some_and(|a| key_fields.contains(&super::field_touches::field_key(a))) =>
+        {
+            Some(KEY_FILTER)
+        }
+        _ => None,
+    }
+}
+
 /// The scope line every routine-scoped touches answer prints after its title.
-const TOUCHES_SCOPE_LINE: &str = "  scope: per operation, one routine into dependency code; \
-     temporary-record touches persist nothing but use the table's schema and run its triggers; \
-     lines are 1-based\n";
+const TOUCHES_SCOPE_LINE: &str = "  scope: per operation, one routine into dependency code\n";
 
 /// [`TOUCHES_SCOPE_LINE`] when the capability cone was read (wave 3a): the
 /// writes beyond each dependency entry point follow the whole cone.
 const TOUCHES_SCOPE_LINE_CONE: &str = "  scope: dependency code: full cone for physical writes, \
-     grouped per dependency routine entered; per-operation detail one routine deep; \
-     temporary-record touches persist nothing but use the table's schema and run its triggers; \
-     lines are 1-based\n";
+     grouped per dependency routine entered; per-operation detail one routine deep\n";
 
 /// The default human list cap for touches (spec §3.8 rule 4's shape: the cap,
 /// or every item when there are at most a quarter more). `--all` lists all.
@@ -2204,7 +2662,7 @@ const GLOBAL_LIST_CAP: usize = 12;
 const TEMP_OWNERS_SHOWN: usize = 4;
 
 /// The shared fold rule (design §3.8 rule 4): one helper for every output.
-use crate::engine::l5::routine_rollup::fold_len;
+use crate::engine::l5::routine_rollup::{fold_len, thousands};
 
 /// The record-operation family of an op kind (spec §4.5's buckets): lock,
 /// write, validate (it runs the field's trigger and may write: never a read),
@@ -2282,6 +2740,18 @@ struct TouchCx<'q, 'a> {
     /// The model the operations belong to (whose routines are the
     /// workspace's, for the absence reasons).
     resolved: &'q Model,
+    /// `--surface` and `--single-app` (output validation §6.1).
+    surface: Surface,
+    single_app: bool,
+    /// The routine (`--from`, as given) and the table name, for a complete
+    /// follow-up call.
+    follow: (&'q str, &'q str),
+}
+
+impl TouchCx<'_, '_> {
+    fn fcx(&self) -> crate::engine::follow_up::Cx {
+        crate::engine::follow_up::Cx::new(self.surface, self.single_app)
+    }
 }
 
 impl<'a> TouchCx<'_, 'a> {
@@ -2412,6 +2882,7 @@ fn absence_reasons(
     not_resolved: usize,
     not_resolved_ref: usize,
     dependency_ops: usize,
+    surface: Surface,
 ) -> Vec<(Value, String)> {
     let mut out = Vec::new();
     if not_resolved > 0 {
@@ -2424,8 +2895,9 @@ fn absence_reasons(
             json!({"kind": "table-not-resolved", "operations": not_resolved,
                    "recordRef": not_resolved_ref}),
             format!(
-                "{} on a table not resolved may be this table{refs} — --table unknown lists them",
-                plural(not_resolved, "operation", "operations")
+                "{} on a table not resolved may be this table{refs} — {} lists them",
+                plural(not_resolved, "operation", "operations"),
+                Input::TableUnknown.on(surface)
             ),
         ));
     }
@@ -2465,8 +2937,9 @@ fn absence_reasons(
                 out.push((
                     json!({"kind": "calls-not-resolved", "calls": unresolved}),
                     format!(
-                        "{} in the cone not resolved may reach it — alsem explain lists them",
-                        plural(unresolved, "call", "calls")
+                        "{} in the cone not resolved may reach it — {} lists them",
+                        plural(unresolved, "call", "calls"),
+                        crate::engine::follow_up::Tool::Explain.on(surface)
                     ),
                 ));
             }
@@ -2560,7 +3033,7 @@ fn render_touches_down(
         } else {
             (not_resolved, not_resolved_ref)
         };
-        absence_reasons(cone, nr, nr_ref, dependency_ops)
+        absence_reasons(cone, nr, nr_ref, dependency_ops, cx.surface)
     };
     let mut down = json!({
         "answerable": true,
@@ -2621,8 +3094,9 @@ fn render_touches_down(
         }
         if shown_n < listed.len() {
             human.push_str(&format!(
-                "    … +{} on persistent or possibly persistent records — --all lists them\n",
-                plural(listed.len() - shown_n, "touch", "touches")
+                "    … +{} on persistent or possibly persistent records — {} lists them\n",
+                plural(listed.len() - shown_n, "touch", "touches"),
+                Input::All.on(cx.surface)
             ));
         }
         if counts.temporary > 0 {
@@ -2652,7 +3126,11 @@ fn render_touches_down(
                 plural(counts.temporary, "touch", "touches"),
                 plural(ranked.len(), "routine", "routines"),
                 names.join(", "),
-                if all { "" } else { " — --all lists them" }
+                if all {
+                    String::new()
+                } else {
+                    format!(" — {} lists them", Input::All.on(cx.surface))
+                }
             ));
         }
     }
@@ -2664,8 +3142,9 @@ fn render_touches_down(
             String::new()
         };
         human.push_str(&format!(
-            "  table not resolved: {} in this cone{refs} (they may be this table) — --table unknown lists them\n",
-            plural(not_resolved, "operation", "operations")
+            "  table not resolved: {} in this cone{refs} (they may be this table) — {} lists them\n",
+            plural(not_resolved, "operation", "operations"),
+            Input::TableUnknown.on(cx.surface)
         ));
     }
     if beyond_n > 0 {
@@ -2687,22 +3166,31 @@ fn render_touches_down(
         let mut text = points[..shown_n].join("; ");
         if shown_n < points.len() {
             text.push_str(&format!(
-                "; … +{} — --all lists them",
+                "; … +{} — {} lists them",
                 plural(
                     points.len() - shown_n,
                     "dependency routine entered",
                     "dependency routines entered"
-                )
+                ),
+                Input::All.on(cx.surface)
             ));
         }
+        // §6.1: the complete prove call for the path.
+        let prove = crate::engine::follow_up::FollowUp::prove(
+            cx.fcx(),
+            cx.follow.0,
+            &format!("writes-table:{}", cx.follow.1),
+            "gives the path",
+        );
         human.push_str(&format!(
             "  beyond dependency calls (the whole cone, literal arguments followed): may write it \
-             beyond {}: {text} — alsem prove <routine> writes-table:<table> gives the path\n",
+             beyond {}: {text} — {} gives the path\n",
             plural(
                 beyond_n,
                 "dependency routine entered",
                 "dependency routines entered"
-            )
+            ),
+            prove.text(cx.surface)
         ));
     }
 }
@@ -2718,7 +3206,7 @@ fn render_touches_down(
 const UP_RELATION: &str = "code-calls";
 const UP_RELATION_LINE: &str = "  callers: by code calls of workspace code (calls, object runs and \
      the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a \
-     caller opens (alsem tests and impact follow it); paths through dependency code are listed \
+     caller opens (the tests and impact tools follow it); paths through dependency code are listed \
      apart, before the caller list\n";
 
 /// `up`: the solve graph's callers ([`render_touches_up_solve`]), then the
@@ -2951,7 +3439,7 @@ fn render_through_dependency(
         }
         line.push_str(&limited);
         if !list_callers && !all {
-            line.push_str(" — --callers lists them");
+            line.push_str(&format!(" — {} lists them", Input::Callers.on(cx.surface)));
         }
         human.push_str(&line);
         human.push('\n');
@@ -2962,7 +3450,7 @@ fn render_through_dependency(
     let row = |c: &DepCaller, label: &str| {
         format!(
             "    +{} {}{label}{}\n",
-            c.hops.len(),
+            hops_unit(c.hops.len()),
             if c.tier == DepTier::Configured {
                 "[via-configuration] "
             } else {
@@ -2992,9 +3480,10 @@ fn render_through_dependency(
         }
         if !long.is_empty() {
             human.push_str(&format!(
-                "    … +{} with paths over {} hops — --all lists them\n",
+                "    … +{} with paths over {} hops — {} lists them\n",
                 plural(long.len(), "caller", "callers"),
-                dep_callers::HUMAN_HOP_FOLD
+                dep_callers::HUMAN_HOP_FOLD,
+                Input::All.on(cx.surface)
             ));
         }
     } else {
@@ -3004,8 +3493,9 @@ fn render_through_dependency(
         }
         if shown < code.len() {
             human.push_str(&format!(
-                "    … +{} — --callers lists them\n",
-                plural(code.len() - shown, "caller", "callers")
+                "    … +{} — {} lists them\n",
+                plural(code.len() - shown, "caller", "callers"),
+                Input::Callers.on(cx.surface)
             ));
         }
     }
@@ -3179,10 +3669,11 @@ fn render_touches_up_solve(
         // Step 1b (astra Task 4): the callers are this touch's consumers
         // (they inherit it), not a dismissed non-finding; `--callers` names
         // them without the witness product `--all` builds.
+        let (all_in, callers_in) = (Input::All.on(cx.surface), Input::Callers.on(cx.surface));
         let more = match (list_callers || all, all) {
-            (true, true) => "",
-            (true, false) => " — --all lists their witnesses",
-            (false, _) => " — --callers lists them, --all their witnesses",
+            (true, true) => String::new(),
+            (true, false) => format!(" — {all_in} lists their witnesses"),
+            (false, _) => format!(" — {callers_in} lists them, {all_in} their witnesses"),
         };
         human.push_str(&format!(
             "  up: {}{who} inherit{} this touch through this routine: {} it, {}, {} unknown{anomalies}{more}\n",
@@ -3194,7 +3685,11 @@ fn render_touches_up_solve(
         ));
         if list_callers && !all {
             for c in &callers {
-                human.push_str(&format!("    +{} {}\n", c.depth, cx.caller_line(c.routine)));
+                human.push_str(&format!(
+                    "    +{} {}\n",
+                    hops_unit(c.depth as usize),
+                    cx.caller_line(c.routine)
+                ));
             }
         }
     } else {
@@ -3213,7 +3708,7 @@ fn render_touches_up_solve(
             if all {
                 human.push_str(&format!(
                     "    +{} {}: {}: {}\n",
-                    c.depth,
+                    hops_unit(c.depth as usize),
                     cx.routine_label(c.routine),
                     plural(w.count, "touch", "touches"),
                     counts_human(&w.counts)
@@ -3224,7 +3719,7 @@ fn render_touches_up_solve(
             } else {
                 human.push_str(&format!(
                     "    +{} {}: {} ({}); first {}\n",
-                    c.depth,
+                    hops_unit(c.depth as usize),
                     cx.routine_label(c.routine),
                     plural(w.count, "touch", "touches"),
                     counts_human(&w.counts),
@@ -3234,8 +3729,9 @@ fn render_touches_up_solve(
         }
         if shown_n < touchers.len() {
             human.push_str(&format!(
-                "    … +{} — --callers lists them\n",
-                plural(touchers.len() - shown_n, "caller", "callers")
+                "    … +{} — {} lists them\n",
+                plural(touchers.len() - shown_n, "caller", "callers"),
+                Input::Callers.on(cx.surface)
             ));
         }
     }
@@ -3243,7 +3739,7 @@ fn render_touches_up_solve(
         for a in &product {
             human.push_str(&format!(
                 "    +{} {} {}\n",
-                a.depth,
+                hops_unit(a.depth as usize),
                 cx.routine_label(a.touch.routine),
                 cx.witness_line(&a.touch)
             ));
@@ -3291,6 +3787,8 @@ pub fn render_query_effects(
             alsem_ver,
             deterministic,
             None,
+            Surface::Cli,
+            !substrate.dependencies.cross_app,
         ),
         &substrate.dependencies,
     )
@@ -3380,6 +3878,7 @@ impl<'q, 'a> FirstHops<'q, 'a> {
 }
 
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 fn render_query_effects_body(
     substrate: &QuerySubstrate,
     routine_selector: &str,
@@ -3387,7 +3886,15 @@ fn render_query_effects_body(
     alsem_ver: &str,
     deterministic: bool,
     cone: Option<&crate::engine::l5::digest_cli::DigestEntryFull>,
+    surface: Surface,
+    single_app: bool,
 ) -> QueryRunResult {
+    // §6.1: a fold note in the surface's words.
+    let all_note = if all {
+        String::new()
+    } else {
+        format!(" — {} lists them", Input::All.on(surface))
+    };
     let deps = &substrate.dependencies;
     let beyond = cone.map(|e| Beyond::new(e, substrate.resolved(), deps));
     let join = RoutineJoin::build(substrate.resolved());
@@ -3940,30 +4447,21 @@ fn render_query_effects_body(
     if beyond.is_some() {
         // Wave 3a: the writes beyond each entry point are the cone's, read
         // as explain reads them; the per-operation rows keep L4's depth.
+        // §5.2 (F61): the depth and inventory of each operation family; the
+        // header's scope clause (§5.3: the static prose is in the tool
+        // description).
         human.push_str(
-            "  coverage: per operation, one routine into dependency code; operations and routes \
-             the root's literal arguments rule out are listed and marked (alsem explain and \
-             prove drop them); writes beyond dependency calls follow the whole cone with \
-             literal arguments, as alsem explain does; lines are 1-based\n",
-        );
-        // §5.2 (F61): the depth and inventory of each operation family.
-        human.push_str(&format!(
             "  scope: reads, locks, validate: one dependency routine deep, not exhaustive beyond; \
-             writes beyond dependency calls: whole cone, grouped per dependency routine entered; \
-             writes to temporary records do not directly persist those records{}\n",
-            dependencies_clause(deps, all)
-        ));
+             writes beyond dependency calls: whole cone with literal arguments, grouped per \
+             dependency routine entered; operations and routes the literal arguments rule out \
+             are listed and marked (explain and prove drop them)\n",
+        );
     } else {
         human.push_str(
-            "  coverage: one routine into dependency code; operations ruled out by literal \
-             arguments are listed (alsem explain and prove drop them); lines are 1-based\n",
-        );
-        human.push_str(&format!(
             "  scope: reads, locks, validate, writes: one dependency routine deep, not exhaustive \
-             beyond (alsem explain and prove follow the whole cone); writes to temporary records \
-             do not directly persist those records{}\n",
-            dependencies_clause(deps, all)
-        ));
+             beyond (explain and prove follow the whole cone); operations ruled out by literal \
+             arguments are listed (explain and prove drop them)\n",
+        );
     }
     let ops_text = |m: &BTreeMap<&str, usize>| -> String {
         let mut v: Vec<(&&str, &usize)> = m.iter().collect();
@@ -4058,14 +4556,15 @@ fn render_query_effects_body(
         }
         if n < list.len() {
             human.push_str(&format!(
-                "    … +{} — --all lists them\n",
-                plural(list.len() - n, "table", "tables")
+                "    … +{} — {} lists them\n",
+                plural(list.len() - n, "table", "tables"),
+                Input::All.on(surface)
             ));
         }
     }
     // Wave 3a: explain's own section, from the same rollup.
     if let Some(b) = &beyond {
-        for l in b.lines(all) {
+        for l in b.lines(all, surface) {
             human.push_str("  ");
             human.push_str(&l);
             human.push('\n');
@@ -4178,7 +4677,7 @@ fn render_query_effects_body(
                 b.rows.len(),
                 plural(b.tables.len(), "table", "tables"),
                 ops_text(&b.ops),
-                if all { "" } else { " — --all lists them" }
+                all_note
             ));
         }
     }
@@ -4188,7 +4687,7 @@ fn render_query_effects_body(
             plural(b.rows.len(), "operation", "operations"),
             plural(b.tables.len(), "table", "tables"),
             plural(b.owners.len(), "routine", "routines"),
-            if all { "" } else { " — --all lists them" }
+            all_note
         ));
     }
     // Q4: "RecordRef" only where the receiver is one; every other operation
@@ -4203,13 +4702,36 @@ fn render_query_effects_body(
                 plural(b.rows.len(), "operation", "operations"),
                 plural(b.owners.len(), "routine", "routines"),
                 ops_text(&b.ops),
-                if all { "" } else { " — --all lists them" }
+                if all {
+                    String::new()
+                } else {
+                    format!(" — {} lists them", Input::All.on(surface))
+                }
             ));
         }
     }
-    human.push_str(
-        "  next: alsem prove <routine> writes-table:<table> follows the whole cone for one table\n",
-    );
+    // §6.2: the complete prove call for the first table it writes; none when
+    // it writes no table (the summary already says so).
+    if let Some(table) = ["writes", "callerDependent"].iter().find_map(|k| {
+        buckets
+            .get(k)
+            .and_then(|b| b.tables.iter().find(|t| !is_unknown_table(t)))
+    }) {
+        // The resolved routine's own selector (V3 §2.1), else the input.
+        let selector = rr
+            .identity
+            .iter()
+            .find(|(k, _)| k.as_str() == "selector")
+            .and_then(|(_, v)| v.as_str())
+            .unwrap_or(routine_selector);
+        let f = crate::engine::follow_up::FollowUp::prove(
+            crate::engine::follow_up::Cx::new(surface, single_app),
+            selector,
+            &format!("writes-table:{}", table_name(table)),
+            "follows the whole cone for one table, with its witness",
+        );
+        human.push_str(&format!("  next: {} — {}\n", f.text(surface), f.why));
+    }
     if all {
         human.push_str(&format!("  every operation ({}):\n", effects.len()));
     }
@@ -4263,6 +4785,25 @@ fn render_query_effects_body(
             "beyondWrites".into(),
             json!({"tables": beyond_tables.len(), "entryPoints": beyond_writes.len()}),
         );
+        // Output validation §8.2 (F53): the two populations with their
+        // units, so the operation tables and the whole-cone write tables
+        // are never compared as one count.
+        let line = format!(
+            "{} on {} one routine deep; whole cone beyond {}: {} (writes only)",
+            plural(effects.len(), "operation", "operations"),
+            plural(
+                m.get("tableCount").and_then(Value::as_u64).unwrap_or(0) as usize,
+                "table",
+                "tables"
+            ),
+            plural(
+                beyond_writes.len(),
+                "dependency routine entered",
+                "dependency routines entered"
+            ),
+            plural(beyond_tables.len(), "table", "tables"),
+        );
+        m.insert("counts".into(), line.into());
         // Step 1b: and how many rows the root's literal arguments mark.
         m.insert(
             "literalRoutes".into(),
@@ -4289,6 +4830,8 @@ struct FieldAsk<'a> {
     from: Option<&'a str>,
     direction: Direction,
     all: bool,
+    /// `--surface` (output validation §6.1).
+    surface: Surface,
 }
 
 /// The human answer lists this many objects, and this many sites per object,
@@ -4947,6 +5490,10 @@ fn render_field_touches(
             "readWriteSites": read_write_sites,
             "sitesByTempState": temp_json,
             "candidates": candidates,
+            // §8.2 (F53, 3.10.0): the sites with no candidate reason and
+            // those with one; they add up to `sites`.
+            "confirmedSites": site_list.len() - candidates,
+            "candidateSites": candidates,
             "candidatesByReason": cand_json,
             "byNumberNotLiteral": cov.by_number_not_literal,
             "fieldIndexSites": cov.field_index_sites,
@@ -5033,10 +5580,16 @@ fn render_field_touches(
                 .iter()
                 .map(|(c, n)| format!("{} {n}", c.as_str()))
                 .collect();
-            format!("; candidates: {candidates} ({})", by.join(", "))
+            format!("; candidates by reason: {}", by.join(", "))
         };
+        // Output validation §8.2 (F53): confirmed sites and candidates
+        // counted apart (they add up to the sites), each count with its
+        // unit: uses per site (a site can have two), sites per temp state.
         human.push_str(&format!(
-            "  consumers: {} in {} of {} — uses: {}; records: {}{cand_h}\n",
+            "  consumers: {}, {} ({} in {} of {}) — uses (a site can have two): {}; sites by \
+             record: {}{cand_h}\n",
+            plural(site_list.len() - candidates, "site", "sites"),
+            plural(candidates, "candidate", "candidates"),
             plural(site_list.len(), "site", "sites"),
             plural(routine_set.len(), "routine", "routines"),
             plural(object_set.len(), "object", "objects"),
@@ -5053,9 +5606,9 @@ fn render_field_touches(
                 " — a numeric reference does not break on a rename (it may on a renumbering)"
             }
         ));
-        for (_, text) in reasons.iter().skip(1) {
-            human.push_str(&format!("  note: {text}\n"));
-        }
+        // §5.3 (F85): no `note:` that repeats the `searched:` clause (the
+        // not-loaded dependency code and the dynamic field numbers are its
+        // `not searched:` part); the JSON keeps every reason.
     }
     human.push_str(&format!(
         "  filters: {}\n",
@@ -5065,12 +5618,10 @@ fn render_field_touches(
             plural(filters, "site", "sites")
         }
     ));
-    human.push_str(
-        "  not a complete rename inventory: page and report columns, CalcFormula and \
-         TableRelation are not searched (the compiler finds them); keys holding the field are \
-         listed as declared keys\n",
-    );
-    if !answer.declared_keys.is_empty() {
+    // §9.3 (F60): the declared keys first, so the verdict can say "above".
+    let keys_line = if answer.declared_keys.is_empty() {
+        "  declared keys holding the field: none\n".to_string()
+    } else {
         let keys: Vec<String> = answer
             .declared_keys
             .iter()
@@ -5080,8 +5631,56 @@ fn render_field_touches(
                 format!("key {} ({})", i + 1, names.join(", "))
             })
             .collect();
-        human.push_str(&format!("  declared keys: {}\n", keys.join("; ")));
-    }
+        format!("  declared keys: {}\n", keys.join("; "))
+    };
+    human.push_str(&keys_line);
+    human.push_str(
+        "  not a complete rename inventory: page and report columns, CalcFormula and \
+         TableRelation are not searched (the compiler finds them); keys holding the field are \
+         listed above\n",
+    );
+    // Output validation §8.2 (F54): what each tag on a site row means, for
+    // the tags the rows carry, printed once under the first row.
+    let mut legend: Option<String> = {
+        let mut tags: BTreeSet<String> = BTreeSet::new();
+        let mut methods = false;
+        for (s, _, _) in &sites {
+            tags.insert(s.temp.as_str().to_string());
+            match s.source.as_str() {
+                "access" | "implicit-access" => {
+                    tags.insert(s.source.clone());
+                }
+                _ => methods = true,
+            }
+            if let Some(c) = s.candidate {
+                tags.insert(format!("candidate: {}", c.as_str()));
+            }
+        }
+        let mut parts: Vec<String> = tags
+            .iter()
+            .map(|t| {
+                let what = match t.as_str() {
+                    "persistent" => "the record is not temporary",
+                    "temporary" => "a temporary record",
+                    "caller-dependent" => "the record is a parameter: temporary or not as its caller passes it",
+                    "unknown" => "the record's temp state is not resolved",
+                    "access" => "a field named on a record (Rec.Field)",
+                    "implicit-access" => "a bare field name inside the table's own code",
+                    "candidate: table-not-resolved" => "the record's table is not resolved, so the site may not name this field",
+                    "candidate: copy-table-not-resolved" => "the other record's table is not resolved, so the copy may not include this field",
+                    "candidate: recordref-table-unknown" => "a RecordRef whose table is not resolved, so the number may name another table's field",
+                    _ => "",
+                };
+                format!("{t}: {what}")
+            })
+            .collect();
+        if methods {
+            parts.push(
+                "a method name (Field, SetRange, …): the record method that names the field".into(),
+            );
+        }
+        (!sites.is_empty()).then(|| format!("      legend: {}\n", parts.join("; ")))
+    };
     // Per object, folded unless --all.
     let mut by_object: Vec<(&str, Vec<usize>)> = Vec::new();
     for (i, (_, rr, _)) in sites.iter().enumerate() {
@@ -5127,18 +5726,24 @@ fn render_field_touches(
                 uses_text(&s.uses),
                 extra.join(", ")
             ));
+            // §8.2 (F54): one legend line under the first tagged row.
+            if let Some(l) = legend.take() {
+                human.push_str(&l);
+            }
         }
         if shown_sites < ixs.len() {
             human.push_str(&format!(
-                "    … +{} — --all lists them\n",
-                plural(ixs.len() - shown_sites, "site", "sites")
+                "    … +{} — {} lists them\n",
+                plural(ixs.len() - shown_sites, "site", "sites"),
+                Input::All.on(ask.surface)
             ));
         }
     }
     if shown_objects < by_object.len() {
         human.push_str(&format!(
-            "  … +{} — --all lists every site\n",
-            plural(by_object.len() - shown_objects, "object", "objects")
+            "  … +{} — {} lists every site\n",
+            plural(by_object.len() - shown_objects, "object", "objects"),
+            Input::All.on(ask.surface)
         ));
     }
     let summary = touches_summary(&payload);

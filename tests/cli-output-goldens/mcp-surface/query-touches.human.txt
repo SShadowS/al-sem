@@ -1,0 +1,6 @@
+query touches Codeunit "Out Issue Document"::IssueDoc vs Out Log (a0a00001-0000-4000-8000-0000000000a1/table/50101)   [cross-app]
+answer: up: 1 transitive caller (Page "Out Doc Card".action(Issue)::OnAction) inherits this touch through this routine: 1 touches it, 0 do not, 0 unknown — callers: true lists them, all: true their witnesses
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: per operation, one routine into dependency code; dependencies: 1 app
+more: all: true lists every witness, no fold; callers: true names every caller; format: "json" for every row
+  callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens (the tests and impact tools follow it); paths through dependency code are listed apart, before the caller list
+  through dependency code: none by code calls (open sites, hubs and what a user starts are outside this list)

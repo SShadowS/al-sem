@@ -10,6 +10,8 @@ const OPTS: RenderOpts = RenderOpts {
     tier: TierPick::Local,
     max_tests: None,
     json: true,
+    surface: crate::engine::follow_up::Surface::Cli,
+    single_app: false,
 };
 
 fn roots(stamp: &str) -> Value {

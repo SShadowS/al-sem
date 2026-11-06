@@ -1,9 +1,7 @@
---- Codeunit D8BadSubscriber::HandlePosted ---
-  question: commits-on-success-path — existing effects (what the routine and its callees already do)
-  answer:   yes
+prove Codeunit D8BadSubscriber::HandlePosted commits-on-success-path   [cross-app]
+answer: yes
+analysis complete · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 0 apps
+more: --format json for every evidence row and its hops
   evidence: 1 effect
     [COMMIT] at ws:src/subscriber.al:11
       condition: unconditional on success
-  analysis complete
-  assumptions: none (default world: an interface call may reach an implementation that is not loaded)
-  limits: none

@@ -1,15 +1,17 @@
 {
   "changedRootsDiagnostics": 0,
+  "index": {
+    "path": "<the server's output folder>",
+    "rows": 1,
+    "sha256": "<per run>"
+  },
   "kind": "digest",
   "rootsRequested": 1,
   "rootsResolved": 1,
   "routines": [
     {
-      "coverage": "partial",
-      "coverageReasons": [
-        "interface-open-world",
-        "object-run-unresolved"
-      ],
+      "analysis": "partial",
+      "answer": "writes: may write 153 tables (11 owned by this app, 142 by dependencies) and 2 writes on a table not resolved; 89 of them beyond Codeunit \"Reminder-Issue\" (393)::OnRun (entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19)",
       "effects": 808,
       "effectsByType": {
         "BACKGROUND_TASK": 5,
@@ -32,52 +34,9 @@
         "UI_PROGRESS": 3,
         "UI_WINDOW_OPEN": 10
       },
-      "names": {
-        "entryPoints": [
-          "Codeunit \"Reminder-Issue\" (393)::OnRun",
-          "Codeunit \"CTS-CDN Network Doc. Mgt.\" (6225516)::CreateEDocument",
-          "Codeunit \"CSC Core\" (6192833)::IsAppActiveOrAskToActivate",
-          "Codeunit Email (8901)::Send",
-          "Codeunit \"CSC Core\" (6192833)::IsAppActiveOrAskToActivate"
-        ],
-        "tablesOwnedByApp": [
-          "CDO Azure Application Setup",
-          "CDO Document Template Line",
-          "CDO E-Mail Log",
-          "CDO E-Mail Template Header",
-          "CDO File",
-          "CDO File Download Document",
-          "CDO Html Color",
-          "CDO Log Attachment",
-          "CDO Print document",
-          "CDO Queue Entry"
-        ],
-        "tablesOwnedByDependencies": [
-          "Activity Log",
-          "Approval Comment Line",
-          "Approval Entry",
-          "Assembly Header",
-          "Attachment",
-          "Avg. Cost Adjmt. Entry Point",
-          "CRM Full Synch. Review Line",
-          "CSC Access Token",
-          "CSC App To Migrate",
-          "CSC Client Credential"
-        ],
-        "topCallees": [
-          {
-            "callee": "CurrLineWithPrice.SetLine",
-            "count": 21
-          },
-          {
-            "callee": "Codeunit.Run(<dynamic>)",
-            "count": 11
-          },
-          {
-            "callee": "CurrLineWithPrice.GetLine",
-            "count": 8
-          }
-        ]
+      "guaranteeLabels": {
+        "descriptiveOnly": 403,
+        "refutable": 0
       },
       "routine": "Codeunit \"CDO Issue Document\"::IssueReminder",
       "selector": "Codeunit \"CDO Issue Document\"::IssueReminder",
@@ -88,6 +47,10 @@
         "commits": {
           "answer": "may",
           "entryPoints": 7,
+          "literalDead": {
+            "entryPoints": 3,
+            "sites": 3
+          },
           "ownSites": 5
         },
         "entryPoints": {
@@ -132,10 +95,12 @@
         },
         "temporaryOnlyTables": 57,
         "unresolvedTableWrites": 2
-      }
+      },
+      "testStatus": "not requested"
     }
   ],
   "routinesListed": 1,
+  "shared": {},
   "totalEffects": 808,
   "totalUnresolved": 288
 }

@@ -262,4 +262,50 @@ fn a_byte_order_mark_is_not_a_mismatch() {
     let f = file(&a, "src/Calc.Codeunit.al");
     assert_eq!(f.mismatch, None);
     assert_eq!(f.buckets.decl.get(&DeclKind::ObjectHeader), Some(&2));
+    // Output validation §9.4 (F62): the header change says what it is.
+    let h = f.header_change.as_ref().expect("a header change");
+    assert_eq!(h.kind, HeaderChangeKind::ByteOrderMarkAdded);
+    assert_eq!(h.lines, BTreeSet::from([1]));
+    assert_eq!(h.old, vec!["codeunit 50101 Calc".to_string()]);
+}
+
+/// Output validation §9.4 (F62): an object-header pair says "no declaration
+/// changed" only when the lines differ by a byte-order mark or by
+/// whitespace OUTSIDE quoted names and values. Hand-stated pairs.
+///
+/// DISCRIMINATION (2026-11-06): ignoring quotes in
+/// `without_outer_whitespace` (whitespace inside them collapsed too) turns
+/// the quoted-name pair into `Whitespace`: fails at "inside a quoted name";
+/// restored, passes.
+#[test]
+fn a_header_change_is_classified_by_what_it_changed() {
+    let v = |s: &[&str]| s.iter().map(|x| (*x).to_string()).collect::<Vec<_>>();
+    let k = |a: &[&str], b: &[&str]| classify_header_change(&v(a), &v(b));
+    assert_eq!(
+        k(&["\u{feff}table 50100 \"A B\""], &["table 50100 \"A B\""]),
+        HeaderChangeKind::ByteOrderMarkRemoved
+    );
+    assert_eq!(
+        k(&["table  50100   \"A B\" "], &["table 50100 \"A B\""]),
+        HeaderChangeKind::Whitespace
+    );
+    assert_eq!(
+        k(&["table 50100 \"A  B\""], &["table 50100 \"A B\""]),
+        HeaderChangeKind::Text,
+        "inside a quoted name"
+    );
+    assert_eq!(
+        k(&["table 50100 'x  y'"], &["table 50100 'x y'"]),
+        HeaderChangeKind::Text,
+        "inside a literal"
+    );
+    assert_eq!(
+        k(&["table 50100 A"], &["table 50100 B"]),
+        HeaderChangeKind::Text
+    );
+    assert_eq!(
+        k(&["table 50100 A"], &[]),
+        HeaderChangeKind::Text,
+        "unpaired"
+    );
 }

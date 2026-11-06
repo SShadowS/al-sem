@@ -25,6 +25,7 @@
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
               "line": 25,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -37,6 +38,7 @@
               "excerpt": "error-call",
               "file": "ws:src/checks.al",
               "line": 6,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "error-path",
@@ -51,6 +53,7 @@
               "excerpt": "error-call",
               "file": "ws:src/checks.al",
               "line": 15,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "error-path",
@@ -74,6 +77,7 @@
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
               "line": 25,
+              "role": "operation",
               "sourceKind": "source"
             },
             "class": "callerDependent",
@@ -99,12 +103,14 @@
         ]
       },
       "extensionPoints": [],
+      "followUps": [],
       "gaps": [
         {
           "anchor": {
             "column": 12,
             "file": "ws:src/checks.al",
             "line": 53,
+            "role": "callSite",
             "sourceKind": "source"
           },
           "callee": "Codeunit \"Error Message Management\"::LogSimpleError",
@@ -117,6 +123,7 @@
             "column": 8,
             "file": "ws:src/post.al",
             "line": 24,
+            "role": "operation",
             "sourceKind": "source"
           },
           "field": "Amount",
@@ -129,6 +136,7 @@
                 "column": 16,
                 "file": "ws:src/order.al",
                 "line": 16,
+                "role": "operation",
                 "sourceKind": "source"
               },
               "comment": null,
@@ -173,6 +181,7 @@
             "column": 8,
             "file": "ws:src/post.al",
             "line": 25,
+            "role": "operation",
             "sourceKind": "source"
           },
           "kind": "table-trigger-rules-skipped",
@@ -184,6 +193,7 @@
                 "column": 12,
                 "file": "ws:src/order.al",
                 "line": 25,
+                "role": "operation",
                 "sourceKind": "source"
               },
               "comment": null,
@@ -210,6 +220,7 @@
                     "column": 11,
                     "file": "ws:src/order.al",
                     "line": 24,
+                    "role": "operation",
                     "sourceKind": "source"
                   },
                   "kind": "Other",
@@ -245,6 +256,7 @@
           "column": 4,
           "file": "ws:src/post.al",
           "line": 18,
+          "role": "definition",
           "sourceKind": "source"
         },
         "display": "Codeunit \"Calls Post\"::QuickPost",
@@ -265,6 +277,7 @@
               "column": 12,
               "file": "ws:src/checks.al",
               "line": 6,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": null,
@@ -301,6 +314,7 @@
               "column": 12,
               "file": "ws:src/checks.al",
               "line": 15,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": null,
@@ -328,6 +342,7 @@
                   "column": 11,
                   "file": "ws:src/checks.al",
                   "line": 14,
+                  "role": "operation",
                   "sourceKind": "source"
                 },
                 "kind": "Other",
@@ -400,6 +415,18 @@
   "diagnostics": [],
   "lineBase": 1,
   "mode": "routine",
+  "result": {
+    "scope": {
+      "analysis": "complete",
+      "assumptions": [
+        "loaded program; unloaded implementations and subscribers are not enumerated"
+      ],
+      "limits": [],
+      "reasons": [],
+      "scope": "dependency code: none reached; no lock facts; dependencies: 0 apps",
+      "universe": "cross-app"
+    }
+  },
   "schema": "al-sem.explain/4",
   "selector": "QuickPost"
 }

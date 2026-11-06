@@ -1,67 +1,41 @@
-computed: current effects of the 5 routines these files touches, in the working tree (every routine in the files); no before/after computed — alsem_impact with base compares two revisions
+digest files src/D48Pos.Codeunit.al → 5 roots: Codeunit "D48 Sender"::SendOne, Codeunit "D48 Loop Caller"::ProcessAll, Codeunit "D48 Loop Caller"::SendOne, … +2 routines   [cross-app]
+answer: 5 roots, one card each; each card leads with its summary line
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code followed through every resolved call with literal arguments; no lock facts; dependencies: 0 apps
+more: --detail lists every list complete; --format json for every effect row
+computed: current effects of the 5 routines these files touches, in the working tree (every routine in the files); no before/after computed — alsem impact --base compares two revisions
 --- Codeunit "D48 Sender"::SendOne ---
   summary — writes: no (every candidate decided)
-    transaction, UI and errors: commits: no (every candidate decided); UI and errors: none observed
-    other effects: events: 0 (0 raised in workspace code); HTTP at 1 place
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  commits: no (every candidate decided)
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
+  transaction, UI and errors: commits: no (every candidate decided); UI and errors: none observed
+  other effects: events: 0 (0 raised in workspace code); HTTP at 1 place
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   HTTP at 1 place: HTTP at ws:src/D48Pos.Codeunit.al:15 (unconditional on success)
 
 --- Codeunit "D48 Loop Caller"::ProcessAll ---
   summary — writes: no (every candidate decided)
-    transaction, UI and errors: commits: no (every candidate decided); UI and errors: none observed
-    other effects: events: 0 (0 raised in workspace code); HTTP at 1 place
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  commits: no (every candidate decided)
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
+  transaction, UI and errors: commits: no (every candidate decided); UI and errors: none observed
+  other effects: events: 0 (0 raised in workspace code); HTTP at 1 place
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   HTTP at 1 place: HTTP at ws:src/D48Pos.Codeunit.al:15 (in a loop)
 
 --- Codeunit "D48 Loop Caller"::SendOne ---
   summary — writes: no (every candidate decided)
-    transaction, UI and errors: commits: no (every candidate decided); UI and errors: none observed
-    other effects: events: 0 (0 raised in workspace code); HTTP at 1 place
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  commits: no (every candidate decided)
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
+  transaction, UI and errors: commits: no (every candidate decided); UI and errors: none observed
+  other effects: events: 0 (0 raised in workspace code); HTTP at 1 place
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   HTTP at 1 place: HTTP at ws:src/D48Pos.Codeunit.al:15 (unconditional on success)
 
 --- Codeunit "D48 Non Loop Caller"::DoSendOnce ---
   summary — writes: no (every candidate decided)
-    transaction, UI and errors: commits: no (every candidate decided); UI and errors: none observed
-    other effects: events: 0 (0 raised in workspace code); HTTP at 1 place
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  commits: no (every candidate decided)
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
+  transaction, UI and errors: commits: no (every candidate decided); UI and errors: none observed
+  other effects: events: 0 (0 raised in workspace code); HTTP at 1 place
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   HTTP at 1 place: HTTP at ws:src/D48Pos.Codeunit.al:15 (unconditional on success)
 
 --- Codeunit "D48 File Loop"::ExportAll ---
   summary — writes: no (every candidate decided)
-    transaction, UI and errors: commits: no (every candidate decided); UI and errors: none observed
-    other effects: events: 0 (0 raised in workspace code); file at 1 place
-    uncertainty: gaps: 1 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  commits: no (every candidate decided)
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
+  transaction, UI and errors: commits: no (every candidate decided); UI and errors: none observed
+  other effects: events: 0 (0 raised in workspace code); file at 1 place
+  uncertainty: gaps: 1 in workspace code, 0 in dependency code, 0 not placed
   file at 1 place: FILE at ws:src/D48Pos.Codeunit.al:73 (in a loop)
   gaps in workspace code (1 call the engine cannot follow):
     F.WriteAllText (unresolved-receiver-type) in ExportAll at ws:src/D48Pos.Codeunit.al:73

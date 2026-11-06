@@ -1,15 +1,17 @@
 {
   "changedRootsDiagnostics": 0,
+  "index": {
+    "path": "<the server's output folder>",
+    "rows": 1,
+    "sha256": "<per run>"
+  },
   "kind": "digest",
   "rootsRequested": 1,
   "rootsResolved": 1,
   "routines": [
     {
-      "coverage": "partial",
-      "coverageReasons": [
-        "interface-open-world",
-        "object-run-unresolved"
-      ],
+      "analysis": "partial",
+      "answer": "writes: may write 418 tables (12 owned by this app, 406 by dependencies) and 2 writes on a table not resolved; 250 of them beyond Codeunit \"Import Attachment - Inc. Doc.\" (134)::CreateNewAttachment (entered at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:179)",
       "effects": 767,
       "effectsByType": {
         "BACKGROUND_TASK": 5,
@@ -32,52 +34,9 @@
         "UI_PROGRESS": 2,
         "UI_WINDOW_OPEN": 8
       },
-      "names": {
-        "entryPoints": [
-          "Codeunit \"Import Attachment - Inc. Doc.\" (134)::CreateNewAttachment",
-          "Codeunit \"Sales-Calc. Discount\" (60)::OnRun",
-          "Codeunit \"CTS-CDN Network Doc. Mgt.\" (6225516)::CreateEDocument",
-          "Codeunit \"CSC Core\" (6192833)::IsAppActiveOrAskToActivate",
-          "Codeunit Email (8901)::Send"
-        ],
-        "tablesOwnedByApp": [
-          "CDO Azure Application Setup",
-          "CDO Document Template Line",
-          "CDO E-Mail Log",
-          "CDO E-Mail Template Header",
-          "CDO File",
-          "CDO File Download Document",
-          "CDO Html Color",
-          "CDO Log Attachment",
-          "CDO Output Profile Conflict",
-          "CDO Print document"
-        ],
-        "tablesOwnedByDependencies": [
-          "Action Message Entry",
-          "Activity Log",
-          "Alloc. Acc. Manual Override",
-          "Analysis View",
-          "Analysis View Budget Entry",
-          "Analysis View Entry",
-          "Application Area Setup",
-          "Approval Comment Line",
-          "Approval Entry",
-          "Assemble-to-Order Link"
-        ],
-        "topCallees": [
-          {
-            "callee": "CurrLineWithPrice.SetLine",
-            "count": 21
-          },
-          {
-            "callee": "Codeunit.Run(<dynamic>)",
-            "count": 11
-          },
-          {
-            "callee": "CurrLineWithPrice.GetLine",
-            "count": 8
-          }
-        ]
+      "guaranteeLabels": {
+        "descriptiveOnly": 355,
+        "refutable": 0
       },
       "routine": "Codeunit \"CDO E-Mail Handler\"::RunReportID",
       "selector": "Codeunit \"CDO E-Mail Handler\"::RunReportID",
@@ -88,6 +47,10 @@
         "commits": {
           "answer": "may",
           "entryPoints": 8,
+          "literalDead": {
+            "entryPoints": 0,
+            "sites": 2
+          },
           "ownSites": 6
         },
         "entryPoints": {
@@ -132,10 +95,12 @@
         },
         "temporaryOnlyTables": 84,
         "unresolvedTableWrites": 2
-      }
+      },
+      "testStatus": "not requested"
     }
   ],
   "routinesListed": 1,
+  "shared": {},
   "totalEffects": 767,
   "totalUnresolved": 288
 }

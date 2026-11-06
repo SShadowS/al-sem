@@ -10,6 +10,18 @@
     },
     "direction": "both",
     "lineBase": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "per operation, one routine into dependency code; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "table": {
       "id": "11111111-0000-0000-0000-00000000d01a/table/50101",
       "isUnknownBucket": false,
@@ -19,7 +31,17 @@
     },
     "up": {
       "directSites": {
+        "dependencyByOp": {},
+        "dependencyRoutines": 0,
         "dependencySites": 0,
+        "keyRelevant": {},
+        "workspaceByObject": {
+          "Codeunit D1 Multi Caller": 4
+        },
+        "workspaceByOp": {
+          "FindSet": 3,
+          "Modify": 1
+        },
         "workspaceRoutines": 4,
         "workspaceSites": 4
       },
@@ -31,7 +53,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/D1MultiCaller.al",
-            "line": 30
+            "line": 30,
+            "role": "definition"
           },
           "display": "CallerB",
           "objectDisplay": "Codeunit D1 Multi Caller",
@@ -44,7 +67,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/D1MultiCaller.al",
-            "line": 38
+            "line": 38,
+            "role": "definition"
           },
           "display": "CallerC",
           "objectDisplay": "Codeunit D1 Multi Caller",
@@ -57,7 +81,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/D1MultiCaller.al",
-            "line": 22
+            "line": 22,
+            "role": "definition"
           },
           "display": "CallerA",
           "objectDisplay": "Codeunit D1 Multi Caller",
@@ -70,7 +95,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/D1MultiCaller.al",
-            "line": 17
+            "line": 17,
+            "role": "definition"
           },
           "display": "ModifyHelper",
           "objectDisplay": "Codeunit D1 Multi Caller",
@@ -83,5 +109,5 @@
       "scoped": false
     }
   },
-  "schemaVersion": "3.8.0"
+  "schemaVersion": "3.10.0"
 }

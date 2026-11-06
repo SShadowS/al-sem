@@ -9,11 +9,25 @@
       "mode": "crossApp"
     },
     "lineBase": 1,
+    "result": {
+      "scope": {
+        "analysis": "notAnalyzed",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [
+          "the input did not resolve"
+        ],
+        "scope": "per operation, one routine into dependency code; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "table": {
       "candidates": [],
       "resolution": "unmatched",
       "selector": "No Such Table At All"
     }
   },
-  "schemaVersion": "3.8.0"
+  "schemaVersion": "3.10.0"
 }

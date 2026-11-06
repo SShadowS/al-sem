@@ -194,7 +194,9 @@ pub(crate) fn human_anchors(text: &str) -> Vec<Anchor> {
         // …`, `[TYPE] at …`).
         let folded: Option<Vec<String>> = if let Some((_, items)) = t
             .strip_prefix("and ")
-            .and_then(|r| r.split_once(" more (--detail prints their paths): "))
+            // `--detail` on the CLI, `detail: true` at `--surface=mcp` (V4).
+            .and_then(|r| r.split_once(" prints their paths): "))
+            .filter(|(head, _)| head.contains(" more ("))
         {
             Some(items.split("; ").map(str::to_string).collect())
         } else if let Some(rest) = t.strip_prefix("also [")
@@ -553,9 +555,11 @@ fn anchor_source_check_on_the_fixture() {
         "every anchor's file exists: {per_output:?}"
     );
     eprintln!("{}", per_output.join("\n"));
-    // Precondition: the check looked at enough anchors, `dep:` ones included.
+    // Precondition: the check looked at enough anchors, `dep:` ones included
+    // (23 since output validation V4: the telemetry places print as a count,
+    // §5.3 F81, so two telemetry anchors left the default answers).
     assert!(
-        all.matched >= 25 && all.matched_dep >= 1,
+        all.matched >= 23 && all.matched_dep >= 1,
         "only {} anchors checked ({} in dependency code):\n{}",
         all.matched,
         all.matched_dep,
@@ -881,11 +885,17 @@ fn digest_summary_through_mcp_on_the_fixture() {
     // W2-1 (design §3.2): the three classes. `Out Doc`'s `Modify` is on
     // IssueDoc's `var` record parameter, so it is caller-dependent, not a
     // table the routine may persist itself.
-    assert_eq!(
-        r["names"]["tablesOwnedByApp"],
-        serde_json::json!(["Out Log"]),
+    // Output validation V4 (§5.2, F77): the row's summary line, its test
+    // status, its signature (one row per stable id); its result index row.
+    assert!(
+        r["answer"]
+            .as_str()
+            .is_some_and(|a| a.starts_with("writes: may write 16 tables")),
         "{summary}"
     );
+    assert_eq!(r["testStatus"], "not requested", "{summary}");
+    assert_eq!(r["signature"], "(var Record \"Out Doc\")", "{summary}");
+    assert_eq!(summary["index"]["rows"], 1, "{summary}");
     assert_eq!(t["callerDependentTables"], 1, "{summary}");
     // Base Doc Line, twelve ledgers, Base Register, Base Price: the group's
     // whole set, not the ten its `detail` names.
@@ -952,7 +962,7 @@ fn one_copy_of_each_answer() {
                 "{label}: one copy (stdoutText {as_text}, output {as_output})"
             ));
         }
-        if label == "prove default" && !stdout.starts_with("--- ") {
+        if label == "prove default" && !stdout.starts_with("prove ") {
             failures.push(format!("{label}: human by default: {stdout}"));
         }
     }
@@ -1281,7 +1291,7 @@ fn digest_path_caps_keys_and_flags_on_the_fixture() {
     assert_eq!(out.trim_end().lines().count(), 1, "compact is one line");
     let (out, _, _) = run_alsem(&["digest", &ws, "--routine", ISSUE_DOC, "--schema", "2"]);
     let v2: Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(v2["schemaVersion"], "2.2.0");
+    assert_eq!(v2["schemaVersion"], "2.3.0");
 }
 
 /// W2-2, T-W2-11 on the fixture: query effects' summary buckets are
@@ -1831,9 +1841,10 @@ fn locks_are_their_own_class_in_query_effects() {
     let (human, err, code) =
         run_alsem(&["query", "effects", &ws, "--routine", "Out Field Ops.RunAll"]);
     assert_eq!(code, 0, "{err}");
+    // Output validation §5.2: the summary is the header's `answer:` line.
     let summary = human.lines().nth(1).unwrap();
     assert!(
-        summary.contains("summary: 9 operations — writes that may persist 5 on 2 tables")
+        summary.contains("answer: 9 operations — writes that may persist 5 on 2 tables")
             && summary.contains("locks 2 on 2 tables")
             && summary.contains("on a RecordRef (table not resolved: RecordRef) 1 in 1 routine")
             && !summary.contains("; table not resolved"),
@@ -2043,14 +2054,20 @@ fn prove_states_coverage_assumptions_and_limits() {
             {"callee": "Handler.Handle", "count": 1}
         ])
     );
+    // Output validation V4 (§5.2): the header's answer line and its third
+    // line (analysis · assumptions · limits · scope).
     let yes = run(ISSUE_DOC, "may-commit", "human");
-    assert!(yes.contains("\n  answer:   yes\n"), "{yes}");
-    for l in ["  analysis partial — ", "  assumptions: ", "  limits: none"] {
+    assert!(yes.contains("\nanswer: yes\n"), "{yes}");
+    for l in [
+        "\nanalysis partial (",
+        " · assumptions: ",
+        " · limits: none",
+    ] {
         assert!(yes.contains(l), "{l}:\n{yes}");
     }
     let unknown = run(ISSUE_DOC, "writes-table:Out Item", "human");
     assert!(
-        unknown.contains("\n  answer:   unknown (blocked by: ")
+        unknown.contains("\nanswer: unknown (blocked by: ")
             && unknown.contains(" — no matching effect was found in the analyzed cone\n"),
         "{unknown}"
     );
@@ -2058,7 +2075,9 @@ fn prove_states_coverage_assumptions_and_limits() {
     assert_eq!(uj["payload"]["result"]["answer"], "unknown");
     let no = run(FIELD_OPS, "may-commit", "human");
     assert!(
-        no.contains("\n  answer:   no\n  analysis complete\n  assumptions: loaded-subscribers\n  limits: none\n"),
+        no.contains(
+            "\nanswer: no\nanalysis complete · assumptions: loaded-subscribers · limits: none · "
+        ),
         "{no}"
     );
 }
@@ -2112,10 +2131,25 @@ fn explain_digest_and_prove_give_one_table_answer() {
         assert_eq!(code, 0, "{args:?}: {err}");
         serde_json::from_str(&out).unwrap()
     };
+    // The location `role` (output validation F78) is a label of the
+    // document it is printed in (prove and explain carry it, digest not);
+    // the answer is the rest.
+    fn without_roles(v: &mut Value) {
+        match v {
+            Value::Object(m) => {
+                m.remove("role");
+                m.values_mut().for_each(without_roles);
+            }
+            Value::Array(a) => a.iter_mut().for_each(without_roles),
+            _ => {}
+        }
+    }
     let key = |v: &Value| {
+        let mut blocked = v.get("blockedBy").cloned().unwrap_or(serde_json::json!([]));
+        without_roles(&mut blocked);
         (
             v["answer"].clone(),
-            v.get("blockedBy").cloned().unwrap_or(serde_json::json!([])),
+            blocked,
             v.get("assumptions").cloned().unwrap_or(Value::Null),
         )
     };

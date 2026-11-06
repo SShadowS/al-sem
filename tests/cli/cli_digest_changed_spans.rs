@@ -26,6 +26,18 @@ use al_sem::program::model::program_calls::assemble_and_resolve_workspace_progra
 
 const VERSION_OVERRIDE: &str = "cli-spans-v1";
 
+/// A human answer after its four header lines (output validation §5.2); the
+/// header must be there, starting with `digest `, its answer `no answer` for
+/// a run with no root.
+fn after_header(stdout: &str) -> &str {
+    let mut parts = stdout.splitn(5, '\n');
+    let first = parts.next().unwrap_or("");
+    let answer = parts.next().unwrap_or("");
+    assert!(first.starts_with("digest "), "{stdout}");
+    assert!(answer.starts_with("answer: "), "{stdout}");
+    parts.nth(2).unwrap_or("")
+}
+
 fn write(path: &Path, text: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
@@ -1886,7 +1898,7 @@ fn declaration_only_procedures_are_roots() {
     );
     assert!(diags(&doc).is_empty(), "(a) {doc}");
     // (f) the additive keys shipped in digest 1.5.0 (current: 2.2.0).
-    assert_eq!(doc["schemaVersion"], "2.2.0");
+    assert_eq!(doc["schemaVersion"], "2.3.0");
 
     // (b) `--file` on IFoo: both methods.
     let (doc, code) = digest(ws, &["--file", "src/IFoo.Interface.al"], None);
@@ -2067,7 +2079,7 @@ fn entry_anchor_is_the_declaration() {
     )
     .expect("prove runs");
     let p: Value = serde_json::from_str(&prove.json_text).unwrap();
-    assert_eq!(p["schemaVersion"], "2.8.0");
+    assert_eq!(p["schemaVersion"], "2.10.0");
     let a = &p["payload"]["routine"]["anchor"];
     assert_eq!(
         (
@@ -2650,14 +2662,15 @@ fn human_tests_run_lists_the_unmatched_file_before_the_tests_line() {
         "human",
     );
     assert_eq!(code, 0, "{stdout}{stderr}");
-    let lines: Vec<&str> = stdout
+    let lines: Vec<&str> = after_header(&stdout)
         .strip_suffix('\n')
         .expect("ends in \\n")
         .split('\n')
         .collect();
     let n = lines.len();
     assert!(n >= 4, "{stdout}");
-    // Output validation V2 (§4.7): the first line says what was computed.
+    // Output validation V2 (§4.7): the first line after the header (§5.2)
+    // says what was computed.
     assert!(lines[0].starts_with("computed: "), "{stdout}");
     assert!(
         lines[1].starts_with("--- ") && lines[1].contains("PostSalesDoc"),
@@ -2868,7 +2881,7 @@ fn human_output_names_the_ambiguous_file() {
     let (stdout, stderr, code) = digest_raw_as(&ws, &[], Some(&diff), "human");
     assert_eq!(code, 2, "{stdout}{stderr}");
     assert_eq!(
-        stdout,
+        after_header(&stdout),
         "digest: no changed roots resolved\nchanged-roots: diff-file-ambiguous Cloud/src/posting.al (candidates: ws:Cloud/src/posting.al, ws:src/posting.al); pass --diff-root <folder> to read diff paths relative to <folder>\n",
         "{stderr}"
     );
@@ -4022,7 +4035,7 @@ fn file_naming_two_files_is_ambiguous() {
     let (stdout, stderr, code) = digest_raw_as(&ws, &file, None, "human");
     assert_eq!(code, 2, "{stdout}{stderr}");
     assert_eq!(
-        stdout,
+        after_header(&stdout),
         "digest: no changed roots resolved\nchanged-roots: file-ambiguous Cloud/src/posting.al (candidates: ws:Cloud/src/posting.al, ws:src/posting.al); pass one candidate as --file, or --diff-root <folder> to read paths relative to <folder>\n",
         "{stderr}"
     );

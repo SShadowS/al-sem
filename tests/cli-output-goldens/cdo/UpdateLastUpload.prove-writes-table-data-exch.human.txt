@@ -1,6 +1,4 @@
---- Codeunit "CDO Telemetry"::UpdateLastUpload ---
-  question: writes-table:Data Exch. (table 1220, Base Application) — existing effects (what the routine and its callees already do)
-  answer:   no
-  analysis complete
-  assumptions: loaded-subscribers
-  limits: none
+prove Codeunit "CDO Telemetry"::UpdateLastUpload writes-table:Data Exch. (table 1220, Base Application)   [cross-app]
+answer: no
+analysis complete · assumptions: loaded-subscribers · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 11 apps
+more: format: "json" for every evidence row and its hops

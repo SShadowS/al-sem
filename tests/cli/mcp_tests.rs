@@ -48,9 +48,13 @@ fn cli(ws: &Path, args: &[&str]) -> (Vec<u8>, u8) {
 }
 
 fn engines(s: &mut Server, id: i64) -> Vec<Value> {
+    // Output validation §5.4: the text block is the compact status; the
+    // full document is `structuredContent`.
     let r = s.call(id, "alsem_status", json!({}));
-    let body: Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
-    body["engines"].as_array().cloned().unwrap_or_default()
+    r["structuredContent"]["engines"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// The byte contract and the composite: `alsem_tests` answers exactly what
@@ -94,6 +98,9 @@ fn alsem_tests_answers_the_clis_bytes_through_two_engines() {
         let r = s.call(10 + i as i64, "alsem_tests", args);
         let env = envelope(&r);
         let (stdout, _, exit) = cli_bytes(&env);
+        // Output validation §6.1: the front end passes `--surface=mcp`.
+        let mut cli_args = cli_args;
+        cli_args.push("--surface=mcp");
         let (want, want_exit) = cli(&ws, &cli_args);
         assert_eq!(
             String::from_utf8_lossy(&stdout),

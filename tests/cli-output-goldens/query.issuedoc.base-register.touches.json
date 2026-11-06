@@ -71,7 +71,8 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/OutIssueDocument.Codeunit.al",
-          "line": 3
+          "line": 3,
+          "role": "definition"
         },
         "display": "IssueDoc",
         "objectDisplay": "Codeunit Out Issue Document",
@@ -83,6 +84,18 @@
       "selector": "Out Issue Document.IssueDoc"
     },
     "lineBase": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "per operation, one routine into dependency code; dependencies: 1 app",
+        "universe": "cross-app"
+      }
+    },
     "table": {
       "id": "d0d00001-0000-4000-8000-0000000000b1/table/70020",
       "isUnknownBucket": false,
@@ -103,7 +116,8 @@
             "anchor": {
               "column": 16,
               "file": "ws:src/Pages.al",
-              "line": 22
+              "line": 22,
+              "role": "definition"
             },
             "display": "OnAction",
             "member": {
@@ -145,5 +159,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "3.8.0"
+  "schemaVersion": "3.10.0"
 }

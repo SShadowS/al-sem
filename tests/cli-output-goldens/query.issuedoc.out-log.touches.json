@@ -44,13 +44,15 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 58
+              "line": 58,
+              "role": "operation"
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/OutIssueDocument.Codeunit.al",
-                "line": 53
+                "line": 53,
+                "role": "definition"
               },
               "display": "WriteLog",
               "objectDisplay": "Codeunit Out Log Mgt",
@@ -71,13 +73,15 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 61
+              "line": 61,
+              "role": "operation"
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/OutIssueDocument.Codeunit.al",
-                "line": 53
+                "line": 53,
+                "role": "definition"
               },
               "display": "WriteLog",
               "objectDisplay": "Codeunit Out Log Mgt",
@@ -99,7 +103,8 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/OutIssueDocument.Codeunit.al",
-          "line": 3
+          "line": 3,
+          "role": "definition"
         },
         "display": "IssueDoc",
         "objectDisplay": "Codeunit Out Issue Document",
@@ -111,6 +116,18 @@
       "selector": "Out Issue Document.IssueDoc"
     },
     "lineBase": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "per operation, one routine into dependency code; dependencies: 1 app",
+        "universe": "cross-app"
+      }
+    },
     "table": {
       "id": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
       "isUnknownBucket": false,
@@ -150,5 +167,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "3.8.0"
+  "schemaVersion": "3.10.0"
 }

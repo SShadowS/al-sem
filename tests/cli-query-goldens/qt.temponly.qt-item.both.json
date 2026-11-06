@@ -36,13 +36,15 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 41
+              "line": 44,
+              "role": "operation"
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 36
+                "line": 39,
+                "role": "definition"
               },
               "display": "TempOnly",
               "objectDisplay": "Codeunit QT Touches",
@@ -63,13 +65,15 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/QTTouches.al",
-              "line": 40
+              "line": 43,
+              "role": "operation"
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/QTTouches.al",
-                "line": 36
+                "line": 39,
+                "role": "definition"
               },
               "display": "TempOnly",
               "objectDisplay": "Codeunit QT Touches",
@@ -91,7 +95,8 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/QTTouches.al",
-          "line": 36
+          "line": 39,
+          "role": "definition"
         },
         "display": "TempOnly",
         "objectDisplay": "Codeunit QT Touches",
@@ -103,6 +108,18 @@
       "selector": "TempOnly"
     },
     "lineBase": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "per operation, one routine into dependency code; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "table": {
       "id": "07070707-0000-4000-8000-000000000071/table/50700",
       "isUnknownBucket": false,
@@ -127,5 +144,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "3.8.0"
+  "schemaVersion": "3.10.0"
 }

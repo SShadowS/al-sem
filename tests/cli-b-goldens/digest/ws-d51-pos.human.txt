@@ -1,14 +1,11 @@
-computed: current effects of the 1 routine these files touches, in the working tree (every routine in the files); no before/after computed — alsem_impact with base compares two revisions
+digest files src/Sender.Codeunit.al → Codeunit "D51 Sender"::PostThenError   [cross-app]
+answer: writes: no (every candidate decided)
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: none reached; no lock facts; dependencies: 0 apps
+more: --detail lists every list complete; --format json for every effect row
+computed: current effects of the 1 routine these files touches, in the working tree (every routine in the files); no before/after computed — alsem impact --base compares two revisions
 --- Codeunit "D51 Sender"::PostThenError ---
-  summary — writes: no (every candidate decided)
-    transaction, UI and errors: commits: no (every candidate decided); errors at 1 place
-    other effects: events: 0 (0 raised in workspace code); HTTP at 1 place
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  commits: no (every candidate decided)
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
+  transaction, UI and errors: commits: no (every candidate decided); errors at 1 place
+  other effects: events: 0 (0 raised in workspace code); HTTP at 1 place
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   HTTP at 1 place: HTTP at ws:src/Sender.Codeunit.al:13 (unconditional on success)
   errors at 1 place: ERROR_THROW at ws:src/Sender.Codeunit.al:14 (unconditional on success)

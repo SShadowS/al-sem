@@ -1782,11 +1782,7 @@ pub fn answer(q: CallersQuestion, roots: &[NodeIx], cx: &CallersCx<'_>) -> Calle
         blocked_by,
         blocked_counts: v.blocked_counts,
         entries: v.entries.into_iter().map(|(k, s)| (k, s.len())).collect(),
-        entry_words: v
-            .entry_words
-            .into_iter()
-            .map(|(k, s)| (k, s.len()))
-            .collect(),
+        entry_words: entry_word_counts(q, v.entry_words),
         uncaught_route: v.uncaught,
         stopped: v.stopped,
         commit_behavior: v.commit_behavior.into_iter().collect(),
@@ -1878,6 +1874,57 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 
 /// The entry words of one class (`false`: established, `true`: over a hub),
 /// largest first: `page actions 3, page triggers 2`.
+/// The precedence of an entry kind word when one entry has several (output
+/// validation §8.2, F53): the most specific kind is its own (a page
+/// action's `OnAction` is a page action, not also a page trigger).
+fn entry_kind_rank(word: &str) -> usize {
+    [
+        "test procedure",
+        "install trigger",
+        "upgrade trigger",
+        "page action",
+        "page trigger",
+        "report trigger",
+        "table trigger",
+        "event subscriber",
+        "codeunit OnRun",
+        "public procedure",
+    ]
+    .iter()
+    .position(|w| *w == word)
+    .unwrap_or(usize::MAX)
+}
+
+/// Distinct entries counted per word (output validation §8.2, F53). By
+/// entry KIND (pending writes, intercepted errors) the kinds are disjoint:
+/// each entry counts once, in its own kind ([`entry_kind_rank`]), and under
+/// "established" when any of its occurrences is (a candidate over a hub
+/// only otherwise), so the counts add up to the distinct entries. By
+/// execution CONTEXT (non-interactive) contexts may overlap and each word
+/// counts its own entries (the line says so).
+fn entry_word_counts<N: Ord + Copy>(
+    q: CallersQuestion,
+    words: BTreeMap<(bool, &'static str), BTreeSet<N>>,
+) -> BTreeMap<(bool, &'static str), usize> {
+    if q == CallersQuestion::NonInteractive {
+        return words.into_iter().map(|(k, s)| (k, s.len())).collect();
+    }
+    let mut own: BTreeMap<N, (bool, &'static str)> = BTreeMap::new();
+    for ((open, w), nodes) in &words {
+        for n in nodes {
+            let e = own.entry(*n).or_insert((*open, *w));
+            if (*open, entry_kind_rank(w)) < (e.0, entry_kind_rank(e.1)) {
+                *e = (*open, *w);
+            }
+        }
+    }
+    let mut out: BTreeMap<(bool, &'static str), usize> = BTreeMap::new();
+    for k in own.into_values() {
+        *out.entry(k).or_default() += 1;
+    }
+    out
+}
+
 fn entry_words_line(a: &CallersAnswer, over_hub: bool) -> String {
     let mut v: Vec<(&str, usize)> = a
         .entry_words
@@ -1910,9 +1957,29 @@ fn blocker_counts(a: &CallersAnswer) -> Vec<(String, usize)> {
     v
 }
 
+/// What the human text needs to name follow-ups (output validation §6.1):
+/// the surface's words, the call's scope inputs, and the routine's selector.
+#[derive(Clone, Copy, Debug)]
+pub struct HumanCx<'s> {
+    pub fcx: crate::engine::follow_up::Cx,
+    pub selector: &'s str,
+}
+
+impl HumanCx<'_> {
+    /// `detail` in the surface's words.
+    fn detail(&self) -> &'static str {
+        self.fcx.input(crate::engine::follow_up::Input::Detail)
+    }
+}
+
 /// The blocker kinds of an `unknown`, at most `cap` named (largest first),
 /// the rest counted: `external callers 2, over a hub 9`.
-fn blockers_named(kinds: &[(String, usize)], cap: usize, detail: bool) -> String {
+fn blockers_named(
+    kinds: &[(String, usize)],
+    cap: usize,
+    detail: bool,
+    hcx: &HumanCx<'_>,
+) -> String {
     let shown = if detail {
         kinds.len()
     } else {
@@ -1926,8 +1993,9 @@ fn blockers_named(kinds: &[(String, usize)], cap: usize, detail: bool) -> String
     if kinds.len() > shown {
         let more = kinds.len() - shown;
         s.push_str(&format!(
-            ", and {more} more {} (detail: true lists them)",
-            if more == 1 { "kind" } else { "kinds" }
+            ", and {more} more {} ({} lists them)",
+            if more == 1 { "kind" } else { "kinds" },
+            hcx.detail()
         ));
     }
     s
@@ -2063,11 +2131,9 @@ fn stop_words(key: &str) -> &str {
 /// For the callers' context questions the one input is
 /// `assumeNoDependents` (it removes `external callers`). `None` when no
 /// input removes a kind of this answer.
-fn reanalysis_line(a: &CallersAnswer, detail: bool) -> Option<String> {
+fn reanalysis_line(a: &CallersAnswer, detail: bool, hcx: &HumanCx<'_>) -> Option<String> {
+    let call = reanalysis_follow_up(a, hcx)?;
     let external = a.blocked_counts.get("external-callers").copied()?;
-    if a.assume_no_dependents {
-        return None;
-    }
     let who = match external {
         1 => "this routine".to_string(),
         2..=5 => format!("these {external} routines"),
@@ -2082,13 +2148,48 @@ fn reanalysis_line(a: &CallersAnswer, detail: bool) -> Option<String> {
     } else {
         format!(
             "removes external callers {external}; stay: {}",
-            blockers_named(&stay, 3, detail)
+            blockers_named(&stay, 3, detail, hcx)
         )
     };
+    // §6.1: at `--surface=mcp` the complete call; on the CLI the flag.
+    let how = match hcx.fcx.surface {
+        crate::engine::follow_up::Surface::Mcp => call.text(hcx.fcx.surface),
+        crate::engine::follow_up::Surface::Cli => {
+            crate::engine::follow_up::Input::AssumeNoDependents
+                .cli()
+                .to_string()
+        }
+    };
     Some(format!(
-        "  re-analysis under an assumption: assumeNoDependents: true — assumes no other app calls \
-         {who}; {removes}"
+        "  re-analysis under an assumption: {how} — only if no other app calls {who}; {removes}"
     ))
+}
+
+/// The `re-analysis under an assumption:` call of an `unknown` (§6.1): the
+/// same question with `assumeNoDependents: true`, a conditional follow-up.
+/// `None` when no input removes a kind of this answer.
+#[must_use]
+pub fn reanalysis_follow_up(
+    a: &CallersAnswer,
+    hcx: &HumanCx<'_>,
+) -> Option<crate::engine::follow_up::FollowUp> {
+    let external = a.blocked_counts.get("external-callers").copied()?;
+    if a.assume_no_dependents || a.answer != ProveAnswer::Unknown {
+        return None;
+    }
+    Some(
+        crate::engine::follow_up::FollowUp::prove(
+            hcx.fcx,
+            hcx.selector,
+            a.question.id(),
+            &format!(
+                "removes the external callers blockers ({external}), only if no other app calls \
+                 them"
+            ),
+        )
+        .arg("assumeNoDependents", true)
+        .conditional(),
+    )
 }
 
 /// The `plain reading:` line of an `unknown` (§4.4): what the analyzed
@@ -2139,7 +2240,11 @@ fn plain_reading(a: &CallersAnswer) -> String {
 /// three answers' one-line forms, and their JSON (`callersContext`). `None`
 /// when the routine is not in the sited graph.
 #[must_use]
-pub fn section(cx: &CallersCx<'_>, root: &str) -> Option<(serde_json::Value, Vec<String>)> {
+pub fn section(
+    cx: &CallersCx<'_>,
+    root: &str,
+    hcx: &HumanCx<'_>,
+) -> Option<(serde_json::Value, Vec<String>)> {
     let nodes = cx.g.nodes_with_stable_id(root);
     if nodes.is_empty() {
         return None;
@@ -2178,9 +2283,13 @@ pub fn section(cx: &CallersCx<'_>, root: &str) -> Option<(serde_json::Value, Vec
             lines.push(line);
         }
         if a.answer == ProveAnswer::Unknown
-            && let Some(l) = reanalysis_line(&a, false)
+            && let Some(l) = reanalysis_line(&a, false, hcx)
         {
             lines.push(format!("    {}", l.trim_start()));
+        }
+        let mut follow_ups: Vec<serde_json::Value> = Vec::new();
+        if let Some(f) = reanalysis_follow_up(&a, hcx) {
+            follow_ups.push(f.json());
         }
         json.insert(
             q.id().into(),
@@ -2189,20 +2298,29 @@ pub fn section(cx: &CallersCx<'_>, root: &str) -> Option<(serde_json::Value, Vec
                 "evidenceCount": a.witness_count,
                 "entries": a.entries,
                 "blockedByCounts": a.blocked_counts,
+                "followUps": follow_ups,
             }),
         );
     }
-    lines.push(
-        "  ask: alsem_prove <routine> callers-have-pending-writes | callers-intercept-errors | \
-         callers-may-run-noninteractive (witnesses and blockers)"
-            .to_string(),
+    // §6.1: one complete call; the other two questions take the same form.
+    let ask = crate::engine::follow_up::FollowUp::prove(
+        hcx.fcx,
+        hcx.selector,
+        CallersQuestion::PendingWrites.id(),
+        "witnesses and blockers",
     );
+    lines.push(format!(
+        "  ask: {} (or question {} | {}) for witnesses and blockers",
+        ask.text(hcx.fcx.surface),
+        CallersQuestion::InterceptErrors.id(),
+        CallersQuestion::NonInteractive.id()
+    ));
     Some((serde_json::Value::Object(json), lines))
 }
 
 /// prove's human answer for a callers' context question.
 #[must_use]
-pub fn format_human(header: &str, a: &CallersAnswer, detail: bool) -> String {
+pub fn format_human(header: &str, a: &CallersAnswer, detail: bool, hcx: &HumanCx<'_>) -> String {
     let q = a.question;
     let mut lines = vec![
         format!("--- {header} ---"),
@@ -2236,7 +2354,7 @@ pub fn format_human(header: &str, a: &CallersAnswer, detail: bool) -> String {
         }
         ProveAnswer::Unknown => format!(
             "  answer:   unknown (blocked by: {}) — no {} was found in the analyzed callers",
-            blockers_named(&kinds, 3, false),
+            blockers_named(&kinds, 3, false, hcx),
             population(q)
         ),
     });
@@ -2245,7 +2363,7 @@ pub fn format_human(header: &str, a: &CallersAnswer, detail: bool) -> String {
     if a.answer == ProveAnswer::Unknown {
         lines.push(plain_reading(a));
         lines.push(format!("  not established: {}", not_established(q)));
-        if let Some(l) = reanalysis_line(a, detail) {
+        if let Some(l) = reanalysis_line(a, detail, hcx) {
             lines.push(l);
         }
     }
@@ -2306,8 +2424,9 @@ pub fn format_human(header: &str, a: &CallersAnswer, detail: bool) -> String {
             }
             if established > shown {
                 lines.push(format!(
-                    "    … {} more established (detail: true lists up to {MAX_WITNESSES})",
-                    established - shown
+                    "    … {} more established ({} lists up to {MAX_WITNESSES})",
+                    established - shown,
+                    hcx.detail()
                 ));
             }
         }
@@ -2340,10 +2459,16 @@ pub fn format_human(header: &str, a: &CallersAnswer, detail: bool) -> String {
             CallersQuestion::InterceptErrors => "uncaught at (entries reached with no trap)",
             CallersQuestion::NonInteractive => "non-interactive entries",
         };
+        // §8.2 (F53): the unit, and how the kinds relate.
+        let unit = if q == CallersQuestion::NonInteractive {
+            " (distinct entries per context; contexts may overlap, not summed)"
+        } else {
+            " (distinct entries; an entry is counted once, in its own kind)"
+        };
         for (over_hub, tag) in [(false, ""), (true, " [via-hub]")] {
             let by = entry_words_line(a, over_hub);
             if !by.is_empty() {
-                lines.push(format!("  {label}{tag}: {by}"));
+                lines.push(format!("  {label}{tag}: {by}{unit}"));
             }
         }
     }

@@ -199,6 +199,18 @@
     ],
     "lineBase": 1,
     "pathCap": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "dependency code: none reached; no lock facts; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "routines": {
       "r:5d5d269f595b": {
         "display": "Codeunit \"D51 Sender\"::PostThenError",
@@ -216,5 +228,5 @@
     },
     "workspaceFingerprint": "37a0814c1077c76f9f8ac81ad844302230b98ba1e215572a5cc7a9a3541c2f28"
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.3.0"
 }

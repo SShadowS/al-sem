@@ -353,7 +353,8 @@ fn prove_names_the_table_it_resolved() {
     assert_eq!(t["number"], 50610, "{v}");
     let human = run("human");
     assert!(
-        human.contains("question: writes-table:W Modify (table 50610, this app)"),
+        // Output validation §5.2: the question is on the header's first line.
+        human.contains(" writes-table:W Modify (table 50610, this app)   ["),
         "{human}"
     );
 }

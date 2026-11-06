@@ -22,6 +22,7 @@
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
               "line": 41,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -34,6 +35,7 @@
               "excerpt": "error-call",
               "file": "ws:src/checks.al",
               "line": 23,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "error-path",
@@ -48,6 +50,7 @@
               "excerpt": "error-call",
               "file": "ws:src/order.al",
               "line": 25,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "error-path",
@@ -70,6 +73,7 @@
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
               "line": 41,
+              "role": "operation",
               "sourceKind": "source"
             },
             "class": "callerDependent",
@@ -91,6 +95,7 @@
         ]
       },
       "extensionPoints": [],
+      "followUps": [],
       "gaps": [],
       "gapsInDependencies": {
         "dynamicTarget": 0,
@@ -111,6 +116,7 @@
           "column": 4,
           "file": "ws:src/post.al",
           "line": 36,
+          "role": "definition",
           "sourceKind": "source"
         },
         "display": "Codeunit \"Calls Post\"::PreviewPost",
@@ -131,6 +137,7 @@
               "column": 12,
               "file": "ws:src/checks.al",
               "line": 23,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": null,
@@ -157,6 +164,7 @@
                   "column": 12,
                   "file": "ws:src/checks.al",
                   "line": 23,
+                  "role": "operation",
                   "sourceKind": "source"
                 },
                 "kind": "Other",
@@ -170,6 +178,7 @@
               "column": 12,
               "file": "ws:src/order.al",
               "line": 25,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": null,
@@ -191,6 +200,7 @@
                 "column": 8,
                 "file": "ws:src/post.al",
                 "line": 41,
+                "role": "operation",
                 "sourceKind": "source"
               },
               "op": "Modify"
@@ -204,6 +214,7 @@
                   "column": 11,
                   "file": "ws:src/order.al",
                   "line": 24,
+                  "role": "operation",
                   "sourceKind": "source"
                 },
                 "kind": "Other",
@@ -276,6 +287,18 @@
   "diagnostics": [],
   "lineBase": 1,
   "mode": "routine",
+  "result": {
+    "scope": {
+      "analysis": "complete",
+      "assumptions": [
+        "loaded program; unloaded implementations and subscribers are not enumerated"
+      ],
+      "limits": [],
+      "reasons": [],
+      "scope": "dependency code: none reached; no lock facts; dependencies: 0 apps",
+      "universe": "cross-app"
+    }
+  },
   "schema": "al-sem.explain/4",
   "selector": "PreviewPost"
 }

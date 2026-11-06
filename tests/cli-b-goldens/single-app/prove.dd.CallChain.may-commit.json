@@ -25,6 +25,7 @@
           "kind": "unresolved-callsite"
         }
       ],
+      "followUps": [],
       "obligations": {
         "analysisGaps": 0,
         "coneTruncated": false,
@@ -41,6 +42,18 @@
           "notResolved": 0,
           "openWorld": 0
         }
+      },
+      "scope": {
+        "analysis": "partial",
+        "assumptions": [
+          "none (default world: an interface call may reach an implementation that is not loaded)"
+        ],
+        "limits": [],
+        "reasons": [
+          "1 call not resolved (0 in this workspace)"
+        ],
+        "scope": "existing effects (what the routine and its callees already do); dependencies: 0 apps",
+        "universe": "single-app"
       }
     },
     "routine": {
@@ -48,6 +61,7 @@
         "column": 4,
         "file": "ws:src/Work.al",
         "line": 13,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "CallChain",
@@ -59,5 +73,5 @@
     },
     "workspaceFingerprint": "205bfd298c228dc5e0b1082339118d4ba526231e65c8f5f36b68984aa499201d"
   },
-  "schemaVersion": "2.8.0"
+  "schemaVersion": "2.10.0"
 }

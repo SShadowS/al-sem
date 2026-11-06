@@ -29,11 +29,13 @@
     },
     "fieldSummary": {
       "byNumberNotLiteral": 0,
+      "candidateSites": 0,
       "candidates": 0,
       "candidatesByReason": {},
       "confirmed": {
         "sites": 1
       },
+      "confirmedSites": 1,
       "declaredKeys": 1,
       "fieldIndexSites": 0,
       "numericCandidates": {
@@ -60,7 +62,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/FTFields.al",
-            "line": 130
+            "line": 130,
+            "role": "definition"
           },
           "display": "CallsKinds",
           "objectDisplay": "Codeunit FT Callers",
@@ -73,7 +76,8 @@
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
-          "line": 135
+          "line": 135,
+          "role": "callSite"
         },
         "source": "access",
         "tempState": "persistent",
@@ -92,7 +96,8 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/FTFields.al",
-          "line": 60
+          "line": 60,
+          "role": "definition"
         },
         "display": "Kinds",
         "objectDisplay": "Codeunit FT Consumers",
@@ -113,6 +118,18 @@
         "routines": 3
       }
     ],
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "per operation, one routine into dependency code; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "searched": {
       "dependencyRoutineBodies": 0,
       "kinds": [
@@ -158,5 +175,5 @@
       "selector": "FT Item"
     }
   },
-  "schemaVersion": "3.8.0"
+  "schemaVersion": "3.10.0"
 }

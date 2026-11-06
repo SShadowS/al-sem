@@ -2487,6 +2487,34 @@ pub(crate) fn scoped_guarantee_to_value(
     serde_json::Value::Object(m)
 }
 
+/// Whether a guarantee label of `eff` is valid for refutation: any of its
+/// scoped guarantees is (output validation §9.8, F73). A label with none is
+/// descriptive only: it describes an ordering, it cannot refute a claim.
+#[must_use]
+pub fn guarantee_refutable(eff: &DigestEffectFull, label: &str) -> bool {
+    eff.scoped_guarantees
+        .iter()
+        .any(|sg| sg.label == label && sg.valid_for_refutation)
+}
+
+/// `refutableGuarantees` (F73, additive beside `guarantees`): the labels of
+/// `guarantees` that are valid for refutation, in `guarantees` order,
+/// written only when at least one is. THE RULE: a label in `guarantees`
+/// that is not listed here is descriptive only (it describes an ordering;
+/// it cannot refute a claim). So a reader never takes a descriptive
+/// guarantee for a refutable fact, even where the folded document keeps no
+/// trivial scoped guarantee to look the flag up in. `None`: no label is
+/// refutable (every label descriptive only), the field is omitted.
+pub(crate) fn refutable_guarantees(eff: &DigestEffectFull) -> Option<serde_json::Value> {
+    let labels: Vec<serde_json::Value> = eff
+        .guarantees
+        .iter()
+        .filter(|g| guarantee_refutable(eff, g))
+        .map(|g| g.clone().into())
+        .collect();
+    (!labels.is_empty()).then_some(serde_json::Value::Array(labels))
+}
+
 pub fn effect_to_value(eff: &DigestEffectFull) -> serde_json::Value {
     let mut m = serde_json::Map::new();
     m.insert("type".into(), eff.effect_type.clone().into());
@@ -2535,6 +2563,9 @@ pub fn effect_to_value(eff: &DigestEffectFull) -> serde_json::Value {
     let guarantees: Vec<serde_json::Value> =
         eff.guarantees.iter().map(|g| g.clone().into()).collect();
     m.insert("guarantees".into(), serde_json::Value::Array(guarantees));
+    if let Some(r) = refutable_guarantees(eff) {
+        m.insert("refutableGuarantees".into(), r);
+    }
     m.insert("factId".into(), eff.fact_id.clone().into());
     let sg: Vec<serde_json::Value> = eff
         .scoped_guarantees
@@ -3057,11 +3088,17 @@ pub fn project_digest_document(
     // overloaded name, a dependency object's number); routine rows and
     // summary rows gain `signature`, `member`, `selector` and `handle`, and
     // summary rows `stableId`.
+    // 3.2.0 (output validation V4, F76, additive): `payload.result.scope`
+    // (analysis, reasons, assumptions, limits, universe, scope).
+    // 3.3.0 / 2.3.0 (output validation V6, F73, additive): an effect row's
+    // `refutableGuarantees` (the labels valid for refutation, written only
+    // when one is; a label not listed is descriptive only), and the summary
+    // row's `guaranteeLabels`.
     let compact = v3.as_ref().is_some_and(|v| v.compact);
     let table_answers = v3.as_ref().map(|v| v.table_answers);
     env.insert(
         "schemaVersion".into(),
-        if v3.is_some() { "3.1.0" } else { "2.2.0" }.into(),
+        if v3.is_some() { "3.3.0" } else { "2.3.0" }.into(),
     );
 
     // The block goes in after the null drop, so its `ratio: null` survives; the
@@ -3083,6 +3120,11 @@ pub fn project_digest_document(
         }
         doc = sort_keys_keep_nulls(doc);
     }
+    // 3.2.0 (output validation V4, F76): `payload.result.scope`.
+    if let Some(scope) = v3.as_ref().and_then(|v| v.scope.clone()) {
+        doc["payload"]["result"] = serde_json::json!({"scope": scope});
+        doc = sort_keys_keep_nulls(doc);
+    }
     if compact {
         let mut s = serde_json::to_string(&doc).expect("serde_json serialization");
         s.push('\n');
@@ -3099,6 +3141,8 @@ pub struct V3Inputs<'a> {
     pub compact: bool,
     /// `--writes-table` (W2-2 gap (a)): `entries[].tableAnswers`.
     pub table_answers: &'a crate::engine::l5::prove::TableAnswers,
+    /// Output validation V4 (F76): `payload.result.scope`.
+    pub scope: Option<serde_json::Value>,
 }
 
 pub struct ChangedInputContract {
@@ -3128,9 +3172,29 @@ pub fn format_digest_human_v3(
         "digest: no changed roots resolved\n".to_string()
     } else {
         let mut lines: Vec<String> = Vec::new();
+        // Output validation §5.2: with one root its summary line is the
+        // answer's `answer:` line and the card keeps the rest; the analysis,
+        // limits and scope are the header's third line (a card of several
+        // prints its own analysis and limits only when they say more).
+        let single = entries.len() == 1;
         for (entry, r) in entries.iter().zip(rollups) {
             lines.push(format!("--- {} ---", entry_display(cx, entry)));
-            let mut body: Vec<String> = rr::header_lines(r, entry, &[]);
+            let facts = rr::header_facts(r, entry, &[]);
+            // Several roots: each card's own summary line first, then the
+            // lines a single card prints.
+            let mut body: Vec<String> = Vec::new();
+            if !single {
+                body.push(format!("summary — {}", facts.answer()));
+            }
+            body.extend(facts.rest().iter().map(|l| (*l).to_string()));
+            if !single {
+                if facts.analysis != crate::engine::result_header::Analysis::Complete {
+                    body.push(facts.analysis.human());
+                }
+                if !facts.limits.is_empty() {
+                    body.push(format!("limits: {}", facts.limits.join("; ")));
+                }
+            }
             if entry.effects.is_empty() {
                 body.push("effects: none".to_string());
             }
@@ -3149,10 +3213,10 @@ pub fn format_digest_human_v3(
             body.extend(rr::literal_dead_lines(r, opts));
             body.extend(rr::temporary_lines(r, opts));
             body.extend(rr::event_lines(r, cx, opts));
-            body.extend(rr::kind_lines(r, entry, opts.detail));
+            body.extend(rr::kind_lines(r, entry, opts));
             body.extend(rr::workspace_gap_lines(r, entry, opts));
             body.extend(rr::dependency_gap_lines(r, opts));
-            body.extend(diagnostic_lines(entry, opts.detail));
+            body.extend(diagnostic_lines(entry, opts));
             lines.extend(body.into_iter().map(|l| format!("  {l}")));
             lines.push(String::new());
         }
@@ -3165,8 +3229,105 @@ pub fn format_digest_human_v3(
     text
 }
 
+/// The digest answer's four header lines (output validation §5.2): the
+/// resolved roots, the answer (one root: its summary line), every root's
+/// analysis and limits at once, the dependency depth and the dependencies
+/// count, and what shows more.
+#[allow(clippy::too_many_arguments)]
+fn digest_header(
+    entries: &[DigestEntryFull],
+    rollups: &[crate::engine::l5::routine_rollup::RoutineRollup],
+    cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
+    files: Option<&[String]>,
+    routines: Option<&[String]>,
+    diff: bool,
+    render: crate::engine::l5::digest_v3::DigestRender,
+    single_app: bool,
+    deps: usize,
+) -> crate::engine::result_header::Header {
+    use crate::engine::follow_up::Input;
+    use crate::engine::l5::routine_rollup as rr;
+    use crate::engine::result_header::{Analysis, Header, dependencies_clause};
+    let names: Vec<String> = entries.iter().map(|e| entry_display(cx, e)).collect();
+    let listed = rr::fold(names.clone(), 3, "routines", false).joined();
+    let roots = match names.len() {
+        0 => "no root resolved".to_string(),
+        1 => names[0].clone(),
+        n => format!("{n} roots: {listed}"),
+    };
+    let mut modes: Vec<String> = Vec::new();
+    if diff {
+        modes.push("diff".to_string());
+    }
+    if let Some(f) = files {
+        modes.push(format!("files {}", f.join(", ")));
+    }
+    if routines.is_some() && (diff || files.is_some()) {
+        modes.push("routines".to_string());
+    }
+    let inputs = if modes.is_empty() {
+        roots
+    } else {
+        format!("{} → {roots}", modes.join(" + "))
+    };
+    let mut h = Header::new("digest", inputs, single_app);
+    let facts: Vec<rr::HeaderFacts> = entries
+        .iter()
+        .zip(rollups)
+        .map(|(e, r)| rr::header_facts(r, e, &[]))
+        .collect();
+    h.answer = match &facts[..] {
+        [] => "no answer — no changed root resolved".to_string(),
+        [one] => one.answer().to_string(),
+        many => format!(
+            "{} roots, one card each; each card leads with its summary line",
+            many.len()
+        ),
+    };
+    let mut analysis = if facts.is_empty() {
+        Analysis::NotAnalyzed("no changed root resolved".to_string())
+    } else {
+        Analysis::Complete
+    };
+    for f in &facts {
+        analysis = analysis.and(f.analysis.clone());
+        for l in &f.limits {
+            if !h.limits.contains(l) {
+                h.limits.push(l.clone());
+            }
+        }
+    }
+    h.analysis = analysis;
+    let mut scope: Vec<String> = Vec::new();
+    match &facts[..] {
+        [] => {}
+        [one] => scope.push(one.depth.clone()),
+        _ => scope.push(
+            "dependency code followed through every resolved call with literal arguments"
+                .to_string(),
+        ),
+    }
+    if !facts.is_empty() {
+        scope.push("no lock facts".to_string());
+    }
+    scope.push(dependencies_clause(deps));
+    h.scope = scope.join("; ");
+    let s = render.surface;
+    if !facts.is_empty() && !render.detail {
+        h.more
+            .push(format!("{} lists every list complete", Input::Detail.on(s)));
+    }
+    h.more
+        .push(format!("{} for every effect row", Input::FormatJson.on(s)));
+    h
+}
+
 /// `diagnostics: kind n; kind n (reason n)`, or each one with `detail`.
-fn diagnostic_lines(entry: &DigestEntryFull, detail: bool) -> Vec<String> {
+fn diagnostic_lines(
+    entry: &DigestEntryFull,
+    opts: crate::engine::l5::routine_rollup::RenderOpts,
+) -> Vec<String> {
+    let detail = opts.detail;
     if entry.entry_diagnostics.is_empty() {
         return Vec::new();
     }
@@ -3217,8 +3378,9 @@ fn diagnostic_lines(entry: &DigestEntryFull, detail: bool) -> Vec<String> {
         })
         .collect();
     vec![format!(
-        "diagnostics: {} (--detail lists each with its operation)",
-        parts.join("; ")
+        "diagnostics: {} ({} lists each with its operation)",
+        parts.join("; "),
+        opts.detail_input()
     )]
 }
 
@@ -3270,47 +3432,60 @@ pub struct DigestRunResult {
     pub json_text: String,
     pub human_text: String,
     pub exit_code: u8, // 0 = OK, 2 = zero roots
-    /// What the document says, in at most [`SUMMARY_CAP_BYTES`] (MCP output plan
+    /// What the document says, in at most 8 KiB (MCP output plan
     /// 1b): [`digest_summary`]. The MCP server sends it beside the file the
     /// document goes to.
     pub summary: serde_json::Value,
 }
 
+#[cfg(test)]
 use crate::engine::batch::output::SUMMARY_CAP_BYTES;
 
-/// How many routines [`digest_summary`] lists, and how many names per list.
-const SUMMARY_ROUTINES: usize = 20;
-const SUMMARY_NAMES: usize = 10;
-
-/// One root's summary (W2-2, design §3.1): the root, its coverage, its
-/// effects by type and the ONE [`RollupTotals`] serialization every reader
-/// prints (`summary`), plus, unless `counts_only`, the first names of each
-/// list (may-persist tables in this app and in dependencies, entry points,
-/// top callees of the dependency gaps).
-///
-/// [`RollupTotals`]: crate::engine::l5::routine_rollup::RollupTotals
+/// One root's summary row (output validation V4, §5.2): its identity (one
+/// row per stable id, overloads apart by signature), its summary line, the
+/// counts a reader decides on, its asked `tableAnswers` and its test status.
 fn digest_entry_summary(
     e: &DigestEntryFull,
     r: &crate::engine::l5::routine_rollup::RoutineRollup,
     cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
-    counts_only: bool,
     answers: Option<&(Vec<serde_json::Value>, Vec<String>)>,
+    test_status: &str,
 ) -> serde_json::Value {
     use serde_json::json;
     let mut by_type: BTreeMap<&str, u64> = BTreeMap::new();
+    // §9.8 (F73): guarantee labels on effect rows, refutable and
+    // descriptive-only counted apart.
+    let (mut refutable, mut descriptive) = (0usize, 0usize);
     for f in &e.effects {
         *by_type.entry(f.effect_type.as_str()).or_default() += 1;
+        for g in &f.guarantees {
+            if guarantee_refutable(f, g) {
+                refutable += 1;
+            } else {
+                descriptive += 1;
+            }
+        }
     }
     // V3 §2.1 (3.1.0): the one display, and the stable id, signature,
     // member and selector that tell overloads and member triggers apart.
+    // Output validation V4 (§5.2, F42, F77): one compact row per stable id —
+    // its summary line (`answer`), the counts a reader decides on, its test
+    // status in the §8.1 words.
+    let facts = crate::engine::l5::routine_rollup::header_facts(r, e, &[]);
     let mut v = json!({
         "routine": entry_display(cx, e),
         "stableId": e.routine_id,
-        "coverage": e.coverage_status,
-        "coverageReasons": e.coverage_reasons,
+        "analysis": facts.analysis.key(),
+        "answer": facts.answer(),
         "effects": e.effects.len(),
         "effectsByType": by_type,
+        // W2-2 (T-W2-13): the one RollupTotals serialization.
         "summary": r.totals.to_json(),
+        "testStatus": test_status,
+        // §9.8 (F73): guarantee labels over the effect rows; `refutable`
+        // counts the labels the rows list in `refutableGuarantees`, and
+        // `descriptiveOnly` the rest of `guarantees` (not listed there).
+        "guaranteeLabels": {"refutable": refutable, "descriptiveOnly": descriptive},
     });
     for (k, x) in cx.names.identity_json(&e.routine_id) {
         if k != "display" {
@@ -3342,36 +3517,14 @@ fn digest_entry_summary(
                 .collect::<Vec<_>>()
         );
     }
-    if !counts_only {
-        let (own, dep) = r.may_write_names(cx);
-        let take = |s: Vec<String>| s.into_iter().take(SUMMARY_NAMES).collect::<Vec<_>>();
-        v["names"] = json!({
-            "tablesOwnedByApp": take(own),
-            "tablesOwnedByDependencies": take(dep),
-            "entryPoints": r
-                .crossings
-                .iter()
-                .filter(|c| c.writes())
-                .take(5)
-                .map(|c| c.name.clone())
-                .collect::<Vec<_>>(),
-            "topCallees": r
-                .gaps
-                .top_callees
-                .iter()
-                .take(3)
-                .map(|(c, n)| json!({"callee": c, "count": n}))
-                .collect::<Vec<_>>(),
-        });
-    }
     v
 }
 
-/// The digest's summary (MCP output plan 1b, D1/D2): the document's totals and,
-/// per root (the first [`SUMMARY_ROUTINES`]), what decides whether to open the
-/// file. Never the unresolved call sites themselves: their counts. Kept under
-/// [`SUMMARY_CAP_BYTES`]: past it every name is dropped (counts only), then
-/// routines are dropped from the end; never a spill.
+/// The digest's summary (MCP output plan 1b, D1/D2; output validation V4
+/// §5.2): the document's totals and one row per root. Never the unresolved
+/// call sites themselves: their counts. Kept under 8 KiB by
+/// [`crate::engine::result_index::with_index`]: rows are dropped from the
+/// end into `summaryTruncated`, and every row is in the result index.
 pub fn digest_summary(
     entries: &[DigestEntryFull],
     rollups: &[crate::engine::l5::routine_rollup::RoutineRollup],
@@ -3399,51 +3552,174 @@ pub(crate) fn digest_summary_with(
     changed_roots_diagnostics: usize,
     table_answers: Option<&crate::engine::l5::prove::TableAnswers>,
 ) -> serde_json::Value {
+    digest_summary_tested(
+        entries,
+        rollups,
+        cx,
+        roots_requested,
+        changed_roots_diagnostics,
+        table_answers,
+        None,
+    )
+}
+
+/// Output validation V4 (§5.2, F42, F77): a root's test status in the §8.1
+/// words, from the `--tests` coverage block (`not requested` without it).
+fn root_test_status(
+    id: &str,
+    tc: Option<&crate::engine::l5::test_coverage::TestCoverage>,
+) -> String {
+    use crate::engine::l5::test_coverage::UncoveredReason as R;
+    let Some(tc) = tc else {
+        return "not requested".to_string();
+    };
+    if let Some(c) = tc.covered.iter().find(|c| c.stable_id == id) {
+        return match c.reached_from.first() {
+            Some(t) => format!("tests with a modeled path (nearest: {t})"),
+            None => "tests with a modeled path".to_string(),
+        };
+    }
+    match tc
+        .uncovered
+        .iter()
+        .find(|u| u.stable_id == id)
+        .map(|u| &u.reason)
+    {
+        Some(R::NotInGraph) => "not in projection",
+        Some(R::NoTestCode | R::DeclarationOnly) => "not loaded",
+        Some(R::PlatformEventSubscriber | R::DependencyEventSubscriber) => "analysis partial",
+        Some(R::NoPath) if tc.coverage.status == "partial" => "analysis partial",
+        Some(R::NoPath) => "no modeled path",
+        None => "not in projection",
+    }
+    .to_string()
+}
+
+/// [`digest_summary_with`] with each row's test status (`--tests`): one
+/// row per stable id (overloads never folded), the values several rows
+/// share factored into `shared` (a row holds `{"shared": "sN"}`), the test
+/// scope once; every row in the result index, as many in the summary as
+/// fit its 8 KiB (`summaryTruncated` says which it left out).
+pub(crate) fn digest_summary_tested(
+    entries: &[DigestEntryFull],
+    rollups: &[crate::engine::l5::routine_rollup::RoutineRollup],
+    cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
+    roots_requested: usize,
+    changed_roots_diagnostics: usize,
+    table_answers: Option<&crate::engine::l5::prove::TableAnswers>,
+    test_coverage: Option<&crate::engine::l5::test_coverage::TestCoverage>,
+) -> serde_json::Value {
     use serde_json::json;
     let total_unresolved: usize = entries.iter().map(|e| e.unresolved.len()).sum();
-    let build = |counts_only: bool, routines: usize| {
-        let listed: Vec<serde_json::Value> = entries
-            .iter()
-            .zip(rollups)
-            .take(routines)
-            .map(|(e, r)| {
-                digest_entry_summary(
-                    e,
-                    r,
-                    cx,
-                    counts_only,
-                    table_answers.and_then(|t| t.get(&e.routine_id)),
-                )
-            })
-            .collect();
-        let mut v = json!({
-            "kind": "digest",
-            "rootsRequested": roots_requested,
-            "rootsResolved": entries.len(),
-            "totalEffects": entries.iter().map(|e| e.effects.len()).sum::<usize>(),
-            "totalUnresolved": total_unresolved,
-            "changedRootsDiagnostics": changed_roots_diagnostics,
-            "routinesListed": listed.len(),
-            "routines": listed,
+    let rows: Vec<serde_json::Value> = entries
+        .iter()
+        .zip(rollups)
+        .map(|(e, r)| {
+            digest_entry_summary(
+                e,
+                r,
+                cx,
+                table_answers.and_then(|t| t.get(&e.routine_id)),
+                &root_test_status(&e.routine_id, test_coverage),
+            )
+        })
+        .collect();
+    // The values two or more rows share, once.
+    const FACTORED: &[&str] = &["effectsByType", "summary"];
+    let mut seen: Vec<(String, serde_json::Value, usize)> = Vec::new();
+    for r in &rows {
+        for k in FACTORED {
+            let s = r[*k].to_string();
+            match seen.iter_mut().find(|(t, _, _)| *t == s) {
+                Some(x) => x.2 += 1,
+                None => seen.push((s, r[*k].clone(), 1)),
+            }
+        }
+    }
+    let mut shared = serde_json::Map::new();
+    let mut key_of: Vec<(String, String)> = Vec::new();
+    for (s, v, n) in &seen {
+        if *n > 1 {
+            let key = format!("s{}", shared.len() + 1);
+            shared.insert(key.clone(), v.clone());
+            key_of.push((s.clone(), key));
+        }
+    }
+    let listed: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let mut r = r.clone();
+            for k in FACTORED {
+                let s = r[*k].to_string();
+                if let Some((_, key)) = key_of.iter().find(|(t, _)| *t == s) {
+                    r[*k] = json!({"shared": key});
+                }
+            }
+            r
+        })
+        .collect();
+    let index_rows: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let mut x = json!({});
+            for k in [
+                "routine",
+                "stableId",
+                "selector",
+                "signature",
+                "member",
+                "analysis",
+                "answer",
+                "tableAnswers",
+                "testStatus",
+            ] {
+                if let Some(v) = r.get(k) {
+                    x[k] = v.clone();
+                }
+            }
+            x
+        })
+        .collect();
+    let mut v = json!({
+        "kind": "digest",
+        "rootsRequested": roots_requested,
+        "rootsResolved": entries.len(),
+        "totalEffects": entries.iter().map(|e| e.effects.len()).sum::<usize>(),
+        "totalUnresolved": total_unresolved,
+        "changedRootsDiagnostics": changed_roots_diagnostics,
+        "routinesListed": listed.len(),
+        "shared": shared,
+        "routines": listed,
+    });
+    if let Some(tc) = test_coverage {
+        v["testScope"] = json!({
+            "status": tc.coverage.status,
+            "reasons": tc.coverage.reasons,
+            "testProceduresConsidered": tc.test_procedures_considered,
+            "testAppsNotLoaded": tc.test_apps_not_loaded.iter().map(|a| a.name.clone())
+                .collect::<Vec<_>>(),
         });
-        if counts_only {
-            v["countsOnly"] = json!(true);
-        }
-        v
-    };
-    let fits = |v: &serde_json::Value| v.to_string().len() <= SUMMARY_CAP_BYTES;
-    let full = build(false, SUMMARY_ROUTINES);
-    if fits(&full) {
-        return full;
     }
-    let mut routines = SUMMARY_ROUTINES.min(entries.len());
-    loop {
-        let v = build(true, routines);
-        if fits(&v) || routines == 0 {
-            return v;
+    // Rows that do not all fit with their totals are listed compact (the
+    // identity, summary line, verdicts and test status; the totals stay in
+    // the document), so the summary names as many requested roots as it can
+    // before it cuts any.
+    let reserve = crate::engine::result_index::INDEX_RESERVE_BYTES;
+    if v.to_string().len() + reserve > crate::engine::batch::output::SUMMARY_CAP_BYTES {
+        v["shared"] = json!({});
+        v["rowDetail"] = json!("compact: each root's totals are in the document");
+        if let Some(rs) = v["routines"].as_array_mut() {
+            for r in rs {
+                if let Some(m) = r.as_object_mut() {
+                    m.remove("summary");
+                    m.remove("effectsByType");
+                }
+            }
         }
-        routines -= 1;
     }
+    let mut v = crate::engine::result_index::with_index(v, "routines", "stableId", index_rows);
+    v["routinesListed"] = json!(v["routines"].as_array().map_or(0, Vec::len));
+    v
 }
 
 /// Run the full digest pipeline for a workspace.
@@ -3809,14 +4085,7 @@ fn digest_view(
         .map(|e| crate::engine::l5::routine_rollup::RoutineRollup::build(e, &rollup_cx))
         .collect();
     // rootsRequested as `payload.summary` counts it (roots + query diagnostics).
-    let summary = digest_summary_with(
-        &entries,
-        &rollups,
-        &rollup_cx,
-        changed_roots.roots.len() + query_diagnostics.len(),
-        changed_roots.diagnostics.len(),
-        (!writes_tables.is_empty()).then_some(&table_answers),
-    );
+    let roots_requested = changed_roots.roots.len() + query_diagnostics.len();
     // #254: the coverage block reads the graph the effects step built off the
     // tree (#160 step 6: the tree itself is released inside `prepare`). A
     // `--tests` plan always builds the tree, roots or not (`digest_plan`).
@@ -3849,6 +4118,17 @@ fn digest_view(
         );
         tc
     });
+    // Output validation V4 (§5.2, F42, F77): one row per root with its test
+    // status, the rows also in the result index.
+    let summary = digest_summary_tested(
+        &entries,
+        &rollups,
+        &rollup_cx,
+        roots_requested,
+        changed_roots.diagnostics.len(),
+        (!writes_tables.is_empty()).then_some(&table_answers),
+        test_coverage.as_ref(),
+    );
     // #69 D1.4: the query's inputs (the effects, the L4 store's join) are dead
     // here. Free them before the JSON projection. (The cells are released
     // after it: the 3.x projection names routines off the model.)
@@ -3864,6 +4144,20 @@ fn digest_view(
         routines: changed_routines.clone(),
         diff_provided: diff_text.is_some(),
     };
+
+    // Output validation §5.2: the header's facts, for the human answer's four
+    // lines and the JSON's `payload.result.scope` (F76).
+    let header = digest_header(
+        &entries,
+        &rollups,
+        &rollup_cx,
+        changed_files.as_deref(),
+        changed_routines.as_deref(),
+        diff_text.is_some(),
+        render,
+        req.single_app,
+        dependencies.apps.len(),
+    );
 
     // JSON
     let json_text = project_digest_document(
@@ -3884,29 +4178,33 @@ fn digest_view(
             opts: render.opts(),
             compact: render.compact,
             table_answers: &table_answers,
+            scope: Some(header.scope_json(serde_json::Map::new())),
         }),
     );
 
     // Human (W2-2, design §4.3): per root the explain card's effect sections,
-    // rendered by the same functions. The dependencies line appears only when
-    // apps were loaded, so a workspace with no dependency reads the same in
-    // both modes.
-    let mut human_text = dependencies.prefix_human(format_digest_human_v3(
+    // rendered by the same functions. Output validation §5.3 (F32): the
+    // dependencies are a count in the header's scope clause.
+    let mut human_text = format_digest_human_v3(
         &entries,
         &rollups,
         &rollup_cx,
         render.opts(),
         &changed_roots.diagnostics,
-    ));
+    );
     // Output validation V2 (§4.7, F27): a change mode says first what it
     // computed. The digest does not compare the diff's lines with the
     // working tree (impact does), so it says so.
     if (diff_text.is_some() || changed_files.is_some()) && !entries.is_empty() {
+        let impact = match render.surface {
+            crate::engine::follow_up::Surface::Mcp => "alsem_impact with base",
+            crate::engine::follow_up::Surface::Cli => "alsem impact --base",
+        };
         human_text.insert_str(
             0,
             &format!(
                 "computed: current effects of the {} {} touches, in the working tree ({}); no \
-                 before/after computed — alsem_impact with base compares two revisions\n",
+                 before/after computed — {impact} compares two revisions\n",
                 crate::engine::l5::routine_rollup::plural(entries.len(), "routine", "routines"),
                 if diff_text.is_some() {
                     "this diff"
@@ -3937,6 +4235,7 @@ fn digest_view(
             }
         }
     }
+    human_text.insert_str(0, &header.human());
     // W2-7 (2g): readable dependency locations (the JSON keeps the guid).
     let human_text = dependencies.readable_locations(human_text);
     drop(rollup_cx);
@@ -4278,6 +4577,122 @@ mod tests {
         }
     }
 
+    /// Output validation §8.2 (F53, c15) and §9.8 (F73): the summary row
+    /// counts the live COMMIT sites and those the root's literal arguments
+    /// rule out apart (3 COMMIT rows = 1 site + 2 more), and guarantee
+    /// labels refutable and descriptive-only apart; an effect row lists its
+    /// refutable labels in `refutableGuarantees` (only when one is; a label
+    /// not listed is descriptive only). Hand-stated rows.
+    ///
+    /// DISCRIMINATION (2026-11-06): not counting own literal-dead COMMIT rows
+    /// (the `commit_dead_sites += 1` in `RoutineRollup::build` removed) fails
+    /// at "literalDead"; restored, passes. `guarantee_refutable` answering
+    /// `false` for every label fails at "refutable row" (the row with
+    /// WRITE_BEFORE_COMMIT lists nothing); restored, passes.
+    #[test]
+    fn summary_counts_dead_commits_and_guarantee_kinds_apart() {
+        use crate::engine::l5::ordering_engine::ScopedGuarantee;
+        let sg = |label: &'static str, refutable: bool| ScopedGuarantee {
+            label,
+            scope: "root",
+            write_occurrence_id: None,
+            commit_occurrence_id: None,
+            io_occurrence_id: None,
+            return_occurrence_id: None,
+            supporting_edge_ids: vec![],
+            commit_effectiveness: None,
+            intervening_boundary: "none",
+            valid_for_refutation: refutable,
+        };
+        let mut live = effect("COMMIT", &[], &[]);
+        live.guarantees = vec!["COMMIT_REACHABLE".into(), "WRITE_BEFORE_COMMIT".into()];
+        live.scoped_guarantees = vec![
+            sg("COMMIT_REACHABLE", false),
+            sg("WRITE_BEFORE_COMMIT", true),
+        ];
+        let mut dead1 = effect("COMMIT", &[], &[]);
+        dead1.literal_unreachable = true;
+        let mut dead2 = effect("COMMIT", &[], &[]);
+        dead2.literal_unreachable = true;
+        let mut e = entry_with(vec![]);
+        e.effects = vec![live, dead1, dead2];
+        assert_eq!(
+            effect_to_value(&e.effects[0])["refutableGuarantees"],
+            serde_json::json!(["WRITE_BEFORE_COMMIT"]),
+            "refutable row"
+        );
+        assert!(
+            effect_to_value(&e.effects[1])
+                .get("refutableGuarantees")
+                .is_none(),
+            "no refutable label, no field"
+        );
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+        let s = digest_summary(&[e], &[r], &cx, 1, 0);
+        let row = &s["routines"][0];
+        assert_eq!(row["effectsByType"]["COMMIT"], 3, "{s}");
+        let c = &row["summary"]["commits"];
+        assert_eq!(c["ownSites"], 1, "{s}");
+        assert_eq!(c["literalDead"]["sites"], 2, "literalDead: {s}");
+        assert_eq!(
+            row["guaranteeLabels"],
+            serde_json::json!({"refutable": 1, "descriptiveOnly": 1}),
+            "refutable 1: {s}"
+        );
+    }
+
+    /// Output validation §8.2 (F53, c05): when no dependency call writes a
+    /// record that may persist, `writes beyond dependency calls` is one
+    /// absence verdict: `no (every candidate decided; …)` only when no
+    /// dependency call is unresolved, else `none observed (…)`. Hand-stated
+    /// rows: one crossing that only commits (writes no table), with and
+    /// without an unresolved call in dependency code.
+    ///
+    /// DISCRIMINATION (2026-11-06): deciding the verdict without the
+    /// dependency gaps (`r.totals.gaps_dependency == 0 &&` removed in
+    /// `beyond_lines`) prints "no" with a gap: fails at "a gap is not a
+    /// no"; restored, passes.
+    #[test]
+    fn beyond_with_no_writing_call_is_one_verdict() {
+        let opts = crate::engine::l5::routine_rollup::RenderOpts {
+            detail: false,
+            path_cap: 1,
+            surface: crate::engine::follow_up::Surface::Cli,
+        };
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let line = |gap: bool| {
+            let mut e = entry_with(vec![]);
+            e.effects = vec![effect(
+                "COMMIT",
+                &[("boundary", "Codeunit Base Poster::OnRun")],
+                &[],
+            )];
+            if gap {
+                e.unresolved = vec![unresolved(
+                    "Codeunit.Run(<dynamic>)",
+                    "dynamic-target",
+                    "dep:g:src/B.al",
+                )];
+            }
+            let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+            crate::engine::l5::routine_rollup::beyond_lines(&r, &e, &cx, opts)
+        };
+        let clean = line(false);
+        assert_eq!(clean.len(), 1, "{clean:?}");
+        assert!(
+            clean[0].starts_with("writes beyond dependency calls: no (every candidate decided; "),
+            "{clean:?}"
+        );
+        let gap = line(true);
+        assert!(
+            gap[0].starts_with("writes beyond dependency calls: none observed ("),
+            "a gap is not a no: {gap:?}"
+        );
+    }
+
     fn unresolved(callee: &str, status: &str, file: &str) -> UnresolvedConeItem {
         UnresolvedConeItem {
             callsite_id: format!("{file}/{callee}"),
@@ -4370,13 +4785,13 @@ mod tests {
             !text.contains("callsiteAnchor") && !text.contains("a-very-long-candidate"),
             "no call-site item: {text}"
         );
+        // Output validation V4 (§5.2): one compact row per root.
         let r = &s["routines"][0];
         assert_eq!(r["routine"], "Codeunit Out Issue Document::IssueDoc");
         assert_eq!(r["effectsByType"]["DB_INSERT"], 2, "{s}");
         // W2-2: the one RollupTotals serialization.
         let t = &r["summary"];
         assert_eq!(t["commits"]["answer"], "may", "{s}");
-        assert_eq!(t["commits"]["entryPoints"], 1, "{s}");
         let w = &t["mayWriteTables"];
         assert_eq!(
             (w["ownedByApp"].as_u64(), w["byDependencies"].as_u64()),
@@ -4384,34 +4799,21 @@ mod tests {
             "{s}"
         );
         assert_eq!(w["count"], 13);
-        assert_eq!(
-            r["names"]["tablesOwnedByApp"],
-            serde_json::json!(["Out Log"])
-        );
-        assert_eq!(
-            r["names"]["tablesOwnedByDependencies"]
-                .as_array()
-                .map(Vec::len),
-            Some(SUMMARY_NAMES)
-        );
-        // Out Log's temporary delete: Out Log is also written persistently.
-        assert_eq!(t["temporaryOnlyTables"], 0);
-        assert_eq!(t["entryPoints"]["count"], 1);
         let g = &t["gaps"];
         assert_eq!(
-            (
-                g["workspace"].as_u64(),
-                g["dependency"].as_u64(),
-                g["notPlaced"].as_u64()
-            ),
-            (Some(2), Some(1), Some(0)),
+            (g["workspace"].as_u64(), g["dependency"].as_u64()),
+            (Some(2), Some(1)),
             "{s}"
         );
-        assert_eq!(
-            r["names"]["topCallees"][0],
-            serde_json::json!({"callee": "Codeunit.Run(<dynamic>)", "count": 1})
+        assert_eq!(r["testStatus"], "not requested", "{s}");
+        assert!(
+            r["answer"]
+                .as_str()
+                .is_some_and(|a| a.starts_with("writes: ")),
+            "{s}"
         );
         assert!(s.get("countsOnly").is_none(), "{s}");
+        assert_eq!(s["indexRows"].as_array().map(Vec::len), Some(1), "{s}");
     }
 
     /// W2-2, T-W2-1: a rollup total is a union by identity, never a sum of
@@ -4529,7 +4931,11 @@ mod tests {
             r.kind_sites
         );
         assert_eq!(r.totals.kinds.get(OTHER_KINDS), Some(&2), "{:?}", r.totals);
-        let lines = kind_lines(&r, &e, false);
+        let lines = kind_lines(
+            &r,
+            &e,
+            crate::engine::l5::routine_rollup::RenderOpts::new(false, None),
+        );
         assert_eq!(
             lines,
             vec![
@@ -4589,16 +4995,21 @@ mod tests {
             .iter()
             .map(|e| crate::engine::l5::routine_rollup::RoutineRollup::build(e, &cx))
             .collect();
-        let s = digest_summary(&entries, &rollups, &cx, 40, 0);
+        // Output validation V4 (§5.2): the rows past the cap go to the result
+        // index (all 40), the summary says which it left out.
+        let mut s = digest_summary(&entries, &rollups, &cx, 40, 0);
+        let rows = s
+            .as_object_mut()
+            .unwrap()
+            .remove(crate::engine::result_index::ROWS_KEY)
+            .unwrap();
         let text = s.to_string();
         assert!(text.len() <= SUMMARY_CAP_BYTES, "{} bytes", text.len());
-        assert_eq!(s["countsOnly"], true, "{text}");
-        assert!(
-            !text.contains("A Rather Long Dependency"),
-            "no names: {text}"
-        );
+        assert_eq!(rows.as_array().map(Vec::len), Some(40), "{rows}");
         let listed = s["routinesListed"].as_u64().unwrap();
-        assert!((1..=SUMMARY_ROUTINES as u64).contains(&listed), "{text}");
+        assert!((1..40).contains(&listed), "{text}");
+        assert_eq!(s["summaryTruncated"]["rowsListed"], listed, "{text}");
+        assert_eq!(s["summaryTruncated"]["rowsTotal"], 40, "{text}");
         assert_eq!(s["rootsResolved"], 40);
     }
 
@@ -4719,8 +5130,10 @@ mod tests {
             "digest: no changed roots resolved\n"
         );
         let text = human(&[entry_with(Vec::new())], &[], false);
+        // Output validation §5.2: one root's summary line is the header's
+        // `answer:`; the card starts with the rest of its summary.
         assert!(
-            text.starts_with("--- R ---\n  summary — writes: "),
+            text.starts_with("--- R ---\n  transaction, UI and errors: "),
             "{text}"
         );
         assert!(text.contains("\n  effects: none\n"), "{text}");

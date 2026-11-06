@@ -26,6 +26,7 @@
               "excerpt": "Order.TestField",
               "file": "ws:src/post.al",
               "line": 12,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -40,6 +41,7 @@
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
               "line": 18,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "guarded-by-IsHandled",
@@ -54,6 +56,7 @@
               "excerpt": "error-call",
               "file": "ws:src/post.al",
               "line": 11,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "error-path",
@@ -70,6 +73,7 @@
               "excerpt": "OnBeforePostOrder",
               "file": "ws:src/post.al",
               "line": 13,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unknown",
@@ -92,6 +96,7 @@
               "excerpt": "Message",
               "file": "ws:src/post.al",
               "line": 19,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "guarded-by-IsHandled",
@@ -108,6 +113,7 @@
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
               "line": 18,
+              "role": "operation",
               "sourceKind": "source"
             },
             "class": "physical",
@@ -138,12 +144,24 @@
         ]
       },
       "extensionPoints": [],
+      "followUps": [
+        {
+          "arguments": {
+            "question": "may-commit",
+            "routine": "Codeunit \"Explain Tests\"::PostUnreleasedFails"
+          },
+          "kind": "ordinary",
+          "tool": "alsem_prove",
+          "why": "the witness of a commit, or the blockers of an unknown"
+        }
+      ],
       "gaps": [
         {
           "anchor": {
             "column": 8,
             "file": "ws:src/tests.al",
             "line": 15,
+            "role": "operation",
             "sourceKind": "source"
           },
           "callee": "Assert.ExpectedError",
@@ -156,6 +174,7 @@
             "column": 8,
             "file": "ws:src/tests.al",
             "line": 16,
+            "role": "operation",
             "sourceKind": "source"
           },
           "callee": "Assert.IsTrue",
@@ -183,6 +202,7 @@
           "column": 4,
           "file": "ws:src/tests.al",
           "line": 9,
+          "role": "definition",
           "sourceKind": "source"
         },
         "display": "Codeunit \"Explain Tests\"::PostUnreleasedFails",
@@ -262,6 +282,22 @@
   "diagnostics": [],
   "lineBase": 1,
   "mode": "routine",
+  "result": {
+    "scope": {
+      "analysis": "partial",
+      "assumptions": [
+        "loaded program; unloaded implementations and subscribers are not enumerated"
+      ],
+      "limits": [
+        "symbol-only-dependency 2"
+      ],
+      "reasons": [
+        "external-target"
+      ],
+      "scope": "dependency code: none reached; no lock facts; dependencies: 0 apps",
+      "universe": "cross-app"
+    }
+  },
   "schema": "al-sem.explain/4",
   "selector": "PostUnreleasedFails"
 }

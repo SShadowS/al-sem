@@ -49,6 +49,9 @@
               "EXTERNAL_IO_BEFORE_COMMIT"
             ],
             "provenance": "direct",
+            "refutableGuarantees": [
+              "COMMIT_DOMINATES_RETURN"
+            ],
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",
@@ -213,6 +216,9 @@
               "WRITE_PENDING_AT_EXTERNAL_IO"
             ],
             "provenance": "direct",
+            "refutableGuarantees": [
+              "WRITE_PENDING_AT_EXTERNAL_IO"
+            ],
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",
@@ -278,5 +284,5 @@
     },
     "workspaceFingerprint": "b8c1a945e4edfea887c05e1dfe4a05cd92953972fc5ee005c195f03c170a5e84"
   },
-  "schemaVersion": "2.2.0"
+  "schemaVersion": "2.3.0"
 }

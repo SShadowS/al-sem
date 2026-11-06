@@ -95,6 +95,9 @@
               "COMMIT_DOMINATES_RETURN"
             ],
             "provenance": "direct",
+            "refutableGuarantees": [
+              "COMMIT_DOMINATES_RETURN"
+            ],
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",
@@ -174,6 +177,9 @@
               "COMMIT_DOMINATES_RETURN"
             ],
             "provenance": "direct",
+            "refutableGuarantees": [
+              "COMMIT_DOMINATES_RETURN"
+            ],
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",
@@ -253,6 +259,9 @@
               "COMMIT_DOMINATES_RETURN"
             ],
             "provenance": "direct",
+            "refutableGuarantees": [
+              "COMMIT_DOMINATES_RETURN"
+            ],
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",
@@ -332,6 +341,9 @@
               "COMMIT_DOMINATES_RETURN"
             ],
             "provenance": "transitive",
+            "refutableGuarantees": [
+              "COMMIT_DOMINATES_RETURN"
+            ],
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",
@@ -414,5 +426,5 @@
     },
     "workspaceFingerprint": "f6926434e3c7c47f07ebe2d627f769e903e898f08ea05d5357827ef685db3a81"
   },
-  "schemaVersion": "2.2.0"
+  "schemaVersion": "2.3.0"
 }

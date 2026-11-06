@@ -1,6 +1,7 @@
---- Codeunit "Ws Work"::CallChain ---
-  question: may-commit — existing effects (what the routine and its callees already do)
-  answer:   unknown (blocked by: call not resolved 1, coverage incomplete 1) — no matching effect was found in the analyzed cone
+prove Codeunit "Ws Work"::CallChain may-commit   [single-app]
+answer: unknown (blocked by: call not resolved 1, coverage incomplete 1) — no matching effect was found in the analyzed cone
+analysis partial (1 call not resolved (0 in this workspace)) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 0 apps
+more: --format json for every evidence row and its hops
   plain reading: no matching effect was found in the analyzed cone; unknown because of call not resolved 1, coverage incomplete 1
   not established: that it never commits
   blockedBy: 2 blockers in 2 kinds
@@ -8,6 +9,4 @@
       coverage status: partial
     call not resolved: 1
       Lib.Outer in CallChain
-  analysis partial — 1 call not resolved (0 in this workspace); top: Lib.Outer ×1
-  assumptions: none (default world: an interface call may reach an implementation that is not loaded)
-  limits: none
+  top callees not resolved: Lib.Outer ×1

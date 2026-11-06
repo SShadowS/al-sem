@@ -565,7 +565,7 @@ fn cdo_digest_json_fits_its_size_budgets() {
     for label in ["IssueReminder", "RunReportID"] {
         let doc = &a.answers[&format!("{label} digest json")].stdout;
         let mut v: Value = serde_json::from_str(doc).expect("digest JSON");
-        assert_eq!(v["schemaVersion"], "3.1.0", "{label}");
+        assert_eq!(v["schemaVersion"], "3.3.0", "{label}");
         strip(&mut v);
         let core = serde_json::to_string_pretty(&v).unwrap().len() + 1;
         eprintln!(
@@ -615,10 +615,24 @@ fn cdo_explain_digest_and_prove_give_one_table_answer() {
         assert_eq!(exit, 0, "{tool}: {}", String::from_utf8_lossy(&stderr));
         serde_json::from_slice(&stdout).expect("JSON")
     };
+    // The location `role` (output validation F78) labels the document it is
+    // printed in (prove and explain, not digest); the answer is the rest.
+    fn without_roles(v: &mut Value) {
+        match v {
+            Value::Object(m) => {
+                m.remove("role");
+                m.values_mut().for_each(without_roles);
+            }
+            Value::Array(a) => a.iter_mut().for_each(without_roles),
+            _ => {}
+        }
+    }
     let key = |v: &Value| {
+        let mut blocked = v.get("blockedBy").cloned().unwrap_or(json!([]));
+        without_roles(&mut blocked);
         (
             v["answer"].clone(),
-            v.get("blockedBy").cloned().unwrap_or(json!([])),
+            blocked,
             v.get("assumptions").cloned().unwrap_or(Value::Null),
         )
     };
@@ -732,8 +746,11 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // `[via-configuration]` and why a configured caller is a candidate)
         // add ~100 B (4,201 B on 2026-11-06).
         ("RunReportID", "query touches human") => (20, 4_400),
-        (_, "query touches human") => (20, 3_000),
-        (_, "prove may-commit human") => (20, 2_000),
+        // Output validation V4 (§5.2): the four header lines (~450 B) where
+        // the removed boilerplate was shorter: IssueReminder's touches 3,030
+        // B, RunReportID's may-commit 2,179 B on 2026-11-06.
+        (_, "query touches human") => (20, 3_300),
+        (_, "prove may-commit human") => (20, 2_400),
         ("RunReportID", "prove writes-table human") => (20, 5_000),
         (_, "prove writes-table human") => (20, 2_500),
         // Final CDO review, item 1: IssueReminder's 287 blockers fold by
@@ -1067,10 +1084,17 @@ fn cdo_rendering_goldens() {
                 )
             })
             .collect();
-        let summary = &a.answers[&format!("{label} digest json")].envelope["summary"];
+        let mut summary = a.answers[&format!("{label} digest json")].envelope["summary"].clone();
+        // The result index (V4 §5.2) lives in the server's output folder,
+        // a new one per run, and names the answer file there: the golden
+        // keeps its row count.
+        if summary["index"]["path"].is_string() {
+            summary["index"]["path"] = json!("<the server's output folder>");
+            summary["index"]["sha256"] = json!("<per run>");
+        }
         files.push((
             format!("{label}.digest-summary.json"),
-            serde_json::to_string_pretty(summary).unwrap() + "\n",
+            serde_json::to_string_pretty(&summary).unwrap() + "\n",
         ));
         for (name, text) in files {
             let path = goldens_dir().join(&name);

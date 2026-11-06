@@ -12,6 +12,7 @@
       "assumptions": [
         "loaded-subscribers"
       ],
+      "followUps": [],
       "obligations": {
         "analysisGaps": 0,
         "coneTruncated": false,
@@ -23,6 +24,16 @@
           "notResolved": 0,
           "openWorld": 0
         }
+      },
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded-subscribers"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "existing effects (what the routine and its callees already do); dependencies: 0 apps",
+        "universe": "cross-app"
       }
     },
     "routine": {
@@ -30,6 +41,7 @@
         "column": 4,
         "file": "ws:src/D1MultiCaller.al",
         "line": 22,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "CallerA",
@@ -41,5 +53,5 @@
     },
     "workspaceFingerprint": "450419199dc399835e4930b0b2b8568717dbc88066e20fa77134485d64043dee"
   },
-  "schemaVersion": "2.8.0"
+  "schemaVersion": "2.10.0"
 }

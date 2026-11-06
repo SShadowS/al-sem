@@ -15,6 +15,7 @@
     "question": "may-commit",
     "result": {
       "answer": "no",
+      "followUps": [],
       "obligations": {
         "analysisGaps": 0,
         "coneTruncated": false,
@@ -26,6 +27,16 @@
           "notResolved": 0,
           "openWorld": 0
         }
+      },
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "none (default world: an interface call may reach an implementation that is not loaded)"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "existing effects (what the routine and its callees already do); dependencies: 0 apps",
+        "universe": "cross-app"
       }
     },
     "routine": {
@@ -33,6 +44,7 @@
         "column": 4,
         "file": "ws:src/Codeunit.al",
         "line": 19,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "OnBeforePrintSafe",
@@ -44,5 +56,5 @@
     },
     "workspaceFingerprint": "f6926434e3c7c47f07ebe2d627f769e903e898f08ea05d5357827ef685db3a81"
   },
-  "schemaVersion": "2.8.0"
+  "schemaVersion": "2.10.0"
 }

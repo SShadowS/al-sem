@@ -1297,6 +1297,7 @@ pub fn human_lines(
     cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
     root: &str,
     detail: bool,
+    surface: crate::engine::follow_up::Surface,
 ) -> Vec<String> {
     use crate::engine::l5::routine_rollup::plural;
     let mut lines = Vec::new();
@@ -1368,8 +1369,9 @@ pub fn human_lines(
     }
     if matching.len() > shown {
         lines.push(format!(
-            "  … +{} matching sites (--detail lists every one; the JSON lists each with its route)",
-            matching.len() - shown
+            "  … +{} matching sites ({} lists every one; the JSON lists each with its route)",
+            matching.len() - shown,
+            crate::engine::follow_up::input(surface, crate::engine::follow_up::Input::Detail)
         ));
     }
     // Output validation V2 (§4.3, F18): the other reachable sites, outside
@@ -1407,10 +1409,17 @@ pub fn human_lines(
             "  to see their routes: {}",
             match (
                 &slice.request.op,
-                others.iter().find_map(|s| s.op_name.as_deref())
+                others.iter().find_map(|s| s.op_name.as_deref()),
+                surface
             ) {
-                (Some(_), Some(op)) => format!("op: \"{op}\", or no op"),
-                (Some(_), None) => "no op".to_string(),
+                (Some(_), Some(op), crate::engine::follow_up::Surface::Mcp) => {
+                    format!("op: \"{op}\", or no op")
+                }
+                (Some(_), Some(op), crate::engine::follow_up::Surface::Cli) => {
+                    format!("--op {op}, or no --op")
+                }
+                (Some(_), None, crate::engine::follow_up::Surface::Mcp) => "no op".to_string(),
+                (Some(_), None, crate::engine::follow_up::Surface::Cli) => "no --op".to_string(),
                 _ => "the same question without the filter".to_string(),
             }
         ));

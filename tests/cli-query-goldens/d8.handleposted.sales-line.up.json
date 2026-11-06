@@ -15,7 +15,8 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/subscriber.al",
-          "line": 4
+          "line": 4,
+          "role": "definition"
         },
         "display": "HandlePosted",
         "objectDisplay": "Codeunit D8BadSubscriber",
@@ -27,6 +28,18 @@
       "selector": "HandlePosted"
     },
     "lineBase": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "per operation, one routine into dependency code; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "table": {
       "id": "11111111-0000-0000-0000-00000000d80a/table/37",
       "isUnknownBucket": false,
@@ -53,13 +66,15 @@
               "anchor": {
                 "column": 8,
                 "file": "ws:src/posting.al",
-                "line": 12
+                "line": 12,
+                "role": "operation"
               },
               "routine": {
                 "anchor": {
                   "column": 4,
                   "file": "ws:src/posting.al",
-                  "line": 3
+                  "line": 3,
+                  "role": "definition"
                 },
                 "display": "PostSalesDoc",
                 "objectDisplay": "Codeunit D8PostingChain",
@@ -77,7 +92,8 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/posting.al",
-              "line": 3
+              "line": 3,
+              "role": "definition"
             },
             "display": "PostSalesDoc",
             "objectDisplay": "Codeunit D8PostingChain",
@@ -100,7 +116,8 @@
             "anchor": {
               "column": 4,
               "file": "ws:src/posting.al",
-              "line": 19
+              "line": 19,
+              "role": "definition"
             },
             "display": "OnAfterPostSalesDoc",
             "objectDisplay": "Codeunit D8PostingChain",
@@ -122,5 +139,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "3.8.0"
+  "schemaVersion": "3.10.0"
 }

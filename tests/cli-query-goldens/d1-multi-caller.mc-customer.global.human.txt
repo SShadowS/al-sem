@@ -1,6 +1,11 @@
---- touches MC Customer (11111111-0000-0000-0000-00000000d01a/table/50101) ---
-  transitively: 4 workspace routines touch it (through workspace or dependency sites; per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code, or on a table not resolved, is not counted)
-  directly: 4 workspace sites in 4 routines and 0 dependency sites touch it
+query touches MC Customer (11111111-0000-0000-0000-00000000d01a/table/50101)   [cross-app]
+answer: workspace sites: 4 in 4 routines — by op: FindSet 3, Modify 1
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependencies: 0 apps
+more: --all lists every witness, no fold; --format json for every row
+  dependency sites: 0 in 0 dependency routines the analysis loads (those the workspace reaches, and the callers of dependency events it subscribes to)
+  by object: Codeunit D1 Multi Caller 4 sites
+  transitive: 4 workspace routines reach one of the workspace or dependency sites (per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code, or on a table not resolved, is not counted)
+  key-relevant (not exhaustive; their sites listed first): Get 0 (primary key), SetCurrentKey 0, SetRange/SetFilter on key fields 0
     [Modify] at ws:src/D1MultiCaller.al:19 in Codeunit "D1 Multi Caller"::ModifyHelper
     [FindSet] at ws:src/D1MultiCaller.al:25 in Codeunit "D1 Multi Caller"::CallerA
     [FindSet] at ws:src/D1MultiCaller.al:33 in Codeunit "D1 Multi Caller"::CallerB

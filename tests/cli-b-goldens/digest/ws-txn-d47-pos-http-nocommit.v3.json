@@ -132,6 +132,9 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
+            "refutableGuarantees": [
+              "WRITE_PENDING_AT_EXTERNAL_IO"
+            ],
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",
@@ -223,6 +226,18 @@
     ],
     "lineBase": 1,
     "pathCap": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "dependency code: none reached; no lock facts; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "routines": {
       "r:abe6856afc01": {
         "display": "Codeunit \"D47 Sender\"::SendAfterModify",
@@ -240,5 +255,5 @@
     },
     "workspaceFingerprint": "0d6c610dea8d73d6142bb6b9375463620d7e10a84ead5599d3040ada0008b395"
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.3.0"
 }

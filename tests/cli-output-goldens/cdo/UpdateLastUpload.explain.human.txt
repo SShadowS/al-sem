@@ -1,22 +1,17 @@
-Codeunit "CDO Telemetry"::UpdateLastUpload  ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:45
-  summary — writes: may modify persistent CDO Setup records (Modify at :48) when the record its caller passes (parameter 1) is not temporary; otherwise it changes a temporary record; no other write (every candidate decided)
-    transaction, UI and errors: commits: no (every candidate decided); errors at 1 place
-    other effects: events: 0 (0 raised in workspace code)
-    callers and tests: callers: 1; tests: none in the workspace; 1 test app discovered (not analyzed here; alsem tests)
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+explain Codeunit "CDO Telemetry"::UpdateLastUpload   [cross-app]
+answer: writes: may modify persistent CDO Setup records (Modify at :48) when the record its caller passes (parameter 1) is not temporary; otherwise it changes a temporary record; no other write (every candidate decided)
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: none reached; no lock facts; dependencies: 11 apps
+more: detail: true lists every list complete; format: "json" for every row
+Codeunit "CDO Telemetry"::UpdateLastUpload  defined at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:45
+  transaction, UI and errors: commits: no (every candidate decided); errors at 1 place
+  other effects: events: 0 (0 raised in workspace code)
+  callers and tests: callers: 1; tests: none in the workspace; 1 test app discovered (not analyzed here; the tests tool selects them)
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   calls: none (no call to a routine; builtins aside)
-  rules: none of its own; inherited: none
   callers: 1 — Codeunit "CDO Telemetry"::QueueUpload
-  commits: no (every candidate decided)
-  caller-dependent writes (1 table): written only if the caller passes a record that is not temporary; alsem prove names the caller
+  caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
     CDO Setup: Modify — depends on the caller's record argument at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:48
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
-  extension points: none (the routine publishes no event itself)
   errors at 1 place: ERROR_IMPLICIT at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:48 (unconditional on success)
-  tests: no [Test] procedure in the workspace app; 1 test app discovered (Continia Document Output 365 - Test); not analyzed in this call — alsem tests (MCP: alsem_tests) selects them
-  next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
+  tests: no [Test] procedure in the workspace app; 1 test app discovered (Continia Document Output 365 - Test); not analyzed in this call — alsem_tests selects them
+  next: alsem_explain {"routines": ["Codeunit \"CDO Telemetry\"::UpdateLastUpload"], "callersContext": true} — its callers' pending writes, intercepted errors and non-interactive entries
 

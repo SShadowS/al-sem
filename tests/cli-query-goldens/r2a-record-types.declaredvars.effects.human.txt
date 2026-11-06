@@ -1,8 +1,7 @@
---- effects of Codeunit "R2a Records"::DeclaredVars ---
-  summary: 4 operations — writes that may persist: none observed (searched: every operation one dependency routine deep, and the whole cone beyond dependency calls; not searched: calls not resolved); locks: none observed (one dependency routine deep; deeper dependency locks are not inventoried); reads 2 on 2 tables; temporary records 1 on 1 table in 1 routine; table not resolved 1 in 1 routine
-  coverage: per operation, one routine into dependency code; operations and routes the root's literal arguments rule out are listed and marked (alsem explain and prove drop them); writes beyond dependency calls follow the whole cone with literal arguments, as alsem explain does; lines are 1-based
-  scope: reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes beyond dependency calls: whole cone, grouped per dependency routine entered; writes to temporary records do not directly persist those records
+query effects Codeunit "R2a Records"::DeclaredVars   [cross-app]
+answer: 4 operations — writes that may persist: none observed (searched: every operation one dependency routine deep, and the whole cone beyond dependency calls; not searched: calls not resolved); locks: none observed (one dependency routine deep; deeper dependency locks are not inventoried); reads 2 on 2 tables; temporary records 1 on 1 table in 1 routine; table not resolved 1 in 1 routine
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes beyond dependency calls: whole cone with literal arguments, grouped per dependency routine entered; operations and routes the literal arguments rule out are listed and marked (explain and prove drop them); dependencies: 0 apps
+more: --all lists every operation; --format json for every row
   reads: 2 on 2 tables (FindFirst 1, FindSet 1) — --all lists them
   temporary records: 1 operation on 1 table in 1 routine — --all lists them
   table not resolved: 1 operation in 1 routine (Get 1) — --all lists them
-  next: alsem prove <routine> writes-table:<table> follows the whole cone for one table

@@ -55,6 +55,8 @@ pub struct DigestRender {
     pub compact: bool,
     /// `--max-paths N`.
     pub max_paths: Option<usize>,
+    /// `--surface` (output validation §6.1).
+    pub surface: crate::engine::follow_up::Surface,
 }
 
 impl DigestRender {
@@ -70,7 +72,7 @@ impl DigestRender {
     /// The path cap and fold of §5.
     #[must_use]
     pub fn opts(&self) -> RenderOpts {
-        RenderOpts::new(self.detail, self.max_paths)
+        RenderOpts::new(self.detail, self.max_paths).with_surface(self.surface)
     }
 }
 
@@ -462,6 +464,12 @@ fn effect_v3(
     m.insert("conditionality".into(), e.conditionality.into());
     m.insert("transactionContext".into(), e.transaction_context.into());
     m.insert("guarantees".into(), json!(e.guarantees));
+    // F73: the refutable labels, only when one is; a label of `guarantees`
+    // not listed there is descriptive only
+    // (`digest_cli::refutable_guarantees`).
+    if let Some(r) = crate::engine::l5::digest_cli::refutable_guarantees(e) {
+        m.insert("refutableGuarantees".into(), r);
+    }
     let mut detail = Map::new();
     for (k, v) in &e.detail {
         // 1d's first-ten comma string: `resources` holds the list (§4.4.2).

@@ -22,6 +22,7 @@
               "excerpt": "Order.TestField",
               "file": "ws:src/post.al",
               "line": 12,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -34,6 +35,7 @@
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
               "line": 18,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "guarded-by-IsHandled",
@@ -46,6 +48,7 @@
               "excerpt": "error-call",
               "file": "ws:src/post.al",
               "line": 11,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "error-path",
@@ -60,6 +63,7 @@
               "excerpt": "OnBeforePostOrder",
               "file": "ws:src/post.al",
               "line": 13,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unknown",
@@ -81,6 +85,7 @@
               "excerpt": "Message",
               "file": "ws:src/post.al",
               "line": 19,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "guarded-by-IsHandled",
@@ -95,6 +100,7 @@
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
               "line": 18,
+              "role": "operation",
               "sourceKind": "source"
             },
             "class": "callerDependent",
@@ -129,6 +135,7 @@
             "excerpt": "OnBeforePostOrder",
             "file": "ws:src/post.al",
             "line": 13,
+            "role": "operation",
             "sourceKind": "source"
           },
           "conditionalOnAppSet": true,
@@ -147,6 +154,19 @@
           "subscribers": 1
         }
       ],
+      "followUps": [
+        {
+          "arguments": {
+            "callersContext": true,
+            "routines": [
+              "Codeunit \"Explain Post\"::PostOrder"
+            ]
+          },
+          "kind": "ordinary",
+          "tool": "alsem_explain",
+          "why": "its callers' pending writes, intercepted errors and non-interactive entries"
+        }
+      ],
       "gaps": [],
       "gapsInDependencies": {
         "dynamicTarget": 0,
@@ -163,6 +183,7 @@
             "column": 12,
             "file": "ws:src/card.al",
             "line": 19,
+            "role": "operation",
             "sourceKind": "source"
           },
           "caption": "P&ost",
@@ -193,6 +214,7 @@
           "column": 4,
           "file": "ws:src/post.al",
           "line": 5,
+          "role": "definition",
           "sourceKind": "source"
         },
         "display": "Codeunit \"Explain Post\"::PostOrder",
@@ -215,6 +237,7 @@
               "column": 12,
               "file": "ws:src/post.al",
               "line": 11,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": null,
@@ -249,6 +272,7 @@
               "column": 8,
               "file": "ws:src/post.al",
               "line": 12,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": null,
@@ -346,6 +370,7 @@
             "column": 4,
             "file": "ws:src/tests.al",
             "line": 9,
+            "role": "operation",
             "sourceKind": "source"
           },
           "asserts": 3,
@@ -374,6 +399,7 @@
               "excerpt": "commit",
               "file": "ws:src/post.al",
               "line": 27,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -389,6 +415,7 @@
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
               "line": 26,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -409,6 +436,7 @@
               "excerpt": "Order.Modify",
               "file": "ws:src/post.al",
               "line": 26,
+              "role": "operation",
               "sourceKind": "source"
             },
             "class": "callerDependent",
@@ -436,6 +464,7 @@
         ]
       },
       "extensionPoints": [],
+      "followUps": [],
       "gaps": [],
       "gapsInDependencies": {
         "dynamicTarget": 0,
@@ -456,6 +485,7 @@
           "column": 4,
           "file": "ws:src/post.al",
           "line": 23,
+          "role": "definition",
           "sourceKind": "source"
         },
         "display": "Codeunit \"Explain Post\"::Archive",
@@ -559,6 +589,7 @@
               "excerpt": "Order.ModifyAll",
               "file": "ws:src/post.al",
               "line": 35,
+              "role": "operation",
               "sourceKind": "source"
             },
             "class": "physical",
@@ -588,6 +619,7 @@
         ]
       },
       "extensionPoints": [],
+      "followUps": [],
       "gaps": [],
       "gapsInDependencies": {
         "dynamicTarget": 0,
@@ -608,6 +640,7 @@
           "column": 4,
           "file": "ws:src/post.al",
           "line": 31,
+          "role": "definition",
           "sourceKind": "source"
         },
         "display": "Codeunit \"Explain Post\"::ReopenAll",
@@ -706,6 +739,7 @@
               "column": 8,
               "file": "ws:src/post.al",
               "line": 17,
+              "role": "operation",
               "sourceKind": "source"
             },
             "kind": "validate",
@@ -715,6 +749,7 @@
                   "column": 12,
                   "file": "ws:src/post.al",
                   "line": 11,
+                  "role": "operation",
                   "sourceKind": "source"
                 },
                 "comment": null,
@@ -752,6 +787,7 @@
                   "column": 8,
                   "file": "ws:src/post.al",
                   "line": 12,
+                  "role": "operation",
                   "sourceKind": "source"
                 },
                 "comment": null,
@@ -804,6 +840,7 @@
               "column": 8,
               "file": "ws:src/post.al",
               "line": 25,
+              "role": "operation",
               "sourceKind": "source"
             },
             "kind": "assign",
@@ -822,6 +859,7 @@
               "column": 8,
               "file": "ws:src/post.al",
               "line": 35,
+              "role": "operation",
               "sourceKind": "source"
             },
             "kind": "modify-all",
@@ -833,6 +871,20 @@
   },
   "lineBase": 1,
   "mode": "field",
+  "result": {
+    "scope": {
+      "analysis": "partial",
+      "assumptions": [
+        "loaded program; unloaded implementations and subscribers are not enumerated"
+      ],
+      "limits": [],
+      "reasons": [
+        "not searched: CalcFormula, TableRelation, page/report/query/XMLport columns (declaration-level); dependency code (none loaded)"
+      ],
+      "scope": "dependency code followed through every resolved call with literal arguments; no lock facts; dependencies: 0 apps",
+      "universe": "cross-app"
+    }
+  },
   "schema": "al-sem.explain/4",
   "selector": {
     "field": "Status",

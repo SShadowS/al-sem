@@ -16,6 +16,7 @@
             "excerpt": "commit",
             "file": "ws:src/Codeunit.al",
             "line": 10,
+            "role": "callSite",
             "sourceKind": "source"
           },
           "detail": "COMMIT with conditionality \"loop-body\"",
@@ -32,6 +33,7 @@
             "excerpt": "commit",
             "file": "ws:src/Codeunit.al",
             "line": 10,
+            "role": "operation",
             "sourceKind": "source"
           },
           "factId": "f0647a58f72646cf",
@@ -55,6 +57,7 @@
           "viaPathsTruncated": false
         }
       ],
+      "followUps": [],
       "obligations": {
         "analysisGaps": 0,
         "coneTruncated": false,
@@ -66,6 +69,16 @@
           "notResolved": 0,
           "openWorld": 0
         }
+      },
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "none (default world: an interface call may reach an implementation that is not loaded)"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "existing effects (what the routine and its callees already do); dependencies: 0 apps",
+        "universe": "cross-app"
       }
     },
     "routine": {
@@ -73,6 +86,7 @@
         "column": 4,
         "file": "ws:src/Codeunit.al",
         "line": 4,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "DirectCommitInLoop",
@@ -84,5 +98,5 @@
     },
     "workspaceFingerprint": "18bd295463f855581d92f3e2f4f696aec9575f2eee33c1469df6c45ca2d35d4e"
   },
-  "schemaVersion": "2.8.0"
+  "schemaVersion": "2.10.0"
 }

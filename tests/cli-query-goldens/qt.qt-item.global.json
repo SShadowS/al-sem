@@ -10,6 +10,18 @@
     },
     "direction": "both",
     "lineBase": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "per operation, one routine into dependency code; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "table": {
       "id": "07070707-0000-4000-8000-000000000071/table/50700",
       "isUnknownBucket": false,
@@ -19,19 +31,54 @@
     },
     "up": {
       "directSites": {
+        "dependencyByOp": {},
+        "dependencyRoutines": 0,
         "dependencySites": 0,
-        "workspaceRoutines": 4,
-        "workspaceSites": 6
+        "keyRelevant": {
+          "Get": 1,
+          "SetCurrentKey": 1,
+          "SetRange/SetFilter on key fields": 1
+        },
+        "workspaceByObject": {
+          "Codeunit QT Touches": 10
+        },
+        "workspaceByOp": {
+          "Delete": 1,
+          "FindFirst": 2,
+          "Get": 1,
+          "Insert": 2,
+          "Modify": 1,
+          "SetCurrentKey": 1,
+          "SetFilter": 1,
+          "SetRange": 1
+        },
+        "workspaceRoutines": 5,
+        "workspaceSites": 10
       },
       "index": "operations-one-routine-deep",
       "note": "workspace-global: every workspace routine whose transitive cone touches this table, by the per-operation index (one routine into dependency code). A routine whose only touch is deeper in dependency code, or on a table not resolved, is not listed. Scope it with --from <routine> --direction up.",
-      "routineCount": 8,
+      "routineCount": 9,
       "routines": [
         {
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 94
+            "line": 97,
+            "role": "definition"
+          },
+          "display": "Keyed",
+          "objectDisplay": "Codeunit QT Touches",
+          "qualifiedDisplay": "Codeunit \"QT Touches\"::Keyed",
+          "selector": "Codeunit \"QT Touches\"::Keyed",
+          "signature": "()",
+          "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#19843f2be37da9909e0fbd343c4e9dcebf343bfe9550b5db6ec24588a0537875"
+        },
+        {
+          "anchor": {
+            "column": 4,
+            "file": "ws:src/QTTouches.al",
+            "line": 107,
+            "role": "definition"
           },
           "display": "Entry",
           "objectDisplay": "Codeunit QT Touches",
@@ -44,7 +91,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 74
+            "line": 77,
+            "role": "definition"
           },
           "display": "Top1",
           "objectDisplay": "Codeunit QT Touches",
@@ -57,7 +105,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 36
+            "line": 39,
+            "role": "definition"
           },
           "display": "TempOnly",
           "objectDisplay": "Codeunit QT Touches",
@@ -70,7 +119,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 31
+            "line": 34,
+            "role": "definition"
           },
           "display": "WriteItem",
           "objectDisplay": "Codeunit QT Touches",
@@ -83,7 +133,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 58
+            "line": 61,
+            "role": "definition"
           },
           "display": "Mixed",
           "objectDisplay": "Codeunit QT Touches",
@@ -96,7 +147,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 51
+            "line": 54,
+            "role": "definition"
           },
           "display": "CallWithReal",
           "objectDisplay": "Codeunit QT Touches",
@@ -109,7 +161,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 44
+            "line": 47,
+            "role": "definition"
           },
           "display": "CallWithTemp",
           "objectDisplay": "Codeunit QT Touches",
@@ -122,7 +175,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/QTTouches.al",
-            "line": 80
+            "line": 83,
+            "role": "definition"
           },
           "display": "Top2",
           "objectDisplay": "Codeunit QT Touches",
@@ -135,5 +189,5 @@
       "scoped": false
     }
   },
-  "schemaVersion": "3.8.0"
+  "schemaVersion": "3.10.0"
 }

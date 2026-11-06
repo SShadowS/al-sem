@@ -12,6 +12,7 @@
       "assumptions": [
         "loaded-subscribers"
       ],
+      "followUps": [],
       "obligations": {
         "analysisGaps": 0,
         "coneTruncated": false,
@@ -23,6 +24,16 @@
           "notResolved": 0,
           "openWorld": 0
         }
+      },
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded-subscribers"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "existing effects (what the routine and its callees already do); dependencies: 1 app",
+        "universe": "cross-app"
       }
     },
     "routine": {
@@ -30,6 +41,7 @@
         "column": 4,
         "file": "ws:src/OutIssueDocument.Codeunit.al",
         "line": 53,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "WriteLog",
@@ -41,5 +53,5 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "2.8.0"
+  "schemaVersion": "2.10.0"
 }

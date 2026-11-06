@@ -1,66 +1,46 @@
-computed: current effects of the 4 routines these files touches, in the working tree (every routine in the files); no before/after computed — alsem_impact with base compares two revisions
+digest files src/D1MultiCaller.al → 4 roots: Codeunit "D1 Multi Caller"::CallerB, Codeunit "D1 Multi Caller"::CallerC, Codeunit "D1 Multi Caller"::CallerA, … +1 routines   [cross-app]
+answer: 4 roots, one card each; each card leads with its summary line
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code followed through every resolved call with literal arguments; no lock facts; dependencies: 0 apps
+more: --detail lists every list complete; --format json for every effect row
+computed: current effects of the 4 routines these files touches, in the working tree (every routine in the files); no before/after computed — alsem impact --base compares two revisions
 --- Codeunit "D1 Multi Caller"::CallerB ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): MC Customer (Modify at :19)
-    transaction, UI and errors: commits: no (every candidate decided); errors at 2 places
-    other effects: events: 0 (0 raised in workspace code)
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  commits: no (every candidate decided)
+  transaction, UI and errors: commits: no (every candidate decided); errors at 2 places
+  other effects: events: 0 (0 raised in workspace code)
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     MC Customer: Modify 1 — known persistent
       Modify at ws:src/D1MultiCaller.al:19
       path: CallerB → ModifyHelper
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
   errors at 2 places: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:19 (in a loop); ERROR_IMPLICIT at ws:src/D1MultiCaller.al:33 (unconditional on success)
 
 --- Codeunit "D1 Multi Caller"::CallerC ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): MC Customer (Modify at :19)
-    transaction, UI and errors: commits: no (every candidate decided); errors at 2 places
-    other effects: events: 0 (0 raised in workspace code)
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  commits: no (every candidate decided)
+  transaction, UI and errors: commits: no (every candidate decided); errors at 2 places
+  other effects: events: 0 (0 raised in workspace code)
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     MC Customer: Modify 1 — known persistent
       Modify at ws:src/D1MultiCaller.al:19
       path: CallerC → ModifyHelper
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
   errors at 2 places: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:19 (in a loop); ERROR_IMPLICIT at ws:src/D1MultiCaller.al:41 (unconditional on success)
 
 --- Codeunit "D1 Multi Caller"::CallerA ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): MC Customer (Modify at :19)
-    transaction, UI and errors: commits: no (every candidate decided); errors at 2 places
-    other effects: events: 0 (0 raised in workspace code)
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  commits: no (every candidate decided)
+  transaction, UI and errors: commits: no (every candidate decided); errors at 2 places
+  other effects: events: 0 (0 raised in workspace code)
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     MC Customer: Modify 1 — known persistent
       Modify at ws:src/D1MultiCaller.al:19
       path: CallerA → ModifyHelper
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
   errors at 2 places: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:19 (in a loop); ERROR_IMPLICIT at ws:src/D1MultiCaller.al:25 (unconditional on success)
 
 --- Codeunit "D1 Multi Caller"::ModifyHelper ---
   summary — writes: may modify persistent MC Customer records (Modify at :19) when the record its caller passes (parameter 1) is not temporary; otherwise it changes a temporary record; no other write (every candidate decided)
-    transaction, UI and errors: commits: no (every candidate decided); errors at 1 place
-    other effects: events: 0 (0 raised in workspace code)
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  commits: no (every candidate decided)
-  caller-dependent writes (1 table): written only if the caller passes a record that is not temporary; alsem prove names the caller
+  transaction, UI and errors: commits: no (every candidate decided); errors at 1 place
+  other effects: events: 0 (0 raised in workspace code)
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
+  caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
     MC Customer: Modify — depends on the caller's record argument at ws:src/D1MultiCaller.al:19
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
   errors at 1 place: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:19 (unconditional on success)

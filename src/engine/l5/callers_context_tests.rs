@@ -55,6 +55,7 @@ fn prove_both(
         detail: true,
         out: None,
         slice: None,
+        surface: Default::default(),
     };
     let r = crate::engine::batch::run_doc(&job)
         .one::<Result<crate::engine::l5::prove::ProveRunResult, String>>()
@@ -776,15 +777,15 @@ fn an_unknown_names_the_assumption_and_what_it_removes() {
     );
     assert_eq!(answer(&v), "unknown", "{v:#}");
     assert!(
-        human.contains("answer:   unknown (blocked by: external callers 1)"),
+        human.contains("\nanswer: unknown (blocked by: external callers 1)"),
         "{human}"
     );
     assert!(human.contains("  plain reading: no pending write was found in the analyzed callers"));
     assert!(human.contains("  not established: that no caller has a write pending"));
     assert!(
         human.contains(
-            "re-analysis under an assumption: assumeNoDependents: true — assumes no other app \
-             calls this routine; removes every blocker of this answer (external callers 1)"
+            "re-analysis under an assumption: --no-dependents — only if no other app calls this \
+             routine; removes every blocker of this answer (external callers 1)"
         ),
         "{human}"
     );
@@ -835,4 +836,38 @@ fn a_started_codeunits_commit_ui_and_error_are_not_the_starters() {
         let v = prove_json(w.path(), "Pw Bg::OnRun", q, true);
         assert_eq!(answer(&v), "yes", "precondition: Bg itself does it ({q})");
     }
+}
+
+/// Output validation §8.2 (F53, c29): entries by kind are DISTINCT entries,
+/// each counted once in its own kind, and under "established" when any of
+/// its occurrences is. Hand-stated sets (an `OnAction` recorded as a page
+/// action AND a page trigger; one entry both established and over a hub),
+/// so the test does not depend on the walk producing the overlap.
+///
+/// DISCRIMINATION (2026-11-06): counting each word's own set (the old
+/// `(k, s.len())` map for every question) gives page trigger 2 and a
+/// via-hub page trigger: fails at "disjoint"; restored, passes.
+#[test]
+fn entries_by_kind_count_each_entry_once_in_its_own_kind() {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut words: BTreeMap<(bool, &'static str), BTreeSet<u32>> = BTreeMap::new();
+    words.insert((false, "page action"), BTreeSet::from([1]));
+    words.insert((false, "page trigger"), BTreeSet::from([1, 2]));
+    words.insert((true, "page trigger"), BTreeSet::from([2]));
+    words.insert((true, "event subscriber"), BTreeSet::from([3]));
+    let got = super::entry_word_counts(super::CallersQuestion::InterceptErrors, words.clone());
+    let want: BTreeMap<(bool, &'static str), usize> = BTreeMap::from([
+        ((false, "page action"), 1),
+        ((false, "page trigger"), 1),
+        ((true, "event subscriber"), 1),
+    ]);
+    assert_eq!(got, want, "disjoint");
+    assert_eq!(
+        got.values().sum::<usize>(),
+        3,
+        "adds up to the distinct entries"
+    );
+    // Contexts overlap by design: each word keeps its own entries.
+    let ctx = super::entry_word_counts(super::CallersQuestion::NonInteractive, words);
+    assert_eq!(ctx[&(false, "page trigger")], 2);
 }

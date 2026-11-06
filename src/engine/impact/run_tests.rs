@@ -106,14 +106,20 @@ fn answer(tests: Vec<Result<Value, String>>, json_out: bool) -> (String, usize) 
 fn accounting_comes_first_and_every_diagnostic_appears() {
     let (human, _) = answer(vec![Ok(select("reached", vec![]))], false);
     let lines: Vec<&str> = human.lines().collect();
+    // Output validation §5.2: the four header lines lead, then the
+    // comparison line, then the accounting.
+    assert!(lines[0].starts_with("impact "), "the header: {human}");
     assert!(
-        lines[1].starts_with("input: 1 changed routine resolved"),
+        lines[5].starts_with("input: 1 changed routine resolved"),
         "accounting first: {human}"
     );
+    // The first routine block (the header's answer names it too).
     let first_root = lines
         .iter()
+        .skip(4)
         .position(|l| l.contains("Codeunit A::R"))
-        .unwrap();
+        .unwrap()
+        + 4;
     let input = lines.iter().position(|l| l.starts_with("input:")).unwrap();
     assert!(input < first_root, "accounting first");
     assert!(

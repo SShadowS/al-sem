@@ -176,7 +176,7 @@ fn symbol_only_dependency_table_resolves_and_is_selectable() {
     // digest, default (cross-app).
     let (doc, code) = json(&["digest", &ws, "--file", "src/Work.al"]);
     assert_eq!(code, 0, "{doc}");
-    assert_eq!(doc["schemaVersion"], "2.2.0");
+    assert_eq!(doc["schemaVersion"], "2.3.0");
     assert_eq!(doc["payload"]["dependencies"]["mode"], "crossApp");
     assert_eq!(
         app_sources(&doc),
@@ -194,12 +194,19 @@ fn symbol_only_dependency_table_resolves_and_is_selectable() {
         "{res:?}"
     );
     let (human, _) = alsem(&["digest", &ws, "--file", "src/Work.al", "--format", "human"]);
-    // Output validation V2 (§4.7): a change mode's first line says what was
-    // computed; the dependencies line follows.
-    assert!(human.starts_with("computed: "), "{human}");
+    // Output validation V2 (§4.7): a change mode's first line after the
+    // header says what was computed; V4 (§5.3, F32): the dependencies are a
+    // count in the header's scope clause.
     assert_eq!(
-        human.lines().nth(1),
-        Some("dependencies: XBase (symbolOnly)"),
+        human.lines().nth(4).map(|l| l.starts_with("computed: ")),
+        Some(true),
+        "{human}"
+    );
+    assert!(
+        human
+            .lines()
+            .nth(2)
+            .is_some_and(|l| l.ends_with("dependencies: 1 app")),
         "{human}"
     );
 
@@ -220,7 +227,7 @@ fn symbol_only_dependency_table_resolves_and_is_selectable() {
     for sel in ["18", "Customer"] {
         let (q, code) = json(&["query", "touches", &ws, "--table", sel]);
         assert_eq!(code, 0, "--table {sel}: {q}");
-        assert_eq!(q["schemaVersion"], "3.8.0");
+        assert_eq!(q["schemaVersion"], "3.10.0");
         assert_eq!(q["payload"]["table"]["id"], dep_table(), "--table {sel}");
         assert_eq!(q["payload"]["table"]["name"], "Customer");
         assert_eq!(q["payload"]["dependencies"]["mode"], "crossApp");
@@ -557,11 +564,22 @@ fn without_dependencies_cross_app_equals_single_app() {
             a.push("--single-app");
             let (single, single_code) = alsem(&a);
             assert_eq!(cross_code, single_code, "{argv:?} {format}");
+            // The universe the answer states (output validation V4: the
+            // header's `[single-app]`, `result.scope.universe`) and the scope
+            // input its follow-ups carry (`--single-app`) are the one
+            // difference; everything else is the same.
             let single = if format == "json" {
                 assert!(single.contains("\"mode\": \"singleApp\""), "{single}");
-                single.replace("\"mode\": \"singleApp\"", "\"mode\": \"crossApp\"")
+                single
+                    .replace("\"mode\": \"singleApp\"", "\"mode\": \"crossApp\"")
+                    .replace(
+                        "\"universe\": \"single-app\"",
+                        "\"universe\": \"cross-app\"",
+                    )
             } else {
                 single
+                    .replace("   [single-app]\n", "   [cross-app]\n")
+                    .replace(" --single-app", "")
             };
             assert_eq!(cross, single, "{argv:?} --format {format}");
             compared += 1;

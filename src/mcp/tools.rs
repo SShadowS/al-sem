@@ -256,7 +256,7 @@ fn schema(extra: Vec<(&str, Value)>, required: &[&str], common: bool) -> Value {
 }
 
 fn deterministic() -> Value {
-    json!({"type": "boolean", "description": "Pin timestamps and the version for byte-stable output."})
+    json!({"type": "boolean", "description": "Pin generatedAt and alsemVersion for byte-stable output. It concerns those two fields only, never the answer; the document's own `deterministic` field says whether they were pinned."})
 }
 
 /// Every tool, as `tools/list` returns it.
@@ -266,7 +266,7 @@ pub fn tool_list() -> Vec<Value> {
     vec![
         tool(
             "alsem_explain",
-            "Use before editing or reviewing AL routines: one evidence card per routine with its own rules (conditions and messages), inherited and caller rules, the physical tables it may write (owned by the app and by dependencies), commits, events, UI, HTTP, file, background tasks and errors, who calls it (routines and page actions), the tests that reach it, and the gaps the engine could not follow. Exactly one mode: `routines` (selectors), `diff` (a unified diff's text: one card per routine it changes; `diffRoot` is the folder its paths are relative to, default the git top level), or `table` with `field` (every workspace routine that writes the field). Default (`format: human`): a summary line first, then coverage, assumptions, limits and scope, then the sections; temporary records counted apart, never as writes; long lists folded with their full count; one path per item. Ask for more: `detail: true` (every list complete, up to 3 paths per item), `maxPaths: 0..3`, `showSource: true` (the cited source line ±2 under each location), `writesTables: [T]` (does it write T? per card, prove's own answer), `callersContext: true` (a section with the three callers' context answers for adding a COMMIT, an error or UI: pending writes, intercepted errors, non-interactive entries; it builds the caller graph once, about a second on a large workspace), `format: json` (schema al-sem.explain/4, for parsing; 270-580 KB for a routine that calls Base Application, so a file with a summary of each card's header and counts). Size: a few lines for a small routine, 30-40 KB human for one that calls into Base Application. Lines are 1-based. Dependency code: the whole cone with literal arguments, grouped per entry point (tables per kind, names folded). Next: alsem_prove writes-table:<T> or may-commit for one witness; alsem_query_effects for every operation. Returns the exact `alsem explain` stdout.",
+            "Use before editing or reviewing AL routines: one evidence card per routine with its own rules (conditions and messages), inherited and caller rules, the physical tables it may write (owned by the app and by dependencies), commits, events, UI, HTTP, file, background tasks and errors, who calls it (routines and page actions), the tests that reach it, and the gaps the engine could not follow. Exactly one mode: `routines` (selectors), `diff` (a unified diff's text: one card per routine it changes; `diffRoot` is the folder its paths are relative to, default the git top level), or `table` with `field` (every workspace routine that writes the field). Default (`format: human`): the four header lines (the routine; `answer:`, its summary line; the analysis · assumptions · limits · scope line; `more:`), then the sections; writes to temporary records do not directly persist those records and are listed apart; counts are distinct tables unless a line says operations; long lists folded with their full count; one path per item. Ask for more: `detail: true` (every list complete, up to 3 paths per item), `maxPaths: 0..3`, `showSource: true` (the cited source line ±2 under each location), `writesTables: [T]` (does it write T? per card, prove's own answer), `callersContext: true` (a section with the three callers' context answers for adding a COMMIT, an error or UI: pending writes, intercepted errors, non-interactive entries; it builds the caller graph once, about a second on a large workspace), `format: json` (schema al-sem.explain/4, for parsing; 270-580 KB for a routine that calls Base Application, so a file with a summary of each card's header and counts). Size: a few lines for a small routine, 30-40 KB human for one that calls into Base Application. Lines are 1-based. Dependency code: the whole cone with literal arguments, grouped per entry point (tables per kind, names folded). Next: alsem_prove writes-table:<T> or may-commit for one witness; alsem_query_effects for every operation. Returns the exact `alsem explain` stdout.",
             schema(
                 vec![
                     (
@@ -322,7 +322,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_prove",
-            "A yes/no question about one AL routine (`routine`, a selector), answered with its evidence. `question`, about the routine's existing effects (what it and its callees already do): may-commit, commits-on-success-path, writes-table:<table>, publishes-event:<event>, reaches-ui, throws-error. Or about its callers' context, before adding a COMMIT, an error or UI to it: callers-have-pending-writes (may a caller have a database write pending when it runs), callers-intercept-errors (may a caller turn its error into false: a TryFunction whose result is used, a checked Codeunit.Run, asserterror, collectible errors; a TryFunction does not roll back database changes), callers-may-run-noninteractive (may it run where no user answers UI: API pages, job queue and web service roots from roots.config.json, install and upgrade codeunits, background sessions); these walk every caller up to its entry points, and a public routine's callers in apps that are not loaded block a no unless `assumeNoDependents: true`. Answers: yes (a path to the effect exists; a may-answer), no (proven absent under the stated assumptions), unknown (no matching effect observed, but coverage is incomplete, so not a proof). A temporary-record write is not a write for writes-table. Default (`format: human`): about 10 lines with the answer, each evidence row with its location and one witness path, then the blockers of an unknown grouped by kind with their counts and the first 3 of each (workspace ones first), then coverage (calls not resolved and interface calls open world, with the top callees), assumptions and limits. Ask for more: `detail: true` (every blocker), `closedWorld: true` (interface calls dispatch only to the loaded implementations; it can turn unknown into no, and says so under assumptions), `format: json` (every evidence row, its group path and witness hops; 5-60 KB). Why did an error or a write happen: filter to the sites that may explain it with `match: \"<text>\"` (throws-error: the error's static message text, a literal or a Label's or TextConst's value with %1 placeholders kept, or the Label's name), `site: \"<file>:<line>\"` (throws-error, writes-table, may-commit, reaches-ui), `op: \"<kind>\"` (throws-error: Error, TestField, FieldError, Get, …; writes-table: Insert, Modify, ModifyAll, Delete, DeleteAll, Rename) or `table: \"<table>\"` (throws-error: errors a record operation on that table raises); the answer is then about the matching sites, each with its message text, one route from the routine and up to 2 innermost enclosing conditions per site on the route (selected context, not all necessary conditions, with the count left out; a while condition is loop-entry, a repeat-until one continuation). `routes: N` (1-10, with a filter) lists up to N distinct routes per matching site, fewest hops first, each with its guards: a route is a simple path over (routine, known argument values) states, so recursion is followed only while it changes the known values; the answer says whether the enumeration completed (then every route is listed) or which cap fired (the routes asked, or 50,000 candidate edges per site), and the candidate edges it examined and rejected (by literal arguments, by returning to a state on the route), never a count of routes ruled out. Static candidates, not an observed trace. An error whose message is not static (a variable, an ErrorInfo, the platform's own) never matches and blocks a filtered no; an implicit error matches only by its kind word. Size: 1-5 KB human. Lines are 1-based. Dependency code: the whole call cone is followed with literal arguments. Next: on unknown, alsem_explain lists the workspace gaps behind it. Returns the exact `alsem prove` stdout.",
+            "A yes/no question about one AL routine (`routine`, a selector), answered with its evidence. `question`, about the routine's existing effects (what it and its callees already do): may-commit, commits-on-success-path, writes-table:<table>, publishes-event:<event>, reaches-ui, throws-error. Or about its callers' context, before adding a COMMIT, an error or UI to it: callers-have-pending-writes (may a caller have a database write pending when it runs), callers-intercept-errors (may a caller turn its error into false: a TryFunction whose result is used, a checked Codeunit.Run, asserterror, collectible errors; a TryFunction does not roll back database changes), callers-may-run-noninteractive (may it run where no user answers UI: API pages, job queue and web service roots from roots.config.json, install and upgrade codeunits, background sessions); these walk every caller up to its entry points, and a public routine's callers in apps that are not loaded block a no unless `assumeNoDependents: true`. Answers: yes (a path to the effect exists; a may-answer), no (proven absent under the stated assumptions), unknown (no matching effect observed, but coverage is incomplete, so not a proof). Writes to temporary records do not directly persist those records, so writes-table does not count them. Default (`format: human`): about 10 lines with the answer, each evidence row with its location and one witness path, then the blockers of an unknown grouped by kind with their counts and the first 3 of each (workspace ones first), then coverage (calls not resolved and interface calls open world, with the top callees), assumptions and limits. Ask for more: `detail: true` (every blocker), `closedWorld: true` (interface calls dispatch only to the loaded implementations; it can turn unknown into no, and says so under assumptions), `format: json` (every evidence row, its group path and witness hops; 5-60 KB; its `deterministic` field concerns `generatedAt` and `alsemVersion` only, never the answer: false means a real timestamp). Why did an error or a write happen: filter to the sites that may explain it with `match: \"<text>\"` (throws-error: the error's static message text, a literal or a Label's or TextConst's value with %1 placeholders kept, or the Label's name), `site: \"<file>:<line>\"` (throws-error, writes-table, may-commit, reaches-ui), `op: \"<kind>\"` (throws-error: Error, TestField, FieldError, Get, …; writes-table: Insert, Modify, ModifyAll, Delete, DeleteAll, Rename) or `table: \"<table>\"` (throws-error: errors a record operation on that table raises); the answer is then about the matching sites, each with its message text, one route from the routine and up to 2 innermost enclosing conditions per site on the route (selected context, not all necessary conditions, with the count left out; a while condition is loop-entry, a repeat-until one continuation). `routes: N` (1-10, with a filter) lists up to N distinct routes per matching site, fewest hops first, each with its guards: a route is a simple path over (routine, known argument values) states, so recursion is followed only while it changes the known values; the answer says whether the enumeration completed (then every route is listed) or which cap fired (the routes asked, or 50,000 candidate edges per site), and the candidate edges it examined and rejected (by literal arguments, by returning to a state on the route), never a count of routes ruled out. Static candidates, not an observed trace. An error whose message is not static (a variable, an ErrorInfo, the platform's own) never matches and blocks a filtered no; an implicit error matches only by its kind word. Size: 1-5 KB human. Lines are 1-based. Dependency code: the whole call cone is followed with literal arguments. Next: on unknown, alsem_explain lists the workspace gaps behind it. Returns the exact `alsem prove` stdout.",
             schema(
                 vec![
                     (
@@ -1107,10 +1107,15 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             let format = a.enumerated("format", &["human", "json"], "human")?;
             v.opt("format", &format);
             v.switch("single-app", universe == Universe::SingleApp);
+            // §6.1: the MCP front end's answers are worded for it; the CLI's
+            // argv carries the same `--surface=mcp`, so the bytes are equal.
+            v.opt("surface", "mcp");
             let opts = crate::engine::test_select::render::RenderOpts {
                 tier: crate::engine::test_select::render::TierPick::parse(&tier)?,
                 max_tests: max_tests.map(|n| n as usize),
                 json: format == "json",
+                surface: crate::engine::follow_up::Surface::Mcp,
+                single_app: universe == Universe::SingleApp,
             };
             return Ok(ToolCall::Tests(TestsCall {
                 command: CommandCall {
@@ -1212,11 +1217,15 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             let format = a.enumerated("format", &["human", "json"], "human")?;
             v.opt("format", &format);
             v.switch("single-app", universe == Universe::SingleApp);
+            // §6.1, as for every command tool.
+            v.opt("surface", "mcp");
             let opts = crate::engine::impact::render::RenderOpts::new(
                 format == "json",
                 max_roots.map(|n| n as usize),
                 req.detail,
-            );
+            )
+            .with_surface(crate::engine::follow_up::Surface::Mcp)
+            .with_single_app(universe == Universe::SingleApp);
             return Ok(ToolCall::Impact(ImpactCall {
                 command: CommandCall {
                     tool,
@@ -1237,6 +1246,10 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
         _ => unreachable!("every tool is listed"),
     };
     argv.switch("single-app", universe == Universe::SingleApp);
+    // Output validation §6.1: the answer names MCP inputs and complete
+    // calls, not CLI flags; the CLI takes the same hidden flag, so the MCP
+    // answer is still the CLI's stdout for this argv, byte for byte.
+    argv.opt("surface", "mcp");
     Ok(ToolCall::Command(CommandCall {
         tool,
         workspace,
@@ -1371,6 +1384,7 @@ mod tests {
                 "--routine=A",
                 "--routine=-B",
                 "--format=human",
+                "--surface=mcp",
                 "--",
                 "/ws"
             ]
@@ -1388,6 +1402,7 @@ mod tests {
                 "--diff-root=/r",
                 "--format=json",
                 "--single-app",
+                "--surface=mcp",
                 "--",
                 "/ws"
             ]
@@ -1416,6 +1431,7 @@ mod tests {
                 "prove",
                 "--format=human",
                 "--deterministic",
+                "--surface=mcp",
                 "--",
                 "/ws",
                 "P",
@@ -1435,6 +1451,7 @@ mod tests {
                 "--routine=P",
                 "--file=a.al",
                 "--format=json",
+                "--surface=mcp",
                 "--",
                 "/ws"
             ]
@@ -1453,6 +1470,7 @@ mod tests {
                 "--from=P",
                 "--direction=up",
                 "--format=human",
+                "--surface=mcp",
                 "--",
                 "/ws"
             ]
@@ -1465,6 +1483,7 @@ mod tests {
                 "effects",
                 "--routine=P",
                 "--format=human",
+                "--surface=mcp",
                 "--",
                 "/ws"
             ]

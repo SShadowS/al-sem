@@ -10,6 +10,18 @@
     },
     "direction": "both",
     "lineBase": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "per operation, one routine into dependency code; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "table": {
       "id": "unknown",
       "isUnknownBucket": true,
@@ -18,7 +30,18 @@
     },
     "up": {
       "directSites": {
+        "dependencyByOp": {},
+        "dependencyRoutines": 0,
         "dependencySites": 0,
+        "keyRelevant": {
+          "Get": 1
+        },
+        "workspaceByObject": {
+          "Codeunit R2a Records": 1
+        },
+        "workspaceByOp": {
+          "Get": 1
+        },
         "workspaceRoutines": 1,
         "workspaceSites": 1
       },
@@ -30,7 +53,8 @@
           "anchor": {
             "column": 4,
             "file": "ws:src/Codeunit.al",
-            "line": 10
+            "line": 10,
+            "role": "definition"
           },
           "display": "DeclaredVars",
           "objectDisplay": "Codeunit R2a Records",
@@ -43,5 +67,5 @@
       "scoped": false
     }
   },
-  "schemaVersion": "3.8.0"
+  "schemaVersion": "3.10.0"
 }

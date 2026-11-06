@@ -18,13 +18,15 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/Codeunit.al",
-            "line": 18
+            "line": 18,
+            "role": "operation"
           },
           "routine": {
             "anchor": {
               "column": 4,
               "file": "ws:src/Codeunit.al",
-              "line": 10
+              "line": 10,
+              "role": "definition"
             },
             "display": "DeclaredVars",
             "objectDisplay": "Codeunit R2a Records",
@@ -47,13 +49,15 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/Codeunit.al",
-            "line": 17
+            "line": 17,
+            "role": "operation"
           },
           "routine": {
             "anchor": {
               "column": 4,
               "file": "ws:src/Codeunit.al",
-              "line": 10
+              "line": 10,
+              "role": "definition"
             },
             "display": "DeclaredVars",
             "objectDisplay": "Codeunit R2a Records",
@@ -76,13 +80,15 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/Codeunit.al",
-            "line": 20
+            "line": 20,
+            "role": "operation"
           },
           "routine": {
             "anchor": {
               "column": 4,
               "file": "ws:src/Codeunit.al",
-              "line": 10
+              "line": 10,
+              "role": "definition"
             },
             "display": "DeclaredVars",
             "objectDisplay": "Codeunit R2a Records",
@@ -104,13 +110,15 @@
           "anchor": {
             "column": 8,
             "file": "ws:src/Codeunit.al",
-            "line": 19
+            "line": 19,
+            "role": "operation"
           },
           "routine": {
             "anchor": {
               "column": 4,
               "file": "ws:src/Codeunit.al",
-              "line": 10
+              "line": 10,
+              "role": "definition"
             },
             "display": "DeclaredVars",
             "objectDisplay": "Codeunit R2a Records",
@@ -129,6 +137,10 @@
     "lineBase": 1,
     "result": {
       "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
         "families": {
           "beyondDependencyCalls": {
             "blockers": {
@@ -183,7 +195,11 @@
               "dependency code deeper than one routine is not inventoried for writes"
             ]
           }
-        }
+        },
+        "limits": [],
+        "reasons": [],
+        "scope": "reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes beyond dependency calls: whole cone with literal arguments; dependencies: 0 apps",
+        "universe": "cross-app"
       }
     },
     "routine": {
@@ -192,7 +208,8 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/Codeunit.al",
-          "line": 10
+          "line": 10,
+          "role": "definition"
         },
         "display": "DeclaredVars",
         "objectDisplay": "Codeunit R2a Records",
@@ -261,5 +278,5 @@
       }
     }
   },
-  "schemaVersion": "3.8.0"
+  "schemaVersion": "3.10.0"
 }

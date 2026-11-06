@@ -523,6 +523,15 @@ pub fn pinned_or_now_iso8601(deterministic: bool) -> String {
     }
 }
 
+/// A Unix time in milliseconds as `YYYY-MM-DDTHH:mm:ssZ` (UTC, seconds).
+#[must_use]
+pub fn iso8601_of_unix_ms(unix_ms: u64) -> String {
+    let secs = unix_ms / 1000;
+    let (s, m, h) = (secs % 60, (secs / 60) % 60, (secs / 3600) % 24);
+    let (y, mo, d) = days_to_ymd(secs / 86400);
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
+}
+
 // ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------

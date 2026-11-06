@@ -1,6 +1,4 @@
---- Codeunit "D47 Sender"::SendAfterModify ---
-  question: reaches-ui — existing effects (what the routine and its callees already do)
-  answer:   no
-  analysis complete
-  assumptions: loaded-subscribers
-  limits: none
+prove Codeunit "D47 Sender"::SendAfterModify reaches-ui   [cross-app]
+answer: no
+analysis complete · assumptions: loaded-subscribers · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 0 apps
+more: --format json for every evidence row and its hops

@@ -777,6 +777,7 @@ fn multi_routine_cards_are_the_single_runs_cards() {
             "diagnostics",
             "lineBase",
             "mode",
+            "result",
             "schema",
             "selectors"
         ]
@@ -788,10 +789,45 @@ fn multi_routine_cards_are_the_single_runs_cards() {
         serde_json::json!([single("PostOrder"), single("Archive")])
     );
     // Human: the two single runs' cards, in the same order.
+    // Output validation §5.2: one header for the answer; each card is the
+    // single run's card with its summary line (the single run's `answer:`)
+    // back under its title.
     let (human, _, code) = explain_ws(&["--routine", "Archive", "--routine", "PostOrder"], "human");
     assert_eq!(code, 0);
-    let one = |r: &str| explain_ws(&["--routine", r], "human").0;
-    assert_eq!(human, format!("{}{}", one("PostOrder"), one("Archive")));
+    let one = |r: &str| card_of(&explain_ws(&["--routine", r], "human").0);
+    assert_eq!(
+        after_header(&human),
+        format!("{}{}", one("PostOrder"), one("Archive"))
+    );
+}
+
+/// A human answer after its four header lines (output validation §5.2).
+fn after_header(human: &str) -> &str {
+    let mut parts = human.splitn(5, '\n');
+    assert!(
+        parts.next().is_some_and(|l| l.starts_with("explain ")),
+        "{human}"
+    );
+    assert!(
+        parts.next().is_some_and(|l| l.starts_with("answer: ")),
+        "{human}"
+    );
+    parts.nth(2).unwrap_or("")
+}
+
+/// A single-card answer's card as a card of several prints it: its
+/// `answer:` line as `summary — …` under the title (the analysis here is
+/// complete and nothing is limited, so the card adds no analysis line).
+fn card_of(single: &str) -> String {
+    let lines: Vec<&str> = single.lines().collect();
+    let answer = lines[1].strip_prefix("answer: ").expect("an answer line");
+    assert!(
+        lines[2].starts_with("analysis complete") && lines[2].contains("limits: none"),
+        "precondition: {single}"
+    );
+    let body = after_header(single);
+    let (title, rest) = body.split_once('\n').expect("a title line");
+    format!("{title}\n  summary — {answer}\n{rest}")
 }
 
 /// Duplicates collapse: a selector given twice writes the single run's bytes
@@ -862,9 +898,15 @@ fn multi_routine_unmatched_selectors_are_diagnostics() {
     let not_found = explain_ws(&["--routine", "NoSuchRoutine"], "human").0;
     let ambiguous = explain_ws(&["--routine", "CheckAmount"], "human").0;
     let card = explain_ws(&["--routine", "PostOrder"], "human").0;
+    // One card: the single run's header and body; then the diagnostics.
     assert_eq!(
-        human,
-        format!("{card}{not_found}{ambiguous}"),
+        after_header(&human),
+        format!(
+            "{}{}{}",
+            after_header(&card),
+            after_header(&not_found),
+            after_header(&ambiguous)
+        ),
         "the cards, then a diagnostics block"
     );
     let (out, _, code) = explain_ws(

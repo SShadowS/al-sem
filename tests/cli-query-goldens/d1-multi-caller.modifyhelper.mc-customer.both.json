@@ -35,13 +35,15 @@
             "anchor": {
               "column": 8,
               "file": "ws:src/D1MultiCaller.al",
-              "line": 19
+              "line": 19,
+              "role": "operation"
             },
             "routine": {
               "anchor": {
                 "column": 4,
                 "file": "ws:src/D1MultiCaller.al",
-                "line": 17
+                "line": 17,
+                "role": "definition"
               },
               "display": "ModifyHelper",
               "objectDisplay": "Codeunit D1 Multi Caller",
@@ -63,7 +65,8 @@
         "anchor": {
           "column": 4,
           "file": "ws:src/D1MultiCaller.al",
-          "line": 17
+          "line": 17,
+          "role": "definition"
         },
         "display": "ModifyHelper",
         "objectDisplay": "Codeunit D1 Multi Caller",
@@ -75,6 +78,18 @@
       "selector": "ModifyHelper"
     },
     "lineBase": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "per operation, one routine into dependency code; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "table": {
       "id": "11111111-0000-0000-0000-00000000d01a/table/50101",
       "isUnknownBucket": false,
@@ -99,5 +114,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "3.8.0"
+  "schemaVersion": "3.10.0"
 }

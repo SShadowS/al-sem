@@ -38,6 +38,10 @@ pub struct RenderOpts {
     /// so. `None` (a `--max-roots` or `--detail` the caller asked for): no
     /// budget.
     pub budget: Option<usize>,
+    /// `--surface` (output validation §6.1).
+    pub surface: crate::engine::follow_up::Surface,
+    /// `--single-app` (the header's universe).
+    pub single_app: bool,
 }
 
 impl Default for RenderOpts {
@@ -57,7 +61,28 @@ impl RenderOpts {
             max_roots: max_roots.unwrap_or(DEFAULT_MAX_ROOTS),
             detail,
             budget: (max_roots.is_none() && !detail).then_some(HUMAN_BUDGET),
+            surface: crate::engine::follow_up::Surface::Cli,
+            single_app: false,
         }
+    }
+
+    /// `--surface` (output validation §6.1).
+    #[must_use]
+    pub fn with_surface(mut self, surface: crate::engine::follow_up::Surface) -> RenderOpts {
+        self.surface = surface;
+        self
+    }
+
+    /// `--single-app`.
+    #[must_use]
+    pub fn with_single_app(mut self, single_app: bool) -> RenderOpts {
+        self.single_app = single_app;
+        self
+    }
+
+    /// `input` in the surface's words.
+    fn input(&self, input: crate::engine::follow_up::Input) -> &'static str {
+        input.on(self.surface)
     }
 }
 
@@ -74,7 +99,52 @@ pub const HUMAN_BUDGET: usize = 38 * 1024;
 pub struct Rendered {
     pub text: String,
     pub exit: u8,
-    pub summary: String,
+    /// The envelope summary of a file answer (output validation §5.2): the
+    /// answer, the outcome, the accounting and the first five routines with
+    /// the tests line (`text`), every changed routine as an index row.
+    pub summary: Value,
+    /// What the exit code means (§6.3): `answered`, `no-routine-changed`
+    /// (complete accounting, no routine) or `input-not-mapped`.
+    pub outcome: &'static str,
+}
+
+/// The impact outcome (§6.3, §1 F24): no routine with exit 0 is
+/// `no-routine-changed` (the accounting is complete: exit 2 when input did
+/// not map), with exit 2 `input-not-mapped`.
+fn impact_outcome(roots: usize, exit: u8) -> &'static str {
+    match (roots, exit) {
+        (0, 0) => "no-routine-changed",
+        (0, _) => "input-not-mapped",
+        _ => "answered",
+    }
+}
+
+/// The summary (§5.2) around `text`, with every routine as an index row.
+fn impact_summary(
+    header: &crate::engine::result_header::Header,
+    outcome: &str,
+    text: String,
+    roots: &[Value],
+) -> Value {
+    let row = |r: &Value| {
+        json!({"routine": named(r), "stableId": r["stableId"], "status": r["status"],
+               "testStatus": r["tests"]["status"].as_str()
+                   .map(crate::engine::vocab::test_status)})
+    };
+    crate::engine::result_index::with_index(
+        json!({
+            "kind": "impact",
+            "answer": header.answer,
+            "analysis": header.analysis.human(),
+            "outcome": outcome,
+            "routinesTotal": roots.len(),
+            "routines": roots.iter().take(5).map(row).collect::<Vec<_>>(),
+            "text": text,
+        }),
+        "routines",
+        "stableId",
+        roots.iter().map(row).collect(),
+    )
 }
 
 fn s<'a>(v: &'a Value, k: &str) -> &'a str {
@@ -135,6 +205,67 @@ fn comparison_line(cmp: &Comparison, files: usize) -> String {
 }
 
 /// The accounting's bucket clause (`routine bodies 10,880, …`).
+/// What the changed object-header lines changed (output validation §9.4,
+/// F62): `object headers: 25 files, line 1 only — a byte-order mark removed
+/// (no declaration changed)`. `None` when no file changed a header line.
+fn object_header_line(acc: &Value) -> Option<String> {
+    let changes: Vec<&Value> = acc["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|f| &f["objectHeaderChange"])
+        .filter(|h| h.is_object())
+        .collect();
+    if changes.is_empty() {
+        return None;
+    }
+    let lines: std::collections::BTreeSet<i64> = changes
+        .iter()
+        .flat_map(|h| h["lines"].as_array().into_iter().flatten())
+        .filter_map(Value::as_i64)
+        .collect();
+    let at = match (lines.first(), lines.last()) {
+        (Some(a), Some(b)) if a == b => format!("line {a} only"),
+        (Some(a), Some(b)) if (b - a + 1) as usize == lines.len() => format!("lines {a}-{b}"),
+        _ => format!(
+            "lines {}",
+            lines
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    let words = |k: &str| match k {
+        "byte-order-mark-removed" => "a byte-order mark removed",
+        "byte-order-mark-added" => "a byte-order mark added",
+        "whitespace" => "whitespace only, outside quoted names and values",
+        _ => "the declaration text changed",
+    };
+    let mut by: BTreeMap<&str, usize> = BTreeMap::new();
+    for h in &changes {
+        *by.entry(h["kind"].as_str().unwrap_or("text")).or_default() += 1;
+    }
+    let unchanged = !by.contains_key("text");
+    let what = if by.len() == 1 {
+        words(by.keys().next().expect("one kind")).to_string()
+    } else {
+        by.iter()
+            .map(|(k, n)| format!("{} in {}", words(k), plural(*n, "file", "files")))
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    Some(format!(
+        "  object headers: {}, {at} — {what}{}",
+        plural(changes.len(), "file", "files"),
+        if unchanged {
+            " (no declaration changed)"
+        } else {
+            ""
+        }
+    ))
+}
+
 fn buckets_clause(t: &Value) -> String {
     let mut parts = vec![
         format!("routine bodies {}", thousands(u(t, "routineBody"))),
@@ -362,8 +493,14 @@ const FOLD_SHARE_PERCENT: usize = 50;
 /// when the reach is broad (its entries are at least
 /// [`FOLD_SHARE_PERCENT`] of the program's), a fold line naming the trigger
 /// and its measure; the hubs on the paths in the §8.1 form.
-fn reach_lines(up: &Value, detail: bool, indent: &str) -> Vec<String> {
+fn reach_lines(
+    up: &Value,
+    detail: bool,
+    indent: &str,
+    surface: crate::engine::follow_up::Surface,
+) -> Vec<String> {
     use crate::engine::vocab;
+    let detail_in = crate::engine::follow_up::Input::Detail.on(surface);
     let mut out = Vec::new();
     let a = &up["ancestors"];
     out.push(format!(
@@ -434,7 +571,7 @@ fn reach_lines(up: &Value, detail: bool, indent: &str) -> Vec<String> {
     match share {
         Some(p) if p >= FOLD_SHARE_PERCENT && !detail => out.push(format!(
             "{indent}  broad navigation reach ({p}% of the program's entries; list folded) — \
-             detail: true lists one representative per kind and tier"
+             {detail_in} lists one representative per kind and tier"
         )),
         _ => {
             // One line per kind: two legacy buckets of one kind (codeunit
@@ -482,7 +619,7 @@ fn reach_lines(up: &Value, detail: bool, indent: &str) -> Vec<String> {
                 .collect::<Vec<_>>()
                 .join(", "),
             if hubs.len() > cap {
-                format!(", … +{} (detail: true lists them)", hubs.len() - cap)
+                format!(", … +{} ({detail_in} lists them)", hubs.len() - cap)
             } else {
                 String::new()
             }
@@ -863,6 +1000,19 @@ pub fn render(
     {
         limits.push(format!("before/after not computed: {e}"));
     }
+    // Output validation §5.2: the header's facts (human: the four lines;
+    // JSON: `result.scope`, F76).
+    let header = impact_header(
+        cmp,
+        &roots,
+        files,
+        up,
+        delta,
+        exit,
+        &assumptions,
+        &limits,
+        opts,
+    );
 
     if opts.json {
         let doc = json!({
@@ -897,6 +1047,15 @@ pub fn render(
                          "states": up.as_ref().ok().map(|u| json!({"perRoot": u["cost"]["perRootStates"], "union": u["cost"]["unionStates"]}))},
             "assumptions": assumptions,
             "limits": limits,
+            // Output validation V4 (F76, additive): the header's facts; the
+            // tests' selection when they were computed.
+            "result": {
+                "scope": header.scope_json(serde_json::Map::new()),
+                "selection": match tests {
+                    Ok(t) => t.doc.pointer("/result/selection").cloned().unwrap_or(Value::Null),
+                    Err(_) => Value::Null,
+                },
+            },
             "base": match delta {
                 Ok(d) => d.block.clone(),
                 Err(e) if e == "not asked" => Value::Null,
@@ -904,20 +1063,37 @@ pub fn render(
             },
         });
         let text = serde_json::to_string_pretty(&doc).expect("serializes") + "\n";
+        let outcome = impact_outcome(roots.len(), exit);
         return Rendered {
-            summary: summary_text(cmp, main, &roots, files, tests, delta),
+            summary: impact_summary(
+                &header,
+                outcome,
+                summary_text(cmp, main, &roots, files, tests, delta),
+                &roots,
+            ),
             text,
             exit,
+            outcome,
         };
     }
 
-    let mut out: Vec<String> = Vec::new();
+    let mut out: Vec<String> = vec![header.human().trim_end().to_string()];
+    // §6.1: inputs in the surface's words.
+    let base_in = match opts.surface {
+        crate::engine::follow_up::Surface::Cli => "--base <ref>",
+        crate::engine::follow_up::Surface::Mcp => "base: \"<ref>\"",
+    };
+    let more_in = format!(
+        "{} or {}",
+        opts.input(crate::engine::follow_up::Input::Detail),
+        opts.input(crate::engine::follow_up::Input::FormatJson)
+    );
     // Output validation V2 (§4.7, F27): a change mode's first line states
     // the computation performed, and whether the diff matched the source.
     match (cmp.source, delta) {
         ("diff", Err(_)) => out.push(format!(
             "computed: current effects of the {} this diff touches, in the working tree (the \
-             diff's lines match it: {}); no before/after computed — pass base for that",
+             diff's lines match it: {}); no before/after computed — {base_in} gives it",
             plural(roots.len(), "routine", "routines"),
             if mismatches.is_empty() {
                 "yes".to_string()
@@ -960,6 +1136,7 @@ pub fn render(
         ));
     }
     out.push(input);
+    out.extend(object_header_line(acc));
     if cmp.source == "base" {
         out.push(format!(
             "  layers: committed {}, staged {}, unstaged {}, untracked .al {}{}",
@@ -1009,7 +1186,7 @@ pub fn render(
             hunks_outside.len(),
             first.join("; "),
             if rest > 0 {
-                format!("; … +{rest}, every one with detail or format json")
+                format!("; … +{rest}, every one with {more_in}")
             } else {
                 String::new()
             }
@@ -1105,10 +1282,7 @@ pub fn render(
             out.push(format!("    {d}"));
         }
         if other_diags.len() > show {
-            out.push(format!(
-                "    … +{} (detail or format json)",
-                other_diags.len() - show
-            ));
+            out.push(format!("    … +{} ({more_in})", other_diags.len() - show));
         }
     }
     if roots.is_empty() {
@@ -1121,17 +1295,19 @@ pub fn render(
             out.push(format!("before/after: not computed — {e}"));
         }
         let text = out.join("\n") + "\n";
+        let outcome = impact_outcome(roots.len(), exit);
         return Rendered {
-            summary: text.clone(),
+            summary: impact_summary(&header, outcome, text.clone(), &roots),
             text,
             exit,
+            outcome,
         };
     }
     // 2. Per root: each shown routine's block, then the whole change (3),
     // the tests (4) and what was not seen (5). The routines shown are the
     // first `max_roots`, fewer when the answer would pass its size budget
     // (`RenderOpts::budget`); the fold says how many it hides and why.
-    let header = |shown: usize| -> Vec<String> {
+    let block_header = |shown: usize| -> Vec<String> {
         let which = if shown == roots.len() {
             "all shown".to_string()
         } else {
@@ -1166,7 +1342,7 @@ pub fn render(
     if let Ok(up) = up {
         let un = &up["union"];
         tail.push("the whole change:".to_string());
-        tail.extend(reach_lines(un, false, "  "));
+        tail.extend(reach_lines(un, false, "  ", opts.surface));
     }
     if let Ok(d) = delta {
         before_after_tail(&mut tail, d, opts);
@@ -1178,22 +1354,21 @@ pub fn render(
     }
     // 4. Tests.
     tail.push(match tests {
+        Err(e) if e.starts_with("not asked") => format!(
+            "tests: not asked ({})",
+            match opts.surface {
+                crate::engine::follow_up::Surface::Cli => "--no-tests",
+                crate::engine::follow_up::Surface::Mcp => "tests: false",
+            }
+        ),
         Err(e) => format!("tests: not computed — {e}"),
         Ok(t) => tests_line(&t.doc),
     });
-    // 5. What was not seen.
-    for l in &limits {
-        tail.push(format!("limit: {l}"));
-    }
-    tail.push(if delta.is_ok() {
-        "these are static may-paths; before/after compares semantic keys of both sides; tests are static reachability, not coverage".into()
-    } else {
-        "these are static may-paths and current effects; tests are static reachability, not coverage".into()
-    });
+    // 5. What was not seen: the header's limits and assumptions (§5.2).
     let fold = |shown: usize, cut: bool| -> Option<String> {
         (roots.len() > shown).then(|| {
             format!(
-                "  … +{} ({}max-roots N to show more, or format json for every one)",
+                "  … +{} ({}{} to show more, or {} for every one)",
                 plural(roots.len() - shown, "routine", "routines"),
                 if cut {
                     format!(
@@ -1202,7 +1377,9 @@ pub fn render(
                     )
                 } else {
                     String::new()
-                }
+                },
+                opts.input(crate::engine::follow_up::Input::MaxRoots),
+                opts.input(crate::engine::follow_up::Input::FormatJson)
             )
         })
     };
@@ -1212,7 +1389,7 @@ pub fn render(
         let fixed = bytes(&out) + bytes(&tail);
         let size = |k: usize| {
             fixed
-                + bytes(&header(k))
+                + bytes(&block_header(k))
                 + blocks[..k].iter().map(|b| bytes(b)).sum::<usize>()
                 + fold(k, k < blocks.len()).map_or(0, |l| l.len() + 1)
         };
@@ -1221,18 +1398,117 @@ pub fn render(
             shown -= 1;
         }
     }
-    out.extend(header(shown));
+    out.extend(block_header(shown));
     for b in &blocks[..shown] {
         out.extend(b.iter().cloned());
     }
     out.extend(fold(shown, shown < blocks.len()));
     out.extend(tail);
     let text = out.join("\n") + "\n";
+    let outcome = impact_outcome(roots.len(), exit);
     Rendered {
-        summary: summary_text(cmp, main, &roots, files, tests, delta),
+        summary: impact_summary(
+            &header,
+            outcome,
+            summary_text(cmp, main, &roots, files, tests, delta),
+            &roots,
+        ),
         text,
         exit,
+        outcome,
     }
+}
+
+/// The impact answer's four header lines (output validation §5.2): what was
+/// compared and the routines it resolved, the accounting outcome, the
+/// analysis, assumptions and limits, and what shows more.
+#[allow(clippy::too_many_arguments)]
+fn impact_header(
+    cmp: &Comparison,
+    roots: &[Value],
+    files: usize,
+    up: &Result<Value, String>,
+    delta: &Result<super::run::DeltaOutcome, String>,
+    exit: u8,
+    assumptions: &[String],
+    limits: &[String],
+    opts: RenderOpts,
+) -> crate::engine::result_header::Header {
+    use crate::engine::follow_up::Input;
+    use crate::engine::result_header::{Analysis, Header};
+    let what = match cmp.source {
+        "base" => format!(
+            "base {} (comparison base {}), {}",
+            cmp.requested_ref.as_deref().unwrap_or(""),
+            cmp.comparison_base
+                .as_deref()
+                .map(short)
+                .unwrap_or_default(),
+            plural(files, "file", "files")
+        ),
+        "diff" => format!("diff ({})", plural(files, "file", "files")),
+        "files" => "files".to_string(),
+        _ => "routines".to_string(),
+    };
+    let first = roots.first().map(named).unwrap_or_default();
+    let inputs = format!(
+        "{what} → {}",
+        plural(roots.len(), "changed routine", "changed routines")
+    );
+    let mut h = Header::new("impact", inputs, opts.single_app);
+    h.answer = match (roots.is_empty(), exit) {
+        (true, 0) => {
+            "no routine changed — every changed line is accounted outside routines (outcome: \
+             no-routine-changed)"
+                .to_string()
+        }
+        (true, _) => "no answer — the input did not map to the working tree's routines (outcome: \
+             input-not-mapped)"
+            .to_string(),
+        (false, _) => {
+            let behavior = match delta {
+                Ok(d) => format!(
+                    "; behavior changed in {} of the {} paired with the base",
+                    d.delta["behaviorChanged"],
+                    u(&d.delta, "paired")
+                ),
+                Err(_) => String::new(),
+            };
+            format!(
+                "{} resolved{behavior}; ranked first: {first}",
+                plural(roots.len(), "changed routine", "changed routines")
+            )
+        }
+    };
+    h.analysis = match up {
+        Err(e) if !roots.is_empty() => {
+            Analysis::Partial(vec![format!("callers and entries not computed: {e}")])
+        }
+        _ if roots.is_empty() && exit != 0 => {
+            Analysis::NotAnalyzed("the input did not map".to_string())
+        }
+        _ => Analysis::Complete,
+    };
+    h.assumptions = assumptions.to_vec();
+    h.limits = limits
+        .iter()
+        .filter(|l| !l.starts_with("callers and entries not computed"))
+        .cloned()
+        .collect();
+    h.scope = "callers and entries over the whole program, dependency code in its own tier; \
+               effects through every resolved call with literal arguments"
+        .to_string();
+    if !opts.detail && !roots.is_empty() {
+        h.more.push(format!(
+            "{} lists up to 10 items per list",
+            opts.input(Input::Detail)
+        ));
+    }
+    h.more.push(format!(
+        "{} for every routine with its callers, effects and tests",
+        opts.input(Input::FormatJson)
+    ));
+    h
 }
 
 /// One routine's lines in the human answer: its name and anchor, its
@@ -1287,7 +1563,12 @@ fn root_block(r: &Value, opts: RenderOpts) -> Vec<String> {
                             .join("; ")
                     },
                     if clauses.len() > cap {
-                        format!("; … +{} (detail or format json)", clauses.len() - cap)
+                        format!(
+                            "; … +{} ({} or {})",
+                            clauses.len() - cap,
+                            opts.input(crate::engine::follow_up::Input::Detail),
+                            opts.input(crate::engine::follow_up::Input::FormatJson)
+                        )
                     } else {
                         String::new()
                     }
@@ -1336,7 +1617,7 @@ fn root_block(r: &Value, opts: RenderOpts) -> Vec<String> {
                     }
                 )
             });
-            out.extend(reach_lines(up, opts.detail, "      "));
+            out.extend(reach_lines(up, opts.detail, "      ", opts.surface));
             let p = &up["eventPublishers"];
             if u(p, "count") > 0 {
                 out.push(format!(
@@ -1414,8 +1695,10 @@ fn before_after_tail(out: &mut Vec<String>, d: &super::run::DeltaOutcome, opts: 
         }
         if deleted.len() > show {
             out.push(format!(
-                "  … +{} (detail or format json)",
-                deleted.len() - show
+                "  … +{} ({} or {})",
+                deleted.len() - show,
+                opts.input(crate::engine::follow_up::Input::Detail),
+                opts.input(crate::engine::follow_up::Input::FormatJson)
             ));
         }
     }
@@ -1430,7 +1713,7 @@ fn before_after_tail(out: &mut Vec<String>, d: &super::run::DeltaOutcome, opts: 
         .filter(|f| f["category"] == "schema")
         .collect();
     out.push(format!(
-        "schema and contract (alsem diff's engine: abi, schema): {}{}",
+        "schema and contract (the diff engine's abi and schema checks): {}{}",
         if by.is_empty() {
             "no finding".to_string()
         } else {
@@ -1447,11 +1730,18 @@ fn before_after_tail(out: &mut Vec<String>, d: &super::run::DeltaOutcome, opts: 
     ));
     for f in schema.iter().take(if opts.detail { usize::MAX } else { 5 }) {
         let id = s(&f["subject"], "normalizedStableId");
+        // §6.1: the complete call for the field's consumers.
         let pointer = match id.split_once('#') {
-            Some((table, field)) if !field.starts_with('K') => format!(
-                "; consumers: alsem_query_touches table:\"{}\" field:{field}",
-                table.rsplit(':').next().unwrap_or(table)
-            ),
+            Some((table, field)) if !field.starts_with('K') => {
+                let f = crate::engine::follow_up::FollowUp::new(
+                    crate::engine::follow_up::Tool::QueryTouches,
+                    crate::engine::follow_up::Cx::new(opts.surface, opts.single_app),
+                    "the field's consumers",
+                )
+                .arg("table", table.rsplit(':').next().unwrap_or(table))
+                .arg("field", field);
+                format!("; consumers: {}", f.text(opts.surface))
+            }
             _ => String::new(),
         };
         out.push(format!(
@@ -1460,7 +1750,16 @@ fn before_after_tail(out: &mut Vec<String>, d: &super::run::DeltaOutcome, opts: 
             s(&f["subject"], "displayName")
         ));
     }
-    out.push(format!("  not computed here: {}", s(sc, "notComputed")));
+    // §6.1: a command with no MCP tool is named so (`alsem diff`).
+    let not_computed = s(sc, "notComputed");
+    let not_computed = match opts.surface {
+        crate::engine::follow_up::Surface::Mcp => not_computed.replace(
+            "(alsem diff <base> <new> gives them)",
+            "(the CLI's diff command gives them; it is not available over MCP)",
+        ),
+        crate::engine::follow_up::Surface::Cli => not_computed.to_string(),
+    };
+    out.push(format!("  not computed here: {not_computed}"));
 }
 
 /// The tests summary line from the al-sem.tests/1 block.
@@ -1578,6 +1877,7 @@ fn summary_text(
         ));
     }
     out.push(input);
+    out.extend(object_header_line(acc));
     out.push(if delta.is_ok() {
         "current effects, first by rank:".into()
     } else {

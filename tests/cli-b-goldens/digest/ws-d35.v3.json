@@ -174,6 +174,9 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
+            "refutableGuarantees": [
+              "COMMIT_DOMINATES_RETURN"
+            ],
             "scopedGuarantees": [
               {
                 "commitOccurrenceId": "d41571e0450b5d46",
@@ -296,6 +299,9 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
+            "refutableGuarantees": [
+              "COMMIT_DOMINATES_RETURN"
+            ],
             "scopedGuarantees": [
               {
                 "commitOccurrenceId": "c71eaa213728e0a7",
@@ -418,6 +424,9 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
+            "refutableGuarantees": [
+              "COMMIT_DOMINATES_RETURN"
+            ],
             "scopedGuarantees": [
               {
                 "commitOccurrenceId": "fb56165678f0df67",
@@ -546,6 +555,9 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "transitive",
+            "refutableGuarantees": [
+              "COMMIT_DOMINATES_RETURN"
+            ],
             "scopedGuarantees": [
               {
                 "commitOccurrenceId": "e4a8376aa5d518ba",
@@ -629,6 +641,18 @@
     ],
     "lineBase": 1,
     "pathCap": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "dependency code followed through every resolved call with literal arguments; no lock facts; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "routines": {
       "r:03b944ecefab": {
         "display": "Codeunit \"D35 Demo\"::OnAfterPostDirect",
@@ -674,5 +698,5 @@
     },
     "workspaceFingerprint": "f6926434e3c7c47f07ebe2d627f769e903e898f08ea05d5357827ef685db3a81"
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.3.0"
 }

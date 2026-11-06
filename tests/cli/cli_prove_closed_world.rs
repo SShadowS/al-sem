@@ -192,7 +192,8 @@ fn closed_world_waives_only_fully_loaded_interface_sites() {
         .unwrap();
     let human = String::from_utf8_lossy(&out.stdout);
     assert!(
-        human.contains("re-analysis under an assumption: closedWorld: true")
+        // The CLI's words (§6.1): the MCP answer names the complete call.
+        human.contains("re-analysis under an assumption: --closed-world")
             && human.contains("removes every blocker of this answer (")
             && !human.contains("stay: coverage incomplete"),
         "{human}"

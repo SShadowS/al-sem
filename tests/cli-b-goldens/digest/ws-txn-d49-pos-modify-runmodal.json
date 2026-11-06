@@ -117,6 +117,9 @@
               "WRITE_PENDING_AT_UI"
             ],
             "provenance": "direct",
+            "refutableGuarantees": [
+              "WRITE_PENDING_AT_UI"
+            ],
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",
@@ -183,5 +186,5 @@
     },
     "workspaceFingerprint": "c6699cf6323bea4482f8eb641cd8f8ad5f5688c22d669234161e0cb01359a0da"
   },
-  "schemaVersion": "2.2.0"
+  "schemaVersion": "2.3.0"
 }

@@ -61,6 +61,7 @@ pub(super) fn job<'a>(
             detail: false,
             out: None,
             slice: None,
+            surface: Default::default(),
         }),
         Cmd::Digest => Box::new(DigestJob::new(
             DigestRequest {

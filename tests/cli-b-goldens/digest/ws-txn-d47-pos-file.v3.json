@@ -67,6 +67,9 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
+            "refutableGuarantees": [
+              "COMMIT_DOMINATES_RETURN"
+            ],
             "scopedGuarantees": [
               {
                 "commitOccurrenceId": "dbfbf612a7c23788",
@@ -185,6 +188,9 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
+            "refutableGuarantees": [
+              "WRITE_PENDING_AT_EXTERNAL_IO"
+            ],
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",
@@ -289,6 +295,18 @@
     ],
     "lineBase": 1,
     "pathCap": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "dependency code: none reached; no lock facts; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "routines": {
       "r:9bfdada2ca95": {
         "display": "Codeunit \"D47 Sender\"::ExportAfterModify",
@@ -306,5 +324,5 @@
     },
     "workspaceFingerprint": "e50d20fccb69854fbbf2a517d67bd58d54002d8dc6f3519c8618126ba3683e47"
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.3.0"
 }

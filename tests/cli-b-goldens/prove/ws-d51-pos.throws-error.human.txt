@@ -1,9 +1,7 @@
---- Codeunit "D51 Sender"::PostThenError ---
-  question: throws-error — existing effects (what the routine and its callees already do)
-  answer:   yes
+prove Codeunit "D51 Sender"::PostThenError throws-error   [cross-app]
+answer: yes
+analysis complete · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 0 apps
+more: --format json for every evidence row and its hops
   evidence: 1 effect
     [ERROR_THROW] at ws:src/Sender.Codeunit.al:14
       condition: unconditional on success
-  analysis complete
-  assumptions: none (default world: an interface call may reach an implementation that is not loaded)
-  limits: none

@@ -7,6 +7,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (counting units and per-tool items, output validation V6)
+
+Output validation round 1, milestone V6 (spec
+`docs/superpowers/specs/2026-11-06-output-validation-r1.md` §8.2, §9; word table §8.1, JSON
+rule §8.3). Every count names its unit, and each tool's remaining items land:
+
+- **Count units** (F53, F54): touches field mode counts confirmed sites and candidates apart
+  (`consumers: 3 sites, 1 candidate (4 sites in …)`) and names each breakdown's unit;
+  caller rows print `+1 hop` / `+3 hops`; query effects' MCP summary adds `counts` (operations
+  one routine deep vs the whole-cone write tables); `writes beyond dependency calls` with no
+  writing call is one absence verdict (`no (every candidate decided; …)`, or `none observed
+  (…)` when dependency calls are unresolved); a commit the root's literal arguments rule out
+  is counted apart (`commits: may (1 site, 2 sites more under literal arguments that cannot
+  run)`; JSON `summary.commits.literalDead`); prove's callers'-context entries by kind are
+  distinct entries, each counted once in its own kind (contexts may overlap and say so). A
+  `legend:` line explains field-mode site tags.
+- **Touches table mode** (F59): workspace sites by operation (the answer line), dependency
+  sites by operation, sites by object, the transitive routine count, and key-relevant uses
+  (not exhaustive: `Get`, `SetCurrentKey`, `SetRange`/`SetFilter` on a declared key's field),
+  listed first; unresolved-table sites say `table: not resolved (RecordRef|Record)`. Field
+  mode prints the declared keys before the rename verdict, which says they are listed above
+  (F60).
+- **explain** (F67, F72, F80): `caller rule (checked by N callers: …; no equivalent check
+  recognized in M analyzed callers: …)`; `events raised (N in workspace code, downstream)`
+  with the event names per publisher when they come from 5 publishers or fewer (else the
+  counts and `--detail` for the names), and `publishes: none of its own` (or how many) on the
+  same line.
+- **impact** (F62): `object headers: N files, line 1 only — a byte-order mark removed (no
+  declaration changed)` (or whitespace outside quoted names and values, or the declaration
+  text changed); JSON accounting files carry `objectHeaderChange` with both line texts.
+- **tests** (F64, F82): `test scope:` is one clause; the missing test-library symbols print
+  once (`missing test-library symbols: N apps (…) — add them to Test/.alpackages`); the
+  `production bytes` line is dropped when nothing differs.
+- **status** (F65): `check.inputs` counts every category the check hashed (app.json
+  included), so the counts add up to `filesHashed`.
+- **digest** (F73): an effect row lists the guarantee labels valid for refutation in
+  `refutableGuarantees`, written only when at least one is; a label of `guarantees` not
+  listed there is descriptive only (it describes an ordering, it cannot refute a claim). The
+  summary row counts `guaranteeLabels` refutable and descriptive-only apart.
+- **prove** (F66): the tool description and the `deterministic` input say the flag concerns
+  `generatedAt` and `alsemVersion` only, never the answer.
+
+Schemas (additive): query 3.10.0, digest 3.3.0 (2.x 2.3.0); prove stays 2.10.0 / 2.11.0,
+explain `al-sem.explain/4`, tests and impact version 1, status `statusVersion` 2.
+
+### Changed (one result header, summaries and MCP-shaped follow-ups, output validation V4)
+
+Output validation round 1, milestone V4 (spec
+`docs/superpowers/specs/2026-11-06-output-validation-r1.md` §5, §6, §9.8 F78; word table
+§8.1, JSON rule §8.3). The answer now leads every tool's output, every JSON document states
+its own scope, and an MCP answer names MCP calls instead of CLI flags:
+
+- **Four header lines on every human answer** (F28, F30): `<tool> <resolved inputs>
+  [cross-app|single-app]`, `answer:` (prove's verdict, the card's summary line for explain
+  and digest, the selection line for tests, the accounting outcome for impact, the result
+  line for query), `analysis complete|partial (<reasons>)|not analyzed (<why>) ·
+  assumptions: … · limits: … · scope: …` (the only place these print), and `more:` (the
+  inputs that show more). An unresolved input prints `answer: no answer — <why>`. The
+  revision generation stays in the envelope (`revision`): a one-shot CLI run has none.
+- **`result.scope` in every JSON document** (F76): `analysis`, `reasons`, `assumptions`,
+  `limits`, `universe`, `scope`; tests and impact add `result.selection` (complete, cap
+  asked, returned, total, fallback); query effects keeps `families` beside them. Schemas
+  (additive): prove 2.10.0 / filtered 2.11.0, query 3.9.0, digest 3.2.0; explain stays
+  `al-sem.explain/4`, tests and impact stay version 1.
+- **Boilerplate** (F31, F32, F81, F85): the static scope prose (temporary records, line
+  base, counts are tables) moved to the tool descriptions, which now say "writes to
+  temporary records do not directly persist those records"; empty sections (`rules: none
+  …`, `extension points: none`, `events: 0 … 0 more`, a repeated `commits: no …`,
+  `callers: none`) are not printed; the dependencies are `dependencies: N apps` in the
+  scope clause; telemetry is a count in the summary; touches field mode drops `note:`
+  lines that repeat `searched:`. A card's title says `defined at`, and every location
+  object of the prove, explain and query documents carries `role: definition | callSite |
+  operation` (F78).
+- **MCP-shaped follow-ups** (F34, F35, F37): the MCP and LSP front ends append a hidden
+  `--surface=mcp`; with it every fold note names the input (`detail: true`, `all: true`,
+  `tier: "dependency"`) and every follow-up is a complete call (`alsem_prove {"routine":
+  …, "question": "writes-table:…"}`), one helper owning the mapping
+  (`src/engine/follow_up.rs`). `re-analysis under an assumption:` carries the complete
+  call with `closedWorld` / `assumeNoDependents`; JSON `followUps[]` (`{tool, arguments,
+  why, kind}`, `kind: "conditional"` for an assumption change). `next:` prints only what
+  the card does not answer. A command with no MCP tool (`alsem diff`) is named as not
+  available over MCP. The CLI default keeps CLI words.
+- **Status in one copy** (F33): the text block is the headline, `check` and `refresh` per
+  engine (about 500 bytes); `structuredContent` holds the full document. With no engine
+  the headline names an analysis call that builds one.
+- **Envelope** (F36, F42, F43, F77): `outcome` (`answered`, `no-routine-changed` only
+  with complete accounting, `input-not-mapped`, `not-found`, `ambiguous`, `usage-error`);
+  a file answer's `summary` for every tool — explain each card's summary line, prove its
+  answer line, analysis and the assumption calls with what they remove, tests the run
+  target, selected tests, totals and truncation, impact the answer, outcome and first
+  routines, digest one row per stable id (signature, summary line, `tableAnswers`, test
+  status in the §8.1 words, shared values factored into `shared`), query effects
+  `writes.byTable`. Every requested row also goes into a result index file beside the
+  answer (`<answer>.index.json`, `al-sem.result-index/1`), named by the summary's `index`;
+  `summaryTruncated` replaces `countsOnly`.
+
 ### Changed (what misleads: tiers, verdict words and the evidence a hazard needs, output validation V2)
 
 Output validation round 1 (spec `docs/superpowers/specs/2026-11-06-output-validation-r1.md`

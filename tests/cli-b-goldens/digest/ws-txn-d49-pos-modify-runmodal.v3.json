@@ -132,6 +132,9 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
+            "refutableGuarantees": [
+              "WRITE_PENDING_AT_UI"
+            ],
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",
@@ -236,6 +239,20 @@
     ],
     "lineBase": 1,
     "pathCap": 1,
+    "result": {
+      "scope": {
+        "analysis": "partial",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [
+          "object-run-unresolved"
+        ],
+        "scope": "dependency code: none reached; no lock facts; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "routines": {
       "r:577b872ad696": {
         "display": "Codeunit \"D49 Sender\"::ModifyThenRunModal",
@@ -253,5 +270,5 @@
     },
     "workspaceFingerprint": "c6699cf6323bea4482f8eb641cd8f8ad5f5688c22d669234161e0cb01359a0da"
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.3.0"
 }

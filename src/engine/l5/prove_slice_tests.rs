@@ -42,6 +42,7 @@ fn job<'a>(
         detail: true,
         out: None,
         slice,
+        surface: Default::default(),
     }
 }
 
@@ -242,7 +243,7 @@ fn e2_match_by_label_value_and_label_name() {
         human.contains(crate::engine::l5::prove_slice::STATIC_LABEL),
         "{human}"
     );
-    assert_eq!(v["schemaVersion"], "2.9.0");
+    assert_eq!(v["schemaVersion"], "2.11.0");
     assert_eq!(v["payload"]["filter"]["match"], "customer is BLOCKED");
     let (v, _) = matching(tmp.path(), "KnownOnly", "blockederr");
     assert_eq!(answer(&v), "yes", "the label's name matches");
@@ -500,7 +501,7 @@ fn a_filtered_no_names_its_filter_and_the_other_sites() {
         "the Insert outside the filter is listed: {r:#}"
     );
     assert!(
-        human.contains("answer:   no — no Delete site is reachable (every candidate decided"),
+        human.contains("\nanswer: no — no Delete site is reachable (every candidate decided"),
         "{human}"
     );
     assert!(
@@ -508,7 +509,11 @@ fn a_filtered_no_names_its_filter_and_the_other_sites() {
             && human.contains("Insert at "),
         "{human}"
     );
-    assert!(human.contains("to see their routes: op: \""), "{human}");
+    // The CLI's words (§6.1); at `--surface=mcp` it reads `op: "Insert"`.
+    assert!(
+        human.contains("to see their routes: --op Insert"),
+        "{human}"
+    );
 }
 
 /// A matching write on a record its caller passes is temporary or not

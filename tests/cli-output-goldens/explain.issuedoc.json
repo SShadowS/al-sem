@@ -21,6 +21,7 @@
               "excerpt": "TaskScheduler.CreateTask",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 19,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -101,6 +102,7 @@
               "excerpt": "Doc.TestField",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 12,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -113,6 +115,7 @@
               "excerpt": "Doc.Modify",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 14,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -191,6 +194,7 @@
               "excerpt": "Log.Insert",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 61,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -207,6 +211,7 @@
               "excerpt": "OnAfterIssueDoc",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 25,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unknown",
@@ -230,6 +235,7 @@
               "excerpt": "Client.Get",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 72,
+              "role": "operation",
               "sourceKind": "source"
             },
             "conditionality": "unconditional-on-success",
@@ -263,6 +269,7 @@
               "excerpt": "TempLog.DeleteAll",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 58,
+              "role": "operation",
               "sourceKind": "source"
             },
             "class": "temporary",
@@ -362,6 +369,7 @@
               "excerpt": "Log.Insert",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 61,
+              "role": "operation",
               "sourceKind": "source"
             },
             "class": "physical",
@@ -393,6 +401,7 @@
               "excerpt": "Doc.Modify",
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 14,
+              "role": "operation",
               "sourceKind": "source"
             },
             "class": "callerDependent",
@@ -452,6 +461,7 @@
             "excerpt": "OnAfterIssueDoc",
             "file": "ws:src/OutIssueDocument.Codeunit.al",
             "line": 25,
+            "role": "operation",
             "sourceKind": "source"
           },
           "conditionalOnAppSet": true,
@@ -470,12 +480,35 @@
           "subscribers": 1
         }
       ],
+      "followUps": [
+        {
+          "arguments": {
+            "question": "may-commit",
+            "routine": "Codeunit \"Out Issue Document\"::IssueDoc"
+          },
+          "kind": "ordinary",
+          "tool": "alsem_prove",
+          "why": "the witness of a commit, or the blockers of an unknown"
+        },
+        {
+          "arguments": {
+            "callersContext": true,
+            "routines": [
+              "Codeunit \"Out Issue Document\"::IssueDoc"
+            ]
+          },
+          "kind": "ordinary",
+          "tool": "alsem_explain",
+          "why": "its callers' pending writes, intercepted errors and non-interactive entries"
+        }
+      ],
       "gaps": [
         {
           "anchor": {
             "column": 8,
             "file": "ws:src/OutIssueDocument.Codeunit.al",
             "line": 21,
+            "role": "operation",
             "sourceKind": "source"
           },
           "callee": "Codeunit.Run(<dynamic>)",
@@ -488,6 +521,7 @@
             "column": 8,
             "file": "ws:src/OutIssueDocument.Codeunit.al",
             "line": 23,
+            "role": "operation",
             "sourceKind": "source"
           },
           "callee": "Handler.Handle",
@@ -516,6 +550,7 @@
             "column": 12,
             "file": "ws:src/Pages.al",
             "line": 18,
+            "role": "operation",
             "sourceKind": "source"
           },
           "caption": "Issue",
@@ -546,6 +581,7 @@
           "column": 4,
           "file": "ws:src/OutIssueDocument.Codeunit.al",
           "line": 3,
+          "role": "definition",
           "sourceKind": "source"
         },
         "display": "Codeunit \"Out Issue Document\"::IssueDoc",
@@ -568,6 +604,7 @@
               "column": 8,
               "file": "ws:src/OutIssueDocument.Codeunit.al",
               "line": 12,
+              "role": "operation",
               "sourceKind": "source"
             },
             "comment": null,
@@ -664,6 +701,22 @@
   "diagnostics": [],
   "lineBase": 1,
   "mode": "routine",
+  "result": {
+    "scope": {
+      "analysis": "partial",
+      "assumptions": [
+        "loaded program; unloaded implementations and subscribers are not enumerated"
+      ],
+      "limits": [],
+      "reasons": [
+        "interface-open-world",
+        "object-run-unresolved",
+        "1 interface call open world, 2 dynamic calls not resolved"
+      ],
+      "scope": "dependency code followed through every resolved call with literal arguments (2 dependency routines entered at 2 dependency calls); no lock facts; dependencies: 1 app",
+      "universe": "cross-app"
+    }
+  },
   "schema": "al-sem.explain/4",
   "selector": "Out Issue Document::IssueDoc"
 }

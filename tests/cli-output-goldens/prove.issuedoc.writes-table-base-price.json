@@ -24,6 +24,7 @@
             "excerpt": "enters Codeunit Base Calc::OnRun",
             "file": "ws:src/OutIssueDocument.Codeunit.al",
             "line": 16,
+            "role": "operation",
             "sourceKind": "source"
           },
           "factId": "36d60a20668909d0",
@@ -87,6 +88,18 @@
           "viaPathsTruncated": false
         }
       ],
+      "followUps": [
+        {
+          "arguments": {
+            "routines": [
+              "Codeunit \"Out Issue Document\"::IssueDoc"
+            ]
+          },
+          "kind": "ordinary",
+          "tool": "alsem_explain",
+          "why": "lists the workspace ones under gaps"
+        }
+      ],
       "obligations": {
         "analysisGaps": 0,
         "coneTruncated": false,
@@ -108,6 +121,18 @@
           "openWorld": 1
         }
       },
+      "scope": {
+        "analysis": "partial",
+        "assumptions": [
+          "none (default world: an interface call may reach an implementation that is not loaded)"
+        ],
+        "limits": [],
+        "reasons": [
+          "2 calls not resolved (1 in this workspace), 1 interface call open world (1 in this workspace)"
+        ],
+        "scope": "existing effects (what the routine and its callees already do); dependencies: 1 app",
+        "universe": "cross-app"
+      },
       "table": {
         "app": "Out Base",
         "appId": "d0d00001-0000-4000-8000-0000000000b1",
@@ -121,6 +146,7 @@
         "column": 4,
         "file": "ws:src/OutIssueDocument.Codeunit.al",
         "line": 3,
+        "role": "definition",
         "sourceKind": "source"
       },
       "display": "IssueDoc",
@@ -132,5 +158,5 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "2.8.0"
+  "schemaVersion": "2.10.0"
 }
