@@ -626,7 +626,9 @@ fn single_app_flag_reaches_prove() {
         // review's item 1 (the human blockers grouped by kind; the JSON did
         // not move), then agent-tasks milestone A (schema 2.4.0, and the
         // human question line names its scope, existing effects; nothing
-        // else moved).
+        // else moved), then output validation V3 (schema 2.6.0: the routine's
+        // `qualifiedDisplay`, `selector`, `signature`; the human header in the
+        // one routine display).
         let path = t8_golden(file);
         let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
         assert_eq!(got, want, "{format}: --single-app != the base's default");

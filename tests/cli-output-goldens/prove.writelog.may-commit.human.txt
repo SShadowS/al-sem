@@ -1,4 +1,4 @@
---- Codeunit Out Log Mgt::WriteLog ---
+--- Codeunit "Out Log Mgt"::WriteLog ---
   question: may-commit — existing effects (what the routine and its callees already do)
   answer:   no
   coverage: complete

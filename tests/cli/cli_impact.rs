@@ -166,12 +166,12 @@ fn a_diff_is_accounted_first_then_each_routine() {
     assert_eq!(tot["objectDeclaration"]["byKind"]["field"], 2);
     assert_eq!(tot["unmapped"]["byReason"]["not-al"], 2);
     let r = &v["roots"][0];
-    assert_eq!(r["display"], "Codeunit TU Core::Calc");
+    assert_eq!(r["display"], "Codeunit \"TU Core\"::Calc");
     assert_eq!(r["status"], "changed");
     assert_eq!(r["up"]["callers"]["count"], 1);
     assert_eq!(
         r["up"]["callers"]["first"][0]["display"],
-        "Codeunit TU Core::Post"
+        "Codeunit \"TU Core\"::Post"
     );
     assert_eq!(r["tests"]["status"], "reached");
     assert!(v["input"]["mismatches"].as_array().unwrap().is_empty());
@@ -222,7 +222,7 @@ fn without_a_base_the_status_says_what_the_diff_shows() {
             .as_array()
             .unwrap()
             .iter()
-            .find(|r| r["display"] == format!("Codeunit TU Core::{name}"))
+            .find(|r| r["display"] == format!("Codeunit \"TU Core\"::{name}"))
             .unwrap_or_else(|| panic!("no root {name}: {v:#}"))["status"]
             .as_str()
             .unwrap()
@@ -238,7 +238,7 @@ fn without_a_base_the_status_says_what_the_diff_shows() {
     assert_eq!(code, 0, "{err}");
     assert!(
         human.contains(
-            "Codeunit TU Core::Audited (ws:src/Core.al:36) — new in this diff (its header is an added line, none of its lines removed)"
+            "Codeunit \"TU Core\"::Audited (ws:src/Core.al:36) — new in this diff (its header is an added line, none of its lines removed)"
         ),
         "{human}"
     );
@@ -442,8 +442,8 @@ fn base_lists_and_resolves_untracked_and_unstaged() {
         .iter()
         .map(|r| r["display"].as_str().unwrap())
         .collect();
-    assert!(names.contains(&"Codeunit TU Extra::Fresh"), "{names:?}");
-    assert!(names.contains(&"Codeunit TU Core::Calc"), "{names:?}");
+    assert!(names.contains(&"Codeunit \"TU Extra\"::Fresh"), "{names:?}");
+    assert!(names.contains(&"Codeunit \"TU Core\"::Calc"), "{names:?}");
 }
 
 /// Spec §12.1's refused combinations: two modes, `--diff-root` without

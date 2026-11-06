@@ -267,6 +267,9 @@ struct Index<'a> {
     /// Forward sites per node: `fwd_sites[fwd_off[n]..fwd_off[n + 1]]`.
     fwd_off: Vec<u32>,
     fwd_sites: Vec<u32>,
+    /// The one routine display (output validation V3, §2.1, §2.2).
+    names: crate::engine::l5::routine_rollup::RoutineNames<'a>,
+    model: &'a Model,
 }
 
 impl<'a> Index<'a> {
@@ -314,6 +317,8 @@ impl<'a> Index<'a> {
             rows: Default::default(),
             fwd_off: count,
             fwd_sites,
+            names: crate::engine::l5::routine_rollup::RoutineNames::new(model, &[]),
+            model,
         }
     }
 
@@ -369,25 +374,15 @@ impl<'a> Index<'a> {
         }
     }
 
+    /// A node as every line names it: the one routine display (V3 §2.1,
+    /// no caption) from its model row, else the graph node's declared names
+    /// (§2.2), else its key.
     fn display(&self, g: &SitedGraph, n: NodeIx) -> String {
+        use crate::engine::l5::routine_rollup::{format_routine, graph_display};
         match self.rows_of(g, n).first() {
-            Some(r) => routine_display(r, self.objects.get(r.object_id.as_str()).copied()),
-            None => g.display(n),
+            Some(r) => format_routine(&self.names.parts_of(r), false),
+            None => graph_display(g, n, Some(self.model)).unwrap_or_else(|| g.display(n)),
         }
-    }
-}
-
-fn routine_display(r: &ModelRoutine, o: Option<&ModelObject>) -> String {
-    let quote = |s: &str| {
-        if s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            s.to_string()
-        } else {
-            format!("\"{s}\"")
-        }
-    };
-    match o {
-        Some(o) => format!("{} {}::{}", o.object_type, quote(&o.name), r.name),
-        None => format!("{}::{}", r.object_id, r.name),
     }
 }
 

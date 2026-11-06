@@ -1,4 +1,4 @@
---- Codeunit D47 Sender::ExportAfterModify ---
+--- Codeunit "D47 Sender"::ExportAfterModify ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
     transaction, UI and errors: commits: yes (1 site); errors at 2 places
     other effects: events: 0 (0 raised in workspace code); file at 1 place

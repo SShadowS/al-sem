@@ -173,10 +173,16 @@ impl Sel {
     }
 }
 
-/// A node's printed name: the source's spelling for a local routine
-/// (`Codeunit CDO Telemetry::UpdateLastUpload`), the graph's otherwise.
+/// A node's printed name: the one routine display (output validation V3,
+/// §2.1, §2.2: `Codeunit "CDO Telemetry"::UpdateLastUpload`, a field
+/// trigger with its field, an overloaded name with its parameter types, a
+/// dependency object by name with its number), from the graph node's
+/// declared names; the graph's key otherwise.
 #[must_use]
 pub fn display(g: &SitedGraph, n: NodeIx) -> String {
+    if let Some(d) = crate::engine::l5::routine_rollup::graph_display_local(g, n) {
+        return d;
+    }
     match (g.local_name(n), g.routine_object(n)) {
         (Some(l), Some(o)) => format!(
             "{} {}::{}",
@@ -194,12 +200,11 @@ pub fn display(g: &SitedGraph, n: NodeIx) -> String {
     }
 }
 
-/// A path hop's name (agent-tasks §12.1, output validation F9): [`display`]
-/// with the routine's overload handle, so two overloads on one path never
-/// print alike.
+/// A path hop's name (agent-tasks §12.1, output validation F9, V3 §2.1):
+/// [`display`], which prints an overloaded name's parameter types, so two
+/// overloads on one path never print alike.
 fn path_name(g: &SitedGraph, n: NodeIx) -> String {
-    let handle = g.local_name(n).map_or("", |l| &*l.handle);
-    format!("{}{handle}", display(g, n))
+    display(g, n)
 }
 
 fn object_number(g: &SitedGraph, n: NodeIx) -> Option<i64> {

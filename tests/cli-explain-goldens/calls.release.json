@@ -52,7 +52,7 @@
             "fieldCaptions": {},
             "fieldOps": [],
             "fields": {
-              "Codeunit Calls Post::Release": [
+              "Codeunit \"Calls Post\"::Release": [
                 "Status"
               ]
             },
@@ -90,7 +90,7 @@
               },
               "comment": null,
               "id": "7a517f8e82137757/6a778fb0754896e3ed60caba4452ae07ea0cb49b23c2c21de0d5cc03a40b93d9/rule0",
-              "in": "Table Calls Order::OnModify",
+              "in": "Table \"Calls Order\"::OnModify",
               "kind": "Error",
               "message": {
                 "args": [],
@@ -123,7 +123,7 @@
           ],
           "table": "Calls Order",
           "triggers": [
-            "Table Calls Order::OnModify"
+            "Table \"Calls Order\"::OnModify"
           ],
           "what": "modify on Calls Order"
         }
@@ -149,12 +149,15 @@
           "line": 52,
           "sourceKind": "source"
         },
+        "display": "Codeunit \"Calls Post\"::Release",
         "doc": null,
         "id": "55555555-ca11-0000-0000-0000000ca115:Codeunit:50453#6539022025cb54269bea52ed5d29596f267a2c5d895a3e32627411fc50ff4d98",
         "name": "Release",
         "object": "Calls Post",
         "objectCaption": null,
-        "objectType": "Codeunit"
+        "objectType": "Codeunit",
+        "selector": "Codeunit \"Calls Post\"::Release",
+        "signature": "(var Record \"Calls Order\")"
       },
       "rules": {
         "callers": [
@@ -166,11 +169,11 @@
               "sourceKind": "source"
             },
             "appliedBy": [
-              "Codeunit Calls Post::ReleaseChecked"
+              "Codeunit \"Calls Post\"::ReleaseChecked"
             ],
             "comment": null,
             "id": "7a517f8e82137757/6ee2fa48f12646d4c89ff8f95d2fe95c6cb64a160c3ba4bc71ec6a3f9124d2ac/rule0",
-            "in": "Codeunit Calls Checks::CheckOrder",
+            "in": "Codeunit \"Calls Checks\"::CheckOrder",
             "kind": "Error",
             "message": {
               "args": [],
@@ -182,14 +185,14 @@
             },
             "note": "applies only when called from the callers in appliedBy",
             "presentIn": [
-              "Codeunit Calls Post::ReleaseChecked"
+              "Codeunit \"Calls Post\"::ReleaseChecked"
             ],
             "skippedBy": [
-              "Codeunit Calls Post::ReleaseDirect",
-              "Codeunit Calls Post::ReleaseBranch",
-              "Codeunit Calls Post::ReleaseLoop",
-              "Codeunit Calls Post::ReleaseGuarded",
-              "Codeunit Calls Post::ReleaseElse"
+              "Codeunit \"Calls Post\"::ReleaseDirect",
+              "Codeunit \"Calls Post\"::ReleaseBranch",
+              "Codeunit \"Calls Post\"::ReleaseLoop",
+              "Codeunit \"Calls Post\"::ReleaseGuarded",
+              "Codeunit \"Calls Post\"::ReleaseElse"
             ],
             "stops": "always",
             "stopsReason": null,
@@ -216,11 +219,11 @@
               "sourceKind": "source"
             },
             "appliedBy": [
-              "Codeunit Calls Post::ReleaseChecked"
+              "Codeunit \"Calls Post\"::ReleaseChecked"
             ],
             "comment": null,
             "id": "7a517f8e82137757/6ee2fa48f12646d4c89ff8f95d2fe95c6cb64a160c3ba4bc71ec6a3f9124d2ac/rule1",
-            "in": "Codeunit Calls Checks::CheckOrder",
+            "in": "Codeunit \"Calls Checks\"::CheckOrder",
             "kind": "TestField",
             "message": {
               "args": [],
@@ -232,14 +235,14 @@
             },
             "note": "applies only when called from the callers in appliedBy",
             "presentIn": [
-              "Codeunit Calls Post::ReleaseChecked"
+              "Codeunit \"Calls Post\"::ReleaseChecked"
             ],
             "skippedBy": [
-              "Codeunit Calls Post::ReleaseDirect",
-              "Codeunit Calls Post::ReleaseBranch",
-              "Codeunit Calls Post::ReleaseLoop",
-              "Codeunit Calls Post::ReleaseGuarded",
-              "Codeunit Calls Post::ReleaseElse"
+              "Codeunit \"Calls Post\"::ReleaseDirect",
+              "Codeunit \"Calls Post\"::ReleaseBranch",
+              "Codeunit \"Calls Post\"::ReleaseLoop",
+              "Codeunit \"Calls Post\"::ReleaseGuarded",
+              "Codeunit \"Calls Post\"::ReleaseElse"
             ],
             "stops": "always",
             "stopsReason": null,
@@ -273,11 +276,11 @@
               "sourceKind": "source"
             },
             "appliedBy": [
-              "Codeunit Calls Post::ReleaseChecked"
+              "Codeunit \"Calls Post\"::ReleaseChecked"
             ],
             "comment": null,
             "id": "7a517f8e82137757/35cf42a674cdde94ee00ea4cc3aae9520821b982c8185ca3e8aa2b7e060d6c58/rule0",
-            "in": "Codeunit Calls Checks::CheckCustomer",
+            "in": "Codeunit \"Calls Checks\"::CheckCustomer",
             "kind": "Error",
             "message": {
               "args": [],
@@ -289,14 +292,14 @@
             },
             "note": "applies only when called from the callers in appliedBy",
             "presentIn": [
-              "Codeunit Calls Post::ReleaseChecked"
+              "Codeunit \"Calls Post\"::ReleaseChecked"
             ],
             "skippedBy": [
-              "Codeunit Calls Post::ReleaseDirect",
-              "Codeunit Calls Post::ReleaseBranch",
-              "Codeunit Calls Post::ReleaseLoop",
-              "Codeunit Calls Post::ReleaseGuarded",
-              "Codeunit Calls Post::ReleaseElse"
+              "Codeunit \"Calls Post\"::ReleaseDirect",
+              "Codeunit \"Calls Post\"::ReleaseBranch",
+              "Codeunit \"Calls Post\"::ReleaseLoop",
+              "Codeunit \"Calls Post\"::ReleaseGuarded",
+              "Codeunit \"Calls Post\"::ReleaseElse"
             ],
             "stops": "always",
             "stopsReason": null,
@@ -329,7 +332,7 @@
             "appliedBy": [],
             "comment": null,
             "id": "7a517f8e82137757/d351aaf1da882aea76cfcb62b5f2f96f26124e2a395541adbb5ae5eb8ca8ce75/rule0",
-            "in": "Codeunit Calls Checks::CheckCollectible",
+            "in": "Codeunit \"Calls Checks\"::CheckCollectible",
             "kind": "Error",
             "message": {
               "args": [],
@@ -341,15 +344,15 @@
             },
             "note": "applies only when called from the callers in appliedBy",
             "presentIn": [
-              "Codeunit Calls Post::ReleaseChecked"
+              "Codeunit \"Calls Post\"::ReleaseChecked"
             ],
             "skippedBy": [
-              "Codeunit Calls Post::ReleaseChecked",
-              "Codeunit Calls Post::ReleaseDirect",
-              "Codeunit Calls Post::ReleaseBranch",
-              "Codeunit Calls Post::ReleaseLoop",
-              "Codeunit Calls Post::ReleaseGuarded",
-              "Codeunit Calls Post::ReleaseElse"
+              "Codeunit \"Calls Post\"::ReleaseChecked",
+              "Codeunit \"Calls Post\"::ReleaseDirect",
+              "Codeunit \"Calls Post\"::ReleaseBranch",
+              "Codeunit \"Calls Post\"::ReleaseLoop",
+              "Codeunit \"Calls Post\"::ReleaseGuarded",
+              "Codeunit \"Calls Post\"::ReleaseElse"
             ],
             "stops": "may-not-stop",
             "stopsReason": "the message is an ErrorInfo: when the error is collectible, execution goes on",
@@ -377,11 +380,11 @@
               "sourceKind": "source"
             },
             "appliedBy": [
-              "Codeunit Calls Post::ReleaseChecked"
+              "Codeunit \"Calls Post\"::ReleaseChecked"
             ],
             "comment": null,
             "id": "7a517f8e82137757/7a18aefd7be17884732b7c9cde5ea921d70da1dbc1615cdcb9005f7e95ca7b7b/rule0",
-            "in": "Codeunit Calls Post::ReleaseChecked",
+            "in": "Codeunit \"Calls Post\"::ReleaseChecked",
             "kind": "Error",
             "message": {
               "args": [],
@@ -393,14 +396,14 @@
             },
             "note": "applies only when called from the callers in appliedBy",
             "presentIn": [
-              "Codeunit Calls Post::ReleaseChecked"
+              "Codeunit \"Calls Post\"::ReleaseChecked"
             ],
             "skippedBy": [
-              "Codeunit Calls Post::ReleaseDirect",
-              "Codeunit Calls Post::ReleaseBranch",
-              "Codeunit Calls Post::ReleaseLoop",
-              "Codeunit Calls Post::ReleaseGuarded",
-              "Codeunit Calls Post::ReleaseElse"
+              "Codeunit \"Calls Post\"::ReleaseDirect",
+              "Codeunit \"Calls Post\"::ReleaseBranch",
+              "Codeunit \"Calls Post\"::ReleaseLoop",
+              "Codeunit \"Calls Post\"::ReleaseGuarded",
+              "Codeunit \"Calls Post\"::ReleaseElse"
             ],
             "stops": "always",
             "stopsReason": null,
@@ -426,11 +429,11 @@
               "sourceKind": "source"
             },
             "appliedBy": [
-              "Codeunit Calls Post::ReleaseGuarded"
+              "Codeunit \"Calls Post\"::ReleaseGuarded"
             ],
             "comment": null,
             "id": "7a517f8e82137757/fed1713d53e8f4b1c803033629bd5fee1c2a3aafee00f67ec27cbba9a84f3128/rule0",
-            "in": "Codeunit Calls Post::ReleaseGuarded",
+            "in": "Codeunit \"Calls Post\"::ReleaseGuarded",
             "kind": "Error",
             "message": {
               "args": [],
@@ -442,14 +445,14 @@
             },
             "note": "applies only when called from the callers in appliedBy",
             "presentIn": [
-              "Codeunit Calls Post::ReleaseGuarded"
+              "Codeunit \"Calls Post\"::ReleaseGuarded"
             ],
             "skippedBy": [
-              "Codeunit Calls Post::ReleaseChecked",
-              "Codeunit Calls Post::ReleaseDirect",
-              "Codeunit Calls Post::ReleaseBranch",
-              "Codeunit Calls Post::ReleaseLoop",
-              "Codeunit Calls Post::ReleaseElse"
+              "Codeunit \"Calls Post\"::ReleaseChecked",
+              "Codeunit \"Calls Post\"::ReleaseDirect",
+              "Codeunit \"Calls Post\"::ReleaseBranch",
+              "Codeunit \"Calls Post\"::ReleaseLoop",
+              "Codeunit \"Calls Post\"::ReleaseElse"
             ],
             "stops": "always",
             "stopsReason": null,
@@ -482,11 +485,11 @@
               "sourceKind": "source"
             },
             "appliedBy": [
-              "Codeunit Calls Post::ReleaseElse"
+              "Codeunit \"Calls Post\"::ReleaseElse"
             ],
             "comment": null,
             "id": "7a517f8e82137757/f783131ae8c40053fc45582139fd0e661de3d2da5cfb8624a1ebfd06f92184db/rule0",
-            "in": "Codeunit Calls Post::ReleaseElse",
+            "in": "Codeunit \"Calls Post\"::ReleaseElse",
             "kind": "Error",
             "message": {
               "args": [],
@@ -498,14 +501,14 @@
             },
             "note": "applies only when called from the callers in appliedBy",
             "presentIn": [
-              "Codeunit Calls Post::ReleaseElse"
+              "Codeunit \"Calls Post\"::ReleaseElse"
             ],
             "skippedBy": [
-              "Codeunit Calls Post::ReleaseChecked",
-              "Codeunit Calls Post::ReleaseDirect",
-              "Codeunit Calls Post::ReleaseBranch",
-              "Codeunit Calls Post::ReleaseLoop",
-              "Codeunit Calls Post::ReleaseGuarded"
+              "Codeunit \"Calls Post\"::ReleaseChecked",
+              "Codeunit \"Calls Post\"::ReleaseDirect",
+              "Codeunit \"Calls Post\"::ReleaseBranch",
+              "Codeunit \"Calls Post\"::ReleaseLoop",
+              "Codeunit \"Calls Post\"::ReleaseGuarded"
             ],
             "stops": "always",
             "stopsReason": null,

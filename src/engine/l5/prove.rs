@@ -1402,6 +1402,10 @@ pub struct ProveDocumentArgs<'a> {
     /// document is [`PROVE_SLICE_SCHEMA_VERSION`]. `None`: the document is
     /// byte-identical to an unfiltered one.
     pub slice: Option<&'a crate::engine::l5::prove_slice::SliceOut>,
+    /// V3 §2.1 (2.6.0): the root's one display and identity fields, added to
+    /// `payload.routine` (`qualifiedDisplay`, `signature`, `member`,
+    /// `selector`, `handle`). Empty for the no-root document.
+    pub routine_identity: serde_json::Map<String, serde_json::Value>,
 }
 
 /// W2-0b: a group path's structured witness (`groupWitness`): per hop the
@@ -1437,12 +1441,12 @@ pub(crate) fn group_witness_value(
 }
 
 /// prove's document `schemaVersion`.
-pub const PROVE_SCHEMA_VERSION: &str = "2.4.0";
+pub const PROVE_SCHEMA_VERSION: &str = "2.6.0";
 
 /// A filtered prove document's `schemaVersion` (agent-tasks E1, additive:
 /// `payload.filter`, `payload.slice`, slice-shaped evidence rows). An
 /// unfiltered document keeps [`PROVE_SCHEMA_VERSION`], byte for byte (E-5).
-pub const PROVE_SLICE_SCHEMA_VERSION: &str = "2.5.0";
+pub const PROVE_SLICE_SCHEMA_VERSION: &str = "2.7.0";
 
 /// Build the DocumentEnvelope<"prove", ProvePayload> as a serde_json::Value,
 /// then serialize with serialize_document_value (sorted keys, null-drop, trailing \n).
@@ -1462,6 +1466,7 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
         deterministic,
         pointers,
         slice,
+        routine_identity,
     } = args;
 
     // result sub-object
@@ -1601,6 +1606,7 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     routine_ref.insert("display".into(), routine_display.into());
     routine_ref.insert("objectDisplay".into(), object_display.into());
     routine_ref.insert("stableId".into(), routine_stable_id.into());
+    routine_ref.extend(routine_identity);
 
     // payload
     let mut payload = serde_json::Map::new();
@@ -1648,6 +1654,10 @@ pub fn project_prove_document(args: ProveDocumentArgs<'_>) -> String {
     // 2.5.0 (agent-tasks E1, additive, filtered documents only): `payload.
     // filter`, `payload.slice`, and evidence rows that are the slice's sites
     // (`evidence.{file, line}` kept); an unfiltered document stays 2.4.0.
+    // 2.6.0 unfiltered / 2.7.0 filtered (output validation V3, additive; the
+    // spec's "2.5.0" was already the filtered number): `payload.routine`
+    // gains `qualifiedDisplay` (the one display), `signature`, `member`,
+    // `selector` and `handle`.
     let version = if slice.is_some() {
         PROVE_SLICE_SCHEMA_VERSION
     } else {
@@ -1684,8 +1694,15 @@ pub fn format_prove_human(
     use crate::engine::l5::routine_rollup::{is_group, no_path_reason, plural};
     let mut lines: Vec<String> = Vec::new();
 
-    // Routine header
-    let routine_header = owner_qualified(object_display, routine_display);
+    // Routine header: the one display (V3 §2.1) when the root is known.
+    let routine_header = match paths {
+        Some(p) => {
+            p.cx.names
+                .display_with(p.root, true)
+                .unwrap_or_else(|| owner_qualified(object_display, routine_display))
+        }
+        None => owner_qualified(object_display, routine_display),
+    };
     lines.push(format!("--- {} ---", routine_header));
     // Agent-tasks §5: the six older questions are about the routine's
     // EXISTING effects; the callers' context ones say so on their own line.
@@ -1887,13 +1904,6 @@ pub fn format_prove_human(
                 "    also [{t}]: {}{more} (--detail lists every row with its path)",
                 listed.join("; ")
             ));
-        }
-        if let Some(p) = paths {
-            lines.extend(
-                p.cx.take_legend(p.detail)
-                    .into_iter()
-                    .map(|l| format!("  {l}")),
-            );
         }
     }
 
@@ -2462,31 +2472,57 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         // the selector names no routine, or several. Exit 2 stays the
         // no-root code digest and fingerprint share.
         use crate::engine::l5::digest_cli::ChangedRootsDiagnostic;
+        let apps = cx.view().target().dependencies().apps;
         let blocker = match changed_roots.diagnostics.iter().find_map(|d| match d {
             ChangedRootsDiagnostic::SelectorAmbiguous {
                 candidates,
                 routines,
+                listed,
                 ..
-            } => Some((candidates, routines)),
+            } => Some((candidates, routines, listed)),
             _ => None,
         }) {
-            Some((candidates, routines)) => ProveBlocker {
+            // V3 §2.4: each candidate with its complete parameter list and
+            // the ready `routines` value.
+            Some((candidates, routines, listed)) => ProveBlocker {
                 kind: "routine-ambiguous",
-                detail: crate::engine::l5::explain::ambiguity_text(
+                detail: if listed.is_empty() {
+                    crate::engine::l5::explain::ambiguity_text(
+                        "",
+                        routine_selector,
+                        candidates,
+                        routines,
+                    )
+                } else {
+                    crate::engine::l5::selector_index::ambiguity_lines("", routine_selector, listed)
+                        .join("\n    ")
+                },
+                anchor: None,
+            },
+            // V3 §2.4: the nearest names (or where the name is found only in
+            // dependency code) and the selector forms.
+            None => {
+                let hints = changed_roots.diagnostics.iter().find_map(|d| match d {
+                    ChangedRootsDiagnostic::SelectorUnmatched { hints, .. } => Some(hints),
+                    _ => None,
+                });
+                let mut lines = vec![crate::engine::l5::explain::unmatched_line(
                     "",
                     routine_selector,
-                    candidates,
-                    routines,
-                ),
-                anchor: None,
-            },
-            None => ProveBlocker {
-                kind: "routine-not-found",
-                detail: format!(
-                    "no routine of the program has the id or name '{routine_selector}'"
-                ),
-                anchor: None,
-            },
+                )];
+                if let Some(h) = hints {
+                    lines.extend(
+                        crate::engine::l5::selector_index::hint_lines(h, &apps)
+                            .into_iter()
+                            .map(|l| format!("      {l}")),
+                    );
+                }
+                ProveBlocker {
+                    kind: "routine-not-found",
+                    detail: lines.join("\n"),
+                    anchor: None,
+                }
+            }
         };
         let dummy_result = ProveResult {
             answer: ProveAnswer::Unknown,
@@ -2515,6 +2551,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             deterministic,
             pointers: None,
             slice: None,
+            routine_identity: serde_json::Map::new(),
         });
 
         let human_text = format_prove_human(
@@ -2665,6 +2702,20 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         .map(|s| filtered_result(entry, &prove_result, s));
     let prove_result = filtered.unwrap_or(prove_result);
 
+    // W2-6: the human answer's paths read the model's names (and, W2-7, the
+    // loaded apps' names); V3 §2.1: so do the root's identity fields.
+    let dependencies = cx.view().target().dependencies();
+    let rollup_cx =
+        crate::engine::l5::routine_rollup::RollupCx::new(cx.view().model(), &dependencies.apps);
+    let mut routine_identity = rollup_cx.names.identity_json(root_id);
+    if let Some(d) = routine_identity.remove("display") {
+        routine_identity.insert("qualifiedDisplay".into(), d);
+    }
+    let handle = rollup_cx.handle(root_id);
+    if !handle.is_empty() {
+        routine_identity.insert("handle".into(), handle.into());
+    }
+
     // Project document
     cx.view().census_output();
     let json_text = project_prove_document(ProveDocumentArgs {
@@ -2682,13 +2733,9 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         deterministic,
         pointers: Some(&pointers),
         slice: slice.as_ref(),
+        routine_identity,
     });
 
-    // W2-6: the human answer's paths read the model's names (and, W2-7, the
-    // loaded apps' names).
-    let dependencies = cx.view().target().dependencies();
-    let rollup_cx =
-        crate::engine::l5::routine_rollup::RollupCx::new(cx.view().model(), &dependencies.apps);
     let paths = HumanPaths {
         cx: &rollup_cx,
         root: root_id,
@@ -2718,7 +2765,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
 
     let summary = serde_json::json!({
         "kind": "prove",
-        "routine": owner_qualified(&entry.object_display, &entry.routine_display),
+        "routine": rollup_cx.qualified(root_id),
         "question": question_text,
         "answer": prove_result.answer.as_str(),
         "evidence": match &slice {
@@ -2850,13 +2897,6 @@ fn format_prove_slice_human(
         ),
     });
     lines.extend(human_lines(slice, paths.cx, paths.root, paths.detail));
-    lines.extend(
-        paths
-            .cx
-            .take_legend(paths.detail)
-            .into_iter()
-            .map(|l| format!("  {l}")),
-    );
     if let Some(blockers) = &result.blocked_by
         && !blockers.is_empty()
     {
@@ -2874,6 +2914,10 @@ pub(crate) struct RootHeader {
     object_display: String,
     /// The declaration's unit and 0-based line.
     anchor: Option<(String, u32)>,
+    /// The one routine display (V3 §2.1, with the member's caption).
+    qualified: String,
+    /// The JSON identity fields (`signature`, `member`, `selector`).
+    identity: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The root's header off the model (the routine row with that stable id).
@@ -2887,11 +2931,20 @@ pub(crate) fn root_header(
         .iter()
         .find(|r| r.stable_routine_id == stable_id);
     let object = row.and_then(|r| model.workspace.objects.iter().find(|o| o.id == r.object_id));
+    let names = crate::engine::l5::routine_rollup::RoutineNames::new(model, &[]);
+    let object_display =
+        object.map_or_else(String::new, |o| format!("{} {}", o.object_type, o.name));
+    let routine_display = row.map_or_else(|| stable_id.to_string(), |r| r.name.clone());
+    let mut identity = names.identity_json(stable_id);
+    identity.remove("display");
     RootHeader {
         stable_id: stable_id.to_string(),
-        routine_display: row.map_or_else(|| stable_id.to_string(), |r| r.name.clone()),
-        object_display: object
-            .map_or_else(String::new, |o| format!("{} {}", o.object_type, o.name)),
+        qualified: names
+            .display_with(stable_id, true)
+            .unwrap_or_else(|| owner_qualified(&object_display, &routine_display)),
+        identity,
+        routine_display,
+        object_display,
         anchor: row.map(|r| {
             (
                 r.source_anchor.source_unit_id.clone(),
@@ -2959,6 +3012,9 @@ fn callers_document(
     routine_ref.insert("display".into(), header.routine_display.clone().into());
     routine_ref.insert("objectDisplay".into(), header.object_display.clone().into());
     routine_ref.insert("stableId".into(), header.stable_id.clone().into());
+    // V3 §2.1 (2.5.0, additive): the one display and its parts.
+    routine_ref.insert("qualifiedDisplay".into(), header.qualified.clone().into());
+    routine_ref.extend(header.identity.clone());
     let mut payload = serde_json::Map::new();
     payload.insert("question".into(), job.question_text.into());
     payload.insert("questionScope".into(), "callers-context".into());
@@ -2981,7 +3037,7 @@ fn callers_document(
     env.insert("payload".into(), serde_json::Value::Object(payload));
     env.insert("schemaVersion".into(), PROVE_SCHEMA_VERSION.into());
     let json_text = serialize_document_value(serde_json::Value::Object(env));
-    let routine = owner_qualified(&header.object_display, &header.routine_display);
+    let routine = header.qualified.clone();
     let human_text = format_human(&routine, a, job.detail);
     let summary = serde_json::json!({
         "kind": "prove",

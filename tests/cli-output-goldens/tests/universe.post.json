@@ -9,10 +9,10 @@
   },
   "changed": [
     {
-      "display": "Codeunit TU Core::Post",
+      "display": "Codeunit \"TU Core\"::Post",
       "nearest": {
         "hops": 1,
-        "test": "Codeunit TU Core Tests::PostUpdatesQty",
+        "test": "Codeunit \"TU Core Tests\"::PostUpdatesQty",
         "tier": "local"
       },
       "nearestTestedCaller": null,
@@ -35,8 +35,8 @@
       "file": "src/CoreTests.al",
       "hops": 1,
       "path": [
-        "Codeunit TU Core Tests::PostUpdatesQty",
-        "Codeunit TU Core::Post"
+        "Codeunit \"TU Core Tests\"::PostUpdatesQty",
+        "Codeunit \"TU Core\"::Post"
       ],
       "procedure": "PostUpdatesQty",
       "reaches": [

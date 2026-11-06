@@ -1,4 +1,4 @@
-Codeunit Explain Post::Archive  ws:src/post.al:23
+Codeunit "Explain Post"::Archive  ws:src/post.al:23
   summary — writes: no observed write that may persist; caller-dependent: 1 table
     transaction, UI and errors: commits: yes (1 site); errors at 1 place
     other effects: events: 0 (0 raised in workspace code)

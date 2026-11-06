@@ -15,7 +15,7 @@
 //! (built from `snap.identities.stable_ids`, a deterministic `Vec`). Both call
 //! sites now share this ONE implementation so they cannot drift apart again.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::engine::l5::snapshot::SnapshotIdentityTable;
 
@@ -353,6 +353,530 @@ fn cascade(
     (Vec::new(), "", None)
 }
 
+/// A member-form selector (output validation V3, §2.1), split:
+/// `Object."Field"::Trigger`, `Object.Field::Trigger` (a plain identifier),
+/// `Object.action(Name)::OnAction` and its kin (`dataitem`, `control`,
+/// `element`); a caption after the member name (`action(Name "Caption")`)
+/// is accepted and ignored. The forms the one routine display prints for a
+/// member trigger, so a display can be pasted into the next call.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct MemberSelector {
+    /// The object part, as written (`Table "CDO E-Mail Job"`).
+    pub(crate) owner: String,
+    /// The member kind word, lowercase, when the selector names one.
+    pub(crate) kind: Option<String>,
+    /// The member's logical name (AL quotes removed).
+    pub(crate) member: String,
+    /// The routine name (one outer quote pair removed).
+    pub(crate) routine: String,
+}
+
+/// The member kind words a member-form selector takes (`.action(Name)`).
+const MEMBER_KIND_WORDS: [&str; 4] = ["action", "dataitem", "control", "element"];
+
+/// The byte offset where each top-level quoted segment of `s` starts, in
+/// order (a `""` inside quotes is an escaped quote, not a segment end).
+fn quoted_starts(s: &str) -> Vec<(usize, usize)> {
+    let b = s.as_bytes();
+    let (mut out, mut i) = (Vec::new(), 0usize);
+    while i < b.len() {
+        if b[i] == b'"' {
+            let start = i;
+            i += 1;
+            while i < b.len() {
+                if b[i] == b'"' {
+                    if i + 1 < b.len() && b[i + 1] == b'"' {
+                        i += 2;
+                        continue;
+                    }
+                    break;
+                }
+                i += 1;
+            }
+            out.push((start, i.min(b.len().saturating_sub(1))));
+        }
+        i += 1;
+    }
+    out
+}
+
+/// A plain AL identifier (`[A-Za-z_][A-Za-z0-9_]*`).
+fn is_plain_identifier(s: &str) -> bool {
+    s.chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// `selector` read as a member form ([`MemberSelector`]); `None` when it is
+/// not one. The parameter list, if any, is split off first
+/// ([`split_signature`]); a trigger has none.
+pub(crate) fn split_member(selector: &str) -> Option<MemberSelector> {
+    let sep = last_separator(selector)?;
+    let (left, routine) = (selector[..sep].trim(), strip_quotes(&selector[sep + 2..]));
+    if routine.is_empty() || left.is_empty() {
+        return None;
+    }
+    let done = |owner: &str, kind: Option<String>, member: String| {
+        let owner = owner.trim();
+        (!owner.is_empty() && !member.is_empty()).then(|| MemberSelector {
+            owner: owner.to_string(),
+            kind,
+            member,
+            routine: routine.to_string(),
+        })
+    };
+    // `.kind(Name …)`: the last unquoted `(` of a text that ends with `)`.
+    if left.ends_with(')') {
+        let (mut quoted, mut open) = (false, None);
+        for (i, c) in left.char_indices() {
+            match c {
+                '"' => quoted = !quoted,
+                '(' if !quoted => open = Some(i),
+                _ => {}
+            }
+        }
+        let open = open?;
+        let head = &left[..open];
+        let dot = head.rfind('.')?;
+        let kind = head[dot + 1..].trim().to_ascii_lowercase();
+        if !MEMBER_KIND_WORDS.contains(&kind.as_str()) {
+            return None;
+        }
+        let inner = left[open + 1..left.len() - 1].trim();
+        let name = if inner.starts_with('"') {
+            let &(s, e) = quoted_starts(inner).first()?;
+            unquote(&inner[s..=e])
+        } else {
+            inner.split_whitespace().next()?.to_string()
+        };
+        return done(&head[..dot], Some(kind), name);
+    }
+    // `."Field"`: the last quoted segment ends the text and follows a dot.
+    if left.ends_with('"') {
+        let &(s, e) = quoted_starts(left).last()?;
+        if e + 1 != left.len() || s == 0 || left.as_bytes()[s - 1] != b'.' {
+            return None;
+        }
+        return done(&left[..s - 1], None, unquote(&left[s..=e]));
+    }
+    // `.Field`: a plain identifier after the last unquoted dot.
+    let dot = last_dot(left)?;
+    let member = &left[dot + 1..];
+    if !is_plain_identifier(member) {
+        return None;
+    }
+    done(&left[..dot], None, member.to_string())
+}
+
+/// One workspace member trigger as a member-form selector matches it: its
+/// stable id, its owner's display (`Table CDO E-Mail Job`), its member's
+/// name and kind, and its routine name.
+pub(crate) struct MemberRow<'a> {
+    pub(crate) id: &'a str,
+    pub(crate) owner_display: String,
+    pub(crate) member: &'a str,
+    pub(crate) member_kind: &'a str,
+    pub(crate) routine: &'a str,
+}
+
+/// The member triggers a member-form selector names (V3 §2.1), in `rows`
+/// order, each stable id once; `None` when `selector` is not a member form.
+/// The owner is matched as an `<owner>::<routine>` selector's is (typed:
+/// the full owner display; bare: the name; AL quotes optional), the member
+/// and routine names case-insensitively, the kind when the selector names
+/// one.
+pub(crate) fn resolve_member_selector<'a>(
+    selector: &str,
+    rows: impl IntoIterator<Item = MemberRow<'a>>,
+) -> Option<Vec<String>> {
+    let m = split_member(selector)?;
+    let owner = owner_part(&m.owner)?;
+    let mut out: Vec<String> = Vec::new();
+    for r in rows {
+        if !r.routine.eq_ignore_ascii_case(&m.routine)
+            || !r.member.eq_ignore_ascii_case(&m.member)
+            || m.kind.as_deref().is_some_and(|k| k != r.member_kind)
+        {
+            continue;
+        }
+        let key = normalize_display_key(&r.owner_display);
+        let owned = owner.wants.iter().any(|want| match owner.typed {
+            true => key == *want,
+            false => strip_type_word_prefix(&key) == Some(want.as_str()),
+        });
+        if owned && !out.iter().any(|x| x == r.id) {
+            out.push(r.id.to_string());
+        }
+    }
+    Some(out)
+}
+
+/// The selector forms every tool reads, as a failure names them (V3 §2.4).
+pub(crate) const SELECTOR_FORMS: &str = "selector forms: Object::Routine, \
+     Object::Routine(<parameter types>), Object.\"Field\"::Trigger, \
+     Object.action(Name)::OnAction, or a stable id";
+
+/// How far a routine name may be from the asked one to be offered as a
+/// nearest name (V3 §2.4): its edit distance (case-insensitive) at most this
+/// share of the longer name's length. 0.4 keeps a typo, a missing or extra
+/// word of a short name and a dropped suffix (`SendMailTwice` → `SendMail`:
+/// 5 of 13) and drops a name that shares only a word (`SendMailTwice` →
+/// `Send`: 9 of 13); measured on the fixtures and CDO (the V3 report).
+pub(crate) const NEAREST_RATIO: f64 = 0.4;
+
+/// How many nearest names a failure lists at most (V3 §2.4).
+pub(crate) const NEAREST_MAX: usize = 5;
+
+/// A nearest name offered for an unmatched selector (V3 §2.4): its display
+/// without parameters, how many routines of its object have that name, a
+/// selector for the first (complete when it is the only one), and its edit
+/// distance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NearName {
+    pub display: String,
+    pub overloads: usize,
+    pub selector: String,
+    pub distance: usize,
+}
+
+/// What an unmatched selector's answer offers (V3 §2.4): the nearest
+/// workspace names, or, when the name exists only in dependency code, where
+/// (`(app guid, display)`; a renderer names the app from its loaded apps):
+/// selectors are scoped to the workspace app.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SelectorHints {
+    pub nearest: Vec<NearName>,
+    pub dependency_only: Vec<(String, String)>,
+}
+
+/// Levenshtein distance over chars.
+pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for i in 1..=a.len() {
+        cur[0] = i;
+        for j in 1..=b.len() {
+            let sub = prev[j - 1] + usize::from(a[i - 1] != b[j - 1]);
+            cur[j] = sub.min(prev[j] + 1).min(cur[j - 1] + 1);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+/// Whether `candidate` is near enough `asked` to be offered ([`NEAREST_RATIO`]).
+pub(crate) fn is_near(asked: &str, candidate: &str) -> Option<usize> {
+    let (a, c) = (asked.to_lowercase(), candidate.to_lowercase());
+    let d = edit_distance(&a, &c);
+    let longest = a.chars().count().max(c.chars().count());
+    (d as f64 <= NEAREST_RATIO * longest as f64).then_some(d)
+}
+
+/// The routine name and object part a selector asks for, whatever its
+/// form; `None` for a stable id (no name to be near).
+fn asked_name(selector: &str) -> Option<(String, Option<String>)> {
+    let (base, _) = split_signature(selector);
+    if base.contains(ROUTINE_ID_SEPARATOR) && !base.contains("::") {
+        return None;
+    }
+    if let Some(m) = split_member(base) {
+        return Some((m.routine, Some(m.owner)));
+    }
+    if let Some(sep) = last_separator(base) {
+        let owner = base[..sep].trim();
+        return Some((
+            strip_quotes(&base[sep + 2..]).to_string(),
+            (!owner.is_empty()).then(|| owner.to_string()),
+        ));
+    }
+    if let Some(dot) = last_dot(base)
+        && dot > 0
+        && dot + 1 < base.len()
+    {
+        return Some((
+            strip_quotes(&base[dot + 1..]).to_string(),
+            Some(base[..dot].to_string()),
+        ));
+    }
+    Some((strip_quotes(base).to_string(), None))
+}
+
+/// The hints for a selector that names no workspace routine (V3 §2.4):
+/// the workspace routine names within [`NEAREST_RATIO`] of the asked name
+/// (at most [`NEAREST_MAX`], nearest first, then those of the asked object,
+/// then by display), or, when no workspace routine has the name and a
+/// dependency routine does, those dependency routines.
+pub(crate) fn selector_hints(
+    names: &crate::engine::l5::routine_rollup::RoutineNames<'_>,
+    owners: impl Fn(&str) -> String,
+    selector: &str,
+) -> SelectorHints {
+    use crate::engine::l5::routine_rollup::format_routine;
+    let Some((asked, owner)) = asked_name(selector) else {
+        return SelectorHints::default();
+    };
+    if asked.is_empty() {
+        return SelectorHints::default();
+    }
+    let owner = owner.as_deref().and_then(owner_part);
+    let model = names.model;
+    let mut seen = std::collections::HashSet::new();
+    let primary_has = model
+        .workspace
+        .routines
+        .iter()
+        .any(|r| names.is_primary(&r.stable_routine_id) && r.name.eq_ignore_ascii_case(&asked));
+    if !primary_has {
+        let mut dep: Vec<(String, String)> = model
+            .workspace
+            .routines
+            .iter()
+            .filter(|r| !names.is_primary(&r.stable_routine_id))
+            .filter(|r| r.name.eq_ignore_ascii_case(&asked))
+            .filter(|r| seen.insert(r.stable_routine_id.as_str()))
+            .map(|r| {
+                (
+                    r.app_guid.to_ascii_lowercase(),
+                    format_routine(&names.parts_of(r), false),
+                )
+            })
+            .collect();
+        if !dep.is_empty() {
+            dep.sort();
+            dep.dedup();
+            dep.truncate(NEAREST_MAX);
+            return SelectorHints {
+                nearest: Vec::new(),
+                dependency_only: dep,
+            };
+        }
+    }
+    // (display without parameters) -> (distance, same object, count, first id)
+    let mut groups: BTreeMap<String, (usize, bool, usize, String)> = BTreeMap::new();
+    let mut seen = std::collections::HashSet::new();
+    for r in &model.workspace.routines {
+        let id = r.stable_routine_id.as_str();
+        if !names.is_primary(id) || !seen.insert(id) {
+            continue;
+        }
+        let Some(d) = is_near(&asked, &r.name) else {
+            continue;
+        };
+        let mut p = names.parts_of(r);
+        p.signature = None;
+        let display = format_routine(&p, false);
+        let same_object = owner.as_ref().is_some_and(|o| {
+            let key = normalize_display_key(&owners(id));
+            o.wants.iter().any(|w| match o.typed {
+                true => key == *w,
+                false => strip_type_word_prefix(&key) == Some(w.as_str()),
+            })
+        });
+        let e = groups
+            .entry(display)
+            .or_insert((d, same_object, 0, id.to_string()));
+        e.2 += 1;
+    }
+    let mut near: Vec<(usize, bool, String, usize, String)> = groups
+        .into_iter()
+        .map(|(display, (d, same, n, id))| (d, !same, display, n, id))
+        .collect();
+    near.sort();
+    near.truncate(NEAREST_MAX);
+    SelectorHints {
+        nearest: near
+            .into_iter()
+            .map(|(distance, _, display, overloads, id)| NearName {
+                selector: if overloads == 1 {
+                    names.selector(&id)
+                } else {
+                    display.clone()
+                },
+                display,
+                overloads,
+                distance,
+            })
+            .collect(),
+        dependency_only: Vec::new(),
+    }
+}
+
+/// An app's name from the loaded apps' rows (`appId`, `name`), else its
+/// guid.
+pub(crate) fn app_name(apps: &[serde_json::Value], guid: &str) -> String {
+    apps.iter()
+        .find(|a| {
+            a["appId"]
+                .as_str()
+                .is_some_and(|g| g.eq_ignore_ascii_case(guid))
+        })
+        .and_then(|a| a["name"].as_str())
+        .map_or_else(|| guid.to_string(), str::to_string)
+}
+
+/// The human lines an unmatched selector's hints print (V3 §2.4), after
+/// the failure's first line; `apps` name a dependency app.
+pub(crate) fn hint_lines(h: &SelectorHints, apps: &[serde_json::Value]) -> Vec<String> {
+    let mut out = Vec::new();
+    if !h.dependency_only.is_empty() {
+        let each: Vec<String> = h
+            .dependency_only
+            .iter()
+            .map(|(app, d)| format!("{}: {d}", app_name(apps, app)))
+            .collect();
+        out.push(format!(
+            "found only in {}; selectors are scoped to the workspace app (a stable id selects a \
+             dependency routine)",
+            each.join("; ")
+        ));
+    } else if h.nearest.is_empty() {
+        out.push("nearest names: no close match".to_string());
+    } else {
+        let each: Vec<String> = h
+            .nearest
+            .iter()
+            .map(|n| match n.overloads {
+                1 => n.display.clone(),
+                k => format!("{} ({k} overloads)", n.display),
+            })
+            .collect();
+        out.push(format!("nearest names: {}", each.join("; ")));
+    }
+    out.push(SELECTOR_FORMS.to_string());
+    out
+}
+
+/// The hints as JSON (V3 §2.4): `nearest: [{display, overloads, selector,
+/// distance}]`, `foundOnlyIn: [{appId, display}]`.
+pub(crate) fn hints_json(h: &SelectorHints) -> serde_json::Map<String, serde_json::Value> {
+    let mut m = serde_json::Map::new();
+    m.insert(
+        "nearest".into(),
+        h.nearest
+            .iter()
+            .map(|n| {
+                serde_json::json!({
+                    "display": n.display,
+                    "overloads": n.overloads,
+                    "selector": n.selector,
+                    "distance": n.distance,
+                })
+            })
+            .collect(),
+    );
+    if !h.dependency_only.is_empty() {
+        m.insert(
+            "foundOnlyIn".into(),
+            h.dependency_only
+                .iter()
+                .map(|(app, d)| serde_json::json!({"appId": app, "display": d}))
+                .collect(),
+        );
+    }
+    m
+}
+
+/// An ambiguous selector's candidate as the failure lists it (V3 §2.4): its
+/// display with its complete parameter list, its declaration, and the
+/// selector that picks it alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AmbiguousCandidate {
+    pub display: String,
+    pub at: String,
+    pub selector: String,
+    pub types: Vec<String>,
+}
+
+impl AmbiguousCandidate {
+    /// Of `id`, through the one display.
+    pub(crate) fn of(
+        names: &crate::engine::l5::routine_rollup::RoutineNames<'_>,
+        id: &str,
+    ) -> Option<AmbiguousCandidate> {
+        let r = names.row(id)?;
+        let mut p = names.parts_of(r);
+        p.signature = Some(signature_text(&r.parameters));
+        let at = &r.source_anchor;
+        Some(AmbiguousCandidate {
+            display: crate::engine::l5::routine_rollup::format_routine(&p, false),
+            at: if at.source_unit_id.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "{}:{}",
+                    at.source_unit_id,
+                    crate::engine::line_base::shown(at.start_line)
+                )
+            },
+            selector: names.selector(id),
+            types: r
+                .parameters
+                .iter()
+                .map(|p| {
+                    if p.is_var {
+                        format!("var {}", p.type_text)
+                    } else {
+                        p.type_text.clone()
+                    }
+                })
+                .collect(),
+        })
+    }
+}
+
+/// How many candidates an ambiguity lists (and puts in its ready value).
+pub(crate) const AMBIGUOUS_SHOWN: usize = 10;
+
+/// An ambiguous selector's failure (V3 §2.4): the first line, one numbered
+/// line per candidate (its display with its complete parameter list, where
+/// it is declared, and what it adds to the first candidate's parameters),
+/// and a ready `routines: [...]` value of the candidates' selectors.
+pub(crate) fn ambiguity_lines(
+    prefix: &str,
+    selector: &str,
+    cands: &[AmbiguousCandidate],
+) -> Vec<String> {
+    let mut out = vec![format!(
+        "{prefix}'{selector}' names {} routines",
+        cands.len()
+    )];
+    let shown = &cands[..cands.len().min(AMBIGUOUS_SHOWN)];
+    for (i, c) in shown.iter().enumerate() {
+        let extra = match cands.first() {
+            Some(f) if i > 0 && c.types.len() > f.types.len() && c.types.starts_with(&f.types) => {
+                format!(" (+ {})", c.types[f.types.len()..].join(", "))
+            }
+            _ => String::new(),
+        };
+        let at = if c.at.is_empty() {
+            String::new()
+        } else {
+            format!(" at {}", c.at)
+        };
+        out.push(format!("  {}. {}{at}{extra}", i + 1, c.display));
+    }
+    if cands.len() > shown.len() {
+        out.push(format!(
+            "  … +{} more (JSON `candidateSelectors` lists every one)",
+            cands.len() - shown.len()
+        ));
+    }
+    let value: Vec<String> = shown
+        .iter()
+        .map(|c| serde_json::Value::from(c.selector.as_str()).to_string())
+        .collect();
+    let word = match shown.len() {
+        2 if cands.len() == 2 => "both".to_string(),
+        n if n == cands.len() => format!("all {n}"),
+        n => format!("these {n}"),
+    };
+    out.push(format!("  {word}: routines: [{}]", value.join(", ")));
+    out
+}
+
 /// An `Owner::Routine` or `Owner.Routine` selector, split (MCP output plan
 /// 3b: one grammar for every tool, so `alsem query` reads the `::` spelling
 /// too).
@@ -472,6 +996,24 @@ pub(crate) fn signature_matches(
     wanted: &[String],
     params: &[crate::program::model::workspace::ModelParameter],
 ) -> bool {
+    // V3 §2.1: the whole list as [`signature_text`] prints it, compared as
+    // one text (case, AL quotes and whitespace folded; `var` optional), so a
+    // type whose text holds a comma (`option A,B`, `Dictionary of [Code[10],
+    // Text]`) still selects: the item split cannot tell its commas apart.
+    let whole = |with_var: bool| -> String {
+        let items: Vec<String> = params
+            .iter()
+            .map(|p| match (with_var, p.is_var) {
+                (true, true) => format!("var {}", p.type_text),
+                _ => p.type_text.clone(),
+            })
+            .collect();
+        fold_whole(&items.join(","))
+    };
+    let asked = fold_whole(&wanted.join(","));
+    if !params.is_empty() && (asked == whole(true) || asked == whole(false)) {
+        return true;
+    }
     wanted.len() == params.len()
         && wanted.iter().zip(params).all(|(w, p)| {
             let ty = signature_key(&p.type_text);
@@ -489,6 +1031,15 @@ pub(crate) fn signature_matches(
                 }
             }
         })
+}
+
+/// A parameter list's text as [`signature_matches`] compares it whole:
+/// lowercase, AL quotes and every whitespace dropped.
+fn fold_whole(s: &str) -> String {
+    s.chars()
+        .filter(|c| *c != '"' && !c.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 /// A routine's parameter types as a selector takes them: `(Integer, var
@@ -881,6 +1432,219 @@ mod tests {
         let snap = snap_with_identities(&[("app:Codeunit:1#abc", "Codeunit \"X\"::Run")]);
         let idx = build_selector_indexes(&snap, None);
         assert!(resolve_selector("DoesNotExist", &idx).0.ids.is_empty());
+    }
+
+    /// V3 §2.1: the member forms the one display prints, split; a caption is
+    /// ignored; a selector with no member part is not a member form.
+    #[test]
+    fn member_forms_split() {
+        let m = split_member("Table \"CDO E-Mail Job\".\"Table No.\"::OnValidate").unwrap();
+        assert_eq!(
+            (
+                m.owner.as_str(),
+                m.kind,
+                m.member.as_str(),
+                m.routine.as_str()
+            ),
+            ("Table \"CDO E-Mail Job\"", None, "Table No.", "OnValidate")
+        );
+        let m = split_member("Table T.Amount::OnValidate").unwrap();
+        assert_eq!((m.owner.as_str(), m.member.as_str()), ("Table T", "Amount"));
+        let m = split_member("Page \"P\".action(Export \"Export \"\"All\"\"\")::OnAction").unwrap();
+        assert_eq!(
+            (m.owner.as_str(), m.kind.as_deref(), m.member.as_str()),
+            ("Page \"P\"", Some("action"), "Export")
+        );
+        let m = split_member("Page P.action(\"My Act\")::OnAction").unwrap();
+        assert_eq!(m.member, "My Act");
+        assert!(split_member("Codeunit \"Log Mgt\"::Run").is_none());
+        assert!(split_member("Codeunit Log::Note(Text)").is_none());
+        assert!(split_member("Table Cust. Ledger Entry::OnInsert").is_none());
+        assert!(split_member("OnValidate").is_none());
+    }
+
+    /// V3 §2.1 (found by the CDO round trip: 37 routines' selectors named
+    /// none): a parameter list whose type text holds commas (`option A,B`,
+    /// `Dictionary of [Code[10], Text]`), pasted from the display, selects
+    /// its overload; a list one type short does not.
+    ///
+    /// Discrimination (2026-11-06): the whole-list comparison removed from
+    /// `signature_matches` fails at "an option list selects"; restored,
+    /// passes.
+    #[test]
+    fn a_parameter_list_with_commas_in_a_type_selects() {
+        use crate::program::model::workspace::ModelParameter;
+        let p = |ty: &str, var: bool| ModelParameter {
+            index: 0,
+            name: "P".into(),
+            type_text: ty.into(),
+            is_var: var,
+            is_record: false,
+            table_name: None,
+        };
+        let params = vec![
+            p("Record \"CDO File\"", true),
+            p("option \" \",\"Attach as one file\",Merge", false),
+            p("Dictionary of [Code[10], Text]", false),
+        ];
+        let shown = format!("Codeunit X::Do{}", signature_text(&params));
+        let (_, wanted) = split_signature(&shown);
+        assert!(
+            signature_matches(&wanted.unwrap(), &params),
+            "an option list selects: {shown}"
+        );
+        let (_, short) = split_signature(
+            "Codeunit X::Do(var Record \"CDO File\", option \" \",\"Attach as one file\",Merge)",
+        );
+        assert!(!signature_matches(&short.unwrap(), &params));
+    }
+
+    /// V3 §2.1: a member form keeps only the named owner, member, kind and
+    /// routine.
+    #[test]
+    fn member_selector_resolves_by_owner_member_and_kind() {
+        let row =
+            |id: &'static str, owner: &str, member: &'static str, kind: &'static str| MemberRow {
+                id,
+                owner_display: owner.to_string(),
+                member,
+                member_kind: kind,
+                routine: if kind == "action" {
+                    "OnAction"
+                } else {
+                    "OnValidate"
+                },
+            };
+        let rows = || {
+            vec![
+                row("a#", "Table Job", "Table No.", "field"),
+                row("b#", "Table Job", "Status", "field"),
+                row("c#", "Table Other", "Table No.", "field"),
+                row("d#", "Page Jobs", "Export", "action"),
+            ]
+        };
+        let sel = |s: &str| resolve_member_selector(s, rows()).unwrap();
+        assert_eq!(sel("Table Job.\"Table No.\"::OnValidate"), ["a#"]);
+        assert_eq!(sel("Job.\"table no.\"::onvalidate"), ["a#"]);
+        assert_eq!(sel("Table \"Job\".Status::OnValidate"), ["b#"]);
+        assert_eq!(sel("Page Jobs.action(Export \"X\")::OnAction"), ["d#"]);
+        assert!(sel("Page Jobs.dataitem(Export)::OnAction").is_empty());
+        assert!(sel("Table Job.Nope::OnValidate").is_empty());
+        assert!(resolve_member_selector("Table Job::OnValidate", rows()).is_none());
+    }
+
+    /// V3 §2.4, a correctness guard on what a failure offers. Hand-stated
+    /// model (by assignment): six `SendMail` overloads and a `Send` in the
+    /// workspace, `PostDoc` only in a dependency. `SendMailTwice` offers
+    /// `SendMail` (6 overloads, within the ratio: 5 of 13) and not `Send` (9
+    /// of 13); `PostDoc` is found only in the dependency, and no unrelated
+    /// workspace name is offered; a far name offers none.
+    ///
+    /// Discrimination (2026-11-06): `NEAREST_RATIO` raised to 1.0 fails at
+    /// "a name sharing one word is not near" (`Send` offered); restored,
+    /// passes. The dependency-only branch removed (`if !primary_has` →
+    /// `if false`) fails at "found only in the dependency"; restored,
+    /// passes.
+    #[test]
+    fn hints_offer_only_near_names_and_name_a_dependency_only_routine() {
+        use crate::engine::l5::routine_rollup::RoutineNames;
+        use crate::engine::l5::test_support::{empty_resolved, routine};
+        use crate::program::model::workspace::{ModelObject, ModelParameter};
+        let mut m = empty_resolved();
+        m.primary_app = Some(crate::engine::gate::app_attribution::App {
+            app_guid: "ws".into(),
+            publisher: String::new(),
+            name: "Workspace".into(),
+            version: String::new(),
+        });
+        let object = |id: &str, app: &str, name: &str, number: i64| ModelObject {
+            id: id.into(),
+            app_guid: app.into(),
+            object_type: "Codeunit".into(),
+            object_number: number,
+            object_key: number.to_string(),
+            name: name.into(),
+            source_table_name: None,
+            extends_target_name: None,
+            implements_interfaces: None,
+            object_subtype: None,
+            page_type: None,
+            inherent_commit_behavior: None,
+            source_table_temporary: None,
+            page_controls: Vec::new(),
+            single_instance: None,
+            editable: None,
+            insert_allowed: None,
+            modify_allowed: None,
+            delete_allowed: None,
+            source_anchor: None,
+            declaration_only_routines: Vec::new(),
+            run_actions: None,
+        };
+        m.workspace.objects = vec![
+            object("ws/Codeunit/1", "ws", "Send Mail Mgt", 1),
+            object("dep/Codeunit/2", "dep", "Posting", 2),
+        ];
+        let mut rows = Vec::new();
+        for k in 0..6u32 {
+            let mut r = routine("SendMail", "procedure");
+            r.stable_routine_id = format!("ws:SendMail#{k}");
+            r.object_id = "ws/Codeunit/1".into();
+            r.app_guid = "ws".into();
+            r.parameters = (0..=k)
+                .map(|i| ModelParameter {
+                    index: i,
+                    name: format!("P{i}"),
+                    type_text: "Text".into(),
+                    is_var: false,
+                    is_record: false,
+                    table_name: None,
+                })
+                .collect();
+            rows.push(r);
+        }
+        let mut send = routine("Send", "procedure");
+        send.stable_routine_id = "ws:Send".into();
+        send.object_id = "ws/Codeunit/1".into();
+        send.app_guid = "ws".into();
+        rows.push(send);
+        let mut dep = routine("PostDoc", "procedure");
+        dep.stable_routine_id = "dep:PostDoc".into();
+        dep.object_id = "dep/Codeunit/2".into();
+        dep.app_guid = "dep".into();
+        dep.object_number = 2;
+        rows.push(dep);
+        m.workspace.routines = rows;
+        let names = RoutineNames::new(&m, &[]);
+        let owners = |_: &str| "Codeunit Send Mail Mgt".to_string();
+        let h = selector_hints(&names, owners, "SendMailTwice");
+        let offered: Vec<&str> = h.nearest.iter().map(|n| n.display.as_str()).collect();
+        assert_eq!(
+            offered,
+            ["Codeunit \"Send Mail Mgt\"::SendMail"],
+            "a name sharing one word is not near: {offered:?}"
+        );
+        assert_eq!(h.nearest[0].overloads, 6);
+        let h = selector_hints(&names, owners, "PostDoc");
+        assert_eq!(
+            h.dependency_only,
+            [(
+                "dep".to_string(),
+                "Codeunit Posting (2)::PostDoc".to_string()
+            )]
+            .into_iter()
+            .collect::<Vec<_>>(),
+            "found only in the dependency"
+        );
+        assert!(h.nearest.is_empty(), "no unrelated workspace name");
+        let lines = hint_lines(
+            &h,
+            &[serde_json::json!({"appId": "dep", "name": "Base App"})],
+        );
+        assert!(lines[0].starts_with("found only in Base App: Codeunit Posting (2)::PostDoc"));
+        let h = selector_hints(&names, owners, "Zebra");
+        assert!(h.nearest.is_empty() && h.dependency_only.is_empty());
+        assert_eq!(hint_lines(&h, &[])[0], "nearest names: no close match");
     }
 
     #[test]

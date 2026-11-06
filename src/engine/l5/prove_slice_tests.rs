@@ -242,7 +242,7 @@ fn e2_match_by_label_value_and_label_name() {
         human.contains(crate::engine::l5::prove_slice::STATIC_LABEL),
         "{human}"
     );
-    assert_eq!(v["schemaVersion"], "2.5.0");
+    assert_eq!(v["schemaVersion"], "2.7.0");
     assert_eq!(v["payload"]["filter"]["match"], "customer is BLOCKED");
     let (v, _) = matching(tmp.path(), "KnownOnly", "blockederr");
     assert_eq!(answer(&v), "yes", "the label's name matches");

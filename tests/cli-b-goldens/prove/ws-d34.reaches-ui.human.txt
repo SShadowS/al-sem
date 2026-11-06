@@ -1,4 +1,4 @@
---- Codeunit D34 Demo::DirectCommitInLoop ---
+--- Codeunit "D34 Demo"::DirectCommitInLoop ---
   question: reaches-ui — existing effects (what the routine and its callees already do)
   answer:   no
   coverage: complete

@@ -162,6 +162,9 @@
           },
           "display": "ModifyThenRunModal",
           "objectDisplay": "Codeunit D49 Sender",
+          "qualifiedDisplay": "Codeunit \"D49 Sender\"::ModifyThenRunModal",
+          "selector": "Codeunit \"D49 Sender\"::ModifyThenRunModal",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-0000000d4902:Codeunit:50000#5098a6b4ccf565e1ea2c49aaa4c34564280e943633b182038eb006d80f813721"
         },
         "scopedGuaranteesFolded": 1,
@@ -235,8 +238,10 @@
     "pathCap": 1,
     "routines": {
       "r:577b872ad696": {
-        "display": "Codeunit D49 Sender::ModifyThenRunModal",
+        "display": "Codeunit \"D49 Sender\"::ModifyThenRunModal",
         "file": "ws:src/Sender.Codeunit.al",
+        "selector": "Codeunit \"D49 Sender\"::ModifyThenRunModal",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-0000000d4902:Codeunit:50000#5098a6b4ccf565e1ea2c49aaa4c34564280e943633b182038eb006d80f813721"
       }
     },
@@ -248,5 +253,5 @@
     },
     "workspaceFingerprint": "c6699cf6323bea4482f8eb641cd8f8ad5f5688c22d669234161e0cb01359a0da"
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }

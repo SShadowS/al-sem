@@ -1,4 +1,4 @@
---- effects of Codeunit R2a Records::DeclaredVars ---
+--- effects of Codeunit "R2a Records"::DeclaredVars ---
   summary: 4 operations — writes that may persist 0 on 0 tables (0 known persistent, 0 temp state unknown); reads 2 on 2 tables; temporary records 1 on 1 table in 1 routine; table not resolved 1 in 1 routine
   coverage: per operation, one routine into dependency code; operations and routes the root's literal arguments rule out are listed and marked (alsem explain and prove drop them); writes beyond dependency entry points follow the whole cone with literal arguments, as alsem explain does; lines are 1-based
   scope: dependency code: full cone for physical writes, grouped per entry point; per-operation detail one routine deep; temporary records are not writes

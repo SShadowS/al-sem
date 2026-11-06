@@ -1,4 +1,4 @@
-Codeunit Calls Post::PreviewPost  ws:src/post.al:36
+Codeunit "Calls Post"::PreviewPost  ws:src/post.al:36
   summary — writes: no observed write that may persist; caller-dependent: 1 table
     transaction, UI and errors: commits: none; errors at 3 places
     other effects: events: 0 (0 raised in workspace code)

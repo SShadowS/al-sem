@@ -108,12 +108,15 @@
           "line": 8,
           "sourceKind": "source"
         },
+        "display": "Codeunit \"Rules Checks\"::CheckOrder",
         "doc": "Checks an order before it is posted.",
         "id": "33333333-7a1e-0000-0000-00000000a1e5:Codeunit:50301#917b80327203aabac80506d6f8ea9a494df0c8e8618957a6b4e4399f3e6bef0e",
         "name": "CheckOrder",
         "object": "Rules Checks",
         "objectCaption": null,
-        "objectType": "Codeunit"
+        "objectType": "Codeunit",
+        "selector": "Codeunit \"Rules Checks\"::CheckOrder",
+        "signature": "(var Record \"Rules Order\", Boolean)"
       },
       "rules": {
         "callers": [],

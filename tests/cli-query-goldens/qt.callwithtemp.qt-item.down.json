@@ -45,6 +45,9 @@
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::WriteItem",
+              "selector": "Codeunit \"QT Touches\"::WriteItem",
+              "signature": "(var Record \"QT Item\")",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#6a863bfb0eb86b6e845ad40acc2308a3480e63e10299e4a629604c6a43c90d72"
             }
           },
@@ -64,6 +67,9 @@
         },
         "display": "CallWithTemp",
         "objectDisplay": "Codeunit QT Touches",
+        "qualifiedDisplay": "Codeunit \"QT Touches\"::CallWithTemp",
+        "selector": "Codeunit \"QT Touches\"::CallWithTemp",
+        "signature": "()",
         "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#e638f22869d8fa1ba69c0c5ea9d3deec52cbf1271e9c38dfedb76176d2ccac80"
       },
       "selector": "CallWithTemp"
@@ -77,5 +83,5 @@
       "selector": "QT Item"
     }
   },
-  "schemaVersion": "3.6.0"
+  "schemaVersion": "3.7.0"
 }

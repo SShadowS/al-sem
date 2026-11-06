@@ -373,7 +373,16 @@ impl RoutineTable {
         let mut table = Map::new();
         let mut files = BTreeMap::new();
         for id in &ids {
+            // V3 §2.1: the one display and its parts, the selector and the
+            // JSON-only handle.
             let mut v = json!({"stableId": id, "display": cx.qualified(id)});
+            for (k, x) in cx.names.identity_json(id) {
+                v[k] = x;
+            }
+            let handle = cx.handle(id);
+            if !handle.is_empty() {
+                v["handle"] = json!(handle);
+            }
             if let Some(f) = cx.default_file(id) {
                 v["file"] = json!(f);
                 files.insert(id.clone(), f);
@@ -606,7 +615,6 @@ pub fn entry_v3(
     cx: &RollupCx<'_>,
     opts: RenderOpts,
 ) -> Value {
-    let _ = cx;
     let root = entry.routine_id.as_str();
     // Crossings, keyed `c:` + hash of the boundary identity.
     let ids: BTreeSet<String> = r.crossings.iter().map(|c| c.id.clone()).collect();
@@ -660,7 +668,23 @@ pub fn entry_v3(
             .count()
     };
     let mut m = Map::new();
-    m.insert("routine".into(), routine_to_value(entry));
+    // V3 §2.1: the one display as `qualifiedDisplay` (`display` keeps the
+    // routine's name, `objectDisplay` stays), `signature`, `member`,
+    // `selector` and `handle` beside `stableId`.
+    let mut routine = routine_to_value(entry);
+    for (k, x) in cx.names.identity_json(root) {
+        let k = if k == "display" {
+            "qualifiedDisplay".to_string()
+        } else {
+            k
+        };
+        routine[k] = x;
+    }
+    let handle = cx.handle(root);
+    if !handle.is_empty() {
+        routine["handle"] = json!(handle);
+    }
+    m.insert("routine".into(), routine);
     m.insert(
         "coverage".into(),
         json!({

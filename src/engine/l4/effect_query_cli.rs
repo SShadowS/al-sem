@@ -97,8 +97,12 @@ use crate::program::resolve::full::LoadedDependencies;
 /// or unclassified row moves to that family's bucket (`summary.reads`, …) and
 /// out of `summary.callerDependent` / `summary.temporary` / `byTable`; a
 /// caller-dependent row adds `parameterPosition` (1-based) and
-/// `parameterName` (additive; `tempState` keeps the 0-based index).
-const QUERY_SCHEMA_VERSION: &str = "3.6.0";
+/// `parameterName` (additive; `tempState` keeps the 0-based index). 3.7.0
+/// (output validation V3, §2.1, additive): every routine object gains
+/// `qualifiedDisplay` (the one routine display: member, AL quoting, an
+/// overloaded name's parameter types), `signature`, `member` and `selector`;
+/// `display` keeps the routine's name.
+const QUERY_SCHEMA_VERSION: &str = "3.7.0";
 
 /// Which direction(s) a `query touches` run reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1027,11 +1031,43 @@ pub fn resolve_routine_selector<'a>(
     let bare: Vec<&ModelRoutine> = routines()
         .filter(|r| r.name.to_lowercase() == want)
         .collect();
+    // V3 §2.1: a member form (`Object."Field"::Trigger`,
+    // `Object.action(Name)::OnAction`), the one display of a member trigger.
+    let member: Vec<&ModelRoutine> = if qualified.is_empty() {
+        let owner_display = |r: &ModelRoutine| object_display(&r.object_type, object_name(r));
+        let rows = routines().filter_map(|r| {
+            Some(crate::engine::l5::selector_index::MemberRow {
+                id: &r.stable_routine_id,
+                owner_display: owner_display(r),
+                member: r.enclosing_member.as_deref()?,
+                member_kind: r.member_detail.as_ref().map_or_else(
+                    || {
+                        crate::engine::l5::routine_rollup::infer_member_kind(
+                            &r.object_type,
+                            &r.name,
+                        )
+                    },
+                    |d| d.kind,
+                ),
+                routine: &r.name,
+            })
+        });
+        match crate::engine::l5::selector_index::resolve_member_selector(selector, rows) {
+            Some(ids) => routines()
+                .filter(|r| ids.contains(&r.stable_routine_id))
+                .collect(),
+            None => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
 
     // Most specific non-empty tier wins; an ambiguity inside a tier does NOT
     // fall through to a looser tier (that would answer a different question).
     let hits = if !qualified.is_empty() {
         qualified
+    } else if !member.is_empty() {
+        member
     } else {
         bare
     };
@@ -1079,12 +1115,22 @@ pub struct RoutineRef {
     pub file: String,
     pub line: u32,
     pub column: u32,
+    /// The one routine display without the member's caption (V3 §2.1).
+    pub canonical: String,
+    /// [`Self::canonical`] without its object: what a line grouped under
+    /// the object prints (`"Table No."::OnValidate`, `Note(Text)`).
+    pub in_object: String,
+    /// The one routine display with the member's caption (headers).
+    pub header: String,
+    /// The JSON identity fields (`signature`, `member`, `selector`).
+    pub identity: serde_json::Map<String, Value>,
 }
 
 impl RoutineRef {
-    /// The one header rule, [`owner_qualified`], for this routine (#78).
+    /// The one routine display (V3 §2.1) as a list row prints it (no
+    /// member caption).
     pub fn qualified(&self) -> String {
-        owner_qualified(&self.object_display, &self.display)
+        self.canonical.clone()
     }
 }
 
@@ -1094,6 +1140,7 @@ impl RoutineRef {
 pub struct RoutineJoin<'a> {
     by_id: HashMap<&'a str, &'a ModelRoutine>,
     declaring: DeclaringObjects<'a>,
+    names: crate::engine::l5::routine_rollup::RoutineNames<'a>,
 }
 
 impl<'a> RoutineJoin<'a> {
@@ -1102,7 +1149,13 @@ impl<'a> RoutineJoin<'a> {
         RoutineJoin {
             by_id: ws.routines.iter().map(|r| (r.id.as_str(), r)).collect(),
             declaring: DeclaringObjects::new(&ws.objects),
+            names: crate::engine::l5::routine_rollup::RoutineNames::new(resolved, &[]),
         }
+    }
+
+    /// The one routine display's names (V3 §2.1).
+    pub fn names(&self) -> &crate::engine::l5::routine_rollup::RoutineNames<'a> {
+        &self.names
     }
 
     /// Join an internal routine id to its renderable identity. `None` for an id
@@ -1119,7 +1172,11 @@ impl<'a> RoutineJoin<'a> {
     }
 
     pub fn of(&self, r: &ModelRoutine) -> RoutineRef {
+        use crate::engine::l5::routine_rollup::format_routine;
         let object_name = self.declaring.of(r).map_or("", |o| o.name.as_str());
+        let parts = self.names.parts_of(r);
+        let mut identity = self.names.identity_json(&r.stable_routine_id);
+        identity.remove("display");
         RoutineRef {
             display: r.name.clone(),
             object_display: object_display(&r.object_type, object_name),
@@ -1127,6 +1184,10 @@ impl<'a> RoutineJoin<'a> {
             file: r.source_anchor.source_unit_id.clone(),
             line: r.source_anchor.start_line,
             column: r.source_anchor.start_column,
+            canonical: format_routine(&parts, false),
+            in_object: crate::engine::l5::routine_rollup::split_display(&parts).1,
+            header: format_routine(&parts, true),
+            identity,
         }
     }
 }
@@ -1315,13 +1376,21 @@ fn origin_human(origin: Option<&OperationRef>, operation_id: &str) -> String {
     }
 }
 
+/// A routine's JSON: `display` (its name, as before) and `objectDisplay`,
+/// plus (V3 §2.1, 3.7.0) `qualifiedDisplay` (the one display), `signature`,
+/// `member` and `selector`.
 fn routine_ref_json(rr: &RoutineRef) -> Value {
-    json!({
+    let mut v = json!({
         "display": rr.display,
         "objectDisplay": rr.object_display,
+        "qualifiedDisplay": rr.header,
         "stableId": rr.stable_id,
         "anchor": { "file": rr.file, "line": shown(rr.line), "column": rr.column },
-    })
+    });
+    for (k, x) in &rr.identity {
+        v[k] = x.clone();
+    }
+    v
 }
 
 /// [`temp_state_str`]'s text for a state that depends on the routine's own
@@ -1503,18 +1572,118 @@ fn selector_failure_doc<T>(
     alsem_ver: &str,
     deterministic: bool,
 ) -> QueryRunResult {
+    selector_failure_doc_with(
+        kind,
+        selector_field,
+        selector,
+        resolution,
+        deps,
+        alsem_ver,
+        deterministic,
+        serde_json::Map::new(),
+        None,
+    )
+}
+
+/// A routine selector's failure document (V3 §2.4): an unmatched one with
+/// the nearest workspace names (or where the name is found only in
+/// dependency code) and the selector forms; an ambiguous one with every
+/// candidate's complete parameter list and a ready `routines: [...]` value.
+#[allow(clippy::too_many_arguments)]
+fn routine_failure_doc(
+    kind: &str,
+    selector_field: &str,
+    selector: &str,
+    resolution: &Resolution<&ModelRoutine>,
+    model: &Model,
+    deps: &LoadedDependencies,
+    alsem_ver: &str,
+    deterministic: bool,
+) -> QueryRunResult {
+    use crate::engine::l5::selector_index as si;
+    let names = crate::engine::l5::routine_rollup::RoutineNames::new(model, &[]);
+    let (extra, human) = match resolution {
+        Resolution::Ambiguous(labels) => {
+            // Each label ends `(stable id <id>)` (`candidate_label`).
+            let listed: Vec<si::AmbiguousCandidate> = labels
+                .iter()
+                .filter_map(|l| {
+                    let id = l.rsplit_once("(stable id ")?.1.strip_suffix(')')?;
+                    si::AmbiguousCandidate::of(&names, id)
+                })
+                .collect();
+            if listed.len() != labels.len() {
+                (serde_json::Map::new(), None)
+            } else {
+                let mut m = serde_json::Map::new();
+                m.insert(
+                    "candidateSelectors".into(),
+                    listed.iter().map(|c| c.selector.clone()).collect(),
+                );
+                let lines =
+                    si::ambiguity_lines(&format!("{kind}: {selector_field} "), selector, &listed);
+                (m, Some(format!("{}\n", lines.join("\n"))))
+            }
+        }
+        _ => {
+            let owners = OwnerIndex::build(model);
+            let hints = si::selector_hints(&names, |id| owners.object_display(id), selector);
+            let mut lines = vec![crate::engine::l5::explain::unmatched_line(
+                &format!("{kind}: {selector_field}: "),
+                selector,
+            )];
+            lines.extend(
+                si::hint_lines(&hints, &deps.apps)
+                    .into_iter()
+                    .map(|l| format!("  {l}")),
+            );
+            (
+                si::hints_json(&hints),
+                Some(format!("{}\n", lines.join("\n"))),
+            )
+        }
+    };
+    selector_failure_doc_with(
+        kind,
+        selector_field,
+        selector,
+        resolution,
+        deps,
+        alsem_ver,
+        deterministic,
+        extra,
+        human,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn selector_failure_doc_with<T>(
+    kind: &str,
+    selector_field: &str,
+    selector: &str,
+    resolution: &Resolution<T>,
+    deps: &LoadedDependencies,
+    alsem_ver: &str,
+    deterministic: bool,
+    extra: serde_json::Map<String, Value>,
+    human_text: Option<String>,
+) -> QueryRunResult {
     let candidates: Vec<String> = match resolution {
         Resolution::Ambiguous(c) => c.clone(),
         _ => Vec::new(),
     };
-    let payload = json!({
-        selector_field: {
-            "selector": selector,
-            "resolution": resolution.label(),
-            "candidates": candidates,
-        }
+    let mut block = json!({
+        "selector": selector,
+        "resolution": resolution.label(),
+        "candidates": candidates,
     });
-    let human = if candidates.is_empty() {
+    if let Value::Object(m) = &mut block {
+        m.extend(extra);
+    }
+    let payload = json!({ selector_field: block });
+    let human = if let Some(h) = human_text {
+        h
+    } else if candidates.is_empty() {
         format!("{kind}: {selector_field} {selector:?} matched no {selector_field}\n")
     } else {
         let mut s = format!("{kind}: {selector_field} {selector:?} is AMBIGUOUS:\n");
@@ -1720,11 +1889,12 @@ fn render_query_touches_body(
         Some(sel) => match resolve_routine_selector(substrate.resolved(), &join.declaring, sel) {
             Resolution::Resolved(r) => Some(r),
             other => {
-                return selector_failure_doc(
+                return routine_failure_doc(
                     "query.touches",
                     "from",
                     sel,
                     &other,
+                    substrate.resolved(),
                     deps,
                     alsem_ver,
                     deterministic,
@@ -1851,7 +2021,7 @@ fn render_query_touches_body(
                 );
                 human.push_str(&format!(
                     "--- {} vs {table_label} ---\n  not answerable: routine has no db-effect row\n",
-                    rr.qualified()
+                    rr.header
                 ));
                 let summary = touches_summary(&payload);
                 return QueryRunResult {
@@ -1869,7 +2039,7 @@ fn render_query_touches_body(
                 };
             };
 
-            human.push_str(&format!("--- {} vs {table_label} ---\n", rr.qualified()));
+            human.push_str(&format!("--- {} vs {table_label} ---\n", rr.header));
             let beyond = cone.map(|e| Beyond::new(e, substrate.resolved(), deps));
             human.push_str(&format!(
                 "{}{}\n",
@@ -2583,7 +2753,13 @@ fn render_through_dependency(
         g.stable_id(n)
             .and_then(|s| by_stable.get(s.as_str()).copied())
             .and_then(|r| cx.join.get(&r.id))
-            .map_or_else(|| g.display(n), |x| x.qualified())
+            .map_or_else(
+                || {
+                    crate::engine::l5::routine_rollup::graph_display(g, n, Some(cx.resolved))
+                        .unwrap_or_else(|| g.display(n))
+                },
+                |x| x.qualified(),
+            )
     };
     let mut listed: Vec<(&DepCaller, String)> = answer
         .callers
@@ -3116,11 +3292,12 @@ fn render_query_effects_body(
         match resolve_routine_selector(substrate.resolved(), &join.declaring, routine_selector) {
             Resolution::Resolved(r) => r,
             other => {
-                return selector_failure_doc(
+                return routine_failure_doc(
                     "query.effects",
                     "routine",
                     routine_selector,
                     &other,
+                    substrate.resolved(),
                     deps,
                     alsem_ver,
                     deterministic,
@@ -3153,7 +3330,7 @@ fn render_query_effects_body(
         });
         let human = format!(
             "--- effects of {} ---\n  not answerable: routine has no db-effect row\n",
-            rr.qualified()
+            rr.header
         );
         return QueryRunResult {
             json_text: envelope("query.effects", payload, deps, alsem_ver, deterministic),
@@ -3466,7 +3643,7 @@ fn render_query_effects_body(
 
     // Human (design §4.5): summary first, then the buckets; every row with
     // --all.
-    let mut human = format!("--- effects of {} ---\n", rr.qualified());
+    let mut human = format!("--- effects of {} ---\n", rr.header);
     let mut parts = vec![format!(
         "writes that may persist {} on {} ({known} known persistent, {unknown_temp} temp state unknown)",
         count("writes"),
@@ -4178,11 +4355,12 @@ fn render_field_touches(
                 Some(field_scope(model, q, sited, r, ask.direction, &join))
             }
             other => {
-                return selector_failure_doc(
+                return routine_failure_doc(
                     KIND,
                     "from",
                     sel,
                     &other,
+                    model,
                     deps,
                     alsem_ver,
                     deterministic,
@@ -4673,7 +4851,7 @@ fn render_field_touches(
             }
             human.push_str(&format!(
                 "    {} {}:{} {} [{}]\n",
-                rr.display,
+                rr.in_object,
                 s.anchor.source_unit_id,
                 shown(s.anchor.start_line),
                 uses_text(&s.uses),

@@ -219,7 +219,9 @@ fn explain_counts_every_commit_site_and_entry_point() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("Codeunit Dep Calc::OnRun, entered at ws:src/ChainDoc.Table.al:20"),
+        stdout.contains(
+            "Codeunit \"Dep Calc\" (50400)::OnRun, entered at ws:src/ChainDoc.Table.al:20"
+        ),
         "{stdout}"
     );
     assert!(

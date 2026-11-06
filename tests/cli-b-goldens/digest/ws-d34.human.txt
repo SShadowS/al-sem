@@ -1,4 +1,4 @@
---- Codeunit D34 Demo::TransitiveCommit ---
+--- Codeunit "D34 Demo"::TransitiveCommit ---
   summary — writes: no observed write that may persist; caller-dependent: none
     transaction, UI and errors: commits: may (1 site); UI and errors: none observed
     other effects: events: 0 (0 raised in workspace code)
@@ -12,7 +12,7 @@
       path: TransitiveCommit → Persist
   events: 0 raised in workspace code; 0 more only beyond entry points
 
---- Codeunit D34 Demo::DirectCommitInLoop ---
+--- Codeunit "D34 Demo"::DirectCommitInLoop ---
   summary — writes: no observed write that may persist; caller-dependent: none
     transaction, UI and errors: commits: may (1 site); UI and errors: none observed
     other effects: events: 0 (0 raised in workspace code)
@@ -25,7 +25,7 @@
     COMMIT at ws:src/Codeunit.al:10 (loop-body)
   events: 0 raised in workspace code; 0 more only beyond entry points
 
---- Codeunit D34 Demo::Persist ---
+--- Codeunit "D34 Demo"::Persist ---
   summary — writes: no observed write that may persist; caller-dependent: none
     transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
     other effects: events: 0 (0 raised in workspace code)
@@ -38,7 +38,7 @@
     COMMIT at ws:src/Codeunit.al:48 (unconditional-on-success)
   events: 0 raised in workspace code; 0 more only beyond entry points
 
---- Codeunit D34 Demo::DoWork ---
+--- Codeunit "D34 Demo"::DoWork ---
   summary — writes: no observed write that may persist; caller-dependent: none
     transaction, UI and errors: commits: none; UI and errors: none observed
     other effects: events: 0 (0 raised in workspace code)
@@ -51,7 +51,7 @@
   commits: none
   events: 0 raised in workspace code; 0 more only beyond entry points
 
---- Codeunit D34 Demo::NestedCommit ---
+--- Codeunit "D34 Demo"::NestedCommit ---
   summary — writes: no observed write that may persist; caller-dependent: none
     transaction, UI and errors: commits: may (1 site); UI and errors: none observed
     other effects: events: 0 (0 raised in workspace code)
@@ -64,7 +64,7 @@
     COMMIT at ws:src/Codeunit.al:22 (loop-body)
   events: 0 raised in workspace code; 0 more only beyond entry points
 
---- Codeunit D34 Demo::CommitAfterLoop ---
+--- Codeunit "D34 Demo"::CommitAfterLoop ---
   summary — writes: no observed write that may persist; caller-dependent: none
     transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
     other effects: events: 0 (0 raised in workspace code)

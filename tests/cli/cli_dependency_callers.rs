@@ -156,7 +156,7 @@ fn touches_up(extra: &[&str]) -> Value {
         String::from_utf8_lossy(&out.stderr)
     );
     let v: Value = serde_json::from_slice(&out.stdout).expect("json");
-    assert_eq!(v["schemaVersion"], "3.6.0");
+    assert_eq!(v["schemaVersion"], "3.7.0");
     v["payload"]["up"].clone()
 }
 
@@ -222,11 +222,13 @@ fn query_touches_up_lists_the_callers_through_dependency_code() {
     assert!(solve.contains("Codeunit DC Both::Direct"), "{solve:?}");
     // The witness ends at the root and names the event and the configured arm.
     let start = &list[1];
-    assert_eq!(start["entersAt"], "Codeunit DC Sub::HandleAfterRun");
+    // V3 §2.1/§2.2: the one display (AL quoting; a dependency object by
+    // name with its number).
+    assert_eq!(start["entersAt"], "Codeunit \"DC Sub\"::HandleAfterRun");
     let w = start["witness"].as_array().unwrap();
     assert_eq!(w[2]["kind"], "event");
-    assert_eq!(w[2]["event"], "Codeunit DC Engine::OnAfterRun");
-    assert_eq!(w.last().unwrap()["to"], "Codeunit DC Target::Target");
+    assert_eq!(w[2]["event"], "Codeunit \"DC Engine\" (52901)::OnAfterRun");
+    assert_eq!(w.last().unwrap()["to"], "Codeunit \"DC Target\"::Target");
     assert_eq!(
         w[1]["at"]["file"], "dep:437dbf0e-84ff-417a-965d-ed2bb9650972:src/Engine.al",
         "a dependency hop's site names its app"
@@ -278,7 +280,7 @@ fn explain_counts_the_callers_through_dependency_code_only_when_asked() {
         .collect();
     assert_eq!(nearest.len(), 3, "{td}");
     assert!(
-        nearest.contains(&"Codeunit DC Caller::Start"),
+        nearest.contains(&"Codeunit \"DC Caller\"::Start"),
         "the nearest code callers: {nearest:?}"
     );
     assert_eq!(
@@ -287,7 +289,7 @@ fn explain_counts_the_callers_through_dependency_code_only_when_asked() {
             .unwrap()
             .last()
             .unwrap()["to"],
-        "Codeunit DC Target::Target"
+        "Codeunit \"DC Target\"::Target"
     );
 }
 
@@ -326,7 +328,7 @@ fn callers_context_human_text_names_dependency_locations_by_app_name() {
         &ws,
     );
     assert!(
-        human.contains("Codeunit \"DC Engine\"::Process (dep:"),
+        human.contains("Codeunit \"DC Engine\" (52901)::Process (dep:"),
         "precondition: a witness path through dependency code: {human}"
     );
     assert!(
@@ -334,7 +336,9 @@ fn callers_context_human_text_names_dependency_locations_by_app_name() {
         "no dependency guid in the human text: {human}"
     );
     assert!(
-        human.contains("Codeunit \"DC Engine\"::Process (dep:Base Application:src/Engine.al:23)"),
+        human.contains(
+            "Codeunit \"DC Engine\" (52901)::Process (dep:Base Application:src/Engine.al:23)"
+        ),
         "{human}"
     );
     let json = run(

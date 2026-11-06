@@ -143,6 +143,9 @@
           },
           "display": "WriteLog",
           "objectDisplay": "Codeunit Out Log Mgt",
+          "qualifiedDisplay": "Codeunit \"Out Log Mgt\"::WriteLog",
+          "selector": "Codeunit \"Out Log Mgt\"::WriteLog",
+          "signature": "(Text[100])",
           "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
         },
         "scopedGuaranteesFolded": 0,
@@ -202,8 +205,10 @@
     "pathCap": 1,
     "routines": {
       "r:aeacadfe0cb1": {
-        "display": "Codeunit Out Log Mgt::WriteLog",
+        "display": "Codeunit \"Out Log Mgt\"::WriteLog",
         "file": "ws:src/OutIssueDocument.Codeunit.al",
+        "selector": "Codeunit \"Out Log Mgt\"::WriteLog",
+        "signature": "(Text[100])",
         "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
       }
     },
@@ -215,5 +220,5 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }

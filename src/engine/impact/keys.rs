@@ -182,7 +182,6 @@ pub struct CallerSite {
 
 /// The names a summary prints.
 pub struct Names<'m> {
-    object_name: HashMap<&'m str, &'m str>,
     table_name: HashMap<&'m str, &'m str>,
     /// Internal routine id → its row.
     by_id: HashMap<&'m str, &'m ModelRoutine>,
@@ -214,11 +213,6 @@ impl<'m> Names<'m> {
             }
         }
         Names {
-            object_name: ws
-                .objects
-                .iter()
-                .map(|o| (o.id.as_str(), o.name.as_str()))
-                .collect(),
             table_name: ws
                 .tables
                 .iter()
@@ -232,18 +226,11 @@ impl<'m> Names<'m> {
         }
     }
 
-    /// `Codeunit X::Name` of a routine row.
+    /// The one routine display of a routine row (V3 §2.1, no member
+    /// caption).
     #[must_use]
     pub fn display(&self, r: &ModelRoutine) -> String {
-        format!(
-            "{} {}::{}",
-            r.object_type,
-            self.object_name
-                .get(r.object_id.as_str())
-                .copied()
-                .unwrap_or(""),
-            r.name
-        )
+        crate::engine::l5::routine_rollup::format_routine(&self.rollup.names.parts_of(r), false)
     }
 
     /// A routine row's short handle: empty when its display is its own, else
@@ -253,11 +240,11 @@ impl<'m> Names<'m> {
         self.rollup.handle(&r.stable_routine_id)
     }
 
-    /// [`Self::display`] with [`Self::handle`]: how a label or a caller names
-    /// a routine, so two overloads never print alike.
+    /// How a label or a caller names a routine: [`Self::display`], which
+    /// prints an overloaded name's parameter types (V3 §2.1).
     #[must_use]
     pub fn named(&self, r: &ModelRoutine) -> String {
-        format!("{}{}", self.display(r), self.handle(r))
+        self.display(r)
     }
 
     /// The row of a stable id.

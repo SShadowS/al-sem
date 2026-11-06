@@ -46,6 +46,9 @@
               },
               "display": "TempOnly",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::TempOnly",
+              "selector": "Codeunit \"QT Touches\"::TempOnly",
+              "signature": "()",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
             }
           },
@@ -70,6 +73,9 @@
               },
               "display": "TempOnly",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::TempOnly",
+              "selector": "Codeunit \"QT Touches\"::TempOnly",
+              "signature": "()",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
             }
           },
@@ -89,6 +95,9 @@
         },
         "display": "TempOnly",
         "objectDisplay": "Codeunit QT Touches",
+        "qualifiedDisplay": "Codeunit \"QT Touches\"::TempOnly",
+        "selector": "Codeunit \"QT Touches\"::TempOnly",
+        "signature": "()",
         "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
       },
       "selector": "TempOnly"
@@ -118,5 +127,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "3.6.0"
+  "schemaVersion": "3.7.0"
 }

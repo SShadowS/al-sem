@@ -1,4 +1,4 @@
---- Codeunit D35 Demo::OnBeforePrintSafe ---
+--- Codeunit "D35 Demo"::OnBeforePrintSafe ---
   summary — writes: no observed write that may persist; caller-dependent: none
     transaction, UI and errors: commits: none; UI at 1 place
     other effects: events: 0 (0 raised in workspace code)
@@ -11,7 +11,7 @@
   events: 0 raised in workspace code; 0 more only beyond entry points
   UI at 1 place: UI_MESSAGE at ws:src/Codeunit.al:21 (unconditional-on-success)
 
---- Codeunit D35 Demo::OnAfterPostDirect ---
+--- Codeunit "D35 Demo"::OnAfterPostDirect ---
   summary — writes: no observed write that may persist; caller-dependent: none
     transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
     other effects: events: 0 (0 raised in workspace code)
@@ -24,7 +24,7 @@
     COMMIT at ws:src/Codeunit.al:7 (unconditional-on-success)
   events: 0 raised in workspace code; 0 more only beyond entry points
 
---- Codeunit D35 Demo::PersistAudit ---
+--- Codeunit "D35 Demo"::PersistAudit ---
   summary — writes: no observed write that may persist; caller-dependent: none
     transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
     other effects: events: 0 (0 raised in workspace code)
@@ -37,7 +37,7 @@
     COMMIT at ws:src/Codeunit.al:32 (unconditional-on-success)
   events: 0 raised in workspace code; 0 more only beyond entry points
 
---- Codeunit D35 Demo::NonSubscriberCommit ---
+--- Codeunit "D35 Demo"::NonSubscriberCommit ---
   summary — writes: no observed write that may persist; caller-dependent: none
     transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
     other effects: events: 0 (0 raised in workspace code)
@@ -50,7 +50,7 @@
     COMMIT at ws:src/Codeunit.al:27 (unconditional-on-success)
   events: 0 raised in workspace code; 0 more only beyond entry points
 
---- Codeunit D35 Demo::OnAfterValidateTransitive ---
+--- Codeunit "D35 Demo"::OnAfterValidateTransitive ---
   summary — writes: no observed write that may persist; caller-dependent: none
     transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
     other effects: events: 0 (0 raised in workspace code)

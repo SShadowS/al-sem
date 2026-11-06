@@ -85,10 +85,11 @@ fn u(v: &Value, k: &str) -> usize {
     v.get(k).and_then(Value::as_u64).unwrap_or(0) as usize
 }
 
-/// A routine's display with its short handle (`Codeunit X::F/2`): two
-/// overloads never print alike.
+/// A routine's display (V3 §2.1: the one display prints an overloaded
+/// name's parameter types, so two overloads never print alike; the short
+/// `handle` stays in JSON only).
 fn named(v: &Value) -> String {
-    format!("{}{}", s(v, "display"), s(v, "handle"))
+    s(v, "display").to_string()
 }
 
 fn short(c: &str) -> String {

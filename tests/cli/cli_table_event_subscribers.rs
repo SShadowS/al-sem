@@ -315,7 +315,7 @@ fn a_table_event_witness_goes_through_the_subscriber() {
     assert!(
         paths
             .iter()
-            .any(|p| p.contains("[event] TE Subscribers::AfterModify")),
+            .any(|p| p.contains("[event] Codeunit \"TE Subscribers\"::AfterModify")),
         "{stdout}"
     );
 }

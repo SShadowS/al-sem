@@ -1,4 +1,4 @@
---- Codeunit D51 Sender::PostThenError ---
+--- Codeunit "D51 Sender"::PostThenError ---
   summary — writes: no observed write that may persist; caller-dependent: none
     transaction, UI and errors: commits: none; errors at 1 place
     other effects: events: 0 (0 raised in workspace code); HTTP at 1 place

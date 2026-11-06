@@ -132,6 +132,9 @@
           },
           "display": "GetThenError",
           "objectDisplay": "Codeunit D51 NegSender",
+          "qualifiedDisplay": "Codeunit \"D51 NegSender\"::GetThenError",
+          "selector": "Codeunit \"D51 NegSender\"::GetThenError",
+          "signature": "()",
           "stableId": "aaaabbbb-cccc-dddd-eeee-100000000d51:Codeunit:50201#2e254ac7f120ad15b09c2e5449a1513e4746dbbfba3c362dc73c040a888723e1"
         },
         "scopedGuaranteesFolded": 0,
@@ -192,8 +195,10 @@
     "pathCap": 1,
     "routines": {
       "r:a02cde649a7b": {
-        "display": "Codeunit D51 NegSender::GetThenError",
+        "display": "Codeunit \"D51 NegSender\"::GetThenError",
         "file": "ws:src/Sender.Codeunit.al",
+        "selector": "Codeunit \"D51 NegSender\"::GetThenError",
+        "signature": "()",
         "stableId": "aaaabbbb-cccc-dddd-eeee-100000000d51:Codeunit:50201#2e254ac7f120ad15b09c2e5449a1513e4746dbbfba3c362dc73c040a888723e1"
       }
     },
@@ -205,5 +210,5 @@
     },
     "workspaceFingerprint": "cce9f4a181c0dc8ab6f329a35c9ae37a2adb0432613af167f388719bb9d5bb05"
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }

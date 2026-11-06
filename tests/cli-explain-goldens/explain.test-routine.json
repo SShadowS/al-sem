@@ -118,7 +118,7 @@
             },
             "fieldOps": [],
             "fields": {
-              "Codeunit Explain Post::PostOrder": [
+              "Codeunit \"Explain Post\"::PostOrder": [
                 "Posted",
                 "Status"
               ]
@@ -185,12 +185,15 @@
           "line": 9,
           "sourceKind": "source"
         },
+        "display": "Codeunit \"Explain Tests\"::PostUnreleasedFails",
         "doc": null,
         "id": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50405#3c15575bee905cbf25ba36fc4fc75ff23321ea016139cee4950b359eee36c410",
         "name": "PostUnreleasedFails",
         "object": "Explain Tests",
         "objectCaption": null,
-        "objectType": "Codeunit"
+        "objectType": "Codeunit",
+        "selector": "Codeunit \"Explain Tests\"::PostUnreleasedFails",
+        "signature": "()"
       },
       "rules": {
         "callers": [],

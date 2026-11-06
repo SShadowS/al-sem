@@ -467,7 +467,7 @@ fn a_transcript_answers_what_the_cli_answers() {
         assert_eq!(env["summary"]["routinesListed"], 1, "{env}");
         assert_eq!(
             env["summary"]["routines"][0]["routine"],
-            "Codeunit Explain Post::PostOrder"
+            "Codeunit \"Explain Post\"::PostOrder"
         );
 
         // A stdout over the inline cap: the same bytes, as a file.

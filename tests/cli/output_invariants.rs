@@ -370,8 +370,17 @@ fn line_tokens(t: &str) -> Vec<String> {
         }
         return v;
     }
+    // V3 §2.1: `reached from page action Page "X".action(Name "Caption") at`:
+    // the anchor opens to the action, by its name.
     if let Some(rest) = t.strip_prefix("reached from page action ") {
-        v.push(rest.split(' ').next().unwrap_or("").to_lowercase());
+        let name = rest
+            .split_once(".action(")
+            .map_or(rest, |(_, n)| n)
+            .split([' ', ')'])
+            .next()
+            .unwrap_or("")
+            .trim_matches('"');
+        v.push(name.to_lowercase());
         return v;
     }
     if let Some(callee) = between(t, "(callee ", ", status") {
@@ -862,7 +871,7 @@ fn digest_summary_through_mcp_on_the_fixture() {
     assert!(text.len() <= 40_000, "{} characters", text.len());
     let r = &summary["routines"][0];
     assert_eq!(
-        r["routine"], "Codeunit Out Issue Document::IssueDoc",
+        r["routine"], "Codeunit \"Out Issue Document\"::IssueDoc",
         "{summary}"
     );
     // W2-2 (design §3.1, T-W2-13): the summary is the rollup's one
@@ -1729,14 +1738,14 @@ fn fields_follow_the_original_operation_kind() {
     let insert = row("Out Item", "Insert");
     assert_eq!(
         insert["fields"],
-        serde_json::json!({"Codeunit Out Field Ops::Create": ["No.", "Qty", "Status"]}),
+        serde_json::json!({"Codeunit \"Out Field Ops\"::Create": ["No.", "Qty", "Status"]}),
         "{insert}"
     );
     let modify_all = row("Out Item", "ModifyAll");
     assert!(empty(&modify_all["fields"]), "{modify_all}");
     assert_eq!(
         modify_all["fieldOps"],
-        serde_json::json!([{"op": "ModifyAll", "field": "Status", "in": "Codeunit Out Field Ops::CloseAll"}])
+        serde_json::json!([{"op": "ModifyAll", "field": "Status", "in": "Codeunit \"Out Field Ops\"::CloseAll"}])
     );
     let rename = row("Out Item", "Rename");
     assert!(
@@ -1745,7 +1754,7 @@ fn fields_follow_the_original_operation_kind() {
     );
     assert_eq!(
         rename["renames"],
-        serde_json::json!(["Codeunit Out Field Ops::Relabel"])
+        serde_json::json!(["Codeunit \"Out Field Ops\"::Relabel"])
     );
     assert!(
         !writes.iter().any(|w| w["opKinds"]
@@ -1776,8 +1785,8 @@ fn fields_follow_the_original_operation_kind() {
     let item = block("Out Item").join("\n");
     for want in [
         "fields Create assigns on this table (not operation-specific): No., Qty, Status",
-        "ModifyAll sets: Status (in Codeunit Out Field Ops::CloseAll)",
-        "renames (primary key) in Codeunit Out Field Ops::Relabel",
+        "ModifyAll sets: Status (in Codeunit \"Out Field Ops\"::CloseAll)",
+        "renames (primary key) in Codeunit \"Out Field Ops\"::Relabel",
     ] {
         assert!(item.contains(want), "{want}:\n{human}");
     }
@@ -1840,7 +1849,7 @@ fn locks_are_their_own_class_in_query_effects() {
     assert!(
         human.contains(
             "  locks (2 tables; not writes): Out Item (also written), Out Log at \
-             ws:src/OutFieldOps.Codeunit.al:21 in Codeunit Out Field Ops::LockLog; a RecordRef \
+             ws:src/OutFieldOps.Codeunit.al:21 in Codeunit \"Out Field Ops\"::LockLog; a RecordRef \
              (table decided at run time): 1 lock\n"
         ),
         "{human}"
@@ -2171,32 +2180,23 @@ fn explain_digest_and_prove_give_one_table_answer() {
 }
 
 /// T-W2-24 on the fixture: `Out Overloads::RunBoth` calls two overloads of
-/// `Note`. The human paths print each by its short handle (MCP output step
-/// 2: `Note/1`, `Note/2`, apart by arity), `--detail` prints their full
-/// signatures once, and digest's routine table keys them apart with
-/// distinct displays.
+/// `Note`. Since output validation V3 (§2.1) every occurrence of an
+/// overloaded name prints its parameter types (the human paths: `Note(Text)`,
+/// `Note(Text, Integer)`; no short handle, no legend), and digest's routine
+/// table keys them apart with distinct displays and keeps the short handle
+/// as JSON `handle`.
 #[test]
 fn overloads_print_with_their_signatures() {
     let ws = workspace().to_string_lossy().into_owned();
     let (human, err, code) = run_alsem(&["explain", &ws, "--routine", "Out Overloads::RunBoth"]);
     assert_eq!(code, 0, "{err}");
-    for want in ["path: RunBoth → Note/1\n", "path: RunBoth → Note/2\n"] {
+    for want in [
+        "path: RunBoth → Note(Text)\n",
+        "path: RunBoth → Note(Text, Integer)\n",
+    ] {
         assert!(human.contains(want), "{want}\n{human}");
     }
-    let (detail, err, code) = run_alsem(&[
-        "explain",
-        &ws,
-        "--routine",
-        "Out Overloads::RunBoth",
-        "--detail",
-    ]);
-    assert_eq!(code, 0, "{err}");
-    for want in [
-        "Note/1 = (Msg: Text)",
-        "Note/2 = (Msg: Text; Level: Integer)",
-    ] {
-        assert!(detail.contains(want), "{want}\n{detail}");
-    }
+    assert!(!human.contains("Note/1"), "no short handle in human text");
     let (out, _, _) = run_alsem(&["digest", &ws, "--routine", "Out Overloads::RunBoth"]);
     let d: Value = serde_json::from_str(&out).unwrap();
     let displays: Vec<&str> = d["payload"]["routines"]
@@ -2208,4 +2208,12 @@ fn overloads_print_with_their_signatures() {
         .collect();
     assert_eq!(displays.len(), 2, "{displays:?}");
     assert_ne!(displays[0], displays[1]);
+    let handles: Vec<&str> = d["payload"]["routines"]
+        .as_object()
+        .unwrap()
+        .values()
+        .filter(|r| r["display"].as_str().is_some_and(|s| s.contains("::Note")))
+        .filter_map(|r| r["handle"].as_str())
+        .collect();
+    assert_eq!(handles.len(), 2, "each keeps its JSON handle: {handles:?}");
 }

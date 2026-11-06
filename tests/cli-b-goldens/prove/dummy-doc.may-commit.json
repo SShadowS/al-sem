@@ -17,7 +17,7 @@
       "answer": "unknown",
       "blockedBy": [
         {
-          "detail": "no routine of the program has the id or name 'NonExistentRoutineXYZ'",
+          "detail": "no routine in the loaded program is named 'NonExistentRoutineXYZ'\n      nearest names: no close match\n      selector forms: Object::Routine, Object::Routine(<parameter types>), Object.\"Field\"::Trigger, Object.action(Name)::OnAction, or a stable id",
           "kind": "routine-not-found"
         }
       ],
@@ -36,5 +36,5 @@
     },
     "workspaceFingerprint": "422fd5d79e0d95f73a850372a04ff8ed07ccc5ee82deecc2ee2bcf44aa4ef31f"
   },
-  "schemaVersion": "2.4.0"
+  "schemaVersion": "2.6.0"
 }

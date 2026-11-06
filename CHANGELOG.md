@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (one name for every routine, and selectors that help the next call: output validation V3)
+
+Output validation round 1 (spec `docs/superpowers/specs/2026-11-06-output-validation-r1.md`
+§2, findings F1–F4, F6–F8) found the same routine printed under several names. Now:
+
+- **One routine display** (`routine_rollup::format_routine`, next to `handle`), used by
+  explain, digest (headers, summary rows, routine table), query effects and touches
+  (headers, caller lists, field-mode rows), prove (header, paths, callers' context),
+  impact and tests. The parameter types print on every occurrence of a name that is
+  overloaded in its object (`Codeunit "CDO Log Management"::CreateSMTPLogEntries(Record
+  "CDO E-Mail Template Line", RecordRef, …)`), and on no other; human paths print them
+  instead of the `/n` short handle, which stays in JSON as `handle` (the overload legend
+  lines are gone). A member trigger names its member: `Table "CDO E-Mail Job"."Table
+  No."::OnValidate`, `Page "CDO E-Mail Templates".action(ExportTemplateAction "Export
+  Template")::OnAction` (the caption in headers only, not on path hops). Object, member
+  and routine names are quoted only when AL needs quotes.
+- **Dependency routines by name** (F4): `Codeunit "Job Queue Dispatcher" (448)::HandleRequest`
+  rather than `Codeunit 448::handlerequest`. The sited graph keeps each node's declared
+  object and routine name (and a local member's), so reverse walks and test paths print
+  them; a dependency table field member takes its declared case from the model's tables.
+- **JSON identity fields**: routine rows gain `signature` (the parameter types), `member`
+  (`{kind, name, caption}`) and `selector` (the form that resolves to that one stable id;
+  the stable id for a dependency routine), and `handle` where a routine has one. Digest
+  3.1.0 (summary rows also gain `stableId`; an entry's `routine` gains `qualifiedDisplay`,
+  `display` keeps the routine name); query 3.7.0 (routine objects gain
+  `qualifiedDisplay`, `display` keeps the routine name); prove 2.6.0 unfiltered / 2.7.0
+  filtered (2.5.0 was already the filtered number); explain stays `al-sem.explain/4`
+  (additive). `ModelRoutine` gains `member_detail` (the member's kind and caption, read at
+  assembly).
+- **Member selectors** (§2.1): every tool reads `Object."Field"::Trigger`,
+  `Object.Field::Trigger` and `Object.action(Name)::OnAction` (a caption after the name is
+  ignored), after the forms that resolved before, so no selector resolves differently. A
+  round-trip test resolves every workspace routine's `selector` and display on the golden
+  fixtures and on CDO (gated), and every `selector` written in the fixture and CDO goldens,
+  to its own stable id.
+- **Selector failures help the next call** (F7, F8): an unmatched selector lists at most 5
+  workspace names whose edit distance is at most 0.4 of the longer name (nearest first,
+  then those of the asked object; "no close match" when none), or says the name is found
+  only in a dependency app (selectors are scoped to the workspace), then the selector
+  forms. An ambiguous one lists each candidate with its complete parameter list and
+  declaration, what it adds to the first, and a ready `routines: [...]` value of their
+  selectors (JSON `candidateSelectors`, `nearest`, `foundOnlyIn`). explain, prove, digest
+  and query print them.
+
 ### Fixed (tests no longer fill /tmp: a cached temp folder was never deleted)
 
 `output_cdo::cdo_answers` kept its CDO dependency-source dump (~12,000 files) in a

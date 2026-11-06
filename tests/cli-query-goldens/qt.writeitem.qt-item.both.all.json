@@ -45,6 +45,9 @@
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::WriteItem",
+              "selector": "Codeunit \"QT Touches\"::WriteItem",
+              "signature": "(var Record \"QT Item\")",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#6a863bfb0eb86b6e845ad40acc2308a3480e63e10299e4a629604c6a43c90d72"
             }
           },
@@ -64,6 +67,9 @@
         },
         "display": "WriteItem",
         "objectDisplay": "Codeunit QT Touches",
+        "qualifiedDisplay": "Codeunit \"QT Touches\"::WriteItem",
+        "selector": "Codeunit \"QT Touches\"::WriteItem",
+        "signature": "(var Record \"QT Item\")",
         "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#6a863bfb0eb86b6e845ad40acc2308a3480e63e10299e4a629604c6a43c90d72"
       },
       "selector": "WriteItem"
@@ -110,6 +116,9 @@
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::WriteItem",
+              "selector": "Codeunit \"QT Touches\"::WriteItem",
+              "signature": "(var Record \"QT Item\")",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#6a863bfb0eb86b6e845ad40acc2308a3480e63e10299e4a629604c6a43c90d72"
             }
           },
@@ -121,6 +130,9 @@
             },
             "display": "CallWithReal",
             "objectDisplay": "Codeunit QT Touches",
+            "qualifiedDisplay": "Codeunit \"QT Touches\"::CallWithReal",
+            "selector": "Codeunit \"QT Touches\"::CallWithReal",
+            "signature": "()",
             "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#a50805f8cc43f25c0d72e4f8befa92ad133e41a9ef3e701c5b09484c27d96dee"
           },
           "tempState": "known(false)",
@@ -145,6 +157,9 @@
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::WriteItem",
+              "selector": "Codeunit \"QT Touches\"::WriteItem",
+              "signature": "(var Record \"QT Item\")",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#6a863bfb0eb86b6e845ad40acc2308a3480e63e10299e4a629604c6a43c90d72"
             }
           },
@@ -156,6 +171,9 @@
             },
             "display": "CallWithTemp",
             "objectDisplay": "Codeunit QT Touches",
+            "qualifiedDisplay": "Codeunit \"QT Touches\"::CallWithTemp",
+            "selector": "Codeunit \"QT Touches\"::CallWithTemp",
+            "signature": "()",
             "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#e638f22869d8fa1ba69c0c5ea9d3deec52cbf1271e9c38dfedb76176d2ccac80"
           },
           "tempState": "known(true)",
@@ -180,6 +198,9 @@
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::WriteItem",
+              "selector": "Codeunit \"QT Touches\"::WriteItem",
+              "signature": "(var Record \"QT Item\")",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#6a863bfb0eb86b6e845ad40acc2308a3480e63e10299e4a629604c6a43c90d72"
             }
           },
@@ -191,6 +212,9 @@
             },
             "display": "Top1",
             "objectDisplay": "Codeunit QT Touches",
+            "qualifiedDisplay": "Codeunit \"QT Touches\"::Top1",
+            "selector": "Codeunit \"QT Touches\"::Top1",
+            "signature": "()",
             "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#1f3271c0e735418a755ca4072577d57566edc2b9600df19a7ce141051b5699fa"
           },
           "tempState": "known(false)",
@@ -215,6 +239,9 @@
               },
               "display": "TempOnly",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::TempOnly",
+              "selector": "Codeunit \"QT Touches\"::TempOnly",
+              "signature": "()",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
             }
           },
@@ -226,6 +253,9 @@
             },
             "display": "Mixed",
             "objectDisplay": "Codeunit QT Touches",
+            "qualifiedDisplay": "Codeunit \"QT Touches\"::Mixed",
+            "selector": "Codeunit \"QT Touches\"::Mixed",
+            "signature": "()",
             "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#88ade733a8ffcb3c10db6fdf91fd8d568c04ca56427eb041e2ebd16d74b0430e"
           },
           "tempState": "known(true)",
@@ -250,6 +280,9 @@
               },
               "display": "Mixed",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::Mixed",
+              "selector": "Codeunit \"QT Touches\"::Mixed",
+              "signature": "()",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#88ade733a8ffcb3c10db6fdf91fd8d568c04ca56427eb041e2ebd16d74b0430e"
             }
           },
@@ -261,6 +294,9 @@
             },
             "display": "Mixed",
             "objectDisplay": "Codeunit QT Touches",
+            "qualifiedDisplay": "Codeunit \"QT Touches\"::Mixed",
+            "selector": "Codeunit \"QT Touches\"::Mixed",
+            "signature": "()",
             "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#88ade733a8ffcb3c10db6fdf91fd8d568c04ca56427eb041e2ebd16d74b0430e"
           },
           "tempState": "known(false)",
@@ -285,6 +321,9 @@
               },
               "display": "TempOnly",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::TempOnly",
+              "selector": "Codeunit \"QT Touches\"::TempOnly",
+              "signature": "()",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
             }
           },
@@ -296,6 +335,9 @@
             },
             "display": "Mixed",
             "objectDisplay": "Codeunit QT Touches",
+            "qualifiedDisplay": "Codeunit \"QT Touches\"::Mixed",
+            "selector": "Codeunit \"QT Touches\"::Mixed",
+            "signature": "()",
             "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#88ade733a8ffcb3c10db6fdf91fd8d568c04ca56427eb041e2ebd16d74b0430e"
           },
           "tempState": "known(true)",
@@ -320,6 +362,9 @@
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::WriteItem",
+              "selector": "Codeunit \"QT Touches\"::WriteItem",
+              "signature": "(var Record \"QT Item\")",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#6a863bfb0eb86b6e845ad40acc2308a3480e63e10299e4a629604c6a43c90d72"
             }
           },
@@ -331,6 +376,9 @@
             },
             "display": "Mixed",
             "objectDisplay": "Codeunit QT Touches",
+            "qualifiedDisplay": "Codeunit \"QT Touches\"::Mixed",
+            "selector": "Codeunit \"QT Touches\"::Mixed",
+            "signature": "()",
             "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#88ade733a8ffcb3c10db6fdf91fd8d568c04ca56427eb041e2ebd16d74b0430e"
           },
           "tempState": "known(true)",
@@ -355,6 +403,9 @@
               },
               "display": "Top2",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::Top2",
+              "selector": "Codeunit \"QT Touches\"::Top2",
+              "signature": "()",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#f1e7fa13c469792bb96767705a35f70e5624e0a8a87e957bcfe5598c2906b0ce"
             }
           },
@@ -366,6 +417,9 @@
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
+            "qualifiedDisplay": "Codeunit \"QT Touches\"::Entry",
+            "selector": "Codeunit \"QT Touches\"::Entry",
+            "signature": "()",
             "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#19bb18e92806771422b68395398f467ac1c4911774b55d8aa7fea177fc75160e"
           },
           "tempState": "known(false)",
@@ -390,6 +444,9 @@
               },
               "display": "TempOnly",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::TempOnly",
+              "selector": "Codeunit \"QT Touches\"::TempOnly",
+              "signature": "()",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
             }
           },
@@ -401,6 +458,9 @@
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
+            "qualifiedDisplay": "Codeunit \"QT Touches\"::Entry",
+            "selector": "Codeunit \"QT Touches\"::Entry",
+            "signature": "()",
             "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#19bb18e92806771422b68395398f467ac1c4911774b55d8aa7fea177fc75160e"
           },
           "tempState": "known(true)",
@@ -425,6 +485,9 @@
               },
               "display": "Mixed",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::Mixed",
+              "selector": "Codeunit \"QT Touches\"::Mixed",
+              "signature": "()",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#88ade733a8ffcb3c10db6fdf91fd8d568c04ca56427eb041e2ebd16d74b0430e"
             }
           },
@@ -436,6 +499,9 @@
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
+            "qualifiedDisplay": "Codeunit \"QT Touches\"::Entry",
+            "selector": "Codeunit \"QT Touches\"::Entry",
+            "signature": "()",
             "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#19bb18e92806771422b68395398f467ac1c4911774b55d8aa7fea177fc75160e"
           },
           "tempState": "known(false)",
@@ -460,6 +526,9 @@
               },
               "display": "TempOnly",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::TempOnly",
+              "selector": "Codeunit \"QT Touches\"::TempOnly",
+              "signature": "()",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#53ab0e106b6aae1d88d91eab109d71551c0335c89caccc52e7c8a96f2e28edee"
             }
           },
@@ -471,6 +540,9 @@
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
+            "qualifiedDisplay": "Codeunit \"QT Touches\"::Entry",
+            "selector": "Codeunit \"QT Touches\"::Entry",
+            "signature": "()",
             "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#19bb18e92806771422b68395398f467ac1c4911774b55d8aa7fea177fc75160e"
           },
           "tempState": "known(true)",
@@ -495,6 +567,9 @@
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::WriteItem",
+              "selector": "Codeunit \"QT Touches\"::WriteItem",
+              "signature": "(var Record \"QT Item\")",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#6a863bfb0eb86b6e845ad40acc2308a3480e63e10299e4a629604c6a43c90d72"
             }
           },
@@ -506,6 +581,9 @@
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
+            "qualifiedDisplay": "Codeunit \"QT Touches\"::Entry",
+            "selector": "Codeunit \"QT Touches\"::Entry",
+            "signature": "()",
             "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#19bb18e92806771422b68395398f467ac1c4911774b55d8aa7fea177fc75160e"
           },
           "tempState": "known(false)",
@@ -530,6 +608,9 @@
               },
               "display": "WriteItem",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::WriteItem",
+              "selector": "Codeunit \"QT Touches\"::WriteItem",
+              "signature": "(var Record \"QT Item\")",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#6a863bfb0eb86b6e845ad40acc2308a3480e63e10299e4a629604c6a43c90d72"
             }
           },
@@ -541,6 +622,9 @@
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
+            "qualifiedDisplay": "Codeunit \"QT Touches\"::Entry",
+            "selector": "Codeunit \"QT Touches\"::Entry",
+            "signature": "()",
             "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#19bb18e92806771422b68395398f467ac1c4911774b55d8aa7fea177fc75160e"
           },
           "tempState": "known(true)",
@@ -565,6 +649,9 @@
               },
               "display": "Top2",
               "objectDisplay": "Codeunit QT Touches",
+              "qualifiedDisplay": "Codeunit \"QT Touches\"::Top2",
+              "selector": "Codeunit \"QT Touches\"::Top2",
+              "signature": "()",
               "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#f1e7fa13c469792bb96767705a35f70e5624e0a8a87e957bcfe5598c2906b0ce"
             }
           },
@@ -576,6 +663,9 @@
             },
             "display": "Entry",
             "objectDisplay": "Codeunit QT Touches",
+            "qualifiedDisplay": "Codeunit \"QT Touches\"::Entry",
+            "selector": "Codeunit \"QT Touches\"::Entry",
+            "signature": "()",
             "stableId": "07070707-0000-4000-8000-000000000071:Codeunit:50700#19bb18e92806771422b68395398f467ac1c4911774b55d8aa7fea177fc75160e"
           },
           "tempState": "known(false)",
@@ -585,5 +675,5 @@
       ]
     }
   },
-  "schemaVersion": "3.6.0"
+  "schemaVersion": "3.7.0"
 }

@@ -156,6 +156,9 @@
           },
           "display": "DoSetup",
           "objectDisplay": "Codeunit Normal Handler",
+          "qualifiedDisplay": "Codeunit \"Normal Handler\"::DoSetup",
+          "selector": "Codeunit \"Normal Handler\"::DoSetup",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d461:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb"
         },
         "scopedGuaranteesFolded": 5,
@@ -367,6 +370,9 @@
           },
           "display": "RunSetup",
           "objectDisplay": "Codeunit Normal Handler",
+          "qualifiedDisplay": "Codeunit \"Normal Handler\"::RunSetup",
+          "selector": "Codeunit \"Normal Handler\"::RunSetup",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d461:Codeunit:50001#b8669e55319108c890634c4a59a65673f0a99a138ff874f926b31d5f202b118b"
         },
         "scopedGuaranteesFolded": 5,
@@ -426,13 +432,17 @@
     "pathCap": 1,
     "routines": {
       "r:21fb742fc01a": {
-        "display": "Codeunit Normal Handler::RunSetup",
+        "display": "Codeunit \"Normal Handler\"::RunSetup",
         "file": "ws:src/NormalCU.al",
+        "selector": "Codeunit \"Normal Handler\"::RunSetup",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d461:Codeunit:50001#b8669e55319108c890634c4a59a65673f0a99a138ff874f926b31d5f202b118b"
       },
       "r:723e54933af9": {
-        "display": "Codeunit Normal Handler::DoSetup",
+        "display": "Codeunit \"Normal Handler\"::DoSetup",
         "file": "ws:src/NormalCU.al",
+        "selector": "Codeunit \"Normal Handler\"::DoSetup",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d461:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb"
       }
     },
@@ -444,5 +454,5 @@
     },
     "workspaceFingerprint": "153dd1f50142677bb6b39ef22a0e7e2e23f75e2a3c9f1a1a81e883dd47ae93a7"
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }

@@ -1,8 +1,8 @@
---- Codeunit Out Issue Document::IssueDoc vs Base Register (d0d00001-0000-4000-8000-0000000000b1/table/70020) ---
+--- Codeunit "Out Issue Document"::IssueDoc vs Base Register (d0d00001-0000-4000-8000-0000000000b1/table/70020) ---
   scope: dependency code: full cone for physical writes, grouped per entry point; per-operation detail one routine deep; temporary-record touches persist nothing but use the table's schema and run its triggers; lines are 1-based; dependencies: 1 app (--all lists them)
   down: no indexed touch (per operation, one routine into dependency code); the whole cone may write it beyond dependency entry points (below)
   table not resolved: 2 operations in this cone, 2 of them on a RecordRef (table decided at run time) (they may be this table) — --table unknown lists them
-  beyond dependency entry points (the whole cone, literal arguments followed): may write it beyond 1 entry point: Codeunit Base Poster::OnRun (Modify) — alsem prove <routine> writes-table:<table> gives the path
+  beyond dependency entry points (the whole cone, literal arguments followed): may write it beyond 1 entry point: Codeunit "Base Poster" (70100)::OnRun (Modify) — alsem prove <routine> writes-table:<table> gives the path
   callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens (alsem tests and impact follow it); paths through dependency code are listed apart below
-  up: 0 of 1 transitive caller touch it through other branches, 1 does not, 0 unknown; not touching: Page Out Doc Card::OnAction
+  up: 0 of 1 transitive caller touch it through other branches, 1 does not, 0 unknown; not touching: Page "Out Doc Card".action(Issue)::OnAction
   through dependency code: none by code calls (open sites, hubs and what a user starts are outside this list)

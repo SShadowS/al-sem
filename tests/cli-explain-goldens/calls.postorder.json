@@ -194,7 +194,7 @@
             "fieldCaptions": {},
             "fieldOps": [],
             "fields": {
-              "Codeunit Calls Post::PostOrder": [
+              "Codeunit \"Calls Post\"::PostOrder": [
                 "Amount",
                 "Status"
               ]
@@ -229,7 +229,7 @@
               "app": "55555555-ca11-0000-0000-0000000ca115",
               "conditional": false,
               "id": "55555555-ca11-0000-0000-0000000ca115:Codeunit:50455#1abae07a71773f058fea92c9c4a00029da67c92d852a28dcf1d96e298d42cd36",
-              "routine": "Codeunit Calls Subscriber::CheckBeforePost",
+              "routine": "Codeunit \"Calls Subscriber\"::CheckBeforePost",
               "rules": [
                 {
                   "anchor": {
@@ -240,7 +240,7 @@
                   },
                   "comment": null,
                   "id": "7a517f8e82137757/ab188033908060a1b87d79606c5640614e8680fc63ca131da52053cee348ea58/rule0",
-                  "in": "Codeunit Calls Subscriber::CheckBeforePost",
+                  "in": "Codeunit \"Calls Subscriber\"::CheckBeforePost",
                   "kind": "Error",
                   "message": {
                     "args": [],
@@ -319,12 +319,15 @@
           "line": 3,
           "sourceKind": "source"
         },
+        "display": "Codeunit \"Calls Post\"::PostOrder",
         "doc": null,
         "id": "55555555-ca11-0000-0000-0000000ca115:Codeunit:50453#b00504ad35a9f49908fe39db897c4ca064cdbd4f5c53791a96924b2277b04b87",
         "name": "PostOrder",
         "object": "Calls Post",
         "objectCaption": null,
-        "objectType": "Codeunit"
+        "objectType": "Codeunit",
+        "selector": "Codeunit \"Calls Post\"::PostOrder",
+        "signature": "(var Record \"Calls Order\")"
       },
       "rules": {
         "callers": [],
@@ -338,7 +341,7 @@
             },
             "comment": null,
             "id": "7a517f8e82137757/6ee2fa48f12646d4c89ff8f95d2fe95c6cb64a160c3ba4bc71ec6a3f9124d2ac/rule0",
-            "in": "Codeunit Calls Checks::CheckOrder",
+            "in": "Codeunit \"Calls Checks\"::CheckOrder",
             "kind": "Error",
             "message": {
               "args": [],
@@ -374,7 +377,7 @@
             },
             "comment": null,
             "id": "7a517f8e82137757/6ee2fa48f12646d4c89ff8f95d2fe95c6cb64a160c3ba4bc71ec6a3f9124d2ac/rule1",
-            "in": "Codeunit Calls Checks::CheckOrder",
+            "in": "Codeunit \"Calls Checks\"::CheckOrder",
             "kind": "TestField",
             "message": {
               "args": [],
@@ -417,7 +420,7 @@
             },
             "comment": null,
             "id": "7a517f8e82137757/35cf42a674cdde94ee00ea4cc3aae9520821b982c8185ca3e8aa2b7e060d6c58/rule0",
-            "in": "Codeunit Calls Checks::CheckCustomer",
+            "in": "Codeunit \"Calls Checks\"::CheckCustomer",
             "kind": "Error",
             "message": {
               "args": [],
@@ -457,7 +460,7 @@
             },
             "comment": null,
             "id": "7a517f8e82137757/d351aaf1da882aea76cfcb62b5f2f96f26124e2a395541adbb5ae5eb8ca8ce75/rule0",
-            "in": "Codeunit Calls Checks::CheckCollectible",
+            "in": "Codeunit \"Calls Checks\"::CheckCollectible",
             "kind": "Error",
             "message": {
               "args": [],
@@ -494,7 +497,7 @@
             },
             "comment": null,
             "id": "7a517f8e82137757/b887850f7c006d5b0616a123c849f3977a38f28a9ade3e4d9a2b2fc98854b551/rule0",
-            "in": "Table Calls Order::OnValidate",
+            "in": "Table \"Calls Order\".Amount::OnValidate",
             "kind": "TestField",
             "message": {
               "args": [],
@@ -539,7 +542,7 @@
             },
             "comment": null,
             "id": "7a517f8e82137757/6a778fb0754896e3ed60caba4452ae07ea0cb49b23c2c21de0d5cc03a40b93d9/rule0",
-            "in": "Table Calls Order::OnModify",
+            "in": "Table \"Calls Order\"::OnModify",
             "kind": "Error",
             "message": {
               "args": [],

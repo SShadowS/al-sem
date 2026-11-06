@@ -1325,6 +1325,7 @@ mod fixtures {
             var_assignments: Vec::new(),
             condition_references: Vec::new(),
             enclosing_member: None,
+            member_detail: None,
             originating_object: None,
             enclosing_member_range: None,
             entry_temp_guard_receiver: None,

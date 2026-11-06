@@ -377,7 +377,7 @@
         "signature": 0
       },
       "delta": null,
-      "display": "Codeunit TU Core::Calc",
+      "display": "Codeunit \"TU Core\"::Calc",
       "effects": {
         "callerDependentTables": 0,
         "commits": {
@@ -415,13 +415,15 @@
         "unresolvedTableWrites": 0
       },
       "handle": "",
+      "selector": "Codeunit \"TU Core\"::Calc",
+      "signature": "(var Record \"TU Item\")",
       "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514",
       "status": "changed",
       "tests": {
         "local": 2,
         "nearest": {
           "hops": 1,
-          "test": "Codeunit TU Core Tests::CalcAddsOne",
+          "test": "Codeunit \"TU Core Tests\"::CalcAddsOne",
           "tier": "local"
         },
         "nearestTestedCaller": null,
@@ -440,7 +442,7 @@
           "count": 1,
           "first": [
             {
-              "display": "Codeunit TU Core::Post",
+              "display": "Codeunit \"TU Core\"::Post",
               "file": "src/Core.al",
               "line": 18,
               "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#22f7f361208a0d8c3669d02eeb4073ece883d836a783765eb80f3d1708f5c71f"
@@ -448,7 +450,7 @@
           ],
           "local": 1
         },
-        "display": "Codeunit TU Core::Calc",
+        "display": "Codeunit \"TU Core\"::Calc",
         "entries": [],
         "eventPublishers": {
           "count": 0,
@@ -460,14 +462,14 @@
             "count": 2,
             "first": [
               {
-                "display": "Codeunit TU Core::Calc",
+                "display": "Codeunit \"TU Core\"::Calc",
                 "file": "src/Core.al",
                 "hops": 0,
                 "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514",
                 "tier": "local"
               },
               {
-                "display": "Codeunit TU Core::Post",
+                "display": "Codeunit \"TU Core\"::Post",
                 "file": "src/Core.al",
                 "hops": 1,
                 "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#22f7f361208a0d8c3669d02eeb4073ece883d836a783765eb80f3d1708f5c71f",
@@ -486,7 +488,7 @@
         "maxHops": 1,
         "nearestAncestors": [
           {
-            "display": "Codeunit TU Core::Post",
+            "display": "Codeunit \"TU Core\"::Post",
             "hops": 1,
             "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#22f7f361208a0d8c3669d02eeb4073ece883d836a783765eb80f3d1708f5c71f"
           }
@@ -513,10 +515,10 @@
     },
     "changed": [
       {
-        "display": "Codeunit TU Core::Calc",
+        "display": "Codeunit \"TU Core\"::Calc",
         "nearest": {
           "hops": 1,
-          "test": "Codeunit TU Core Tests::CalcAddsOne",
+          "test": "Codeunit \"TU Core Tests\"::CalcAddsOne",
           "tier": "local"
         },
         "nearestTestedCaller": null,
@@ -542,8 +544,8 @@
         "file": "src/CoreTests.al",
         "hops": 1,
         "path": [
-          "Codeunit TU Core Tests::CalcAddsOne",
-          "Codeunit TU Core::Calc"
+          "Codeunit \"TU Core Tests\"::CalcAddsOne",
+          "Codeunit \"TU Core\"::Calc"
         ],
         "procedure": "CalcAddsOne",
         "reaches": [
@@ -559,9 +561,9 @@
         "file": "src/CoreTests.al",
         "hops": 2,
         "path": [
-          "Codeunit TU Core Tests::PostUpdatesQty",
-          "Codeunit TU Core::Post",
-          "Codeunit TU Core::Calc"
+          "Codeunit \"TU Core Tests\"::PostUpdatesQty",
+          "Codeunit \"TU Core\"::Post",
+          "Codeunit \"TU Core\"::Calc"
         ],
         "procedure": "PostUpdatesQty",
         "reaches": [
@@ -614,14 +616,14 @@
         "count": 2,
         "first": [
           {
-            "display": "Codeunit TU Core::Calc",
+            "display": "Codeunit \"TU Core\"::Calc",
             "file": "src/Core.al",
             "hops": 0,
             "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#da7793605fdbc343679810137067f09f5d197e797250e00da5c14e3f34f64514",
             "tier": "local"
           },
           {
-            "display": "Codeunit TU Core::Post",
+            "display": "Codeunit \"TU Core\"::Post",
             "file": "src/Core.al",
             "hops": 1,
             "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#22f7f361208a0d8c3669d02eeb4073ece883d836a783765eb80f3d1708f5c71f",

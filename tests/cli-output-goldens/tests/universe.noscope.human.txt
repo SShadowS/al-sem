@@ -1,6 +1,6 @@
 test scope: workspace 0 [Test] procedures; sibling test apps turned off (testApps: [] in .al-sem.json)
 test scope: none — no [Test] procedure in the workspace app, and sibling test apps turned off (testApps: [] in .al-sem.json). No test was considered. This does not mean no tests are needed.
-changed: 1 routine (Codeunit TU Core::Post — not-analyzed)
+changed: 1 routine (Codeunit "TU Core"::Post — not-analyzed)
 run first — local path: none
 selection complete: no — run the whole suite as well (requiredFallback): no test code was considered
 this is static reachability, not coverage: a reached test may not exercise the changed lines

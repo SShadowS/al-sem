@@ -1,4 +1,4 @@
---- Codeunit D49 Sender::MessageOnly ---
+--- Codeunit "D49 Sender"::MessageOnly ---
   summary — writes: no observed write that may persist; caller-dependent: none
     transaction, UI and errors: commits: none; UI at 1 place
     other effects: events: 0 (0 raised in workspace code)

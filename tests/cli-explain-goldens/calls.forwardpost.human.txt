@@ -1,4 +1,4 @@
-Codeunit Calls Post::ForwardPost  ws:src/post.al:28
+Codeunit "Calls Post"::ForwardPost  ws:src/post.al:28
   summary — writes: no observed write that may persist; caller-dependent: 1 table
     transaction, UI and errors: commits: none; errors at 5 places
     other effects: events: 0 (0 raised in workspace code)

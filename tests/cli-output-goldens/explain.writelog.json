@@ -74,7 +74,7 @@
             "fieldCaptions": {},
             "fieldOps": [],
             "fields": {
-              "Codeunit Out Log Mgt::WriteLog": [
+              "Codeunit \"Out Log Mgt\"::WriteLog": [
                 "Entry No.",
                 "Message"
               ]
@@ -140,12 +140,15 @@
           "line": 53,
           "sourceKind": "source"
         },
+        "display": "Codeunit \"Out Log Mgt\"::WriteLog",
         "doc": null,
         "id": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0",
         "name": "WriteLog",
         "object": "Out Log Mgt",
         "objectCaption": null,
-        "objectType": "Codeunit"
+        "objectType": "Codeunit",
+        "selector": "Codeunit \"Out Log Mgt\"::WriteLog",
+        "signature": "(Text[100])"
       },
       "rules": {
         "callers": [
@@ -157,11 +160,11 @@
               "sourceKind": "source"
             },
             "appliedBy": [
-              "Codeunit Out Issue Document::IssueDoc"
+              "Codeunit \"Out Issue Document\"::IssueDoc"
             ],
             "comment": null,
             "id": "51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/rule0",
-            "in": "Codeunit Out Issue Document::IssueDoc",
+            "in": "Codeunit \"Out Issue Document\"::IssueDoc",
             "kind": "TestField",
             "message": {
               "args": [],
@@ -173,11 +176,11 @@
             },
             "note": "applies only when called from the callers in appliedBy",
             "presentIn": [
-              "Codeunit Out Issue Document::IssueDoc"
+              "Codeunit \"Out Issue Document\"::IssueDoc"
             ],
             "skippedBy": [
-              "Codeunit Out Subscribers::LogIssued",
-              "Codeunit Out Tests::WriteLogInserts"
+              "Codeunit \"Out Subscribers\"::LogIssued",
+              "Codeunit \"Out Tests\"::WriteLogInserts"
             ],
             "stops": "always",
             "stopsReason": null,
@@ -264,7 +267,7 @@
           },
           "asserts": 0,
           "id": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50130#706d1d394b8aba299e7b8a5fffbde697e3c3b46b66a7ef61e8f02928f79e9079",
-          "test": "Codeunit Out Tests::WriteLogInserts",
+          "test": "Codeunit \"Out Tests\"::WriteLogInserts",
           "viaEvent": false
         }
       ]

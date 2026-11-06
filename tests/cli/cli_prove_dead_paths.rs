@@ -354,7 +354,7 @@ fn query_effects_marks_routes_the_literal_arguments_rule_out() {
             "DocBoth",
             "otherRoute",
             "RunReportRec",
-            Some("Codeunit G23 Handler::Hop1"),
+            Some("Codeunit \"G23 Handler\"::Hop1"),
         ),
         ("DocQueue", "coneRoute", "RunReport", None),
         ("DocQueueRecursive", "coneRoute", "RunReportRec", None),

@@ -15,6 +15,6 @@
   Page FT Card: 1 site in 1 routine (read 1)
     OnAfterGetRecord ws:src/FTFields.al:169 read [persistent, implicit-access]
   Table FT Item: 3 sites in 1 routine (read 1, write 1, rule 1)
-    OnValidate ws:src/FTFields.al:19 write [caller-dependent, implicit-access]
-    OnValidate ws:src/FTFields.al:19 read [caller-dependent, implicit-access]
-    OnValidate ws:src/FTFields.al:20 rule [caller-dependent, TestField]
+    Amount::OnValidate ws:src/FTFields.al:19 write [caller-dependent, implicit-access]
+    Amount::OnValidate ws:src/FTFields.al:19 read [caller-dependent, implicit-access]
+    Amount::OnValidate ws:src/FTFields.al:20 rule [caller-dependent, TestField]

@@ -1,4 +1,4 @@
---- Codeunit D48 Sender::SendOne ---
+--- Codeunit "D48 Sender"::SendOne ---
   summary — writes: no observed write that may persist; caller-dependent: none
     transaction, UI and errors: commits: none; UI and errors: none observed
     other effects: events: 0 (0 raised in workspace code); HTTP at 1 place
@@ -11,7 +11,7 @@
   events: 0 raised in workspace code; 0 more only beyond entry points
   HTTP at 1 place: HTTP at ws:src/D48Pos.Codeunit.al:15 (unconditional-on-success)
 
---- Codeunit D48 Loop Caller::ProcessAll ---
+--- Codeunit "D48 Loop Caller"::ProcessAll ---
   summary — writes: no observed write that may persist; caller-dependent: none
     transaction, UI and errors: commits: none; UI and errors: none observed
     other effects: events: 0 (0 raised in workspace code); HTTP at 1 place
@@ -24,7 +24,7 @@
   events: 0 raised in workspace code; 0 more only beyond entry points
   HTTP at 1 place: HTTP at ws:src/D48Pos.Codeunit.al:15 (loop-body)
 
---- Codeunit D48 Loop Caller::SendOne ---
+--- Codeunit "D48 Loop Caller"::SendOne ---
   summary — writes: no observed write that may persist; caller-dependent: none
     transaction, UI and errors: commits: none; UI and errors: none observed
     other effects: events: 0 (0 raised in workspace code); HTTP at 1 place
@@ -37,7 +37,7 @@
   events: 0 raised in workspace code; 0 more only beyond entry points
   HTTP at 1 place: HTTP at ws:src/D48Pos.Codeunit.al:15 (unconditional-on-success)
 
---- Codeunit D48 Non Loop Caller::DoSendOnce ---
+--- Codeunit "D48 Non Loop Caller"::DoSendOnce ---
   summary — writes: no observed write that may persist; caller-dependent: none
     transaction, UI and errors: commits: none; UI and errors: none observed
     other effects: events: 0 (0 raised in workspace code); HTTP at 1 place
@@ -50,7 +50,7 @@
   events: 0 raised in workspace code; 0 more only beyond entry points
   HTTP at 1 place: HTTP at ws:src/D48Pos.Codeunit.al:15 (unconditional-on-success)
 
---- Codeunit D48 File Loop::ExportAll ---
+--- Codeunit "D48 File Loop"::ExportAll ---
   summary — writes: no observed write that may persist; caller-dependent: none
     transaction, UI and errors: commits: none; UI and errors: none observed
     other effects: events: 0 (0 raised in workspace code); file at 1 place

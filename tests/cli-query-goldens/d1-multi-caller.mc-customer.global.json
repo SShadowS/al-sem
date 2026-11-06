@@ -30,6 +30,9 @@
           },
           "display": "CallerB",
           "objectDisplay": "Codeunit D1 Multi Caller",
+          "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::CallerB",
+          "selector": "Codeunit \"D1 Multi Caller\"::CallerB",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#22d79cdc769a71d6f724e7468843fb5a879c193e230effbf2c9b81cac03e82cf"
         },
         {
@@ -40,6 +43,9 @@
           },
           "display": "CallerC",
           "objectDisplay": "Codeunit D1 Multi Caller",
+          "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::CallerC",
+          "selector": "Codeunit \"D1 Multi Caller\"::CallerC",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#77e5d11f5d0fcec939747ce2b13beaef853990807dc6030b36ec487372fd680c"
         },
         {
@@ -50,6 +56,9 @@
           },
           "display": "CallerA",
           "objectDisplay": "Codeunit D1 Multi Caller",
+          "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::CallerA",
+          "selector": "Codeunit \"D1 Multi Caller\"::CallerA",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#b2ad4cc8e18349f86facdc5d49d913638d7b4cbfa6a8ef368516b4840dca7a6c"
         },
         {
@@ -60,11 +69,14 @@
           },
           "display": "ModifyHelper",
           "objectDisplay": "Codeunit D1 Multi Caller",
+          "qualifiedDisplay": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
+          "selector": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
+          "signature": "(var Record \"MC Customer\")",
           "stableId": "11111111-0000-0000-0000-00000000d01a:Codeunit:50101#bba09dc4564face513d34012aa979e52fafbbb67925ac7625604faf279c99a9f"
         }
       ],
       "scoped": false
     }
   },
-  "schemaVersion": "3.6.0"
+  "schemaVersion": "3.7.0"
 }

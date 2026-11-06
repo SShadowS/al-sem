@@ -1,6 +1,6 @@
 dependencies: Out Base (embedded)
---- Codeunit Out Issue Document::IssueDoc ---
-  summary — writes: may write 16 tables (1 owned by this app, 15 by dependencies); 14 of them beyond Codeunit Base Poster::OnRun (entered at ws:src/OutIssueDocument.Codeunit.al:15); caller-dependent: 1 table
+--- Codeunit "Out Issue Document"::IssueDoc ---
+  summary — writes: may write 16 tables (1 owned by this app, 15 by dependencies); 14 of them beyond Codeunit "Base Poster" (70100)::OnRun (entered at ws:src/OutIssueDocument.Codeunit.al:15); caller-dependent: 1 table
     transaction, UI and errors: commits: may (1 commit-bearing entry point); errors at 5 places
     other effects: events: 2 (1 raised in workspace code); HTTP at 1 place; background tasks at 1 place
     uncertainty: gaps: 2 in workspace code, 1 in dependency code, 0 not placed
@@ -9,24 +9,24 @@ dependencies: Out Base (embedded)
   limits: none
   scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (2 entry points at 2 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   commits: may — none in workspace code; 1 commit-bearing entry point:
-    Codeunit Base Poster::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15
-      path: IssueDoc → [run] Base Poster::OnRun → PostDocument (COMMIT at dep:Out Base:src/BasePoster.Codeunit.al:46)
+    Codeunit "Base Poster" (70100)::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15
+      path: IssueDoc → [run] Codeunit "Base Poster" (70100)::OnRun → PostDocument (COMMIT at dep:Out Base:src/BasePoster.Codeunit.al:46)
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     Out Log: Insert 1 — known persistent
       Insert at ws:src/OutIssueDocument.Codeunit.al:61
-      path: IssueDoc → Out Log Mgt::WriteLog
+      path: IssueDoc → Codeunit "Out Log Mgt"::WriteLog
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary; alsem prove names the caller
     Out Doc: Modify — depends on the caller's record argument at ws:src/OutIssueDocument.Codeunit.al:14
   writes beyond dependency entry points (15 tables through 2 entry points at 2 sites):
-    Codeunit Base Poster::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15 — 14 tables (Delete on 1, Insert on 12, Modify on 1): Base Doc Line, Base Ledger 01, Base Ledger 02, Base Ledger 03, Base Ledger 04, Base Ledger 05, Base Ledger 06, Base Ledger 07, Base Ledger 08, Base Ledger 09, Base Ledger 10, Base Ledger 11, Base Ledger 12, Base Register; also COMMIT, ERROR_IMPLICIT; 1 event
-      representative path (Base Doc Line, the nearest of 14 tables): IssueDoc → [run] Base Poster::OnRun (DeleteAll at dep:Out Base:src/BasePoster.Codeunit.al:7)
-    Codeunit Base Calc::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:16 — 1 table (Modify on 1): Base Price; also ERROR_IMPLICIT
-      representative path (Base Price): IssueDoc → [run] Base Calc::OnRun → UpdatePrice (Modify at dep:Out Base:src/BasePoster.Codeunit.al:68)
+    Codeunit "Base Poster" (70100)::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15 — 14 tables (Delete on 1, Insert on 12, Modify on 1): Base Doc Line, Base Ledger 01, Base Ledger 02, Base Ledger 03, Base Ledger 04, Base Ledger 05, Base Ledger 06, Base Ledger 07, Base Ledger 08, Base Ledger 09, Base Ledger 10, Base Ledger 11, Base Ledger 12, Base Register; also COMMIT, ERROR_IMPLICIT; 1 event
+      representative path (Base Doc Line, the nearest of 14 tables): IssueDoc → [run] Codeunit "Base Poster" (70100)::OnRun (DeleteAll at dep:Out Base:src/BasePoster.Codeunit.al:7)
+    Codeunit "Base Calc" (70101)::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:16 — 1 table (Modify on 1): Base Price; also ERROR_IMPLICIT
+      representative path (Base Price): IssueDoc → [run] Codeunit "Base Calc" (70101)::OnRun → UpdatePrice (Modify at dep:Out Base:src/BasePoster.Codeunit.al:68)
   temporary records (not writes): 1 table in workspace code (1 effect row): Out Log; 1 table only beyond entry points; only temporary: 0 tables
   events: 1 raised in workspace code, by publisher: Codeunit Out Issue Document 1; 1 more only beyond entry points
   HTTP at 1 place: HTTP at ws:src/OutIssueDocument.Codeunit.al:72 (unconditional-on-success)
   background tasks at 1 place: BACKGROUND_TASK at ws:src/OutIssueDocument.Codeunit.al:19 (unconditional-on-success), starts Codeunit Out Job
-  errors at 5 places: ERROR_IMPLICIT at ws:src/OutIssueDocument.Codeunit.al:12 (unconditional-on-success); ERROR_IMPLICIT at ws:src/OutIssueDocument.Codeunit.al:14 (unconditional-on-success); ERROR_IMPLICIT at ws:src/OutIssueDocument.Codeunit.al:61 (unconditional-on-success); ERROR_IMPLICIT beyond Codeunit Base Poster::OnRun; ERROR_IMPLICIT beyond Codeunit Base Calc::OnRun
+  errors at 5 places: ERROR_IMPLICIT at ws:src/OutIssueDocument.Codeunit.al:12 (unconditional-on-success); ERROR_IMPLICIT at ws:src/OutIssueDocument.Codeunit.al:14 (unconditional-on-success); ERROR_IMPLICIT at ws:src/OutIssueDocument.Codeunit.al:61 (unconditional-on-success); ERROR_IMPLICIT beyond Codeunit "Base Poster" (70100)::OnRun; ERROR_IMPLICIT beyond Codeunit "Base Calc" (70101)::OnRun
   gaps in workspace code (2 calls the engine cannot follow):
     Codeunit.Run(<dynamic>) (dynamic-target) in IssueDoc at ws:src/OutIssueDocument.Codeunit.al:21
     Handler.Handle (polymorphic) in IssueDoc at ws:src/OutIssueDocument.Codeunit.al:23

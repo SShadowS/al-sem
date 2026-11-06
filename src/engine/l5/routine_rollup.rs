@@ -139,6 +139,500 @@ pub fn overload_short(me: &OverloadShape<'_>, others: &[OverloadShape<'_>]) -> (
     (short, numbered)
 }
 
+/// An object, member or routine name as AL writes it (output validation V3,
+/// §2.1): bare when it is a plain identifier (`[A-Za-z_][A-Za-z0-9_]*`),
+/// else in double quotes with each `"` doubled.
+#[must_use]
+pub fn al_name(name: &str) -> std::borrow::Cow<'_, str> {
+    let plain = name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if plain {
+        std::borrow::Cow::Borrowed(name)
+    } else {
+        std::borrow::Cow::Owned(format!("\"{}\"", name.replace('"', "\"\"")))
+    }
+}
+
+/// The kind of member a member trigger's member is, when the source does
+/// not say (a symbol-only row, a graph node): `action` for `OnAction`,
+/// `dataitem` for a report/query data item trigger, `element` for an
+/// XmlPort member, `field` for a table member or a field trigger of a page
+/// or request page, else `control` (a page user-control event).
+#[must_use]
+pub fn infer_member_kind(object_type: &str, trigger: &str) -> &'static str {
+    let t = trigger.to_ascii_lowercase();
+    let ty = object_type.to_ascii_lowercase();
+    if t == "onaction" {
+        return "action";
+    }
+    if matches!(
+        t.as_str(),
+        "onpredataitem" | "onaftergetrecord" | "onpostdataitem"
+    ) || ty == "query"
+    {
+        return "dataitem";
+    }
+    if ty == "xmlport" {
+        return "element";
+    }
+    if ty == "table"
+        || ty == "tableextension"
+        || matches!(
+            t.as_str(),
+            "onvalidate"
+                | "onlookup"
+                | "onafterlookup"
+                | "ondrilldown"
+                | "onassistedit"
+                | "oncontroladdin"
+                | "onbeforevalidate"
+                | "onaftervalidate"
+        )
+    {
+        return "field";
+    }
+    "control"
+}
+
+/// A routine's member as the display prints it (§2.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberPart<'a> {
+    /// `field`, `action`, `dataitem`, `control` or `element`.
+    pub kind: &'a str,
+    pub name: &'a str,
+    pub caption: Option<&'a str>,
+}
+
+/// The parts of the one routine display (output validation V3, §2.1, §2.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoutineParts<'a> {
+    pub object_type: &'a str,
+    pub object_name: &'a str,
+    /// A dependency object's number, printed in brackets after its name
+    /// (`Codeunit "Job Queue Dispatcher" (448)`, §2.2).
+    pub object_number: Option<i64>,
+    pub member: Option<MemberPart<'a>>,
+    pub routine: &'a str,
+    /// The parameter types (`(Integer, var Text)`) when the name is
+    /// overloaded in its object, on every occurrence (§2.1).
+    pub signature: Option<String>,
+    /// The app label of two loaded objects with one display (` [<app>]`).
+    pub app: Option<String>,
+}
+
+/// THE routine display (output validation V3, §2.1): every header, list
+/// row, path hop and JSON `display` prints a routine through this one
+/// function. `Table "CDO E-Mail Job"."Table No."::OnValidate`,
+/// `Page X.action(Export "Export Template")::OnAction`,
+/// `Codeunit "Job Queue Dispatcher" (448)::HandleRequest`,
+/// `Codeunit Log::Note(Text, Integer)`. Names are quoted as AL needs
+/// ([`al_name`]); a member's caption prints only when `caption` (headers and
+/// legends, not path hops).
+#[must_use]
+pub fn format_routine(p: &RoutineParts<'_>, caption: bool) -> String {
+    let mut out = format_object(p.object_type, p.object_name, p.object_number);
+    if let Some(m) = &p.member {
+        out.push_str(&format_member(m, caption));
+    }
+    if !out.is_empty() {
+        out.push_str("::");
+    }
+    out.push_str(&al_name(p.routine));
+    if let Some(sig) = &p.signature {
+        out.push_str(sig);
+    }
+    if let Some(app) = &p.app {
+        out.push_str(&format!(" [{app}]"));
+    }
+    out
+}
+
+/// The one display (no caption) split into its object and the rest, for a
+/// line grouped under its object or a path hop whose object is the previous
+/// hop's: (`Table "CDO E-Mail Job"`, `"Table No."::OnValidate`),
+/// (`Codeunit Log`, `Note(Text)`), (`Page X`, `action(Y)::OnAction`).
+#[must_use]
+pub fn split_display(p: &RoutineParts<'_>) -> (String, String) {
+    let object = format_object(p.object_type, p.object_name, p.object_number);
+    let full = format_routine(p, false);
+    let rest = match full.strip_prefix(&object) {
+        Some(rest) if !object.is_empty() => rest
+            .strip_prefix('.')
+            .or_else(|| rest.strip_prefix("::"))
+            .unwrap_or(rest)
+            .to_string(),
+        _ => full.clone(),
+    };
+    (object, rest)
+}
+
+/// An object as the routine display prints it: `Codeunit "Log Mgt"`, with a
+/// dependency object's number in brackets; empty for no object.
+#[must_use]
+pub fn format_object(object_type: &str, object_name: &str, number: Option<i64>) -> String {
+    let mut out = match (object_type.is_empty(), object_name.is_empty()) {
+        (_, true) => object_type.to_string(),
+        (true, false) => al_name(object_name).into_owned(),
+        (false, false) => format!("{object_type} {}", al_name(object_name)),
+    };
+    if let Some(n) = number.filter(|n| *n > 0 && !out.is_empty()) {
+        out.push_str(&format!(" ({n})"));
+    }
+    out
+}
+
+/// A member as the display prints it after its object: `."Table No."` for
+/// a field, `.action(Name "Caption")` for the other kinds.
+#[must_use]
+pub fn format_member(m: &MemberPart<'_>, caption: bool) -> String {
+    if m.kind == "field" {
+        return format!(".{}", al_name(m.name));
+    }
+    let cap = match m.caption.filter(|c| caption && !c.is_empty()) {
+        Some(c) => format!(" \"{}\"", c.replace('"', "\"\"")),
+        None => String::new(),
+    };
+    format!(".{}({}{cap})", m.kind, al_name(m.name))
+}
+
+/// The routine display's JSON parts (§2.1): `signature` (the parameter
+/// types, every routine), `member` (`{kind, name, caption}`) for a member
+/// trigger.
+#[must_use]
+pub fn member_json(m: &MemberPart<'_>) -> Value {
+    json!({"kind": m.kind, "name": m.name, "caption": m.caption})
+}
+
+/// The one display of a sited-graph node (output validation V3, §2.2), for a
+/// node the model has no row for (a dependency routine or object reached on
+/// a reverse walk): `Codeunit "Job Queue Dispatcher" (448)::HandleRequest`,
+/// `Table "Sales Invoice Header" (110)."Applies-to Doc. No."::OnLookup`,
+/// `Codeunit "X" (6225383)` for an object node. The declared names come from
+/// the graph node, never from its key; a table field member's declared case
+/// from `model`'s tables when it holds the table (the graph keeps the member
+/// lowercased). A workspace object prints no number. `None` for a hub or a
+/// node with no declared name.
+#[must_use]
+pub fn graph_display(
+    g: &crate::program::impact_graph::SitedGraph,
+    n: u32,
+    model: Option<&Model>,
+) -> Option<String> {
+    graph_display_as(g, n, model, false)
+}
+
+/// [`graph_display`] where every app loaded from local source counts as
+/// the subject's own (no object number): a test-selection answer, whose
+/// graph's primary app is the test app and whose subject is the production
+/// app beside it.
+#[must_use]
+pub fn graph_display_local(g: &crate::program::impact_graph::SitedGraph, n: u32) -> Option<String> {
+    graph_display_as(g, n, None, true)
+}
+
+fn graph_display_as(
+    g: &crate::program::impact_graph::SitedGraph,
+    n: u32,
+    model: Option<&Model>,
+    local_is_own: bool,
+) -> Option<String> {
+    let local = local_is_own && g.flags(n) & crate::program::impact_graph::sited::flag::LOCAL != 0;
+    if let Some((kind, name, number, primary)) = g.object_node_name(n) {
+        return Some(format_object(
+            kind,
+            name,
+            number.filter(|_| !primary && !local),
+        ));
+    }
+    let mut nn = g.node_name(n)?;
+    nn.primary |= local;
+    let member_name: Option<String> = nn.member.map(|m| {
+        if nn.member_declared {
+            return m.to_string();
+        }
+        let declared = model.and_then(|model| {
+            let app = g.node_app(n).map(|a| g.app_identity(a).0)?;
+            let number = nn.object_number?;
+            model
+                .workspace
+                .tables
+                .iter()
+                .filter(|t| t.table_number == number && t.app_guid.eq_ignore_ascii_case(&app))
+                .flat_map(|t| &t.fields)
+                .find(|f| f.name.eq_ignore_ascii_case(m))
+                .map(|f| f.name.clone())
+        });
+        declared.unwrap_or_else(|| m.to_string())
+    });
+    let parts = RoutineParts {
+        object_type: nn.object_kind,
+        object_name: nn.object_name,
+        object_number: nn.object_number.filter(|_| !nn.primary),
+        member: member_name.as_deref().map(|name| MemberPart {
+            kind: infer_member_kind(nn.object_kind, nn.routine),
+            name,
+            caption: None,
+        }),
+        routine: nn.routine,
+        signature: (!nn.signature.is_empty()).then(|| nn.signature.to_string()),
+        app: None,
+    };
+    Some(format_routine(&parts, false))
+}
+
+/// The model's names of every routine, for [`format_routine`] (§2.1): the
+/// declaring object, the member, whether a name is overloaded in its object,
+/// whether two apps' routines share a display, and each workspace routine's
+/// `selector`. Built once per answer over the model's rows.
+pub struct RoutineNames<'m> {
+    pub model: &'m Model,
+    declaring: DeclaringRows,
+    /// Stable routine id → its first model row.
+    rows: HashMap<&'m str, usize>,
+    /// The stable ids whose name is overloaded in their object (same app,
+    /// object, member and name; distinct stable ids).
+    overloaded: std::collections::HashSet<&'m str>,
+    /// The stable ids whose display (without app label) another app's
+    /// routine shares.
+    app_shared: std::collections::HashSet<&'m str>,
+    /// The workspace display keys (no caption) that name more than one
+    /// stable id: those routines' selector is their stable id.
+    selector_shared: std::collections::HashSet<String>,
+    app_names: HashMap<String, String>,
+}
+
+impl<'m> RoutineNames<'m> {
+    /// Over `model`; `apps` are the loaded dependencies' rows
+    /// (`LoadedDependencies::apps`: `appId`, `name`), for the app label.
+    #[must_use]
+    pub fn new(model: &'m Model, apps: &[Value]) -> RoutineNames<'m> {
+        let mut app_names: HashMap<String, String> = apps
+            .iter()
+            .filter_map(|a| {
+                Some((
+                    a["appId"].as_str()?.to_ascii_lowercase(),
+                    a["name"].as_str()?.to_string(),
+                ))
+            })
+            .collect();
+        if let Some(p) = &model.primary_app {
+            app_names.insert(p.app_guid.to_ascii_lowercase(), p.name.clone());
+        }
+        let mut rows: HashMap<&'m str, usize> = HashMap::new();
+        for (i, r) in model.workspace.routines.iter().enumerate() {
+            rows.entry(r.stable_routine_id.as_str()).or_insert(i);
+        }
+        let mut names = RoutineNames {
+            model,
+            declaring: DeclaringRows::new(&model.workspace.objects),
+            rows,
+            overloaded: Default::default(),
+            app_shared: Default::default(),
+            selector_shared: Default::default(),
+            app_names,
+        };
+        // Overloads: one app, object, member and name; distinct stable ids.
+        type Key = (String, String, Option<String>, String);
+        let mut groups: HashMap<Key, Vec<&'m str>> = HashMap::new();
+        // App collisions: one display (type, object name, member, name) in
+        // two apps.
+        let mut displays: HashMap<String, Vec<(&'m str, &'m str)>> = HashMap::new();
+        for (&id, &i) in &names.rows {
+            let r = &model.workspace.routines[i];
+            let object = names.object_name_of(r).to_ascii_lowercase();
+            groups
+                .entry((
+                    r.app_guid.to_ascii_lowercase(),
+                    format!("{}/{object}", r.object_id),
+                    r.enclosing_member.as_ref().map(|m| m.to_ascii_lowercase()),
+                    r.name.to_ascii_lowercase(),
+                ))
+                .or_default()
+                .push(id);
+            displays
+                .entry(format!(
+                    "{}|{object}|{}|{}",
+                    r.object_type.to_ascii_lowercase(),
+                    r.enclosing_member.as_deref().unwrap_or("").to_lowercase(),
+                    r.name.to_ascii_lowercase()
+                ))
+                .or_default()
+                .push((id, r.app_guid.as_str()));
+        }
+        for ids in groups.values().filter(|ids| ids.len() > 1) {
+            names.overloaded.extend(ids.iter().copied());
+        }
+        for ids in displays.values() {
+            let first = ids[0].1;
+            if ids.iter().any(|(_, a)| !a.eq_ignore_ascii_case(first)) {
+                names.app_shared.extend(ids.iter().map(|(id, _)| *id));
+            }
+        }
+        // Selectors: a workspace routine's display key (no caption) must
+        // name it alone.
+        let mut seen: HashMap<String, &'m str> = HashMap::new();
+        let mut shared = std::collections::HashSet::new();
+        for &id in names.rows.keys() {
+            if !names.is_primary(id) {
+                continue;
+            }
+            let key = crate::engine::l5::selector_index::normalize_display_key(
+                &names.base_selector(id).unwrap_or_default(),
+            );
+            if let Some(other) = seen.insert(key.clone(), id)
+                && other != id
+            {
+                shared.insert(key);
+            }
+        }
+        names.selector_shared = shared;
+        names
+    }
+
+    fn object_name_of(&self, r: &ModelRoutine) -> &'m str {
+        self.declaring
+            .of(&self.model.workspace.objects, r)
+            .map_or("", |o| o.name.as_str())
+    }
+
+    /// The first model row of a stable routine id.
+    #[must_use]
+    pub fn row(&self, stable_id: &str) -> Option<&'m ModelRoutine> {
+        self.rows
+            .get(stable_id)
+            .map(|&i| &self.model.workspace.routines[i])
+    }
+
+    /// Whether a stable id is a workspace (primary app) routine.
+    #[must_use]
+    pub fn is_primary(&self, stable_id: &str) -> bool {
+        self.row(stable_id)
+            .is_some_and(|r| self.model.role_of_app(&r.app_guid) != Role::Dependency)
+    }
+
+    /// An app's name, else its guid.
+    #[must_use]
+    pub fn app_label(&self, guid: &str) -> String {
+        self.app_names
+            .get(&guid.to_ascii_lowercase())
+            .cloned()
+            .unwrap_or_else(|| guid.to_string())
+    }
+
+    /// The display parts of model row `r` (§2.1, §2.2).
+    #[must_use]
+    pub fn parts_of<'r>(&'r self, r: &'r ModelRoutine) -> RoutineParts<'r> {
+        let dependency = self.model.role_of_app(&r.app_guid) == Role::Dependency;
+        let member = r.enclosing_member.as_deref().map(|name| MemberPart {
+            kind: r
+                .member_detail
+                .as_ref()
+                .map_or_else(|| infer_member_kind(&r.object_type, &r.name), |d| d.kind),
+            name,
+            caption: r.member_detail.as_ref().and_then(|d| d.caption.as_deref()),
+        });
+        let id = r.stable_routine_id.as_str();
+        RoutineParts {
+            object_type: &r.object_type,
+            object_name: self.object_name_of(r),
+            object_number: dependency.then_some(r.object_number),
+            member,
+            routine: &r.name,
+            signature: self
+                .overloaded
+                .contains(id)
+                .then(|| crate::engine::l5::selector_index::signature_text(&r.parameters)),
+            app: self
+                .app_shared
+                .contains(id)
+                .then(|| self.app_label(&r.app_guid)),
+        }
+    }
+
+    /// The display of a stable routine id (§2.1), its caption with
+    /// `caption`; `None` when the model has no row for it.
+    #[must_use]
+    pub fn display_with(&self, stable_id: &str, caption: bool) -> Option<String> {
+        self.row(stable_id)
+            .map(|r| format_routine(&self.parts_of(r), caption))
+    }
+
+    /// The header display of a stable routine id (with the member's
+    /// caption), else the id.
+    #[must_use]
+    pub fn display(&self, stable_id: &str) -> String {
+        self.display_with(stable_id, true)
+            .unwrap_or_else(|| stable_id.to_string())
+    }
+
+    /// The path-hop display of a stable routine id (no caption), else the
+    /// id.
+    #[must_use]
+    pub fn hop(&self, stable_id: &str) -> String {
+        self.display_with(stable_id, false)
+            .unwrap_or_else(|| stable_id.to_string())
+    }
+
+    /// The display a selector reads (§2.1): no caption, no dependency
+    /// number, no app label.
+    fn base_selector(&self, stable_id: &str) -> Option<String> {
+        let r = self.row(stable_id)?;
+        let mut p = self.parts_of(r);
+        p.object_number = None;
+        p.app = None;
+        Some(format_routine(&p, false))
+    }
+
+    /// `selector` (§2.1): the shortest form that resolves to this one
+    /// stable id. A workspace routine's display without caption (it holds
+    /// the member, and the parameter list exactly when the name is
+    /// overloaded); the stable id for a dependency routine (selectors are
+    /// scoped to the workspace app) or a display another routine shares.
+    #[must_use]
+    pub fn selector(&self, stable_id: &str) -> String {
+        if !self.is_primary(stable_id) {
+            return stable_id.to_string();
+        }
+        match self.base_selector(stable_id) {
+            Some(s)
+                if !self.selector_shared.contains(
+                    &crate::engine::l5::selector_index::normalize_display_key(&s),
+                ) =>
+            {
+                s
+            }
+            _ => stable_id.to_string(),
+        }
+    }
+
+    /// The identity fields every JSON routine row carries (§2.1):
+    /// `display`, `signature` (the parameter types), `member` for a member
+    /// trigger, `selector`. `stableId` is the caller's.
+    #[must_use]
+    pub fn identity_json(&self, stable_id: &str) -> serde_json::Map<String, Value> {
+        let mut m = serde_json::Map::new();
+        let Some(r) = self.row(stable_id) else {
+            return m;
+        };
+        let p = self.parts_of(r);
+        m.insert("display".into(), json!(format_routine(&p, true)));
+        m.insert(
+            "signature".into(),
+            json!(crate::engine::l5::selector_index::signature_text(
+                &r.parameters
+            )),
+        );
+        if let Some(mp) = &p.member {
+            m.insert("member".into(), member_json(mp));
+        }
+        m.insert("selector".into(), json!(self.selector(stable_id)));
+        m
+    }
+}
+
 /// The caps of §3.8 rule 4.
 pub mod caps {
     pub const TABLES: usize = 12;
@@ -163,20 +657,14 @@ pub mod caps {
 pub struct RollupCx<'m> {
     pub model: &'m Model,
     ops: OperationIndex<'m>,
-    declaring: DeclaringRows,
     primary: Option<String>,
     objects: HashMap<&'m str, usize>,
-    /// Stable routine id → its first model row.
-    rows: HashMap<&'m str, usize>,
-    app_names: HashMap<String, String>,
+    /// The one routine display (§2.1).
+    pub names: RoutineNames<'m>,
     /// Qualified display → the distinct stable ids that share it (T-W2-24:
-    /// overloads, and objects of one name in two apps).
+    /// overloads, and objects of one name in two apps), for the JSON
+    /// `handle`.
     shared: HashMap<String, Vec<&'m str>>,
-    /// The handles ([`Self::handle`], MCP output step 2) paths printed since
-    /// the last [`Self::take_legend`]: handle →
-    /// (numbered: the arity alone does not tell it apart, its full
-    /// signature and declaration).
-    legend: std::cell::RefCell<BTreeMap<String, (bool, String)>>,
 }
 
 /// Who owns an operation (design §3.5): the qualified owner routine, its
@@ -197,24 +685,12 @@ impl<'m> RollupCx<'m> {
     /// (`LoadedDependencies::apps`: `appId`, `name`).
     #[must_use]
     pub fn new(model: &'m Model, apps: &[Value]) -> RollupCx<'m> {
-        let mut app_names: HashMap<String, String> = apps
-            .iter()
-            .filter_map(|a| {
-                Some((
-                    a["appId"].as_str()?.to_ascii_lowercase(),
-                    a["name"].as_str()?.to_string(),
-                ))
-            })
-            .collect();
-        if let Some(p) = &model.primary_app {
-            app_names.insert(p.app_guid.to_ascii_lowercase(), p.name.clone());
-        }
         let mut cx = RollupCx {
             model,
             // Every id kind: a no-path row's owner and an operation's original
             // kind are read by `lookup` / `claims` (design §3.5).
             ops: OperationIndex::build(model, IndexScope::All),
-            declaring: DeclaringRows::new(&model.workspace.objects),
+            names: RoutineNames::new(model, apps),
             primary: model
                 .primary_app
                 .as_ref()
@@ -226,20 +702,14 @@ impl<'m> RollupCx<'m> {
                 .enumerate()
                 .map(|(i, o)| (o.id.as_str(), i))
                 .collect(),
-            rows: {
-                let mut m = HashMap::new();
-                for (i, r) in model.workspace.routines.iter().enumerate() {
-                    m.entry(r.stable_routine_id.as_str()).or_insert(i);
-                }
-                m
-            },
-            app_names,
             shared: HashMap::new(),
-            legend: std::cell::RefCell::new(BTreeMap::new()),
         };
         let mut shared: HashMap<String, Vec<&'m str>> = HashMap::new();
-        for (&stable, &i) in &cx.rows {
-            shared.entry(cx.qualified_row(i)).or_default().push(stable);
+        for (i, r) in model.workspace.routines.iter().enumerate() {
+            let ids = shared.entry(cx.qualified_row(i)).or_default();
+            if !ids.contains(&r.stable_routine_id.as_str()) {
+                ids.push(r.stable_routine_id.as_str());
+            }
         }
         shared.retain(|_, ids| {
             ids.sort_unstable();
@@ -249,93 +719,26 @@ impl<'m> RollupCx<'m> {
         cx
     }
 
-    /// What tells a routine apart from another of the same qualified
-    /// display (design §3.8 rule 6, T-W2-24): its parameter list for an
-    /// overload in the same app (`(Msg: Text; Level: Integer)`), ` [<app>]`
-    /// when a colliding routine is in another app; empty when the display is
-    /// its own.
-    #[must_use]
-    pub fn disambiguator(&self, stable_id: &str) -> String {
-        let Some(&i) = self.rows.get(stable_id) else {
-            return String::new();
-        };
-        let Some(ids) = self.shared.get(&self.qualified_row(i)) else {
-            return String::new();
-        };
-        let r = &self.model.workspace.routines[i];
-        let app_of = |s: &str| {
-            self.rows
-                .get(s)
-                .map(|&j| self.model.workspace.routines[j].app_guid.as_str())
-        };
-        let mut out = String::new();
-        if ids
-            .iter()
-            .any(|s| *s != stable_id && app_of(s) == Some(r.app_guid.as_str()))
-        {
-            // The parameter names (`Note(Msg, Level)`, design §3.8 rule 6's
-            // short form); the typed list only when a same-app overload has
-            // the same names.
-            let names = |r: &ModelRoutine| -> String {
-                r.parameters
-                    .iter()
-                    .map(|p| p.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
-            let mine = names(r);
-            let clash = ids.iter().any(|s| {
-                *s != stable_id
-                    && self.rows.get(s).is_some_and(|&j| {
-                        let o = &self.model.workspace.routines[j];
-                        o.app_guid == r.app_guid && names(o) == mine
-                    })
-            });
-            let sig = if clash {
-                r.parameters
-                    .iter()
-                    .map(|p| {
-                        format!(
-                            "{}{}: {}",
-                            if p.is_var { "var " } else { "" },
-                            p.name,
-                            p.type_text
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            } else {
-                mine
-            };
-            out.push_str(&format!("({sig})"));
-        }
-        if ids
-            .iter()
-            .any(|s| app_of(s).is_some_and(|a| a != r.app_guid))
-        {
-            out.push_str(&format!(" [{}]", self.app_label(&r.app_guid)));
-        }
-        out
-    }
-
-    /// What a PATH prints after a routine's name (MCP output step 2): an
-    /// overload's short handle, recorded with its full signature in the
-    /// legend ([`Self::take_legend`], which explain, digest and prove print):
-    /// `/n` (its arity), `/n[position: type]` (the types it differs in) when a
-    /// same-app overload has its arity, `/n#k` (source order) when it differs
-    /// in nothing but its place; then the ` [<app>]` label as
-    /// [`Self::disambiguator`] gives it. Every human path names a routine
-    /// this way, so two outputs' shared sections read alike.
+    /// A routine's short handle, JSON `handle` only (V3 §2.1: human text
+    /// prints the parameter list instead): `/n` (its arity), `/n[position:
+    /// type]` (the types it differs in) when a same-app routine of its
+    /// `<Type> <Object>::<Routine>` has its arity, `/n#k` (source order) when
+    /// it differs in nothing but its place; then ` [<app>]` when another
+    /// app's routine shares it. Empty when the name is its own.
     #[must_use]
     pub fn handle(&self, stable_id: &str) -> String {
-        let Some(&i) = self.rows.get(stable_id) else {
+        let Some(r) = self.names.row(stable_id) else {
             return String::new();
         };
-        let Some(ids) = self.shared.get(&self.qualified_row(i)) else {
+        let Some(ids) = self
+            .names
+            .rows
+            .get(stable_id)
+            .and_then(|&i| self.shared.get(&self.qualified_row(i)))
+        else {
             return String::new();
         };
-        let r = &self.model.workspace.routines[i];
-        let row_of = |s: &str| self.rows.get(s).map(|&j| &self.model.workspace.routines[j]);
+        let row_of = |s: &str| self.names.row(s);
         let others: Vec<&ModelRoutine> = ids
             .iter()
             .filter(|s| **s != stable_id)
@@ -355,31 +758,7 @@ impl<'m> RollupCx<'m> {
                 }
             }
             let other_shapes: Vec<OverloadShape<'_>> = others.iter().map(|o| shape(o)).collect();
-            let (short, numbered) = overload_short(&shape(r), &other_shapes);
-            let full: Vec<String> = r
-                .parameters
-                .iter()
-                .map(|p| {
-                    format!(
-                        "{}{}: {}",
-                        if p.is_var { "var " } else { "" },
-                        p.name,
-                        p.type_text
-                    )
-                })
-                .collect();
-            let q = self.qualified_row(i);
-            let at = &r.source_anchor;
-            let at = if at.source_unit_id.is_empty() {
-                String::new()
-            } else {
-                format!(" at {}", self.location(&at.source_unit_id, at.start_line))
-            };
-            self.legend.borrow_mut().insert(
-                format!("{q}{short}"),
-                (numbered, format!("({}){at}", full.join("; "))),
-            );
-            out.push_str(&short);
+            out.push_str(&overload_short(&shape(r), &other_shapes).0);
         }
         if ids
             .iter()
@@ -390,50 +769,22 @@ impl<'m> RollupCx<'m> {
         out
     }
 
-    /// The legend of the handles printed since the last call, and clears it:
-    /// one `overloads: <handle> = (<parameters>) at <declaration>` line per
-    /// numbered handle (`/n#k`, which the arity alone does not tell apart);
-    /// with `all` (`--detail`), every handle's, `/n` ones too, and without,
-    /// a count of those. Empty when no overload was printed.
+    /// A path hop's object display and the rest of its name (V3 §2.1): the
+    /// object (`Codeunit "Log Mgt"`, a dependency's with its number) and
+    /// `member::Routine(<types>)` without the member's caption, so a hop
+    /// whose object is the previous hop's prints the rest alone.
     #[must_use]
-    pub fn take_legend(&self, all: bool) -> Vec<String> {
-        let legend = std::mem::take(&mut *self.legend.borrow_mut());
-        let mut out: Vec<String> = legend
-            .iter()
-            .filter(|(_, (numbered, _))| all || *numbered)
-            .map(|(h, (_, s))| format!("overload {h} = {s}"))
-            .collect();
-        let by_arity = legend.values().filter(|(n, _)| !n).count();
-        if !all && by_arity > 0 {
-            out.push(format!(
-                "({} named by arity, `Name/n`, or by the parameter types they differ in, \
-                 `Name/n[position: type]`; --detail prints their signatures)",
-                plural(by_arity, "overload", "overloads")
-            ));
-        }
-        out
-    }
-
-    /// The `(object, routine)` names of a stable routine id's first row.
-    #[must_use]
-    pub fn names_of(&self, stable_id: &str) -> Option<(String, String)> {
-        let &i = self.rows.get(stable_id)?;
-        let r = &self.model.workspace.routines[i];
-        let object = self
-            .declaring
-            .of(&self.model.workspace.objects, r)
-            .map_or("", |o| o.name.as_str());
-        Some((object.to_string(), r.name.clone()))
+    pub fn hop_parts(&self, stable_id: &str) -> Option<(String, String)> {
+        let r = self.names.row(stable_id)?;
+        Some(split_display(&self.names.parts_of(r)))
     }
 
     /// Whether a stable routine id's first row is in a loaded dependency
     /// (an app other than the primary one); `false` when unknown.
     #[must_use]
     pub fn in_dependency(&self, stable_id: &str) -> bool {
-        self.rows.get(stable_id).is_some_and(|&i| {
-            let app = self.model.workspace.routines[i]
-                .app_guid
-                .to_ascii_lowercase();
+        self.names.row(stable_id).is_some_and(|r| {
+            let app = r.app_guid.to_ascii_lowercase();
             self.primary.as_deref().is_some_and(|p| p != app)
         })
     }
@@ -441,20 +792,15 @@ impl<'m> RollupCx<'m> {
     /// The source unit of a stable routine id's first row.
     #[must_use]
     pub fn default_file(&self, stable_id: &str) -> Option<String> {
-        let &i = self.rows.get(stable_id)?;
-        let f = &self.model.workspace.routines[i]
-            .source_anchor
-            .source_unit_id;
+        let f = &self.names.row(stable_id)?.source_anchor.source_unit_id;
         (!f.is_empty()).then(|| f.clone())
     }
 
-    /// The qualified display of a stable routine id, else the id.
+    /// The display of a stable routine id (V3 §2.1, [`format_routine`],
+    /// with the member's caption), else the id.
     #[must_use]
     pub fn qualified(&self, stable_id: &str) -> String {
-        self.rows.get(stable_id).map_or_else(
-            || stable_id.to_string(),
-            |&i| format!("{}{}", self.qualified_row(i), self.disambiguator(stable_id)),
-        )
+        self.names.display(stable_id)
     }
 
     /// A witness path as one line (design §3.8 rules 6, 7): the root, then
@@ -466,11 +812,10 @@ impl<'m> RollupCx<'m> {
         root: &str,
         hops: &[crate::engine::l5::digest::ProjectedHop],
     ) -> String {
-        let mut object = self.names_of(root).map(|(o, _)| o).unwrap_or_default();
-        let mut parts = vec![
-            self.names_of(root)
-                .map_or_else(|| root.to_string(), |(_, n)| n),
-        ];
+        let (mut object, root_name) = self
+            .hop_parts(root)
+            .unwrap_or_else(|| (String::new(), root.to_string()));
+        let mut parts = vec![root_name];
         for h in hops {
             let h = &h.inner;
             let tag = edge_tag(h.edge_kind.as_deref().unwrap_or(h.kind));
@@ -480,12 +825,12 @@ impl<'m> RollupCx<'m> {
                 .or_else(|| h.callee_display.clone())
                 .unwrap_or_default();
             let to = h.to_routine_id.as_deref().unwrap_or("");
-            let name = match self.names_of(to) {
-                Some((o, n)) if o != object => {
+            let name = match self.hop_parts(to) {
+                Some((o, n)) if o != object && !o.is_empty() => {
                     object = o.clone();
-                    format!("{o}::{n}{}", self.handle(to))
+                    format!("{o}{}{n}", hop_joint(&n))
                 }
-                Some((_, n)) => format!("{n}{}", self.handle(to)),
+                Some((_, n)) => n,
                 None => fallback,
             };
             parts.push(format!("{tag}{name}"));
@@ -532,35 +877,30 @@ impl<'m> RollupCx<'m> {
         from: Option<usize>,
     ) -> String {
         let (mut object, root_name) = self
-            .names_of(root)
+            .hop_parts(root)
             .unwrap_or_else(|| (String::new(), root.to_string()));
         let mut parts = vec![root_name];
         let start = from.unwrap_or(0).min(steps.len());
-        if start > 0 {
-            parts.push("…".to_string());
-            object = steps[start - 1]
-                .display
-                .rsplit_once("::")
-                .map(|(o, _)| o.split_once(' ').map_or(o, |(_, n)| n).to_string())
-                .unwrap_or_default();
-        }
-        for s in &steps[start..] {
-            let tag = edge_tag(&s.edge);
-            let (o, n) = match self.names_of(&s.to) {
+        let step_parts =
+            |s: &crate::engine::l5::group_path::WitnessStep| match self.hop_parts(&s.to) {
                 Some(on) => on,
                 None => match s.display.rsplit_once("::") {
-                    Some((o, n)) => (
-                        o.split_once(' ').map_or(o, |(_, n)| n).to_string(),
-                        n.to_string(),
-                    ),
+                    Some((o, n)) => (o.to_string(), n.to_string()),
                     None => (String::new(), s.display.clone()),
                 },
             };
+        if start > 0 {
+            parts.push("…".to_string());
+            object = step_parts(&steps[start - 1]).0;
+        }
+        for s in &steps[start..] {
+            let tag = edge_tag(&s.edge);
+            let (o, n) = step_parts(s);
             let name = if o != object && !o.is_empty() {
                 object = o.clone();
-                format!("{o}::{n}{}", self.handle(&s.to))
+                format!("{o}{}{n}", hop_joint(&n))
             } else {
-                format!("{n}{}", self.handle(&s.to))
+                n
             };
             parts.push(format!("{tag}{name}"));
         }
@@ -607,14 +947,11 @@ impl<'m> RollupCx<'m> {
             .map_or(effect_type, |o| o.op.as_str())
     }
 
-    /// The qualified `<Type> <Object>::<Routine>` of model row `i`.
-    #[must_use]
-    pub fn qualified_row(&self, i: usize) -> String {
+    /// The `<Type> <Object>::<Routine>` key of model row `i` the JSON
+    /// `handle` groups by (no member, no parameters).
+    fn qualified_row(&self, i: usize) -> String {
         let r = &self.model.workspace.routines[i];
-        let object = self
-            .declaring
-            .of(&self.model.workspace.objects, r)
-            .map_or("", |o| o.name.as_str());
+        let object = self.names.object_name_of(r);
         crate::engine::l4::effect_query_cli::owner_qualified(
             &crate::engine::l4::effect_query_cli::object_display(&r.object_type, object),
             &r.name,
@@ -633,10 +970,7 @@ impl<'m> RollupCx<'m> {
     /// An app's name, else its guid.
     #[must_use]
     pub fn app_label(&self, guid: &str) -> String {
-        self.app_names
-            .get(&guid.to_ascii_lowercase())
-            .cloned()
-            .unwrap_or_else(|| guid.to_string())
+        self.names.app_label(guid)
     }
 
     /// An object id's display (`Codeunit Foo`), else the id.
@@ -673,13 +1007,45 @@ impl<'m> RollupCx<'m> {
             .anchor(&claim)
             .map(|a| format!("{}:{}", a.source_unit_id, shown(a.start_line)));
         Some(OpOwner {
-            display: self.qualified_row(claim.row as usize),
+            display: format_routine(&self.names.parts_of(r), true),
             stable_id: r.stable_routine_id.clone(),
             anchor,
             app: r.app_guid.clone(),
             dependency: self.model.role_of_app(&r.app_guid) == Role::Dependency,
             outcome,
         })
+    }
+}
+
+/// What joins a hop's object to the rest of its name ([`RollupCx::hop_parts`]):
+/// `.` before a member (`"Table No."::OnValidate`, `action(X)::OnAction`),
+/// `::` before the routine.
+fn hop_joint(rest: &str) -> &'static str {
+    let member = rest.starts_with('"') && {
+        // A quoted first segment followed by `::` is a field member, not a
+        // quoted routine name (which ends the text).
+        let mut quoted = false;
+        let mut end = None;
+        for (i, c) in rest.char_indices() {
+            if c == '"' {
+                quoted = !quoted;
+            } else if !quoted {
+                end = Some(i);
+                break;
+            }
+        }
+        end.is_some_and(|e| rest[e..].starts_with("::"))
+    };
+    let kinded = ["action(", "dataitem(", "control(", "element("]
+        .iter()
+        .any(|k| rest.starts_with(k));
+    let plain_member = rest
+        .split_once("::")
+        .is_some_and(|(m, _)| !m.contains('(') && !m.is_empty());
+    if member || kinded || plain_member {
+        "."
+    } else {
+        "::"
     }
 }
 
@@ -2715,7 +3081,7 @@ pub fn beyond_lines(
         o.detail,
     );
     let root_name = cx
-        .names_of(&entry.routine_id)
+        .hop_parts(&entry.routine_id)
         .map_or_else(|| entry.routine_id.clone(), |(_, n)| n);
     for p in &shown.shown {
         out.push(line(p));
@@ -2836,7 +3202,7 @@ pub fn no_path_lines(
         return Vec::new();
     }
     let root = cx
-        .names_of(&entry.routine_id)
+        .hop_parts(&entry.routine_id)
         .map_or_else(|| entry.routine_display.clone(), |(_, n)| n);
     let mut out = vec![format!(
         "writes with no path kept ({}, {}; the witness walk found no path from {root}):",
@@ -3128,14 +3494,14 @@ mod tests {
         );
     }
 
-    /// T-W2-24 (design §3.8 rule 6): routines that share a qualified display
-    /// print apart: an overload in the same app by its parameters, a routine
-    /// of another app by that app's name; a display of its own prints bare.
-    /// The model is stated by assignment (no fixture app pair shares an
-    /// object name).
+    /// T-W2-24, V3 §2.1: routines that share a qualified display print
+    /// apart: an overload in the same app by its parameter types (on every
+    /// occurrence), a routine of another app by that app's name; a name of
+    /// its own prints bare. The model is stated by assignment (no fixture app
+    /// pair shares an object name).
     ///
-    /// Discrimination (2026-11-04): `disambiguator` returning "" always (the
-    /// old display) fails at "overloads differ"; restored, passes.
+    /// Discrimination (2026-11-04, kept for V3): `RoutineNames::new` marking
+    /// no stable id overloaded fails at "overloads differ"; restored, passes.
     #[test]
     fn shared_displays_print_apart() {
         use crate::engine::l5::test_support::{empty_resolved, routine};
@@ -3176,12 +3542,12 @@ mod tests {
             cx.qualified("dep:Note#1"),
         );
         assert_ne!(qa, qb, "overloads differ");
-        assert!(qa.ends_with("Note(Msg) [app]"), "{qa}");
-        assert!(qb.ends_with("Note(Msg, Level) [app]"), "{qb}");
+        assert!(qa.ends_with("Note(Text) [app]"), "{qa}");
+        assert!(qb.ends_with("Note(Text, Integer) [app]"), "{qb}");
         assert!(qc.ends_with("Note [Base App]"), "{qc}");
         assert!(cx.qualified("ws:Alone").ends_with("::Alone"));
-        assert!(cx.qualified("ws:Pick#1").ends_with("Pick(X: Integer)"));
-        assert!(cx.qualified("ws:Pick#2").ends_with("Pick(X: Text)"));
+        assert!(cx.qualified("ws:Pick#1").ends_with("Pick(Integer)"));
+        assert!(cx.qualified("ws:Pick#2").ends_with("Pick(Text)"));
     }
 
     /// MCP output step 2: a path's short handle tells every overload apart.
@@ -3244,14 +3610,84 @@ mod tests {
         assert_eq!(handles[3], "/1[1: Text]");
         assert_ne!(handles[4], handles[5], "triggers differ");
         assert_eq!(handles[4], "/0#1", "source order");
-        let legend = cx.take_legend(false);
-        assert!(
-            legend
-                .iter()
-                .any(|l| l.contains("OnValidate/0#2 = () at ws:src/T.al:20")),
-            "{legend:?}"
+    }
+
+    /// V3 §2.1/§2.2: the one display's member, caption, quoting and
+    /// dependency-number rules, as `format_routine` prints them.
+    #[test]
+    fn the_one_display_prints_members_quotes_and_numbers() {
+        let base = RoutineParts {
+            object_type: "Table",
+            object_name: "CDO E-Mail Job",
+            object_number: None,
+            member: Some(MemberPart {
+                kind: "field",
+                name: "Table No.",
+                caption: Some("Table No."),
+            }),
+            routine: "OnValidate",
+            signature: None,
+            app: None,
+        };
+        assert_eq!(
+            format_routine(&base, true),
+            "Table \"CDO E-Mail Job\".\"Table No.\"::OnValidate"
         );
-        assert!(cx.take_legend(false).is_empty(), "the legend is taken once");
+        let action = RoutineParts {
+            object_type: "Page",
+            object_name: "CDO E-Mail Templates",
+            member: Some(MemberPart {
+                kind: "action",
+                name: "ExportTemplateAction",
+                caption: Some("Export Template"),
+            }),
+            routine: "OnAction",
+            ..base.clone()
+        };
+        assert_eq!(
+            format_routine(&action, true),
+            "Page \"CDO E-Mail Templates\".action(ExportTemplateAction \"Export Template\")::OnAction"
+        );
+        assert_eq!(
+            format_routine(&action, false),
+            "Page \"CDO E-Mail Templates\".action(ExportTemplateAction)::OnAction",
+            "no caption on a path hop"
+        );
+        let dep = RoutineParts {
+            object_type: "Codeunit",
+            object_name: "Job Queue Dispatcher",
+            object_number: Some(448),
+            member: None,
+            routine: "HandleRequest",
+            ..base.clone()
+        };
+        assert_eq!(
+            format_routine(&dep, true),
+            "Codeunit \"Job Queue Dispatcher\" (448)::HandleRequest"
+        );
+        let plain = RoutineParts {
+            object_type: "PageExtension",
+            object_name: "CDOSalesInvoiceExt",
+            object_number: None,
+            member: None,
+            routine: "Send",
+            signature: Some("(Integer, var Text)".into()),
+            ..base.clone()
+        };
+        assert_eq!(
+            format_routine(&plain, true),
+            "PageExtension CDOSalesInvoiceExt::Send(Integer, var Text)"
+        );
+        assert_eq!(al_name("A\"B"), "\"A\"\"B\"");
+        assert_eq!(al_name("_x1"), "_x1");
+        assert_eq!(al_name("1x"), "\"1x\"");
+        // A hop's joint: a member follows its object with `.`.
+        assert_eq!(hop_joint("\"Table No.\"::OnValidate"), ".");
+        assert_eq!(hop_joint("Amount::OnValidate"), ".");
+        assert_eq!(hop_joint("action(X)::OnAction"), ".");
+        assert_eq!(hop_joint("Run"), "::");
+        assert_eq!(hop_joint("Send(Integer)"), "::");
+        assert_eq!(hop_joint("\"Do It\""), "::");
     }
 
     /// Final CDO output review, item 3 (design §3.3, §3.6): the scope line,

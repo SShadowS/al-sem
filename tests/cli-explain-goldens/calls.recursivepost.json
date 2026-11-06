@@ -100,7 +100,7 @@
               },
               "comment": null,
               "id": "7a517f8e82137757/6a778fb0754896e3ed60caba4452ae07ea0cb49b23c2c21de0d5cc03a40b93d9/rule0",
-              "in": "Table Calls Order::OnModify",
+              "in": "Table \"Calls Order\"::OnModify",
               "kind": "Error",
               "message": {
                 "args": [],
@@ -133,7 +133,7 @@
           ],
           "table": "Calls Order",
           "triggers": [
-            "Table Calls Order::OnModify"
+            "Table \"Calls Order\"::OnModify"
           ],
           "what": "modify on Calls Order"
         }
@@ -159,12 +159,15 @@
           "line": 44,
           "sourceKind": "source"
         },
+        "display": "Codeunit \"Calls Post\"::RecursivePost",
         "doc": null,
         "id": "55555555-ca11-0000-0000-0000000ca115:Codeunit:50453#53e9e2d3734ad15dfe2a62b00b6e5be8fc4e1e6d91699c311e51d74968042549",
         "name": "RecursivePost",
         "object": "Calls Post",
         "objectCaption": null,
-        "objectType": "Codeunit"
+        "objectType": "Codeunit",
+        "selector": "Codeunit \"Calls Post\"::RecursivePost",
+        "signature": "(var Record \"Calls Order\")"
       },
       "rules": {
         "callers": [],
@@ -178,7 +181,7 @@
             },
             "comment": null,
             "id": "7a517f8e82137757/08de3cf6ddb1af8952930777b25fd8e572a1f82c739478d9d0070c49d71f2024/rule0",
-            "in": "Codeunit Calls Checks::PingCheck",
+            "in": "Codeunit \"Calls Checks\"::PingCheck",
             "kind": "Error",
             "message": {
               "args": [],

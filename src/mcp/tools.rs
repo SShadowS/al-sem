@@ -224,7 +224,7 @@ fn common_properties() -> Map<String, Value> {
 
 /// The one selector grammar every routine argument takes (MCP output plan
 /// 3b; the server instructions state it once).
-const SELECTOR: &str = "a stable routine id, `Owner::Routine` or `Owner.Routine` (type word and AL quotes optional), or a bare routine name unique in the workspace; an overloaded name takes its parameter types in parentheses, `Owner::Routine(Integer, Text)` (or the parameter names), as an ambiguity answer prints each candidate";
+const SELECTOR: &str = "a stable routine id, `Owner::Routine` or `Owner.Routine` (type word and AL quotes optional), or a bare routine name unique in the workspace; an overloaded name takes its parameter types in parentheses, `Owner::Routine(Integer, Text)` (or the parameter names), as an ambiguity answer prints each candidate; a field or action trigger takes its member, `Object.\"Field\"::OnValidate`, `Object.action(Name)::OnAction`. Every JSON routine row carries `selector`, the form that names it alone: pass that value back (a human display is pasteable for these forms only)";
 
 fn string_array(description: &str) -> Value {
     json!({"type": "array", "items": {"type": "string"}, "minItems": 1, "description": description})

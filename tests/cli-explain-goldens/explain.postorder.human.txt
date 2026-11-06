@@ -1,4 +1,4 @@
-Codeunit Explain Post::PostOrder  ws:src/post.al:5
+Codeunit "Explain Post"::PostOrder  ws:src/post.al:5
   summary — writes: no observed write that may persist; caller-dependent: 1 table
     transaction, UI and errors: commits: none; UI at 1 place; errors at 3 places
     other effects: events: 1 (1 raised in workspace code)
@@ -12,8 +12,8 @@ Codeunit Explain Post::PostOrder  ws:src/post.al:5
   rejects when Order.Status <> Order.Status::Released: "Order %1 is not released."  [Error ws:src/post.al:11]
   rejects when not (Order.Status <> Order.Status::Released) and Order.Amount is empty: (platform message)  [TestField ws:src/post.al:12]
   inherited rules: none
-  callers: 1 — Codeunit Explain Tests::PostUnreleasedFails; reached from 1 page action
-    reached from page action Post on Page Explain Order Card (caption "P&ost") at ws:src/card.al:19
+  callers: 1 — Codeunit "Explain Tests"::PostUnreleasedFails; reached from 1 page action
+    reached from page action Page "Explain Order Card".action(Post "P&ost") at ws:src/card.al:19
   commits: none
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary; alsem prove names the caller
     Explain Order: Modify — depends on the caller's record argument at ws:src/post.al:18
@@ -21,6 +21,6 @@ Codeunit Explain Post::PostOrder  ws:src/post.al:5
   extension point OnBeforePostOrder: 1 subscriber(s), IsHandled
   UI at 1 place: UI_MESSAGE at ws:src/post.al:19 (guarded-by-IsHandled)
   errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:12 (unconditional-on-success); ERROR_IMPLICIT at ws:src/post.al:18 (guarded-by-IsHandled); ERROR_THROW at ws:src/post.al:11 (error-path)
-  test Codeunit Explain Tests::PostUnreleasedFails (3 own assert(s))
+  test Codeunit "Explain Tests"::PostUnreleasedFails (3 own assert(s))
   next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

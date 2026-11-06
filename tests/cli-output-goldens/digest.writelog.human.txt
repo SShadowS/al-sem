@@ -1,5 +1,5 @@
 dependencies: Out Base (embedded)
---- Codeunit Out Log Mgt::WriteLog ---
+--- Codeunit "Out Log Mgt"::WriteLog ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
     transaction, UI and errors: commits: none; errors at 1 place
     other effects: events: 0 (0 raised in workspace code)

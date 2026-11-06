@@ -1,4 +1,4 @@
-Codeunit Out Log Mgt::WriteLog  ws:src/OutIssueDocument.Codeunit.al:53
+Codeunit "Out Log Mgt"::WriteLog  ws:src/OutIssueDocument.Codeunit.al:53
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
     transaction, UI and errors: commits: none; errors at 1 place
     other effects: events: 0 (0 raised in workspace code)
@@ -9,9 +9,9 @@ Codeunit Out Log Mgt::WriteLog  ws:src/OutIssueDocument.Codeunit.al:53
   limits: none
   scope: dependency code followed through every resolved call, with literal arguments, grouped per entry point (0 entry points at 0 sites); temporary records are not writes; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   rules: none of its own; inherited: none
-  callers: 3 — Codeunit Out Issue Document::IssueDoc, Codeunit Out Subscribers::LogIssued, Codeunit Out Tests::WriteLogInserts; reached from 1 page action
-    caller rule (applied by Codeunit Out Issue Document::IssueDoc; skipped by Codeunit Out Subscribers::LogIssued, Codeunit Out Tests::WriteLogInserts): rejects when Doc.Status <> Doc.Status::Open: (platform message)  [TestField ws:src/OutIssueDocument.Codeunit.al:12]
-    reached from page action Issue on Page Out Doc Card (caption "Issue") at ws:src/Pages.al:18
+  callers: 3 — Codeunit "Out Issue Document"::IssueDoc, Codeunit "Out Subscribers"::LogIssued, Codeunit "Out Tests"::WriteLogInserts; reached from 1 page action
+    caller rule (applied by Codeunit "Out Issue Document"::IssueDoc; skipped by Codeunit "Out Subscribers"::LogIssued, Codeunit "Out Tests"::WriteLogInserts): rejects when Doc.Status <> Doc.Status::Open: (platform message)  [TestField ws:src/OutIssueDocument.Codeunit.al:12]
+    reached from page action Page "Out Doc Card".action(Issue "Issue") at ws:src/Pages.al:18
   commits: none
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     Out Log: Insert 1 — known persistent
@@ -22,6 +22,6 @@ Codeunit Out Log Mgt::WriteLog  ws:src/OutIssueDocument.Codeunit.al:53
   events: 0 raised in workspace code; 0 more only beyond entry points
   extension points: none (the routine publishes no event itself)
   errors at 1 place: ERROR_IMPLICIT at ws:src/OutIssueDocument.Codeunit.al:61 (unconditional-on-success)
-  test Codeunit Out Tests::WriteLogInserts (0 own assert(s))
+  test Codeunit "Out Tests"::WriteLogInserts (0 own assert(s))
   next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

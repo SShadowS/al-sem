@@ -44,6 +44,9 @@
             },
             "display": "WriteLog",
             "objectDisplay": "Codeunit Out Log Mgt",
+            "qualifiedDisplay": "Codeunit \"Out Log Mgt\"::WriteLog",
+            "selector": "Codeunit \"Out Log Mgt\"::WriteLog",
+            "signature": "(Text[100])",
             "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
           }
         },
@@ -75,6 +78,9 @@
             },
             "display": "OnRun",
             "objectDisplay": "Codeunit Base Poster",
+            "qualifiedDisplay": "Codeunit \"Base Poster\" (70100)::OnRun",
+            "selector": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc",
+            "signature": "()",
             "stableId": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70100#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
           }
         },
@@ -106,6 +112,9 @@
             },
             "display": "ScanFields",
             "objectDisplay": "Codeunit Out Issue Document",
+            "qualifiedDisplay": "Codeunit \"Out Issue Document\"::ScanFields",
+            "selector": "Codeunit \"Out Issue Document\"::ScanFields",
+            "signature": "(Integer)",
             "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#dc74df7bb7bcbc92cfb38268a3daedc82b01192f10c23c33ccb4342d44bb987b"
           }
         },
@@ -140,6 +149,9 @@
             },
             "display": "WriteLog",
             "objectDisplay": "Codeunit Out Log Mgt",
+            "qualifiedDisplay": "Codeunit \"Out Log Mgt\"::WriteLog",
+            "selector": "Codeunit \"Out Log Mgt\"::WriteLog",
+            "signature": "(Text[100])",
             "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
           }
         },
@@ -166,6 +178,9 @@
             },
             "display": "IssueDoc",
             "objectDisplay": "Codeunit Out Issue Document",
+            "qualifiedDisplay": "Codeunit \"Out Issue Document\"::IssueDoc",
+            "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
+            "signature": "(var Record \"Out Doc\")",
             "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"
           }
         },
@@ -199,6 +214,9 @@
             },
             "display": "ScanFields",
             "objectDisplay": "Codeunit Out Issue Document",
+            "qualifiedDisplay": "Codeunit \"Out Issue Document\"::ScanFields",
+            "selector": "Codeunit \"Out Issue Document\"::ScanFields",
+            "signature": "(Integer)",
             "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#dc74df7bb7bcbc92cfb38268a3daedc82b01192f10c23c33ccb4342d44bb987b"
           }
         },
@@ -219,6 +237,9 @@
         },
         "display": "IssueDoc",
         "objectDisplay": "Codeunit Out Issue Document",
+        "qualifiedDisplay": "Codeunit \"Out Issue Document\"::IssueDoc",
+        "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
+        "signature": "(var Record \"Out Doc\")",
         "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"
       },
       "selector": "Out Issue Document.IssueDoc"
@@ -226,7 +247,7 @@
     "summary": {
       "beyondEntryPoints": [
         {
-          "entryPoint": "Codeunit Base Poster::OnRun",
+          "entryPoint": "Codeunit \"Base Poster\" (70100)::OnRun",
           "sites": [
             "ws:src/OutIssueDocument.Codeunit.al:15"
           ],
@@ -336,7 +357,7 @@
           "unresolvedWrites": 0
         },
         {
-          "entryPoint": "Codeunit Base Calc::OnRun",
+          "entryPoint": "Codeunit \"Base Calc\" (70101)::OnRun",
           "sites": [
             "ws:src/OutIssueDocument.Codeunit.al:16"
           ],
@@ -365,7 +386,7 @@
         {
           "beyond": [
             {
-              "entryPoint": "Codeunit Base Poster::OnRun",
+              "entryPoint": "Codeunit \"Base Poster\" (70100)::OnRun",
               "ops": [
                 "DB_DELETE"
               ],
@@ -376,7 +397,7 @@
           ],
           "class": "physical",
           "first": {
-            "firstHop": "Codeunit Base Poster::OnRun",
+            "firstHop": "Codeunit \"Base Poster\" (70100)::OnRun",
             "operationId": "9c6111a83a31bbff/810777ec24f485a082352742d1ed938ac54d03e97272675493521d2830e28aba/op0"
           },
           "literalRuledOut": 0,
@@ -390,7 +411,7 @@
           "beyond": [],
           "class": "physical",
           "first": {
-            "firstHop": "Codeunit Out Log Mgt::WriteLog",
+            "firstHop": "Codeunit \"Out Log Mgt\"::WriteLog",
             "literalRoute": {
               "status": "coneRoute"
             },
@@ -466,5 +487,5 @@
       }
     }
   },
-  "schemaVersion": "3.6.0"
+  "schemaVersion": "3.7.0"
 }

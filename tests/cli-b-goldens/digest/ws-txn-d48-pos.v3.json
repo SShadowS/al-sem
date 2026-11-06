@@ -71,6 +71,9 @@
           },
           "display": "SendOne",
           "objectDisplay": "Codeunit D48 Sender",
+          "qualifiedDisplay": "Codeunit \"D48 Sender\"::SendOne",
+          "selector": "Codeunit \"D48 Sender\"::SendOne",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50000#575f7874587897f82348220d404de819860d274571630bbafa38721de672ef16"
         },
         "scopedGuaranteesFolded": 0,
@@ -190,6 +193,9 @@
           },
           "display": "ProcessAll",
           "objectDisplay": "Codeunit D48 Loop Caller",
+          "qualifiedDisplay": "Codeunit \"D48 Loop Caller\"::ProcessAll",
+          "selector": "Codeunit \"D48 Loop Caller\"::ProcessAll",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50001#341ea40393c719987aa24f563f883e09ab6132174f4ef8275f8d997ecbf8650e"
         },
         "scopedGuaranteesFolded": 0,
@@ -304,6 +310,9 @@
           },
           "display": "SendOne",
           "objectDisplay": "Codeunit D48 Loop Caller",
+          "qualifiedDisplay": "Codeunit \"D48 Loop Caller\"::SendOne",
+          "selector": "Codeunit \"D48 Loop Caller\"::SendOne",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50001#575f7874587897f82348220d404de819860d274571630bbafa38721de672ef16"
         },
         "scopedGuaranteesFolded": 0,
@@ -418,6 +427,9 @@
           },
           "display": "DoSendOnce",
           "objectDisplay": "Codeunit D48 Non Loop Caller",
+          "qualifiedDisplay": "Codeunit \"D48 Non Loop Caller\"::DoSendOnce",
+          "selector": "Codeunit \"D48 Non Loop Caller\"::DoSendOnce",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50002#197d34c68565ddcb1cc7fa6474f1b19b163362119fb2dcd8b8eaff37d3af2ce9"
         },
         "scopedGuaranteesFolded": 0,
@@ -526,6 +538,9 @@
           },
           "display": "ExportAll",
           "objectDisplay": "Codeunit D48 File Loop",
+          "qualifiedDisplay": "Codeunit \"D48 File Loop\"::ExportAll",
+          "selector": "Codeunit \"D48 File Loop\"::ExportAll",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50003#c430e2d2f95fd1b5c0bbbf663dc9783e81063456de7781a8cca3c89ebb6c015d"
         },
         "scopedGuaranteesFolded": 0,
@@ -598,28 +613,38 @@
     "pathCap": 1,
     "routines": {
       "r:1c088b4fbe9f": {
-        "display": "Codeunit D48 Sender::SendOne",
+        "display": "Codeunit \"D48 Sender\"::SendOne",
         "file": "ws:src/D48Pos.Codeunit.al",
+        "selector": "Codeunit \"D48 Sender\"::SendOne",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50000#575f7874587897f82348220d404de819860d274571630bbafa38721de672ef16"
       },
       "r:20ab43ac5fd3": {
-        "display": "Codeunit D48 Loop Caller::SendOne",
+        "display": "Codeunit \"D48 Loop Caller\"::SendOne",
         "file": "ws:src/D48Pos.Codeunit.al",
+        "selector": "Codeunit \"D48 Loop Caller\"::SendOne",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50001#575f7874587897f82348220d404de819860d274571630bbafa38721de672ef16"
       },
       "r:604fd4291df3": {
-        "display": "Codeunit D48 Loop Caller::ProcessAll",
+        "display": "Codeunit \"D48 Loop Caller\"::ProcessAll",
         "file": "ws:src/D48Pos.Codeunit.al",
+        "selector": "Codeunit \"D48 Loop Caller\"::ProcessAll",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50001#341ea40393c719987aa24f563f883e09ab6132174f4ef8275f8d997ecbf8650e"
       },
       "r:d12fd39da928": {
-        "display": "Codeunit D48 Non Loop Caller::DoSendOnce",
+        "display": "Codeunit \"D48 Non Loop Caller\"::DoSendOnce",
         "file": "ws:src/D48Pos.Codeunit.al",
+        "selector": "Codeunit \"D48 Non Loop Caller\"::DoSendOnce",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50002#197d34c68565ddcb1cc7fa6474f1b19b163362119fb2dcd8b8eaff37d3af2ce9"
       },
       "r:e579f0ca91c9": {
-        "display": "Codeunit D48 File Loop::ExportAll",
+        "display": "Codeunit \"D48 File Loop\"::ExportAll",
         "file": "ws:src/D48Pos.Codeunit.al",
+        "selector": "Codeunit \"D48 File Loop\"::ExportAll",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-00000000d480:Codeunit:50003#c430e2d2f95fd1b5c0bbbf663dc9783e81063456de7781a8cca3c89ebb6c015d"
       }
     },
@@ -631,5 +656,5 @@
     },
     "workspaceFingerprint": "598ae8ef367e11fc639c1b762c08ea95a321cc8e1edb679fbf999289aeeb3770"
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }

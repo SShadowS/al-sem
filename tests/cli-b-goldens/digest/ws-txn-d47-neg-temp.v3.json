@@ -136,6 +136,9 @@
           },
           "display": "SendAfterTempInsert",
           "objectDisplay": "Codeunit D47 Sender",
+          "qualifiedDisplay": "Codeunit \"D47 Sender\"::SendAfterTempInsert",
+          "selector": "Codeunit \"D47 Sender\"::SendAfterTempInsert",
+          "signature": "()",
           "stableId": "11111111-0000-0000-0000-0000000d4705:Codeunit:50000#cc7e0d05e04c6c2a3061943bdc3dc62be0146ae5a91d97774026d7e5158f39ba"
         },
         "scopedGuaranteesFolded": 0,
@@ -196,8 +199,10 @@
     "pathCap": 1,
     "routines": {
       "r:9498fc26a070": {
-        "display": "Codeunit D47 Sender::SendAfterTempInsert",
+        "display": "Codeunit \"D47 Sender\"::SendAfterTempInsert",
         "file": "ws:src/Sender.Codeunit.al",
+        "selector": "Codeunit \"D47 Sender\"::SendAfterTempInsert",
+        "signature": "()",
         "stableId": "11111111-0000-0000-0000-0000000d4705:Codeunit:50000#cc7e0d05e04c6c2a3061943bdc3dc62be0146ae5a91d97774026d7e5158f39ba"
       }
     },
@@ -209,5 +214,5 @@
     },
     "workspaceFingerprint": "d7511a4fe3bcaed11cec5244ebdc7b282e2294c2cf2e3782c9f106718516fe98"
   },
-  "schemaVersion": "3.0.0"
+  "schemaVersion": "3.1.0"
 }

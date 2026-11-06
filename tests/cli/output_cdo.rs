@@ -820,6 +820,17 @@ fn cdo_human_outputs_are_clean_and_within_their_ratchets() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// Output validation V3 (§2.1, §12.1): every CDO workspace routine's
+/// `selector` and display, and every `selector` in the CDO rendering
+/// goldens, resolve to their own stable id (`cli_selector_round_trip`).
+#[test]
+fn cdo_selectors_round_trip() {
+    let Some(ws) = crate::cdo::cdo_ws_or_enforce() else {
+        return;
+    };
+    crate::cli_selector_round_trip::cdo_round_trip(&ws);
+}
+
 /// The inline cap's margin (MCP output plan item T): IssueReminder's and
 /// RunReportID's default explain card must arrive inline, under the 40 KiB
 /// cap with at least 1 KiB to spare, and under the client's character

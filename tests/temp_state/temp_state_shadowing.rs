@@ -141,6 +141,7 @@ fn make_routine_for_pass2b(variables: Vec<ModelVariable>) -> ModelRoutine {
         var_assignments: Vec::new(),
         condition_references: Vec::new(),
         enclosing_member: None,
+        member_detail: None,
         originating_object: None,
         enclosing_member_range: None,
         entry_temp_guard_receiver: None,

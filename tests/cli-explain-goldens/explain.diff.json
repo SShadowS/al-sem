@@ -105,7 +105,7 @@
             },
             "fieldOps": [],
             "fields": {
-              "Codeunit Explain Post::PostOrder": [
+              "Codeunit \"Explain Post\"::PostOrder": [
                 "Posted",
                 "Status"
               ]
@@ -140,7 +140,7 @@
               "app": "44444444-e491-0000-0000-0000000e4a11",
               "conditional": false,
               "id": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50403#4a41efe8fa6904400b08f5b28c40b0b711bc616b02d26da59dbd1c1e1ec9872a",
-              "routine": "Codeunit Explain Subscriber::HandleBeforePost",
+              "routine": "Codeunit \"Explain Subscriber\"::HandleBeforePost",
               "rules": []
             }
           ],
@@ -195,12 +195,15 @@
           "line": 5,
           "sourceKind": "source"
         },
+        "display": "Codeunit \"Explain Post\"::PostOrder",
         "doc": "Posts a released order.\nIt marks the order posted.",
         "id": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50401#d2166489ad174cb2f8c763f785477e5a5160ade8e87e7435e965fed790061e77",
         "name": "PostOrder",
         "object": "Explain Post",
         "objectCaption": null,
-        "objectType": "Codeunit"
+        "objectType": "Codeunit",
+        "selector": "Codeunit \"Explain Post\"::PostOrder",
+        "signature": "(var Record \"Explain Order\")"
       },
       "rules": {
         "callers": [],
@@ -347,7 +350,7 @@
           },
           "asserts": 3,
           "id": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50405#3c15575bee905cbf25ba36fc4fc75ff23321ea016139cee4950b359eee36c410",
-          "test": "Codeunit Explain Tests::PostUnreleasedFails",
+          "test": "Codeunit \"Explain Tests\"::PostUnreleasedFails",
           "viaEvent": false
         }
       ]
@@ -416,7 +419,7 @@
             },
             "fieldOps": [],
             "fields": {
-              "Codeunit Explain Post::Archive": [
+              "Codeunit \"Explain Post\"::Archive": [
                 "Status"
               ]
             },
@@ -455,12 +458,15 @@
           "line": 23,
           "sourceKind": "source"
         },
+        "display": "Codeunit \"Explain Post\"::Archive",
         "doc": "Archives without any check.",
         "id": "44444444-e491-0000-0000-0000000e4a11:Codeunit:50401#784c1883c3a487fed2627f93fb9437018e64ce687a18635d0bf7e49b484b411c",
         "name": "Archive",
         "object": "Explain Post",
         "objectCaption": null,
-        "objectType": "Codeunit"
+        "objectType": "Codeunit",
+        "selector": "Codeunit \"Explain Post\"::Archive",
+        "signature": "(var Record \"Explain Order\")"
       },
       "rules": {
         "callers": [],

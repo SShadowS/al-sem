@@ -478,23 +478,23 @@ fn caller_rules_and_trigger_and_collector_gaps() {
     let own = rule_with(callers, "A posted order cannot be released.");
     assert_eq!(
         own["appliedBy"],
-        serde_json::json!(["Codeunit Calls Post::ReleaseChecked"])
+        serde_json::json!(["Codeunit \"Calls Post\"::ReleaseChecked"])
     );
     assert_eq!(
         own["skippedBy"],
         serde_json::json!([
-            "Codeunit Calls Post::ReleaseDirect",
-            "Codeunit Calls Post::ReleaseBranch",
-            "Codeunit Calls Post::ReleaseLoop",
-            "Codeunit Calls Post::ReleaseGuarded",
-            "Codeunit Calls Post::ReleaseElse"
+            "Codeunit \"Calls Post\"::ReleaseDirect",
+            "Codeunit \"Calls Post\"::ReleaseBranch",
+            "Codeunit \"Calls Post\"::ReleaseLoop",
+            "Codeunit \"Calls Post\"::ReleaseGuarded",
+            "Codeunit \"Calls Post\"::ReleaseElse"
         ])
     );
     // A MayNotStop rule is present, never applied.
     let collected = rule_with(callers, "A negative amount is collected.");
     assert_eq!(
         collected["presentIn"],
-        serde_json::json!(["Codeunit Calls Post::ReleaseChecked"])
+        serde_json::json!(["Codeunit \"Calls Post\"::ReleaseChecked"])
     );
     assert_eq!(collected["appliedBy"], serde_json::json!([]));
     assert_eq!(release["rules"]["knownCallers"], 6);
@@ -520,11 +520,11 @@ fn caller_rules_and_trigger_and_collector_gaps() {
     assert_eq!(quick.len(), 1, "only ReleaseGuarded's check: {quick:?}");
     assert_eq!(
         quick[0]["appliedBy"],
-        serde_json::json!(["Codeunit Calls Post::ReleaseGuarded"])
+        serde_json::json!(["Codeunit \"Calls Post\"::ReleaseGuarded"])
     );
     assert_eq!(
         rule_with(callers, "An order without a number cannot be released.")["appliedBy"],
-        serde_json::json!(["Codeunit Calls Post::ReleaseElse"])
+        serde_json::json!(["Codeunit \"Calls Post\"::ReleaseElse"])
     );
 
     let quick = calls_card("QuickPost");
@@ -1124,12 +1124,14 @@ fn explain_counts_every_caller_and_page_runs() {
         .find(|l| l.trim_start().starts_with("callers:"))
         .unwrap_or_else(|| panic!("a callers line: {human}"));
     for name in [
-        "Page Ex Card::OnOpenPage",
-        "Page Ex Card::OnAfterGetCurrRecord",
-        "Page Ex Card::OnAssistEdit",
-        "PageExtension Ex Card Ext::OnOpenPage",
-        "Page Ex Journal::OnOpenPage",
-        "Page Ex Other::OnValidate",
+        // V3 §2.1: the one display (AL quoting, the field of a field
+        // trigger).
+        "Page \"Ex Card\"::OnOpenPage",
+        "Page \"Ex Card\"::OnAfterGetCurrRecord",
+        "Page \"Ex Card\".CodeField::OnAssistEdit",
+        "PageExtension \"Ex Card Ext\"::OnOpenPage",
+        "Page \"Ex Journal\"::OnOpenPage",
+        "Page \"Ex Other\".CodeField::OnValidate",
     ] {
         assert!(line.contains(name), "{name} in {line}");
     }

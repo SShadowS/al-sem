@@ -1,4 +1,4 @@
-Codeunit Explain Tests::PostUnreleasedFails  ws:src/tests.al:9
+Codeunit "Explain Tests"::PostUnreleasedFails  ws:src/tests.al:9
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
     transaction, UI and errors: commits: no observed COMMIT; UI at 1 place; errors at 3 places
     other effects: events: 1 (1 raised in workspace code)
@@ -14,7 +14,7 @@ Codeunit Explain Tests::PostUnreleasedFails  ws:src/tests.al:9
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     Explain Order: Modify 1 — known persistent
       Modify at ws:src/post.al:18
-      path: PostUnreleasedFails → Explain Post::PostOrder
+      path: PostUnreleasedFails → Codeunit "Explain Post"::PostOrder
       fields PostOrder assigns on this table (not operation-specific): Posted, Status
   events: 1 raised in workspace code, by publisher: Codeunit Explain Post 1; 0 more only beyond entry points
   extension points: none (the routine publishes no event itself)

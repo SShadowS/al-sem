@@ -241,14 +241,17 @@ fn a_test_path_names_overloads_apart() {
         .filter_map(Value::as_str)
         .collect();
     assert!(
-        path.windows(2)
-            .any(|w| w == ["Codeunit TU Core::Send/1", "Codeunit TU Core::Send/0"]),
+        path.windows(2).any(|w| w
+            == [
+                "Codeunit \"TU Core\"::Send(Integer)",
+                "Codeunit \"TU Core\"::Send()"
+            ]),
         "the two overloads print apart: {path:?}"
     );
     let (human, code) = tests(&ws, &["--routine", "TU Core::Untested"]);
     assert_eq!(code, 0, "{human}");
     assert!(
-        human.contains("Codeunit TU Core::Send/1 → Codeunit TU Core::Send/0"),
+        human.contains("Codeunit \"TU Core\"::Send(Integer) → Codeunit \"TU Core\"::Send()"),
         "{human}"
     );
 }

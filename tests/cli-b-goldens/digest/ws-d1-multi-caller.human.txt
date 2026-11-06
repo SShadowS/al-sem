@@ -1,4 +1,4 @@
---- Codeunit D1 Multi Caller::CallerB ---
+--- Codeunit "D1 Multi Caller"::CallerB ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
     transaction, UI and errors: commits: none; errors at 2 places
     other effects: events: 0 (0 raised in workspace code)
@@ -15,7 +15,7 @@
   events: 0 raised in workspace code; 0 more only beyond entry points
   errors at 2 places: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:19 (loop-body); ERROR_IMPLICIT at ws:src/D1MultiCaller.al:33 (unconditional-on-success)
 
---- Codeunit D1 Multi Caller::CallerC ---
+--- Codeunit "D1 Multi Caller"::CallerC ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
     transaction, UI and errors: commits: none; errors at 2 places
     other effects: events: 0 (0 raised in workspace code)
@@ -32,7 +32,7 @@
   events: 0 raised in workspace code; 0 more only beyond entry points
   errors at 2 places: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:19 (loop-body); ERROR_IMPLICIT at ws:src/D1MultiCaller.al:41 (unconditional-on-success)
 
---- Codeunit D1 Multi Caller::CallerA ---
+--- Codeunit "D1 Multi Caller"::CallerA ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
     transaction, UI and errors: commits: none; errors at 2 places
     other effects: events: 0 (0 raised in workspace code)
@@ -49,7 +49,7 @@
   events: 0 raised in workspace code; 0 more only beyond entry points
   errors at 2 places: ERROR_IMPLICIT at ws:src/D1MultiCaller.al:19 (loop-body); ERROR_IMPLICIT at ws:src/D1MultiCaller.al:25 (unconditional-on-success)
 
---- Codeunit D1 Multi Caller::ModifyHelper ---
+--- Codeunit "D1 Multi Caller"::ModifyHelper ---
   summary — writes: no observed write that may persist; caller-dependent: 1 table
     transaction, UI and errors: commits: none; errors at 1 place
     other effects: events: 0 (0 raised in workspace code)

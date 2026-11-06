@@ -1,8 +1,8 @@
---- Codeunit QT Touches::Leaf vs QT Item (07070707-0000-4000-8000-000000000071/table/50700) ---
+--- Codeunit "QT Touches"::Leaf vs QT Item (07070707-0000-4000-8000-000000000071/table/50700) ---
   scope: per operation, one routine into dependency code; temporary-record touches persist nothing but use the table's schema and run its triggers; lines are 1-based
   callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens (alsem tests and impact follow it); paths through dependency code are listed apart below
-  up: 3 of 4 transitive callers touch it through other branches, 1 does not, 0 unknown; not touching: Codeunit QT Touches::Top3
-    +1 Codeunit QT Touches::Top1: 1 touch (1 on a persistent record, 0 on possibly persistent records, 0 on temporary records); first [Insert] write at ws:src/QTTouches.al:33 in Codeunit QT Touches::WriteItem, through Codeunit QT Touches::CallWithReal
-    +1 Codeunit QT Touches::Top2: 2 touches (2 on persistent records, 0 on possibly persistent records, 0 on temporary records); first [Delete] write at ws:src/QTTouches.al:86 in Codeunit QT Touches::Top2
-    +2 Codeunit QT Touches::Entry: 7 touches (4 on persistent records, 0 on possibly persistent records, 3 on temporary records); first [Delete] write at ws:src/QTTouches.al:86 in Codeunit QT Touches::Top2, through Codeunit QT Touches::Top2
+  up: 3 of 4 transitive callers touch it through other branches, 1 does not, 0 unknown; not touching: Codeunit "QT Touches"::Top3
+    +1 Codeunit "QT Touches"::Top1: 1 touch (1 on a persistent record, 0 on possibly persistent records, 0 on temporary records); first [Insert] write at ws:src/QTTouches.al:33 in Codeunit "QT Touches"::WriteItem, through Codeunit "QT Touches"::CallWithReal
+    +1 Codeunit "QT Touches"::Top2: 2 touches (2 on persistent records, 0 on possibly persistent records, 0 on temporary records); first [Delete] write at ws:src/QTTouches.al:86 in Codeunit "QT Touches"::Top2
+    +2 Codeunit "QT Touches"::Entry: 7 touches (4 on persistent records, 0 on possibly persistent records, 3 on temporary records); first [Delete] write at ws:src/QTTouches.al:86 in Codeunit "QT Touches"::Top2, through Codeunit "QT Touches"::Top2
   through dependency code: not applicable (no dependency code loaded)

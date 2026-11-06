@@ -118,19 +118,15 @@ fn a_count_change_lists_its_first_sites_and_counts_the_rest() {
     assert!(text.contains("ws:src/a.al:9, ws:src/a.al:10)"), "{text}");
 }
 
-/// A root's line names it by its short handle (`R/2`), as its callees'
-/// labels do.
-///
-/// Break: print `display` alone in `root_block`.
+/// V3 §2.1: a root's line prints its display (which carries an overloaded
+/// name's parameter types); the short handle stays in JSON only.
 #[test]
-fn a_root_line_carries_its_handle() {
+fn a_root_line_prints_its_display_not_its_handle() {
     let (mut main, up, delta) = parts(1, 0);
     main["roots"][0]["handle"] = json!("/2");
     let text = human(&main, &up, delta, RenderOpts::default());
-    assert!(
-        text.contains("  Codeunit A::R0/2 (ws:src/a.al:1)"),
-        "{text}"
-    );
+    assert!(text.contains("  Codeunit A::R0 (ws:src/a.al:1)"), "{text}");
+    assert!(!text.contains("R0/2"), "{text}");
 }
 
 /// A witness only an open site (a hub) reaches says so, and so does the

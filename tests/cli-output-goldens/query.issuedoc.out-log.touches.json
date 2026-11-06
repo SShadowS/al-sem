@@ -54,6 +54,9 @@
               },
               "display": "WriteLog",
               "objectDisplay": "Codeunit Out Log Mgt",
+              "qualifiedDisplay": "Codeunit \"Out Log Mgt\"::WriteLog",
+              "selector": "Codeunit \"Out Log Mgt\"::WriteLog",
+              "signature": "(Text[100])",
               "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
             }
           },
@@ -78,6 +81,9 @@
               },
               "display": "WriteLog",
               "objectDisplay": "Codeunit Out Log Mgt",
+              "qualifiedDisplay": "Codeunit \"Out Log Mgt\"::WriteLog",
+              "selector": "Codeunit \"Out Log Mgt\"::WriteLog",
+              "signature": "(Text[100])",
               "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
             }
           },
@@ -97,6 +103,9 @@
         },
         "display": "IssueDoc",
         "objectDisplay": "Codeunit Out Issue Document",
+        "qualifiedDisplay": "Codeunit \"Out Issue Document\"::IssueDoc",
+        "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
+        "signature": "(var Record \"Out Doc\")",
         "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"
       },
       "selector": "Out Issue Document.IssueDoc"
@@ -141,5 +150,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "3.6.0"
+  "schemaVersion": "3.7.0"
 }
