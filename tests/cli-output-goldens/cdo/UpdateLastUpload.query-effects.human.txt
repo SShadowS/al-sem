@@ -1,7 +1,7 @@
---- effects of Codeunit CDO Telemetry::UpdateLastUpload ---
+--- effects of Codeunit "CDO Telemetry"::UpdateLastUpload ---
   summary: 1 operation — writes that may persist 0 on 0 tables (0 known persistent, 0 temp state unknown); caller-dependent writes 1 on 1 table
   coverage: per operation, one routine into dependency code; operations and routes the root's literal arguments rule out are listed and marked (alsem explain and prove drop them); writes beyond dependency entry points follow the whole cone with literal arguments, as alsem explain does; lines are 1-based
   scope: dependency code: full cone for physical writes, grouped per entry point; per-operation detail one routine deep; temporary records are not writes; dependencies: 11 apps (--all lists them)
   caller-dependent writes (1 table; written only if the caller passes a record that is not temporary):
-    CDO Setup: Modify 1 (caller-dependent: parameter 1 (DOSetup)) — first Modify at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:48 in Codeunit CDO Telemetry::UpdateLastUpload
+    CDO Setup: Modify 1 (caller-dependent: parameter 1 (DOSetup)) — first Modify at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:48 in Codeunit "CDO Telemetry"::UpdateLastUpload
   next: alsem prove <routine> writes-table:<table> follows the whole cone for one table

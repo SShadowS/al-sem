@@ -812,10 +812,10 @@ pub(crate) fn cdo_impact_base_ratchets() {
             .unwrap()
             .iter()
             .filter(|r| {
-                r["display"]
-                    .as_str()
-                    .is_some_and(|d| d.ends_with(&format!("::{name}")))
-                    && r["delta"]["own"].is_array()
+                // V3 §2.1: an overloaded name carries its parameter types.
+                r["display"].as_str().is_some_and(|d| {
+                    d.ends_with(&format!("::{name}")) || d.contains(&format!("::{name}("))
+                }) && r["delta"]["own"].is_array()
             })
             .flat_map(own)
             .collect()
@@ -840,15 +840,15 @@ pub(crate) fn cdo_impact_base_ratchets() {
         changes("FileExists"),
         pairs(&[(
             "added",
-            "calls Codeunit CDO Azure Blob Storage::ResolvePath"
+            "calls Codeunit \"CDO Azure Blob Storage\"::ResolvePath"
         )])
     );
     let init = changes("InitNewEntry");
     for want in [
-        ("added", "calls Table CDO E-Mail Log::InitNewEntryCore"),
-        ("removed", "calls Table CDO E-Mail Log::SetTo"),
-        ("removed", "calls Table CDO E-Mail Log::SetCc"),
-        ("removed", "calls Table CDO E-Mail Log::SetBcc"),
+        ("added", "calls Table \"CDO E-Mail Log\"::InitNewEntryCore"),
+        ("removed", "calls Table \"CDO E-Mail Log\"::SetTo"),
+        ("removed", "calls Table \"CDO E-Mail Log\"::SetCc"),
+        ("removed", "calls Table \"CDO E-Mail Log\"::SetBcc"),
     ] {
         assert!(
             init.contains(&(want.0.to_string(), want.1.to_string())),

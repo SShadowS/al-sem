@@ -18,7 +18,10 @@
         "tablesOwnedByDependencies": [],
         "topCallees": []
       },
-      "routine": "Codeunit CDO Telemetry::UpdateLastUpload",
+      "routine": "Codeunit \"CDO Telemetry\"::UpdateLastUpload",
+      "selector": "Codeunit \"CDO Telemetry\"::UpdateLastUpload",
+      "signature": "(var Record \"CDO Setup\")",
+      "stableId": "f4b69b55-c90d-4937-8f53-2742898fa948:Codeunit:6175362#aa151ceac50f6b7d2472459a0f2c1b730a0c8c57fee67447eeadf8ab99d9a253",
       "summary": {
         "callerDependentTables": 1,
         "commits": {

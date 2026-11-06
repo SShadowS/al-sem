@@ -34,11 +34,11 @@
       },
       "names": {
         "entryPoints": [
-          "Codeunit Import Attachment - Inc. Doc.::CreateNewAttachment",
-          "Codeunit Sales-Calc. Discount::OnRun",
-          "Codeunit CTS-CDN Network Doc. Mgt.::CreateEDocument",
-          "Codeunit CSC Core::IsAppActiveOrAskToActivate",
-          "Codeunit Email::Send"
+          "Codeunit \"Import Attachment - Inc. Doc.\" (134)::CreateNewAttachment",
+          "Codeunit \"Sales-Calc. Discount\" (60)::OnRun",
+          "Codeunit \"CTS-CDN Network Doc. Mgt.\" (6225516)::CreateEDocument",
+          "Codeunit \"CSC Core\" (6192833)::IsAppActiveOrAskToActivate",
+          "Codeunit Email (8901)::Send"
         ],
         "tablesOwnedByApp": [
           "CDO Azure Application Setup",
@@ -79,7 +79,10 @@
           }
         ]
       },
-      "routine": "Codeunit CDO E-Mail Handler::RunReportID",
+      "routine": "Codeunit \"CDO E-Mail Handler\"::RunReportID",
+      "selector": "Codeunit \"CDO E-Mail Handler\"::RunReportID",
+      "signature": "(Boolean, Variant, Integer, Text, Integer, Integer, Integer, Boolean)",
+      "stableId": "f4b69b55-c90d-4937-8f53-2742898fa948:Codeunit:6175303#83ca4899fc0acb1c45bd213a175b47d9c5e6e9cc243afdc35b33cf9c4820edf9",
       "summary": {
         "callerDependentTables": 0,
         "commits": {
@@ -118,7 +121,7 @@
           "count": 418,
           "mostBeyond": {
             "enteredAt": "ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:179",
-            "entryPoint": "Codeunit Import Attachment - Inc. Doc.::CreateNewAttachment",
+            "entryPoint": "Codeunit \"Import Attachment - Inc. Doc.\" (134)::CreateNewAttachment",
             "tables": 250
           },
           "ownedByApp": 12

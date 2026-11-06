@@ -549,7 +549,7 @@ pub(crate) fn cdo_selection_ratchets() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|c| c["display"] == "Codeunit CDO Issue Document::IssueReminder")
+        .find(|c| c["display"] == "Codeunit \"CDO Issue Document\"::IssueReminder")
         .expect("IssueReminder resolved");
     assert_eq!(ir["nearest"]["tier"], "throughDependency", "{ir}");
     assert_eq!(v["selectionComplete"], false);

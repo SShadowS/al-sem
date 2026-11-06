@@ -34,11 +34,11 @@
       },
       "names": {
         "entryPoints": [
-          "Codeunit Reminder-Issue::OnRun",
-          "Codeunit CTS-CDN Network Doc. Mgt.::CreateEDocument",
-          "Codeunit CSC Core::IsAppActiveOrAskToActivate",
-          "Codeunit Email::Send",
-          "Codeunit CSC Core::IsAppActiveOrAskToActivate"
+          "Codeunit \"Reminder-Issue\" (393)::OnRun",
+          "Codeunit \"CTS-CDN Network Doc. Mgt.\" (6225516)::CreateEDocument",
+          "Codeunit \"CSC Core\" (6192833)::IsAppActiveOrAskToActivate",
+          "Codeunit Email (8901)::Send",
+          "Codeunit \"CSC Core\" (6192833)::IsAppActiveOrAskToActivate"
         ],
         "tablesOwnedByApp": [
           "CDO Azure Application Setup",
@@ -79,7 +79,10 @@
           }
         ]
       },
-      "routine": "Codeunit CDO Issue Document::IssueReminder",
+      "routine": "Codeunit \"CDO Issue Document\"::IssueReminder",
+      "selector": "Codeunit \"CDO Issue Document\"::IssueReminder",
+      "signature": "(Record \"Reminder Header\")",
+      "stableId": "f4b69b55-c90d-4937-8f53-2742898fa948:Codeunit:6175305#5799e983e89ddc35d5f6895cd20d55709f6235280bd6404471f743da3a55914c",
       "summary": {
         "callerDependentTables": 0,
         "commits": {
@@ -118,7 +121,7 @@
           "count": 153,
           "mostBeyond": {
             "enteredAt": "ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19",
-            "entryPoint": "Codeunit Reminder-Issue::OnRun",
+            "entryPoint": "Codeunit \"Reminder-Issue\" (393)::OnRun",
             "tables": 89
           },
           "ownedByApp": 11

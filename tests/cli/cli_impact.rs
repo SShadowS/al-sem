@@ -560,13 +560,14 @@ pub(crate) fn cdo_impact_ratchets() {
     // two fewer routines fit the 40 KiB budget. +682 on the integration with
     // F1 and field-writers (`integrate/outval-r1-fixes`, each alone kept
     // +679): the text before the cut grew, so one more routine falls past
-    // the budget.
-    assert!(human.contains("  … +682 routines"), "{human}");
+    // the budget. +683 since output validation V3 (the one routine display:
+    // AL quotes, overloads' parameter types): the text before the cut grew.
+    assert!(human.contains("  … +683 routines"), "{human}");
 
     let v = json(&ws, &["--routine", "CDO Telemetry::UpdateLastUpload"], None);
     let r = &v["roots"][0];
     assert_eq!(
-        r["up"]["callers"]["first"][0]["display"], "Codeunit CDO Telemetry::QueueUpload",
+        r["up"]["callers"]["first"][0]["display"], "Codeunit \"CDO Telemetry\"::QueueUpload",
         "{r:#}"
     );
     assert_eq!(r["tests"]["status"], "reached");

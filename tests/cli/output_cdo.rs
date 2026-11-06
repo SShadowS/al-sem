@@ -541,11 +541,18 @@ fn cdo_every_spilled_answer_carries_a_small_summary() {
 /// subscribers of the table events it raises, its digest measured 1,293,230
 /// bytes whole and 744,546 core (+3.5%). The owner's ratchet: this raise
 /// needs his confirmation.
+///
+/// Raised again 2026-11-06 (output validation V3, digest 3.1.0: routine rows
+/// gain `signature`, `member`, `selector`, `handle`, and every display is the
+/// one routine display) from 1,310,000 / 760,000: IssueReminder measured
+/// 1,347,484 bytes whole and 798,800 core (+4.2% / +7.3%). The owner's
+/// ratchet: this raise needs his confirmation too (V5's dedup is where the
+/// size comes back).
 #[test]
 fn cdo_digest_json_fits_its_size_budgets() {
     let Some(a) = cdo_answers() else { return };
-    const WHOLE: usize = 1_310_000;
-    const CORE: usize = 760_000;
+    const WHOLE: usize = 1_380_000;
+    const CORE: usize = 820_000;
     fn strip(v: &mut Value) {
         match v {
             Value::Object(m) => {
@@ -559,7 +566,7 @@ fn cdo_digest_json_fits_its_size_budgets() {
     for label in ["IssueReminder", "RunReportID"] {
         let doc = &a.answers[&format!("{label} digest json")].stdout;
         let mut v: Value = serde_json::from_str(doc).expect("digest JSON");
-        assert_eq!(v["schemaVersion"], "3.0.0", "{label}");
+        assert_eq!(v["schemaVersion"], "3.1.0", "{label}");
         strip(&mut v);
         let core = serde_json::to_string_pretty(&v).unwrap().len() + 1;
         eprintln!(
@@ -703,10 +710,17 @@ const RENDERED: &[(&str, &str)] = &[
 /// human IR 113 / 30,687, RR 123 / 35,392). A number may go down freely; up
 /// only by editing it here with the reason. The plan's targets hold under
 /// every one: explain ≤ 150 lines, query effects ≤ 100, touches ≤ 20.
+///
+/// Raised 2026-11-06 by output validation V3 (spec 2026-11-06 §2.1: every
+/// occurrence of an overloaded name prints its full parameter types, names
+/// are AL-quoted, dependency objects carry their number): measured explain
+/// IR 136 lines / 39,169 B, RR 145 / 45,058; digest human IR 120 / 36,991,
+/// RR 126 / 42,077 (of RR's explain growth, 5,295 B are parameter lists,
+/// ~700 B dependency numbers, ~670 B quotes). Lines did not grow.
 fn ratchet(label: &str, call: &str) -> Budget {
     let (lines, bytes) = match (label, call) {
-        ("IssueReminder", "explain human") => (140, 35_500),
-        ("RunReportID", "explain human") => (150, 39_936),
+        ("IssueReminder", "explain human") => (140, 43_000),
+        ("RunReportID", "explain human") => (150, 49_500),
         (_, "explain human") => (30, 2_500),
         ("IssueReminder", "query effects human") => (70, 23_000),
         ("RunReportID", "query effects human") => (80, 27_000),
@@ -726,8 +740,8 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // (17 lines, 7,366 B).
         ("RunReportID", "prove writes-table data-exch human") => (20, 8_200),
         (_, "prove writes-table data-exch human") => (30, 3_000),
-        ("IssueReminder", "digest human") => (125, 34_000),
-        ("RunReportID", "digest human") => (135, 39_000),
+        ("IssueReminder", "digest human") => (125, 40_700),
+        ("RunReportID", "digest human") => (135, 46_300),
         (_, "digest human") => (30, 2_500),
         _ => (150, 40 * 1024),
     };
@@ -1112,7 +1126,8 @@ fn cdo_write_lines_have_a_path_or_a_reason() {
         .copied()
         .collect::<Vec<_>>()
         .join("\n");
-    if !block.contains("path (re-enters workspace code beyond Codeunit Reminder-Issue::OnRun")
+    if !block
+        .contains("path (re-enters workspace code beyond Codeunit \"Reminder-Issue\" (393)::OnRun")
         || !block.contains("→ QueueMailCombined")
     {
         failures.push(format!(
