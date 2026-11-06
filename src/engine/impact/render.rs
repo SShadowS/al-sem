@@ -205,6 +205,67 @@ fn comparison_line(cmp: &Comparison, files: usize) -> String {
 }
 
 /// The accounting's bucket clause (`routine bodies 10,880, …`).
+/// What the changed object-header lines changed (output validation §9.4,
+/// F62): `object headers: 25 files, line 1 only — a byte-order mark removed
+/// (no declaration changed)`. `None` when no file changed a header line.
+fn object_header_line(acc: &Value) -> Option<String> {
+    let changes: Vec<&Value> = acc["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|f| &f["objectHeaderChange"])
+        .filter(|h| h.is_object())
+        .collect();
+    if changes.is_empty() {
+        return None;
+    }
+    let lines: std::collections::BTreeSet<i64> = changes
+        .iter()
+        .flat_map(|h| h["lines"].as_array().into_iter().flatten())
+        .filter_map(Value::as_i64)
+        .collect();
+    let at = match (lines.first(), lines.last()) {
+        (Some(a), Some(b)) if a == b => format!("line {a} only"),
+        (Some(a), Some(b)) if (b - a + 1) as usize == lines.len() => format!("lines {a}-{b}"),
+        _ => format!(
+            "lines {}",
+            lines
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    let words = |k: &str| match k {
+        "byte-order-mark-removed" => "a byte-order mark removed",
+        "byte-order-mark-added" => "a byte-order mark added",
+        "whitespace" => "whitespace only, outside quoted names and values",
+        _ => "the declaration text changed",
+    };
+    let mut by: BTreeMap<&str, usize> = BTreeMap::new();
+    for h in &changes {
+        *by.entry(h["kind"].as_str().unwrap_or("text")).or_default() += 1;
+    }
+    let unchanged = !by.contains_key("text");
+    let what = if by.len() == 1 {
+        words(by.keys().next().expect("one kind")).to_string()
+    } else {
+        by.iter()
+            .map(|(k, n)| format!("{} in {}", words(k), plural(*n, "file", "files")))
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    Some(format!(
+        "  object headers: {}, {at} — {what}{}",
+        plural(changes.len(), "file", "files"),
+        if unchanged {
+            " (no declaration changed)"
+        } else {
+            ""
+        }
+    ))
+}
+
 fn buckets_clause(t: &Value) -> String {
     let mut parts = vec![
         format!("routine bodies {}", thousands(u(t, "routineBody"))),
@@ -1075,6 +1136,7 @@ pub fn render(
         ));
     }
     out.push(input);
+    out.extend(object_header_line(acc));
     if cmp.source == "base" {
         out.push(format!(
             "  layers: committed {}, staged {}, unstaged {}, untracked .al {}{}",
@@ -1815,6 +1877,7 @@ fn summary_text(
         ));
     }
     out.push(input);
+    out.extend(object_header_line(acc));
     out.push(if delta.is_ok() {
         "current effects, first by rank:".into()
     } else {

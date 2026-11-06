@@ -212,6 +212,119 @@ pub struct FileAccount {
     /// Why the whole file is unmapped.
     pub unmapped: Option<Unmapped>,
     pub mismatch: Option<Mismatch>,
+    /// What its changed object-header lines changed, when it has any
+    /// (output validation §9.4, F62).
+    pub header_change: Option<HeaderChange>,
+}
+
+/// What a file's changed object-header lines changed (output validation
+/// §9.4, F62): the removed lines paired with the added ones, in order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum HeaderChangeKind {
+    /// Each pair differs only by a leading byte-order mark the old line had.
+    ByteOrderMarkRemoved,
+    /// Each pair differs only by a leading byte-order mark the new line has.
+    ByteOrderMarkAdded,
+    /// Each pair differs only by whitespace outside quoted names and values
+    /// (a byte-order mark too, or a line ending). Whitespace inside a quoted
+    /// identifier or literal is a real change.
+    Whitespace,
+    /// The declaration text changed (or the lines do not pair).
+    Text,
+}
+
+impl HeaderChangeKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HeaderChangeKind::ByteOrderMarkRemoved => "byte-order-mark-removed",
+            HeaderChangeKind::ByteOrderMarkAdded => "byte-order-mark-added",
+            HeaderChangeKind::Whitespace => "whitespace",
+            HeaderChangeKind::Text => "text",
+        }
+    }
+
+    /// Whether no declaration changed.
+    #[must_use]
+    pub fn declaration_unchanged(self) -> bool {
+        self != HeaderChangeKind::Text
+    }
+}
+
+/// A file's changed object-header lines and what they changed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeaderChange {
+    pub kind: HeaderChangeKind,
+    /// The new-side line numbers (1-based) the changed lines are at (a
+    /// removed line: the line it stood before).
+    pub lines: BTreeSet<i32>,
+    /// The removed lines' text, and the added lines' text, as the diff has
+    /// them (a byte-order mark kept).
+    pub old: Vec<String>,
+    pub new: Vec<String>,
+}
+
+/// AL text with whitespace outside quotes (`"…"` identifiers, `'…'`
+/// literals) collapsed to one space and trimmed. A doubled quote inside a
+/// quoted run toggles twice, so it stays inside.
+fn without_outer_whitespace(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut quote: Option<char> = None;
+    let mut space = false;
+    for c in s.trim().chars() {
+        match quote {
+            Some(q) => {
+                out.push(c);
+                if c == q {
+                    quote = None;
+                }
+            }
+            None if c.is_whitespace() => space = true,
+            None => {
+                if space {
+                    out.push(' ');
+                    space = false;
+                }
+                if c == '"' || c == '\'' {
+                    quote = Some(c);
+                }
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// What the removed object-header lines `old` and the added ones `new`
+/// changed, pairing them in order.
+#[must_use]
+pub fn classify_header_change(old: &[String], new: &[String]) -> HeaderChangeKind {
+    if old.len() != new.len() || old.is_empty() {
+        return HeaderChangeKind::Text;
+    }
+    let mut kinds = BTreeSet::new();
+    for (a, b) in old.iter().zip(new) {
+        let (a, b) = (a.trim_end_matches('\r'), b.trim_end_matches('\r'));
+        let (a0, b0) = (
+            a.strip_prefix('\u{feff}').unwrap_or(a),
+            b.strip_prefix('\u{feff}').unwrap_or(b),
+        );
+        let bom = (a0.len() != a.len(), b0.len() != b.len());
+        kinds.insert(if a0 == b0 && bom == (true, false) {
+            HeaderChangeKind::ByteOrderMarkRemoved
+        } else if a0 == b0 && bom == (false, true) {
+            HeaderChangeKind::ByteOrderMarkAdded
+        } else if without_outer_whitespace(a0) == without_outer_whitespace(b0) {
+            HeaderChangeKind::Whitespace
+        } else {
+            HeaderChangeKind::Text
+        });
+    }
+    match kinds.len() {
+        1 => *kinds.first().expect("one kind"),
+        _ if kinds.contains(&HeaderChangeKind::Text) => HeaderChangeKind::Text,
+        _ => HeaderChangeKind::Whitespace,
+    }
 }
 
 /// Per routine (stable id): its changed lines.
@@ -347,6 +460,7 @@ pub fn account(
             removed_routines: BTreeSet::new(),
             unmapped: None,
             mismatch: None,
+            header_change: None,
         };
         let whole = if df.kind == DiffFileKind::Deleted {
             Some(if is_al_path(&df.path) || df.old_path.is_none() {
@@ -460,6 +574,9 @@ fn account_file(
         }
     });
     let mut mismatched = Vec::new();
+    // F62: the object-header lines removed and added, with their place.
+    let (mut header_old, mut header_new): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    let mut header_lines: BTreeSet<i32> = BTreeSet::new();
     // F25: the spans a `-` run sits in or at the edges of.
     let mut removed_near: BTreeSet<usize> = BTreeSet::new();
     for h in &df.hunks {
@@ -515,6 +632,16 @@ fn account_file(
                     } else {
                         match &labels[ix] {
                             LineKind::Outside => Bucket::Outside,
+                            LineKind::Decl(DeclKind::ObjectHeader) => {
+                                header_lines.insert(n);
+                                header_new.push(
+                                    h.new_side
+                                        .iter()
+                                        .find(|(m, _)| *m == n)
+                                        .map_or_else(|| lines[ix].to_string(), |(_, t)| t.clone()),
+                                );
+                                Bucket::Decl(DeclKind::ObjectHeader)
+                            }
                             LineKind::Decl(k) => Bucket::Decl(*k),
                             LineKind::Routine { .. } => Bucket::RoutineNotInModel,
                         }
@@ -544,9 +671,18 @@ fn account_file(
                         .get(&(l.max(0) as usize))
                         .cloned()
                         .unwrap_or_default();
-                    for k in s.scan(run.iter().map(String::as_str), |_, _| {}) {
+                    for (k, text) in s
+                        .scan(run.iter().map(String::as_str), |_, _| {})
+                        .into_iter()
+                        .zip(run)
+                    {
                         let b = match k {
                             LineKind::Outside => Bucket::Outside,
+                            LineKind::Decl(DeclKind::ObjectHeader) => {
+                                header_lines.insert(l + 1);
+                                header_old.push(text.clone());
+                                Bucket::Decl(DeclKind::ObjectHeader)
+                            }
                             LineKind::Decl(k) => Bucket::Decl(k),
                             LineKind::Routine { name } => {
                                 if let Some(n) = name {
@@ -572,6 +708,14 @@ fn account_file(
         fa.mismatch = Some(Mismatch {
             line: first,
             lines: mismatched.len(),
+        });
+    }
+    if !header_old.is_empty() || !header_new.is_empty() {
+        fa.header_change = Some(HeaderChange {
+            kind: classify_header_change(&header_old, &header_new),
+            lines: header_lines,
+            old: header_old,
+            new: header_new,
         });
     }
 }

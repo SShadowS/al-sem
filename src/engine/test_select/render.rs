@@ -131,8 +131,15 @@ fn u(v: &Value, k: &str) -> usize {
     v.get(k).and_then(Value::as_u64).unwrap_or(0) as usize
 }
 
-/// The scope line (§4.6) and whether there is any test scope.
-fn scope_line(roots: &Value, parts: &[Part]) -> (String, bool) {
+/// The scope line (§4.6) and whether there is any test scope. Output
+/// validation §9.5 (F64): one clause per part — the test apps by name with
+/// the tests loaded, the skipped apps counted (the JSON's `scope.skipped`
+/// says why); roots, discovery ways and reasons are in the JSON.
+fn scope_line(
+    roots: &Value,
+    parts: &[Part],
+    surface: crate::engine::follow_up::Surface,
+) -> (String, bool) {
     let scope = &roots["scope"];
     let ws_tests = u(roots, "workspaceTests");
     let apps = scope["apps"].as_array().cloned().unwrap_or_default();
@@ -143,32 +150,35 @@ fn scope_line(roots: &Value, parts: &[Part]) -> (String, bool) {
     if apps.is_empty() {
         line.push_str(&format!("; {}", s(scope, "summary")));
     } else {
+        let mut tests = 0;
         let listed: Vec<String> = apps
             .iter()
             .map(|a| {
-                let part = parts.iter().find(|p| p.app["root"] == a["root"]);
-                let loaded = part
-                    .and_then(|p| p.result.as_ref().ok())
-                    .map(|v| {
-                        format!(
-                            "; {} loaded; production app loaded as local source, tier {}",
-                            n_of(u(v, "testsLoaded"), "test", "tests"),
-                            s(v, "productionTier")
-                        )
-                    })
-                    .unwrap_or_default();
-                let how = match s(a, "found") {
-                    "auto" => "auto-discovered",
-                    "configured" => "configured in .al-sem.json",
-                    _ => "named in the call",
-                };
-                format!("{} ({}, {how}{loaded})", s(a, "name"), s(a, "root"))
+                let part = parts
+                    .iter()
+                    .find(|p| p.app["root"] == a["root"])
+                    .and_then(|p| p.result.as_ref().ok());
+                tests += part.map_or(0, |v| u(v, "testsLoaded"));
+                // §8.1 projection: an approximate projection never reads
+                // as plain `local`.
+                let approximate =
+                    part.is_some_and(|v| s(v, "productionTier") == "localApproximate");
+                format!(
+                    "{}{}",
+                    s(a, "name"),
+                    if approximate {
+                        ": production source projection approximate"
+                    } else {
+                        ""
+                    }
+                )
             })
             .collect();
         line.push_str(&format!(
-            "; {} — {}",
+            "; {} ({}), {}",
             n_of(apps.len(), "test app", "test apps"),
-            listed.join(", ")
+            listed.join(", "),
+            n_of(tests, "test", "tests")
         ));
         if scope["complete"] == json!(false) {
             line.push_str(&format!(
@@ -183,29 +193,13 @@ fn scope_line(roots: &Value, parts: &[Part]) -> (String, bool) {
             ));
         }
     }
-    let skipped = scope["skipped"].as_array().cloned().unwrap_or_default();
-    if !skipped.is_empty() {
-        // Grouped by reason, in first-seen order.
-        let mut by: Vec<(String, Vec<String>)> = Vec::new();
-        for k in &skipped {
-            let d = s(k, "detail").to_string();
-            let name = if s(k, "name").is_empty() {
-                s(k, "root").to_string()
-            } else {
-                s(k, "name").to_string()
-            };
-            match by.iter_mut().find(|(r, _)| *r == d) {
-                Some((_, v)) => v.push(name),
-                None => by.push((d, vec![name])),
-            }
-        }
-        line.push_str("; skipped: ");
-        line.push_str(
-            &by.iter()
-                .map(|(d, v)| format!("{} ({d})", v.join(", ")))
-                .collect::<Vec<_>>()
-                .join("; "),
-        );
+    let skipped = scope["skipped"].as_array().map_or(0, Vec::len);
+    if skipped > 0 {
+        line.push_str(&format!(
+            "; {} skipped: {} lists why",
+            n_of(skipped, "app", "apps"),
+            crate::engine::follow_up::Input::FormatJson.on(surface)
+        ));
     }
     (line, ws_tests > 0 || !apps.is_empty())
 }
@@ -213,7 +207,7 @@ fn scope_line(roots: &Value, parts: &[Part]) -> (String, bool) {
 /// Render the answer (see the module doc).
 #[must_use]
 pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
-    let (scope_text, any_scope) = scope_line(roots, parts);
+    let (scope_text, any_scope) = scope_line(roots, parts, opts.surface);
     let changed: Vec<Value> = roots["roots"].as_array().cloned().unwrap_or_default();
     let diagnostics: Vec<String> = roots["diagnostics"]
         .as_array()
@@ -415,18 +409,37 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
     let complete = fallback.is_empty();
     let exit = if changed.is_empty() { 2 } else { 0 };
 
-    // The next step when the standard test libraries are missing.
-    let ms_missing: Vec<&str> = missing
+    // The next step when the test app's dependencies are missing: printed
+    // once (output validation §9.5, F64; agent-tasks §13.3 Q3's action,
+    // shortened). The selection-incomplete line points here.
+    let missing_names: Vec<&str> = missing.iter().map(|m| s(m, "name")).collect();
+    let lacking: Vec<&str> = parts
         .iter()
-        .filter(|m| s(m, "publisher").eq_ignore_ascii_case("microsoft"))
-        .map(|m| s(m, "name"))
+        .filter(|p| {
+            p.result.as_ref().is_ok_and(|v| {
+                v["missingDependencies"]
+                    .as_array()
+                    .is_some_and(|a| !a.is_empty())
+            })
+        })
+        .map(|p| s(&p.app, "root"))
         .collect();
-    let next = (!ms_missing.is_empty()).then(|| {
+    let into = match lacking.as_slice() {
+        [root] => format!(
+            "{}/.alpackages",
+            std::path::Path::new(root)
+                .file_name()
+                .map_or_else(|| (*root).to_string(), |n| n.to_string_lossy().into_owned())
+        ),
+        _ => "each test app's .alpackages".to_string(),
+    };
+    let next = (!missing_names.is_empty()).then(|| {
         format!(
-            "next: the test app depends on Microsoft's {}, not loaded here. Put their symbols in the test app's .alpackages (in VS Code: open the test app and run \"AL: Download symbols\"; or copy Microsoft_<name>_<version>.app from a BC artifact's Applications folder), then ask again: calls into them then resolve{}",
-            ms_missing.join(", "),
+            "missing test-library symbols: {} ({}) — add them to {into} (\"AL: Download symbols\" in the test app), then ask again{}",
+            n_of(missing_names.len(), "app", "apps"),
+            missing_names.join(", "),
             if unresolved > 0 {
-                " and the selection can tighten"
+                ": calls into them then resolve and the selection can tighten"
             } else {
                 ""
             }
@@ -683,10 +696,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
 
     // §5.2: the run line is the header's `answer:`.
     let mut out: Vec<String> = vec![header.human().trim_end().to_string()];
-    out.push(scope_text.replace(
-        "tier localApproximate",
-        "tier local (projection: approximate)",
-    ));
+    out.push(scope_text);
     if !any_scope {
         out.push(format!(
             "test scope: none — no [Test] procedure in the workspace app, and {}. No test was considered. This does not mean no tests are needed.",
@@ -704,13 +714,13 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             summary,
         };
     }
-    if !ok_parts.is_empty() {
-        let same = ok_parts.iter().all(|p| p["productionSourceStamp"] == stamp);
-        out.push(if same {
-            "production bytes: the same in the production and test universes".to_string()
-        } else {
-            "production bytes: DIFFER between the production and a test universe".to_string()
-        });
+    // Output validation §9.5 (F82): said only when it differs (the JSON's
+    // `productionSourceStamp` per part says it either way).
+    if ok_parts.iter().any(|p| p["productionSourceStamp"] != stamp) {
+        out.push(
+            "test universe: NOT the same production source as the main engine (a test universe was built from other bytes; ask again)"
+                .to_string(),
+        );
     }
     let shown_changed: Vec<String> = changed_out
         .iter()
@@ -837,7 +847,17 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             "selection incomplete — run the whole suite as well (requiredFallback): {}",
             fallback
                 .iter()
-                .map(|f| s(f, "detail").to_string())
+                .map(|f| {
+                    // F64: the missing symbols are named once, below.
+                    if s(f, "reason") == "unresolved-test-calls" && next.is_some() {
+                        format!(
+                            "test code makes {} that resolve nowhere (missing test-library symbols, below); a library may call back into this code",
+                            n_of(u(f, "count"), "call", "calls")
+                        )
+                    } else {
+                        s(f, "detail").to_string()
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join("; ")
         ));
