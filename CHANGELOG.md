@@ -44,6 +44,10 @@ Output validation round 1 (spec `docs/superpowers/specs/2026-11-06-output-valida
 - **The MCP default inline cap is 48 KiB for now** (owner decision 2026-11-06; was 40 KiB):
   the one display grew RunReportID's CDO explain card to 45,058 bytes (IssueReminder
   39,169). Temporary: V5's path dedup (spec §7.5/§7.7) brings it back to 40 KiB.
+- **The CDO digest size budget is 1,380,000 / 820,000 bytes** (whole / core; owner's
+  ratchet, accepted 2026-11-06 as the new budget; was 1,310,000 / 760,000): digest 3.1.0's
+  routine rows carry `signature`, `member`, `selector` and `handle`. IssueReminder measured
+  1,347,484 / 798,800.
 - **Member selectors** (§2.1): every tool reads `Object."Field"::Trigger`,
   `Object.Field::Trigger` and `Object.action(Name)::OnAction` (a caption after the name is
   ignored), after the forms that resolved before, so no selector resolves differently. A
@@ -378,8 +382,8 @@ call-graph export spec, flagged `unraisedPublisher`, not a choice for cost; `pro
   `derived_only_matches_raw_fold_on_cdo`'s pinned recursive-member count 784 → 1,027 (the
   raw-fold oracle agrees; recursive SCCs 70 → 106: subscribers that write the table they
   subscribe to re-raise its events); the digest size budget (owner's ratchet T-W2-15) raised 1,250,000 / 720,000 →
-  1,310,000 / 760,000 bytes (IssueReminder measured 1,293,230 / 744,546), which needs the
-  owner's confirmation.
+  1,310,000 / 760,000 bytes (IssueReminder measured 1,293,230 / 744,546), confirmed by the
+  owner on 2026-11-06.
 
 ### Fixed (the macOS build compiles again)
 

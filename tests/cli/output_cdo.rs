@@ -539,15 +539,14 @@ fn cdo_every_spilled_answer_carries_a_small_summary() {
 /// Raised 2026-11-06 (F1, record operations raise their table's platform
 /// events) from 1,250,000 / 720,000: IssueReminder's cone now holds the
 /// subscribers of the table events it raises, its digest measured 1,293,230
-/// bytes whole and 744,546 core (+3.5%). The owner's ratchet: this raise
-/// needs his confirmation.
+/// bytes whole and 744,546 core (+3.5%). The owner's ratchet: confirmed by
+/// the owner on 2026-11-06.
 ///
 /// Raised again 2026-11-06 (output validation V3, digest 3.1.0: routine rows
 /// gain `signature`, `member`, `selector`, `handle`, and every display is the
 /// one routine display) from 1,310,000 / 760,000: IssueReminder measured
 /// 1,347,484 bytes whole and 798,800 core (+4.2% / +7.3%). The owner's
-/// ratchet: this raise needs his confirmation too (V5's dedup is where the
-/// size comes back).
+/// ratchet: accepted by the owner on 2026-11-06 as the new budget.
 #[test]
 fn cdo_digest_json_fits_its_size_budgets() {
     let Some(a) = cdo_answers() else { return };
