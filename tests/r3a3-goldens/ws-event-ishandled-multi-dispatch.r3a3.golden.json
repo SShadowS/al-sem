@@ -4,6 +4,14 @@
 			"routineId": "99999999-9999-9999-9999-999999999999:Codeunit:50000#0efd9bc38e09d5da5d41175fb6082001fddad16bc62ee82eddefdfd83bc5ef48",
 			"capabilityFactsDirect": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "99999999-9999-9999-9999-999999999999:Codeunit:50000#0efd9bc38e09d5da5d41175fb6082001fddad16bc62ee82eddefdfd83bc5ef48/op0"
+				},
+				{
 					"op": "insert",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -60,6 +68,14 @@
 		{
 			"routineId": "99999999-9999-9999-9999-999999999999:Codeunit:50000#495ffedc239a0a859c0031d878edb93322347c10d3de040b55e4c6958a61da5b",
 			"capabilityFactsDirect": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "99999999-9999-9999-9999-999999999999:Codeunit:50000#495ffedc239a0a859c0031d878edb93322347c10d3de040b55e4c6958a61da5b/op0"
+				},
 				{
 					"op": "modify",
 					"resourceKind": "table",

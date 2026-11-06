@@ -2972,10 +2972,14 @@ fn derive_pd_arena(
             "pd arena: snapshot edges {prev:?} and {ix} share the key {key:?}"
         );
     }
-    // (owner stable id, operation id) → the owner's direct fact.
+    // (owner stable id, operation id) → the owner's direct table fact (the
+    // producer row, `view::is_producer_row`: not another kind's fact the same
+    // operation witnesses, such as its `error-implicit`).
     let mut direct_fact_ix: HashMap<(&str, &str), usize> = HashMap::new();
     for (ix, f) in capability_facts.iter().enumerate() {
-        if let ("direct", Some(op)) = (f.provenance(), f.witness_operation_id()) {
+        if let Some(op) = f.witness_operation_id()
+            && view::is_producer_row(f, op)
+        {
             direct_fact_ix.entry((f.subject(), op)).or_insert(ix);
         }
     }

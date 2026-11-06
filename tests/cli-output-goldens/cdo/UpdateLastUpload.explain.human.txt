@@ -1,6 +1,6 @@
 Codeunit CDO Telemetry::UpdateLastUpload  ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:45
   summary — writes: no observed write that may persist; caller-dependent: 1 table
-    transaction, UI and errors: commits: none; UI and errors: none observed
+    transaction, UI and errors: commits: none; errors at 1 place
     other effects: events: 0 (0 raised in workspace code)
     callers and tests: callers: 1; tests: none in the workspace; 1 test app discovered (not analyzed here; alsem tests)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
@@ -15,6 +15,7 @@ Codeunit CDO Telemetry::UpdateLastUpload  ws:src/Platform/Telemetry/CDOTelemetry
     CDO Setup: Modify — depends on the caller's record argument at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:48
   events: 0 raised in workspace code; 0 more only beyond entry points
   extension points: none (the routine publishes no event itself)
+  errors at 1 place: ERROR_IMPLICIT at ws:src/Platform/Telemetry/CDOTelemetry.Codeunit.al:48 (unconditional-on-success)
   tests: no [Test] procedure in the workspace app; 1 test app discovered (Continia Document Output 365 - Test); not analyzed in this call — alsem tests (MCP: alsem_tests) selects them
   next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

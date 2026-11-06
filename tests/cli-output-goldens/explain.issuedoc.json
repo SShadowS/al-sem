@@ -108,6 +108,18 @@
             "via": []
           },
           {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Doc.Modify",
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 14,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "type": "ERROR_IMPLICIT",
+            "via": []
+          },
+          {
             "conditionality": "unknown",
             "crossing": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
             "pathOutcome": "found",
@@ -133,12 +145,59 @@
                 ],
                 "terminal": {
                   "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
-                  "line": 41,
-                  "operationId": "9c6111a83a31bbff/4e7d6ef0e2bb3e3936c2d85040e9cbc4494c8f3eda89b147641f3655b38b5f59/op13"
+                  "line": 28,
+                  "operationId": "9c6111a83a31bbff/4e7d6ef0e2bb3e3936c2d85040e9cbc4494c8f3eda89b147641f3655b38b5f59/op0"
                 }
               }
             ],
             "type": "ERROR_IMPLICIT"
+          },
+          {
+            "conditionality": "unknown",
+            "crossing": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs1",
+            "pathOutcome": "found",
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "display": "Codeunit Base Calc::OnRun",
+                    "edge": "object-run-resolved",
+                    "edgeId": "51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs1",
+                    "file": "ws:src/OutIssueDocument.Codeunit.al",
+                    "line": 16,
+                    "to": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70101#9d5617297360fc8d21d4f3270b09dbb5db7318b4cfc666d6b35ae7660f3d48bc"
+                  },
+                  {
+                    "display": "Codeunit Base Calc::UpdatePrice",
+                    "edge": "direct-call",
+                    "edgeId": "9c6111a83a31bbff/de85cbc4bb80b919b9c4b84bc405488a6f973c1a478b1b76ce0a79d4b1da41cf/cs0",
+                    "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
+                    "line": 59,
+                    "to": "d0d00001-0000-4000-8000-0000000000b1:Codeunit:70101#594160f9d6d30e76f443d25bf35b3e9630c5f2607cdf99bbffbb3550b4740eee"
+                  }
+                ],
+                "terminal": {
+                  "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
+                  "line": 68,
+                  "operationId": "9c6111a83a31bbff/90f20db82887b2706a496b9771d490d3f493634c407e39c74800b2ee46197210/op1"
+                }
+              }
+            ],
+            "type": "ERROR_IMPLICIT"
+          },
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Log.Insert",
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 61,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "type": "ERROR_IMPLICIT",
+            "via": [
+              "WriteLog"
+            ]
           }
         ],
         "events": [
@@ -560,7 +619,7 @@
         },
         "kinds": {
           "backgroundTasks": 1,
-          "errors": 2,
+          "errors": 5,
           "http": 1
         },
         "literalDeadTables": 0,

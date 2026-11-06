@@ -329,10 +329,11 @@ pub struct ModelRecordOperation {
     /// walk, an exact structural proof). Forwarded for d1 to suppress the terminator
     /// `Next()`. Never serialized (the L3 projection is field-allowlisted).
     pub in_until_condition: bool,
-    /// G20: the op is a bare call statement, so a lookup's Boolean is discarded
+    /// G20: the op is a bare call statement, so its "ok" Boolean is discarded
     /// (`PRecordOperation.in_statement_position`, forwarded): an unguarded
-    /// `Get`/`FindFirst`/`FindLast`/`FindSet` raises an error when no record
-    /// matches. Never serialized.
+    /// lookup (`Get`, `FindFirst`, …) or write (`Insert`, `Modify`, …) raises
+    /// an error when it fails (`ui_events_error::implicit_error_record_op`).
+    /// Never serialized.
     pub in_statement_position: bool,
     /// Detector-audit d29 FP-1: literal `RunTrigger` arg of a mutating op
     /// (`Modify`/`Delete`/`DeleteAll`/`ModifyAll`). `Some(false)` ⇒ trigger
@@ -550,8 +551,11 @@ pub struct ModelRoutine {
     /// Agent-tasks D1: bare identifiers read or written through the routine's
     /// implicit record (`Amount := 0` in a table trigger), not matched against
     /// the table's fields yet (`ir_walk::IrSpine::implicit_field_accesses`).
-    /// Read by `alsem query touches --field` only; kept apart from
-    /// `field_accesses` so no detector input moves. Empty for a symbol-only row.
+    /// Its consumers read it through [`ModelRoutine::field_access_sites`]
+    /// (`alsem query touches --field` and the field writers, so `explain
+    /// --field` and d65's writer index; a size probe in `field_touches` counts
+    /// it directly); kept apart from `field_accesses` so the detectors that
+    /// read that list do not move. Empty for a symbol-only row.
     pub implicit_field_accesses: Vec<crate::program::body::features::PFieldAccess>,
     /// The routine's lexical scope (params → locals → non-shadowed object globals).
     /// Iterate with `.iter()`; see [`RoutineVariables`] for why the globals are shared
@@ -718,6 +722,25 @@ pub struct CardAction {
 }
 
 impl ModelRoutine {
+    /// Every field access of the routine's body: the qualified ones
+    /// (`R.F`, `field_accesses`, tagged `"access"`) first, then the bare ones
+    /// through the implicit record (`F := …` in a table, table-extension or
+    /// page trigger, or in a `with` body; `implicit_field_accesses`, tagged
+    /// `"implicit-access"`), each list in body order. The ONE definition of
+    /// "the routine's field accesses" that `alsem query touches --field` and
+    /// the field writers (`l5::field_writers`: `explain --field`, d65's writer
+    /// index) both read, so the two never disagree on a site. A bare name is
+    /// not checked against a table's fields here: a reader matches it by name.
+    pub fn field_access_sites(
+        &self,
+    ) -> impl Iterator<Item = (&crate::program::body::features::PFieldAccess, &'static str)> {
+        self.field_accesses.iter().map(|fa| (fa, "access")).chain(
+            self.implicit_field_accesses
+                .iter()
+                .map(|fa| (fa, "implicit-access")),
+        )
+    }
+
     /// The routine's rules. Reading them from a model built without
     /// `ViewNeeds::rules` is a bug and panics, in every build
     /// (`get_ordering_facts`'s pattern), so "not built" never reads as "none".

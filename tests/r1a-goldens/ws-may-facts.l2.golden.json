@@ -1203,6 +1203,14 @@
             },
             "opSubtype": "Modify"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "678b099f036b6ca7/cceedab4376d0129db7ef9bd1b8ac93b5911003c387412486d48e7310c6b4438/op0"
         }
       ],
       "capabilityStatus": "complete",

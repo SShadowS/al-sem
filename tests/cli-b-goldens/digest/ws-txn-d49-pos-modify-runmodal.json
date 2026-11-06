@@ -85,6 +85,28 @@
             "detail": {},
             "evidence": {
               "column": 8,
+              "excerpt": "Rec.Modify",
+              "file": "ws:src/Sender.Codeunit.al",
+              "line": 14,
+              "sourceKind": "source"
+            },
+            "factId": "b432e1ebe2c7d941",
+            "guarantees": [],
+            "provenance": "direct",
+            "scopedGuarantees": [],
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT",
+            "viaPaths": [
+              []
+            ],
+            "viaPathsTruncated": false
+          },
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
               "excerpt": "Page.RunModal",
               "file": "ws:src/Sender.Codeunit.al",
               "line": 15,
@@ -156,7 +178,7 @@
     "summary": {
       "rootsRequested": 1,
       "rootsResolved": 1,
-      "totalEffects": 3,
+      "totalEffects": 4,
       "totalUnresolved": 1
     },
     "workspaceFingerprint": "c6699cf6323bea4482f8eb641cd8f8ad5f5688c22d669234161e0cb01359a0da"

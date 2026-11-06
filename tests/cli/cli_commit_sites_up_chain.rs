@@ -396,11 +396,14 @@ const KIND_DEP_SOURCE: &str = r#"table 50500 "Kind Log"
 }
 codeunit 50501 "Kind Writer"
 {
+    // `if … then;`: the Insert's Boolean is consumed, so it raises no
+    // implicit error (G20), whose resource-less row at each crossing would
+    // leave no crossing without a row.
     procedure Write()
     var
         Log: Record "Kind Log";
     begin
-        Log.Insert();
+        if Log.Insert() then;
     end;
 }
 "#;

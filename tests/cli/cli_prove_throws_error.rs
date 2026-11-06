@@ -236,6 +236,179 @@ fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
     })
 }
 
+/// The record writes and `Find` in statement position, as `Get` above: AL's
+/// `[Ok :=] Rec.Modify()` raises an error when it fails and its Boolean is
+/// not consumed. Continia DO's c01 edit added a bare `Modify();` to a table
+/// field's OnValidate (`CDO E-Mail Job`), and digest said "UI and errors: none
+/// observed". The implicit-`Rec` shape (`TableTrigger`) is that edit's.
+const WRITES_SOURCE: &str = r#"table 50190 "G20W T"
+{
+    fields
+    {
+        field(1; Code; Code[20]) { }
+        field(2; Name; Text[50])
+        {
+            trigger OnValidate()
+            begin
+                Modify();
+            end;
+        }
+    }
+    keys { key(PK; Code) { } }
+}
+codeunit 50191 "G20W Writes"
+{
+    procedure UnguardedInsert()
+    var
+        T: Record "G20W T";
+    begin
+        T.Insert();
+    end;
+
+    procedure UnguardedModify()
+    var
+        T: Record "G20W T";
+    begin
+        T.Modify(true);
+    end;
+
+    procedure UnguardedDelete()
+    var
+        T: Record "G20W T";
+    begin
+        T.Delete();
+    end;
+
+    procedure UnguardedRename()
+    var
+        T: Record "G20W T";
+    begin
+        T.Rename('B');
+    end;
+
+    procedure UnguardedFind()
+    var
+        T: Record "G20W T";
+    begin
+        T.Find('-');
+    end;
+
+    procedure GuardedInsert(): Boolean
+    var
+        T: Record "G20W T";
+    begin
+        exit(T.Insert());
+    end;
+
+    procedure GuardedModify()
+    var
+        T: Record "G20W T";
+    begin
+        if not T.Modify() then
+            exit;
+    end;
+
+    procedure AssignedDelete()
+    var
+        T: Record "G20W T";
+        Ok: Boolean;
+    begin
+        Ok := T.Delete();
+    end;
+
+    procedure StatementSetOps()
+    var
+        T: Record "G20W T";
+    begin
+        T.DeleteAll();
+        T.ModifyAll(Name, 'X');
+        T.Init();
+    end;
+}
+"#;
+
+#[test]
+fn throws_error_sees_statement_record_writes() {
+    let t = tempfile::tempdir().unwrap();
+    let ws = t.path().join("ws");
+    std::fs::create_dir_all(ws.join("src")).unwrap();
+    std::fs::write(
+        ws.join("app.json"),
+        r#"{"id":"20202020-0000-4000-8000-000000000021","name":"G20W","publisher":"t","version":"1.0.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(ws.join("src/Writes.al"), WRITES_SOURCE).unwrap();
+
+    let inv = alsem(
+        t.path(),
+        &["fingerprint", "ws", "--inventory-only", "--format", "json"],
+    );
+    let id_of = |name: &str| -> String {
+        inv["payload"]["routineInventory"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["routineName"] == name)
+            .unwrap_or_else(|| panic!("precondition: routine {name} is in the inventory"))
+            ["stableRoutineId"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let prove = |name: &str| -> serde_json::Value {
+        alsem(
+            t.path(),
+            &[
+                "prove",
+                "ws",
+                &id_of(name),
+                "throws-error",
+                "--deterministic",
+            ],
+        )["payload"]["result"]
+            .clone()
+    };
+
+    for (routine, excerpt) in [
+        // A bare op on the implicit record is named for `Rec`.
+        ("OnValidate", "Rec.Modify"),
+        ("UnguardedInsert", "T.Insert"),
+        ("UnguardedModify", "T.Modify"),
+        ("UnguardedDelete", "T.Delete"),
+        ("UnguardedRename", "T.Rename"),
+        ("UnguardedFind", "T.Find"),
+    ] {
+        let r = prove(routine);
+        assert_eq!(r["answer"], "yes", "{routine}: {r}");
+        let evidence: Vec<(&str, &str)> = r["evidence"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{routine}: no evidence: {r}"))
+            .iter()
+            .map(|e| {
+                (
+                    e["type"].as_str().unwrap_or(""),
+                    e["evidence"]["excerpt"].as_str().unwrap_or(""),
+                )
+            })
+            .collect();
+        assert!(
+            evidence
+                .iter()
+                .any(|(t, x)| *t == "ERROR_IMPLICIT" && x.starts_with(excerpt)),
+            "{routine}: the evidence must be an ERROR_IMPLICIT at {excerpt:?}: {evidence:?}"
+        );
+    }
+    for routine in [
+        "GuardedInsert",
+        "GuardedModify",
+        "AssignedDelete",
+        "StatementSetOps",
+    ] {
+        let r = prove(routine);
+        assert_eq!(r["answer"], "no", "{routine} raises no implicit error: {r}");
+    }
+}
+
 #[test]
 fn throws_error_sees_implicit_runtime_errors() {
     let t = tempfile::tempdir().unwrap();

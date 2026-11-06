@@ -81,7 +81,8 @@ fn map_op(op: &str) -> Option<&'static str> {
         "ui-file-dialog" => Some("UI_FILE_DIALOG"),
         "ui-progress" => Some("UI_PROGRESS"),
         "error-throw" => Some("ERROR_THROW"),
-        // G20: a record lookup whose Boolean is discarded, TestField, FieldError.
+        // G20: a record lookup or write whose Boolean is discarded, TestField,
+        // FieldError.
         // Not ERROR_THROW: the ordering engine grades that as an explicit Error.
         "error-implicit" => Some("ERROR_IMPLICIT"),
         _ => None,

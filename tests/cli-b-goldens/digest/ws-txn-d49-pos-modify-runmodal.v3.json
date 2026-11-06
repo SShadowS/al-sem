@@ -148,6 +148,11 @@
           }
         ],
         "entryDiagnosticCounts": {},
+        "moreSites": {
+          "ERROR_IMPLICIT": {
+            "ws:src/Sender.Codeunit.al": "14 unconditional-on-success"
+          }
+        },
         "routine": {
           "anchor": {
             "column": 4,
@@ -183,7 +188,7 @@
             "workspace": 1
           },
           "kinds": {
-            "errors": 1,
+            "errors": 2,
             "ui": 1
           },
           "literalDeadTables": 0,
@@ -238,7 +243,7 @@
     "summary": {
       "rootsRequested": 1,
       "rootsResolved": 1,
-      "totalEffects": 3,
+      "totalEffects": 4,
       "totalUnresolved": 1
     },
     "workspaceFingerprint": "c6699cf6323bea4482f8eb641cd8f8ad5f5688c22d669234161e0cb01359a0da"

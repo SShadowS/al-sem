@@ -1,6 +1,6 @@
 --- Codeunit D8PostingChain::PostSalesDoc ---
   summary — writes: may write 3 tables (3 owned by this app, 0 by dependencies); caller-dependent: none
-    transaction, UI and errors: commits: may (1 site); errors at 1 place
+    transaction, UI and errors: commits: may (1 site); errors at 4 places
     other effects: events: 1 (1 raised in workspace code)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
@@ -21,11 +21,11 @@
       ModifyAll at ws:src/posting.al:12
       path: PostSalesDoc (in the routine itself)
   events: 1 raised in workspace code, by publisher: Codeunit D8PostingChain 1; 0 more only beyond entry points
-  errors at 1 place: ERROR_IMPLICIT at ws:src/posting.al:8 (unconditional-on-success)
+  errors at 4 places: ERROR_IMPLICIT at ws:src/posting.al:8 (unconditional-on-success); ERROR_IMPLICIT at ws:src/posting.al:10 (unconditional-on-success); ERROR_IMPLICIT at ws:src/posting.al:15 (unconditional-on-success); ERROR_IMPLICIT at ws:src/subscriber.al:10 (unknown)
 
 --- Codeunit D8PostingChain::OnAfterPostSalesDoc ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
-    transaction, UI and errors: commits: may (1 site); UI and errors: none observed
+    transaction, UI and errors: commits: may (1 site); errors at 1 place
     other effects: events: 1 (1 raised in workspace code)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
@@ -40,11 +40,12 @@
       Insert at ws:src/subscriber.al:10
       path: OnAfterPostSalesDoc → [event] D8BadSubscriber::HandlePosted
   events: 1 raised in workspace code, by publisher: Codeunit D8PostingChain 1; 0 more only beyond entry points
+  errors at 1 place: ERROR_IMPLICIT at ws:src/subscriber.al:10 (unknown)
   diagnostics: evidence-unavailable 1 (--detail lists each with its operation)
 
 --- Codeunit D8BadSubscriber::HandlePosted ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
-    transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
+    transaction, UI and errors: commits: yes (1 site); errors at 1 place
     other effects: events: 0 (0 raised in workspace code)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
@@ -58,3 +59,4 @@
       Insert at ws:src/subscriber.al:10
       path: HandlePosted (in the routine itself)
   events: 0 raised in workspace code; 0 more only beyond entry points
+  errors at 1 place: ERROR_IMPLICIT at ws:src/subscriber.al:10 (unconditional-on-success)

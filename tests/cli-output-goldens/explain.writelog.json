@@ -15,7 +15,20 @@
         "commitSites": [],
         "commits": "none",
         "crossings": [],
-        "errors": [],
+        "errors": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Log.Insert",
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 61,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "type": "ERROR_IMPLICIT",
+            "via": []
+          }
+        ],
         "events": [],
         "file": [],
         "http": [],
@@ -210,7 +223,9 @@
           "notPlaced": 0,
           "workspace": 0
         },
-        "kinds": {},
+        "kinds": {
+          "errors": 1
+        },
         "literalDeadTables": 0,
         "mayWriteTables": {
           "byDependencies": 0,

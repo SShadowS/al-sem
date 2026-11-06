@@ -17,3 +17,7 @@ Re-mints:
   `endLine` is one higher (1-based), `schemaVersion` 4 became 5 and the header gained
   `"lineBase": 1`; nothing else changed. Checked mechanically on the json and on the decoded cbor
   (a value-by-value walk of old against new allowing exactly those three differences).
+- 2026-11-06 (G20 widened to statement writes): full-snapshot.dd.{cross-app,single-app}.{json,cbor}.
+  A statement `Insert` / `Modify` / `Delete` / `Rename` / `Find` now also gives an
+  `error-implicit` fact. The json diff is additions only: `error-implicit` facts, 3 in cross-app
+  (2 direct, 1 inherited) and 2 direct in single-app, and nothing else; r5b.cross-app did not move.

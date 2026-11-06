@@ -1,7 +1,7 @@
 dependencies: Out Base (embedded)
 --- Codeunit Out Log Mgt::WriteLog ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
-    transaction, UI and errors: commits: none; UI and errors: none observed
+    transaction, UI and errors: commits: none; errors at 1 place
     other effects: events: 0 (0 raised in workspace code)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
@@ -15,3 +15,4 @@ dependencies: Out Base (embedded)
       path: WriteLog (in the routine itself)
   temporary records (not writes): 1 table in workspace code (1 effect row): Out Log; 0 tables only beyond entry points; only temporary: 0 tables
   events: 0 raised in workspace code; 0 more only beyond entry points
+  errors at 1 place: ERROR_IMPLICIT at ws:src/OutIssueDocument.Codeunit.al:61 (unconditional-on-success)

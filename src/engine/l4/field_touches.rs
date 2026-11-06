@@ -421,12 +421,9 @@ pub fn field_touches<'m>(
             });
         };
 
-        // Field accesses, explicit and through the implicit record.
-        for (fa, source) in r.field_accesses.iter().map(|fa| (fa, "access")).chain(
-            r.implicit_field_accesses
-                .iter()
-                .map(|fa| (fa, "implicit-access")),
-        ) {
+        // Field accesses, explicit and through the implicit record (the one
+        // definition the field writers read too).
+        for (fa, source) in r.field_access_sites() {
             if !names_f(&fa.field_name) {
                 continue;
             }

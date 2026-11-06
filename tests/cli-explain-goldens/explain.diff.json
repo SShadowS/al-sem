@@ -30,6 +30,18 @@
           },
           {
             "anchor": {
+              "column": 8,
+              "excerpt": "Order.Modify",
+              "file": "ws:src/post.al",
+              "line": 18,
+              "sourceKind": "source"
+            },
+            "conditionality": "guarded-by-IsHandled",
+            "type": "ERROR_IMPLICIT",
+            "via": []
+          },
+          {
+            "anchor": {
               "column": 12,
               "excerpt": "error-call",
               "file": "ws:src/post.al",
@@ -294,7 +306,7 @@
           "workspace": 0
         },
         "kinds": {
-          "errors": 2,
+          "errors": 3,
           "ui": 1
         },
         "literalDeadTables": 0,
@@ -367,7 +379,20 @@
         ],
         "commits": "yes",
         "crossings": [],
-        "errors": [],
+        "errors": [
+          {
+            "anchor": {
+              "column": 8,
+              "excerpt": "Order.Modify",
+              "file": "ws:src/post.al",
+              "line": 26,
+              "sourceKind": "source"
+            },
+            "conditionality": "unconditional-on-success",
+            "type": "ERROR_IMPLICIT",
+            "via": []
+          }
+        ],
         "events": [],
         "file": [],
         "http": [],
@@ -466,7 +491,9 @@
           "notPlaced": 0,
           "workspace": 0
         },
-        "kinds": {},
+        "kinds": {
+          "errors": 1
+        },
         "literalDeadTables": 0,
         "mayWriteTables": {
           "byDependencies": 0,

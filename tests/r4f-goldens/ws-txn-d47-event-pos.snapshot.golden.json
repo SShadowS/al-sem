@@ -1,6 +1,6 @@
 {
   "fixtureName": "ws-txn-d47-event-pos",
-  "capabilityFactCount": 11,
+  "capabilityFactCount": 12,
   "typedEdgeCount": 2,
   "operationIndexCount": 2,
   "callsiteIndexCount": 2,
@@ -38,6 +38,15 @@
         "provenance": "direct",
         "via": "self",
         "witnessOperationId": "2584d981b3f23bbc/4e3e888e63bce330dfce9c26ca1d6036c6e285add05714dc15caacda3593ecb8/op0"
+      },
+      {
+        "subject": "11111111-0000-0000-0000-0000000d4720:Codeunit:50000#1b14d37dcf2ab2bfe14c21ea39032c69934029e553023cd2e8ef7fc364eeaf5f",
+        "op": "error-implicit",
+        "resourceKind": "error",
+        "confidence": "static",
+        "provenance": "direct",
+        "via": "self",
+        "witnessOperationId": "2584d981b3f23bbc/4e3e888e63bce330dfce9c26ca1d6036c6e285add05714dc15caacda3593ecb8/op1"
       },
       {
         "subject": "11111111-0000-0000-0000-0000000d4720:Codeunit:50000#1b14d37dcf2ab2bfe14c21ea39032c69934029e553023cd2e8ef7fc364eeaf5f",

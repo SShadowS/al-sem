@@ -5,6 +5,15 @@
 			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "call",
+					"witnessOperationId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:50990#ded7dc9f07a66f435835b0448cbc15279a94ca7c25d5c4eeff78e6235f0d1b69/op0",
+					"witnessCallsiteId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:50990#289070bbfbe78fa3c2fbf9f7ee780124680b5324738fb1a4f8c5252d68941163/cs0"
+				},
+				{
 					"op": "modify",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -36,6 +45,15 @@
 			"routineId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:50990#b2ff8c83d256c3b73c095708287121396313d073e4f13c8b2159d9e287ae4f71",
 			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "call",
+					"witnessOperationId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:50990#ded7dc9f07a66f435835b0448cbc15279a94ca7c25d5c4eeff78e6235f0d1b69/op0",
+					"witnessCallsiteId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:50990#b2ff8c83d256c3b73c095708287121396313d073e4f13c8b2159d9e287ae4f71/cs0"
+				},
 				{
 					"op": "modify",
 					"resourceKind": "table",
@@ -69,6 +87,15 @@
 			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "call",
+					"witnessOperationId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:50990#ded7dc9f07a66f435835b0448cbc15279a94ca7c25d5c4eeff78e6235f0d1b69/op0",
+					"witnessCallsiteId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:50990#cfe4fe4fbe1cfec704e6fcbce5d44d1b3abb2b3674a2558bbd56ec7a69427eab/cs0"
+				},
+				{
 					"op": "modify",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -99,6 +126,14 @@
 		{
 			"routineId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:50990#ded7dc9f07a66f435835b0448cbc15279a94ca7c25d5c4eeff78e6235f0d1b69",
 			"capabilityFactsDirect": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "ee2eee2e-0000-0000-0000-00000000e2e2:Codeunit:50990#ded7dc9f07a66f435835b0448cbc15279a94ca7c25d5c4eeff78e6235f0d1b69/op0"
+				},
 				{
 					"op": "modify",
 					"resourceKind": "table",

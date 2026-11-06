@@ -357,6 +357,14 @@
             },
             "opSubtype": "Modify"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "182d5de479438f31/c2693b80cf557e73fc9a4b630e5e170b00df8020ad6c339afde56d1b797a0805/op0"
         }
       ],
       "capabilityStatus": "complete",
@@ -620,6 +628,14 @@
             },
             "opSubtype": "Insert"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "182d5de479438f31/7b72dc66b4072eae4f6566341a7e0a3e02abae097f9fe8010474b2cc6152d319/op2"
         }
       ],
       "capabilityStatus": "complete",

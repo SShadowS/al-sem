@@ -1,6 +1,6 @@
 {
   "fixtureName": "ws-txn-d47-crosshop-iobeforecommit",
-  "capabilityFactCount": 6,
+  "capabilityFactCount": 7,
   "typedEdgeCount": 1,
   "operationIndexCount": 3,
   "callsiteIndexCount": 2,
@@ -45,6 +45,15 @@
         "provenance": "direct",
         "via": "self",
         "witnessOperationId": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op0"
+      },
+      {
+        "subject": "11111111-0000-0000-0000-0000000d4707:Codeunit:50000#302dc2332e7a9ae6fb0474a4d66e256730ee465bd1df06a0f8f46b10716cf434",
+        "op": "error-implicit",
+        "resourceKind": "error",
+        "confidence": "static",
+        "provenance": "direct",
+        "via": "self",
+        "witnessOperationId": "37e6b06c9ac529a4/567706b3c2202a86627f7e32abb7ec9fb5349003f9c28508dcd078c1a1413c2e/op1"
       },
       {
         "subject": "11111111-0000-0000-0000-0000000d4707:Codeunit:50000#302dc2332e7a9ae6fb0474a4d66e256730ee465bd1df06a0f8f46b10716cf434",

@@ -12,6 +12,14 @@
 					"witnessOperationId": "22222222-0000-0000-0000-000000pr0001:Codeunit:50200#afbd4d21cd130a0310f3053cdb1624182dade39345a728046cb409622a883fcf/op0"
 				},
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "22222222-0000-0000-0000-000000pr0001:Codeunit:50200#afbd4d21cd130a0310f3053cdb1624182dade39345a728046cb409622a883fcf/op1"
+				},
+				{
 					"op": "modify",
 					"resourceKind": "table",
 					"confidence": "static",

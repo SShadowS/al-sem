@@ -106,7 +106,11 @@ fn b4_rule_b_is_off_on_the_cut() {
     let view = digest_view(tmp.path(), &["CallWrite"]);
     assert_eq!(
         shape(effects_of(&view, "CallWrite")),
-        vec!["DB_MODIFY Codeunit Dep Rec Lib::Write Customer"],
+        // `C.Modify();` is a statement: its implicit error (G20) groups too.
+        vec![
+            "DB_MODIFY Codeunit Dep Rec Lib::Write Customer",
+            "ERROR_IMPLICIT Codeunit Dep Rec Lib::Write -"
+        ],
         "the tree groups"
     );
     let model = view.model();
@@ -117,7 +121,7 @@ fn b4_rule_b_is_off_on_the_cut() {
     let effects = &entries[0].effects;
     assert_eq!(
         shape(effects),
-        vec!["DB_MODIFY - Customer"],
+        vec!["DB_MODIFY - Customer", "ERROR_IMPLICIT - -"],
         "the cut keeps its per-resource effect: {effects:?}"
     );
     assert!(effects.iter().all(|e| !e.boundary_group));
@@ -183,7 +187,11 @@ fn a_tree_read_is_a_pure_read() {
     );
     let off = read(BoundaryMode::Off);
     let effects = &off[0].entries[0].effects;
-    assert_eq!(shape(effects), vec!["DB_MODIFY - Customer"], "rule B off");
+    assert_eq!(
+        shape(effects),
+        vec!["DB_MODIFY - Customer", "ERROR_IMPLICIT - -"],
+        "rule B off"
+    );
     assert!(effects.iter().all(|e| !e.boundary_group));
     assert!(tree.boundary.is_some(), "the tree keeps its rule");
     assert_eq!(
@@ -229,9 +237,11 @@ fn b7_a_boundary_commit_carries_no_must_label() {
     assert_eq!(
         shape(effects),
         // A COMMIT group states no resources (MCP output plan 1d).
+        // The statement `L.Insert();` also raises an implicit error (G20).
         vec![
             "COMMIT Codeunit Dep Rec Lib::MaybeCommit -",
-            "DB_INSERT - Ws Log"
+            "DB_INSERT - Ws Log",
+            "ERROR_IMPLICIT - -"
         ],
         "precondition: the own write and the commit group: {effects:?}"
     );
@@ -304,8 +314,11 @@ fn b8_proofs_are_cut_at_the_boundary_and_keep_their_class() {
     write_fixture_rule_b(tmp.path());
     let view = digest_view(tmp.path(), &["FillAndPost"]);
     let effects = effects_of(&view, "FillAndPost");
+    // The insert groups (each statement insert's `ERROR_IMPLICIT`, G20, is a
+    // group of its own at the same crossing).
     let groups: Vec<(&str, bool, usize)> = effects
         .iter()
+        .filter(|e| e.effect_type == "DB_INSERT")
         .map(|e| {
             (
                 detail(e, "boundary").unwrap_or("-"),

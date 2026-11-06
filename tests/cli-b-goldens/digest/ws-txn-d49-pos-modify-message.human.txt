@@ -1,6 +1,6 @@
 --- Codeunit D49 Sender::ModifyThenMessage ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
-    transaction, UI and errors: commits: none; UI at 1 place; errors at 1 place
+    transaction, UI and errors: commits: none; UI at 1 place; errors at 2 places
     other effects: events: 0 (0 raised in workspace code)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
@@ -14,5 +14,5 @@
       path: ModifyThenMessage (in the routine itself)
   events: 0 raised in workspace code; 0 more only beyond entry points
   UI at 1 place: UI_MESSAGE at ws:src/Sender.Codeunit.al:15 (unconditional-on-success)
-  errors at 1 place: ERROR_IMPLICIT at ws:src/Sender.Codeunit.al:12 (unconditional-on-success)
+  errors at 2 places: ERROR_IMPLICIT at ws:src/Sender.Codeunit.al:12 (unconditional-on-success); ERROR_IMPLICIT at ws:src/Sender.Codeunit.al:14 (unconditional-on-success)
 changed-roots: file-unmatched src/Rec.Table.al

@@ -273,9 +273,11 @@ fn r3a5_anti_degenerate_matrix_matches_manifest() {
         projection.coverages_with_opaque_apps_reason, 2,
         "coveragesWithOpaqueAppsReason=2"
     );
+    // 2: the dependency's write and, since its write is a statement (its
+    // Boolean discarded), that write's `error-implicit` (G20).
     assert_eq!(
-        projection.total_cross_app_inherited_facts, 1,
-        "totalCrossAppInheritedFacts=1"
+        projection.total_cross_app_inherited_facts, 2,
+        "totalCrossAppInheritedFacts=2"
     );
 
     // --- cross-check vs the al-sem manifest matrix (ground truth) -------------

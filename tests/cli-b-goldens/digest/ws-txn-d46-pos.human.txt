@@ -1,6 +1,6 @@
 --- Codeunit Install Handler::OnInstallAppPerCompany ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
-    transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
+    transaction, UI and errors: commits: yes (1 site); errors at 1 place
     other effects: events: 0 (0 raised in workspace code)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
@@ -15,10 +15,11 @@
       Insert at ws:src/InstallCU.al:33
       path: OnInstallAppPerCompany → DoSetup
   events: 0 raised in workspace code; 0 more only beyond entry points
+  errors at 1 place: ERROR_IMPLICIT at ws:src/InstallCU.al:33 (conditional)
 
 --- Codeunit Install Handler::DoSetup ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
-    transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
+    transaction, UI and errors: commits: yes (1 site); errors at 1 place
     other effects: events: 0 (0 raised in workspace code)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
@@ -32,10 +33,11 @@
       Insert at ws:src/InstallCU.al:33
       path: DoSetup (in the routine itself)
   events: 0 raised in workspace code; 0 more only beyond entry points
+  errors at 1 place: ERROR_IMPLICIT at ws:src/InstallCU.al:33 (conditional)
 
 --- Codeunit Upgrade Handler::DoUpgrade ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
-    transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
+    transaction, UI and errors: commits: yes (1 site); errors at 1 place
     other effects: events: 0 (0 raised in workspace code)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
@@ -49,10 +51,11 @@
       Modify at ws:src/UpgradeCU.al:16
       path: DoUpgrade (in the routine itself)
   events: 0 raised in workspace code; 0 more only beyond entry points
+  errors at 1 place: ERROR_IMPLICIT at ws:src/UpgradeCU.al:16 (conditional)
 
 --- Codeunit Upgrade Handler::OnUpgradePerCompany ---
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
-    transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
+    transaction, UI and errors: commits: yes (1 site); errors at 1 place
     other effects: events: 0 (0 raised in workspace code)
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   coverage: complete
@@ -67,3 +70,4 @@
       Modify at ws:src/UpgradeCU.al:16
       path: OnUpgradePerCompany → DoUpgrade
   events: 0 raised in workspace code; 0 more only beyond entry points
+  errors at 1 place: ERROR_IMPLICIT at ws:src/UpgradeCU.al:16 (conditional)

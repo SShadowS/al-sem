@@ -696,6 +696,22 @@
           "provenance": "direct",
           "via": "self",
           "witnessOperationId": "989b7d6f008ddafa/7881ece10a8504f9fecc101043499a18dc5f95d36938d05e86bc07ea433f50e7/op0"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "989b7d6f008ddafa/7881ece10a8504f9fecc101043499a18dc5f95d36938d05e86bc07ea433f50e7/op1"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "989b7d6f008ddafa/7881ece10a8504f9fecc101043499a18dc5f95d36938d05e86bc07ea433f50e7/op5"
         }
       ],
       "capabilityStatus": "complete",

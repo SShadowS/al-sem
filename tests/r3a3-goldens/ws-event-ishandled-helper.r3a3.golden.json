@@ -5,6 +5,15 @@
 			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "call",
+					"witnessOperationId": "88888888-8888-8888-8888-888888888888:Codeunit:50000#b35f55e82da626aedc065b77a1583026a77d8008d2c455daa751b5747dec0690/op0",
+					"witnessCallsiteId": "88888888-8888-8888-8888-888888888888:Codeunit:50000#52d4f6e9f0d8415f293b8e403f633ad1730b40db6a00641cc763ead4b55d5249/cs1"
+				},
+				{
 					"op": "insert",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -98,6 +107,14 @@
 		{
 			"routineId": "88888888-8888-8888-8888-888888888888:Codeunit:50000#b35f55e82da626aedc065b77a1583026a77d8008d2c455daa751b5747dec0690",
 			"capabilityFactsDirect": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "88888888-8888-8888-8888-888888888888:Codeunit:50000#b35f55e82da626aedc065b77a1583026a77d8008d2c455daa751b5747dec0690/op0"
+				},
 				{
 					"op": "insert",
 					"resourceKind": "table",

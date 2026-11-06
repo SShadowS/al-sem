@@ -148,6 +148,96 @@ on a hand-stated fixture and a discrimination proof.
   "without their witnesses", but a caller that touches the table through another branch
   prints its first touch (operation, location, first hop; c17). Both texts now say so.
 
+### Fixed (field writers count bare writes through the implicit record)
+
+`alsem explain --table T --field F` (and d65's writer index, which reads the same
+`l5::field_writers::field_writes`) read only qualified writes (`R.F := …`), `Validate` and
+`ModifyAll`. A bare `F := …` inside the table's own code, a table extension, a page with
+that source table or a `with` body was never a writer, although the body walk records it
+(`implicit_field_accesses`) and `alsem query touches --field` already listed it as an
+`implicit-access` write. On the CDO baseline (`bc3ccb18`), `CDO Setup."Document Folder"`
+answered "0 writer(s)" while its own OnValidate assigns
+`"Document Folder" := "Document Folder" + '\'` (`CDOSetup.Table.al:97`); it now answers
+1 writer, `Table CDO Setup::OnValidate`, assign at `:97`. `CDO E-Mail Template Header."Document
+Folder"` gains its OnValidate (`:363`) beside the two writers it had.
+
+- One definition: `ModelRoutine::field_access_sites()` (qualified then bare accesses) is what
+  both `query touches --field` and `field_writes` iterate, so explain's writers and the
+  touches' `write` sites are the same sites.
+- d65 (opt-in) on CDO: 0 → 2 findings at both `--scope primary` and `--scope all`, both at
+  `CDO Merge Table Field::ImportFromXmlNode` (`CDOMergeTableField.Table.al:611`, a bare
+  `Table := …`): the other five writers set `Table` through `Validate`, whose OnValidate
+  `TestField` rules the import skips. Triaged against source: the skip is real and
+  deliberate (the XML import restores exported values field by field without validation),
+  an exception d65 is meant to surface, not a bug. The default `alsem analyze` findings did
+  not move (2,238 primary, 31,311 all).
+- Test: `tests/cli/cli_field_writers.rs` on the new fixture `tests/fixtures/field-writers-implicit`
+  (a table trigger, a table procedure, a table extension, a page action, a qualified write;
+  a bare read, a shadowing local and another field as controls), through the binary; it also
+  checks explain's writer lines equal `query touches`' write lines (the new fixture dir
+  bumps `FIXTURE_ROOTS`' `fixtures` count, 58 → 59). Discrimination: reading
+  only `field_accesses` again in `field_writes` fails both tests (only `Qualified` is left).
+
+### Fixed (a statement `Insert` / `Modify` / `Delete` / `Rename` / `Find` raises an implicit error)
+
+AL raises a runtime error when a record method declared `[Ok :=] Rec.M(…)` fails and its
+Boolean is not consumed. G20's rule (`implicit_error_record_op`) knew this only for
+`Get` / `FindFirst` / `FindLast` / `FindSet` and `TestField`, so a bare `Modify();` raised
+nothing. On CDO, the digest of a one-line edit adding `Modify();` to `CDO E-Mail Job`'s
+"Table No." OnValidate said "UI and errors: none observed"; it now says "errors at 1 place"
+(`ERROR_IMPLICIT` at `CDOEMailJob.Table.al:24`). The rule now also covers `Find`, `Insert`,
+`Modify`, `Delete` and `Rename` in statement position; `CalcFields` / `CalcSums` stay out
+(they fail only on a non-FlowField, a coding error no data state causes), and `DeleteAll`,
+`ModifyAll`, `Next`, `Count`, `IsEmpty` return no "ok" Boolean. Consumers: digest and
+explain's errors, `prove … throws-error`, impact's error counts, snapshots and
+fingerprints. The detectors read `error-throw`, not `error-implicit`: CDO's default
+`analyze` findings are unchanged at both scopes, and `--program-call-graph-stats` is
+byte-identical.
+
+- **Latent bug fixed with it:** the snapshot's pd arena found a producer's row by
+  `(owner, operation id)` alone, first match. One operation can witness two facts (a
+  statement `Modify();` is a `modify` table fact and an `error-implicit` fact), and the
+  sorted rows put `error-implicit` first, so a parameter-dependent write's states pointed
+  at the error fact and its digest effect lost its proof paths, evidence and ordering
+  labels (`cli_digest_temp_state`, `cli_implicit_trigger_cone`,
+  `cli_event_dispatch_first_hop`, `r3_temp_class_parity_arena` all failed). The same held
+  for a statement `Get` on a parameter record since G20. `snapshot_view::is_producer_row`
+  (a direct TABLE fact witnessing the operation) is now the one rule for
+  `derive_pd_arena` and both view lookups. Discrimination: dropping its `resource_kind ==
+  "table"` test fails `r3_temp_class_parity_arena` and `cli_digest_temp_state::a1a`.
+- Test: `cli_prove_throws_error::throws_error_sees_statement_record_writes` (a table
+  trigger's bare `Modify();`, the c01 shape, and qualified `Insert` / `Modify(true)` /
+  `Delete` / `Rename` / `Find`; `exit(T.Insert())`, `if not T.Modify()`, `Ok := T.Delete()`
+  and statement `DeleteAll` / `ModifyAll` / `Init` as controls). Discrimination: removing
+  the `Modify` arm makes `OnValidate` answer "no" and the test fails.
+- Goldens: 300+ digest, fingerprint, snapshot, explain, output, r1a, r3a3, r4f and batch
+  goldens gain `error-implicit` facts / `ERROR_IMPLICIT` effects and the counts and hashes
+  that follow; where the one-row-per-kind outputs list one site, the new site can become
+  the representative and the old one moves to `moreSites`, and an inherited error's
+  shortest witness can change. The CDO rendering goldens (`tests/cli-output-goldens/cdo/`,
+  re-minted with `CDO_WS` + `REGEN_TEMP_GOLDENS=1`) move the same way: IssueReminder's errors
+  194 → 301 places, `UpdateLastUpload` (a statement `Modify` at `CDOTelemetry.Codeunit.al:48`)
+  "UI and errors: none observed" → "errors at 1 place"; a dependency entry point can gain a
+  real call site its write group had folded into "at least" (`CreateEDocumentLog` at
+  `CDOeDocumentsDispatcher.Codeunit.al:308`), and explain's write lines gain "fields … assigns"
+  from the field-writers fix. Hand-held oracles moved with them: the l2cap vectors (+4
+  facts), the r3a3 vectors (+13), the R3a-3 manifest matrix (+130 direct, +46 inherited),
+  the R3a-5 matrix (`totalCrossAppInheritedFacts` 1 → 2) and the split records
+  (`REMINT_SPLIT_RECORDS=1`, RECORD explains) and the policy facts oracle
+  (`REMINT_POLICY_FACTS_ORACLE=1`: 175 of 455 cases gain facts, none loses one). Hand-written
+  tests whose fixtures have a statement write now expect the new error, or filter to table
+  effects where the test is about tables (`cli_digest_query_dependencies`,
+  `cli_escaped_object_names`, `cli_object_display`, `cli_impact_base`, `cli_prove_cross_app`,
+  `no_path_tests`, `wave2_index_tests`, `digest_rule_b_tests`). Where the extra fact would
+  break a test's stated precondition, its fixture consumes the Boolean instead
+  (`if … then;`): `cli_commit_sites_up_chain` (a crossing with no row), the cone's T3b
+  (the set's one entry is the commit) and T7 (G has one fact).
+- Observed, not changed: in a dependency group, a resource-less kind (now also this
+  error) gets a row at every crossing, also one whose literal argument makes the
+  operation unreachable (`wave2_index_tests`' `PostWith(false)` around `if Flag then
+  L.Insert();`), because `literal_reach` judges a group by its crossing and resources,
+  and a resource-less group has none.
+
 ### Fixed (the macOS build compiles again)
 
 `OutputDir::create` (`src/engine/host/output.rs`) compared `fstat`'s mode, a `u32`, with

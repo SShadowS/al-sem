@@ -25,6 +25,14 @@
 			"routineId": "aaaaaaaa-0000-0000-0000-000000xc0001:Codeunit:50102#564f36f7d14874ad277d7d0804651a7acf423a857a4b9918203f9df3898ae158",
 			"capabilityFactsDirect": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "aaaaaaaa-0000-0000-0000-000000xc0001:Codeunit:50102#564f36f7d14874ad277d7d0804651a7acf423a857a4b9918203f9df3898ae158/op1"
+				},
+				{
 					"op": "insert",
 					"resourceKind": "table",
 					"confidence": "static",

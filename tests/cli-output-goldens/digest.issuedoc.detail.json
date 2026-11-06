@@ -597,16 +597,37 @@
             "type": "DB_READ"
           },
           {
-            "conditionality": "unknown",
+            "conditionality": "unconditional-on-success",
             "confidence": "static",
-            "crossing": "c:1249372dd091",
-            "detail": {
-              "boundary": "Codeunit Base Poster::OnRun"
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Log.Insert",
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 61,
+              "sourceKind": "source"
             },
-            "factId": "3c11a869e7cc7cbc",
-            "guarantees": [
-              "COMMIT_REACHABLE"
+            "factId": "3682e914d340f673",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "edge": "variable-typed-call",
+                    "line": 17,
+                    "to": "r:aeacadfe0cb1"
+                  }
+                ],
+                "terminal": {
+                  "file": "ws:src/OutIssueDocument.Codeunit.al",
+                  "line": 61,
+                  "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op1"
+                }
+              }
             ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
             "provenance": "transitive",
             "status": "live",
             "transactionContext": "unknown",
@@ -707,7 +728,8 @@
         "entryDiagnosticCounts": {},
         "moreSites": {
           "ERROR_IMPLICIT": {
-            "ws:src/OutIssueDocument.Codeunit.al": "12 unconditional-on-success"
+            "beyond": "c:1249372dd091; c:c01248383de2",
+            "ws:src/OutIssueDocument.Codeunit.al": "12 unconditional-on-success; 14 unconditional-on-success"
           }
         },
         "routine": {
@@ -721,7 +743,7 @@
           "objectDisplay": "Codeunit Out Issue Document",
           "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"
         },
-        "scopedGuaranteesFolded": 13,
+        "scopedGuaranteesFolded": 15,
         "summary": {
           "callerDependentTables": 1,
           "commits": {
@@ -746,7 +768,7 @@
           },
           "kinds": {
             "backgroundTasks": 1,
-            "errors": 2,
+            "errors": 5,
             "http": 1
           },
           "literalDeadTables": 0,
@@ -856,7 +878,7 @@
     "summary": {
       "rootsRequested": 1,
       "rootsResolved": 1,
-      "totalEffects": 18,
+      "totalEffects": 21,
       "totalUnresolved": 3
     },
     "testCoverage": {

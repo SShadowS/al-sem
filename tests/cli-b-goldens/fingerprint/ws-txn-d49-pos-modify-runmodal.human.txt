@@ -17,6 +17,10 @@ Codeunit D49 Sender::ModifyThenRunModal  [public-procedure]
       Path 1/1 shown:
         direct Rec.Get at ws:src/Sender.Codeunit.al:12:8
 
+    error-implicit error — 1 path shown
+      Path 1/1 shown:
+        direct Rec.Modify at ws:src/Sender.Codeunit.al:14:8
+
     execute page — 1 path shown
       Path 1/1 shown:
         call Page.RunModal at ws:src/Sender.Codeunit.al:15:8

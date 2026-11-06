@@ -494,8 +494,8 @@ impl FactBase {
         &self.tables.subjects[g.subject as usize]
     }
 
-    /// The first direct row of `subject` witnessing `op`: `(run, base
-    /// position)`, `derive_pd_arena`'s `direct_fact_ix` entry.
+    /// The direct table row of `subject` witnessing `op` ([`is_producer_row`]):
+    /// `(run, base position)`, `derive_pd_arena`'s `direct_fact_ix` entry.
     fn direct_row(&self, subject: &str, op: &str) -> Option<(u32, usize)> {
         use crate::engine::joined_key::cmp_joined;
         let k = self.runs.partition_point(|r| {
@@ -507,13 +507,23 @@ impl FactBase {
         }
         run.rows
             .clone()
-            .find(|&i| is_direct_witness(&self.rows[i], op))
+            .find(|&i| is_producer_row(&self.rows[i], op))
             .map(|i| (u32::try_from(k).expect("runs fit u32"), i))
     }
 }
 
-fn is_direct_witness(f: &SnapshotCapabilityFact, op: &str) -> bool {
-    f.provenance() == "direct" && f.witness_operation_id() == Some(op)
+/// Whether `f` is the snapshot row of a pd producer whose operation is `op`:
+/// a DIRECT TABLE fact witnessing `op`. A producer is a table fact with a
+/// parameter-dependent temp state (`capability_cone::fact_pd_index`), and one
+/// operation can witness facts of other kinds too: a statement `Modify();`
+/// is a `modify` table fact and an `error-implicit` error fact (G20), and the
+/// sorted rows put `error-implicit` first. Matching by operation alone mapped
+/// the producer to the error fact, so its write lost its proof paths. The one
+/// rule `derive_pd_arena` and both view lookups use.
+pub(super) fn is_producer_row(f: &SnapshotCapabilityFact, op: &str) -> bool {
+    f.provenance() == "direct"
+        && f.resource_kind() == "table"
+        && f.witness_operation_id() == Some(op)
 }
 
 /// [`FactBase`] of `inp` (`derive_capability_facts` without raw facts: the
@@ -645,7 +655,7 @@ impl ViewFacts {
         let k = self.rebuilt.partition_point(|r| r.0 < run);
         match self.rebuilt.get(k) {
             Some(&(r, start, len)) if r == run => (start..start + len)
-                .find(|&i| is_direct_witness(&self.rows[i], op))
+                .find(|&i| is_producer_row(&self.rows[i], op))
                 .expect("a rebuilt run keeps its direct rows"),
             _ => pos + k.checked_sub(1).map_or(0, |j| self.shift_after[j]),
         }
@@ -887,8 +897,8 @@ pub(super) fn derive_pd_base(
 pub(super) enum ProducerRows<'v> {
     /// Split mode: through the base position and the view's run shifts.
     Spliced(&'v PdBase, &'v ViewFacts),
-    /// `(owner stable id, operation id)` → the first direct row, over facts
-    /// derived whole.
+    /// `(owner stable id, operation id)` → the producer row
+    /// ([`is_producer_row`]), over facts derived whole.
     Whole(HashMap<(&'v str, &'v str), usize>),
 }
 
@@ -897,7 +907,9 @@ impl<'v> ProducerRows<'v> {
     pub(super) fn whole(facts: &'v [SnapshotCapabilityFact]) -> Self {
         let mut ix: HashMap<(&str, &str), usize> = HashMap::new();
         for (i, f) in facts.iter().enumerate() {
-            if let ("direct", Some(op)) = (f.provenance(), f.witness_operation_id()) {
+            if let Some(op) = f.witness_operation_id()
+                && is_producer_row(f, op)
+            {
                 ix.entry((f.subject(), op)).or_insert(i);
             }
         }

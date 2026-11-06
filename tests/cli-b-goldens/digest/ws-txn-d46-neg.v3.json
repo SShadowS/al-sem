@@ -111,6 +111,39 @@
             "status": "live",
             "transactionContext": "unknown",
             "type": "DB_INSERT"
+          },
+          {
+            "conditionality": "conditional",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 12,
+              "excerpt": "Setup.Insert",
+              "file": "ws:src/NormalCU.al",
+              "line": 34,
+              "sourceKind": "source"
+            },
+            "factId": "c32eb589fa13f8b6",
+            "guarantees": [
+              "COMMIT_REACHABLE"
+            ],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/NormalCU.al",
+                  "line": 34,
+                  "operationId": "1f0dcf35161dfd3e/1eb9f4ab2c84095b8b812d7412755d2dce9707e54a87d63626459383ead69ada/op2"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -125,7 +158,7 @@
           "objectDisplay": "Codeunit Normal Handler",
           "stableId": "11111111-0000-0000-0000-00000000d461:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb"
         },
-        "scopedGuaranteesFolded": 4,
+        "scopedGuaranteesFolded": 5,
         "summary": {
           "callerDependentTables": 0,
           "commits": {
@@ -148,7 +181,9 @@
             "notPlaced": 0,
             "workspace": 0
           },
-          "kinds": {},
+          "kinds": {
+            "errors": 1
+          },
           "literalDeadTables": 0,
           "mayWriteTables": {
             "byDependencies": 0,
@@ -281,6 +316,45 @@
             "status": "live",
             "transactionContext": "unknown",
             "type": "DB_INSERT"
+          },
+          {
+            "conditionality": "conditional",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 12,
+              "excerpt": "Setup.Insert",
+              "file": "ws:src/NormalCU.al",
+              "line": 34,
+              "sourceKind": "source"
+            },
+            "factId": "d464d7671e046d37",
+            "guarantees": [
+              "COMMIT_REACHABLE"
+            ],
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "edge": "direct-call",
+                    "line": 25,
+                    "to": "r:723e54933af9"
+                  }
+                ],
+                "terminal": {
+                  "file": "ws:src/NormalCU.al",
+                  "line": 34,
+                  "operationId": "1f0dcf35161dfd3e/1eb9f4ab2c84095b8b812d7412755d2dce9707e54a87d63626459383ead69ada/op2"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "transitive",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -295,7 +369,7 @@
           "objectDisplay": "Codeunit Normal Handler",
           "stableId": "11111111-0000-0000-0000-00000000d461:Codeunit:50001#b8669e55319108c890634c4a59a65673f0a99a138ff874f926b31d5f202b118b"
         },
-        "scopedGuaranteesFolded": 4,
+        "scopedGuaranteesFolded": 5,
         "summary": {
           "callerDependentTables": 0,
           "commits": {
@@ -318,7 +392,9 @@
             "notPlaced": 0,
             "workspace": 0
           },
-          "kinds": {},
+          "kinds": {
+            "errors": 1
+          },
           "literalDeadTables": 0,
           "mayWriteTables": {
             "byDependencies": 0,
@@ -363,7 +439,7 @@
     "summary": {
       "rootsRequested": 2,
       "rootsResolved": 2,
-      "totalEffects": 4,
+      "totalEffects": 6,
       "totalUnresolved": 0
     },
     "workspaceFingerprint": "153dd1f50142677bb6b39ef22a0e7e2e23f75e2a3c9f1a1a81e883dd47ae93a7"

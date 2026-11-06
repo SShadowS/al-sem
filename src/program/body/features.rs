@@ -355,9 +355,10 @@ pub struct PRecordOperation {
     #[serde(skip)]
     pub in_until_condition: bool,
     /// True iff the op is the outermost expression of a bare call statement, so
-    /// a lookup's Boolean is discarded (`PCallSite.in_statement_position`'s twin).
-    /// G20: an unguarded `Get`/`FindFirst`/`FindLast`/`FindSet` raises an error
-    /// when no record matches. INTERNAL-ONLY like `in_until_condition`
+    /// its "ok" Boolean is discarded (`PCallSite.in_statement_position`'s twin).
+    /// G20: an unguarded lookup (`Get`, `FindFirst`, …) or write (`Insert`,
+    /// `Modify`, …) raises an error when it fails
+    /// (`ui_events_error::implicit_error_record_op`). INTERNAL-ONLY like `in_until_condition`
     /// (`serde(skip)`, excluded from `PartialEq`).
     #[serde(skip)]
     pub in_statement_position: bool,
