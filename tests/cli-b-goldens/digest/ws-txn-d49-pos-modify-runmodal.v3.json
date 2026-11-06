@@ -116,12 +116,6 @@
               "sourceKind": "source"
             },
             "factId": "40c1ea6e11ec8aee",
-            "guaranteeEvidence": [
-              {
-                "label": "WRITE_PENDING_AT_UI",
-                "validForRefutation": true
-              }
-            ],
             "guarantees": [
               "WRITE_PENDING_AT_UI"
             ],
@@ -138,6 +132,9 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
+            "refutableGuarantees": [
+              "WRITE_PENDING_AT_UI"
+            ],
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",

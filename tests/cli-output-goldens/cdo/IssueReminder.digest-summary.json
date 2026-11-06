@@ -34,6 +34,10 @@
         "UI_PROGRESS": 3,
         "UI_WINDOW_OPEN": 10
       },
+      "guaranteeLabels": {
+        "descriptiveOnly": 403,
+        "refutable": 0
+      },
       "routine": "Codeunit \"CDO Issue Document\"::IssueReminder",
       "selector": "Codeunit \"CDO Issue Document\"::IssueReminder",
       "signature": "(Record \"Reminder Header\")",
@@ -43,6 +47,10 @@
         "commits": {
           "answer": "may",
           "entryPoints": 7,
+          "literalDead": {
+            "entryPoints": 3,
+            "sites": 3
+          },
           "ownSites": 5
         },
         "entryPoints": {

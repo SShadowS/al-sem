@@ -34,6 +34,10 @@
         "UI_PROGRESS": 2,
         "UI_WINDOW_OPEN": 8
       },
+      "guaranteeLabels": {
+        "descriptiveOnly": 355,
+        "refutable": 0
+      },
       "routine": "Codeunit \"CDO E-Mail Handler\"::RunReportID",
       "selector": "Codeunit \"CDO E-Mail Handler\"::RunReportID",
       "signature": "(Boolean, Variant, Integer, Text, Integer, Integer, Integer, Boolean)",
@@ -43,6 +47,10 @@
         "commits": {
           "answer": "may",
           "entryPoints": 8,
+          "literalDead": {
+            "entryPoints": 0,
+            "sites": 2
+          },
           "ownSites": 6
         },
         "entryPoints": {

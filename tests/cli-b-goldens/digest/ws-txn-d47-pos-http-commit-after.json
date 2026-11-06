@@ -41,28 +41,6 @@
               "sourceKind": "source"
             },
             "factId": "d63c880f79cb9c83",
-            "guaranteeEvidence": [
-              {
-                "label": "COMMIT_REACHABLE",
-                "validForRefutation": false
-              },
-              {
-                "label": "COMMIT_ON_SUCCESS_PATH",
-                "validForRefutation": false
-              },
-              {
-                "label": "COMMIT_DOMINATES_RETURN",
-                "validForRefutation": true
-              },
-              {
-                "label": "WRITE_COMMITTED_BEFORE_RETURN",
-                "validForRefutation": false
-              },
-              {
-                "label": "EXTERNAL_IO_BEFORE_COMMIT",
-                "validForRefutation": false
-              }
-            ],
             "guarantees": [
               "COMMIT_REACHABLE",
               "COMMIT_ON_SUCCESS_PATH",
@@ -71,6 +49,9 @@
               "EXTERNAL_IO_BEFORE_COMMIT"
             ],
             "provenance": "direct",
+            "refutableGuarantees": [
+              "COMMIT_DOMINATES_RETURN"
+            ],
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",
@@ -134,12 +115,6 @@
               "sourceKind": "source"
             },
             "factId": "09dd270143c86078",
-            "guaranteeEvidence": [
-              {
-                "label": "COMMIT_REACHABLE",
-                "validForRefutation": false
-              }
-            ],
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
@@ -171,12 +146,6 @@
               "sourceKind": "source"
             },
             "factId": "5a9e0a83db0160b9",
-            "guaranteeEvidence": [
-              {
-                "label": "COMMIT_REACHABLE",
-                "validForRefutation": false
-              }
-            ],
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
@@ -208,12 +177,6 @@
               "sourceKind": "source"
             },
             "factId": "fbbfcd65351e66fb",
-            "guaranteeEvidence": [
-              {
-                "label": "COMMIT_REACHABLE",
-                "validForRefutation": false
-              }
-            ],
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
@@ -247,26 +210,15 @@
               "sourceKind": "source"
             },
             "factId": "6fecdfec851d5e96",
-            "guaranteeEvidence": [
-              {
-                "label": "COMMIT_REACHABLE",
-                "validForRefutation": false
-              },
-              {
-                "label": "EXTERNAL_IO_BEFORE_COMMIT",
-                "validForRefutation": false
-              },
-              {
-                "label": "WRITE_PENDING_AT_EXTERNAL_IO",
-                "validForRefutation": true
-              }
-            ],
             "guarantees": [
               "COMMIT_REACHABLE",
               "EXTERNAL_IO_BEFORE_COMMIT",
               "WRITE_PENDING_AT_EXTERNAL_IO"
             ],
             "provenance": "direct",
+            "refutableGuarantees": [
+              "WRITE_PENDING_AT_EXTERNAL_IO"
+            ],
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",

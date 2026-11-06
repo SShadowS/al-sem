@@ -113,16 +113,13 @@
               "sourceKind": "source"
             },
             "factId": "fbe3089a337fb3e7",
-            "guaranteeEvidence": [
-              {
-                "label": "WRITE_PENDING_AT_EXTERNAL_IO",
-                "validForRefutation": true
-              }
-            ],
             "guarantees": [
               "WRITE_PENDING_AT_EXTERNAL_IO"
             ],
             "provenance": "direct",
+            "refutableGuarantees": [
+              "WRITE_PENDING_AT_EXTERNAL_IO"
+            ],
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",

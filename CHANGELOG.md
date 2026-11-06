@@ -42,9 +42,10 @@ rule §8.3). Every count names its unit, and each tool's remaining items land:
   `production bytes` line is dropped when nothing differs.
 - **status** (F65): `check.inputs` counts every category the check hashed (app.json
   included), so the counts add up to `filesHashed`.
-- **digest** (F73): each effect row's `guaranteeEvidence` gives every guarantee label with
-  `validForRefutation`; the summary row counts `guaranteeLabels` refutable and
-  descriptive-only apart.
+- **digest** (F73): an effect row lists the guarantee labels valid for refutation in
+  `refutableGuarantees`, written only when at least one is; a label of `guarantees` not
+  listed there is descriptive only (it describes an ordering, it cannot refute a claim). The
+  summary row counts `guaranteeLabels` refutable and descriptive-only apart.
 - **prove** (F66): the tool description and the `deterministic` input say the flag concerns
   `generatedAt` and `alsemVersion` only, never the answer.
 

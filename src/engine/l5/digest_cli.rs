@@ -2497,23 +2497,22 @@ pub fn guarantee_refutable(eff: &DigestEffectFull, label: &str) -> bool {
         .any(|sg| sg.label == label && sg.valid_for_refutation)
 }
 
-/// `guaranteeEvidence` (F73, additive beside a non-empty `guarantees`;
-/// absent when there is no label): each label with
-/// its `validForRefutation` flag, in `guarantees` order, so a reader never
-/// sees a descriptive guarantee beside refutable facts without the flag
-/// (the folded document keeps no trivial scoped guarantee to look it up in).
-pub(crate) fn guarantee_evidence(eff: &DigestEffectFull) -> serde_json::Value {
-    serde_json::Value::Array(
-        eff.guarantees
-            .iter()
-            .map(|g| {
-                serde_json::json!({
-                    "label": g,
-                    "validForRefutation": guarantee_refutable(eff, g),
-                })
-            })
-            .collect(),
-    )
+/// `refutableGuarantees` (F73, additive beside `guarantees`): the labels of
+/// `guarantees` that are valid for refutation, in `guarantees` order,
+/// written only when at least one is. THE RULE: a label in `guarantees`
+/// that is not listed here is descriptive only (it describes an ordering;
+/// it cannot refute a claim). So a reader never takes a descriptive
+/// guarantee for a refutable fact, even where the folded document keeps no
+/// trivial scoped guarantee to look the flag up in. `None`: no label is
+/// refutable (every label descriptive only), the field is omitted.
+pub(crate) fn refutable_guarantees(eff: &DigestEffectFull) -> Option<serde_json::Value> {
+    let labels: Vec<serde_json::Value> = eff
+        .guarantees
+        .iter()
+        .filter(|g| guarantee_refutable(eff, g))
+        .map(|g| g.clone().into())
+        .collect();
+    (!labels.is_empty()).then_some(serde_json::Value::Array(labels))
 }
 
 pub fn effect_to_value(eff: &DigestEffectFull) -> serde_json::Value {
@@ -2564,8 +2563,8 @@ pub fn effect_to_value(eff: &DigestEffectFull) -> serde_json::Value {
     let guarantees: Vec<serde_json::Value> =
         eff.guarantees.iter().map(|g| g.clone().into()).collect();
     m.insert("guarantees".into(), serde_json::Value::Array(guarantees));
-    if !eff.guarantees.is_empty() {
-        m.insert("guaranteeEvidence".into(), guarantee_evidence(eff));
+    if let Some(r) = refutable_guarantees(eff) {
+        m.insert("refutableGuarantees".into(), r);
     }
     m.insert("factId".into(), eff.fact_id.clone().into());
     let sg: Vec<serde_json::Value> = eff
@@ -3091,8 +3090,10 @@ pub fn project_digest_document(
     // summary rows `stableId`.
     // 3.2.0 (output validation V4, F76, additive): `payload.result.scope`
     // (analysis, reasons, assumptions, limits, universe, scope).
-    // 3.3.0 / 2.3.0 (output validation V6, F73, additive): every effect row's
-    // `guaranteeEvidence` (each guarantee label with `validForRefutation`).
+    // 3.3.0 / 2.3.0 (output validation V6, F73, additive): an effect row's
+    // `refutableGuarantees` (the labels valid for refutation, written only
+    // when one is; a label not listed is descriptive only), and the summary
+    // row's `guaranteeLabels`.
     let compact = v3.as_ref().is_some_and(|v| v.compact);
     let table_answers = v3.as_ref().map(|v| v.table_answers);
     env.insert(
@@ -3481,6 +3482,9 @@ fn digest_entry_summary(
         // W2-2 (T-W2-13): the one RollupTotals serialization.
         "summary": r.totals.to_json(),
         "testStatus": test_status,
+        // §9.8 (F73): guarantee labels over the effect rows; `refutable`
+        // counts the labels the rows list in `refutableGuarantees`, and
+        // `descriptiveOnly` the rest of `guarantees` (not listed there).
         "guaranteeLabels": {"refutable": refutable, "descriptiveOnly": descriptive},
     });
     for (k, x) in cx.names.identity_json(&e.routine_id) {
@@ -4576,14 +4580,15 @@ mod tests {
     /// Output validation §8.2 (F53, c15) and §9.8 (F73): the summary row
     /// counts the live COMMIT sites and those the root's literal arguments
     /// rule out apart (3 COMMIT rows = 1 site + 2 more), and guarantee
-    /// labels refutable and descriptive-only apart; each effect row's
-    /// `guaranteeEvidence` carries the flag per label. Hand-stated rows.
+    /// labels refutable and descriptive-only apart; an effect row lists its
+    /// refutable labels in `refutableGuarantees` (only when one is; a label
+    /// not listed is descriptive only). Hand-stated rows.
     ///
     /// DISCRIMINATION (2026-11-06): not counting own literal-dead COMMIT rows
     /// (the `commit_dead_sites += 1` in `RoutineRollup::build` removed) fails
     /// at "literalDead"; restored, passes. `guarantee_refutable` answering
-    /// `false` for every label fails at the `guaranteeEvidence` assertion
-    /// (WRITE_BEFORE_COMMIT shown descriptive); restored, passes.
+    /// `false` for every label fails at "refutable row" (the row with
+    /// WRITE_BEFORE_COMMIT lists nothing); restored, passes.
     #[test]
     fn summary_counts_dead_commits_and_guarantee_kinds_apart() {
         use crate::engine::l5::ordering_engine::ScopedGuarantee;
@@ -4611,13 +4616,16 @@ mod tests {
         dead2.literal_unreachable = true;
         let mut e = entry_with(vec![]);
         e.effects = vec![live, dead1, dead2];
-        let ev = guarantee_evidence(&e.effects[0]);
         assert_eq!(
-            ev,
-            serde_json::json!([
-                {"label": "COMMIT_REACHABLE", "validForRefutation": false},
-                {"label": "WRITE_BEFORE_COMMIT", "validForRefutation": true},
-            ])
+            effect_to_value(&e.effects[0])["refutableGuarantees"],
+            serde_json::json!(["WRITE_BEFORE_COMMIT"]),
+            "refutable row"
+        );
+        assert!(
+            effect_to_value(&e.effects[1])
+                .get("refutableGuarantees")
+                .is_none(),
+            "no refutable label, no field"
         );
         let model = ws_model();
         let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);

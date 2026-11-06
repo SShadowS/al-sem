@@ -464,13 +464,11 @@ fn effect_v3(
     m.insert("conditionality".into(), e.conditionality.into());
     m.insert("transactionContext".into(), e.transaction_context.into());
     m.insert("guarantees".into(), json!(e.guarantees));
-    // F73: beside a non-empty `guarantees` only (an empty list has no flag
-    // to carry).
-    if !e.guarantees.is_empty() {
-        m.insert(
-            "guaranteeEvidence".into(),
-            crate::engine::l5::digest_cli::guarantee_evidence(e),
-        );
+    // F73: the refutable labels, only when one is; a label of `guarantees`
+    // not listed there is descriptive only
+    // (`digest_cli::refutable_guarantees`).
+    if let Some(r) = crate::engine::l5::digest_cli::refutable_guarantees(e) {
+        m.insert("refutableGuarantees".into(), r);
     }
     let mut detail = Map::new();
     for (k, v) in &e.detail {

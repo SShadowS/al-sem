@@ -111,16 +111,13 @@
               "sourceKind": "source"
             },
             "factId": "3ab3609b25266202",
-            "guaranteeEvidence": [
-              {
-                "label": "WRITE_PENDING_AT_UI",
-                "validForRefutation": true
-              }
-            ],
             "guarantees": [
               "WRITE_PENDING_AT_UI"
             ],
             "provenance": "direct",
+            "refutableGuarantees": [
+              "WRITE_PENDING_AT_UI"
+            ],
             "scopedGuarantees": [
               {
                 "interveningBoundary": "none",

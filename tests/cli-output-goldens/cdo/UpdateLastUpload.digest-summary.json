@@ -17,6 +17,10 @@
         "DB_MODIFY": 1,
         "ERROR_IMPLICIT": 1
       },
+      "guaranteeLabels": {
+        "descriptiveOnly": 0,
+        "refutable": 0
+      },
       "routine": "Codeunit \"CDO Telemetry\"::UpdateLastUpload",
       "selector": "Codeunit \"CDO Telemetry\"::UpdateLastUpload",
       "signature": "(var Record \"CDO Setup\")",
