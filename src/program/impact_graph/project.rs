@@ -333,7 +333,7 @@ impl<'a> Builder<'a> {
             ("testHandler", _, _) => Boundary::TestHandler,
             _ => Boundary::Open,
         };
-        let site = Site {
+        let mut site = Site {
             from: self.sited.node(&from),
             to: self.sited.node(&to),
             kind,
@@ -343,6 +343,22 @@ impl<'a> Builder<'a> {
             boundary,
             anchor: line,
         };
+        // A catalogued configured-dispatch arm (design r2 §4.3): a label in
+        // the conditions mask; boundary, `via` and confidence stay the site's.
+        if let (Key::Routine(r), Some(a)) = (&from, line)
+            && let Some(region) = self.inp.facts.configured.get(r)
+            && let Some(arm) = region.arm_at(a.start_line)
+        {
+            site.conditions |=
+                condition_mask([super::configured_dispatch::CONDITION].iter().copied());
+            self.sited.configured_arms.push((
+                self.sited.sites.len() as u32,
+                super::sited::ConfiguredArm {
+                    entry: region.entry,
+                    label: arm.label.as_str().into(),
+                },
+            ));
+        }
         self.sited.sites.push(site);
         match self.edges.entry((site.from, site.to, kind)) {
             std::collections::hash_map::Entry::Vacant(v) => {

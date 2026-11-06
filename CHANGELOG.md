@@ -7,6 +7,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (callers through dependency code, v1: the configured-dispatch label)
+
+Design: `docs/superpowers/specs/2026-11-06-dependency-callers-design.md` (revision 2).
+
+- **Configured dispatch, a site condition.** A catalogued `case` whose arms the engine resolves as
+  ordinary static calls, but whose arm runs only when configuration rows select it, now carries
+  the site condition `configuredDispatch` (`impact_graph::configured_dispatch`, `sited::CONDITIONS`)
+  on the sites of its arm labels, arm bodies and `else` body. The catalog is engine-owned and
+  versioned (version 1); its one entry is Base Application's `Workflow Response
+  Handling::ExecuteResponse` and its `case WorkflowResponse."Function Name"`, matched on the app id,
+  the object, the routine's full signature (each parameter's `var` and type) and the scrutinee
+  folded and unquoted. A matched routine with no such case, two of them, or a case sharing a
+  source line with other code is a mismatch: nothing is labelled (never the whole body) and the
+  reason is reported. The condition is a label: the site's boundary, `via`, confidence and
+  `is_code_call_site` are unchanged, and no R0 walk, detector, summary or prove answer reads it.
+- **`alsem graph`** exports the condition on the catalogued edges' `conditions` (additive under
+  `al-sem.callgraph` v1; documented in the callgraph spec). A consumer may rank a test found only
+  through such edges lower; it must not exclude one.
+- **`aldump --configured-dispatch-candidates <ws> [--min-arms K]`**, the discovery probe for
+  whoever extends the catalog: the catalog's version and status, then every `case` in dependency
+  code with at least K (default 12) arms making a code call, with its scrutinee, arm count,
+  distinct callees and whether the catalog labels it.
+- Fixture `tests/fixtures/dependency-callers` (a dependency carrying Base Application's id, loaded
+  from a source folder; its README states each case).
+
+### Added (callers through dependency code, v1: `query touches` up)
+
+- **`query touches --from R --direction up` (or `both`) lists the workspace callers that reach R
+  only through dependency code** (`up.throughDependency`, query schema 3.5.0, additive;
+  `impact_graph::dep_callers`). Not a new structure: R0's reverse walk over the cross-app sited
+  graph restricted to code-call sites (`reverse::CodeCalls`), with a visitor that marks the states
+  whose path passed dependency code (an app other than the workspace's, the line `ExecRelation`
+  draws, not R0's trust tier: a source-folder dependency counts) and records each state's parent.
+  Callers compose across any number of crossings between workspace and dependency code (a caller
+  whose path enters the workspace six hops before the root is still listed). The first hop into
+  dependency code is any code-call site (a call, an object run, a record operation firing a
+  dependency trigger, event dispatch). Each caller has its tier (`code`; or `configured`: reachable
+  only through a configured-dispatch site, listed after the others with the catalog entry and
+  arm), its hop count, where it enters the workspace, and its witness from the caller to R with
+  every dependency routine, every event and each hop's kind and site. The list is disjoint from
+  `up.transitiveCallers` and labelled "potential callers by code calls, path feasibility not
+  checked"; single-app, and cross-app with no dependency loaded (the no-dependency contract),
+  answer `notApplicable: "no dependency code loaded"`; a walk that hits its budget says `limited`. Human
+  output: one count line (configured callers' arms by frequency) and the 3 nearest callers, each
+  witness folded around where it enters the workspace; `--callers` every caller with a path of
+  at most 12 hops plus the 3 nearest whatever their length (the rest counted); `--all`
+  everything. The `callers:` line now says "paths through dependency code are listed apart below".
+  The job declares the sited graph for this question (the engine host's `reads_sited` pins it).
+  `up.relation`, `transitiveCallers` and every other field are unchanged; no detector, summary,
+  solver or prove answer reads the walk.
+- The MCP `alsem_query_touches` description says so (no parameter changed).
+- CDO: the three rendering goldens of `query touches` (human) gain the block; RunReportID's lists
+  its 2 code callers, so its size ratchet in `output_cdo` rises from 3,000 to 4,100 bytes (3,683
+  measured; still 16 of 20 lines).
+
+### Added (callers through dependency code, v1: explain)
+
+- **`alsem explain --callers-context`** adds, on the line after each card's `callers:`, the
+  callers through dependency code: their count, the 3 nearest with hops, the first dependency
+  routine and where the path enters the workspace, and the configured count with its arms; JSON
+  `throughDependency` per card (counts, the catalog, the nearest with witnesses). Only with
+  `--callers-context`, which already declares the sited graph: without it the card builds no
+  sited graph and is unchanged (M0's lazy rule, and an answer never depends on whether a
+  resident engine happens to hold the graph).
+
+### Measured (callers through dependency code v1, CDO baseline `bc3ccb18`, release-fast)
+
+Base `master` `5c05092b` against this branch, same machine, loaded (load average 5-97, so wall
+times are noisy).
+
+- `WaitForMailLimit` (`query touches --table "CDO E-Mail Log" --from "CDO Send Mail
+  Management.WaitForMailLimit" --direction up --callers`): `up.throughDependency` lists **2 code
+  callers**, the two "Send" actions (`Page CDO UnhandledPostedSalesInv.` / `Page CDO Unhandled
+  Posted Cr. Memo`, `OnAction`, 17 hops each) through `Sales Invoice Header::SendRecords` /
+  `Sales Cr.Memo Header::SendRecords` -> `Document Sending Profile::SendCustomerRecords` -> `Send`
+  -> `OnBeforeSend` -[event]-> `CDO eDocs Sending Profile Subs::OnBeforeSendCustomer`, which is
+  where they enter the workspace (12 workspace hops before the root); and **84 configured
+  callers**, every one through `ExecuteResponse`'s `PostDocumentCode()` arm (31-47 hops). Catalog
+  1 matched (Base Application 28.1.49838.50268). Every other byte of the answer equals the base's
+  (`up.transitiveCallers` 967 = 964 workspace routines + 3 dependency publishers in the solve
+  graph: `Document Sending Profile::OnBeforeSend`, `Service-Post::OnAfterPostServiceDoc`,
+  `Sales-Post::OnAfterFinalizePosting`; its `--callers` list has 966 rows on both sides).
+- Unchanged: `alsem analyze --deterministic --format json` byte-identical at `--scope primary`
+  and `--scope all`; `aldump --program-call-graph-stats` byte-identical; 28 prove answers (6
+  routines × `may-commit`, `reaches-ui`, `throws-error`, `writes-table:CDO E-Mail Log` and the
+  three callers' context questions) byte-identical. `alsem graph`: 109,778 lines on both sides;
+  27 edges gain `configuredDispatch` and nothing else changes.
+- Cost: the one-shot `query touches` up above 15.6 s wall / 101 s user / 3.19 GB peak RSS,
+  against 17.7 s / 111 s / 3.15 GB on the base (the sited graph adds about 40 MB; time within
+  noise). `explain --callers-context` 25.7 s / 3.21 GB against 27.1 s / 3.23 GB (the graph was
+  already built there; the walk is not measurable). `aldump --configured-dispatch-candidates`:
+  10.3 s, 2.27 GB; 47 cases with at least 12 call-making arms, `ExecuteResponse` the only one
+  catalogued.
+
 ### Fixed (impact follow-ups: a warm large range, the `--base` answer's size, overload names)
 
 Spec: `docs/superpowers/specs/2026-11-05-agent-tasks-design.md` §8.12.

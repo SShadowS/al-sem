@@ -1987,10 +1987,12 @@ fn write_run_stdout(out: Vec<u8>, whole: bool) -> ExitCode {
 
 /// Whether `command` walks the sited graph beside the model
 /// (`ViewNeeds::MODEL_SITED`): a callers' context prove question or explain
-/// with `--callers-context` (agent-tasks design §6), and `query touches
+/// with `--callers-context` (agent-tasks design §6), `query touches
 /// --field --from` asked up (`up` or the default `both`, either universe:
-/// R0's reverse walk names the callers; design §7). Each job's demand states
-/// the same rule. A resident engine then pins with `pin_sited`.
+/// R0's reverse walk names the callers; design §7), and `query touches
+/// --from` asked up cross-app (`up.throughDependency`, callers-through-
+/// dependency design r2). Each job's demand states the same rule. A resident
+/// engine then pins with `pin_sited`.
 fn reads_sited(command: &Commands) -> bool {
     match command {
         Commands::Prove(p) => {
@@ -1999,7 +2001,7 @@ fn reads_sited(command: &Commands) -> bool {
         Commands::Explain(e) => e.callers_context,
         Commands::Query(q) => match &q.command {
             QueryCommands::Touches(t) => {
-                t.field.is_some() && t.from.is_some() && t.direction != "down"
+                t.from.is_some() && t.direction != "down" && (t.field.is_some() || !t.single_app)
             }
             QueryCommands::Effects(_) => false,
         },

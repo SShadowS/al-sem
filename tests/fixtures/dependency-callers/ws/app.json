@@ -1,0 +1,16 @@
+{
+  "id": "dc0dc0dc-0000-4000-8000-0000000000dc",
+  "name": "DC Workspace",
+  "publisher": "probe",
+  "version": "1.0.0.0",
+  "runtime": "13.0",
+  "idRanges": [{ "from": 52800, "to": 52899 }],
+  "dependencies": [
+    {
+      "id": "437dbf0e-84ff-417a-965d-ed2bb9650972",
+      "name": "Base Application",
+      "publisher": "Microsoft",
+      "version": "1.0.0.0"
+    }
+  ]
+}

@@ -4,5 +4,6 @@
     [Insert] write at ws:src/OutIssueDocument.Codeunit.al:61 in Codeunit Out Log Mgt::WriteLog, through Codeunit Out Log Mgt::WriteLog
     temporary records: 1 touch in 1 routine (Codeunit Out Log Mgt::WriteLog 1) — --all lists them
   table not resolved: 2 operations in this cone, 2 of them on a RecordRef (table decided at run time) (they may be this table) — --table unknown lists them
-  callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens, nor a path through dependency code (alsem tests and impact follow both)
+  callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens (alsem tests and impact follow it); paths through dependency code are listed apart below
   up: 1 transitive caller (Page Out Doc Card::OnAction) inherits this touch through this routine: 1 touches it, 0 do not, 0 unknown — --callers lists them, --all their witnesses
+  through dependency code: none by code calls (open sites, hubs and what a user starts are outside this list)

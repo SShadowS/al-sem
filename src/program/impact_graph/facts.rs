@@ -66,6 +66,11 @@ pub struct ObjectFacts {
 pub struct SourceFacts {
     pub routines: HashMap<RoutineNodeId, RoutineFacts>,
     pub objects: HashMap<ObjectNodeId, ObjectFacts>,
+    /// The configured-dispatch regions of the routines the catalog matched
+    /// ([`super::configured_dispatch`]); the projection labels their sites.
+    pub configured: HashMap<RoutineNodeId, super::configured_dispatch::Region>,
+    /// The catalog's outcome in this program.
+    pub catalog: super::configured_dispatch::CatalogReport,
 }
 
 /// Read the facts from every unit in `units` (the workspace and the dependency
@@ -186,6 +191,10 @@ pub fn extract_source_facts(
         f.tables.sort();
         f.tables.dedup();
     }
+    let (configured, catalog) =
+        super::configured_dispatch::extract(super::configured_dispatch::CATALOG, graph, units);
+    out.configured = configured;
+    out.catalog = catalog;
     out
 }
 
