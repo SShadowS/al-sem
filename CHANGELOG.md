@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (the macOS build compiles again)
+
+`OutputDir::create` (`src/engine/host/output.rs`) compared `fstat`'s mode, a `u32`, with
+`libc::S_IFMT`/`S_IFDIR`, which are `u16` on macOS (`mode_t`). The crate did not compile
+there, so the "Build and Deploy Binaries" workflow failed its `build-macos` job on every
+master merge from at least 2026-11-03 on and deployed nothing. The constants are now widened
+to `u32`. Linux and Windows were unaffected (CI builds only Linux).
+
 ### Fixed (a commit's hook no longer lets tests write into the committer's repository)
 
 Git hands its hooks `GIT_DIR`, `GIT_INDEX_FILE` and `GIT_PREFIX` (from a worktree,
