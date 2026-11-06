@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (a named return value of a record type is a record variable)
+
+A procedure's named return value (`procedure P() Ret: Record T`) is a variable of that
+routine, scoped like a local. The body walk took only globals, parameters and locals as
+record receivers, so `Ret.Get(…)`, `Ret.Insert()` and `Ret."Field" := …` were not record
+operations or field accesses: `query touches` left them out, and `explain`, `digest`,
+`query effects` and `prove` saw no write on the returned record. Round-2 fact check c30:
+`query touches --table "CDO E-Mail Template Header"` answered 199 sites in 121 routines
+without `CDOEMailTemplateManagement.Codeunit.al:259` `EMailTemplateHeader.Get(…)` (in
+`GetEmailTemplateFromRecord`, `:243`); CDO Send Code missed
+`CDOeDocsSendCodeMigration.Codeunit.al:207` and `CDOSetupData.Codeunit.al:650`, and
+`CreateDefaulteDocsSendCode`'s `SendCode.Insert()` (`:663`) was no write at all.
+
+- One definition, `ir_walk::named_return_var`, read by the body walk's receiver sets
+  (record operations, field accesses, RecordRef receivers), its record variables (a row
+  typed to the return type's table, temporary when declared `temporary`) and the
+  resolver's site extraction (`extract::routine_rvars`), so the two engines classify the
+  same calls as record operations (a named return's `Insert` now raises the table's
+  `OnAfterInsertEvent` like a local's). A bare name that is the return value is no longer
+  an implicit field access of a same-named field. A return value that shares a parameter's
+  or local's name (a compile error) is declined, as `receiver::caller_scope_symbol`
+  declines it; a `Rec` return in an object with an implicit `Rec` keeps the implicit row
+  (#299).
+- Population (static count over the CDO baseline `bc3ccb18` and its dependency source):
+  4 workspace routines with a record-typed named return hold 4 operations on it (Get 3,
+  Insert 1); in dependency code, 36 routines hold 49 (Continia Delivery Network 28 / 39,
+  System Application 6 / 5, Base Application 2 / 5). `aldump --program-call-graph-stats`
+  on CDO: edges unchanged (whole program 46,426, primary 21,014), `unknown` 0 → 0.
+- Tests: `tests/cli/cli_named_return_record.rs` through the binary (query touches counts,
+  explain's write and its table-event subscriber write, digest's persistent and temporary
+  writes, the scalar return named like a field, the RecordRef return);
+  `ir_walk::…::named_return_record_variable_rows` (the clash and `Rec` rules).
+
 ### Changed (size and dedup: query 4.0.0, digest 4.0.0, tests version 2; output validation V5)
 
 Output validation round 1, milestone V5 (spec
