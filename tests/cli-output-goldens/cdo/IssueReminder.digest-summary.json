@@ -12,7 +12,7 @@
     {
       "analysis": "partial",
       "answer": "writes: may write 153 tables (11 owned by this app, 142 by dependencies) and 2 writes on a table not resolved; 89 of them beyond Codeunit \"Reminder-Issue\" (393)::OnRun (entered at ws:src/DocumentTypes/Finance/General/CDOIssueDocument.Codeunit.al:19)",
-      "effects": 808,
+      "effects": 805,
       "effectsByType": {
         "BACKGROUND_TASK": 5,
         "COMMIT": 18,
@@ -22,7 +22,7 @@
         "ERROR_IMPLICIT": 232,
         "ERROR_THROW": 118,
         "EVENT_PUBLISH": 95,
-        "FILE": 6,
+        "FILE": 3,
         "HTTP": 24,
         "ISOLATED_STORAGE": 18,
         "TELEMETRY": 27,
@@ -35,7 +35,7 @@
         "UI_WINDOW_OPEN": 10
       },
       "guaranteeLabels": {
-        "descriptiveOnly": 403,
+        "descriptiveOnly": 400,
         "refutable": 0
       },
       "routine": "Codeunit \"CDO Issue Document\"::IssueReminder",
@@ -72,7 +72,7 @@
         "kinds": {
           "backgroundTasks": 3,
           "errors": 301,
-          "file": 4,
+          "file": 1,
           "http": 20,
           "isolatedStorage": 16,
           "telemetry": 23,
@@ -101,6 +101,6 @@
   ],
   "routinesListed": 1,
   "shared": {},
-  "totalEffects": 808,
+  "totalEffects": 805,
   "totalUnresolved": 288
 }

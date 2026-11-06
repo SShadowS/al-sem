@@ -27,7 +27,12 @@ under `kinds.file`.
   separate in-memory-stream label, so none was added.
 - Population (static count): `Temp Blob` `CreateOutStream` calls on the CDO baseline,
   3 in the workspace, 159 in dependency source (Base Application 91, System Application
-  57, Continia Delivery Network 11); each was a FILE effect.
+  57, Continia Delivery Network 11); each was a FILE effect. The CDO renderings moved
+  only where a Temp Blob was the whole FILE story: `IssueReminder` FILE effects 6 → 3
+  (`file at 4 places` → 1), `RunReportID` 4 → 2 (the `Data Compression` and Temp Blob
+  `SendNetworkDocument` entries drop out; entry points 44 → 42). On the fact-check calls,
+  n10's `file at 5 places` is now 2 (both real `File` I/O in Base Application's
+  `IC Outbox Export`), and c25 holds no FILE effect (total effects 1,788 → 1,780).
 - Tests: `tests/cli/cli_temp_blob_not_file.rs` (explain and digest through the binary,
   a `File.Create` as the positive control); `r4_cross_app_program::temp_blob_is_not_file_io`
   now asserts the workspace's own `Temp Blob` call has no FILE fact either.
