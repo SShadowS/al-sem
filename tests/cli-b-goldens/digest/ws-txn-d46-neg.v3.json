@@ -12,9 +12,60 @@
       ]
     },
     "changedRootsDiagnostics": [],
+    "defaults": {
+      "effect": {
+        "conditionality": "conditional"
+      }
+    },
     "dependencies": {
       "apps": [],
       "mode": "crossApp"
+    },
+    "effects": {
+      "e:1": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "commit",
+          "file": "ws:src/NormalCU.al",
+          "line": 36,
+          "sourceKind": "source"
+        },
+        "transactionContext": "span-has-known-writes",
+        "type": "COMMIT"
+      },
+      "e:2": {
+        "class": "physical",
+        "classReason": "known-persistent",
+        "confidence": "static",
+        "detail": {
+          "resourceDisplay": "My Setup",
+          "resourceId": "11111111-0000-0000-0000-00000000d461/table/50000"
+        },
+        "evidence": {
+          "column": 12,
+          "excerpt": "Setup.Insert",
+          "file": "ws:src/NormalCU.al",
+          "line": 34,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "DB_INSERT"
+      },
+      "e:3": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 12,
+          "excerpt": "Setup.Insert",
+          "file": "ws:src/NormalCU.al",
+          "line": 34,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "ERROR_IMPLICIT"
+      }
     },
     "entries": [
       {
@@ -30,15 +81,7 @@
         "effects": [
           {
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "commit",
-              "file": "ws:src/NormalCU.al",
-              "line": 36,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "49f3a3a18ca24731",
             "guarantees": [
               "COMMIT_REACHABLE",
@@ -72,27 +115,13 @@
                 "validForRefutation": true
               }
             ],
-            "status": "live",
-            "transactionContext": "span-has-known-writes",
-            "type": "COMMIT"
+            "status": "live"
           },
           {
-            "class": "physical",
-            "classReason": "known-persistent",
-            "conditionality": "conditional",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "My Setup",
-              "resourceId": "11111111-0000-0000-0000-00000000d461/table/50000",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 12,
-              "excerpt": "Setup.Insert",
-              "file": "ws:src/NormalCU.al",
-              "line": 34,
-              "sourceKind": "source"
-            },
+            "effect": "e:2",
             "factId": "0fed3f95c2025e0c",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -111,21 +140,10 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_INSERT"
+            "status": "live"
           },
           {
-            "conditionality": "conditional",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 12,
-              "excerpt": "Setup.Insert",
-              "file": "ws:src/NormalCU.al",
-              "line": 34,
-              "sourceKind": "source"
-            },
+            "effect": "e:3",
             "factId": "c32eb589fa13f8b6",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -144,9 +162,7 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -229,15 +245,7 @@
         "effects": [
           {
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "commit",
-              "file": "ws:src/NormalCU.al",
-              "line": 36,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "da953d8ae0f202d0",
             "guarantees": [
               "COMMIT_REACHABLE",
@@ -277,27 +285,13 @@
                 "validForRefutation": true
               }
             ],
-            "status": "live",
-            "transactionContext": "span-has-known-writes",
-            "type": "COMMIT"
+            "status": "live"
           },
           {
-            "class": "physical",
-            "classReason": "known-persistent",
-            "conditionality": "conditional",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "My Setup",
-              "resourceId": "11111111-0000-0000-0000-00000000d461/table/50000",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 12,
-              "excerpt": "Setup.Insert",
-              "file": "ws:src/NormalCU.al",
-              "line": 34,
-              "sourceKind": "source"
-            },
+            "effect": "e:2",
             "factId": "e17e7d0193e26e7d",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -322,21 +316,10 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_INSERT"
+            "status": "live"
           },
           {
-            "conditionality": "conditional",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 12,
-              "excerpt": "Setup.Insert",
-              "file": "ws:src/NormalCU.al",
-              "line": 34,
-              "sourceKind": "source"
-            },
+            "effect": "e:3",
             "factId": "d464d7671e046d37",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -361,9 +344,7 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -472,5 +453,5 @@
     },
     "workspaceFingerprint": "153dd1f50142677bb6b39ef22a0e7e2e23f75e2a3c9f1a1a81e883dd47ae93a7"
   },
-  "schemaVersion": "3.3.0"
+  "schemaVersion": "4.0.0"
 }

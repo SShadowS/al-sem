@@ -291,6 +291,9 @@ pub struct QueryJob<'a> {
     show_source: bool,
     /// `--surface` (output validation §6.1): the words of every follow-up.
     surface: Surface,
+    /// `--schema`: 4 (the default, [`super::query_v4`]) or 3 (the 3.x
+    /// document, kept for one release).
+    schema: u32,
 }
 
 impl<'a> QueryJob<'a> {
@@ -387,7 +390,16 @@ impl<'a> QueryJob<'a> {
             out: None,
             show_source: false,
             surface: Surface::Cli,
+            schema: 4,
         }
+    }
+
+    /// `--schema 3` (output validation §7.2): the 3.x document, kept for one
+    /// release; any other value is 4.0.0.
+    #[must_use]
+    pub fn schema(mut self, schema: u32) -> QueryJob<'a> {
+        self.schema = schema;
+        self
     }
 
     /// `--show-source` (W2-7).
@@ -607,10 +619,23 @@ impl Job for QueryJob<'_> {
         JobOutput::text_with_summary(
             self.out,
             r.map(|r| {
-                let text = if self.json { r.json_text } else { r.human_text };
+                let text = match (self.json, self.schema) {
+                    (false, _) => r.human_text,
+                    (true, 3) => r.json_text,
+                    (true, _) => v4_text(&r.json_text),
+                };
                 (text, r.exit_code, r.summary)
             }),
         )
+    }
+}
+
+/// The 4.0.0 text of a 3.x query document ([`super::query_v4`]); a text
+/// that does not parse is returned as it is.
+fn v4_text(v3: &str) -> String {
+    match serde_json::from_str::<Value>(v3) {
+        Ok(doc) => serialize_document_value(super::query_v4::document_from_v3(doc)),
+        Err(_) => v3.to_string(),
     }
 }
 
@@ -2759,19 +2784,35 @@ impl<'a> TouchCx<'_, 'a> {
     /// <first hop>` on a row that is not the routine's own, when a direct
     /// callee holds its complete contribution (design §4.5).
     fn witness_line(&self, t: &TableTouch<'a>) -> String {
+        let op = self.ops.get(t.operation_id, self.join);
+        // §7.5 (F84): `through` only when it names a routine other than the
+        // `in` one.
+        let through = match t.via {
+            crate::engine::l4::effect_store::ViaRank::Direct => String::new(),
+            _ => match self.hops.of(t) {
+                Ok(c) => {
+                    let hop = self.routine_label(c);
+                    if op.as_ref().is_some_and(|o| o.owner.qualified() == hop) {
+                        String::new()
+                    } else {
+                        format!(", through {hop}")
+                    }
+                }
+                Err(_) => String::new(),
+            },
+        };
+        format!("{}{through}", self.touch_core(t))
+    }
+
+    /// [`Self::witness_line`] without its `through` clause: the touch
+    /// itself, `[Op] <family> at <file>:<line> in <owner><temp><via>`.
+    fn touch_core(&self, t: &TableTouch<'a>) -> String {
         let at = match self.ops.get(t.operation_id, self.join) {
             Some(o) => format!("at {}:{} in {}", o.file, shown(o.line), o.owner.qualified()),
             None => format!("(outside the workspace: {})", t.operation_id),
         };
-        let through = match t.via {
-            crate::engine::l4::effect_store::ViaRank::Direct => String::new(),
-            _ => match self.hops.of(t) {
-                Ok(c) => format!(", through {}", self.routine_label(c)),
-                Err(_) => String::new(),
-            },
-        };
         format!(
-            "[{}] {} {at}{}{}{through}",
+            "[{}] {} {at}{}{}",
             t.op,
             op_family(t.op),
             temp_note(t.temp_state),
@@ -2825,6 +2866,121 @@ impl<'a> TouchCx<'_, 'a> {
             None => internal.to_string(),
         }
     }
+}
+
+/// The kind of records a caller's touches are on (§7.1): one class when
+/// they all are, else the counts.
+fn class_words(c: &TouchCounts) -> String {
+    match (c.known_persistent, c.possibly_persistent(), c.temporary) {
+        (_, 0, 0) => "on persistent records".to_string(),
+        (0, _, 0) => "on possibly persistent records".to_string(),
+        (0, 0, _) => "on temporary records".to_string(),
+        _ => counts_human(c),
+    }
+}
+
+/// The touching callers of `query touches --direction up` (output
+/// validation §7.1, F38): the first touch they share and their touch class
+/// print once, then every caller once, by object (nearest object first),
+/// with its definition line and hop distance; a caller prints its own first
+/// touch or class only when it differs from the shared one. The first
+/// `listed` callers; the caller folds the rest.
+fn callers_by_object<'a>(
+    cx: &TouchCx<'_, 'a>,
+    touchers: &[&CallerTouch<'a>],
+    listed: usize,
+) -> String {
+    let mut out = String::new();
+    if touchers.is_empty() {
+        return out;
+    }
+    let first = |c: &CallerTouch<'a>| {
+        let w = c.witnesses.as_ref().expect("a touching caller");
+        (cx.touch_core(&w.first), class_words(&w.counts))
+    };
+    // The most common first touch and class (ties: the nearest caller's).
+    let most = |key: &dyn Fn(&CallerTouch<'a>) -> String| -> (String, usize) {
+        let mut n: HashMap<String, (usize, usize)> = HashMap::new();
+        for (i, c) in touchers.iter().enumerate() {
+            let e = n.entry(key(c)).or_insert((0, i));
+            e.0 += 1;
+        }
+        let (k, (count, _)) = n
+            .into_iter()
+            .max_by(|a, b| a.1.0.cmp(&b.1.0).then(b.1.1.cmp(&a.1.1)))
+            .expect("non-empty");
+        (k, count)
+    };
+    let (touch, with_touch) = most(&|c| first(c).0);
+    let (class, _) = most(&|c| first(c).1);
+    out.push_str(&format!(
+        "    shared first touch ({} of {}): {touch}; touches {class}\n",
+        with_touch,
+        plural(touchers.len(), "caller", "callers"),
+    ));
+    // By object, in the order of each object's nearest caller.
+    // (object display, file, its callers with their routine).
+    type Group<'c, 't> = (String, String, Vec<(&'c CallerTouch<'t>, RoutineRef)>);
+    let mut objects: Vec<Group<'_, '_>> = Vec::new();
+    for c in &touchers[..listed] {
+        let internal = cx.query.bundle().routine_id(c.routine);
+        let Some(r) = cx.join.get(internal) else {
+            objects.push((internal.to_string(), String::new(), Vec::new()));
+            continue;
+        };
+        match objects
+            .iter_mut()
+            .find(|(o, f, _)| *o == r.object_display && *f == r.file)
+        {
+            Some((_, _, v)) => v.push((c, r)),
+            None => objects.push((r.object_display.clone(), r.file.clone(), vec![(c, r)])),
+        }
+    }
+    let routines = listed;
+    out.push_str(&format!(
+        "    callers ({} in {}), by object, nearest first; each with its definition line and hops:\n",
+        plural(routines, "routine", "routines"),
+        plural(objects.len(), "object", "objects"),
+    ));
+    for (object, file, rows) in &objects {
+        if rows.is_empty() {
+            out.push_str(&format!("      {object}\n"));
+            continue;
+        }
+        let head = rows[0].1.qualified();
+        let object_words = head
+            .strip_suffix(&rows[0].1.in_object)
+            .and_then(|s| s.strip_suffix("::").or_else(|| s.strip_suffix('.')))
+            .unwrap_or(object);
+        out.push_str(&format!(
+            "      {object_words} ({}) — {file}:\n",
+            rows.len()
+        ));
+        let mut sorted: Vec<&(&CallerTouch<'_>, RoutineRef)> = rows.iter().collect();
+        sorted.sort_by(|a, b| (a.0.depth, &a.1.in_object).cmp(&(b.0.depth, &b.1.in_object)));
+        for (c, r) in sorted {
+            let (own_touch, own_class) = first(c);
+            let mut differs = Vec::new();
+            if own_touch != touch {
+                differs.push(format!("first touch: {own_touch}"));
+            }
+            if own_class != class {
+                differs.push(format!("touches {own_class}"));
+            }
+            out.push_str(&format!(
+                "        {} :{} +{}{}\n",
+                r.in_object,
+                shown(r.line),
+                hops_unit(c.depth as usize),
+                if differs.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {}", differs.join("; "))
+                }
+            ));
+        }
+    }
+    out
 }
 
 fn counts_json(c: &TouchCounts) -> Value {
@@ -3438,6 +3594,13 @@ fn render_through_dependency(
             ));
         }
         line.push_str(&limited);
+        // §7.1: how these populations relate to the transitive callers
+        // (disjoint by construction: a solve-graph caller is removed above).
+        line.push_str(if configured.is_empty() {
+            "; disjoint from the transitive callers"
+        } else {
+            "; the three populations are disjoint"
+        });
         if !list_callers && !all {
             line.push_str(&format!(" — {} lists them", Input::Callers.on(cx.surface)));
         }
@@ -3703,9 +3866,9 @@ fn render_touches_up_solve(
         let touchers: Vec<&CallerTouch<'_>> =
             callers.iter().filter(|c| c.witnesses.is_some()).collect();
         let shown_n = fold_len(touchers.len(), TOUCHES_LIST_CAP, all || list_callers);
-        for c in &touchers[..shown_n] {
-            let w = c.witnesses.as_ref().expect("filtered");
-            if all {
+        if all {
+            for c in &touchers[..shown_n] {
+                let w = c.witnesses.as_ref().expect("filtered");
                 human.push_str(&format!(
                     "    +{} {}: {}: {}\n",
                     hops_unit(c.depth as usize),
@@ -3716,16 +3879,9 @@ fn render_touches_up_solve(
                 for a in product.iter().filter(|a| a.touch.routine == c.routine) {
                     human.push_str(&format!("      {}\n", cx.witness_line(&a.touch)));
                 }
-            } else {
-                human.push_str(&format!(
-                    "    +{} {}: {} ({}); first {}\n",
-                    hops_unit(c.depth as usize),
-                    cx.routine_label(c.routine),
-                    plural(w.count, "touch", "touches"),
-                    counts_human(&w.counts),
-                    cx.witness_line(&w.first)
-                ));
             }
+        } else {
+            human.push_str(&callers_by_object(cx, &touchers, shown_n));
         }
         if shown_n < touchers.len() {
             human.push_str(&format!(
@@ -4507,13 +4663,23 @@ fn render_query_effects_body(
         let n = fold_len(list.len(), 12, all);
         for (id, rows) in &list[..n] {
             let first = &effects[rows[0]];
-            let at = match ops.get(first.operation_id, &join) {
+            let op = ops.get(first.operation_id, &join);
+            let at = match &op {
                 Some(o) => format!("at {}:{} in {}", o.file, shown(o.line), o.owner.qualified()),
                 None => format!("(outside the workspace: {})", first.operation_id),
             };
+            // §7.5 (F84): `through` only when it names a routine other than
+            // the `in` one.
             let through = match first.via {
                 crate::engine::l4::effect_store::ViaRank::Direct => String::new(),
                 v => match hops.of(first) {
+                    Ok(c)
+                        if op
+                            .as_ref()
+                            .is_some_and(|o| o.owner.qualified() == hop_label(c)) =>
+                    {
+                        via_note(v).to_string()
+                    }
                     Ok(c) => format!(", through {}{}", hop_label(c), via_note(v)),
                     Err(_) => via_note(v).to_string(),
                 },
@@ -4564,7 +4730,8 @@ fn render_query_effects_body(
     }
     // Wave 3a: explain's own section, from the same rollup.
     if let Some(b) = &beyond {
-        for l in b.lines(all, surface) {
+        // A run of hops several paths share prints once (§7.5).
+        for l in crate::engine::path_segments::segment(b.lines(all, surface)) {
             human.push_str("  ");
             human.push_str(&l);
             human.push('\n');

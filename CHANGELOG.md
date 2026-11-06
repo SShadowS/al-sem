@@ -7,6 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (size and dedup: query 4.0.0, digest 4.0.0, tests version 2; output validation V5)
+
+Output validation round 1, milestone V5 (spec
+`docs/superpowers/specs/2026-11-06-output-validation-r1.md` §7, §8.3, §12.1; findings F38,
+F40, F41, F44–F47, F83, F84). Large answers repeated the same witness, routine, effect or
+path many times. Each shared thing is now stated once and referred to by id; nothing a
+reader needs is dropped.
+
+- **Path segments** (§7.5, §7.7, F45; `src/engine/path_segments.rs`): when several printed
+  paths share a run of three or more hops, the run prints once. The first path that uses it
+  prints `[segment S1: 7 hops]`, a later one `[S1]`, and the hops are listed once under
+  `path segments (each [Sn] in a path above stands for these hops):`. A path keeps its own
+  last hop, and a hub, guard or location stays on the hop that has it. explain's card,
+  digest's per-root card, query effects' `writes beyond` section and both prove renderers
+  use it. It replaces the per-section `(in <section>, a path that begins with `… →` begins
+  with: …)` line.
+- **prove, callers' context** (§7.5, F45, F83): `blocked by:` is one line of counts, the
+  kinds that carry an action first, each with its first example (`guard not recognized 1
+  (… at …:1433)`, `publication data not loaded 1 (no roots.config.json …)`); `detail`
+  lists examples of each kind below it. A hop that enters a hub no longer prints the site
+  the hub's `at` already names. The `coverage: the reverse cone, N states over M nodes`
+  line left the human text (JSON `states`, `nodes` keep it).
+- **`through` only when it names another routine** (F84): query effects and touches drop
+  `, through X` when X is the `in` routine.
+- **query touches, callers** (§7.1, F38, F39): the first touch the callers share and their
+  touch class print once (`shared first touch (952 of 952 callers): …`); then every caller
+  once, grouped by object (nearest object first), each with its definition line and hop
+  distance, and its own first touch or class only when it differs. The through-dependency
+  line says how its populations relate (`the three populations are disjoint`). The
+  `callers` input and the tool description say exactly that.
+- **explain caller rules** (§7.7, F47): more than three callers without the equivalent check
+  print as counts by object kind (`no equivalent check recognized in 41 analyzed callers:
+  14 page extensions, 5 pages — detail: true lists them`). In `most actions`, a tie the fold
+  would cut prints as one count (`6 page objects with 5 each`).
+- **impact detail** (§7.6, F46): `detail` is an evidence budget per routine, not ten items
+  per list: the direct callers and event publishers with call sites (three each), and the
+  nearest entry per tier, each on its own line. The hubs stay three, counted. The
+  whole-change block is left out when the change has one routine. "No base given" prints
+  once, in the header's assumptions (no longer in the comparison, input and block lines).
+- **MCP default inline cap back to 40 KiB** (`MCP_DEFAULT_INLINE_BYTES`; 48 KiB from V3 until
+  now): the path segments bring RunReportID's CDO explain card under it (45,374 bytes
+  before; the CDO renderings are re-minted in their own commit, which states the sizes).
+
+#### Schema majors (consumer notice)
+
+Each major keeps the previous document for one release behind `--schema` (MCP `schema`),
+as digest 2.x did (owner decision 5). §8.3: the word renames of §8.1 that touch these
+documents ship in the same major, so a reader sees one break.
+
+- **query 4.0.0** (§7.1, §7.2, F40): every routine a row names is one entry of
+  `payload.routines` (`r:<n>` → display, objectDisplay, qualifiedDisplay, signature,
+  selector, stableId, definition anchor); rows carry `firstHop: "r:<n>"` and `origin:
+  {routine: "r:<n>", file, line, column, role}` (the operation's own place stays on the
+  row). `via` is `payload.defaults.via` (its most common value) and a row carries it only
+  when it differs. A touches caller's first touch is `"w:<n>"` into `payload.witnesses`.
+  Words: `tempState` on an operation row is `temporary` / `not temporary` /
+  `caller-dependent (Rec)` / `caller-dependent (parameter N)` (1-based) / `not resolved`;
+  `tier` is `via-dependency` / `via-hub` / `via-configuration`; a row on a table not
+  resolved has no `tableId` and carries `tableNotResolved` (`RecordRef` or `Record`);
+  `isUnknownBucket` is gone. `--schema 3` writes 3.10.0.
+- **digest 4.0.0** (§7.3, F41): an effect's intrinsic facts (type, site, table, boundary,
+  resources, class, events, crossing) are one entry of `payload.effects` (`e:<n>`); each
+  root lists `{effect: "e:<n>", …}` with its own annotations: `status` (literal liveness),
+  `detail.tempState` and `detail.resourceCount`, `conditionality`, `provenance`, the paths
+  and their counts, `factId`, `guarantees`, `scopedGuarantees`, `refutableGuarantees`. A
+  root's liveness and temp state come from its reference, never from the shared row.
+  Crossings' boundary, sites and targets are in `payload.crossings` (each root keeps its
+  `prefix`); a path's hops may end with `{"tail": "t:<n>"}` into `payload.pathTails`;
+  `entries[].unresolved` holds `u:<n>` ids into `payload.unresolvedSites`;
+  `payload.defaults.effect` holds the most common `conditionality` and `provenance`.
+  `--schema 3` writes 3.3.0; `--schema 2` still writes 2.3.0.
+- **`al-sem.tests` version 2** (§7.4, F44): `hidden` is `{"<class>": {reason, channel,
+  selectionRelevant, nodes: [{node, nodeId}]}}` (a node whose own value differs keeps it);
+  `changed[].nearestTestedCaller` is left out when null; `changed[].status` and
+  `runFirst[].tier` are gone (`testStatus`, `pathTier` stay); `byTier` keys and
+  `nearest.tier` are the §8.1 tier words; `productionTier: "localApproximate"` is `"local"`
+  with `productionApproximate: true`. `--schema 1` writes version 1. impact keeps the
+  version 1 tests block inside `al-sem.impact/1` until impact's next major.
+- **Unchanged**: `alsem graph` JSONL (`al-sem.callgraph`), prove 2.10.0 / 2.11.0, explain
+  `al-sem.explain/4`, impact version 1, the result index `al-sem.result-index/1`.
+- **Who must move**: ConTinAI `work/scripts/effects.py` reads query rows' `via`,
+  `origin.routine.{stableId, objectDisplay, display}`, `origin.anchor.{file, line}`,
+  `tableName`, `isUnknownBucket`, `tempState == "known(true)"`: in 4.0.0 read
+  `origin.{file, line}`, join `origin.routine` with `payload.routines`, take `via` from the
+  row or `payload.defaults.via`, `tableNotResolved` for the unknown bucket and the new temp
+  words (or pass `--schema 3` for one release). bc-dev-mcp reads digest 2.x (pinned to
+  1.7.1, `satisfiesPin` refuses another major): when its pin moves, `risk.ts` and
+  `alsem-writes.ts` read each root's references and annotations and join them with
+  `payload.effects`, `crossings` and `pathTails` (or ask `--schema 3`/`2`); it reads `alsem
+  graph`, which is unchanged. al-lsp-for-agents relays engine answers and parses none of
+  these documents: no change.
+- **Semantic gate** (§12.1): `tests/cli/output_shared_evidence.rs` checks, through the
+  binary, that every digest root's entry, every query row's operation location and routine
+  and every touches caller's first touch read back through the shared tables equal the 3.x
+  document of the same input; `callers_context_tests::shared_witness_tails_print_once_and_
+  expand_to_every_hop` checks a prove witness's hops through its segment. Each has a
+  discrimination proof.
+
 ### Changed (counting units and per-tool items, output validation V6)
 
 Output validation round 1, milestone V6 (spec

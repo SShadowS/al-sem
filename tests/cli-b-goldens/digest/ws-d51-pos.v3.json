@@ -12,9 +12,58 @@
       ]
     },
     "changedRootsDiagnostics": [],
+    "defaults": {
+      "effect": {
+        "conditionality": "unconditional-on-success",
+        "provenance": "direct"
+      }
+    },
     "dependencies": {
       "apps": [],
       "mode": "crossApp"
+    },
+    "effects": {
+      "e:1": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "error-call",
+          "file": "ws:src/Sender.Codeunit.al",
+          "line": 14,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "ERROR_THROW"
+      },
+      "e:2": {
+        "confidence": "static",
+        "detail": {
+          "method": "Post"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "Client.Post",
+          "file": "ws:src/Sender.Codeunit.al",
+          "line": 13,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "HTTP"
+      },
+      "e:3": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "Error",
+          "file": "ws:src/Sender.Codeunit.al",
+          "line": 14,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "UI_ERROR"
+      }
     },
     "entries": [
       {
@@ -29,16 +78,7 @@
         "crossings": {},
         "effects": [
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "error-call",
-              "file": "ws:src/Sender.Codeunit.al",
-              "line": 14,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "13ef3af0ee3a1c65",
             "guarantees": [],
             "paths": [
@@ -54,24 +94,10 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_THROW"
+            "status": "live"
           },
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {
-              "method": "Post"
-            },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Client.Post",
-              "file": "ws:src/Sender.Codeunit.al",
-              "line": 13,
-              "sourceKind": "source"
-            },
+            "effect": "e:2",
             "factId": "9c47042e77369b78",
             "guarantees": [],
             "paths": [
@@ -86,22 +112,10 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "HTTP"
+            "status": "live"
           },
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "Error",
-              "file": "ws:src/Sender.Codeunit.al",
-              "line": 14,
-              "sourceKind": "source"
-            },
+            "effect": "e:3",
             "factId": "9bcff0f852b91056",
             "guarantees": [],
             "paths": [
@@ -116,10 +130,7 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "UI_ERROR"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -222,5 +233,5 @@
     },
     "workspaceFingerprint": "7b850fecf8bc63d2216a6d8e134dbdee8afdd0ceb51be87ffc52197fcef36875"
   },
-  "schemaVersion": "3.3.0"
+  "schemaVersion": "4.0.0"
 }

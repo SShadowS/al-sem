@@ -42,7 +42,7 @@ fn json(args: &[&str]) -> (Value, i32) {
     }
     let (out, code) = alsem(&a);
     (
-        serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}")),
+        crate::as_v3(serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"))),
         code,
     )
 }
@@ -227,7 +227,7 @@ fn symbol_only_dependency_table_resolves_and_is_selectable() {
     for sel in ["18", "Customer"] {
         let (q, code) = json(&["query", "touches", &ws, "--table", sel]);
         assert_eq!(code, 0, "--table {sel}: {q}");
-        assert_eq!(q["schemaVersion"], "3.10.0");
+        assert_eq!(q["schemaVersion"], "4.0.0");
         assert_eq!(q["payload"]["table"]["id"], dep_table(), "--table {sel}");
         assert_eq!(q["payload"]["table"]["name"], "Customer");
         assert_eq!(q["payload"]["dependencies"]["mode"], "crossApp");

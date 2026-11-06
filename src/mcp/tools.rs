@@ -160,11 +160,12 @@ pub enum ToolCall {
 /// the envelope. 40 KiB leaves that room; the wire's own default (64 KiB)
 /// still serves the LSP front end.
 ///
-/// TEMPORARY 48 KiB (owner decision 2026-11-06, output validation V3): the
-/// one routine display (every occurrence of an overloaded name prints its
-/// parameter types) grew RunReportID's CDO explain card to 45,058 bytes.
-/// This goes back to 40 KiB in V5 (spec 2026-11-06 §7.5/§7.7, path dedup).
-pub const MCP_DEFAULT_INLINE_BYTES: u64 = 48 * 1024;
+/// It was 48 KiB from output validation V3 until V5 (owner decision
+/// 2026-11-06: the one routine display grew RunReportID's CDO explain card
+/// to 45,374 bytes). V5's path segments (spec 2026-11-06 §7.5/§7.7: a shared
+/// run of hops prints once, under a segment id) brought the card back under
+/// 40 KiB, so the cap is 40 KiB again.
+pub const MCP_DEFAULT_INLINE_BYTES: u64 = 40 * 1024;
 
 /// Claude Code's limit (measured 2026-11-04): a result whose serialized
 /// `structuredContent` is over 50,000 characters is filed, not shown. The
@@ -222,7 +223,7 @@ fn common_properties() -> Map<String, Value> {
     );
     m.insert(
         "maxInlineBytes".into(),
-        json!({"type": "integer", "minimum": 0, "description": "The largest output returned inline (default 49152, at most 4194304); a larger one is written to a file in the server's output folder. Left unset, an answer over the client's 50,000 characters once escaped also goes to a file; set, the cap is exact."}),
+        json!({"type": "integer", "minimum": 0, "description": "The largest output returned inline (default 40960, at most 4194304); a larger one is written to a file in the server's output folder. Left unset, an answer over the client's 50,000 characters once escaped also goes to a file; set, the cap is exact."}),
     );
     m
 }
@@ -425,7 +426,7 @@ pub fn tool_list() -> Vec<Value> {
                     ),
                     (
                         "schema",
-                        json!({"type": "integer", "enum": [2, 3], "description": "2: the 2.x document (old shape, current analysis), for one release window; not with detail, maxPaths or compact."}),
+                        json!({"type": "integer", "enum": [2, 3, 4], "description": "The document's schema major (default 4: each effect's intrinsic facts once in `payload.effects`, each root's references with its own liveness, temp state, paths and refutation evidence). 3: the 3.x document, for one release. 2: the 2.x document (old shape, current analysis), for one release window; not with detail, maxPaths or compact."}),
                     ),
                     ("deterministic", deterministic()),
                 ],
@@ -435,7 +436,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_query_effects",
-            "Every record operation one routine (`routine`, a selector) performs transitively, each with its temp state and `via` provenance: reads, locks, validates, temporary records and caller-dependent writes included, each operation in exactly one bucket. Default (`format: human`): a summary line (writes that may persist, writes beyond dependency entry points, caller-dependent writes, locks, validate, reads, temporary records, on a RecordRef (table decided at run time), table not resolved), then writes per table with the first operation's location and first hop, then the writes beyond dependency entry points (alsem_explain's own section); about 20-25 KB for a routine that reaches Base Application. Ask for more: `all: true` (one line per operation, temporary records and reads included), `showSource: true` (the cited source line ±2 under each location), `format: json` (every row with its `firstHop`, and a `summary`; about 900 KB for such a routine, so a file with a summary of counts by operation and temp state). Lines are 1-based. Dependency code: per operation one routine deep (the operations of the first dependency routine entered); physical writes beyond each dependency entry point follow the whole cone with literal arguments, as alsem_explain does (`summary.beyondEntryPoints` in JSON); operations the cone rules out under literal arguments are still listed here, each row marked as the cone judges its route (`literalRoute`: ruledOut and notInCone, no route runs; otherRoute, the index's first hop is not the cone's live route, which it names; coneRoute; absent, not judged), and the human table lines say so. Next: alsem_prove writes-table:<T> for one table's witness. Returns the exact `alsem query effects` stdout.",
+            "Every record operation one routine (`routine`, a selector) performs transitively, each with its temp state and `via` provenance: reads, locks, validates, temporary records and caller-dependent writes included, each operation in exactly one bucket. Default (`format: human`): a summary line (writes that may persist, writes beyond dependency entry points, caller-dependent writes, locks, validate, reads, temporary records, on a RecordRef (table decided at run time), table not resolved), then writes per table with the first operation's location and first hop, then the writes beyond dependency entry points (alsem_explain's own section); about 20-25 KB for a routine that reaches Base Application. Ask for more: `all: true` (one line per operation, temporary records and reads included), `showSource: true` (the cited source line ±2 under each location), `format: json` (schema 4.0.0: every row with its `firstHop` and `origin.routine` as ids into `payload.routines`, `origin` holding the operation's own file, line and column, `via` only where it differs from `payload.defaults.via`, and a `summary`; a few hundred KB for such a routine, so a file with a summary of counts by operation and temp state; `schema: 3` for the 3.x document, one release). Lines are 1-based. Dependency code: per operation one routine deep (the operations of the first dependency routine entered); physical writes beyond each dependency entry point follow the whole cone with literal arguments, as alsem_explain does (`summary.beyondEntryPoints` in JSON); operations the cone rules out under literal arguments are still listed here, each row marked as the cone judges its route (`literalRoute`: ruledOut and notInCone, no route runs; otherRoute, the index's first hop is not the cone's live route, which it names; coneRoute; absent, not judged), and the human table lines say so. Next: alsem_prove writes-table:<T> for one table's witness. Returns the exact `alsem query effects` stdout.",
             schema(
                 vec![
                     (
@@ -454,6 +455,10 @@ pub fn tool_list() -> Vec<Value> {
                         "format",
                         json!({"type": "string", "enum": ["human", "json"], "description": "Output format (default human)."}),
                     ),
+                    (
+                        "schema",
+                        json!({"type": "integer", "enum": [3, 4], "description": "JSON schema major (default 4: each routine once in `payload.routines`, rows refer to it by id). 3: the 3.x document, for one release."}),
+                    ),
                     ("deterministic", deterministic()),
                 ],
                 &["routine"],
@@ -462,7 +467,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_query_touches",
-            "Is a table touched by any record operation, transitively? `table`: a number, a name, an internal table id, or unknown (operations whose table is decided at run time). Without `from`: every workspace routine that touches it, by the per-operation index. With `from` (a routine selector), `direction`: down (does it touch the table, and through which operations; when no indexed operation does, the answer is `unknown` with its reasons, such as operations on a RecordRef, calls not resolved or dependency code deeper than one routine, and `no` only when none applies), up (its transitive callers: how many touch it, do not, or are unknown; then, listed apart, the workspace callers that reach it only through dependency code, nearest first, each with its witness through every dependency routine and event, tier `configured` when only a configured-dispatch site such as Base Application's workflow responses connects it; potential callers, path feasibility not checked), or both (the default). Touches are counted on persistent records, on possibly persistent records and on temporary records (a temporary-record touch persists nothing but uses the table's schema and runs its triggers); when the routine touches the table itself its callers inherit the touch and are counted, not listed. With `field` (a field name or number of `table`): every code consumer of that one field instead, by use kind (read, write, validate, filter, key-use, load, calc, rule, metadata, copy-candidate for TransferFields, by-number for RecordRef.Field of a literal), each site once with its uses (`F += 1` is one site, read and write), temporary records counted with persistent ones, a record of an unresolved table as a candidate, the table's keys holding it, and what was searched: every workspace body and the dependency bodies loaded, never declaration-level consumers (CalcFormula, TableRelation, page and report columns); with no site the answer is \"no indexed consumer observed\", never no; with `from`, only the routine's cone (down) and its callers (up, by the reverse walk alsem_tests uses, each with its tier: local, through dependency code, only through an open site). Default (`format: human`): a few lines to about 10 KB, lists folded. Ask for more: `callers: true` (every caller by name, depth and location, each with its first touch when it touches the table through another branch; no witness paths), `all: true` (every witness, the callers' included, no fold; tens of megabytes on a hub routine), `showSource: true` (the cited source line ±2), `format: json` (every down witness, about 200 KB on a hub routine; over the cap a file with a summary of the down and up headlines). Lines are 1-based. Dependency code: per operation one routine deep; with `from` asked down, the dependency entry points beyond which the whole cone may write the table are listed too (`down.beyond`). Next: alsem_query_effects for the routine's other tables. Returns the exact `alsem query touches` stdout.",
+            "Is a table touched by any record operation, transitively? `table`: a number, a name, an internal table id, or unknown (operations whose table is decided at run time). Without `from`: every workspace routine that touches it, by the per-operation index. With `from` (a routine selector), `direction`: down (does it touch the table, and through which operations; when no indexed operation does, the answer is `unknown` with its reasons, such as operations on a RecordRef, calls not resolved or dependency code deeper than one routine, and `no` only when none applies), up (its transitive callers: how many touch it, do not, or are unknown; then, listed apart, the workspace callers that reach it only through dependency code, nearest first, each with its witness through every dependency routine and event, tier `configured` when only a configured-dispatch site such as Base Application's workflow responses connects it; potential callers, path feasibility not checked), or both (the default). Touches are counted on persistent records, on possibly persistent records and on temporary records (a temporary-record touch persists nothing but uses the table's schema and runs its triggers); when the routine touches the table itself its callers inherit the touch and are counted, not listed. With `field` (a field name or number of `table`): every code consumer of that one field instead, by use kind (read, write, validate, filter, key-use, load, calc, rule, metadata, copy-candidate for TransferFields, by-number for RecordRef.Field of a literal), each site once with its uses (`F += 1` is one site, read and write), temporary records counted with persistent ones, a record of an unresolved table as a candidate, the table's keys holding it, and what was searched: every workspace body and the dependency bodies loaded, never declaration-level consumers (CalcFormula, TableRelation, page and report columns); with no site the answer is \"no indexed consumer observed\", never no; with `from`, only the routine's cone (down) and its callers (up, by the reverse walk alsem_tests uses, each with its tier: local, through dependency code, only through an open site). Default (`format: human`): a few lines to about 10 KB, lists folded. Ask for more: `callers: true` (every caller once, by object, with its definition line and hop distance; the shared first touch once, a caller's own only when it differs; no witness paths), `all: true` (every witness, the callers' included, no fold; tens of megabytes on a hub routine), `showSource: true` (the cited source line ±2), `format: json` (every down witness, about 200 KB on a hub routine; over the cap a file with a summary of the down and up headlines; schema 4.0.0: routines in `payload.routines` and shared first touches in `payload.witnesses`, rows refer to them by id; `schema: 3` for the 3.x document, one release). Lines are 1-based. Dependency code: per operation one routine deep; with `from` asked down, the dependency entry points beyond which the whole cone may write the table are listed too (`down.beyond`). Next: alsem_query_effects for the routine's other tables. Returns the exact `alsem query touches` stdout.",
             schema(
                 vec![
                     (
@@ -487,7 +492,7 @@ pub fn tool_list() -> Vec<Value> {
                     ),
                     (
                         "callers",
-                        json!({"type": "boolean", "description": "Name every transitive caller with its depth and location, each with its first touch (operation, location, first hop) when it touches the table through another branch; no witness paths (`--callers`)."}),
+                        json!({"type": "boolean", "description": "Name every transitive caller once, grouped by object, with its definition line and hop distance; the first touch they share prints once, and a caller's own first touch only when it differs from the shared one; no witness paths (`--callers`)."}),
                     ),
                     (
                         "showSource",
@@ -497,6 +502,10 @@ pub fn tool_list() -> Vec<Value> {
                         "format",
                         json!({"type": "string", "enum": ["human", "json"], "description": "Output format (default human)."}),
                     ),
+                    (
+                        "schema",
+                        json!({"type": "integer", "enum": [3, 4], "description": "JSON schema major (default 4: routines and shared witnesses in tables, rows refer to them by id). 3: the 3.x document, for one release."}),
+                    ),
                     ("deterministic", deterministic()),
                 ],
                 &["table"],
@@ -505,7 +514,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_tests",
-            "Which tests to run first for a change, and whether that is enough. Exactly one of `routines` (selectors), `files` (workspace-relative .al files: every routine in them) or `diff` (a unified diff's text; `diffRoot` is the folder its paths are relative to, default the git top level). The test scope comes first: the workspace's own [Test] procedures and the sibling test apps, from `testApps` (folders), else `testApps` in .al-sem.json (`[]` turns them off), else found under the git top level (at most 3 levels and 64 app.json files; a cap says discovery incomplete). Each test app is analyzed in a test universe of its own (the workspace app loaded into it as source; nothing is written into the test app), started on the first call; the production engine resolves the changed routines. Then each changed routine's status (reached, no-known-path, analysis-incomplete, not-loaded, not-in-projection), the tests to run first ranked by tier, hops and codeunit, grouped per codeunit with the first test's path, `selection complete: yes|no` and, when no, every reason the whole suite must run as well (ways to run no edge shows, calls from test code that resolve nowhere, a root not in a test universe), and a codeunit filter. Default (`format: human`): one line per test codeunit (the first 5), 2-6 KB. Ask for more: `tier: dependency` (also tests whose path passes dependency code) or `tier: all` (also paths over open sites), `maxTests: N` (at most N tests in runFirst), `format: json` (schema al-sem.tests/1: runFirst, requiredFallback, selectionComplete, byTier, hidden, next). Lines are 1-based. Dependency code: a test reaching the routine only through dependency code is counted in its own tier, never as local, and when those paths go through nodes that may execute most of the program the answer says they are not specific to this change. Static reachability, not coverage. Next: run the runFirst filter, then the whole suite when selection complete is no. Returns the exact `alsem tests` stdout.",
+            "Which tests to run first for a change, and whether that is enough. Exactly one of `routines` (selectors), `files` (workspace-relative .al files: every routine in them) or `diff` (a unified diff's text; `diffRoot` is the folder its paths are relative to, default the git top level). The test scope comes first: the workspace's own [Test] procedures and the sibling test apps, from `testApps` (folders), else `testApps` in .al-sem.json (`[]` turns them off), else found under the git top level (at most 3 levels and 64 app.json files; a cap says discovery incomplete). Each test app is analyzed in a test universe of its own (the workspace app loaded into it as source; nothing is written into the test app), started on the first call; the production engine resolves the changed routines. Then each changed routine's status (reached, no-known-path, analysis-incomplete, not-loaded, not-in-projection), the tests to run first ranked by tier, hops and codeunit, grouped per codeunit with the first test's path, `selection complete: yes|no` and, when no, every reason the whole suite must run as well (ways to run no edge shows, calls from test code that resolve nowhere, a root not in a test universe), and a codeunit filter. Default (`format: human`): one line per test codeunit (the first 5), 2-6 KB. Ask for more: `tier: dependency` (also tests whose path passes dependency code) or `tier: all` (also paths over open sites), `maxTests: N` (at most N tests in runFirst), `format: json` (schema al-sem.tests/2: runFirst, requiredFallback, selectionComplete, byTier, hidden by class, next; `schema: 1` for version 1, one release). Lines are 1-based. Dependency code: a test reaching the routine only through dependency code is counted in its own tier, never as local, and when those paths go through nodes that may execute most of the program the answer says they are not specific to this change. Static reachability, not coverage. Next: run the runFirst filter, then the whole suite when selection complete is no. Returns the exact `alsem tests` stdout.",
             schema(
                 vec![
                     (
@@ -544,6 +553,10 @@ pub fn tool_list() -> Vec<Value> {
                         "format",
                         json!({"type": "string", "enum": ["human", "json"], "description": "Output format (default human)."}),
                     ),
+                    (
+                        "schema",
+                        json!({"type": "integer", "enum": [1, 2], "description": "JSON document version (default 2: `hidden` grouped by class with its reason once). 1: the version 1 document, for one release."}),
+                    ),
                 ],
                 &[],
                 true,
@@ -551,7 +564,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_impact",
-            "Reviewing a diff or a PR: what the change touches, who it reaches, and with `base` how each changed routine's behavior differs from the base. Exactly one of `routines` (selectors), `files` (workspace-relative .al files: every routine in them), `diff` (a unified diff's text; `diffRoot` is the folder its paths are relative to, default the git top level) or `base` (a git ref: the working tree against the merge base of the ref and HEAD, committed, staged, unstaged and untracked .al files; git is only read); `base` with `diff` compares that diff against the merge base, whose files must match the diff's old lines. With `base` the base is built (that commit's files, analyzed under TODAY's packages, labelled so, package hashes recorded on both sides; first time about 40 s and 4 GB on a large app, then cached per base, at most 10 bases) in a one-shot child that takes a place of the engine children (it waits up to 60 s for an idle one, else the answer says why and keeps the rest), and each changed routine gets a before/after: writes by table, operation and class, commits, UI, errors, events, calls and the effects beyond calls, compared by meaning and never by line (a moved line is no change; a table swapped for another shows both); a loss is `no longer observed` (not removed) when the new side's analysis of that routine is incomplete; routines are paired by id, else by signature (a changed parameter list), else are added or deleted (deleted ones with their callers in the base); schema findings (fields, keys, enums) and contract findings as alsem diff finds them; a change to app.json dependencies marks dependency-reaching changes unreliable. `delta: false` skips the base build (current effects only). The input accounting comes first: the comparison tuple (requested ref, resolved commit, merge base, comparison base, HEAD and the revision's inputs stamp, the diff's hash), then every changed line in one bucket (routine body or signature, object declarations by kind: fields, keys, global vars, properties, actions, layout …, outside objects, removed routine text, unmapped with the reason), the hunks outside routines, files not mapped, diff lines that do not match the working tree. Then per changed routine, ranked reached-from-a-user-or-job first, then by ancestors: its current effects (writes, commits, UI, errors, events), who reaches it (direct callers with their call site, ancestors by tier, page actions by caption, API pages, job queue, event subscribers and publishers, external callers) and its tests (tests reaching it, the nearest; a routine no test universe has gets its nearest tested caller), then the tests line (selection complete and why not, a codeunit filter). Without `base`: current effects only, nothing called added or deleted. Default (`format: human`): the first 20 routines, a few lines each with the first item of each list; 2-5 KB for one routine, about 35 KB for a 94-file change with 699 routines; over the cap a file with a summary (the accounting, the first five routines, the tests line). Ask for more: `maxRoots: N` (routines shown), `detail: true` (up to 10 items per list, every hunk and diagnostic), `format: json` (schema al-sem.impact/1, every routine with `up`, `effects`, `tests` and its `delta` (null without a base), the base block, `deleted` and `schemaChanges`; megabytes for a large change, so a file). `tests: false` builds no test universe; `testApps` names the sibling test apps (as alsem_tests); `assumeNoDependents: true` reports no external callers. Lines are 1-based. Dependency code: callers and entries follow the whole program (dependency code included, counted in its own tier); effects follow every resolved call with literal arguments, as alsem_digest does. Next: alsem_explain on a top-ranked routine; alsem_tests for the full selection. Returns the exact `alsem impact` stdout.",
+            "Reviewing a diff or a PR: what the change touches, who it reaches, and with `base` how each changed routine's behavior differs from the base. Exactly one of `routines` (selectors), `files` (workspace-relative .al files: every routine in them), `diff` (a unified diff's text; `diffRoot` is the folder its paths are relative to, default the git top level) or `base` (a git ref: the working tree against the merge base of the ref and HEAD, committed, staged, unstaged and untracked .al files; git is only read); `base` with `diff` compares that diff against the merge base, whose files must match the diff's old lines. With `base` the base is built (that commit's files, analyzed under TODAY's packages, labelled so, package hashes recorded on both sides; first time about 40 s and 4 GB on a large app, then cached per base, at most 10 bases) in a one-shot child that takes a place of the engine children (it waits up to 60 s for an idle one, else the answer says why and keeps the rest), and each changed routine gets a before/after: writes by table, operation and class, commits, UI, errors, events, calls and the effects beyond calls, compared by meaning and never by line (a moved line is no change; a table swapped for another shows both); a loss is `no longer observed` (not removed) when the new side's analysis of that routine is incomplete; routines are paired by id, else by signature (a changed parameter list), else are added or deleted (deleted ones with their callers in the base); schema findings (fields, keys, enums) and contract findings as alsem diff finds them; a change to app.json dependencies marks dependency-reaching changes unreliable. `delta: false` skips the base build (current effects only). The input accounting comes first: the comparison tuple (requested ref, resolved commit, merge base, comparison base, HEAD and the revision's inputs stamp, the diff's hash), then every changed line in one bucket (routine body or signature, object declarations by kind: fields, keys, global vars, properties, actions, layout …, outside objects, removed routine text, unmapped with the reason), the hunks outside routines, files not mapped, diff lines that do not match the working tree. Then per changed routine, ranked reached-from-a-user-or-job first, then by ancestors: its current effects (writes, commits, UI, errors, events), who reaches it (direct callers with their call site, ancestors by tier, page actions by caption, API pages, job queue, event subscribers and publishers, external callers) and its tests (tests reaching it, the nearest; a routine no test universe has gets its nearest tested caller), then the tests line (selection complete and why not, a codeunit filter). Without `base`: current effects only, nothing called added or deleted. Default (`format: human`): the first 20 routines, a few lines each with the first item of each list; 2-5 KB for one routine, about 35 KB for a 94-file change with 699 routines; over the cap a file with a summary (the accounting, the first five routines, the tests line). Ask for more: `maxRoots: N` (routines shown), `detail: true` (an evidence budget per routine: its direct callers and event publishers with call sites, and the nearest entry per tier, each on its own line; every hunk and diagnostic), `format: json` (schema al-sem.impact/1, every routine with `up`, `effects`, `tests` and its `delta` (null without a base), the base block, `deleted` and `schemaChanges`; megabytes for a large change, so a file). `tests: false` builds no test universe; `testApps` names the sibling test apps (as alsem_tests); `assumeNoDependents: true` reports no external callers. Lines are 1-based. Dependency code: callers and entries follow the whole program (dependency code included, counted in its own tier); effects follow every resolved call with literal arguments, as alsem_digest does. Next: alsem_explain on a top-ranked routine; alsem_tests for the full selection. Returns the exact `alsem impact` stdout.",
             schema(
                 vec![
                     (
@@ -596,7 +609,7 @@ pub fn tool_list() -> Vec<Value> {
                     ),
                     (
                         "detail",
-                        json!({"type": "boolean", "description": "Up to 10 items per list, every hunk outside routines and every diagnostic."}),
+                        json!({"type": "boolean", "description": "Per routine its direct callers and event publishers with call sites and the nearest entry per tier; every hunk outside routines and every diagnostic."}),
                     ),
                     (
                         "assumeNoDependents",
@@ -1031,6 +1044,9 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
                 "format",
                 &a.enumerated("format", &["human", "json"], "human")?,
             );
+            if let Some(n) = a.count("schema")? {
+                v.opt("schema", &n.to_string());
+            }
             v.switch("deterministic", a.flag("deterministic")?);
             v
         }
@@ -1054,6 +1070,9 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
                 "format",
                 &a.enumerated("format", &["human", "json"], "human")?,
             );
+            if let Some(n) = a.count("schema")? {
+                v.opt("schema", &n.to_string());
+            }
             v.switch("deterministic", a.flag("deterministic")?);
             v
         }
@@ -1107,6 +1126,17 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             let format = a.enumerated("format", &["human", "json"], "human")?;
             v.opt("format", &format);
             v.switch("single-app", universe == Universe::SingleApp);
+            // §7.4: `schema: 1` keeps the version 1 document for one release.
+            let schema = match a.count("schema")? {
+                None => 2,
+                Some(n @ (1 | 2)) => {
+                    v.opt("schema", &n.to_string());
+                    n as u32
+                }
+                Some(n) => {
+                    return Err(format!("alsem_tests: unknown schema {n}. Expected: 1 or 2"));
+                }
+            };
             // §6.1: the MCP front end's answers are worded for it; the CLI's
             // argv carries the same `--surface=mcp`, so the bytes are equal.
             v.opt("surface", "mcp");
@@ -1116,6 +1146,7 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
                 json: format == "json",
                 surface: crate::engine::follow_up::Surface::Mcp,
                 single_app: universe == Universe::SingleApp,
+                schema,
             };
             return Ok(ToolCall::Tests(TestsCall {
                 command: CommandCall {
@@ -1414,9 +1445,9 @@ mod tests {
             json!({"routine": "P", "question": "may-commit", "deterministic": true}),
         )
         .unwrap();
-        // MCP output plan 1c: human by default for an agent; 48 KiB inline
-        // (temporary, 40 KiB again in V5),
-        // and (T-W2-23) the client's character budget.
+        // MCP output plan 1c: human by default for an agent; 40 KiB inline
+        // (48 KiB from V3 until V5), and (T-W2-23) the client's character
+        // budget.
         assert_eq!(c.max_inline_bytes, Some(MCP_DEFAULT_INLINE_BYTES));
         assert_eq!(c.client_budget_chars, Some(MCP_CLIENT_BUDGET_CHARS));
         let own = command(

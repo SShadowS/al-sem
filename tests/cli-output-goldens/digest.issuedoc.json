@@ -12,6 +12,34 @@
       ]
     },
     "changedRootsDiagnostics": [],
+    "crossings": {
+      "c:1249372dd091": {
+        "boundary": "Codeunit \"Base Poster\" (70100)::OnRun",
+        "id": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
+        "sites": [
+          "ws:src/OutIssueDocument.Codeunit.al:15"
+        ],
+        "targets": [
+          "r:06ab280a2dc1"
+        ]
+      },
+      "c:c01248383de2": {
+        "boundary": "Codeunit \"Base Calc\" (70101)::OnRun",
+        "id": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs1",
+        "sites": [
+          "ws:src/OutIssueDocument.Codeunit.al:16"
+        ],
+        "targets": [
+          "r:5e210a1999b4"
+        ]
+      }
+    },
+    "defaults": {
+      "effect": {
+        "conditionality": "unknown",
+        "provenance": "transitive"
+      }
+    },
     "dependencies": {
       "apps": [
         {
@@ -23,6 +51,277 @@
         }
       ],
       "mode": "crossApp"
+    },
+    "effects": {
+      "e:1": {
+        "confidence": "static",
+        "detail": {
+          "starts": "Codeunit Out Job"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "TaskScheduler.CreateTask",
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 19,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "BACKGROUND_TASK"
+      },
+      "e:10": {
+        "class": "physical",
+        "classReason": "not-joined",
+        "confidence": "static",
+        "crossing": "c:c01248383de2",
+        "detail": {
+          "boundary": "Codeunit Base Calc::OnRun"
+        },
+        "resources": [
+          {
+            "display": "Base Price",
+            "id": "d0d00001-0000-4000-8000-0000000000b1/table/70022"
+          }
+        ],
+        "transactionContext": "unknown",
+        "type": "DB_MODIFY"
+      },
+      "e:11": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "Log.Insert",
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 61,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "ERROR_IMPLICIT"
+      },
+      "e:12": {
+        "confidence": "static",
+        "detail": {
+          "eventClass": "Integration",
+          "resourceDisplay": "onafterissuedoc",
+          "resourceId": "a0a00001-0000-4000-8000-0000000000a1/Codeunit/50110/event/onafterissuedoc"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "OnAfterIssueDoc",
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 25,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "EVENT_PUBLISH"
+      },
+      "e:13": {
+        "confidence": "static",
+        "crossing": "c:1249372dd091",
+        "detail": {
+          "boundary": "Codeunit Base Poster::OnRun"
+        },
+        "eventsByPublisher": [
+          {
+            "events": [
+              "onafterpostdocument"
+            ],
+            "publisher": "d0d00001-0000-4000-8000-0000000000b1/Codeunit/70100"
+          }
+        ],
+        "transactionContext": "unknown",
+        "type": "EVENT_PUBLISH"
+      },
+      "e:14": {
+        "confidence": "static",
+        "detail": {
+          "method": "Get"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "Client.Get",
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 72,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "HTTP"
+      },
+      "e:2": {
+        "confidence": "static",
+        "crossing": "c:1249372dd091",
+        "detail": {
+          "boundary": "Codeunit Base Poster::OnRun"
+        },
+        "transactionContext": "unknown",
+        "type": "COMMIT"
+      },
+      "e:3": {
+        "class": "physical",
+        "classReason": "not-joined",
+        "confidence": "static",
+        "crossing": "c:1249372dd091",
+        "detail": {
+          "boundary": "Codeunit Base Poster::OnRun"
+        },
+        "resources": [
+          {
+            "display": "Base Doc Line",
+            "id": "d0d00001-0000-4000-8000-0000000000b1/table/70021"
+          }
+        ],
+        "transactionContext": "unknown",
+        "type": "DB_DELETE"
+      },
+      "e:4": {
+        "class": "temporary",
+        "classReason": "known-temporary",
+        "confidence": "static",
+        "detail": {
+          "resourceDisplay": "Out Log",
+          "resourceId": "a0a00001-0000-4000-8000-0000000000a1/table/50101"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "TempLog.DeleteAll",
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 58,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "DB_DELETE"
+      },
+      "e:5": {
+        "class": "temporary",
+        "classReason": "known-temporary",
+        "confidence": "static",
+        "crossing": "c:1249372dd091",
+        "detail": {
+          "boundary": "Codeunit Base Poster::OnRun"
+        },
+        "resources": [
+          {
+            "display": "Base Ledger 01",
+            "id": "d0d00001-0000-4000-8000-0000000000b1/table/70001"
+          }
+        ],
+        "transactionContext": "unknown",
+        "type": "DB_INSERT"
+      },
+      "e:6": {
+        "class": "physical",
+        "classReason": "not-joined",
+        "confidence": "static",
+        "crossing": "c:1249372dd091",
+        "detail": {
+          "boundary": "Codeunit Base Poster::OnRun"
+        },
+        "resources": [
+          {
+            "display": "Base Ledger 01",
+            "id": "d0d00001-0000-4000-8000-0000000000b1/table/70001"
+          },
+          {
+            "display": "Base Ledger 02",
+            "id": "d0d00001-0000-4000-8000-0000000000b1/table/70002"
+          },
+          {
+            "display": "Base Ledger 03",
+            "id": "d0d00001-0000-4000-8000-0000000000b1/table/70003"
+          },
+          {
+            "display": "Base Ledger 04",
+            "id": "d0d00001-0000-4000-8000-0000000000b1/table/70004"
+          },
+          {
+            "display": "Base Ledger 05",
+            "id": "d0d00001-0000-4000-8000-0000000000b1/table/70005"
+          },
+          {
+            "display": "Base Ledger 06",
+            "id": "d0d00001-0000-4000-8000-0000000000b1/table/70006"
+          },
+          {
+            "display": "Base Ledger 07",
+            "id": "d0d00001-0000-4000-8000-0000000000b1/table/70007"
+          },
+          {
+            "display": "Base Ledger 08",
+            "id": "d0d00001-0000-4000-8000-0000000000b1/table/70008"
+          },
+          {
+            "display": "Base Ledger 09",
+            "id": "d0d00001-0000-4000-8000-0000000000b1/table/70009"
+          },
+          {
+            "display": "Base Ledger 10",
+            "id": "d0d00001-0000-4000-8000-0000000000b1/table/70010"
+          },
+          {
+            "display": "Base Ledger 11",
+            "id": "d0d00001-0000-4000-8000-0000000000b1/table/70011"
+          },
+          {
+            "display": "Base Ledger 12",
+            "id": "d0d00001-0000-4000-8000-0000000000b1/table/70012"
+          }
+        ],
+        "transactionContext": "unknown",
+        "type": "DB_INSERT"
+      },
+      "e:7": {
+        "class": "physical",
+        "classReason": "known-persistent",
+        "confidence": "static",
+        "detail": {
+          "resourceDisplay": "Out Log",
+          "resourceId": "a0a00001-0000-4000-8000-0000000000a1/table/50101"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "Log.Insert",
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 61,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "DB_INSERT"
+      },
+      "e:8": {
+        "class": "callerDependent",
+        "classReason": "parameter",
+        "confidence": "static",
+        "detail": {
+          "resourceDisplay": "Out Doc",
+          "resourceId": "a0a00001-0000-4000-8000-0000000000a1/table/50100"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "Doc.Modify",
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 14,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "DB_MODIFY"
+      },
+      "e:9": {
+        "class": "physical",
+        "classReason": "not-joined",
+        "confidence": "static",
+        "crossing": "c:1249372dd091",
+        "detail": {
+          "boundary": "Codeunit Base Poster::OnRun"
+        },
+        "resources": [
+          {
+            "display": "Base Register",
+            "id": "d0d00001-0000-4000-8000-0000000000b1/table/70020"
+          }
+        ],
+        "transactionContext": "unknown",
+        "type": "DB_MODIFY"
+      }
     },
     "entries": [
       {
@@ -39,46 +338,20 @@
         },
         "crossings": {
           "c:1249372dd091": {
-            "boundary": "Codeunit \"Base Poster\" (70100)::OnRun",
-            "id": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs0",
             "prefix": {
               "hops": []
-            },
-            "sites": [
-              "ws:src/OutIssueDocument.Codeunit.al:15"
-            ],
-            "targets": [
-              "r:06ab280a2dc1"
-            ]
+            }
           },
           "c:c01248383de2": {
-            "boundary": "Codeunit \"Base Calc\" (70101)::OnRun",
-            "id": "cs:51168e57cf87e49c/90672b4a526949a163e6d9102c44e0823cae86a1bf91f613e1e9d0f13c14b1de/cs1",
             "prefix": {
               "hops": []
-            },
-            "sites": [
-              "ws:src/OutIssueDocument.Codeunit.al:16"
-            ],
-            "targets": [
-              "r:5e210a1999b4"
-            ]
+            }
           }
         },
         "effects": [
           {
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {
-              "starts": "Codeunit Out Job"
-            },
-            "evidence": {
-              "column": 8,
-              "excerpt": "TaskScheduler.CreateTask",
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 19,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "e28b3de46714ba70",
             "guarantees": [
               "COMMIT_REACHABLE",
@@ -107,17 +380,10 @@
                 "writeOccurrenceId": "dbb35aab093e98c0"
               }
             ],
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "BACKGROUND_TASK"
+            "status": "live"
           },
           {
-            "conditionality": "unknown",
-            "confidence": "static",
-            "crossing": "c:1249372dd091",
-            "detail": {
-              "boundary": "Codeunit Base Poster::OnRun"
-            },
+            "effect": "e:2",
             "factId": "ee69de9d9133b75f",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -126,16 +392,7 @@
               {
                 "hops": [
                   {
-                    "edge": "object-run-resolved",
-                    "file": "ws:src/OutIssueDocument.Codeunit.al",
-                    "line": 15,
-                    "to": "r:06ab280a2dc1"
-                  },
-                  {
-                    "edge": "direct-call",
-                    "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
-                    "line": 8,
-                    "to": "r:4bb5b37bce93"
+                    "tail": "t:1"
                   }
                 ],
                 "representative": true,
@@ -147,21 +404,13 @@
                 "throughEntryPoint": true
               }
             ],
-            "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "COMMIT"
+            "status": "live"
           },
           {
-            "class": "physical",
-            "classReason": "not-joined",
-            "conditionality": "unknown",
-            "confidence": "static",
-            "crossing": "c:1249372dd091",
             "detail": {
-              "boundary": "Codeunit Base Poster::OnRun",
               "resourceCount": "1"
             },
+            "effect": "e:3",
             "factId": "dbb35aab093e98c0",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -186,81 +435,39 @@
                 "throughEntryPoint": true
               }
             ],
-            "provenance": "transitive",
-            "resources": [
-              {
-                "display": "Base Doc Line",
-                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70021"
-              }
-            ],
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_DELETE"
+            "status": "live"
           },
           {
-            "class": "temporary",
-            "classReason": "known-temporary",
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "Out Log",
-              "resourceId": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
               "tempState": "known(true)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "TempLog.DeleteAll",
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 58,
-              "sourceKind": "source"
-            },
+            "effect": "e:4",
             "factId": "5141fd0a447226eb",
             "guarantees": [],
             "paths": [],
             "pathsKept": 1,
             "pathsOmitted": 1,
             "pathsProducerTruncated": false,
-            "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_DELETE"
+            "status": "live"
           },
           {
-            "class": "temporary",
-            "classReason": "known-temporary",
-            "conditionality": "unknown",
-            "confidence": "static",
-            "crossing": "c:1249372dd091",
             "detail": {
-              "boundary": "Codeunit Base Poster::OnRun",
               "resourceCount": "1",
               "tempState": "known(true)"
             },
+            "effect": "e:5",
             "factId": "2299df03090dd5dd",
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
-            "provenance": "transitive",
-            "resources": [
-              {
-                "display": "Base Ledger 01",
-                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70001"
-              }
-            ],
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_INSERT"
+            "status": "live"
           },
           {
-            "class": "physical",
-            "classReason": "not-joined",
-            "conditionality": "unknown",
-            "confidence": "static",
-            "crossing": "c:1249372dd091",
             "detail": {
-              "boundary": "Codeunit Base Poster::OnRun",
               "resourceCount": "12"
             },
+            "effect": "e:6",
             "factId": "d1e1b546fd8d6f5c",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -269,16 +476,7 @@
               {
                 "hops": [
                   {
-                    "edge": "object-run-resolved",
-                    "file": "ws:src/OutIssueDocument.Codeunit.al",
-                    "line": 15,
-                    "to": "r:06ab280a2dc1"
-                  },
-                  {
-                    "edge": "direct-call",
-                    "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
-                    "line": 8,
-                    "to": "r:4bb5b37bce93"
+                    "tail": "t:1"
                   }
                 ],
                 "representative": true,
@@ -291,78 +489,14 @@
                 "throughEntryPoint": true
               }
             ],
-            "provenance": "transitive",
-            "resources": [
-              {
-                "display": "Base Ledger 01",
-                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70001"
-              },
-              {
-                "display": "Base Ledger 02",
-                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70002"
-              },
-              {
-                "display": "Base Ledger 03",
-                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70003"
-              },
-              {
-                "display": "Base Ledger 04",
-                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70004"
-              },
-              {
-                "display": "Base Ledger 05",
-                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70005"
-              },
-              {
-                "display": "Base Ledger 06",
-                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70006"
-              },
-              {
-                "display": "Base Ledger 07",
-                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70007"
-              },
-              {
-                "display": "Base Ledger 08",
-                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70008"
-              },
-              {
-                "display": "Base Ledger 09",
-                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70009"
-              },
-              {
-                "display": "Base Ledger 10",
-                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70010"
-              },
-              {
-                "display": "Base Ledger 11",
-                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70011"
-              },
-              {
-                "display": "Base Ledger 12",
-                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70012"
-              }
-            ],
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_INSERT"
+            "status": "live"
           },
           {
-            "class": "physical",
-            "classReason": "known-persistent",
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "Out Log",
-              "resourceId": "a0a00001-0000-4000-8000-0000000000a1/table/50101",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Log.Insert",
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 61,
-              "sourceKind": "source"
-            },
+            "effect": "e:7",
             "factId": "369cf30301f856c2",
             "guarantees": [],
             "paths": [
@@ -384,28 +518,14 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_INSERT"
+            "status": "live"
           },
           {
-            "class": "callerDependent",
-            "classReason": "parameter",
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "Out Doc",
-              "resourceId": "a0a00001-0000-4000-8000-0000000000a1/table/50100",
               "tempState": "parameter-dependent(0)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Doc.Modify",
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 14,
-              "sourceKind": "source"
-            },
+            "effect": "e:8",
             "factId": "65e80a0b8fa09ee5",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -424,20 +544,13 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_MODIFY"
+            "status": "live"
           },
           {
-            "class": "physical",
-            "classReason": "not-joined",
-            "conditionality": "unknown",
-            "confidence": "static",
-            "crossing": "c:1249372dd091",
             "detail": {
-              "boundary": "Codeunit Base Poster::OnRun",
               "resourceCount": "1"
             },
+            "effect": "e:9",
             "factId": "88c2872efa55e67e",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -446,16 +559,7 @@
               {
                 "hops": [
                   {
-                    "edge": "object-run-resolved",
-                    "file": "ws:src/OutIssueDocument.Codeunit.al",
-                    "line": 15,
-                    "to": "r:06ab280a2dc1"
-                  },
-                  {
-                    "edge": "direct-call",
-                    "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
-                    "line": 8,
-                    "to": "r:4bb5b37bce93"
+                    "tail": "t:1"
                   }
                 ],
                 "representative": true,
@@ -468,27 +572,13 @@
                 "throughEntryPoint": true
               }
             ],
-            "provenance": "transitive",
-            "resources": [
-              {
-                "display": "Base Register",
-                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70020"
-              }
-            ],
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_MODIFY"
+            "status": "live"
           },
           {
-            "class": "physical",
-            "classReason": "not-joined",
-            "conditionality": "unknown",
-            "confidence": "static",
-            "crossing": "c:c01248383de2",
             "detail": {
-              "boundary": "Codeunit Base Calc::OnRun",
               "resourceCount": "1"
             },
+            "effect": "e:10",
             "factId": "36d60a20668909d0",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -519,28 +609,11 @@
                 "throughEntryPoint": true
               }
             ],
-            "provenance": "transitive",
-            "resources": [
-              {
-                "display": "Base Price",
-                "id": "d0d00001-0000-4000-8000-0000000000b1/table/70022"
-              }
-            ],
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_MODIFY"
+            "status": "live"
           },
           {
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "Log.Insert",
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 61,
-              "sourceKind": "source"
-            },
+            "effect": "e:11",
             "factId": "3682e914d340f673",
             "guarantees": [],
             "paths": [
@@ -562,26 +635,10 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           },
           {
-            "conditionality": "unknown",
-            "confidence": "static",
-            "detail": {
-              "eventClass": "Integration",
-              "resourceDisplay": "onafterissuedoc",
-              "resourceId": "a0a00001-0000-4000-8000-0000000000a1/Codeunit/50110/event/onafterissuedoc"
-            },
-            "evidence": {
-              "column": 8,
-              "excerpt": "OnAfterIssueDoc",
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 25,
-              "sourceKind": "source"
-            },
+            "effect": "e:12",
             "factId": "cc7ca039e0043831",
             "guarantees": [
               "ORDERING_UNKNOWN"
@@ -590,49 +647,22 @@
             "pathsKept": 1,
             "pathsOmitted": 1,
             "pathsProducerTruncated": false,
-            "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "EVENT_PUBLISH"
+            "status": "live"
           },
           {
-            "conditionality": "unknown",
-            "confidence": "static",
-            "crossing": "c:1249372dd091",
             "detail": {
-              "boundary": "Codeunit Base Poster::OnRun",
               "resourceCount": "1"
             },
-            "eventsByPublisher": [
-              {
-                "events": [
-                  "onafterpostdocument"
-                ],
-                "publisher": "d0d00001-0000-4000-8000-0000000000b1/Codeunit/70100"
-              }
-            ],
+            "effect": "e:13",
             "factId": "e3cb657fcb1d748d",
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
-            "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "EVENT_PUBLISH"
+            "status": "live"
           },
           {
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {
-              "method": "Get"
-            },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Client.Get",
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 72,
-              "sourceKind": "source"
-            },
+            "effect": "e:14",
             "factId": "75166aca19c90410",
             "guarantees": [],
             "paths": [
@@ -653,10 +683,7 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "HTTP"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -727,32 +754,8 @@
           "unresolvedTableWrites": 0
         },
         "unresolved": [
-          {
-            "calleeDisplay": "Codeunit.Run(<dynamic>)",
-            "callsiteAnchor": {
-              "column": 8,
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 21,
-              "sourceKind": "source"
-            },
-            "owningRoutine": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475",
-            "owningRoutineDisplay": "IssueDoc",
-            "status": "dynamic-target"
-          },
-          {
-            "calleeDisplay": "Handler.Handle",
-            "callsiteAnchor": {
-              "column": 8,
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 23,
-              "sourceKind": "source"
-            },
-            "candidateCount": 1,
-            "openWorld": true,
-            "owningRoutine": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475",
-            "owningRoutineDisplay": "IssueDoc",
-            "status": "polymorphic"
-          }
+          "u:1",
+          "u:2"
         ],
         "unresolvedInDependencies": {
           "dynamicTarget": 1,
@@ -774,6 +777,22 @@
     ],
     "lineBase": 1,
     "pathCap": 1,
+    "pathTails": {
+      "t:1": [
+        {
+          "edge": "object-run-resolved",
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 15,
+          "to": "r:06ab280a2dc1"
+        },
+        {
+          "edge": "direct-call",
+          "file": "dep:d0d00001-0000-4000-8000-0000000000b1:src/BasePoster.Codeunit.al",
+          "line": 8,
+          "to": "r:4bb5b37bce93"
+        }
+      ]
+    },
     "result": {
       "scope": {
         "analysis": "partial",
@@ -847,7 +866,35 @@
       "totalEffects": 18,
       "totalUnresolved": 3
     },
+    "unresolvedSites": {
+      "u:1": {
+        "calleeDisplay": "Codeunit.Run(<dynamic>)",
+        "callsiteAnchor": {
+          "column": 8,
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 21,
+          "sourceKind": "source"
+        },
+        "owningRoutine": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475",
+        "owningRoutineDisplay": "IssueDoc",
+        "status": "dynamic-target"
+      },
+      "u:2": {
+        "calleeDisplay": "Handler.Handle",
+        "callsiteAnchor": {
+          "column": 8,
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 23,
+          "sourceKind": "source"
+        },
+        "candidateCount": 1,
+        "openWorld": true,
+        "owningRoutine": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475",
+        "owningRoutineDisplay": "IssueDoc",
+        "status": "polymorphic"
+      }
+    },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "3.3.0"
+  "schemaVersion": "4.0.0"
 }

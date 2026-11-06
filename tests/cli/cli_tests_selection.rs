@@ -131,10 +131,12 @@ fn workspace_tests_select_the_local_test_with_its_hops() {
     let ws = repo_root().join("tests/fixtures/test-selection-graph");
     let v = json(&ws, &["--routine", "ApplyDecay"]);
     assert_eq!(v["schema"], "al-sem.tests");
-    assert_eq!(v["changed"][0]["status"], "reached");
+    assert_eq!(v["version"], 2);
+    assert_eq!(v["changed"][0]["testStatus"], "tests with a modeled path");
+    assert!(v["changed"][0].get("status").is_none(), "{v:#}");
     let first = &v["runFirst"][0];
     assert_eq!(first["procedure"], "NightlyRecalcDecays");
-    assert_eq!(first["tier"], "local");
+    assert_eq!(first["pathTier"], "local");
     assert_eq!(first["hops"], 4);
     assert_eq!(first["class"], "direct");
     let (human, code) = tests(&ws, &["--routine", "ApplyDecay"]);
@@ -178,10 +180,11 @@ fn a_sibling_test_app_is_discovered_and_reaches_the_production_root() {
     assert_eq!(scope["discoveryComplete"], true);
     assert_eq!(scope["apps"][0]["name"], "TU Production Tests");
     assert_eq!(scope["apps"][0]["testsLoaded"], 2);
-    assert_eq!(scope["apps"][0]["productionTier"], "localApproximate");
+    assert_eq!(scope["apps"][0]["productionTier"], "local");
+    assert_eq!(scope["apps"][0]["productionApproximate"], true);
     assert_eq!(scope["skipped"][0]["reason"], "no-source");
     let id = v["changed"][0]["stableId"].as_str().unwrap().to_string();
-    assert_eq!(v["changed"][0]["status"], "reached");
+    assert_eq!(v["changed"][0]["testStatus"], "tests with a modeled path");
     assert_eq!(v["runFirst"][0]["procedure"], "PostUpdatesQty");
     assert_eq!(v["runFirst"][0]["hops"], 1);
     assert_eq!(v["runFirst"][0]["reaches"][0], id);
@@ -200,7 +203,7 @@ fn a_sibling_test_app_is_discovered_and_reaches_the_production_root() {
 fn a_leaf_reached_through_production_code_is_reached() {
     let t = universe_repo();
     let v = json(&t.path().join("App"), &["--routine", "TU Core::Leaf"]);
-    assert_eq!(v["changed"][0]["status"], "reached");
+    assert_eq!(v["changed"][0]["testStatus"], "tests with a modeled path");
     assert_eq!(v["runFirst"][0]["procedure"], "PostUpdatesQty");
     assert_eq!(v["runFirst"][0]["hops"], 2);
 }
@@ -277,11 +280,14 @@ fn a_platform_table_event_in_the_cone_keeps_the_selection_incomplete() {
     let t = universe_repo();
     let ws = t.path().join("App");
     let v = json(&ws, &["--routine", "TU Core::Audited"]);
-    assert_eq!(v["changed"][0]["status"], "reached", "audited: {v:#}");
+    assert_eq!(
+        v["changed"][0]["testStatus"], "tests with a modeled path",
+        "audited: {v:#}"
+    );
     let (human, _) = tests(&ws, &["--routine", "TU Core::Audited"]);
     golden("universe.audited.human.txt", &human, Some(t.path()));
     let v = json(&ws, &["--routine", "TU Core::Logged"]);
-    assert_eq!(v["changed"][0]["status"], "analysis-incomplete");
+    assert_eq!(v["changed"][0]["testStatus"], "analysis partial");
     assert_eq!(v["selectionComplete"], false);
     let reasons: Vec<&str> = v["requiredFallback"]
         .as_array()
@@ -290,7 +296,15 @@ fn a_platform_table_event_in_the_cone_keeps_the_selection_incomplete() {
         .map(|f| f["reason"].as_str().unwrap())
         .collect();
     assert!(reasons.contains(&"hidden-callers"), "{reasons:?}");
-    assert_eq!(v["hidden"][0]["class"], "platform-table-event");
+    // §7.4: `hidden` by class, the reason once per class.
+    assert!(
+        v["hidden"]["platform-table-event"]["reason"].is_string(),
+        "{v:#}"
+    );
+    assert!(
+        !v["hidden"]["platform-table-event"]["nodes"][0].is_null(),
+        "{v:#}"
+    );
     let (human, _) = tests(&ws, &["--routine", "TU Core::Logged"]);
     // Output validation §5.2: "static reachability, not coverage" is the
     // header's assumption, said once; the selection line is in the body.
@@ -303,7 +317,7 @@ fn a_platform_table_event_in_the_cone_keeps_the_selection_incomplete() {
                 .unwrap()
     );
     let v = json(&ws, &["--routine", "TU Core::Untested"]);
-    assert_eq!(v["changed"][0]["status"], "no-known-path");
+    assert_eq!(v["changed"][0]["testStatus"], "no modeled path");
     assert_eq!(v["selectionComplete"], true, "{v:#}");
 }
 
@@ -528,7 +542,7 @@ pub(crate) fn cdo_selection_ratchets() {
     assert_eq!(names.len(), 3, "{names:?}");
     for t in v["runFirst"].as_array().unwrap() {
         assert_eq!(t["codeunit"], "CDO Telemetry Tests");
-        assert_eq!(t["tier"], "local");
+        assert_eq!(t["pathTier"], "local");
         assert_eq!(t["hops"], 1);
     }
     for n in [
@@ -560,7 +574,7 @@ pub(crate) fn cdo_selection_ratchets() {
         .iter()
         .find(|c| c["display"] == "Codeunit \"CDO Issue Document\"::IssueReminder")
         .expect("IssueReminder resolved");
-    assert_eq!(ir["nearest"]["tier"], "throughDependency", "{ir}");
+    assert_eq!(ir["nearest"]["tier"], "via-dependency", "{ir}");
     assert_eq!(v["selectionComplete"], false);
     let reasons: Vec<&str> = v["requiredFallback"]
         .as_array()

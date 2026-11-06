@@ -140,6 +140,8 @@ pub mod conditionality;
 pub mod diff_parser;
 pub mod digest_cli;
 pub mod digest_v3;
+/// The digest 4.0.0 document (output validation §7.3).
+pub mod digest_v4;
 // G23: effects unreachable once literal Boolean arguments are followed.
 pub mod field_guard;
 pub mod group_path;

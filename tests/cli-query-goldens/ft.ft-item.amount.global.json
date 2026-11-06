@@ -75,20 +75,7 @@
         "object": "Codeunit FT Consumers",
         "record": "RecRef",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 93,
-            "role": "definition"
-          },
-          "display": "ByNumberUnknown",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::ByNumberUnknown",
-          "selector": "Codeunit \"FT Consumers\"::ByNumberUnknown",
-          "signature": "(var RecordRef, Integer)",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#35f18753daa50247ab182e842484d094fa44db0de5f27c405e53c485c5715aa6"
-        },
+        "routine": "r:1",
         "site": {
           "column": 16,
           "file": "ws:src/FTFields.al",
@@ -106,20 +93,7 @@
         "object": "Codeunit FT Consumers",
         "record": "Item",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 60,
-            "role": "definition"
-          },
-          "display": "Kinds",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
-          "selector": "Codeunit \"FT Consumers\"::Kinds",
-          "signature": "(var Record \"FT Item\")",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
-        },
+        "routine": "r:2",
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
@@ -138,20 +112,7 @@
         "object": "Codeunit FT Consumers",
         "record": "Item",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 60,
-            "role": "definition"
-          },
-          "display": "Kinds",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
-          "selector": "Codeunit \"FT Consumers\"::Kinds",
-          "signature": "(var Record \"FT Item\")",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
-        },
+        "routine": "r:2",
         "site": {
           "column": 29,
           "file": "ws:src/FTFields.al",
@@ -169,20 +130,7 @@
         "object": "Codeunit FT Consumers",
         "record": "Item",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 60,
-            "role": "definition"
-          },
-          "display": "Kinds",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
-          "selector": "Codeunit \"FT Consumers\"::Kinds",
-          "signature": "(var Record \"FT Item\")",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
-        },
+        "routine": "r:2",
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
@@ -200,20 +148,7 @@
         "object": "Codeunit FT Consumers",
         "record": "Item",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 60,
-            "role": "definition"
-          },
-          "display": "Kinds",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
-          "selector": "Codeunit \"FT Consumers\"::Kinds",
-          "signature": "(var Record \"FT Item\")",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
-        },
+        "routine": "r:2",
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
@@ -231,20 +166,7 @@
         "object": "Codeunit FT Consumers",
         "record": "Item",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 60,
-            "role": "definition"
-          },
-          "display": "Kinds",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
-          "selector": "Codeunit \"FT Consumers\"::Kinds",
-          "signature": "(var Record \"FT Item\")",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
-        },
+        "routine": "r:2",
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
@@ -262,20 +184,7 @@
         "object": "Codeunit FT Consumers",
         "record": "Item",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 60,
-            "role": "definition"
-          },
-          "display": "Kinds",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
-          "selector": "Codeunit \"FT Consumers\"::Kinds",
-          "signature": "(var Record \"FT Item\")",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
-        },
+        "routine": "r:2",
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
@@ -293,20 +202,7 @@
         "object": "Codeunit FT Consumers",
         "record": "Item",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 60,
-            "role": "definition"
-          },
-          "display": "Kinds",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
-          "selector": "Codeunit \"FT Consumers\"::Kinds",
-          "signature": "(var Record \"FT Item\")",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
-        },
+        "routine": "r:2",
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
@@ -324,20 +220,7 @@
         "object": "Codeunit FT Consumers",
         "record": "Item",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 60,
-            "role": "definition"
-          },
-          "display": "Kinds",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
-          "selector": "Codeunit \"FT Consumers\"::Kinds",
-          "signature": "(var Record \"FT Item\")",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
-        },
+        "routine": "r:2",
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
@@ -355,20 +238,7 @@
         "object": "Codeunit FT Consumers",
         "record": "Item",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 60,
-            "role": "definition"
-          },
-          "display": "Kinds",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
-          "selector": "Codeunit \"FT Consumers\"::Kinds",
-          "signature": "(var Record \"FT Item\")",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
-        },
+        "routine": "r:2",
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
@@ -386,20 +256,7 @@
         "object": "Codeunit FT Consumers",
         "record": "Item",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 60,
-            "role": "definition"
-          },
-          "display": "Kinds",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
-          "selector": "Codeunit \"FT Consumers\"::Kinds",
-          "signature": "(var Record \"FT Item\")",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
-        },
+        "routine": "r:2",
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
@@ -417,20 +274,7 @@
         "object": "Codeunit FT Consumers",
         "record": "Item",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 60,
-            "role": "definition"
-          },
-          "display": "Kinds",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
-          "selector": "Codeunit \"FT Consumers\"::Kinds",
-          "signature": "(var Record \"FT Item\")",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
-        },
+        "routine": "r:2",
         "site": {
           "column": 16,
           "file": "ws:src/FTFields.al",
@@ -448,20 +292,7 @@
         "object": "Codeunit FT Consumers",
         "record": "Item",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 60,
-            "role": "definition"
-          },
-          "display": "Kinds",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
-          "selector": "Codeunit \"FT Consumers\"::Kinds",
-          "signature": "(var Record \"FT Item\")",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
-        },
+        "routine": "r:2",
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
@@ -479,20 +310,7 @@
         "object": "Codeunit FT Consumers",
         "record": "Tmp",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 60,
-            "role": "definition"
-          },
-          "display": "Kinds",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
-          "selector": "Codeunit \"FT Consumers\"::Kinds",
-          "signature": "(var Record \"FT Item\")",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
-        },
+        "routine": "r:2",
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
@@ -511,20 +329,7 @@
         "object": "Codeunit FT Consumers",
         "record": "Item",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 60,
-            "role": "definition"
-          },
-          "display": "Kinds",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
-          "selector": "Codeunit \"FT Consumers\"::Kinds",
-          "signature": "(var Record \"FT Item\")",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
-        },
+        "routine": "r:2",
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
@@ -543,20 +348,7 @@
         "object": "Codeunit FT Consumers",
         "record": "Item",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 60,
-            "role": "definition"
-          },
-          "display": "Kinds",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
-          "selector": "Codeunit \"FT Consumers\"::Kinds",
-          "signature": "(var Record \"FT Item\")",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
-        },
+        "routine": "r:2",
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
@@ -574,20 +366,7 @@
         "object": "Codeunit FT Consumers",
         "record": "RecRef",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 60,
-            "role": "definition"
-          },
-          "display": "Kinds",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
-          "selector": "Codeunit \"FT Consumers\"::Kinds",
-          "signature": "(var Record \"FT Item\")",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
-        },
+        "routine": "r:2",
         "site": {
           "column": 16,
           "file": "ws:src/FTFields.al",
@@ -606,20 +385,7 @@
         "object": "Codeunit FT Consumers",
         "record": "Missing",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 101,
-            "role": "definition"
-          },
-          "display": "Unresolved",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::Unresolved",
-          "selector": "Codeunit \"FT Consumers\"::Unresolved",
-          "signature": "()",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#48e5cd4bd9f9660ab704a3888a9f97cbebf62a1e79395f33feb1976b34fcbf46"
-        },
+        "routine": "r:3",
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
@@ -638,20 +404,7 @@
         "object": "Codeunit FT Consumers",
         "record": "Missing",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 101,
-            "role": "definition"
-          },
-          "display": "Unresolved",
-          "objectDisplay": "Codeunit FT Consumers",
-          "qualifiedDisplay": "Codeunit \"FT Consumers\"::Unresolved",
-          "selector": "Codeunit \"FT Consumers\"::Unresolved",
-          "signature": "()",
-          "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#48e5cd4bd9f9660ab704a3888a9f97cbebf62a1e79395f33feb1976b34fcbf46"
-        },
+        "routine": "r:3",
         "site": {
           "column": 8,
           "file": "ws:src/FTFields.al",
@@ -669,20 +422,7 @@
         "object": "Page FT Card",
         "record": "Rec",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 4,
-            "file": "ws:src/FTFields.al",
-            "line": 167,
-            "role": "definition"
-          },
-          "display": "OnAfterGetRecord",
-          "objectDisplay": "Page FT Card",
-          "qualifiedDisplay": "Page \"FT Card\"::OnAfterGetRecord",
-          "selector": "Page \"FT Card\"::OnAfterGetRecord",
-          "signature": "()",
-          "stableId": "08080808-0000-4000-8000-000000000081:Page:50800#c61793b51db155d5f30630cf4f4640931c2f93380ff5b0863cc412c4e4a39303"
-        },
+        "routine": "r:4",
         "site": {
           "column": 11,
           "file": "ws:src/FTFields.al",
@@ -700,24 +440,7 @@
         "object": "Table FT Item",
         "record": "Rec",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 12,
-            "file": "ws:src/FTFields.al",
-            "line": 17,
-            "role": "definition"
-          },
-          "display": "OnValidate",
-          "member": {
-            "kind": "field",
-            "name": "Amount"
-          },
-          "objectDisplay": "Table FT Item",
-          "qualifiedDisplay": "Table \"FT Item\".Amount::OnValidate",
-          "selector": "Table \"FT Item\".Amount::OnValidate",
-          "signature": "()",
-          "stableId": "08080808-0000-4000-8000-000000000081:Table:50800#ae29e2bf6eb7d1d235ab9401b018cedc68aadaa3964f6a0ef131e22006744e91"
-        },
+        "routine": "r:5",
         "site": {
           "column": 16,
           "file": "ws:src/FTFields.al",
@@ -735,24 +458,7 @@
         "object": "Table FT Item",
         "record": "Rec",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 12,
-            "file": "ws:src/FTFields.al",
-            "line": 17,
-            "role": "definition"
-          },
-          "display": "OnValidate",
-          "member": {
-            "kind": "field",
-            "name": "Amount"
-          },
-          "objectDisplay": "Table FT Item",
-          "qualifiedDisplay": "Table \"FT Item\".Amount::OnValidate",
-          "selector": "Table \"FT Item\".Amount::OnValidate",
-          "signature": "()",
-          "stableId": "08080808-0000-4000-8000-000000000081:Table:50800#ae29e2bf6eb7d1d235ab9401b018cedc68aadaa3964f6a0ef131e22006744e91"
-        },
+        "routine": "r:5",
         "site": {
           "column": 26,
           "file": "ws:src/FTFields.al",
@@ -770,24 +476,7 @@
         "object": "Table FT Item",
         "record": "Rec",
         "role": "primary",
-        "routine": {
-          "anchor": {
-            "column": 12,
-            "file": "ws:src/FTFields.al",
-            "line": 17,
-            "role": "definition"
-          },
-          "display": "OnValidate",
-          "member": {
-            "kind": "field",
-            "name": "Amount"
-          },
-          "objectDisplay": "Table FT Item",
-          "qualifiedDisplay": "Table \"FT Item\".Amount::OnValidate",
-          "selector": "Table \"FT Item\".Amount::OnValidate",
-          "signature": "()",
-          "stableId": "08080808-0000-4000-8000-000000000081:Table:50800#ae29e2bf6eb7d1d235ab9401b018cedc68aadaa3964f6a0ef131e22006744e91"
-        },
+        "routine": "r:5",
         "site": {
           "column": 16,
           "file": "ws:src/FTFields.al",
@@ -824,6 +513,82 @@
         "reasons": [],
         "scope": "per operation, one routine into dependency code; dependencies: 0 apps",
         "universe": "cross-app"
+      }
+    },
+    "routines": {
+      "r:1": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/FTFields.al",
+          "line": 93,
+          "role": "definition"
+        },
+        "display": "ByNumberUnknown",
+        "objectDisplay": "Codeunit FT Consumers",
+        "qualifiedDisplay": "Codeunit \"FT Consumers\"::ByNumberUnknown",
+        "selector": "Codeunit \"FT Consumers\"::ByNumberUnknown",
+        "signature": "(var RecordRef, Integer)",
+        "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#35f18753daa50247ab182e842484d094fa44db0de5f27c405e53c485c5715aa6"
+      },
+      "r:2": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/FTFields.al",
+          "line": 60,
+          "role": "definition"
+        },
+        "display": "Kinds",
+        "objectDisplay": "Codeunit FT Consumers",
+        "qualifiedDisplay": "Codeunit \"FT Consumers\"::Kinds",
+        "selector": "Codeunit \"FT Consumers\"::Kinds",
+        "signature": "(var Record \"FT Item\")",
+        "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#fdecd40ffd0fa670ab98de7fa291a1179ceca5393b980ddb980f1995eb1157b4"
+      },
+      "r:3": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/FTFields.al",
+          "line": 101,
+          "role": "definition"
+        },
+        "display": "Unresolved",
+        "objectDisplay": "Codeunit FT Consumers",
+        "qualifiedDisplay": "Codeunit \"FT Consumers\"::Unresolved",
+        "selector": "Codeunit \"FT Consumers\"::Unresolved",
+        "signature": "()",
+        "stableId": "08080808-0000-4000-8000-000000000081:Codeunit:50800#48e5cd4bd9f9660ab704a3888a9f97cbebf62a1e79395f33feb1976b34fcbf46"
+      },
+      "r:4": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/FTFields.al",
+          "line": 167,
+          "role": "definition"
+        },
+        "display": "OnAfterGetRecord",
+        "objectDisplay": "Page FT Card",
+        "qualifiedDisplay": "Page \"FT Card\"::OnAfterGetRecord",
+        "selector": "Page \"FT Card\"::OnAfterGetRecord",
+        "signature": "()",
+        "stableId": "08080808-0000-4000-8000-000000000081:Page:50800#c61793b51db155d5f30630cf4f4640931c2f93380ff5b0863cc412c4e4a39303"
+      },
+      "r:5": {
+        "anchor": {
+          "column": 12,
+          "file": "ws:src/FTFields.al",
+          "line": 17,
+          "role": "definition"
+        },
+        "display": "OnValidate",
+        "member": {
+          "kind": "field",
+          "name": "Amount"
+        },
+        "objectDisplay": "Table FT Item",
+        "qualifiedDisplay": "Table \"FT Item\".Amount::OnValidate",
+        "selector": "Table \"FT Item\".Amount::OnValidate",
+        "signature": "()",
+        "stableId": "08080808-0000-4000-8000-000000000081:Table:50800#ae29e2bf6eb7d1d235ab9401b018cedc68aadaa3964f6a0ef131e22006744e91"
       }
     },
     "searched": {
@@ -871,5 +636,5 @@
       "selector": "FT Item"
     }
   },
-  "schemaVersion": "3.10.0"
+  "schemaVersion": "4.0.0"
 }

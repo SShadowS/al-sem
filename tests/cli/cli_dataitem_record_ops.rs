@@ -92,8 +92,10 @@ fn digest(ws: &Path) -> serde_json::Value {
         .env("RUST_LOG", "off")
         .output()
         .unwrap();
-    serde_json::from_slice(&out.stdout)
-        .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)))
+    crate::as_v3(
+        serde_json::from_slice(&out.stdout)
+            .unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr))),
+    )
 }
 
 /// Every `{calleeDisplay, status}` row anywhere in the digest.

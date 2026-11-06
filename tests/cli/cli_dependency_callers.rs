@@ -156,8 +156,8 @@ fn touches_up(extra: &[&str]) -> Value {
         String::from_utf8_lossy(&out.stderr)
     );
     let v: Value = serde_json::from_slice(&out.stdout).expect("json");
-    assert_eq!(v["schemaVersion"], "3.10.0");
-    v["payload"]["up"].clone()
+    assert_eq!(v["schemaVersion"], "4.0.0");
+    crate::as_v3(v)["payload"]["up"].clone()
 }
 
 /// `objectDisplay::display` of a routine row.

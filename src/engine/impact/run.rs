@@ -319,6 +319,9 @@ fn tests_outcome(
             json: true,
             surface: Default::default(),
             single_app: false,
+            // Impact embeds this block in `al-sem.impact/1`: it keeps the
+            // tests version 1 shape until impact's next major.
+            schema: 1,
         },
     );
     let mut doc: Value =

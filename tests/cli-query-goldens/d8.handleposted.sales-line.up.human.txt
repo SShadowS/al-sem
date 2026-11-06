@@ -4,4 +4,7 @@ analysis complete · assumptions: loaded program; unloaded implementations and s
 more: --all lists every witness, no fold; --callers names every caller; --format json for every row
   callers: by code calls of workspace code (calls, object runs and the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a caller opens (the tests and impact tools follow it); paths through dependency code are listed apart, before the caller list
   through dependency code: not applicable (no dependency code loaded)
-    +2 hops Codeunit D8PostingChain::PostSalesDoc: 1 touch (1 on a persistent record, 0 on possibly persistent records, 0 on temporary records); first [ModifyAll] write at ws:src/posting.al:12 in Codeunit D8PostingChain::PostSalesDoc
+    shared first touch (1 of 1 caller): [ModifyAll] write at ws:src/posting.al:12 in Codeunit D8PostingChain::PostSalesDoc; touches on persistent records
+    callers (1 routine in 1 object), by object, nearest first; each with its definition line and hops:
+      Codeunit D8PostingChain (1) — ws:src/posting.al:
+        PostSalesDoc :3 +2 hops

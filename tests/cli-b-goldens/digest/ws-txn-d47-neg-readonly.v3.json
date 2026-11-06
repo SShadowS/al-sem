@@ -12,9 +12,32 @@
       ]
     },
     "changedRootsDiagnostics": [],
+    "defaults": {
+      "effect": {
+        "conditionality": "unconditional-on-success",
+        "provenance": "direct"
+      }
+    },
     "dependencies": {
       "apps": [],
       "mode": "crossApp"
+    },
+    "effects": {
+      "e:1": {
+        "confidence": "static",
+        "detail": {
+          "method": "Get"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "Client.Get",
+          "file": "ws:src/Sender.Codeunit.al",
+          "line": 12,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "HTTP"
+      }
     },
     "entries": [
       {
@@ -29,18 +52,7 @@
         "crossings": {},
         "effects": [
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {
-              "method": "Get"
-            },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Client.Get",
-              "file": "ws:src/Sender.Codeunit.al",
-              "line": 12,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "211b45ff6ef73613",
             "guarantees": [],
             "paths": [
@@ -55,10 +67,7 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "HTTP"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -160,5 +169,5 @@
     },
     "workspaceFingerprint": "9a26de0865bbcbff926a04804ba7498aecbc802ada68e2c5c834dbc7c66ddbd9"
   },
-  "schemaVersion": "3.3.0"
+  "schemaVersion": "4.0.0"
 }

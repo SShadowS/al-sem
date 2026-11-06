@@ -12,9 +12,66 @@
       ]
     },
     "changedRootsDiagnostics": [],
+    "defaults": {
+      "effect": {
+        "conditionality": "loop-body",
+        "provenance": "transitive"
+      }
+    },
     "dependencies": {
       "apps": [],
       "mode": "crossApp"
+    },
+    "effects": {
+      "e:1": {
+        "class": "physical",
+        "classReason": "known-persistent",
+        "confidence": "static",
+        "detail": {
+          "resourceDisplay": "MC Customer",
+          "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "Cust.Modify",
+          "file": "ws:src/D1MultiCaller.al",
+          "line": 19,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "DB_MODIFY"
+      },
+      "e:2": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "Cust.Modify",
+          "file": "ws:src/D1MultiCaller.al",
+          "line": 19,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "ERROR_IMPLICIT"
+      },
+      "e:3": {
+        "class": "callerDependent",
+        "classReason": "parameter",
+        "confidence": "static",
+        "detail": {
+          "resourceDisplay": "MC Customer",
+          "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "Cust.Modify",
+          "file": "ws:src/D1MultiCaller.al",
+          "line": 19,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "DB_MODIFY"
+      }
     },
     "entries": [
       {
@@ -29,22 +86,10 @@
         "crossings": {},
         "effects": [
           {
-            "class": "physical",
-            "classReason": "known-persistent",
-            "conditionality": "loop-body",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "MC Customer",
-              "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Cust.Modify",
-              "file": "ws:src/D1MultiCaller.al",
-              "line": 19,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "1432fced4ff049e2",
             "guarantees": [],
             "paths": [
@@ -66,22 +111,10 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_MODIFY"
+            "status": "live"
           },
           {
-            "conditionality": "loop-body",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "Cust.Modify",
-              "file": "ws:src/D1MultiCaller.al",
-              "line": 19,
-              "sourceKind": "source"
-            },
+            "effect": "e:2",
             "factId": "497413d19f4e63a8",
             "guarantees": [],
             "paths": [
@@ -103,10 +136,7 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -193,22 +223,10 @@
         "crossings": {},
         "effects": [
           {
-            "class": "physical",
-            "classReason": "known-persistent",
-            "conditionality": "loop-body",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "MC Customer",
-              "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Cust.Modify",
-              "file": "ws:src/D1MultiCaller.al",
-              "line": 19,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "5a4a7bd7d3e83981",
             "guarantees": [],
             "paths": [
@@ -230,22 +248,10 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_MODIFY"
+            "status": "live"
           },
           {
-            "conditionality": "loop-body",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "Cust.Modify",
-              "file": "ws:src/D1MultiCaller.al",
-              "line": 19,
-              "sourceKind": "source"
-            },
+            "effect": "e:2",
             "factId": "f171f61e4181d3b4",
             "guarantees": [],
             "paths": [
@@ -267,10 +273,7 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -357,22 +360,10 @@
         "crossings": {},
         "effects": [
           {
-            "class": "physical",
-            "classReason": "known-persistent",
-            "conditionality": "loop-body",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "MC Customer",
-              "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Cust.Modify",
-              "file": "ws:src/D1MultiCaller.al",
-              "line": 19,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "9dc07ba4a609e78a",
             "guarantees": [],
             "paths": [
@@ -394,22 +385,10 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_MODIFY"
+            "status": "live"
           },
           {
-            "conditionality": "loop-body",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "Cust.Modify",
-              "file": "ws:src/D1MultiCaller.al",
-              "line": 19,
-              "sourceKind": "source"
-            },
+            "effect": "e:2",
             "factId": "9ef38d0967e5d920",
             "guarantees": [],
             "paths": [
@@ -431,10 +410,7 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -521,22 +497,11 @@
         "crossings": {},
         "effects": [
           {
-            "class": "callerDependent",
-            "classReason": "parameter",
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "MC Customer",
-              "resourceId": "11111111-0000-0000-0000-00000000d01a/table/50101",
               "tempState": "parameter-dependent(0)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Cust.Modify",
-              "file": "ws:src/D1MultiCaller.al",
-              "line": 19,
-              "sourceKind": "source"
-            },
+            "effect": "e:3",
             "factId": "b162c24ab8fb6723",
             "guarantees": [],
             "paths": [
@@ -553,21 +518,11 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_MODIFY"
+            "status": "live"
           },
           {
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "Cust.Modify",
-              "file": "ws:src/D1MultiCaller.al",
-              "line": 19,
-              "sourceKind": "source"
-            },
+            "effect": "e:2",
             "factId": "efece40aad07874a",
             "guarantees": [],
             "paths": [
@@ -584,9 +539,7 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -709,5 +662,5 @@
     },
     "workspaceFingerprint": "7b29099315fe12775912a7c35a4f9c6e730f9fcb4c52790b789fa0629ba09d01"
   },
-  "schemaVersion": "3.3.0"
+  "schemaVersion": "4.0.0"
 }

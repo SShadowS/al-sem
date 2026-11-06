@@ -13,9 +13,104 @@
       ]
     },
     "changedRootsDiagnostics": [],
+    "defaults": {
+      "effect": {
+        "conditionality": "conditional"
+      }
+    },
     "dependencies": {
       "apps": [],
       "mode": "crossApp"
+    },
+    "effects": {
+      "e:1": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "commit",
+          "file": "ws:src/InstallCU.al",
+          "line": 35,
+          "sourceKind": "source"
+        },
+        "transactionContext": "span-has-known-writes",
+        "type": "COMMIT"
+      },
+      "e:2": {
+        "class": "physical",
+        "classReason": "known-persistent",
+        "confidence": "static",
+        "detail": {
+          "resourceDisplay": "My Setup",
+          "resourceId": "11111111-0000-0000-0000-00000000d460/table/50000"
+        },
+        "evidence": {
+          "column": 12,
+          "excerpt": "Setup.Insert",
+          "file": "ws:src/InstallCU.al",
+          "line": 33,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "DB_INSERT"
+      },
+      "e:3": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 12,
+          "excerpt": "Setup.Insert",
+          "file": "ws:src/InstallCU.al",
+          "line": 33,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "ERROR_IMPLICIT"
+      },
+      "e:4": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "commit",
+          "file": "ws:src/UpgradeCU.al",
+          "line": 18,
+          "sourceKind": "source"
+        },
+        "transactionContext": "span-has-known-writes",
+        "type": "COMMIT"
+      },
+      "e:5": {
+        "class": "physical",
+        "classReason": "known-persistent",
+        "confidence": "static",
+        "detail": {
+          "resourceDisplay": "My Setup",
+          "resourceId": "11111111-0000-0000-0000-00000000d460/table/50000"
+        },
+        "evidence": {
+          "column": 12,
+          "excerpt": "Setup.Modify",
+          "file": "ws:src/UpgradeCU.al",
+          "line": 16,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "DB_MODIFY"
+      },
+      "e:6": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 12,
+          "excerpt": "Setup.Modify",
+          "file": "ws:src/UpgradeCU.al",
+          "line": 16,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "ERROR_IMPLICIT"
+      }
     },
     "entries": [
       {
@@ -31,15 +126,7 @@
         "effects": [
           {
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "commit",
-              "file": "ws:src/InstallCU.al",
-              "line": 35,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "aeb6e256328d0bc0",
             "guarantees": [
               "COMMIT_REACHABLE",
@@ -79,27 +166,13 @@
                 "validForRefutation": true
               }
             ],
-            "status": "live",
-            "transactionContext": "span-has-known-writes",
-            "type": "COMMIT"
+            "status": "live"
           },
           {
-            "class": "physical",
-            "classReason": "known-persistent",
-            "conditionality": "conditional",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "My Setup",
-              "resourceId": "11111111-0000-0000-0000-00000000d460/table/50000",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 12,
-              "excerpt": "Setup.Insert",
-              "file": "ws:src/InstallCU.al",
-              "line": 33,
-              "sourceKind": "source"
-            },
+            "effect": "e:2",
             "factId": "1b8a1d95b74b8f7c",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -124,21 +197,10 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_INSERT"
+            "status": "live"
           },
           {
-            "conditionality": "conditional",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 12,
-              "excerpt": "Setup.Insert",
-              "file": "ws:src/InstallCU.al",
-              "line": 33,
-              "sourceKind": "source"
-            },
+            "effect": "e:3",
             "factId": "bcf6f3743ad07acf",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -163,9 +225,7 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -248,15 +308,7 @@
         "effects": [
           {
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "commit",
-              "file": "ws:src/InstallCU.al",
-              "line": 35,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "1161ef8efe183dd9",
             "guarantees": [
               "COMMIT_REACHABLE",
@@ -290,27 +342,13 @@
                 "validForRefutation": true
               }
             ],
-            "status": "live",
-            "transactionContext": "span-has-known-writes",
-            "type": "COMMIT"
+            "status": "live"
           },
           {
-            "class": "physical",
-            "classReason": "known-persistent",
-            "conditionality": "conditional",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "My Setup",
-              "resourceId": "11111111-0000-0000-0000-00000000d460/table/50000",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 12,
-              "excerpt": "Setup.Insert",
-              "file": "ws:src/InstallCU.al",
-              "line": 33,
-              "sourceKind": "source"
-            },
+            "effect": "e:2",
             "factId": "63af67ee66fc4502",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -329,21 +367,10 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_INSERT"
+            "status": "live"
           },
           {
-            "conditionality": "conditional",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 12,
-              "excerpt": "Setup.Insert",
-              "file": "ws:src/InstallCU.al",
-              "line": 33,
-              "sourceKind": "source"
-            },
+            "effect": "e:3",
             "factId": "99ea124ab78b840c",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -362,9 +389,7 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -447,15 +472,7 @@
         "effects": [
           {
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "commit",
-              "file": "ws:src/UpgradeCU.al",
-              "line": 18,
-              "sourceKind": "source"
-            },
+            "effect": "e:4",
             "factId": "5564d69a99d91528",
             "guarantees": [
               "COMMIT_REACHABLE",
@@ -489,27 +506,13 @@
                 "validForRefutation": true
               }
             ],
-            "status": "live",
-            "transactionContext": "span-has-known-writes",
-            "type": "COMMIT"
+            "status": "live"
           },
           {
-            "class": "physical",
-            "classReason": "known-persistent",
-            "conditionality": "conditional",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "My Setup",
-              "resourceId": "11111111-0000-0000-0000-00000000d460/table/50000",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 12,
-              "excerpt": "Setup.Modify",
-              "file": "ws:src/UpgradeCU.al",
-              "line": 16,
-              "sourceKind": "source"
-            },
+            "effect": "e:5",
             "factId": "cd5b1a00fdc31d54",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -528,21 +531,10 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_MODIFY"
+            "status": "live"
           },
           {
-            "conditionality": "conditional",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 12,
-              "excerpt": "Setup.Modify",
-              "file": "ws:src/UpgradeCU.al",
-              "line": 16,
-              "sourceKind": "source"
-            },
+            "effect": "e:6",
             "factId": "82ba042a17a9709a",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -561,9 +553,7 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -646,15 +636,7 @@
         "effects": [
           {
             "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "commit",
-              "file": "ws:src/UpgradeCU.al",
-              "line": 18,
-              "sourceKind": "source"
-            },
+            "effect": "e:4",
             "factId": "02ee06c8b7a2675d",
             "guarantees": [
               "COMMIT_REACHABLE",
@@ -694,27 +676,13 @@
                 "validForRefutation": true
               }
             ],
-            "status": "live",
-            "transactionContext": "span-has-known-writes",
-            "type": "COMMIT"
+            "status": "live"
           },
           {
-            "class": "physical",
-            "classReason": "known-persistent",
-            "conditionality": "conditional",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "My Setup",
-              "resourceId": "11111111-0000-0000-0000-00000000d460/table/50000",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 12,
-              "excerpt": "Setup.Modify",
-              "file": "ws:src/UpgradeCU.al",
-              "line": 16,
-              "sourceKind": "source"
-            },
+            "effect": "e:5",
             "factId": "ab9ed9a86a85e6f1",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -739,21 +707,10 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_MODIFY"
+            "status": "live"
           },
           {
-            "conditionality": "conditional",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 12,
-              "excerpt": "Setup.Modify",
-              "file": "ws:src/UpgradeCU.al",
-              "line": 16,
-              "sourceKind": "source"
-            },
+            "effect": "e:6",
             "factId": "8a9fbb1c1364bd55",
             "guarantees": [
               "COMMIT_REACHABLE"
@@ -778,9 +735,7 @@
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
             "provenance": "transitive",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -903,5 +858,5 @@
     },
     "workspaceFingerprint": "369c4515c708fe7831c9af975d8a55ce0e8d1baf6090a0e083e3d6d8e7f602e8"
   },
-  "schemaVersion": "3.3.0"
+  "schemaVersion": "4.0.0"
 }

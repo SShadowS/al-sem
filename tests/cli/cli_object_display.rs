@@ -95,7 +95,7 @@ fn alsem(args: &[&str]) -> (Value, i32) {
             String::from_utf8_lossy(&out.stderr)
         )
     });
-    (doc, out.status.code().unwrap_or(-1))
+    (crate::as_v3(doc), out.status.code().unwrap_or(-1))
 }
 
 /// `alsem digest <ws> --file <file> --deterministic --format json`.

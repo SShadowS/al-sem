@@ -4,6 +4,9 @@
   "generatedAt": "1970-01-01T00:00:00Z",
   "kind": "query.touches",
   "payload": {
+    "defaults": {
+      "via": "inherited"
+    },
     "dependencies": {
       "apps": [
         {
@@ -41,78 +44,33 @@
           "op": "DeleteAll",
           "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op0",
           "origin": {
-            "anchor": {
-              "column": 8,
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 58,
-              "role": "operation"
-            },
-            "routine": {
-              "anchor": {
-                "column": 4,
-                "file": "ws:src/OutIssueDocument.Codeunit.al",
-                "line": 53,
-                "role": "definition"
-              },
-              "display": "WriteLog",
-              "objectDisplay": "Codeunit Out Log Mgt",
-              "qualifiedDisplay": "Codeunit \"Out Log Mgt\"::WriteLog",
-              "selector": "Codeunit \"Out Log Mgt\"::WriteLog",
-              "signature": "(Text[100])",
-              "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
-            }
+            "column": 8,
+            "file": "ws:src/OutIssueDocument.Codeunit.al",
+            "line": 58,
+            "role": "operation",
+            "routine": "r:1"
           },
-          "tempState": "known(true)",
-          "touchClass": "temporary",
-          "via": "inherited"
+          "tempState": "temporary",
+          "touchClass": "temporary"
         },
         {
           "op": "Insert",
           "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op1",
           "origin": {
-            "anchor": {
-              "column": 8,
-              "file": "ws:src/OutIssueDocument.Codeunit.al",
-              "line": 61,
-              "role": "operation"
-            },
-            "routine": {
-              "anchor": {
-                "column": 4,
-                "file": "ws:src/OutIssueDocument.Codeunit.al",
-                "line": 53,
-                "role": "definition"
-              },
-              "display": "WriteLog",
-              "objectDisplay": "Codeunit Out Log Mgt",
-              "qualifiedDisplay": "Codeunit \"Out Log Mgt\"::WriteLog",
-              "selector": "Codeunit \"Out Log Mgt\"::WriteLog",
-              "signature": "(Text[100])",
-              "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
-            }
+            "column": 8,
+            "file": "ws:src/OutIssueDocument.Codeunit.al",
+            "line": 61,
+            "role": "operation",
+            "routine": "r:1"
           },
-          "tempState": "known(false)",
-          "touchClass": "knownPersistent",
-          "via": "inherited"
+          "tempState": "not temporary",
+          "touchClass": "knownPersistent"
         }
       ]
     },
     "from": {
       "resolution": "resolved",
-      "routine": {
-        "anchor": {
-          "column": 4,
-          "file": "ws:src/OutIssueDocument.Codeunit.al",
-          "line": 3,
-          "role": "definition"
-        },
-        "display": "IssueDoc",
-        "objectDisplay": "Codeunit Out Issue Document",
-        "qualifiedDisplay": "Codeunit \"Out Issue Document\"::IssueDoc",
-        "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
-        "signature": "(var Record \"Out Doc\")",
-        "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"
-      },
+      "routine": "r:2",
       "selector": "Out Issue Document.IssueDoc"
     },
     "lineBase": 1,
@@ -126,6 +84,36 @@
         "reasons": [],
         "scope": "per operation, one routine into dependency code; dependencies: 1 app",
         "universe": "cross-app"
+      }
+    },
+    "routines": {
+      "r:1": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 53,
+          "role": "definition"
+        },
+        "display": "WriteLog",
+        "objectDisplay": "Codeunit Out Log Mgt",
+        "qualifiedDisplay": "Codeunit \"Out Log Mgt\"::WriteLog",
+        "selector": "Codeunit \"Out Log Mgt\"::WriteLog",
+        "signature": "(Text[100])",
+        "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50111#7fe655c3e371c42001e6346b39e39183d41f140c8c8ebcf6fc5751e312215fb0"
+      },
+      "r:2": {
+        "anchor": {
+          "column": 4,
+          "file": "ws:src/OutIssueDocument.Codeunit.al",
+          "line": 3,
+          "role": "definition"
+        },
+        "display": "IssueDoc",
+        "objectDisplay": "Codeunit Out Issue Document",
+        "qualifiedDisplay": "Codeunit \"Out Issue Document\"::IssueDoc",
+        "selector": "Codeunit \"Out Issue Document\"::IssueDoc",
+        "signature": "(var Record \"Out Doc\")",
+        "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"
       }
     },
     "table": {
@@ -167,5 +155,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "3.10.0"
+  "schemaVersion": "4.0.0"
 }

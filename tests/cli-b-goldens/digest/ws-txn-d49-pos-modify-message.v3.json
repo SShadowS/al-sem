@@ -18,9 +18,61 @@
         "kind": "file-unmatched"
       }
     ],
+    "defaults": {
+      "effect": {
+        "conditionality": "unconditional-on-success",
+        "provenance": "direct"
+      }
+    },
     "dependencies": {
       "apps": [],
       "mode": "crossApp"
+    },
+    "effects": {
+      "e:1": {
+        "class": "physical",
+        "classReason": "known-persistent",
+        "confidence": "static",
+        "detail": {
+          "resourceDisplay": "D49 Rec",
+          "resourceId": "11111111-0000-0000-0000-0000000d4901/table/50100"
+        },
+        "evidence": {
+          "column": 8,
+          "excerpt": "Rec.Modify",
+          "file": "ws:src/Sender.Codeunit.al",
+          "line": 14,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "DB_MODIFY"
+      },
+      "e:2": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "Rec.Get",
+          "file": "ws:src/Sender.Codeunit.al",
+          "line": 12,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "ERROR_IMPLICIT"
+      },
+      "e:3": {
+        "confidence": "static",
+        "detail": {},
+        "evidence": {
+          "column": 8,
+          "excerpt": "Message",
+          "file": "ws:src/Sender.Codeunit.al",
+          "line": 15,
+          "sourceKind": "source"
+        },
+        "transactionContext": "unknown",
+        "type": "UI_MESSAGE"
+      }
     },
     "entries": [
       {
@@ -35,22 +87,10 @@
         "crossings": {},
         "effects": [
           {
-            "class": "physical",
-            "classReason": "known-persistent",
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
             "detail": {
-              "resourceDisplay": "D49 Rec",
-              "resourceId": "11111111-0000-0000-0000-0000000d4901/table/50100",
               "tempState": "known(false)"
             },
-            "evidence": {
-              "column": 8,
-              "excerpt": "Rec.Modify",
-              "file": "ws:src/Sender.Codeunit.al",
-              "line": 14,
-              "sourceKind": "source"
-            },
+            "effect": "e:1",
             "factId": "fa4712cf8225549f",
             "guarantees": [],
             "paths": [
@@ -66,22 +106,10 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "DB_MODIFY"
+            "status": "live"
           },
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "Rec.Get",
-              "file": "ws:src/Sender.Codeunit.al",
-              "line": 12,
-              "sourceKind": "source"
-            },
+            "effect": "e:2",
             "factId": "fdb0a0fca2b84e91",
             "guarantees": [],
             "paths": [
@@ -97,22 +125,10 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "ERROR_IMPLICIT"
+            "status": "live"
           },
           {
-            "conditionality": "unconditional-on-success",
-            "confidence": "static",
-            "detail": {},
-            "evidence": {
-              "column": 8,
-              "excerpt": "Message",
-              "file": "ws:src/Sender.Codeunit.al",
-              "line": 15,
-              "sourceKind": "source"
-            },
+            "effect": "e:3",
             "factId": "3ab3609b25266202",
             "guarantees": [
               "WRITE_PENDING_AT_UI"
@@ -129,7 +145,6 @@
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
             "refutableGuarantees": [
               "WRITE_PENDING_AT_UI"
             ],
@@ -143,9 +158,7 @@
                 "writeOccurrenceId": "fa4712cf8225549f"
               }
             ],
-            "status": "live",
-            "transactionContext": "unknown",
-            "type": "UI_MESSAGE"
+            "status": "live"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -253,5 +266,5 @@
     },
     "workspaceFingerprint": "e098e48fbdfcefab8d69f8ae58dcd79175c85fe80556a3eaa5f3fd8cbac40957"
   },
-  "schemaVersion": "3.3.0"
+  "schemaVersion": "4.0.0"
 }

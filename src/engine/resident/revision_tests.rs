@@ -883,7 +883,10 @@ fn a_digest_after_a_prove_answers_as_a_cold_digest() {
     // stays, its paths marked truncated). Since the final CDO review (item
     // 2) the row carries its searched witness instead: the live route
     // through `Hop1`, never the dead first call.
-    let doc: serde_json::Value = serde_json::from_str(&text).expect("digest JSON");
+    // Digest 4.0.0 (§7.3): the rows read back into their 3.x shape.
+    let doc = crate::engine::l5::digest_v4::document_to_v3(
+        serde_json::from_str(&text).expect("digest JSON"),
+    );
     let row = doc["payload"]["entries"][0]["effects"]
         .as_array()
         .and_then(|es| {

@@ -520,7 +520,8 @@ fn include_reads_is_per_job_in_a_batch() {
     let run = batch(&jobs);
     assert_eq!(spans(&run.events, is_view).len(), 1, "one shared view");
     assert_each_standalone(&run, &jobs, None);
-    let doc = |i: usize| -> Value { serde_json::from_slice(&run.streams(i).0).unwrap() };
+    let doc =
+        |i: usize| -> Value { crate::as_v3(serde_json::from_slice(&run.streams(i).0).unwrap()) };
     assert!(count_reads(&doc(0)) > 0, "job 0 has no DB_READ");
     assert_eq!(count_reads(&doc(1)), 0, "job 1 has DB_READ");
 }

@@ -103,7 +103,8 @@ fn a_parameter_has_one_number() {
         "no 0-based index: {human}"
     );
 
-    let v: Value = serde_json::from_str(&effects(&["--all", "--format", "json"])).expect("json");
+    let v: Value =
+        crate::as_v3(serde_json::from_str(&effects(&["--all", "--format", "json"])).expect("json"));
     let rows: Vec<&Value> = v["payload"]["effects"]
         .as_array()
         .unwrap()
@@ -190,5 +191,5 @@ fn locks_and_reads_always_print_with_their_scope() {
     let f = &v["payload"]["result"]["scope"]["families"];
     assert_eq!(f["locks"]["depth"], "oneDependencyRoutine", "{f:#}");
     assert_eq!(f["locks"]["inventory"], "notExhaustive", "{f:#}");
-    assert_eq!(v["schemaVersion"], "3.10.0");
+    assert_eq!(v["schemaVersion"], "4.0.0");
 }

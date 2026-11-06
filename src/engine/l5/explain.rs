@@ -2594,6 +2594,76 @@ struct CardTests<'a> {
     scope: Option<&'a crate::engine::test_select::scope::Scope>,
 }
 
+/// The callers a caller rule names one by one before it counts them by
+/// object kind (§7.7, F47).
+const CALLER_RULE_NAMES: usize = 3;
+
+/// Routine displays counted by their object's kind, most first (ties by
+/// kind): `5 pages, 14 page extensions` (§7.7, F47).
+fn by_object_kind(displays: &[String]) -> String {
+    let mut by: BTreeMap<&str, usize> = BTreeMap::new();
+    for d in displays {
+        *by.entry(d.split(' ').next().unwrap_or("")).or_default() += 1;
+    }
+    let mut v: Vec<(&str, usize)> = by.into_iter().collect();
+    v.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    v.into_iter()
+        .map(|(kind, n)| {
+            let words = match kind {
+                "PageExtension" => "page extension",
+                "TableExtension" => "table extension",
+                "ReportExtension" => "report extension",
+                "EnumExtension" => "enum extension",
+                "PageCustomization" => "page customization",
+                "Codeunit" => "codeunit",
+                "Page" => "page",
+                "Table" => "table",
+                "Report" => "report",
+                "Query" => "query",
+                "XmlPort" | "Xmlport" => "xmlport",
+                other => other,
+            };
+            let many = match words {
+                "query" => "queries".to_string(),
+                w => format!("{w}s"),
+            };
+            rf_plural(n, words, &many)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The page objects with the most actions, most first, at most `cap` named
+/// (§7.7, F47): a tie the cap would cut prints as one count, `6 page objects
+/// with 5 each`, never as an arbitrary few of them; the rest is counted.
+fn ties_folded(ranked: &[(String, usize)], cap: usize) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut named = 0;
+    let mut i = 0;
+    while i < ranked.len() && named < cap {
+        let n = ranked[i].1;
+        let tie = ranked[i..].iter().take_while(|(_, m)| *m == n).count();
+        if named + tie <= cap {
+            parts.extend(ranked[i..i + tie].iter().map(|(o, m)| format!("{o} {m}")));
+            named += tie;
+        } else {
+            parts.push(format!(
+                "{} with {n} each",
+                rf_plural(tie, "page object", "page objects")
+            ));
+            named = cap;
+        }
+        i += tie;
+    }
+    if i < ranked.len() {
+        parts.push(format!(
+            "… +{}",
+            rf_plural(ranked.len() - i, "page object", "page objects")
+        ));
+    }
+    parts.join(", ")
+}
+
 impl Card {
     fn build(
         ix: &Indexes<'_>,
@@ -2700,8 +2770,17 @@ impl Card {
                 // Output validation §9.1 (F67): "skipped by" read like a
                 // bypass and "not checked" like a proof of absence; each
                 // side says what the analysis saw, with its count.
+                // §7.7 (F47): more than a few callers without the check
+                // print as counts by object kind, `detail` lists them.
                 let skipped = if c.skipped_by.is_empty() {
                     String::new()
+                } else if c.skipped_by.len() > CALLER_RULE_NAMES && !opts.detail {
+                    format!(
+                        "; no equivalent check recognized in {}: {} — {} lists them",
+                        rf_plural(c.skipped_by.len(), "analyzed caller", "analyzed callers"),
+                        by_object_kind(&names(&c.skipped_by)),
+                        opts.detail_input()
+                    )
                 } else {
                     format!(
                         "; no equivalent check recognized in {}: {}",
@@ -3746,13 +3825,15 @@ impl Card {
             line(&format!(
                 "  most actions ({}): {} ({} lists every action)",
                 rf_plural(objects.len(), "page object", "page objects"),
-                by(objects, caps::PAGE_OBJECTS, "page objects"),
+                ties_folded(&objects, caps::PAGE_OBJECTS),
                 self.opts.detail_input()
             ));
         }
-        // 9-16: the shared effect sections.
+        // 9-16: the shared effect sections. A run of hops several of their
+        // paths share prints once, under a segment id, listed after the
+        // last of them (output validation §7.5).
         let s = &self.sections;
-        for section in [
+        let effect_lines: Vec<String> = [
             &s.commits,
             &s.workspace,
             &s.caller_dependent,
@@ -3761,17 +3842,13 @@ impl Card {
             &s.dead,
             &s.temporary,
             &s.events,
-        ] {
-            // A section's shared path start, once (MCP output step 2); the
-            // `writes beyond` section does it itself (`beyond_lines`).
-            let lines = if std::ptr::eq(section, &s.beyond) {
-                section.clone()
-            } else {
-                crate::engine::l5::routine_rollup::factor_prefix(section.clone())
-            };
-            for l in &lines {
-                line(l);
-            }
+        ]
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect();
+        for l in &crate::engine::path_segments::segment(effect_lines) {
+            line(l);
         }
         // 17: extension points (never a group); none is not printed (§5.3).
         for (_, h) in &self.extension_points {

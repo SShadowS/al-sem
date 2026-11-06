@@ -210,16 +210,18 @@ fn background_task_line_names_the_started_codeunit() {
     ]);
     let line = background_line(&digest).unwrap_or_else(|| panic!("digest:\n{digest}"));
     assert!(line.ends_with(", starts Codeunit BS Two"), "{line}");
-    let json: serde_json::Value = serde_json::from_str(&alsem(&[
-        "digest",
-        w,
-        "--routine",
-        "BS Starter::Task",
-        "--deterministic",
-        "--format",
-        "json",
-    ]))
-    .unwrap();
+    let json: serde_json::Value = crate::as_v3(
+        serde_json::from_str(&alsem(&[
+            "digest",
+            w,
+            "--routine",
+            "BS Starter::Task",
+            "--deterministic",
+            "--format",
+            "json",
+        ]))
+        .unwrap(),
+    );
     let starts: Vec<&serde_json::Value> = json["payload"]["entries"]
         .as_array()
         .expect("entries")

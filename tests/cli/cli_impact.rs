@@ -167,10 +167,9 @@ fn a_diff_is_accounted_first_then_each_routine() {
         lines[2].starts_with("input: 1 changed routine resolved"),
         "{human}"
     );
-    assert!(
-        human.contains("current effects; no before/after"),
-        "{human}"
-    );
+    // §7.6: "no base given" prints once, in the header's assumptions.
+    assert!(human.contains("no base was built"), "{human}");
+    assert!(!human.contains("no base given"), "{human}");
     golden("diff.human.txt", &human, t.path());
     let v = json(&ws, &["--diff", "-"], Some(DIFF));
     let tot = &v["input"]["accounting"]["totals"];

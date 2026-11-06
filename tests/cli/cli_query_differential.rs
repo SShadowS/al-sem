@@ -740,7 +740,7 @@ fn touches_absence_is_no_only_when_nothing_is_unseen() {
         let (json, code) = run_alsem(&argv, "json");
         assert_eq!(code, 0, "{json}");
         let (human, _) = run_alsem(&argv, "human");
-        let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let doc: serde_json::Value = crate::as_v3(serde_json::from_str(&json).unwrap());
         (doc["payload"]["down"].clone(), human)
     };
     let (leaf, human) = down(QT_WS, "QT Item", "Leaf");
@@ -793,7 +793,7 @@ fn json_of(c: &Case) -> serde_json::Value {
     let mut argv: Vec<&str> = vec!["query", c.sub, &ws_str];
     argv.extend_from_slice(c.args);
     let (got, _code) = run_alsem(&argv, "json");
-    serde_json::from_str(&got).expect("query JSON parses")
+    crate::as_v3(serde_json::from_str(&got).expect("query JSON parses"))
 }
 
 /// The ancestor-scoped answer is INFORMATIVE here — `HandlePosted` does not
@@ -1022,7 +1022,7 @@ codeunit 50301 "Rn Runner"
         "json",
     );
     assert_eq!(code, 0, "query effects failed: {out}");
-    let doc: serde_json::Value = serde_json::from_str(&out).expect("json");
+    let doc: serde_json::Value = crate::as_v3(serde_json::from_str(&out).expect("json"));
     let effects = doc["payload"]["effects"].as_array().expect("effects array");
     let ops: Vec<(&str, &str)> = effects
         .iter()
@@ -1072,7 +1072,7 @@ fn query_effects_event_raise_decides_the_subscribers_temp_state() {
         let ws = dir.path().to_string_lossy().to_string();
         let (out, code) = run_alsem(&["query", "effects", &ws, "--routine", "Raise"], "json");
         assert_eq!(code, 0, "{out}");
-        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let v: serde_json::Value = crate::as_v3(serde_json::from_str(&out).unwrap());
         let effects = v["payload"]["effects"].as_array().unwrap();
         assert_eq!(effects.len(), 1, "{out}");
         assert_eq!(effects[0]["tempState"], want, "{decl}");

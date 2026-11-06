@@ -75,6 +75,150 @@ fn relation(t: &Value) -> &'static str {
     }
 }
 
+/// The `al-sem.tests/2` document of a version 1 one (output validation
+/// V5, §7.4, F44; §8.3 for the words):
+/// - `hidden` is `{"<class>": {"reason", "channel", "selectionRelevant",
+///   "nodes": [{node, nodeId}]}}`: the class carries its most common reason,
+///   channel and relevance once, and a node whose own differs keeps it (the
+///   grouping loses nothing: [`hidden_v1`] gives the list back);
+/// - `changed[].nearestTestedCaller` is left out when null;
+/// - the legacy values leave: `changed[].status` (its §8.1 word is
+///   `testStatus`), `runFirst[].tier` (its word is `pathTier`); `byTier`'s
+///   keys and `changed[].nearest.tier` are the §8.1 tier words; a part's
+///   `productionTier: "localApproximate"` is `"local"` with
+///   `productionApproximate: true` (§8.1 projection).
+#[must_use]
+pub fn v2_of(mut doc: Value) -> Value {
+    doc["version"] = json!(2);
+    if let Some(Value::Array(h)) = doc.get("hidden").cloned() {
+        doc["hidden"] = hidden_v2(&h);
+    }
+    if let Some(Value::Array(changed)) = doc.get_mut("changed") {
+        for c in changed {
+            let Value::Object(m) = c else { continue };
+            m.remove("status");
+            if m.get("nearestTestedCaller").is_some_and(Value::is_null) {
+                m.remove("nearestTestedCaller");
+            }
+            if let Some(Value::String(t)) = m.get_mut("nearest").and_then(|n| n.get_mut("tier")) {
+                *t = crate::engine::vocab::tier_key(t).to_string();
+            }
+        }
+    }
+    if let Some(Value::Array(rows)) = doc.get_mut("runFirst") {
+        for r in rows {
+            if let Value::Object(m) = r {
+                m.remove("tier");
+            }
+        }
+    }
+    if let Some(Value::Object(by)) = doc.get("byTier").cloned() {
+        doc["byTier"] = Value::Object(
+            by.into_iter()
+                .map(|(k, v)| (crate::engine::vocab::tier_key(&k).to_string(), v))
+                .collect(),
+        );
+    }
+    if let Some(Value::Array(apps)) = doc.pointer_mut("/scope/apps") {
+        for a in apps {
+            if a["productionTier"] == "localApproximate" {
+                a["productionTier"] = json!("local");
+                a["productionApproximate"] = json!(true);
+            }
+        }
+    }
+    doc
+}
+
+/// The fields a hidden node shares with its class when they agree.
+const HIDDEN_SHARED: &[&str] = &["reason", "channel", "selectionRelevant"];
+
+/// Version 1's `hidden` list grouped by class (§7.4): each shared field's
+/// most common value (ties: the first met) on the class, the rest on the
+/// node.
+fn hidden_v2(rows: &[Value]) -> Value {
+    let mut classes: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
+    for r in rows {
+        classes
+            .entry(r["class"].as_str().unwrap_or("").to_string())
+            .or_default()
+            .push(r);
+    }
+    let mut out = serde_json::Map::new();
+    for (class, nodes) in classes {
+        let mut group = serde_json::Map::new();
+        for f in HIDDEN_SHARED {
+            let mut count: Vec<(Value, usize)> = Vec::new();
+            for n in &nodes {
+                let v = n.get(*f).cloned().unwrap_or(Value::Null);
+                match count.iter_mut().find(|(x, _)| *x == v) {
+                    Some((_, c)) => *c += 1,
+                    None => count.push((v, 1)),
+                }
+            }
+            // The first of the largest counts.
+            let best = count
+                .iter()
+                .fold(None::<&(Value, usize)>, |b, x| match b {
+                    Some(b) if b.1 >= x.1 => Some(b),
+                    _ => Some(x),
+                })
+                .map(|(v, _)| v.clone())
+                .unwrap_or(Value::Null);
+            group.insert((*f).to_string(), best);
+        }
+        let listed: Vec<Value> = nodes
+            .iter()
+            .map(|n| {
+                let mut m = serde_json::Map::new();
+                for (k, v) in n.as_object().into_iter().flatten() {
+                    let shared = HIDDEN_SHARED.contains(&k.as_str()) && group.get(k) == Some(v);
+                    if k != "class" && !shared {
+                        m.insert(k.clone(), v.clone());
+                    }
+                }
+                // A node that lacks a field its class carries says so.
+                for f in HIDDEN_SHARED {
+                    if n.get(*f).is_none() && !group[*f].is_null() {
+                        m.insert((*f).to_string(), Value::Null);
+                    }
+                }
+                Value::Object(m)
+            })
+            .collect();
+        group.insert("nodes".into(), Value::Array(listed));
+        out.insert(class, Value::Object(group));
+    }
+    Value::Object(out)
+}
+
+/// [`hidden_v2`]'s inverse: the version 1 list, class by class in key
+/// order, each node with its class's fields unless it has its own.
+#[must_use]
+pub fn hidden_v1(grouped: &Value) -> Vec<Value> {
+    let mut out = Vec::new();
+    for (class, g) in grouped.as_object().into_iter().flatten() {
+        for n in g["nodes"].as_array().into_iter().flatten() {
+            let mut m = n.as_object().cloned().unwrap_or_default();
+            m.insert("class".into(), class.clone().into());
+            for f in HIDDEN_SHARED {
+                match m.get(*f) {
+                    Some(Value::Null) => {
+                        m.remove(*f);
+                    }
+                    Some(_) => {}
+                    None if !g[*f].is_null() => {
+                        m.insert((*f).to_string(), g[*f].clone());
+                    }
+                    None => {}
+                }
+            }
+            out.push(Value::Object(m));
+        }
+    }
+    out
+}
+
 /// How to render.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RenderOpts {
@@ -85,6 +229,10 @@ pub struct RenderOpts {
     pub surface: crate::engine::follow_up::Surface,
     /// `--single-app` (the header's universe).
     pub single_app: bool,
+    /// The JSON document's version (`--schema`): 2 (output validation V5,
+    /// §7.4) or 1, kept for one release and for impact, which embeds the
+    /// tests block in `al-sem.impact/1` until impact's next major.
+    pub schema: u32,
 }
 
 /// One test universe's part: the app it is for and its select part's JSON,
@@ -687,6 +835,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
                 "selection": selection,
             },
         });
+        let doc = if opts.schema >= 2 { v2_of(doc) } else { doc };
         return Rendered {
             text: serde_json::to_string_pretty(&doc).expect("serializes") + "\n",
             exit,
@@ -877,6 +1026,52 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
 mod tests {
     use super::*;
 
+    /// Output validation V5 (§7.4, F44): `hidden` grouped by class states
+    /// each class's reason once, and a node whose reason, channel or
+    /// relevance differs keeps its own, so the grouping loses nothing: the
+    /// version 1 list comes back (as a set: the groups are in class order).
+    /// Hand-stated rows: one class whose nodes share a reason but not a
+    /// channel, and a node of it with its own reason. Discrimination
+    /// (2026-11-06): leaving every shared field off the node whatever its
+    /// value (no `group.get(k) == Some(v)` check) fails at the node's own
+    /// reason; restored, it passes.
+    #[test]
+    fn hidden_by_class_states_the_reason_once_and_loses_nothing() {
+        let row = |node: &str, class: &str, ch: &str, reason: &str, rel: bool| {
+            json!({"node": node, "nodeId": node, "channel": ch, "class": class,
+                   "selectionRelevant": rel, "reason": reason})
+        };
+        let v1 = vec![
+            row("A", "page-opened", "page", "a page a user opens", true),
+            row("B", "page-opened", "page", "a page a user opens", true),
+            row(
+                "C",
+                "page-opened",
+                "run",
+                "opened by a run of a variable",
+                true,
+            ),
+            row("D", "event", "event", "an event no subscriber shows", false),
+        ];
+        let g = hidden_v2(&v1);
+        assert_eq!(g["page-opened"]["reason"], "a page a user opens", "{g:#}");
+        assert_eq!(
+            g["page-opened"]["nodes"][0],
+            json!({"node": "A", "nodeId": "A"})
+        );
+        assert_eq!(
+            g["page-opened"]["nodes"][2]["reason"],
+            "opened by a run of a variable"
+        );
+        assert_eq!(g["page-opened"]["nodes"][2]["channel"], "run");
+        let key = |v: &Value| v.to_string();
+        let mut back: Vec<String> = hidden_v1(&g).iter().map(key).collect();
+        let mut want: Vec<String> = v1.iter().map(key).collect();
+        back.sort();
+        want.sort();
+        assert_eq!(back, want);
+    }
+
     /// Output validation V2 (§3.3, F13): a code path ranks ahead of a path
     /// that needs UI navigation, whatever their tiers: a `local` test whose
     /// path opens a page comes after a `via-dependency` code path. Hand-stated
@@ -912,6 +1107,7 @@ mod tests {
                 json: true,
                 surface: Default::default(),
                 single_app: false,
+                schema: 2,
             },
         );
         let v: Value = serde_json::from_str(&r.text).unwrap();

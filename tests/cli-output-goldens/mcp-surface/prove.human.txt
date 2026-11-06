@@ -7,6 +7,4 @@ more: format: "json" for every evidence row and its hops
   re-analysis under an assumption: alsem_prove {"routine": "Codeunit \"Out Issue Document\"::IssueDoc", "question": "callers-intercept-errors", "assumeNoDependents": true} — only if no other app calls this routine; removes every blocker of this answer (external callers 1)
   uncaught at (entries reached with no trap): page actions 1 (distinct entries; an entry is counted once, in its own kind)
   stopped: 1 path at a page's own trigger or action (a later user event)
-  blocked by: external callers 1
-    [external callers] Codeunit "Out Issue Document"::IssueDoc is public: apps that depend on this app may call it
-  coverage: the reverse cone, 2 states over 2 nodes
+  blocked by: external callers 1; detail: true lists examples of each kind

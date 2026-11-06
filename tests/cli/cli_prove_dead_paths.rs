@@ -142,12 +142,12 @@ fn alsem(cwd: &Path, args: &[&str]) -> serde_json::Value {
         .env("RUST_LOG", "off")
         .output()
         .unwrap();
-    serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
+    crate::as_v3(serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
         panic!(
             "{args:?}: {e}; stderr: {}",
             String::from_utf8_lossy(&out.stderr)
         )
-    })
+    }))
 }
 
 #[test]

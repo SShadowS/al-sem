@@ -1748,96 +1748,6 @@ pub fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{} {}", thousands(n), if n == 1 { one } else { many })
 }
 
-/// One section's `path:` lines with their most-shared start printed once
-/// (MCP output step 2): the start (the root and at least two more hops)
-/// that saves the most text over the `path:` / `prefix path:` lines that
-/// begin with it and go on past it, when two or more do. A line `(in
-/// <section>, a path that begins with `… →` begins with: <prefix>)` follows
-/// the section's first line, and each such path prints as `path: … →
-/// <rest>`; every other line is unchanged.
-#[must_use]
-pub fn factor_prefix(lines: Vec<String>) -> Vec<String> {
-    const SEP: &str = " → ";
-    // A path line: a label naming a path (`path: `, `prefix path: `,
-    // `representative path (…): `), then its hops: (indent, label, hops).
-    let labelled = |l: &str| -> Option<(usize, String, Vec<String>)> {
-        let indent = l.len() - l.trim_start().len();
-        let t = l.trim_start();
-        let end = t.find(": ")? + 2;
-        let label = &t[..end];
-        let is_path = label == "path: "
-            || label == "prefix path: "
-            || (label.starts_with("representative path (") && !label.contains(SEP));
-        is_path.then(|| {
-            (
-                indent,
-                label.to_string(),
-                t[end..].split(SEP).map(str::to_string).collect(),
-            )
-        })
-    };
-    let path_of = |l: &str| labelled(l).map(|(i, _, p)| (i, p));
-    let paths: Vec<(usize, Vec<String>)> = lines.iter().filter_map(|l| path_of(l)).collect();
-    if paths.len() < 2 || lines.len() < 2 {
-        return lines;
-    }
-    // Every candidate start: a path's first `n` hops (3 or more, and fewer
-    // than the path has: its terminal is its own), with how many paths
-    // begin with it; the best saves the most characters.
-    let mut best: Option<(usize, &[String])> = None;
-    for (_, p) in &paths {
-        for n in 3..p.len() {
-            let start = &p[..n];
-            let users = paths
-                .iter()
-                .filter(|(_, q)| q.len() > n && q[..n] == *start)
-                .count();
-            if users < 2 {
-                break;
-            }
-            let chars: usize = start.iter().map(String::len).sum::<usize>() + SEP.len() * n;
-            let saving = (users - 1) * chars;
-            if best.is_none_or(|(s, _)| saving > s) {
-                best = Some((saving, start));
-            }
-        }
-    }
-    let Some((_, start)) = best else {
-        return lines;
-    };
-    let start: Vec<String> = start.to_vec();
-    let n = start.len();
-    let prefix = start.join(SEP);
-    let indent = paths.iter().map(|(i, _)| *i).min().unwrap_or(2);
-    // The note names its section (its header's words before `:` or `(`),
-    // so two sections with one shared start do not print the same line.
-    let section = lines[0]
-        .trim()
-        .split([':', '('])
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let mut out = Vec::with_capacity(lines.len() + 1);
-    for (k, l) in lines.into_iter().enumerate() {
-        match labelled(&l) {
-            Some((i, label, p)) if p.len() > n && p[..n] == start[..] => out.push(format!(
-                "{}{label}…{SEP}{}",
-                " ".repeat(i),
-                p[n..].join(SEP)
-            )),
-            _ => out.push(l),
-        }
-        if k == 0 {
-            out.push(format!(
-                "{}(in {section}, a path that begins with `… →` begins with: {prefix})",
-                " ".repeat(indent)
-            ));
-        }
-    }
-    out
-}
-
 /// `"at least "` for a count that is a lower bound, else nothing.
 #[must_use]
 pub fn at_least(partial: bool) -> &'static str {
@@ -3561,9 +3471,10 @@ pub fn beyond_lines(
             ));
         }
     }
-    // The section's shared path start, once: here, so every output that
-    // prints this section (explain, digest, query effects) prints it alike.
-    factor_prefix(out)
+    // Shared runs of hops print once over the whole answer
+    // (`path_segments`, output validation §7.5): each output segments the
+    // region that holds this section.
+    out
 }
 
 /// `writes with no path kept` (design §4.1 section 13), by the owner's app.

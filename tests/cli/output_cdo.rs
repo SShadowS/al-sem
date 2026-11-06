@@ -187,7 +187,9 @@ fn cdo_query_effects_writes_agree_with_the_cone() {
         return;
     };
     let doc = |label: &str, call: &str| -> Value {
-        serde_json::from_str(&a.answers[&format!("{label} {call}")].stdout).expect("JSON")
+        crate::as_v3(
+            serde_json::from_str(&a.answers[&format!("{label} {call}")].stdout).expect("JSON"),
+        )
     };
     for (label, ..) in ROUTINES {
         let explain = doc(label, "explain json");
@@ -470,7 +472,7 @@ fn cdo_boundary_groups_name_their_owner_and_every_resource() {
     for (key, ans) in &a.answers {
         let doc: Value = match key.as_str() {
             k if k.ends_with("digest json") || k.contains("prove") && k.ends_with(" json") => {
-                serde_json::from_str(&ans.stdout).unwrap()
+                crate::as_v3(serde_json::from_str(&ans.stdout).unwrap())
             }
             _ => continue,
         };
@@ -565,7 +567,7 @@ fn cdo_digest_json_fits_its_size_budgets() {
     for label in ["IssueReminder", "RunReportID"] {
         let doc = &a.answers[&format!("{label} digest json")].stdout;
         let mut v: Value = serde_json::from_str(doc).expect("digest JSON");
-        assert_eq!(v["schemaVersion"], "3.3.0", "{label}");
+        assert_eq!(v["schemaVersion"], "4.0.0", "{label}");
         strip(&mut v);
         let core = serde_json::to_string_pretty(&v).unwrap().len() + 1;
         eprintln!(
@@ -872,10 +874,11 @@ fn cdo_selectors_round_trip() {
 /// that grows into the margin fails here: shorten the card, do not raise
 /// the cap without the owner.
 ///
-/// The cap is TEMPORARILY 48 KiB (owner decision 2026-11-06): output
-/// validation V3's one routine display grew RunReportID's card to 45,058
-/// bytes (IssueReminder 39,169). It goes back to 40 KiB in V5 (spec
-/// 2026-11-06 §7.5/§7.7, path dedup).
+/// The cap was 48 KiB from output validation V3 until V5 (owner decision
+/// 2026-11-06: V3's one routine display grew RunReportID's card to 45,374
+/// bytes). V5's path segments (spec 2026-11-06 §7.5/§7.7: a run of hops
+/// several paths share prints once, under a segment id) brought the cards
+/// back under 40 KiB, and the cap is 40 KiB again.
 #[test]
 fn cdo_explain_cards_stay_inline_with_a_margin() {
     let Some(a) = cdo_answers() else { return };
@@ -910,8 +913,9 @@ fn cdo_every_effect_kind_is_in_the_card() {
     let Some(a) = cdo_answers() else { return };
     let mut failures = Vec::new();
     for (label, ..) in ROUTINES {
-        let d: Value =
-            serde_json::from_str(&a.answers[&format!("{label} digest json")].stdout).unwrap();
+        let d: Value = crate::as_v3(
+            serde_json::from_str(&a.answers[&format!("{label} digest json")].stdout).unwrap(),
+        );
         let effects = d["payload"]["entries"][0]["effects"].as_array().unwrap();
         let card = &a.answers[&format!("{label} explain human")].stdout;
         failures.extend(kind_failures(label, effects, card));
@@ -942,7 +946,7 @@ fn cdo_evidence_and_crossings_name_their_places_and_targets() {
             ));
         }
         if key.ends_with("digest json") {
-            let d: Value = serde_json::from_str(&ans.stdout).unwrap();
+            let d: Value = crate::as_v3(serde_json::from_str(&ans.stdout).unwrap());
             crossings += d["payload"]["entries"][0]["crossings"]
                 .as_object()
                 .map_or(0, |m| m.len());

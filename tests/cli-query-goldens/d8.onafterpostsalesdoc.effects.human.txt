@@ -3,5 +3,5 @@ answer: 1 operation — writes that may persist 1 on 1 table (1 not temporary, 0
 analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes beyond dependency calls: whole cone with literal arguments, grouped per dependency routine entered; operations and routes the literal arguments rule out are listed and marked (explain and prove drop them); dependencies: 0 apps
 more: --all lists every operation; --format json for every row
   writes that may persist (1 table):
-    Audit Entry: Insert 1 — first Insert at ws:src/subscriber.al:10 in Codeunit D8BadSubscriber::HandlePosted, through Codeunit D8BadSubscriber::HandlePosted (event subscriber)
+    Audit Entry: Insert 1 — first Insert at ws:src/subscriber.al:10 in Codeunit D8BadSubscriber::HandlePosted (event subscriber)
   next: alsem prove 'Codeunit D8PostingChain::OnAfterPostSalesDoc' 'writes-table:Audit Entry' — follows the whole cone for one table, with its witness

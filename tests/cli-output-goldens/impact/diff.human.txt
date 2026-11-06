@@ -1,15 +1,15 @@
 impact diff (2 files) → 1 changed routine   [cross-app]
 answer: 1 changed routine resolved; ranked first: Codeunit "TU Core"::Calc
 analysis complete · assumptions: current effects only: no base was built, so there is no before/after and no routine is called added or deleted; callers and entries are static may-paths over the sited graph (R0's reverse walk); tests are static reachability, not coverage · limits: none · scope: callers and entries over the whole program, dependency code in its own tier; effects through every resolved call with literal arguments
-more: --detail lists up to 10 items per list; --format json for every routine with its callers, effects and tests
+more: --detail lists each routine's direct callers and nearest entry per tier; --format json for every routine with its callers, effects and tests
 computed: current effects of the 1 routine this diff touches, in the working tree (the diff's lines match it: yes); no before/after computed — --base <ref> gives it
-impact of a diff (2 files); no comparison base: a diff alone names none; HEAD not a git repository; diff blake3:ffae8ba8abdd; one-shot run (no resident revision)
-input: 1 changed routine resolved (no base given: added or deleted needs a base); changed lines 6 = routine bodies 2, signatures 0, object declarations 2 (fields 2), outside objects 0, unmapped 2 (not AL 2)
+impact of a diff (2 files); HEAD not a git repository; diff blake3:ffae8ba8abdd; one-shot run (no resident revision)
+input: 1 changed routine resolved; changed lines 6 = routine bodies 2, signatures 0, object declarations 2 (fields 2), outside objects 0, unmapped 2 (not AL 2)
   hunks outside routines: 2 (App/src/Core.al:8-10 field 2; App/notes.md:1-1 unmapped 2)
   files not mapped: 1 (App/notes.md (not AL, 2 lines))
   root diagnostics: 1 (diff-file-not-al 1)
     changed-roots: diff-file-not-al App/notes.md
-current effects of the 1 changed routine (no base given: current effects; no before/after); ranked: reached from a user or a job first, then by ancestors; all shown:
+current effects of the 1 changed routine; ranked: reached from a user or a job first, then by ancestors; all shown:
   Codeunit "TU Core"::Calc (ws:src/Core.al:23) — changed
       effects: writes that may persist: none observed (searched: the cone through every resolved call; not searched: calls not resolved); commits: no (every candidate decided) (0 own commit sites)
       reached by code callers: 1 routine (nearest: Codeunit "TU Core"::Post at src/Core.al:18)
@@ -17,8 +17,5 @@ current effects of the 1 changed routine (no base given: current effects; no bef
         entries among them: none (no page action, API page, job, trigger, subscriber or test reaches it)
       external: apps outside the program may call routines of its cone (by reason, routines): public 2
       tests: tests with a modeled path: 2 (2 by a local path); nearest Codeunit "TU Core Tests"::CalcAddsOne (local, 1 hop)
-the whole change:
-  reached beyond it: 1 ancestor — by tier: local 1, via-dependency 0, via-hub 0
-    entries among them: none (no page action, API page, job, trigger, subscriber or test reaches it)
 schema: 2 field, key or field group lines changed (current revision only; a base gives the schema findings)
 tests: run first (app "TU Production Tests"): codeunits 50850 — a superset: whole codeunits, for the 2 tests with a modeled path (2 by a local path); selection complete; workspace 0 [Test]; 1 test app (TU Production Tests)

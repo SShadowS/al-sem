@@ -1036,7 +1036,7 @@ fn boundary_groups_name_their_owner_and_every_resource() {
     let ws = workspace().to_string_lossy().into_owned();
     let mut failures = Vec::new();
     let (out, _, _) = run_alsem(&["digest", &ws, "--routine", ISSUE_DOC, "--format", "json"]);
-    let doc: Value = serde_json::from_str(&out).unwrap();
+    let doc: Value = crate::as_v3(serde_json::from_str(&out).unwrap());
     let effects = doc["payload"]["entries"][0]["effects"]
         .as_array()
         .unwrap()
@@ -1210,7 +1210,7 @@ fn digest_path_caps_keys_and_flags_on_the_fixture() {
             arg,
         ]);
         assert_eq!(code, 0, "{err}");
-        let d: Value = serde_json::from_str(&out).unwrap();
+        let d: Value = crate::as_v3(serde_json::from_str(&out).unwrap());
         assert_eq!(d["payload"]["pathCap"], cap, "--max-paths {arg}");
         let keys = d["payload"]["routines"].as_object().unwrap();
         let entry = &d["payload"]["entries"][0];
@@ -1319,7 +1319,8 @@ fn query_effects_buckets_and_first_hops_on_the_fixture() {
             "--format",
             "json",
         ]);
-        (code == 0).then(|| serde_json::from_str::<Value>(&out).unwrap()["payload"].clone())
+        (code == 0)
+            .then(|| crate::as_v3(serde_json::from_str::<Value>(&out).unwrap())["payload"].clone())
     };
     let p = effects_of(ISSUE_DOC_Q).expect("IssueDoc is selectable");
     let s = &p["summary"];
@@ -1433,7 +1434,7 @@ fn explain_digest_and_prove_agree_on_the_fixture() {
     let json = |args: &[&str]| -> Value {
         let (out, err, code) = run_alsem(args);
         assert_eq!(code, 0, "{args:?}: {err}");
-        serde_json::from_str(&out).unwrap_or_else(|e| panic!("{args:?}: {e}"))
+        crate::as_v3(serde_json::from_str(&out).unwrap_or_else(|e| panic!("{args:?}: {e}")))
     };
     let explain = json(&["explain", &ws, "--routine", ISSUE_DOC, "--format", "json"]);
     let digest = json(&["digest", &ws, "--routine", ISSUE_DOC, "--format", "json"]);
@@ -1887,7 +1888,7 @@ fn a_commit_beyond_an_entry_point_has_its_own_terminal_witness() {
     let json = |args: &[&str]| -> Value {
         let (out, err, code) = run_alsem(args);
         assert_eq!(code, 0, "{args:?}: {err}");
-        serde_json::from_str(&out).unwrap()
+        crate::as_v3(serde_json::from_str(&out).unwrap())
     };
     let p = json(&["prove", &wss, ISSUE_DOC, "may-commit", "--format", "json"]);
     let ev = &p["payload"]["result"]["evidence"][0];

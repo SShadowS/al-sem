@@ -4,8 +4,8 @@
   ],
   "byTier": {
     "local": 1,
-    "onlyOpen": 0,
-    "throughDependency": 0
+    "via-dependency": 0,
+    "via-hub": 0
   },
   "changed": [
     {
@@ -15,9 +15,7 @@
         "test": "Codeunit \"TU Core Tests\"::PostUpdatesQty",
         "tier": "local"
       },
-      "nearestTestedCaller": null,
       "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#22f7f361208a0d8c3669d02eeb4073ece883d836a783765eb80f3d1708f5c71f",
-      "status": "reached",
       "testStatus": "tests with a modeled path"
     }
   ],
@@ -34,7 +32,7 @@
       }
     }
   ],
-  "hidden": [],
+  "hidden": {},
   "limits": [],
   "lineBase": 1,
   "next": "missing test-library symbols: 1 app (Library Assert) — add them to Test/.alpackages (\"AL: Download symbols\" in the test app), then ask again",
@@ -76,8 +74,7 @@
         "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a01:Codeunit:50801#22f7f361208a0d8c3669d02eeb4073ece883d836a783765eb80f3d1708f5c71f"
       ],
       "relation": "code",
-      "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a02:Codeunit:50850#cef2f0b2d01083453c0df5a65fe6974bc777040d9c41e9975027b27e906251c7",
-      "tier": "local"
+      "stableId": "7d3c1a20-5b8e-4f61-9a2d-0c4e6b1f8a02:Codeunit:50850#cef2f0b2d01083453c0df5a65fe6974bc777040d9c41e9975027b27e906251c7"
     }
   ],
   "runFirstLine": "run first (app \"TU Production Tests\"): codeunits 50850 — a superset: whole codeunits, for the 1 selected test procedure on a local path; selection complete",
@@ -90,7 +87,8 @@
         "files": 1,
         "found": "auto",
         "name": "TU Production Tests",
-        "productionTier": "localApproximate",
+        "productionApproximate": true,
+        "productionTier": "local",
         "root": "<root>/Test",
         "testsLoaded": 2,
         "universe": "tests:<key>"
@@ -111,5 +109,5 @@
   },
   "selectionComplete": true,
   "tier": "local",
-  "version": 1
+  "version": 2
 }
