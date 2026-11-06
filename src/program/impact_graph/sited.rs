@@ -50,9 +50,13 @@ pub(crate) const VIAS: &[&str] = &[
 ];
 
 /// Every route condition, in name order: a condition mask's bits, read low
-/// to high, are the export's sorted `conditions`.
+/// to high, are the export's sorted `conditions`. `configuredDispatch` is the
+/// projection's own (a catalogued configured-dispatch arm,
+/// [`super::configured_dispatch`]); the others come from the resolver's
+/// routes.
 pub(crate) const CONDITIONS: &[&str] = &[
     "ambiguousDispatch",
+    "configuredDispatch",
     "manualBinding",
     "onTaskFailure",
     "runTriggerGuarded",
@@ -235,6 +239,28 @@ pub struct SitedGraph {
     /// The platform's table-event publishers (`OnAfterModifyEvent`, …: the
     /// synthetic publishers a subscriber binds to), ascending.
     platform_publishers: Vec<u32>,
+    /// The sites carrying `configuredDispatch`, ascending, with the catalog
+    /// entry and arm that labelled each ([`super::configured_dispatch`]).
+    configured_arms: Vec<(u32, ConfiguredArm)>,
+    /// The configured-dispatch catalog's outcome in this program.
+    catalog: super::configured_dispatch::CatalogReport,
+}
+
+/// The catalog entry and arm a `configuredDispatch` site lies in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConfiguredArm {
+    /// The entry's index in [`super::configured_dispatch::CATALOG`].
+    pub entry: u16,
+    /// The arm's label as written (`PostDocumentCode()`, `else`).
+    pub label: Box<str>,
+}
+
+impl ConfiguredArm {
+    /// The entry's name.
+    #[must_use]
+    pub fn entry_name(&self) -> &'static str {
+        super::configured_dispatch::CATALOG[self.entry as usize].name
+    }
 }
 
 /// A local routine node's names as its source spells them.
@@ -253,6 +279,28 @@ impl SitedGraph {
     #[must_use]
     pub fn local_name(&self, ix: u32) -> Option<&LocalName> {
         self.local_names.get(&ix)
+    }
+
+    /// Whether site `s` carries condition `name` (one of [`CONDITIONS`]).
+    #[must_use]
+    pub fn has_condition(&self, s: u32, name: &str) -> bool {
+        let mask = self.sites[s as usize].conditions;
+        condition_names(mask).any(|n| n == name)
+    }
+
+    /// The catalog entry and arm of a `configuredDispatch` site.
+    #[must_use]
+    pub fn configured_arm(&self, s: u32) -> Option<&ConfiguredArm> {
+        self.configured_arms
+            .binary_search_by_key(&s, |(x, _)| *x)
+            .ok()
+            .map(|i| &self.configured_arms[i].1)
+    }
+
+    /// The configured-dispatch catalog's outcome in this program.
+    #[must_use]
+    pub fn catalog(&self) -> &super::configured_dispatch::CatalogReport {
+        &self.catalog
     }
 
     /// Whether `ix` is a platform table-event publisher (`OnAfterModifyEvent`
@@ -544,7 +592,12 @@ impl SitedGraph {
             })
             .sum::<usize>()
             + self.platform_publishers.capacity() * size_of::<u32>();
-        (nodes + sites + units + tables + names) as u64
+        let configured: usize = self
+            .configured_arms
+            .iter()
+            .map(|(_, a)| a.label.len() + size_of::<(u32, ConfiguredArm)>())
+            .sum();
+        (nodes + sites + units + tables + names + configured) as u64
     }
 }
 
@@ -578,6 +631,8 @@ pub(crate) struct SitedBuilder {
     unit_ix: HashMap<Box<str>, u32>,
     /// The lifecycle sites a page action's `RunObject` makes.
     pub(crate) action_run_sites: Vec<u32>,
+    /// The sites the projection labelled `configuredDispatch`, in site order.
+    pub(crate) configured_arms: Vec<(u32, ConfiguredArm)>,
 }
 
 impl SitedBuilder {
@@ -590,6 +645,7 @@ impl SitedBuilder {
             units: Vec::new(),
             unit_ix: HashMap::new(),
             action_run_sites: Vec::new(),
+            configured_arms: Vec::new(),
         };
         for r in graph.routines.iter() {
             b.node(&Key::Routine(r.id.clone()));
@@ -837,6 +893,8 @@ impl SitedBuilder {
             rev_sites,
             local_names,
             platform_publishers,
+            configured_arms: self.configured_arms,
+            catalog: inp.facts.catalog.clone(),
         }
     }
 }

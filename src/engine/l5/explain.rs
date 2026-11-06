@@ -375,6 +375,30 @@ impl Job for ExplainJob<'_> {
             }
             _ => HashMap::new(),
         };
+        // `--callers-context` also counts each card's callers through
+        // dependency code (callers-through-dependency design r2 §11.3): the
+        // sited graph is declared here, so it costs one walk per card.
+        // Without the flag nothing is built and the card is unchanged (M0's
+        // lazy rule; an answer never depends on whether a resident engine
+        // happens to hold the graph).
+        let through: HashMap<String, (Value, String)> =
+            if self.callers_context && !resolved.roots.is_empty() {
+                let view = cx.view();
+                let no_dependency_code =
+                    self.req.single_app || view.target().dependencies().apps.is_empty();
+                resolved
+                    .roots
+                    .iter()
+                    .map(|r| {
+                        (
+                            r.clone(),
+                            through_dependency_card(view.model(), sited, r, no_dependency_code),
+                        )
+                    })
+                    .collect()
+            } else {
+                HashMap::new()
+            };
         let has_tree = cx.has_tree();
         let mut effects = if has_tree {
             cx.take_effects()
@@ -452,6 +476,7 @@ impl Job for ExplainJob<'_> {
             &table_answers,
             &test_scope,
             &callers,
+            &through,
         );
         drop(full);
         drop(effects);
@@ -1133,6 +1158,169 @@ fn path_names(
     out
 }
 
+/// One card's callers through dependency code under `--callers-context`
+/// (callers-through-dependency design r2 §11.3, `impact_graph::dep_callers`):
+/// the JSON `throughDependency` (counts, the catalog, the 3 nearest code
+/// callers with their witnesses) and its human line. `sited` is `None` when
+/// the declared graph did not build. Explain's `callers:` count is the direct
+/// callers; these are transitive, and only those the walk reaches without a
+/// workspace-only path.
+fn through_dependency_card(
+    model: &Model,
+    sited: Option<&crate::program::impact_graph::SitedGraph>,
+    root: &str,
+    no_dependency_code: bool,
+) -> (Value, String) {
+    use crate::program::impact_graph::dep_callers::{self, DepTier, is_dependency_node};
+    let mut m = Map::new();
+    m.insert("relation".into(), dep_callers::RELATION.into());
+    if no_dependency_code {
+        m.insert("notApplicable".into(), "no dependency code loaded".into());
+        return (
+            Value::Object(m),
+            "through dependency code: not applicable (no dependency code loaded)".into(),
+        );
+    }
+    let Some(g) = sited else {
+        m.insert("notComputed".into(), "the sited graph did not build".into());
+        return (
+            Value::Object(m),
+            "through dependency code: not computed (the sited graph did not build)".into(),
+        );
+    };
+    let roots = g.nodes_with_stable_id(root);
+    if roots.is_empty() {
+        m.insert(
+            "notComputed".into(),
+            "the routine has no node in the sited graph".into(),
+        );
+        return (
+            Value::Object(m),
+            "through dependency code: not computed (the routine has no node in the sited graph)"
+                .into(),
+        );
+    }
+    let answer = dep_callers::callers_through_dependency(
+        g,
+        &roots,
+        &crate::program::impact_graph::reverse::WalkOptions::default(),
+    );
+    let objects: HashMap<&str, &str> = model
+        .workspace
+        .objects
+        .iter()
+        .map(|o| (o.id.as_str(), o.name.as_str()))
+        .collect();
+    let by_stable: HashMap<&str, &crate::program::model::workspace::ModelRoutine> = model
+        .workspace
+        .routines
+        .iter()
+        .map(|r| (r.stable_routine_id.as_str(), r))
+        .collect();
+    let name = |n: u32| -> String {
+        g.stable_id(n)
+            .and_then(|s| by_stable.get(s.as_str()).copied())
+            .map_or_else(
+                || g.display(n),
+                |r| {
+                    format!(
+                        "{} {}::{}",
+                        r.object_type,
+                        objects.get(r.object_id.as_str()).unwrap_or(&"?"),
+                        r.name
+                    )
+                },
+            )
+    };
+    let code: Vec<&dep_callers::DepCaller> = answer
+        .callers
+        .iter()
+        .filter(|c| c.tier == DepTier::Code)
+        .collect();
+    let configured: Vec<&dep_callers::DepCaller> = answer
+        .callers
+        .iter()
+        .filter(|c| c.tier == DepTier::Configured)
+        .collect();
+    let nearest: Vec<&dep_callers::DepCaller> = code.iter().take(3).copied().collect();
+    m.insert("engine".into(), "reverse-walk".into());
+    m.insert("feasibility".into(), "notChecked".into());
+    m.insert("callers".into(), code.len().into());
+    m.insert("configured".into(), configured.len().into());
+    m.insert("catalog".into(), g.catalog().json());
+    m.insert(
+        "limited".into(),
+        answer
+            .limited
+            .map_or(Value::Null, |l| dep_callers::limit_str(l).into()),
+    );
+    m.insert(
+        "nearest".into(),
+        nearest
+            .iter()
+            .map(|c| {
+                let mut row = Map::new();
+                row.insert("routine".into(), name(c.node).into());
+                row.insert("stableId".into(), c.stable_id.as_str().into());
+                row.extend(dep_callers::caller_json(g, c, &name));
+                Value::Object(row)
+            })
+            .collect::<Vec<_>>()
+            .into(),
+    );
+    let limited = answer.limited.map_or(String::new(), |l| {
+        format!(
+            "; the walk stopped at its {} cap, so this is a lower bound",
+            dep_callers::limit_str(l)
+        )
+    });
+    let mut line = if code.is_empty() {
+        "through dependency code: none by code calls".to_string()
+    } else {
+        let shown: Vec<String> = nearest
+            .iter()
+            .map(|c| {
+                let via = c
+                    .hops
+                    .iter()
+                    .find(|h| is_dependency_node(g, h.to))
+                    .map(|h| format!(", via {}", name(h.to)))
+                    .unwrap_or_default();
+                let enters = c
+                    .enters_at
+                    .map(|n| format!(", enters at {}", name(n)))
+                    .unwrap_or_default();
+                format!("{} ({} hops{via}{enters})", name(c.node), c.hops.len())
+            })
+            .collect();
+        format!(
+            "through dependency code (potential callers by code calls, path feasibility not \
+             checked): {} more — nearest: {}{}",
+            code.len(),
+            shown.join("; "),
+            if code.len() > nearest.len() {
+                " — alsem query touches --callers lists them"
+            } else {
+                ""
+            }
+        )
+    };
+    if !configured.is_empty() {
+        let arms: Vec<String> = dep_callers::arm_counts(&configured)
+            .into_iter()
+            .take(3)
+            .map(|(e, a, n)| format!("{e}: {a} {n}"))
+            .collect();
+        line.push_str(&format!(
+            "; {} only through configured dispatch ({})",
+            configured.len(),
+            arms.join(", ")
+        ));
+    }
+    line.push_str(&limited);
+    (Value::Object(m), line)
+}
+
 /// Everything the document needs, rendered: over `prepared`, the indexes a
 /// resident revision keeps for `model`, else over indexes built here.
 #[allow(clippy::too_many_arguments)] // the card's inputs, one each
@@ -1149,6 +1337,7 @@ fn render(
     table_answers: &TableAnswers,
     test_scope: &crate::engine::test_select::scope::Scope,
     callers: &HashMap<String, (Value, Vec<String>)>,
+    through: &HashMap<String, (Value, String)>,
 ) -> ExplainRunResult {
     use crate::engine::perf_trace::span;
     let built;
@@ -1208,6 +1397,17 @@ fn render(
                 let at = human.find("\n  next:").map_or(human.len(), |i| i + 1);
                 let text: String = lines.iter().map(|l| format!("  {l}\n")).collect();
                 human.insert_str(at, &text);
+            }
+            // `--callers-context`: the callers through dependency code, on
+            // the line after `callers:` (design r2 §11.3).
+            if let Some((value, line)) = through.get(rid) {
+                json["throughDependency"] = value.clone();
+                let at = human
+                    .find("\n  callers:")
+                    .and_then(|i| human[i + 1..].find('\n').map(|j| i + 1 + j + 1))
+                    .or_else(|| human.find("\n  next:").map(|i| i + 1))
+                    .unwrap_or(human.len());
+                human.insert_str(at, &format!("    {line}\n"));
             }
             // `--callers-context` (agent-tasks §6.6): the callers' context
             // section, before `next:`.

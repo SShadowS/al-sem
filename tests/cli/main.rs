@@ -112,6 +112,7 @@ mod cli_database_commit;
 mod cli_dataitem_name_arg;
 mod cli_dataitem_record_ops;
 mod cli_decision7_precedence;
+mod cli_dependency_callers;
 mod cli_dependency_diagnostics;
 mod cli_dependency_lookup_page_run;
 mod cli_dependency_roots;

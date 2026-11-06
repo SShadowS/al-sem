@@ -500,6 +500,20 @@ impl<K: StoreKey, V: StoreValue> Store<K, V> {
         self.evict(&free)
     }
 
+    /// The measured bytes of the keys of `keys` a reclaim could evict now
+    /// ([`Store::evict_unheld`]'s rule: held by no request's snapshot, and
+    /// [`Store::evict`]'s: not pinned).
+    pub fn reclaimable_bytes(&self, keys: &[K]) -> u64 {
+        let reg = self.registry();
+        let cell = self.cell();
+        keys.iter()
+            .filter(|k| reg.get(*k).is_none_or(|e| e.pins == 0))
+            .filter_map(|k| cell.entries.get(k))
+            .filter(|p| Arc::strong_count(&p.value) == 1)
+            .map(|p| p.bytes)
+            .sum()
+    }
+
     /// Invalidate `keys` whatever their pins (a tombstone): each generation
     /// is incremented, so a fill in flight is discarded at publication and
     /// refilled, and the entries leave the current snapshot. A snapshot a

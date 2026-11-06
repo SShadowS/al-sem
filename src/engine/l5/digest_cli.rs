@@ -1471,97 +1471,256 @@ pub(crate) fn finish_effects(
     tests: bool,
     gaps_in_cone: bool,
 ) -> Vec<DigestEffects> {
-    debug_assert!(
-        all_entries
-            .windows(2)
-            .all(|w| w[0].routine_id < w[1].routine_id),
-        "the entries are sorted by routine id"
-    );
-    let coverage_graph = tests.then(|| {
-        let _s = crate::engine::perf_trace::span("digest", "digest.coverage_graph");
-        crate::engine::perf_trace::counter_delta("build.coverage_graph", 1);
-        Arc::new(crate::engine::l5::test_coverage::CoverageGraph::from_snapshot(tree, model))
-    });
-    let gap_subjects: Vec<&str> = if gaps_in_cone {
-        tree.analysis_gaps
-            .iter()
-            .map(|g| g.subject.as_str())
-            .collect()
-    } else {
-        Vec::new()
-    };
-    // Cataloged platform natives: they do not bring their app's gap.
-    let natives: std::collections::HashSet<&str> = model
-        .workspace
-        .routines
-        .iter()
-        .filter(|r| crate::program::model::platform_natives::pure_native(r).is_some())
-        .map(|r| r.stable_routine_id.as_str())
-        .collect();
-    // Routines that raise platform table events (prove's `loaded-subscribers`).
-    let fires: std::collections::HashSet<&str> = if gaps_in_cone {
-        model
+    FinishCx::new(tree, model, tests, gaps_in_cone).finish(readers, all_entries)
+}
+
+/// [`finish_effects`]' per-tree half: the coverage graph (`tests`), the gap
+/// subjects, the platform natives and the table-event raisers, built once
+/// and shared by every batch [`FinishCx::finish`] is given (a streamed read,
+/// [`digest_effects_chunks`]).
+pub(crate) struct FinishCx<'t> {
+    tree: &'t CapabilitySnapshot,
+    background_starts: Arc<HashMap<String, crate::program::model::calls::BackgroundStart>>,
+    gaps_in_cone: bool,
+    coverage_graph: Option<Arc<crate::engine::l5::test_coverage::CoverageGraph>>,
+    gap_subjects: Vec<&'t str>,
+    natives: std::collections::HashSet<&'t str>,
+    fires: std::collections::HashSet<&'t str>,
+}
+
+impl<'t> FinishCx<'t> {
+    pub(crate) fn new(
+        tree: &'t CapabilitySnapshot,
+        model: &'t Model,
+        tests: bool,
+        gaps_in_cone: bool,
+    ) -> FinishCx<'t> {
+        let coverage_graph = tests.then(|| {
+            let _s = crate::engine::perf_trace::span("digest", "digest.coverage_graph");
+            crate::engine::perf_trace::counter_delta("build.coverage_graph", 1);
+            Arc::new(crate::engine::l5::test_coverage::CoverageGraph::from_snapshot(tree, model))
+        });
+        let gap_subjects: Vec<&str> = if gaps_in_cone {
+            tree.analysis_gaps
+                .iter()
+                .map(|g| g.subject.as_str())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        // Cataloged platform natives: they do not bring their app's gap.
+        let natives: std::collections::HashSet<&str> = model
             .workspace
             .routines
             .iter()
-            .filter(|r| {
-                r.record_operations.iter().any(|op| {
-                    crate::program::resolve::full::can_fire_trigger(&op.op.to_ascii_lowercase())
-                })
-            })
+            .filter(|r| crate::program::model::platform_natives::pure_native(r).is_some())
             .map(|r| r.stable_routine_id.as_str())
-            .collect()
-    } else {
-        Default::default()
-    };
-    // W2-1 (design §3.1): every reader of the effects (digest, explain,
-    // prove) reads them after the literal pass, so "does R write T" has one
-    // answer. W2-1b: the entries arrive passed ([`passed_root_entries`]), so a
-    // resident revision memoizes them passed.
-    let unresolved_span = crate::engine::perf_trace::span("digest", "digest.unresolved_cones");
-    let read: Vec<(Vec<DigestEntryResult>, BTreeMap<String, UnresolvedCone>)> = readers
-        .iter()
-        .map(|roots| {
-            let own: std::collections::HashSet<&str> = roots.iter().map(String::as_str).collect();
-            let entries: Vec<DigestEntryResult> = all_entries
+            .collect();
+        // Routines that raise platform table events (prove's `loaded-subscribers`).
+        let fires: std::collections::HashSet<&str> = if gaps_in_cone {
+            model
+                .workspace
+                .routines
                 .iter()
-                .filter(|e| own.contains(e.routine_id.as_str()))
-                .cloned()
-                .collect();
-            let unresolved = roots
-                .iter()
-                .map(|r| {
-                    let c = unresolved_cone(tree, r);
-                    (
-                        r.clone(),
-                        UnresolvedCone {
-                            gaps_in_cone: gaps_in_cone.then(|| {
-                                count_gaps_in_cone(&gap_subjects, &c.visited_ids, &natives)
-                            }),
-                            fires_table_events: gaps_in_cone
-                                .then(|| c.visited_ids.iter().any(|v| fires.contains(v.as_str()))),
-                            items: c.items,
-                            traversal: c.traversal,
-                        },
-                    )
+                .filter(|r| {
+                    r.record_operations.iter().any(|op| {
+                        crate::program::resolve::full::can_fire_trigger(&op.op.to_ascii_lowercase())
+                    })
                 })
-                .collect();
-            (entries, unresolved)
-        })
-        .collect();
-    drop(unresolved_span);
-    drop(gap_subjects);
-    read.into_iter()
-        .map(|(entries, unresolved)| DigestEffects {
-            entries,
-            unresolved,
-            coverage: Arc::clone(&tree.coverage),
-            identities: Arc::clone(&tree.identities),
-            coverage_graph: coverage_graph.clone(),
-            slice: None,
+                .map(|r| r.stable_routine_id.as_str())
+                .collect()
+        } else {
+            Default::default()
+        };
+        FinishCx {
+            tree,
             background_starts: Arc::clone(&model.calls.background_starts),
-        })
-        .collect()
+            gaps_in_cone,
+            coverage_graph,
+            gap_subjects,
+            natives,
+            fires,
+        }
+    }
+
+    /// `all_entries` (every reader's roots' entries, owned, sorted by
+    /// routine id) finished for each reader (see [`finish_effects`]). One
+    /// reader takes the entries themselves; several each take copies of
+    /// their own.
+    pub(crate) fn finish(
+        &self,
+        readers: &[&[String]],
+        all_entries: Vec<DigestEntryResult>,
+    ) -> Vec<DigestEffects> {
+        debug_assert!(
+            all_entries
+                .windows(2)
+                .all(|w| w[0].routine_id < w[1].routine_id),
+            "the entries are sorted by routine id"
+        );
+        let (tree, gaps_in_cone) = (self.tree, self.gaps_in_cone);
+        // W2-1 (design §3.1): every reader of the effects (digest, explain,
+        // prove) reads them after the literal pass, so "does R write T" has one
+        // answer. W2-1b: the entries arrive passed ([`passed_root_entries`]), so a
+        // resident revision memoizes them passed.
+        let unresolved_span = crate::engine::perf_trace::span("digest", "digest.unresolved_cones");
+        let mut all_entries = Some(all_entries);
+        let read: Vec<(Vec<DigestEntryResult>, BTreeMap<String, UnresolvedCone>)> = readers
+            .iter()
+            .map(|roots| {
+                let own: std::collections::HashSet<&str> =
+                    roots.iter().map(String::as_str).collect();
+                // One reader: every entry is its own (the entries are its
+                // roots'), so it takes them rather than a copy (one copy of a
+                // large read's witnesses less at its peak).
+                let entries: Vec<DigestEntryResult> = if readers.len() == 1 {
+                    all_entries
+                        .take()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|e| own.contains(e.routine_id.as_str()))
+                        .collect()
+                } else {
+                    all_entries
+                        .iter()
+                        .flatten()
+                        .filter(|e| own.contains(e.routine_id.as_str()))
+                        .cloned()
+                        .collect()
+                };
+                let unresolved = roots
+                    .iter()
+                    .map(|r| {
+                        let c = unresolved_cone(tree, r);
+                        (
+                            r.clone(),
+                            UnresolvedCone {
+                                gaps_in_cone: gaps_in_cone.then(|| {
+                                    count_gaps_in_cone(
+                                        &self.gap_subjects,
+                                        &c.visited_ids,
+                                        &self.natives,
+                                    )
+                                }),
+                                fires_table_events: gaps_in_cone.then(|| {
+                                    c.visited_ids
+                                        .iter()
+                                        .any(|v| self.fires.contains(v.as_str()))
+                                }),
+                                items: c.items,
+                                traversal: c.traversal,
+                            },
+                        )
+                    })
+                    .collect();
+                (entries, unresolved)
+            })
+            .collect();
+        drop(unresolved_span);
+        read.into_iter()
+            .map(|(entries, unresolved)| DigestEffects {
+                entries,
+                unresolved,
+                coverage: Arc::clone(&tree.coverage),
+                identities: Arc::clone(&tree.identities),
+                coverage_graph: self.coverage_graph.clone(),
+                slice: None,
+                background_starts: Arc::clone(&self.background_starts),
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: the batches [`digest_effects_chunks`] read on this thread.
+    pub(crate) static STREAM_BATCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// One reader's [`DigestEffects`] over `roots` (sorted, distinct), STREAMED:
+/// `f` is handed each batch of at most `chunk` roots (and its effects) in
+/// root order,
+/// so no more than one batch's witnesses (5.6-7.9 MiB per root on CDO) is
+/// alive at once, plus what `f` keeps. The per-tree work of
+/// [`digest_effects_each`] (the tree's indexes, the carrier cache, the
+/// literal reach and its suffix trees, the finishing sets) is built ONCE and
+/// shared by every batch. Each batch's effects equal the ones
+/// [`digest_effects_each`] gives for a reader of that batch's roots: an
+/// entry and its unresolved cone are functions of the root over any tree
+/// holding it (`prove_scoped_equals_unscoped`), and rule B is decided per
+/// root as [`root_entries`] does (pinned by
+/// `streamed_effects_equal_one_read`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn digest_effects_chunks(
+    tree: &CapabilitySnapshot,
+    model: &Model,
+    roots: &[String],
+    chunk: usize,
+    tests: bool,
+    gaps_in_cone: bool,
+    include_reads: bool,
+    mut f: impl FnMut(&[String], DigestEffects),
+) {
+    use crate::engine::l5::digest::{QueryCx, root_set, with_query_cx};
+    debug_assert!(
+        roots.windows(2).all(|w| w[0] < w[1]),
+        "the roots are sorted and distinct"
+    );
+    let chunk = chunk.max(1);
+    // `compute_digest_effects_cli_in`'s root set, once: the reportable roots
+    // and the dependency routines a caller may name.
+    let eligible = root_set(model);
+    let isolated = crate::program::model::events::isolated_event_ids(&model.workspace.routines);
+    let isolated = (!isolated.is_empty()).then_some(&isolated);
+    // G31 (`root_entries`): a root inside a dependency is read with rule B off.
+    let is_dependency_root = |r: &String| {
+        tree.boundary
+            .as_ref()
+            .is_some_and(|b| b.dependency_app.contains_key(r))
+    };
+    let any_dependency = roots.iter().any(is_dependency_root);
+    let finish = FinishCx::new(tree, model, tests, gaps_in_cone);
+    let mut pass = LiteralPass::new(tree, model);
+    let mut batches = |on: &QueryCx<'_, '_>, off: Option<&QueryCx<'_, '_>>| {
+        for batch in roots.chunks(chunk) {
+            let _s = crate::engine::perf_trace::span("digest", "digest.stream_batch");
+            crate::engine::perf_trace::counter_delta("digest.stream_batches", 1);
+            #[cfg(test)]
+            STREAM_BATCHES.with(|n| n.set(n.get() + 1));
+            let (dependency, workspace): (Vec<String>, Vec<String>) = batch
+                .iter()
+                .filter(|r| eligible.contains(r.as_str()))
+                .cloned()
+                .partition(is_dependency_root);
+            let run = |cx: &QueryCx<'_, '_>, ids: &[String]| {
+                cx.run(ids, None, isolated, false, include_reads, |e| e)
+            };
+            let mut by_root: HashMap<String, DigestEntryResult> = run(on, &workspace)
+                .into_iter()
+                .map(|e| (e.routine_id.clone(), e))
+                .collect();
+            if let Some(off) = off {
+                by_root.extend(
+                    run(off, &dependency)
+                        .into_iter()
+                        .map(|e| (e.routine_id.clone(), e)),
+                );
+            }
+            let mut entries: Vec<DigestEntryResult> =
+                batch.iter().filter_map(|r| by_root.remove(r)).collect();
+            drop(by_root);
+            pass.pass(&mut entries);
+            let mut out = finish.finish(&[batch], entries);
+            f(batch, out.pop().expect("one reader, one result"));
+        }
+    };
+    with_query_cx(tree, BoundaryMode::On, |on| {
+        if any_dependency {
+            with_query_cx(tree, BoundaryMode::Off, |off| batches(on, Some(off)));
+        } else {
+            batches(on, None);
+        }
+    });
 }
 
 /// G23, prove's read only: effects a root cannot reach once literal Boolean
@@ -1576,32 +1735,71 @@ pub(crate) fn literal_reach_pass(
     model: &Model,
     entries: &mut [DigestEntryResult],
 ) {
-    let reach = {
-        let _s = crate::engine::perf_trace::span("digest", "prove.literal_reach");
-        crate::engine::l5::literal_reach::LiteralReach::new(
-            &tree.typed_edges,
-            &tree.capability_facts,
-            model,
-        )
-    };
-    // G35: how each group resource is reached inside the dependency.
-    let group_paths = {
-        let _s = crate::engine::perf_trace::span("digest", "prove.group_paths");
-        crate::engine::l5::group_path::GroupPaths::new(&tree.typed_edges, model)
-    };
+    LiteralPass::new(tree, model).pass(entries);
+}
+
+/// [`literal_reach_pass`]'s per-tree half: the literal reach, the group
+/// paths and the suffix trees, built once and shared by every batch of
+/// entries [`LiteralPass::pass`] is given (a streamed read,
+/// [`digest_effects_chunks`]).
+pub(crate) struct LiteralPass<'t> {
+    reach: crate::engine::l5::literal_reach::LiteralReach<'t>,
+    group_paths: crate::engine::l5::group_path::GroupPaths<'t>,
+    suffixes: crate::engine::l5::literal_reach::SuffixCache<'t>,
+}
+
+impl<'t> LiteralPass<'t> {
+    pub(crate) fn new(tree: &'t CapabilitySnapshot, model: &'t Model) -> LiteralPass<'t> {
+        let reach = {
+            let _s = crate::engine::perf_trace::span("digest", "prove.literal_reach");
+            crate::engine::l5::literal_reach::LiteralReach::new(
+                &tree.typed_edges,
+                &tree.capability_facts,
+                model,
+            )
+        };
+        // G35: how each group resource is reached inside the dependency.
+        let group_paths = {
+            let _s = crate::engine::perf_trace::span("digest", "prove.group_paths");
+            crate::engine::l5::group_path::GroupPaths::new(&tree.typed_edges, model)
+        };
+        LiteralPass {
+            reach,
+            group_paths,
+            // W2-0b (design §3.4.3): the suffix trees, shared by every root,
+            // crossing and resource of this read.
+            suffixes: crate::engine::l5::literal_reach::SuffixCache::default(),
+        }
+    }
+
+    /// The pass over `entries` (see [`literal_reach_pass`]).
+    pub(crate) fn pass(&mut self, entries: &mut [DigestEntryResult]) {
+        let LiteralPass {
+            reach,
+            group_paths,
+            suffixes,
+        } = self;
+        literal_reach_entries(reach, group_paths, suffixes, entries);
+    }
+}
+
+fn literal_reach_entries<'t>(
+    reach: &crate::engine::l5::literal_reach::LiteralReach<'t>,
+    group_paths: &crate::engine::l5::group_path::GroupPaths<'t>,
+    suffixes: &mut crate::engine::l5::literal_reach::SuffixCache<'t>,
+    entries: &mut [DigestEntryResult],
+) {
     let _s = crate::engine::perf_trace::span("digest", "prove.reach_effects");
-    // W2-0b (design §3.4.3): the suffix trees, shared by every root,
-    // crossing and resource of this read. A shared fill is never cancelled
-    // by a request (context-server design §4.6), so nothing here asks to
-    // stop; the check is wired for a reader that owns its search.
-    let mut suffixes = crate::engine::l5::literal_reach::SuffixCache::default();
+    // A shared fill is never cancelled by a request (context-server design
+    // §4.6), so nothing here asks to stop; the check is wired for a reader
+    // that owns its search.
     let never = || false;
     for entry in entries {
         // The root's guarded search, built once per root on first need
         // (`None` inside: it hit its cap).
         let mut root_tree = None;
         if entry.effects.iter().any(|e| e.boundary_group) {
-            root_tree = Some(reach.live_tree(&entry.routine_id));
+            root_tree = Some(reach.live_tree_of(&entry.routine_id));
         }
         if let Some(Some(tree)) = &root_tree {
             // One crossing's entries serve each of its rows.
@@ -1652,7 +1850,7 @@ pub(crate) fn literal_reach_pass(
                     })
                     .collect();
                 e.group_resource_paths =
-                    group_paths.paths(&reach, tree, entries, e, &candidates, &mut suffixes, &never);
+                    group_paths.paths(reach, tree, entries, e, &candidates, suffixes, &never);
                 // W2-6 (2f): a resource-less group (COMMIT, HTTP, UI, …) gets
                 // its own terminal witness: through the crossing to a live
                 // state owning a direct fact of its type.
@@ -1662,7 +1860,7 @@ pub(crate) fn literal_reach_pass(
                 {
                     let ops = vec![(String::new(), reach.terminal_ops(&e.effect_type))];
                     e.group_terminal_path = group_paths
-                        .paths(&reach, tree, entries, e, &ops, &mut suffixes, &never)
+                        .paths(reach, tree, entries, e, &ops, suffixes, &never)
                         .pop()
                         .map(|(_, o)| o);
                 }
@@ -1675,7 +1873,7 @@ pub(crate) fn literal_reach_pass(
                             _ if !judged => {
                                 ResourceStatus::NotEstablished(Undecided::KindNotJudged)
                             }
-                            Some(ops) => reach.resource_status(entries, ops, &mut suffixes, &never),
+                            Some(ops) => reach.resource_status(entries, ops, suffixes, &never),
                             None => ResourceStatus::NotEstablished(Undecided::NoOperation),
                         };
                         (r.clone(), status)
@@ -1757,13 +1955,13 @@ pub(crate) fn literal_reach_pass(
                 true => None,
                 false => Some(
                     root_tree
-                        .get_or_insert_with(|| reach.live_tree(&entry.routine_id))
+                        .get_or_insert_with(|| reach.live_tree_of(&entry.routine_id))
                         .as_ref(),
                 ),
             };
             e.own_path = Some(match tree {
-                None => group_paths.own_path_in_root(&reach, &entry.routine_id, &ops),
-                Some(t) => group_paths.own_path(&reach, t, &ops),
+                None => group_paths.own_path_in_root(reach, &entry.routine_id, &ops),
+                Some(t) => group_paths.own_path(reach, t, &ops),
             });
         }
     }

@@ -577,9 +577,12 @@ fn touches_trivial_up_is_counted_not_enumerated() {
         ],
         "human",
     );
+    // The solve graph's `up` is one line; the callers through dependency
+    // code (query schema 3.5.0) follow as their own section.
     let up_lines: Vec<&str> = human
         .lines()
         .skip_while(|l| !l.starts_with("  up:"))
+        .take_while(|l| !l.starts_with("  through dependency code"))
         .collect();
     assert_eq!(up_lines.len(), 1, "one `up` line: {human}");
 

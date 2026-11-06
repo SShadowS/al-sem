@@ -478,6 +478,7 @@ pub fn compute(base: &Side<'_>, new: &Side<'_>, dependency_note: Option<&str>) -
         deleted.push(json!({
             "stableId": id,
             "display": s.map(|s| s.display.clone()),
+            "handle": s.map(|s| s.handle.clone()),
             "anchor": s.map(|s| json!({"file": s.file, "line": s.line})),
             "baseCallers": s.map(|s| &s.callers),
             "reason": unpaired_reason(&id, base, new),

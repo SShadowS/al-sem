@@ -111,9 +111,28 @@
       "note": "the index holds no touch of the table in this routine's cone (one routine into dependency code; not proof of absence); the touching callers reach it through other branches",
       "relation": "code-calls",
       "scoped": true,
+      "throughDependency": {
+        "callers": 0,
+        "catalog": {
+          "entries": [
+            {
+              "app": "Base Application",
+              "name": "Workflow Response Handling::ExecuteResponse",
+              "status": "notLoaded"
+            }
+          ],
+          "version": "1"
+        },
+        "configured": 0,
+        "engine": "reverse-walk",
+        "feasibility": "notChecked",
+        "follows": "code calls (calls, object runs and the triggers a run runs, record triggers, event dispatch) that pass dependency code (an app other than the workspace's), any number of times, ending at this routine; not open sites, hubs or what a user starts on a page",
+        "list": [],
+        "relation": "code-calls-through-dependency"
+      },
       "transitiveCallers": 1,
       "unknown": []
     }
   },
-  "schemaVersion": "3.4.0"
+  "schemaVersion": "3.5.0"
 }

@@ -457,7 +457,7 @@ pub fn tool_list() -> Vec<Value> {
         ),
         tool(
             "alsem_query_touches",
-            "Is a table touched by any record operation, transitively? `table`: a number, a name, an internal table id, or unknown (operations whose table is decided at run time). Without `from`: every workspace routine that touches it, by the per-operation index. With `from` (a routine selector), `direction`: down (does it touch the table, and through which operations; when no indexed operation does, the answer is `unknown` with its reasons, such as operations on a RecordRef, calls not resolved or dependency code deeper than one routine, and `no` only when none applies), up (its transitive callers: how many touch it, do not, or are unknown), or both (the default). Touches are counted on persistent records, on possibly persistent records and on temporary records (a temporary-record touch persists nothing but uses the table's schema and runs its triggers); when the routine touches the table itself its callers inherit the touch and are counted, not listed. With `field` (a field name or number of `table`): every code consumer of that one field instead, by use kind (read, write, validate, filter, key-use, load, calc, rule, metadata, copy-candidate for TransferFields, by-number for RecordRef.Field of a literal), each site once with its uses (`F += 1` is one site, read and write), temporary records counted with persistent ones, a record of an unresolved table as a candidate, the table's keys holding it, and what was searched: every workspace body and the dependency bodies loaded, never declaration-level consumers (CalcFormula, TableRelation, page and report columns); with no site the answer is \"no indexed consumer observed\", never no; with `from`, only the routine's cone (down) and its callers (up, by the reverse walk alsem_tests uses, each with its tier: local, through dependency code, only through an open site). Default (`format: human`): a few lines to about 10 KB, lists folded. Ask for more: `callers: true` (every caller by name, depth and location, without witnesses), `all: true` (every witness, the callers' included, no fold; tens of megabytes on a hub routine), `showSource: true` (the cited source line ±2), `format: json` (every down witness, about 200 KB on a hub routine; over the cap a file with a summary of the down and up headlines). Lines are 1-based. Dependency code: per operation one routine deep; with `from` asked down, the dependency entry points beyond which the whole cone may write the table are listed too (`down.beyond`). Next: alsem_query_effects for the routine's other tables. Returns the exact `alsem query touches` stdout.",
+            "Is a table touched by any record operation, transitively? `table`: a number, a name, an internal table id, or unknown (operations whose table is decided at run time). Without `from`: every workspace routine that touches it, by the per-operation index. With `from` (a routine selector), `direction`: down (does it touch the table, and through which operations; when no indexed operation does, the answer is `unknown` with its reasons, such as operations on a RecordRef, calls not resolved or dependency code deeper than one routine, and `no` only when none applies), up (its transitive callers: how many touch it, do not, or are unknown; then, listed apart, the workspace callers that reach it only through dependency code, nearest first, each with its witness through every dependency routine and event, tier `configured` when only a configured-dispatch site such as Base Application's workflow responses connects it; potential callers, path feasibility not checked), or both (the default). Touches are counted on persistent records, on possibly persistent records and on temporary records (a temporary-record touch persists nothing but uses the table's schema and runs its triggers); when the routine touches the table itself its callers inherit the touch and are counted, not listed. With `field` (a field name or number of `table`): every code consumer of that one field instead, by use kind (read, write, validate, filter, key-use, load, calc, rule, metadata, copy-candidate for TransferFields, by-number for RecordRef.Field of a literal), each site once with its uses (`F += 1` is one site, read and write), temporary records counted with persistent ones, a record of an unresolved table as a candidate, the table's keys holding it, and what was searched: every workspace body and the dependency bodies loaded, never declaration-level consumers (CalcFormula, TableRelation, page and report columns); with no site the answer is \"no indexed consumer observed\", never no; with `from`, only the routine's cone (down) and its callers (up, by the reverse walk alsem_tests uses, each with its tier: local, through dependency code, only through an open site). Default (`format: human`): a few lines to about 10 KB, lists folded. Ask for more: `callers: true` (every caller by name, depth and location, without witnesses), `all: true` (every witness, the callers' included, no fold; tens of megabytes on a hub routine), `showSource: true` (the cited source line ±2), `format: json` (every down witness, about 200 KB on a hub routine; over the cap a file with a summary of the down and up headlines). Lines are 1-based. Dependency code: per operation one routine deep; with `from` asked down, the dependency entry points beyond which the whole cone may write the table are listed too (`down.beyond`). Next: alsem_query_effects for the routine's other tables. Returns the exact `alsem query touches` stdout.",
             schema(
                 vec![
                     (
@@ -587,7 +587,7 @@ pub fn tool_list() -> Vec<Value> {
                     ),
                     (
                         "maxRoots",
-                        json!({"type": "integer", "minimum": 0, "description": "Routines shown in the human output (default 20); the JSON holds every one."}),
+                        json!({"type": "integer", "minimum": 0, "description": "Routines shown in the human output (default 20, fewer when the answer would pass 38 KiB; given, that budget is off); the JSON holds every one."}),
                     ),
                     (
                         "detail",
@@ -1207,13 +1207,11 @@ fn parse_known(tool: &'static str, a: &Args<'_>, defaults: &Defaults) -> Result<
             let format = a.enumerated("format", &["human", "json"], "human")?;
             v.opt("format", &format);
             v.switch("single-app", universe == Universe::SingleApp);
-            let opts = crate::engine::impact::render::RenderOpts {
-                json: format == "json",
-                max_roots: max_roots
-                    .map(|n| n as usize)
-                    .unwrap_or(crate::engine::impact::render::DEFAULT_MAX_ROOTS),
-                detail: req.detail,
-            };
+            let opts = crate::engine::impact::render::RenderOpts::new(
+                format == "json",
+                max_roots.map(|n| n as usize),
+                req.detail,
+            );
             return Ok(ToolCall::Impact(ImpactCall {
                 command: CommandCall {
                     tool,
