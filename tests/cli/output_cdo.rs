@@ -57,7 +57,8 @@ pub(crate) struct Answer {
 
 pub(crate) struct CdoAnswers {
     pub ws: PathBuf,
-    pub dump: tempfile::TempDir,
+    /// The dependency source dump (`crate::process_scratch`): lives for the whole process.
+    pub dump: PathBuf,
     /// `"<routine> <call>"` -> answer, in call order.
     pub answers: BTreeMap<String, Answer>,
 }
@@ -273,8 +274,10 @@ pub(crate) fn cdo_answers() -> Option<&'static CdoAnswers> {
     ANSWERS
         .get_or_init(|| {
             let ws = crate::cdo::cdo_ws_or_enforce()?;
-            let dump = tempfile::tempdir().unwrap();
-            dump_dependency_source(&ws, dump.path());
+            // A `static` keeps the dump for the anchor check: never a `TempDir` here
+            // (see `process_scratch`; ~12,000 files leaked per run before).
+            let dump = crate::process_scratch("output-cdo-dependency-source");
+            dump_dependency_source(&ws, &dump);
             let mut server = Server::ready(&ws, None);
             let mut answers = BTreeMap::new();
             let mut id = 1000;
@@ -335,7 +338,7 @@ fn cdo_anchor_source_check() {
     let step = anchors.len() / 50;
     let sample: Vec<Anchor> = anchors.into_iter().step_by(step).take(50).collect();
     let deps = sample.iter().filter(|x| x.file.starts_with("dep:")).count();
-    let c = check_anchors(&sample, &a.ws, a.dump.path());
+    let c = check_anchors(&sample, &a.ws, &a.dump);
     assert!(
         c.failures.is_empty(),
         "anchors that do not open to what they print:\n{}",

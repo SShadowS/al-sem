@@ -53,6 +53,38 @@ pub(crate) fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
     }
 }
 
+/// A scratch folder that lives for the whole test process, for data a `static` keeps
+/// (a `OnceLock` cache). Never use a `tempfile::TempDir` there: a `static` is never
+/// dropped, so the folder is never deleted. On 2026-11-06 such leaks (`output_cdo`'s
+/// CDO dependency dump, ~12,000 files per `cdo-gate` run, and this crate's
+/// `cli_implicit_trigger_cone` fixture) filled /tmp's inodes and broke every gate.
+/// The folder is `<CARGO_TARGET_TMPDIR>/process-scratch/<name>/pid-<pid>`, created
+/// empty; earlier processes' folders under `<name>` older than six hours are removed
+/// first (a younger one may belong to a concurrent run).
+pub(crate) fn process_scratch(name: &str) -> std::path::PathBuf {
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("process-scratch")
+        .join(name);
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        let stale = std::time::Duration::from_secs(6 * 3600);
+        for e in entries.flatten() {
+            let old = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age > stale);
+            if old {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
+    let dir = root.join(format!("pid-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create the process scratch folder");
+    dir
+}
+
 /// What `fingerprint`, `digest`, `prove` and `diff` read besides the build's
 /// inputs (#160 §4.2.6): the snapshot hash rows. Harnesses that call those
 /// pipelines read their `WorkspaceInputs` with it.
