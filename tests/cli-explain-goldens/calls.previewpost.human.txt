@@ -9,7 +9,6 @@ Codeunit "Calls Post"::PreviewPost  ws:src/post.al:36
   limits: none
   scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0 dependency routines entered at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   calls: Codeunit "Calls Checks"::CheckPreview (:40)
-  route to its UI effect: UI_ERROR at ws:src/checks.al:23, via PreviewPost → Codeunit "Calls Checks"::CheckPreview
   rules: none of its own
   inherits via CheckPreview: rejects when Preview: "A preview cannot post."  [Error ws:src/checks.al:23]
   inherits from table trigger OnModify (run by Modify at ws:src/post.al:41): rejects when Blocked: "A blocked order cannot change."  [Error ws:src/order.al:25]

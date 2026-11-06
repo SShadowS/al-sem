@@ -376,8 +376,18 @@ fn summary(up: &Up<'_>, g: &SitedGraph, captions: &mut Captions) -> Value {
             .iter()
             .map(|&s| &g.sites()[s as usize])
             .filter(|s| up.best.contains_key(&s.from))
-            .filter_map(|s| s.anchor)
-            .map(|a| format!("{}:{}", g.unit(a.unit), a.start_line + 1))
+            .filter_map(|s| s.anchor.map(|a| (s.from, a)))
+            .map(|(from, a)| {
+                // `ws:` / `dep:<app name>:` as every human location reads.
+                let unit = g.unit(a.unit);
+                let file = match g.node_app(from) {
+                    _ if unit.starts_with("ws:") || unit.starts_with("dep:") => unit.to_string(),
+                    Some(app) if app == g.primary_app() => format!("ws:{unit}"),
+                    Some(app) => format!("dep:{}:{unit}", g.app_identity(app).1),
+                    None => unit.to_string(),
+                };
+                format!("{file}:{}", a.start_line + 1)
+            })
             .min()
             .unwrap_or_default();
         hubs.insert((kind, at));

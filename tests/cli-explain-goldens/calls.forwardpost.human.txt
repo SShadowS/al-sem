@@ -9,7 +9,6 @@ Codeunit "Calls Post"::ForwardPost  ws:src/post.al:28
   limits: none
   scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0 dependency routines entered at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   calls: Codeunit "Calls Checks"::CheckOrder (:32)
-  route to its UI effect: UI_ERROR at ws:src/checks.al:6, via ForwardPost → Codeunit "Calls Checks"::CheckOrder
   rules: none of its own
   inherits via CheckOrder: rejects when Order."No." = '': "The order has no number."  [Error ws:src/checks.al:6]
   inherits via CheckOrder: rejects when not (Order."No." = '') and StrictMode and Order.Amount is empty: (platform message)  [TestField ws:src/checks.al:8]

@@ -437,7 +437,15 @@ fn reach_lines(up: &Value, detail: bool, indent: &str) -> Vec<String> {
              detail: true lists one representative per kind and tier"
         )),
         _ => {
+            // One line per kind: two legacy buckets of one kind (codeunit
+            // OnRun and background starts) print the first one's witnesses.
+            let mut printed: Vec<&str> = Vec::new();
             for e in &entries {
+                let kind = vocab::entry_key(s(e, "kind")).0;
+                if printed.contains(&kind) {
+                    continue;
+                }
+                printed.push(kind);
                 let firsts: Vec<String> = e["first"]
                     .as_array()
                     .into_iter()

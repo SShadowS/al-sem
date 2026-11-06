@@ -1351,26 +1351,27 @@ fn own_state_changes(model: &crate::program::model::workspace::Model, root: &str
     else {
         return "own state changes: not known (no body in the model)".to_string();
     };
-    let globals: BTreeMap<String, &str> = r
+    let globals: BTreeSet<String> = r
         .variables
         .iter()
         .filter(|v| v.scope.as_deref() == Some("global"))
-        .map(|v| (v.name.to_ascii_lowercase(), v.name.as_str()))
+        .map(|v| v.name.to_ascii_lowercase())
         .collect();
-    let set: BTreeSet<&str> = r
-        .var_assignments
-        .iter()
-        .filter_map(|a| {
-            let head = a
-                .lhs_name
-                .split(['.', '['])
-                .next()
-                .unwrap_or("")
-                .trim_matches('"')
-                .to_ascii_lowercase();
-            globals.get(&head).copied()
-        })
-        .collect();
+    // The global as the assignment writes it (the model folds names).
+    let mut set: BTreeMap<String, String> = BTreeMap::new();
+    for a in &r.var_assignments {
+        let head = a
+            .lhs_name
+            .split(['.', '['])
+            .next()
+            .unwrap_or("")
+            .trim_matches('"');
+        if globals.contains(&head.to_ascii_lowercase()) {
+            set.entry(head.to_ascii_lowercase())
+                .or_insert_with(|| head.to_string());
+        }
+    }
+    let set: Vec<String> = set.into_values().collect();
     let kind = model
         .workspace
         .objects
@@ -1770,7 +1771,12 @@ fn render(
             if let Some(e) = entry.and_then(|e| {
                 e.effects
                     .iter()
-                    .filter(|f| f.effect_type.starts_with("UI_") && !f.literal_unreachable)
+                    .filter(|f| {
+                        // UI, not an error (UI_ERROR is the errors family).
+                        f.effect_type.starts_with("UI_")
+                            && f.effect_type != "UI_ERROR"
+                            && !f.literal_unreachable
+                    })
                     .find(|f| f.via_paths.iter().any(|p| !p.is_empty()))
             }) && let Some(p) = e
                 .via_paths

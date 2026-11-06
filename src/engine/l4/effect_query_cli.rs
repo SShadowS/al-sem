@@ -3849,12 +3849,21 @@ fn render_query_effects_body(
         ));
         parts.extend(conditional.iter().cloned());
     } else if !conditional.is_empty() {
-        parts.push(format!(
-            "{}; otherwise it changes a temporary record; no other write that may persist: {}",
-            conditional.join("; "),
-            write_search
-        ));
-    } else {
+        // The absence of any other write holds only when nothing is written
+        // beyond a dependency call either (that part follows when it is).
+        parts.push(if beyond_tables.is_empty() {
+            format!(
+                "{}; otherwise it changes a temporary record; no other write that may persist: {}",
+                conditional.join("; "),
+                write_search
+            )
+        } else {
+            format!(
+                "{}; otherwise it changes a temporary record",
+                conditional.join("; ")
+            )
+        });
+    } else if beyond_tables.is_empty() {
         parts.push(format!("writes that may persist: {write_search}"));
     }
     if !beyond_writes.is_empty() {

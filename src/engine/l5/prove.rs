@@ -166,6 +166,11 @@ pub struct ProveObligations {
     pub world: World,
     pub waived_rows: usize,
     pub coverage_closed_by_assumption: bool,
+    /// The coverage is partial only through interface open world (its one
+    /// reason): a closed world would close it too (output validation V2,
+    /// the `re-analysis under an assumption:` line names it among what
+    /// `closedWorld` removes).
+    pub coverage_open_world_only: bool,
     /// The answer holds only in `world`: the strict world answers differently
     /// ([`prove_with_callers`]). The [`World::label`] label.
     pub answer_relies_on_world: bool,
@@ -341,6 +346,13 @@ fn compute_obligations(
         world,
         waived_rows,
         coverage_closed_by_assumption,
+        coverage_open_world_only: !complete
+            && entry.coverage_status == "partial"
+            && !entry.coverage_reasons.is_empty()
+            && entry
+                .coverage_reasons
+                .iter()
+                .all(|r| r == INTERFACE_OPEN_WORLD),
         answer_relies_on_world: false,
         relies_on_loaded_subscribers: false,
     }
@@ -2198,19 +2210,32 @@ fn unknown_lines(
         "  not established: {}",
         not_established_effect(question)
     ));
-    if let Some((_, w, n)) = kinds.iter().find(|(k, _, _)| *k == "open-world-dispatch")
-        && o.world != World::Closed
-    {
+    if kinds.iter().any(|(k, _, _)| *k == "open-world-dispatch") && o.world != World::Closed {
+        // A closed world also closes the coverage when interface open world
+        // is its only reason (`compute_obligations`'
+        // `coverage_closed_by_assumption`).
+        let coverage_too = o.coverage_open_world_only;
         let stay: Vec<(&'static str, String, usize)> = kinds
             .iter()
-            .filter(|(k, _, _)| *k != "open-world-dispatch")
+            .filter(|(k, _, _)| {
+                *k != "open-world-dispatch" && !(coverage_too && *k == "coverage-incomplete")
+            })
             .cloned()
             .collect();
+        let removed: Vec<String> = kinds
+            .iter()
+            .filter(|k| !stay.contains(k))
+            .map(|(_, w, n)| format!("{w} {n}"))
+            .collect();
         let removes = if stay.is_empty() {
-            format!("removes every blocker of this answer ({w} {n})")
+            format!(
+                "removes every blocker of this answer ({})",
+                removed.join(", ")
+            )
         } else {
             format!(
-                "removes {w} {n}; stay: {}",
+                "removes {}; stay: {}",
+                removed.join(", "),
                 named_kinds(&stay, if detail { stay.len() } else { 3 })
             )
         };
@@ -2762,6 +2787,7 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             world: World::Strict,
             waived_rows: 0,
             coverage_closed_by_assumption: false,
+            coverage_open_world_only: false,
             answer_relies_on_world: false,
             relies_on_loaded_subscribers: false,
         };
