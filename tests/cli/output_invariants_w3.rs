@@ -492,7 +492,8 @@ fn kind_line(ty: &str) -> Option<&'static str> {
     Some(match ty {
         t if t.starts_with("DB_") || t == "UI_ERROR" => return None,
         "COMMIT" => "commits: ",
-        "EVENT_PUBLISH" => "events: ",
+        // Output validation §9.1 (F72): `events raised (N …, downstream)`.
+        "EVENT_PUBLISH" => "events raised (",
         t if t.starts_with("UI_") => "UI at ",
         "HTTP" => "HTTP at ",
         "FILE" => "file at ",
@@ -524,7 +525,7 @@ pub(crate) fn kind_failures(label: &str, effects: &[Value], card: &str) -> Vec<S
         let ok = match (ty, line) {
             (_, None) => false,
             ("COMMIT", Some(l)) => !l.starts_with("commits: none"),
-            ("EVENT_PUBLISH", Some(l)) => !l.starts_with("events: none"),
+            ("EVENT_PUBLISH", Some(l)) => !l.starts_with("events raised (0 "),
             (_, Some(l)) => l.contains(ty) || l.contains("… +"),
         };
         if !ok {

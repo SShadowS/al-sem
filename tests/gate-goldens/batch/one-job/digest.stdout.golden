@@ -46,6 +46,7 @@
               "sourceKind": "source"
             },
             "factId": "9dc07ba4a609e78a",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
@@ -83,6 +84,7 @@
               "sourceKind": "source"
             },
             "factId": "9ef38d0967e5d920",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
@@ -220,5 +222,5 @@
     },
     "workspaceFingerprint": "450419199dc399835e4930b0b2b8568717dbc88066e20fa77134485d64043dee"
   },
-  "schemaVersion": "3.2.0"
+  "schemaVersion": "3.3.0"
 }

@@ -176,7 +176,7 @@ fn symbol_only_dependency_table_resolves_and_is_selectable() {
     // digest, default (cross-app).
     let (doc, code) = json(&["digest", &ws, "--file", "src/Work.al"]);
     assert_eq!(code, 0, "{doc}");
-    assert_eq!(doc["schemaVersion"], "2.2.0");
+    assert_eq!(doc["schemaVersion"], "2.3.0");
     assert_eq!(doc["payload"]["dependencies"]["mode"], "crossApp");
     assert_eq!(
         app_sources(&doc),

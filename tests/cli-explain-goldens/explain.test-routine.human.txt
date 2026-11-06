@@ -15,7 +15,7 @@ Codeunit "Explain Tests"::PostUnreleasedFails  defined at ws:src/tests.al:9
       Modify at ws:src/post.al:18
       path: PostUnreleasedFails → Codeunit "Explain Post"::PostOrder
       fields PostOrder assigns on this table (not operation-specific): Posted, Status
-  events: 1 raised in workspace code, by publisher: Codeunit Explain Post 1; 0 more only beyond dependency calls
+  events raised (1 in workspace code, downstream): Codeunit Explain Post: OnBeforePostOrder; 0 more only beyond dependency calls; publishes: none of its own
   UI at 1 place: UI_MESSAGE at ws:src/post.al:19 (guarded-by-IsHandled)
   errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:12 (unconditional on success); ERROR_IMPLICIT at ws:src/post.al:18 (guarded-by-IsHandled); ERROR_THROW at ws:src/post.al:11 (error-path)
   tests: 1 [Test] procedure loaded; none reaches it (not a reason to skip tests)

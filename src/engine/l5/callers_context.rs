@@ -1782,11 +1782,7 @@ pub fn answer(q: CallersQuestion, roots: &[NodeIx], cx: &CallersCx<'_>) -> Calle
         blocked_by,
         blocked_counts: v.blocked_counts,
         entries: v.entries.into_iter().map(|(k, s)| (k, s.len())).collect(),
-        entry_words: v
-            .entry_words
-            .into_iter()
-            .map(|(k, s)| (k, s.len()))
-            .collect(),
+        entry_words: entry_word_counts(q, v.entry_words),
         uncaught_route: v.uncaught,
         stopped: v.stopped,
         commit_behavior: v.commit_behavior.into_iter().collect(),
@@ -1878,6 +1874,57 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 
 /// The entry words of one class (`false`: established, `true`: over a hub),
 /// largest first: `page actions 3, page triggers 2`.
+/// The precedence of an entry kind word when one entry has several (output
+/// validation §8.2, F53): the most specific kind is its own (a page
+/// action's `OnAction` is a page action, not also a page trigger).
+fn entry_kind_rank(word: &str) -> usize {
+    [
+        "test procedure",
+        "install trigger",
+        "upgrade trigger",
+        "page action",
+        "page trigger",
+        "report trigger",
+        "table trigger",
+        "event subscriber",
+        "codeunit OnRun",
+        "public procedure",
+    ]
+    .iter()
+    .position(|w| *w == word)
+    .unwrap_or(usize::MAX)
+}
+
+/// Distinct entries counted per word (output validation §8.2, F53). By
+/// entry KIND (pending writes, intercepted errors) the kinds are disjoint:
+/// each entry counts once, in its own kind ([`entry_kind_rank`]), and under
+/// "established" when any of its occurrences is (a candidate over a hub
+/// only otherwise), so the counts add up to the distinct entries. By
+/// execution CONTEXT (non-interactive) contexts may overlap and each word
+/// counts its own entries (the line says so).
+fn entry_word_counts<N: Ord + Copy>(
+    q: CallersQuestion,
+    words: BTreeMap<(bool, &'static str), BTreeSet<N>>,
+) -> BTreeMap<(bool, &'static str), usize> {
+    if q == CallersQuestion::NonInteractive {
+        return words.into_iter().map(|(k, s)| (k, s.len())).collect();
+    }
+    let mut own: BTreeMap<N, (bool, &'static str)> = BTreeMap::new();
+    for ((open, w), nodes) in &words {
+        for n in nodes {
+            let e = own.entry(*n).or_insert((*open, *w));
+            if (*open, entry_kind_rank(w)) < (e.0, entry_kind_rank(e.1)) {
+                *e = (*open, *w);
+            }
+        }
+    }
+    let mut out: BTreeMap<(bool, &'static str), usize> = BTreeMap::new();
+    for k in own.into_values() {
+        *out.entry(k).or_default() += 1;
+    }
+    out
+}
+
 fn entry_words_line(a: &CallersAnswer, over_hub: bool) -> String {
     let mut v: Vec<(&str, usize)> = a
         .entry_words
@@ -2412,10 +2459,16 @@ pub fn format_human(header: &str, a: &CallersAnswer, detail: bool, hcx: &HumanCx
             CallersQuestion::InterceptErrors => "uncaught at (entries reached with no trap)",
             CallersQuestion::NonInteractive => "non-interactive entries",
         };
+        // §8.2 (F53): the unit, and how the kinds relate.
+        let unit = if q == CallersQuestion::NonInteractive {
+            " (distinct entries per context; contexts may overlap, not summed)"
+        } else {
+            " (distinct entries; an entry is counted once, in its own kind)"
+        };
         for (over_hub, tag) in [(false, ""), (true, " [via-hub]")] {
             let by = entry_words_line(a, over_hub);
             if !by.is_empty() {
-                lines.push(format!("  {label}{tag}: {by}"));
+                lines.push(format!("  {label}{tag}: {by}{unit}"));
             }
         }
     }

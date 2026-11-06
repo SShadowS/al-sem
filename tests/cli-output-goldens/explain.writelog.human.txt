@@ -9,7 +9,7 @@ Codeunit "Out Log Mgt"::WriteLog  defined at ws:src/OutIssueDocument.Codeunit.al
   uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   calls: none (no call to a routine; builtins aside)
   callers: 3 — Codeunit "Out Issue Document"::IssueDoc, Codeunit "Out Subscribers"::LogIssued, Codeunit "Out Tests"::WriteLogInserts; reached from 1 page action
-    caller rule (applied by Codeunit "Out Issue Document"::IssueDoc; skipped by Codeunit "Out Subscribers"::LogIssued, Codeunit "Out Tests"::WriteLogInserts): rejects when Doc.Status <> Doc.Status::Open: (platform message)  [TestField ws:src/OutIssueDocument.Codeunit.al:12]
+    caller rule (checked by 1 caller: Codeunit "Out Issue Document"::IssueDoc; no equivalent check recognized in 2 analyzed callers: Codeunit "Out Subscribers"::LogIssued, Codeunit "Out Tests"::WriteLogInserts): rejects when Doc.Status <> Doc.Status::Open: (platform message)  [TestField ws:src/OutIssueDocument.Codeunit.al:12]
     reached from page action Page "Out Doc Card".action(Issue "Issue") at ws:src/Pages.al:18
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     Out Log: Insert 1 — known persistent

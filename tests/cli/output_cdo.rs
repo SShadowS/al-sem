@@ -565,7 +565,7 @@ fn cdo_digest_json_fits_its_size_budgets() {
     for label in ["IssueReminder", "RunReportID"] {
         let doc = &a.answers[&format!("{label} digest json")].stdout;
         let mut v: Value = serde_json::from_str(doc).expect("digest JSON");
-        assert_eq!(v["schemaVersion"], "3.2.0", "{label}");
+        assert_eq!(v["schemaVersion"], "3.3.0", "{label}");
         strip(&mut v);
         let core = serde_json::to_string_pretty(&v).unwrap().len() + 1;
         eprintln!(

@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (counting units and per-tool items, output validation V6)
+
+Output validation round 1, milestone V6 (spec
+`docs/superpowers/specs/2026-11-06-output-validation-r1.md` §8.2, §9; word table §8.1, JSON
+rule §8.3). Every count names its unit, and each tool's remaining items land:
+
+- **Count units** (F53, F54): touches field mode counts confirmed sites and candidates apart
+  (`consumers: 3 sites, 1 candidate (4 sites in …)`) and names each breakdown's unit;
+  caller rows print `+1 hop` / `+3 hops`; query effects' MCP summary adds `counts` (operations
+  one routine deep vs the whole-cone write tables); `writes beyond dependency calls` with no
+  writing call is one absence verdict (`no (every candidate decided; …)`, or `none observed
+  (…)` when dependency calls are unresolved); a commit the root's literal arguments rule out
+  is counted apart (`commits: may (1 site, 2 sites more under literal arguments that cannot
+  run)`; JSON `summary.commits.literalDead`); prove's callers'-context entries by kind are
+  distinct entries, each counted once in its own kind (contexts may overlap and say so). A
+  `legend:` line explains field-mode site tags.
+- **Touches table mode** (F59): workspace sites by operation (the answer line), dependency
+  sites by operation, sites by object, the transitive routine count, and key-relevant uses
+  (not exhaustive: `Get`, `SetCurrentKey`, `SetRange`/`SetFilter` on a declared key's field),
+  listed first; unresolved-table sites say `table: not resolved (RecordRef|Record)`. Field
+  mode prints the declared keys before the rename verdict, which says they are listed above
+  (F60).
+- **explain** (F67, F72, F80): `caller rule (checked by N callers: …; no equivalent check
+  recognized in M analyzed callers: …)`; `events raised (N in workspace code, downstream)`
+  with the event names per publisher when they come from 5 publishers or fewer (else the
+  counts and `--detail` for the names), and `publishes: none of its own` (or how many) on the
+  same line.
+- **impact** (F62): `object headers: N files, line 1 only — a byte-order mark removed (no
+  declaration changed)` (or whitespace outside quoted names and values, or the declaration
+  text changed); JSON accounting files carry `objectHeaderChange` with both line texts.
+- **tests** (F64, F82): `test scope:` is one clause; the missing test-library symbols print
+  once (`missing test-library symbols: N apps (…) — add them to Test/.alpackages`); the
+  `production bytes` line is dropped when nothing differs.
+- **status** (F65): `check.inputs` counts every category the check hashed (app.json
+  included), so the counts add up to `filesHashed`.
+- **digest** (F73): each effect row's `guaranteeEvidence` gives every guarantee label with
+  `validForRefutation`; the summary row counts `guaranteeLabels` refutable and
+  descriptive-only apart.
+- **prove** (F66): the tool description and the `deterministic` input say the flag concerns
+  `generatedAt` and `alsemVersion` only, never the answer.
+
+Schemas (additive): query 3.10.0, digest 3.3.0 (2.x 2.3.0); prove stays 2.10.0 / 2.11.0,
+explain `al-sem.explain/4`, tests and impact version 1, status `statusVersion` 2.
+
 ### Changed (one result header, summaries and MCP-shaped follow-ups, output validation V4)
 
 Output validation round 1, milestone V4 (spec

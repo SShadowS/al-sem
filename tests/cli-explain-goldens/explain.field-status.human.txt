@@ -31,7 +31,7 @@ Codeunit "Explain Post"::PostOrder  defined at ws:src/post.al:5
     reached from page action Page "Explain Order Card".action(Post "P&ost") at ws:src/card.al:19
   caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
     Explain Order: Modify — depends on the caller's record argument at ws:src/post.al:18
-  events: 1 raised in workspace code, by publisher: Codeunit Explain Post 1; 0 more only beyond dependency calls
+  events raised (1 in workspace code, its own and downstream): Codeunit Explain Post: OnBeforePostOrder; 0 more only beyond dependency calls; publishes: 1 of its own (extension points below)
   extension point OnBeforePostOrder: 1 subscriber(s), IsHandled
   UI at 1 place: UI_MESSAGE at ws:src/post.al:19 (guarded-by-IsHandled)
   errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:12 (unconditional on success); ERROR_IMPLICIT at ws:src/post.al:18 (guarded-by-IsHandled); ERROR_THROW at ws:src/post.al:11 (error-path)

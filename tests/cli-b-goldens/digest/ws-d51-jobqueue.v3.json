@@ -46,6 +46,7 @@
               "sourceKind": "source"
             },
             "factId": "13ef3af0ee3a1c65",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
@@ -79,6 +80,7 @@
               "sourceKind": "source"
             },
             "factId": "9c47042e77369b78",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
@@ -109,6 +111,7 @@
               "sourceKind": "source"
             },
             "factId": "9bcff0f852b91056",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
@@ -228,5 +231,5 @@
     },
     "workspaceFingerprint": "37a0814c1077c76f9f8ac81ad844302230b98ba1e215572a5cc7a9a3541c2f28"
   },
-  "schemaVersion": "3.2.0"
+  "schemaVersion": "3.3.0"
 }

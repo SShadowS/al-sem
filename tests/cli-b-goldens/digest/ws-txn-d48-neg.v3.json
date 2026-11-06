@@ -42,6 +42,7 @@
               "sourceKind": "source"
             },
             "factId": "bf044d346223675c",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
@@ -160,5 +161,5 @@
     },
     "workspaceFingerprint": "17fbcaab4eb174ec9f7c2e3d53f24d2fc8c3bbf94cf005e47d7c9d3069575c4a"
   },
-  "schemaVersion": "3.2.0"
+  "schemaVersion": "3.3.0"
 }

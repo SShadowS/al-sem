@@ -2697,18 +2697,29 @@ impl Card {
                     "note".into(),
                     "applies only when called from the callers in appliedBy".into(),
                 );
+                // Output validation §9.1 (F67): "skipped by" read like a
+                // bypass and "not checked" like a proof of absence; each
+                // side says what the analysis saw, with its count.
                 let skipped = if c.skipped_by.is_empty() {
                     String::new()
                 } else {
-                    format!("; skipped by {}", names(&c.skipped_by).join(", "))
+                    format!(
+                        "; no equivalent check recognized in {}: {}",
+                        rf_plural(c.skipped_by.len(), "analyzed caller", "analyzed callers"),
+                        names(&c.skipped_by).join(", ")
+                    )
                 };
                 let applied = if c.applied_by.is_empty() {
                     format!(
-                        "applied by none, present in {} but may not stop",
+                        "checked by no caller; present in {}, but its check may not stop the call",
                         names(&c.present_in).join(", ")
                     )
                 } else {
-                    format!("applied by {}", names(&c.applied_by).join(", "))
+                    format!(
+                        "checked by {}: {}",
+                        rf_plural(c.applied_by.len(), "caller", "callers"),
+                        names(&c.applied_by).join(", ")
+                    )
                 };
                 (
                     v,
@@ -3431,7 +3442,23 @@ impl Card {
             no_path: no_path_lines(&rollup, full, rcx, opts),
             dead: literal_dead_lines(&rollup, opts),
             temporary: temporary_lines(&rollup, opts),
-            events: event_lines(&rollup, rcx, opts),
+            events: {
+                // Output validation §9.1 (F72): the events the cone raises
+                // and the ones the routine publishes itself, on one line.
+                let mut lines = event_lines(&rollup, rcx, opts);
+                if let Some(l) = lines.first_mut() {
+                    if extension_points.is_empty() {
+                        l.push_str("; publishes: none of its own");
+                    } else {
+                        *l = l.replacen(", downstream)", ", its own and downstream)", 1);
+                        l.push_str(&format!(
+                            "; publishes: {} of its own (extension points below)",
+                            extension_points.len()
+                        ));
+                    }
+                }
+                lines
+            },
             kinds: kind_lines(&rollup, full, opts),
             dependency_gaps: dependency_gap_lines(&rollup, opts),
         };

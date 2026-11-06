@@ -28,7 +28,7 @@ Codeunit "Out Issue Document"::IssueDoc  defined at ws:src/OutIssueDocument.Code
     Codeunit "Base Calc" (70101)::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:16 — 1 table (Modify on 1): Base Price; also ERROR_IMPLICIT
       representative path (Base Price): IssueDoc → [run] Codeunit "Base Calc" (70101)::OnRun → UpdatePrice (Modify at dep:Out Base:src/BasePoster.Codeunit.al:68)
   temporary records (writes to them do not directly persist): 1 table in workspace code (1 effect row): Out Log; 1 table only beyond dependency calls; only temporary: 0 tables
-  events: 1 raised in workspace code, by publisher: Codeunit Out Issue Document 1; 1 more only beyond dependency calls
+  events raised (1 in workspace code, its own and downstream): Codeunit Out Issue Document: OnAfterIssueDoc; 1 more only beyond dependency calls; publishes: 1 of its own (extension points below)
   extension point OnAfterIssueDoc: 1 subscriber(s)
   HTTP at 1 place: HTTP at ws:src/OutIssueDocument.Codeunit.al:72 (unconditional on success)
   background tasks at 1 place: BACKGROUND_TASK at ws:src/OutIssueDocument.Codeunit.al:19 (unconditional on success), starts Codeunit Out Job

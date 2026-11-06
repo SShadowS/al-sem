@@ -46,6 +46,28 @@
               "sourceKind": "source"
             },
             "factId": "dbfbf612a7c23788",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              },
+              {
+                "label": "COMMIT_ON_SUCCESS_PATH",
+                "validForRefutation": false
+              },
+              {
+                "label": "COMMIT_DOMINATES_RETURN",
+                "validForRefutation": true
+              },
+              {
+                "label": "WRITE_COMMITTED_BEFORE_RETURN",
+                "validForRefutation": false
+              },
+              {
+                "label": "EXTERNAL_IO_BEFORE_COMMIT",
+                "validForRefutation": false
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE",
               "COMMIT_ON_SUCCESS_PATH",
@@ -99,6 +121,12 @@
               "sourceKind": "source"
             },
             "factId": "223edeb5c2e21158",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
@@ -132,6 +160,12 @@
               "sourceKind": "source"
             },
             "factId": "cf6c6451ea6cb1e8",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
@@ -167,6 +201,20 @@
               "sourceKind": "source"
             },
             "factId": "c872b12d2974e080",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              },
+              {
+                "label": "EXTERNAL_IO_BEFORE_COMMIT",
+                "validForRefutation": false
+              },
+              {
+                "label": "WRITE_PENDING_AT_EXTERNAL_IO",
+                "validForRefutation": true
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE",
               "EXTERNAL_IO_BEFORE_COMMIT",
@@ -318,5 +366,5 @@
     },
     "workspaceFingerprint": "e50d20fccb69854fbbf2a517d67bd58d54002d8dc6f3519c8618126ba3683e47"
   },
-  "schemaVersion": "3.2.0"
+  "schemaVersion": "3.3.0"
 }

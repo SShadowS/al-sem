@@ -2487,6 +2487,34 @@ pub(crate) fn scoped_guarantee_to_value(
     serde_json::Value::Object(m)
 }
 
+/// Whether a guarantee label of `eff` is valid for refutation: any of its
+/// scoped guarantees is (output validation §9.8, F73). A label with none is
+/// descriptive only: it describes an ordering, it cannot refute a claim.
+#[must_use]
+pub fn guarantee_refutable(eff: &DigestEffectFull, label: &str) -> bool {
+    eff.scoped_guarantees
+        .iter()
+        .any(|sg| sg.label == label && sg.valid_for_refutation)
+}
+
+/// `guaranteeEvidence` (F73, additive beside `guarantees`): each label with
+/// its `validForRefutation` flag, in `guarantees` order, so a reader never
+/// sees a descriptive guarantee beside refutable facts without the flag
+/// (the folded document keeps no trivial scoped guarantee to look it up in).
+pub(crate) fn guarantee_evidence(eff: &DigestEffectFull) -> serde_json::Value {
+    serde_json::Value::Array(
+        eff.guarantees
+            .iter()
+            .map(|g| {
+                serde_json::json!({
+                    "label": g,
+                    "validForRefutation": guarantee_refutable(eff, g),
+                })
+            })
+            .collect(),
+    )
+}
+
 pub fn effect_to_value(eff: &DigestEffectFull) -> serde_json::Value {
     let mut m = serde_json::Map::new();
     m.insert("type".into(), eff.effect_type.clone().into());
@@ -2535,6 +2563,7 @@ pub fn effect_to_value(eff: &DigestEffectFull) -> serde_json::Value {
     let guarantees: Vec<serde_json::Value> =
         eff.guarantees.iter().map(|g| g.clone().into()).collect();
     m.insert("guarantees".into(), serde_json::Value::Array(guarantees));
+    m.insert("guaranteeEvidence".into(), guarantee_evidence(eff));
     m.insert("factId".into(), eff.fact_id.clone().into());
     let sg: Vec<serde_json::Value> = eff
         .scoped_guarantees
@@ -3059,11 +3088,13 @@ pub fn project_digest_document(
     // summary rows `stableId`.
     // 3.2.0 (output validation V4, F76, additive): `payload.result.scope`
     // (analysis, reasons, assumptions, limits, universe, scope).
+    // 3.3.0 / 2.3.0 (output validation V6, F73, additive): every effect row's
+    // `guaranteeEvidence` (each guarantee label with `validForRefutation`).
     let compact = v3.as_ref().is_some_and(|v| v.compact);
     let table_answers = v3.as_ref().map(|v| v.table_answers);
     env.insert(
         "schemaVersion".into(),
-        if v3.is_some() { "3.2.0" } else { "2.2.0" }.into(),
+        if v3.is_some() { "3.3.0" } else { "2.3.0" }.into(),
     );
 
     // The block goes in after the null drop, so its `ratio: null` survives; the
@@ -3418,8 +3449,18 @@ fn digest_entry_summary(
 ) -> serde_json::Value {
     use serde_json::json;
     let mut by_type: BTreeMap<&str, u64> = BTreeMap::new();
+    // §9.8 (F73): guarantee labels on effect rows, refutable and
+    // descriptive-only counted apart.
+    let (mut refutable, mut descriptive) = (0usize, 0usize);
     for f in &e.effects {
         *by_type.entry(f.effect_type.as_str()).or_default() += 1;
+        for g in &f.guarantees {
+            if guarantee_refutable(f, g) {
+                refutable += 1;
+            } else {
+                descriptive += 1;
+            }
+        }
     }
     // V3 §2.1 (3.1.0): the one display, and the stable id, signature,
     // member and selector that tell overloads and member triggers apart.
@@ -3437,6 +3478,7 @@ fn digest_entry_summary(
         // W2-2 (T-W2-13): the one RollupTotals serialization.
         "summary": r.totals.to_json(),
         "testStatus": test_status,
+        "guaranteeLabels": {"refutable": refutable, "descriptiveOnly": descriptive},
     });
     for (k, x) in cx.names.identity_json(&e.routine_id) {
         if k != "display" {
@@ -4509,6 +4551,118 @@ mod tests {
             literal_unreachable: false,
             crossing: None,
         }
+    }
+
+    /// Output validation §8.2 (F53, c15) and §9.8 (F73): the summary row
+    /// counts the live COMMIT sites and those the root's literal arguments
+    /// rule out apart (3 COMMIT rows = 1 site + 2 more), and guarantee
+    /// labels refutable and descriptive-only apart; each effect row's
+    /// `guaranteeEvidence` carries the flag per label. Hand-stated rows.
+    ///
+    /// DISCRIMINATION (2026-11-06): not counting own literal-dead COMMIT rows
+    /// (the `commit_dead_sites += 1` in `RoutineRollup::build` removed) fails
+    /// at "literalDead"; restored, passes. `guarantee_refutable` answering
+    /// `false` for every label fails at the `guaranteeEvidence` assertion
+    /// (WRITE_BEFORE_COMMIT shown descriptive); restored, passes.
+    #[test]
+    fn summary_counts_dead_commits_and_guarantee_kinds_apart() {
+        use crate::engine::l5::ordering_engine::ScopedGuarantee;
+        let sg = |label: &'static str, refutable: bool| ScopedGuarantee {
+            label,
+            scope: "root",
+            write_occurrence_id: None,
+            commit_occurrence_id: None,
+            io_occurrence_id: None,
+            return_occurrence_id: None,
+            supporting_edge_ids: vec![],
+            commit_effectiveness: None,
+            intervening_boundary: "none",
+            valid_for_refutation: refutable,
+        };
+        let mut live = effect("COMMIT", &[], &[]);
+        live.guarantees = vec!["COMMIT_REACHABLE".into(), "WRITE_BEFORE_COMMIT".into()];
+        live.scoped_guarantees = vec![
+            sg("COMMIT_REACHABLE", false),
+            sg("WRITE_BEFORE_COMMIT", true),
+        ];
+        let mut dead1 = effect("COMMIT", &[], &[]);
+        dead1.literal_unreachable = true;
+        let mut dead2 = effect("COMMIT", &[], &[]);
+        dead2.literal_unreachable = true;
+        let mut e = entry_with(vec![]);
+        e.effects = vec![live, dead1, dead2];
+        let ev = guarantee_evidence(&e.effects[0]);
+        assert_eq!(
+            ev,
+            serde_json::json!([
+                {"label": "COMMIT_REACHABLE", "validForRefutation": false},
+                {"label": "WRITE_BEFORE_COMMIT", "validForRefutation": true},
+            ])
+        );
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+        let s = digest_summary(&[e], &[r], &cx, 1, 0);
+        let row = &s["routines"][0];
+        assert_eq!(row["effectsByType"]["COMMIT"], 3, "{s}");
+        let c = &row["summary"]["commits"];
+        assert_eq!(c["ownSites"], 1, "{s}");
+        assert_eq!(c["literalDead"]["sites"], 2, "literalDead: {s}");
+        assert_eq!(
+            row["guaranteeLabels"],
+            serde_json::json!({"refutable": 1, "descriptiveOnly": 1}),
+            "refutable 1: {s}"
+        );
+    }
+
+    /// Output validation §8.2 (F53, c05): when no dependency call writes a
+    /// record that may persist, `writes beyond dependency calls` is one
+    /// absence verdict: `no (every candidate decided; …)` only when no
+    /// dependency call is unresolved, else `none observed (…)`. Hand-stated
+    /// rows: one crossing that only commits (writes no table), with and
+    /// without an unresolved call in dependency code.
+    ///
+    /// DISCRIMINATION (2026-11-06): deciding the verdict without the
+    /// dependency gaps (`r.totals.gaps_dependency == 0 &&` removed in
+    /// `beyond_lines`) prints "no" with a gap: fails at "a gap is not a
+    /// no"; restored, passes.
+    #[test]
+    fn beyond_with_no_writing_call_is_one_verdict() {
+        let opts = crate::engine::l5::routine_rollup::RenderOpts {
+            detail: false,
+            path_cap: 1,
+            surface: crate::engine::follow_up::Surface::Cli,
+        };
+        let model = ws_model();
+        let cx = crate::engine::l5::routine_rollup::RollupCx::new(&model, &[]);
+        let line = |gap: bool| {
+            let mut e = entry_with(vec![]);
+            e.effects = vec![effect(
+                "COMMIT",
+                &[("boundary", "Codeunit Base Poster::OnRun")],
+                &[],
+            )];
+            if gap {
+                e.unresolved = vec![unresolved(
+                    "Codeunit.Run(<dynamic>)",
+                    "dynamic-target",
+                    "dep:g:src/B.al",
+                )];
+            }
+            let r = crate::engine::l5::routine_rollup::RoutineRollup::build(&e, &cx);
+            crate::engine::l5::routine_rollup::beyond_lines(&r, &e, &cx, opts)
+        };
+        let clean = line(false);
+        assert_eq!(clean.len(), 1, "{clean:?}");
+        assert!(
+            clean[0].starts_with("writes beyond dependency calls: no (every candidate decided; "),
+            "{clean:?}"
+        );
+        let gap = line(true);
+        assert!(
+            gap[0].starts_with("writes beyond dependency calls: none observed ("),
+            "a gap is not a no: {gap:?}"
+        );
     }
 
     fn unresolved(callee: &str, status: &str, file: &str) -> UnresolvedConeItem {

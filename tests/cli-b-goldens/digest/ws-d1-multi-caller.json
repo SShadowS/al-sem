@@ -39,6 +39,7 @@
               "sourceKind": "source"
             },
             "factId": "1432fced4ff049e2",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "transitive",
             "scopedGuarantees": [],
@@ -78,6 +79,7 @@
               "sourceKind": "source"
             },
             "factId": "497413d19f4e63a8",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "transitive",
             "scopedGuarantees": [],
@@ -117,6 +119,7 @@
               "sourceKind": "source"
             },
             "factId": "12d2ab78786edf39",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "direct",
             "scopedGuarantees": [],
@@ -169,6 +172,7 @@
               "sourceKind": "source"
             },
             "factId": "5a4a7bd7d3e83981",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "transitive",
             "scopedGuarantees": [],
@@ -208,6 +212,7 @@
               "sourceKind": "source"
             },
             "factId": "f171f61e4181d3b4",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "transitive",
             "scopedGuarantees": [],
@@ -247,6 +252,7 @@
               "sourceKind": "source"
             },
             "factId": "3d70d5016ea6a707",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "direct",
             "scopedGuarantees": [],
@@ -299,6 +305,7 @@
               "sourceKind": "source"
             },
             "factId": "9dc07ba4a609e78a",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "transitive",
             "scopedGuarantees": [],
@@ -338,6 +345,7 @@
               "sourceKind": "source"
             },
             "factId": "9ef38d0967e5d920",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "transitive",
             "scopedGuarantees": [],
@@ -377,6 +385,7 @@
               "sourceKind": "source"
             },
             "factId": "d47b464bf3ed72e4",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "direct",
             "scopedGuarantees": [],
@@ -429,6 +438,7 @@
               "sourceKind": "source"
             },
             "factId": "b162c24ab8fb6723",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "direct",
             "scopedGuarantees": [],
@@ -451,6 +461,7 @@
               "sourceKind": "source"
             },
             "factId": "efece40aad07874a",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "direct",
             "scopedGuarantees": [],
@@ -491,5 +502,5 @@
     },
     "workspaceFingerprint": "7b29099315fe12775912a7c35a4f9c6e730f9fcb4c52790b789fa0629ba09d01"
   },
-  "schemaVersion": "2.2.0"
+  "schemaVersion": "2.3.0"
 }

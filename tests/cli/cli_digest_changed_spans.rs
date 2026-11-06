@@ -1898,7 +1898,7 @@ fn declaration_only_procedures_are_roots() {
     );
     assert!(diags(&doc).is_empty(), "(a) {doc}");
     // (f) the additive keys shipped in digest 1.5.0 (current: 2.2.0).
-    assert_eq!(doc["schemaVersion"], "2.2.0");
+    assert_eq!(doc["schemaVersion"], "2.3.0");
 
     // (b) `--file` on IFoo: both methods.
     let (doc, code) = digest(ws, &["--file", "src/IFoo.Interface.al"], None);

@@ -40,6 +40,20 @@
               "sourceKind": "source"
             },
             "factId": "49f3a3a18ca24731",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              },
+              {
+                "label": "COMMIT_ON_SUCCESS_PATH",
+                "validForRefutation": false
+              },
+              {
+                "label": "COMMIT_DOMINATES_RETURN",
+                "validForRefutation": true
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE",
               "COMMIT_ON_SUCCESS_PATH",
@@ -91,6 +105,12 @@
               "sourceKind": "source"
             },
             "factId": "0fed3f95c2025e0c",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
@@ -124,6 +144,12 @@
               "sourceKind": "source"
             },
             "factId": "c32eb589fa13f8b6",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
@@ -236,6 +262,20 @@
               "sourceKind": "source"
             },
             "factId": "da953d8ae0f202d0",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              },
+              {
+                "label": "COMMIT_ON_SUCCESS_PATH",
+                "validForRefutation": false
+              },
+              {
+                "label": "COMMIT_DOMINATES_RETURN",
+                "validForRefutation": true
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE",
               "COMMIT_ON_SUCCESS_PATH",
@@ -293,6 +333,12 @@
               "sourceKind": "source"
             },
             "factId": "e17e7d0193e26e7d",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
@@ -332,6 +378,12 @@
               "sourceKind": "source"
             },
             "factId": "d464d7671e046d37",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
@@ -466,5 +518,5 @@
     },
     "workspaceFingerprint": "153dd1f50142677bb6b39ef22a0e7e2e23f75e2a3c9f1a1a81e883dd47ae93a7"
   },
-  "schemaVersion": "3.2.0"
+  "schemaVersion": "3.3.0"
 }

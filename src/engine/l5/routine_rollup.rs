@@ -1276,6 +1276,10 @@ pub struct RollupTotals {
     pub commits: &'static str,
     pub commit_sites: usize,
     pub commit_entry_points: usize,
+    /// COMMIT rows under literal arguments that cannot run (output
+    /// validation §8.2, F53): own sites and dependency routines entered.
+    pub commit_dead_sites: usize,
+    pub commit_dead_entry_points: usize,
     /// The COMMIT site search stopped at its depth bound
     /// ([`crate::engine::l5::digest_cli::SITES_PARTIAL`]): the two counts
     /// above are lower bounds, printed "at least".
@@ -1390,6 +1394,14 @@ impl RollupTotals {
         if self.commit_sites_partial {
             v["commits"]["atLeast"] = json!(true);
         }
+        // §8.2 (F53, additive): the COMMIT rows literal arguments rule out,
+        // counted apart, so `effectsByType.COMMIT` reconciles.
+        if self.commit_dead_sites + self.commit_dead_entry_points > 0 {
+            v["commits"]["literalDead"] = json!({
+                "sites": self.commit_dead_sites,
+                "entryPoints": self.commit_dead_entry_points,
+            });
+        }
         if let Some(d) = &self.dominant_entry_point {
             v["mayWriteTables"]["mostBeyond"] = json!({
                 "entryPoint": d.name,
@@ -1467,6 +1479,24 @@ impl RollupTotals {
                             "dependency routine entered that commits",
                             "dependency routines entered that commit",
                         )
+                    ));
+                }
+                // §8.2 (F53, c15): the rows literal arguments rule out.
+                let mut dead = Vec::new();
+                if self.commit_dead_sites > 0 {
+                    dead.push(plural(self.commit_dead_sites, "site", "sites"));
+                }
+                if self.commit_dead_entry_points > 0 {
+                    dead.push(plural(
+                        self.commit_dead_entry_points,
+                        "dependency routine entered",
+                        "dependency routines entered",
+                    ));
+                }
+                if !dead.is_empty() {
+                    where_.push(format!(
+                        "{} more under literal arguments that cannot run",
+                        dead.join(" and ")
                     ));
                 }
                 format!("commits: {answer} ({})", where_.join(", "))
@@ -1854,6 +1884,11 @@ pub struct RoutineRollup {
     pub literal_dead_rows: Vec<usize>,
     /// Own COMMIT rows (live).
     pub commit_sites: Vec<usize>,
+    /// COMMIT rows the root's literal arguments rule out (output validation
+    /// §8.2, F53): own ones (sites) and crossing ones (dependency routines
+    /// entered), counted apart from the live ones.
+    pub commit_dead_sites: usize,
+    pub commit_dead_crossings: usize,
     pub commit_unconditional: bool,
     /// Own EVENT_PUBLISH rows' event ids (live), with the row.
     pub events_ws: BTreeMap<String, usize>,
@@ -2014,6 +2049,9 @@ impl RoutineRollup {
                             dead_tables.insert(id.clone(), d.clone());
                         }
                     }
+                    if ty == "COMMIT" {
+                        r.commit_dead_crossings += 1;
+                    }
                     r.literal_dead_rows.push(i);
                     continue;
                 }
@@ -2059,6 +2097,9 @@ impl RoutineRollup {
                         id.to_string(),
                         detail(e, "resourceDisplay").unwrap_or(id).to_string(),
                     );
+                }
+                if ty == "COMMIT" {
+                    r.commit_dead_sites += 1;
                 }
                 r.literal_dead_rows.push(i);
                 continue;
@@ -2293,6 +2334,8 @@ impl RoutineRollup {
             caller_dependent_tables: caller_own.len(),
             commits,
             commit_sites: self.commit_sites.len(),
+            commit_dead_sites: self.commit_dead_sites,
+            commit_dead_entry_points: self.commit_dead_crossings,
             commit_entry_points,
             commit_sites_partial,
             kinds_partial: BTreeSet::new(),
@@ -3299,6 +3342,34 @@ pub fn beyond_lines(
         .collect();
     // The counts of the one union (EntryPointCounts), as the scope line's.
     let counts = EntryPointCounts::of(r);
+    // Output validation §8.2 (F53): no dependency call writes a record that
+    // may persist — an absence verdict, in the §8.1 words, with the calls
+    // that write only temporary records (or no table) counted in its unit.
+    if writing.is_empty() && !o.detail {
+        let verdict = if r.totals.gaps_dependency == 0 && !r.totals.entry_points_partial {
+            "no (every candidate decided".to_string()
+        } else {
+            format!(
+                "none observed (searched: the whole cone beyond dependency calls with literal \
+                 arguments; not searched: {} in dependency code",
+                plural(
+                    r.totals.gaps_dependency,
+                    "call not resolved",
+                    "calls not resolved"
+                )
+            )
+        };
+        return vec![format!(
+            "writes beyond dependency calls: {verdict}; {} at {} write only temporary records \
+             or no table, which does not directly persist them)",
+            plural(
+                counts.other.0,
+                "dependency routine entered",
+                "dependency routines entered"
+            ),
+            plural(counts.other.1, "dependency call", "dependency calls"),
+        )];
+    }
     let mut out = vec![format!(
         "writes beyond dependency calls ({} through {}{} at {}{}):",
         plural(tables.len(), "table", "tables"),
@@ -3633,13 +3704,53 @@ pub fn event_lines(r: &RoutineRollup, cx: &RollupCx<'_>, o: RenderOpts) -> Vec<S
         .iter()
         .map(|(p, n)| format!("{} {n}", cx.object_display(p)))
         .collect();
-    let f = fold(items, caps::PUBLISHERS, "publishers", o.detail);
+    // Output validation §9.1 (F72): what the cone raises, told apart from
+    // what the routine publishes itself (explain adds `publishes:`).
     let mut s = format!(
-        "events: {} raised in workspace code",
+        "events raised ({} in workspace code, downstream)",
         thousands(r.events_ws.len())
     );
-    if !f.shown.is_empty() {
-        s.push_str(&format!(", by publisher{}: {}", f.count_note(), f.joined()));
+    // F80: the distinct names, per publisher, when they come from at most
+    // [`EVENT_NAME_PUBLISHERS`] publishers (or with detail); else the
+    // counts per publisher and how to get the names.
+    if !ranked.is_empty() && (ranked.len() <= EVENT_NAME_PUBLISHERS || o.detail) {
+        let name_of = |id: &str| -> String {
+            cx.model
+                .events
+                .graph
+                .events
+                .iter()
+                .find(|e| e.id == id)
+                .map_or_else(
+                    || id.rsplit("/event/").next().unwrap_or(id).to_string(),
+                    |e| e.event_name.clone(),
+                )
+        };
+        let groups: Vec<String> = ranked
+            .iter()
+            .map(|(p, _)| {
+                let mut names: Vec<String> = r
+                    .events_ws
+                    .keys()
+                    .filter(|id| publisher_of(id) == *p)
+                    .map(|id| name_of(id))
+                    .collect();
+                names.sort();
+                names.dedup();
+                format!("{}: {}", cx.object_display(p), names.join(", "))
+            })
+            .collect();
+        s.push_str(&format!(": {}", groups.join("; ")));
+    } else {
+        let f = fold(items, caps::PUBLISHERS, "publishers", o.detail);
+        if !f.shown.is_empty() {
+            s.push_str(&format!(
+                ", by publisher{}: {}; names: {} lists them",
+                f.count_note(),
+                f.joined(),
+                o.detail_input()
+            ));
+        }
     }
     s.push_str(&format!(
         "; {} more only beyond dependency calls",
@@ -3647,6 +3758,10 @@ pub fn event_lines(r: &RoutineRollup, cx: &RollupCx<'_>, o: RenderOpts) -> Vec<S
     ));
     vec![s]
 }
+
+/// How many publishers the `events raised` line names each event of
+/// (output validation §9.1, F80).
+const EVENT_NAME_PUBLISHERS: usize = 5;
 
 /// One line per present kind family (design §4.1 section 18). Telemetry
 /// (output validation §5.3, F81) prints as its count in the summary's

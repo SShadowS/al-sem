@@ -80,6 +80,16 @@
               "sourceKind": "source"
             },
             "factId": "e28b3de46714ba70",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              },
+              {
+                "label": "WRITE_PENDING_AT_EXTERNAL_IO",
+                "validForRefutation": false
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE",
               "WRITE_PENDING_AT_EXTERNAL_IO"
@@ -119,6 +129,12 @@
               "boundary": "Codeunit Base Poster::OnRun"
             },
             "factId": "ee69de9d9133b75f",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
@@ -163,6 +179,12 @@
               "resourceCount": "1"
             },
             "factId": "dbb35aab093e98c0",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
@@ -215,6 +237,7 @@
               "sourceKind": "source"
             },
             "factId": "5141fd0a447226eb",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [],
             "pathsKept": 1,
@@ -237,6 +260,12 @@
               "tempState": "known(true)"
             },
             "factId": "2299df03090dd5dd",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
@@ -262,6 +291,12 @@
               "resourceCount": "12"
             },
             "factId": "d1e1b546fd8d6f5c",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
@@ -364,6 +399,7 @@
               "sourceKind": "source"
             },
             "factId": "369cf30301f856c2",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
@@ -407,6 +443,12 @@
               "sourceKind": "source"
             },
             "factId": "65e80a0b8fa09ee5",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
@@ -439,6 +481,12 @@
               "resourceCount": "1"
             },
             "factId": "88c2872efa55e67e",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
@@ -490,6 +538,12 @@
               "resourceCount": "1"
             },
             "factId": "36d60a20668909d0",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
@@ -539,6 +593,7 @@
               "resourceCount": "1"
             },
             "factId": "370b6539b611c25e",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "transitive",
             "resources": [
@@ -560,6 +615,7 @@
               "resourceCount": "1"
             },
             "factId": "10311c540d591a90",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "transitive",
             "resources": [
@@ -586,6 +642,7 @@
               "sourceKind": "source"
             },
             "factId": "ebe72fa16ca367fe",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [],
             "pathsKept": 1,
@@ -608,6 +665,7 @@
               "sourceKind": "source"
             },
             "factId": "3682e914d340f673",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
@@ -649,6 +707,12 @@
               "sourceKind": "source"
             },
             "factId": "cc7ca039e0043831",
+            "guaranteeEvidence": [
+              {
+                "label": "ORDERING_UNKNOWN",
+                "validForRefutation": false
+              }
+            ],
             "guarantees": [
               "ORDERING_UNKNOWN"
             ],
@@ -678,6 +742,12 @@
               }
             ],
             "factId": "e3cb657fcb1d748d",
+            "guaranteeEvidence": [
+              {
+                "label": "COMMIT_REACHABLE",
+                "validForRefutation": false
+              }
+            ],
             "guarantees": [
               "COMMIT_REACHABLE"
             ],
@@ -700,6 +770,7 @@
               "sourceKind": "source"
             },
             "factId": "75166aca19c90410",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
@@ -942,5 +1013,5 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "3.2.0"
+  "schemaVersion": "3.3.0"
 }

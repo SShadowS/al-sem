@@ -1289,7 +1289,7 @@ fn digest_path_caps_keys_and_flags_on_the_fixture() {
     assert_eq!(out.trim_end().lines().count(), 1, "compact is one line");
     let (out, _, _) = run_alsem(&["digest", &ws, "--routine", ISSUE_DOC, "--schema", "2"]);
     let v2: Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(v2["schemaVersion"], "2.2.0");
+    assert_eq!(v2["schemaVersion"], "2.3.0");
 }
 
 /// W2-2, T-W2-11 on the fixture: query effects' summary buckets are

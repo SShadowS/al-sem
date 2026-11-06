@@ -35,6 +35,7 @@
               "sourceKind": "source"
             },
             "factId": "164c21bfb5fa6f3b",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "direct",
             "scopedGuarantees": [],
@@ -75,5 +76,5 @@
     },
     "workspaceFingerprint": "6bbd1a2d99abadce08496fe643c9429f0d3981694b9ad61899df905cc9eebb26"
   },
-  "schemaVersion": "2.2.0"
+  "schemaVersion": "2.3.0"
 }

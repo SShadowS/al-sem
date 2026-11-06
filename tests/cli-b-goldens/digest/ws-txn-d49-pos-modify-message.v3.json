@@ -52,6 +52,7 @@
               "sourceKind": "source"
             },
             "factId": "fa4712cf8225549f",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
@@ -83,6 +84,7 @@
               "sourceKind": "source"
             },
             "factId": "fdb0a0fca2b84e91",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "paths": [
               {
@@ -114,6 +116,12 @@
               "sourceKind": "source"
             },
             "factId": "3ab3609b25266202",
+            "guaranteeEvidence": [
+              {
+                "label": "WRITE_PENDING_AT_UI",
+                "validForRefutation": true
+              }
+            ],
             "guarantees": [
               "WRITE_PENDING_AT_UI"
             ],
@@ -250,5 +258,5 @@
     },
     "workspaceFingerprint": "e098e48fbdfcefab8d69f8ae58dcd79175c85fe80556a3eaa5f3fd8cbac40957"
   },
-  "schemaVersion": "3.2.0"
+  "schemaVersion": "3.3.0"
 }

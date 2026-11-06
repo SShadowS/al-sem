@@ -47,6 +47,7 @@
               "sourceKind": "source"
             },
             "factId": "00cda7804c9127d8",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "direct",
             "scopedGuarantees": [],
@@ -69,6 +70,7 @@
               "sourceKind": "source"
             },
             "factId": "6cda70870642a2ab",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "direct",
             "scopedGuarantees": [],
@@ -91,6 +93,7 @@
               "sourceKind": "source"
             },
             "factId": "b432e1ebe2c7d941",
+            "guaranteeEvidence": [],
             "guarantees": [],
             "provenance": "direct",
             "scopedGuarantees": [],
@@ -113,6 +116,12 @@
               "sourceKind": "source"
             },
             "factId": "40c1ea6e11ec8aee",
+            "guaranteeEvidence": [
+              {
+                "label": "WRITE_PENDING_AT_UI",
+                "validForRefutation": true
+              }
+            ],
             "guarantees": [
               "WRITE_PENDING_AT_UI"
             ],
@@ -183,5 +192,5 @@
     },
     "workspaceFingerprint": "c6699cf6323bea4482f8eb641cd8f8ad5f5688c22d669234161e0cb01359a0da"
   },
-  "schemaVersion": "2.2.0"
+  "schemaVersion": "2.3.0"
 }
