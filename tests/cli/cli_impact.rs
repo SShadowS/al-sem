@@ -182,7 +182,9 @@ fn a_diff_is_accounted_first_then_each_routine() {
 /// Output validation F25: without a base, a routine's status says what the
 /// diff shows. The diff has c20's shape for `Audited`: it adds `Untested`'s
 /// `end;`, a blank line, `Audited`'s header and `begin`, and aligns
-/// `Audited`'s own `end;` with `Untested`'s old one as context. It also
+/// `Audited`'s own `end;` with `Untested`'s old one as context (the last
+/// context line is the blank line after `Audited`, before `Logged`, which the
+/// table-event fixture added; it was `Core`'s closing `}` before). It also
 /// rewrites `Leaf`'s header line (a `-` and a `+` line). `Audited` is "new in
 /// this diff" (its header is added, none of its lines removed), `Leaf`
 /// "signature lines changed in the diff" (its header is added too, but a
@@ -212,7 +214,7 @@ fn without_a_base_the_status_says_what_the_diff_shows() {
 +    procedure Audited()
 +    begin
      end;
- }
+
 ";
     let v = json(&ws, &["--diff", "-", "--no-tests"], Some(diff));
     let status = |name: &str| -> String {
