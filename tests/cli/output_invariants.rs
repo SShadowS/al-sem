@@ -883,11 +883,17 @@ fn digest_summary_through_mcp_on_the_fixture() {
     // W2-1 (design §3.2): the three classes. `Out Doc`'s `Modify` is on
     // IssueDoc's `var` record parameter, so it is caller-dependent, not a
     // table the routine may persist itself.
-    assert_eq!(
-        r["names"]["tablesOwnedByApp"],
-        serde_json::json!(["Out Log"]),
+    // Output validation V4 (§5.2, F77): the row's summary line, its test
+    // status, its signature (one row per stable id); its result index row.
+    assert!(
+        r["answer"]
+            .as_str()
+            .is_some_and(|a| a.starts_with("writes: may write 16 tables")),
         "{summary}"
     );
+    assert_eq!(r["testStatus"], "not requested", "{summary}");
+    assert_eq!(r["signature"], "(var Record \"Out Doc\")", "{summary}");
+    assert_eq!(summary["index"]["rows"], 1, "{summary}");
     assert_eq!(t["callerDependentTables"], 1, "{summary}");
     // Base Doc Line, twelve ledgers, Base Register, Base Price: the group's
     // whole set, not the ten its `detail` names.

@@ -242,6 +242,7 @@ mod gate_suppress_baseline_differential;
 mod ids_file_list_independence;
 mod ids_parent_baseline;
 mod mcp_composite;
+mod mcp_envelope;
 mod mcp_impact;
 mod mcp_server;
 mod mcp_tests;

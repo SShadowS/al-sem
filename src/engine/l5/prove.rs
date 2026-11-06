@@ -3410,6 +3410,28 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
                 .count()
         );
     }
+    // Output validation §5.2: the answer line, the analysis, and the
+    // assumption inputs with what each removes (the conditional follow-ups);
+    // the routine and its verdict as the result index row.
+    if let Some(h) = &header {
+        summary["answerLine"] = h.answer.clone().into();
+        summary["analysis"] = h.analysis.human().into();
+        summary["assumptions"] = serde_json::json!(h.assumptions);
+    }
+    summary["followUps"] = crate::engine::follow_up::json_list(&effect_follow_ups(
+        &hc,
+        &prove_result,
+        Some(&pointers),
+    ));
+    let row = serde_json::json!({
+        "routine": summary["routine"],
+        "selector": hc.selector,
+        "stableId": root_id,
+        "question": question_text,
+        "answer": prove_result.answer.as_str(),
+        "filter": summary.get("filter").cloned(),
+    });
+    let summary = crate::engine::result_index::with_index(summary, "", "", vec![row]);
     Ok(ProveRunResult {
         json_text,
         human_text,
@@ -3712,7 +3734,7 @@ fn callers_document(
         "lineBase".into(),
         crate::engine::line_base::LINE_BASE.into(),
     );
-    payload.insert("result".into(), result);
+    payload.insert("result".into(), result.clone());
     payload.insert("routine".into(), serde_json::Value::Object(routine_ref));
     payload.insert("workspaceFingerprint".into(), workspace_fp.into());
     let mut env = serde_json::Map::new();
@@ -3739,7 +3761,24 @@ fn callers_document(
         "establishedWitnesses": a.witness_count - a.open_witness_count,
         "candidateWitnesses": a.open_witness_count,
         "blockedBy": a.blocked_counts.values().sum::<usize>(),
+        // Output validation §5.2: the answer line, the analysis, the
+        // assumption input and what it removes.
+        "answerLine": h.as_ref().map(|h| h.answer.clone()),
+        "analysis": h.as_ref().map(|h| h.analysis.human()),
+        "followUps": result["followUps"],
     });
+    let summary = crate::engine::result_index::with_index(
+        summary,
+        "",
+        "",
+        vec![serde_json::json!({
+            "routine": routine,
+            "selector": selector,
+            "stableId": header.stable_id,
+            "question": job.question_text,
+            "answer": a.answer.as_str(),
+        })],
+    );
     ProveRunResult {
         json_text,
         human_text,

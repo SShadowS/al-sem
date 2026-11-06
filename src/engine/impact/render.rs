@@ -99,7 +99,52 @@ pub const HUMAN_BUDGET: usize = 38 * 1024;
 pub struct Rendered {
     pub text: String,
     pub exit: u8,
-    pub summary: String,
+    /// The envelope summary of a file answer (output validation §5.2): the
+    /// answer, the outcome, the accounting and the first five routines with
+    /// the tests line (`text`), every changed routine as an index row.
+    pub summary: Value,
+    /// What the exit code means (§6.3): `answered`, `no-routine-changed`
+    /// (complete accounting, no routine) or `input-not-mapped`.
+    pub outcome: &'static str,
+}
+
+/// The impact outcome (§6.3, §1 F24): no routine with exit 0 is
+/// `no-routine-changed` (the accounting is complete: exit 2 when input did
+/// not map), with exit 2 `input-not-mapped`.
+fn impact_outcome(roots: usize, exit: u8) -> &'static str {
+    match (roots, exit) {
+        (0, 0) => "no-routine-changed",
+        (0, _) => "input-not-mapped",
+        _ => "answered",
+    }
+}
+
+/// The summary (§5.2) around `text`, with every routine as an index row.
+fn impact_summary(
+    header: &crate::engine::result_header::Header,
+    outcome: &str,
+    text: String,
+    roots: &[Value],
+) -> Value {
+    let row = |r: &Value| {
+        json!({"routine": named(r), "stableId": r["stableId"], "status": r["status"],
+               "testStatus": r["tests"]["status"].as_str()
+                   .map(crate::engine::vocab::test_status)})
+    };
+    crate::engine::result_index::with_index(
+        json!({
+            "kind": "impact",
+            "answer": header.answer,
+            "analysis": header.analysis.human(),
+            "outcome": outcome,
+            "routinesTotal": roots.len(),
+            "routines": roots.iter().take(5).map(row).collect::<Vec<_>>(),
+            "text": text,
+        }),
+        "routines",
+        "stableId",
+        roots.iter().map(row).collect(),
+    )
 }
 
 fn s<'a>(v: &'a Value, k: &str) -> &'a str {
@@ -957,10 +1002,17 @@ pub fn render(
             },
         });
         let text = serde_json::to_string_pretty(&doc).expect("serializes") + "\n";
+        let outcome = impact_outcome(roots.len(), exit);
         return Rendered {
-            summary: summary_text(cmp, main, &roots, files, tests, delta),
+            summary: impact_summary(
+                &header,
+                outcome,
+                summary_text(cmp, main, &roots, files, tests, delta),
+                &roots,
+            ),
             text,
             exit,
+            outcome,
         };
     }
 
@@ -1181,17 +1233,19 @@ pub fn render(
             out.push(format!("before/after: not computed — {e}"));
         }
         let text = out.join("\n") + "\n";
+        let outcome = impact_outcome(roots.len(), exit);
         return Rendered {
-            summary: text.clone(),
+            summary: impact_summary(&header, outcome, text.clone(), &roots),
             text,
             exit,
+            outcome,
         };
     }
     // 2. Per root: each shown routine's block, then the whole change (3),
     // the tests (4) and what was not seen (5). The routines shown are the
     // first `max_roots`, fewer when the answer would pass its size budget
     // (`RenderOpts::budget`); the fold says how many it hides and why.
-    let header = |shown: usize| -> Vec<String> {
+    let block_header = |shown: usize| -> Vec<String> {
         let which = if shown == roots.len() {
             "all shown".to_string()
         } else {
@@ -1273,7 +1327,7 @@ pub fn render(
         let fixed = bytes(&out) + bytes(&tail);
         let size = |k: usize| {
             fixed
-                + bytes(&header(k))
+                + bytes(&block_header(k))
                 + blocks[..k].iter().map(|b| bytes(b)).sum::<usize>()
                 + fold(k, k < blocks.len()).map_or(0, |l| l.len() + 1)
         };
@@ -1282,17 +1336,24 @@ pub fn render(
             shown -= 1;
         }
     }
-    out.extend(header(shown));
+    out.extend(block_header(shown));
     for b in &blocks[..shown] {
         out.extend(b.iter().cloned());
     }
     out.extend(fold(shown, shown < blocks.len()));
     out.extend(tail);
     let text = out.join("\n") + "\n";
+    let outcome = impact_outcome(roots.len(), exit);
     Rendered {
-        summary: summary_text(cmp, main, &roots, files, tests, delta),
+        summary: impact_summary(
+            &header,
+            outcome,
+            summary_text(cmp, main, &roots, files, tests, delta),
+            &roots,
+        ),
         text,
         exit,
+        outcome,
     }
 }
 
