@@ -1,9 +1,7 @@
---- Codeunit "D34 Demo"::DirectCommitInLoop ---
-  question: may-commit — existing effects (what the routine and its callees already do)
-  answer:   yes
+prove Codeunit "D34 Demo"::DirectCommitInLoop may-commit   [cross-app]
+answer: yes
+analysis complete · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 0 apps
+more: --format json for every evidence row and its hops
   evidence: 1 effect
     [COMMIT] at ws:src/Codeunit.al:10
       condition: in a loop
-  analysis complete
-  assumptions: none (default world: an interface call may reach an implementation that is not loaded)
-  limits: none

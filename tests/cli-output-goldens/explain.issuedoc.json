@@ -470,6 +470,28 @@
           "subscribers": 1
         }
       ],
+      "followUps": [
+        {
+          "arguments": {
+            "question": "may-commit",
+            "routine": "Codeunit \"Out Issue Document\"::IssueDoc"
+          },
+          "kind": "ordinary",
+          "tool": "alsem_prove",
+          "why": "the witness of a commit, or the blockers of an unknown"
+        },
+        {
+          "arguments": {
+            "callersContext": true,
+            "routines": [
+              "Codeunit \"Out Issue Document\"::IssueDoc"
+            ]
+          },
+          "kind": "ordinary",
+          "tool": "alsem_explain",
+          "why": "its callers' pending writes, intercepted errors and non-interactive entries"
+        }
+      ],
       "gaps": [
         {
           "anchor": {
@@ -664,6 +686,22 @@
   "diagnostics": [],
   "lineBase": 1,
   "mode": "routine",
+  "result": {
+    "scope": {
+      "analysis": "partial",
+      "assumptions": [
+        "loaded program; unloaded implementations and subscribers are not enumerated"
+      ],
+      "limits": [],
+      "reasons": [
+        "interface-open-world",
+        "object-run-unresolved",
+        "1 interface call open world, 2 dynamic calls not resolved"
+      ],
+      "scope": "dependency code followed through every resolved call with literal arguments (2 dependency routines entered at 2 dependency calls); no lock facts; dependencies: 1 app",
+      "universe": "cross-app"
+    }
+  },
   "schema": "al-sem.explain/4",
   "selector": "Out Issue Document::IssueDoc"
 }

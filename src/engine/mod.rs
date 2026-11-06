@@ -9,6 +9,8 @@ pub mod batch;
 /// The retained byte census under `ALSEM_RETAINED_CENSUS=1` (#160 §4.1.5).
 pub mod census;
 pub mod deps;
+/// Follow-ups in the asking surface's words (output validation §6.1).
+pub mod follow_up;
 pub mod gate;
 /// The engine child process and its protocol (context-server stage 2).
 pub mod host;
@@ -30,6 +32,8 @@ pub mod perf_trace;
 /// The resident session of the context server (design §4-§5, stage 2): a
 /// revision kept between requests, its artifact store, the manifest.
 pub mod resident;
+/// The four-line result header and `result.scope` (output validation §5.2).
+pub mod result_header;
 pub mod return_summary;
 pub mod root_classification;
 /// #160 step 2: `View`, `Plan`, `RunKey` (spec §4.4.3).

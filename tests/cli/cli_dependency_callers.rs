@@ -156,7 +156,7 @@ fn touches_up(extra: &[&str]) -> Value {
         String::from_utf8_lossy(&out.stderr)
     );
     let v: Value = serde_json::from_slice(&out.stdout).expect("json");
-    assert_eq!(v["schemaVersion"], "3.8.0");
+    assert_eq!(v["schemaVersion"], "3.9.0");
     v["payload"]["up"].clone()
 }
 

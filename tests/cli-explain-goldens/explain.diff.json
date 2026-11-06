@@ -147,6 +147,19 @@
           "subscribers": 1
         }
       ],
+      "followUps": [
+        {
+          "arguments": {
+            "callersContext": true,
+            "routines": [
+              "Codeunit \"Explain Post\"::PostOrder"
+            ]
+          },
+          "kind": "ordinary",
+          "tool": "alsem_explain",
+          "why": "its callers' pending writes, intercepted errors and non-interactive entries"
+        }
+      ],
       "gaps": [],
       "gapsInDependencies": {
         "dynamicTarget": 0,
@@ -436,6 +449,7 @@
         ]
       },
       "extensionPoints": [],
+      "followUps": [],
       "gaps": [],
       "gapsInDependencies": {
         "dynamicTarget": 0,
@@ -541,5 +555,17 @@
   ],
   "lineBase": 1,
   "mode": "diff",
+  "result": {
+    "scope": {
+      "analysis": "complete",
+      "assumptions": [
+        "loaded program; unloaded implementations and subscribers are not enumerated"
+      ],
+      "limits": [],
+      "reasons": [],
+      "scope": "dependency code followed through every resolved call with literal arguments; no lock facts; dependencies: 0 apps",
+      "universe": "cross-app"
+    }
+  },
   "schema": "al-sem.explain/4"
 }

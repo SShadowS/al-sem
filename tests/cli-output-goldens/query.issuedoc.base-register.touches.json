@@ -83,6 +83,18 @@
       "selector": "Out Issue Document.IssueDoc"
     },
     "lineBase": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "per operation, one routine into dependency code; dependencies: 1 app",
+        "universe": "cross-app"
+      }
+    },
     "table": {
       "id": "d0d00001-0000-4000-8000-0000000000b1/table/70020",
       "isUnknownBucket": false,
@@ -145,5 +157,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "3.8.0"
+  "schemaVersion": "3.9.0"
 }

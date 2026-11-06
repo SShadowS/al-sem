@@ -49,10 +49,13 @@ fn workspace() -> (tempfile::TempDir, PathBuf) {
     (tmp, ws)
 }
 
-/// `alsem <argv>`: (stdout, stderr, exit).
+/// `alsem <argv> --surface=mcp`: (stdout, stderr, exit). The LSP front end
+/// builds its argv with the MCP tools' own `parse_call`, which appends
+/// `--surface=mcp` (output validation §6.1): the same follow-up words.
 fn cli(argv: &[&str]) -> (Vec<u8>, Vec<u8>, u8) {
     let out = Command::new(ALSEM)
         .args(argv)
+        .arg("--surface=mcp")
         .stdin(Stdio::null())
         .output()
         .expect("alsem runs");

@@ -3057,11 +3057,13 @@ pub fn project_digest_document(
     // overloaded name, a dependency object's number); routine rows and
     // summary rows gain `signature`, `member`, `selector` and `handle`, and
     // summary rows `stableId`.
+    // 3.2.0 (output validation V4, F76, additive): `payload.result.scope`
+    // (analysis, reasons, assumptions, limits, universe, scope).
     let compact = v3.as_ref().is_some_and(|v| v.compact);
     let table_answers = v3.as_ref().map(|v| v.table_answers);
     env.insert(
         "schemaVersion".into(),
-        if v3.is_some() { "3.1.0" } else { "2.2.0" }.into(),
+        if v3.is_some() { "3.2.0" } else { "2.2.0" }.into(),
     );
 
     // The block goes in after the null drop, so its `ratio: null` survives; the
@@ -3083,6 +3085,11 @@ pub fn project_digest_document(
         }
         doc = sort_keys_keep_nulls(doc);
     }
+    // 3.2.0 (output validation V4, F76): `payload.result.scope`.
+    if let Some(scope) = v3.as_ref().and_then(|v| v.scope.clone()) {
+        doc["payload"]["result"] = serde_json::json!({"scope": scope});
+        doc = sort_keys_keep_nulls(doc);
+    }
     if compact {
         let mut s = serde_json::to_string(&doc).expect("serde_json serialization");
         s.push('\n');
@@ -3099,6 +3106,8 @@ pub struct V3Inputs<'a> {
     pub compact: bool,
     /// `--writes-table` (W2-2 gap (a)): `entries[].tableAnswers`.
     pub table_answers: &'a crate::engine::l5::prove::TableAnswers,
+    /// Output validation V4 (F76): `payload.result.scope`.
+    pub scope: Option<serde_json::Value>,
 }
 
 pub struct ChangedInputContract {
@@ -3128,9 +3137,29 @@ pub fn format_digest_human_v3(
         "digest: no changed roots resolved\n".to_string()
     } else {
         let mut lines: Vec<String> = Vec::new();
+        // Output validation §5.2: with one root its summary line is the
+        // answer's `answer:` line and the card keeps the rest; the analysis,
+        // limits and scope are the header's third line (a card of several
+        // prints its own analysis and limits only when they say more).
+        let single = entries.len() == 1;
         for (entry, r) in entries.iter().zip(rollups) {
             lines.push(format!("--- {} ---", entry_display(cx, entry)));
-            let mut body: Vec<String> = rr::header_lines(r, entry, &[]);
+            let facts = rr::header_facts(r, entry, &[]);
+            // Several roots: each card's own summary line first, then the
+            // lines a single card prints.
+            let mut body: Vec<String> = Vec::new();
+            if !single {
+                body.push(format!("summary — {}", facts.answer()));
+            }
+            body.extend(facts.rest().iter().map(|l| (*l).to_string()));
+            if !single {
+                if facts.analysis != crate::engine::result_header::Analysis::Complete {
+                    body.push(facts.analysis.human());
+                }
+                if !facts.limits.is_empty() {
+                    body.push(format!("limits: {}", facts.limits.join("; ")));
+                }
+            }
             if entry.effects.is_empty() {
                 body.push("effects: none".to_string());
             }
@@ -3149,10 +3178,10 @@ pub fn format_digest_human_v3(
             body.extend(rr::literal_dead_lines(r, opts));
             body.extend(rr::temporary_lines(r, opts));
             body.extend(rr::event_lines(r, cx, opts));
-            body.extend(rr::kind_lines(r, entry, opts.detail));
+            body.extend(rr::kind_lines(r, entry, opts));
             body.extend(rr::workspace_gap_lines(r, entry, opts));
             body.extend(rr::dependency_gap_lines(r, opts));
-            body.extend(diagnostic_lines(entry, opts.detail));
+            body.extend(diagnostic_lines(entry, opts));
             lines.extend(body.into_iter().map(|l| format!("  {l}")));
             lines.push(String::new());
         }
@@ -3165,8 +3194,105 @@ pub fn format_digest_human_v3(
     text
 }
 
+/// The digest answer's four header lines (output validation §5.2): the
+/// resolved roots, the answer (one root: its summary line), every root's
+/// analysis and limits at once, the dependency depth and the dependencies
+/// count, and what shows more.
+#[allow(clippy::too_many_arguments)]
+fn digest_header(
+    entries: &[DigestEntryFull],
+    rollups: &[crate::engine::l5::routine_rollup::RoutineRollup],
+    cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
+    files: Option<&[String]>,
+    routines: Option<&[String]>,
+    diff: bool,
+    render: crate::engine::l5::digest_v3::DigestRender,
+    single_app: bool,
+    deps: usize,
+) -> crate::engine::result_header::Header {
+    use crate::engine::follow_up::Input;
+    use crate::engine::l5::routine_rollup as rr;
+    use crate::engine::result_header::{Analysis, Header, dependencies_clause};
+    let names: Vec<String> = entries.iter().map(|e| entry_display(cx, e)).collect();
+    let listed = rr::fold(names.clone(), 3, "routines", false).joined();
+    let roots = match names.len() {
+        0 => "no root resolved".to_string(),
+        1 => names[0].clone(),
+        n => format!("{n} roots: {listed}"),
+    };
+    let mut modes: Vec<String> = Vec::new();
+    if diff {
+        modes.push("diff".to_string());
+    }
+    if let Some(f) = files {
+        modes.push(format!("files {}", f.join(", ")));
+    }
+    if routines.is_some() && (diff || files.is_some()) {
+        modes.push("routines".to_string());
+    }
+    let inputs = if modes.is_empty() {
+        roots
+    } else {
+        format!("{} → {roots}", modes.join(" + "))
+    };
+    let mut h = Header::new("digest", inputs, single_app);
+    let facts: Vec<rr::HeaderFacts> = entries
+        .iter()
+        .zip(rollups)
+        .map(|(e, r)| rr::header_facts(r, e, &[]))
+        .collect();
+    h.answer = match &facts[..] {
+        [] => "no answer — no changed root resolved".to_string(),
+        [one] => one.answer().to_string(),
+        many => format!(
+            "{} roots, one card each; each card leads with its summary line",
+            many.len()
+        ),
+    };
+    let mut analysis = if facts.is_empty() {
+        Analysis::NotAnalyzed("no changed root resolved".to_string())
+    } else {
+        Analysis::Complete
+    };
+    for f in &facts {
+        analysis = analysis.and(f.analysis.clone());
+        for l in &f.limits {
+            if !h.limits.contains(l) {
+                h.limits.push(l.clone());
+            }
+        }
+    }
+    h.analysis = analysis;
+    let mut scope: Vec<String> = Vec::new();
+    match &facts[..] {
+        [] => {}
+        [one] => scope.push(one.depth.clone()),
+        _ => scope.push(
+            "dependency code followed through every resolved call with literal arguments"
+                .to_string(),
+        ),
+    }
+    if !facts.is_empty() {
+        scope.push("no lock facts".to_string());
+    }
+    scope.push(dependencies_clause(deps));
+    h.scope = scope.join("; ");
+    let s = render.surface;
+    if !facts.is_empty() && !render.detail {
+        h.more
+            .push(format!("{} lists every list complete", Input::Detail.on(s)));
+    }
+    h.more
+        .push(format!("{} for every effect row", Input::FormatJson.on(s)));
+    h
+}
+
 /// `diagnostics: kind n; kind n (reason n)`, or each one with `detail`.
-fn diagnostic_lines(entry: &DigestEntryFull, detail: bool) -> Vec<String> {
+fn diagnostic_lines(
+    entry: &DigestEntryFull,
+    opts: crate::engine::l5::routine_rollup::RenderOpts,
+) -> Vec<String> {
+    let detail = opts.detail;
     if entry.entry_diagnostics.is_empty() {
         return Vec::new();
     }
@@ -3217,8 +3343,9 @@ fn diagnostic_lines(entry: &DigestEntryFull, detail: bool) -> Vec<String> {
         })
         .collect();
     vec![format!(
-        "diagnostics: {} (--detail lists each with its operation)",
-        parts.join("; ")
+        "diagnostics: {} ({} lists each with its operation)",
+        parts.join("; "),
+        opts.detail_input()
     )]
 }
 
@@ -3865,6 +3992,20 @@ fn digest_view(
         diff_provided: diff_text.is_some(),
     };
 
+    // Output validation §5.2: the header's facts, for the human answer's four
+    // lines and the JSON's `payload.result.scope` (F76).
+    let header = digest_header(
+        &entries,
+        &rollups,
+        &rollup_cx,
+        changed_files.as_deref(),
+        changed_routines.as_deref(),
+        diff_text.is_some(),
+        render,
+        req.single_app,
+        dependencies.apps.len(),
+    );
+
     // JSON
     let json_text = project_digest_document(
         &workspace_fp,
@@ -3884,29 +4025,33 @@ fn digest_view(
             opts: render.opts(),
             compact: render.compact,
             table_answers: &table_answers,
+            scope: Some(header.scope_json(serde_json::Map::new())),
         }),
     );
 
     // Human (W2-2, design §4.3): per root the explain card's effect sections,
-    // rendered by the same functions. The dependencies line appears only when
-    // apps were loaded, so a workspace with no dependency reads the same in
-    // both modes.
-    let mut human_text = dependencies.prefix_human(format_digest_human_v3(
+    // rendered by the same functions. Output validation §5.3 (F32): the
+    // dependencies are a count in the header's scope clause.
+    let mut human_text = format_digest_human_v3(
         &entries,
         &rollups,
         &rollup_cx,
         render.opts(),
         &changed_roots.diagnostics,
-    ));
+    );
     // Output validation V2 (§4.7, F27): a change mode says first what it
     // computed. The digest does not compare the diff's lines with the
     // working tree (impact does), so it says so.
     if (diff_text.is_some() || changed_files.is_some()) && !entries.is_empty() {
+        let impact = match render.surface {
+            crate::engine::follow_up::Surface::Mcp => "alsem_impact with base",
+            crate::engine::follow_up::Surface::Cli => "alsem impact --base",
+        };
         human_text.insert_str(
             0,
             &format!(
                 "computed: current effects of the {} {} touches, in the working tree ({}); no \
-                 before/after computed — alsem_impact with base compares two revisions\n",
+                 before/after computed — {impact} compares two revisions\n",
                 crate::engine::l5::routine_rollup::plural(entries.len(), "routine", "routines"),
                 if diff_text.is_some() {
                     "this diff"
@@ -3937,6 +4082,7 @@ fn digest_view(
             }
         }
     }
+    human_text.insert_str(0, &header.human());
     // W2-7 (2g): readable dependency locations (the JSON keeps the guid).
     let human_text = dependencies.readable_locations(human_text);
     drop(rollup_cx);
@@ -4529,7 +4675,11 @@ mod tests {
             r.kind_sites
         );
         assert_eq!(r.totals.kinds.get(OTHER_KINDS), Some(&2), "{:?}", r.totals);
-        let lines = kind_lines(&r, &e, false);
+        let lines = kind_lines(
+            &r,
+            &e,
+            crate::engine::l5::routine_rollup::RenderOpts::new(false, None),
+        );
         assert_eq!(
             lines,
             vec![
@@ -4719,8 +4869,10 @@ mod tests {
             "digest: no changed roots resolved\n"
         );
         let text = human(&[entry_with(Vec::new())], &[], false);
+        // Output validation §5.2: one root's summary line is the header's
+        // `answer:`; the card starts with the rest of its summary.
         assert!(
-            text.starts_with("--- R ---\n  summary — writes: "),
+            text.starts_with("--- R ---\n  transaction, UI and errors: "),
             "{text}"
         );
         assert!(text.contains("\n  effects: none\n"), "{text}");

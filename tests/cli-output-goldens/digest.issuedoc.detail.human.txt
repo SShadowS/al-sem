@@ -1,13 +1,11 @@
-dependencies: Out Base (embedded)
+digest Codeunit "Out Issue Document"::IssueDoc   [cross-app]
+answer: writes: may write 16 tables (1 owned by this app, 15 by dependencies); 14 of them beyond Codeunit "Base Poster" (70100)::OnRun (entered at ws:src/OutIssueDocument.Codeunit.al:15); may modify persistent Out Doc records (Modify at :14) when the record its caller passes (parameter 1) is not temporary
+analysis partial (interface-open-world; object-run-unresolved; 1 interface call open world, 2 dynamic calls not resolved) · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code followed through every resolved call with literal arguments (2 dependency routines entered at 2 dependency calls); no lock facts; dependencies: 1 app
+more: --detail lists every list complete; --format json for every effect row
 --- Codeunit "Out Issue Document"::IssueDoc ---
-  summary — writes: may write 16 tables (1 owned by this app, 15 by dependencies); 14 of them beyond Codeunit "Base Poster" (70100)::OnRun (entered at ws:src/OutIssueDocument.Codeunit.al:15); may modify persistent Out Doc records (Modify at :14) when the record its caller passes (parameter 1) is not temporary
-    transaction, UI and errors: commits: may (1 dependency routine entered that commits); errors at 5 places
-    other effects: events: 2 (1 raised in workspace code); HTTP at 1 place; background tasks at 1 place
-    uncertainty: gaps: 2 in workspace code, 1 in dependency code, 0 not placed
-  analysis partial (interface-open-world, object-run-unresolved) — 1 interface call open world, 2 dynamic calls not resolved
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (2, at 2 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  transaction, UI and errors: commits: may (1 dependency routine entered that commits); errors at 5 places
+  other effects: events: 2 (1 raised in workspace code); HTTP at 1 place; background tasks at 1 place
+  uncertainty: gaps: 2 in workspace code, 1 in dependency code, 0 not placed
   commits: may — none in workspace code; 1 dependency routine entered that commits:
     Codeunit "Base Poster" (70100)::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15
       path: IssueDoc → [run] Codeunit "Base Poster" (70100)::OnRun → PostDocument (COMMIT at dep:Out Base:src/BasePoster.Codeunit.al:46)
@@ -15,7 +13,7 @@ dependencies: Out Base (embedded)
     Out Log: Insert 1 — known persistent
       Insert at ws:src/OutIssueDocument.Codeunit.al:61
       path: IssueDoc → Codeunit "Out Log Mgt"::WriteLog
-  caller-dependent writes (1 table): written only if the caller passes a record that is not temporary; alsem prove names the caller
+  caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
     Out Doc: Modify — depends on the caller's record argument at ws:src/OutIssueDocument.Codeunit.al:14
   writes beyond dependency calls (15 tables through 2 dependency routines entered at 2 dependency calls):
     Codeunit "Base Poster" (70100)::OnRun, entered at ws:src/OutIssueDocument.Codeunit.al:15 — 14 tables (Delete on 1, Insert on 12, Modify on 1): Base Doc Line, Base Ledger 01, Base Ledger 02, Base Ledger 03, Base Ledger 04, Base Ledger 05, Base Ledger 06, Base Ledger 07, Base Ledger 08, Base Ledger 09, Base Ledger 10, Base Ledger 11, Base Ledger 12, Base Register; also COMMIT, ERROR_IMPLICIT; 1 event

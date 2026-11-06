@@ -1341,7 +1341,7 @@ impl SiblingTests {
             (0, true) => None,
             (0, false) => Some("test app discovery incomplete".to_string()),
             (n, complete) => Some(format!(
-                "{} discovered (not analyzed here; alsem tests){}",
+                "{} discovered (not analyzed here; the tests tool selects them){}",
                 plural(n, "test app", "test apps"),
                 if complete {
                     ""
@@ -2409,6 +2409,9 @@ pub struct RenderOpts {
     /// Paths per item (design §5: `--max-paths N`, else 3 with `--detail`,
     /// else 1; at most 3).
     pub path_cap: usize,
+    /// The front end the answer is for (`--surface`, §6.1): the words of
+    /// every fold note and follow-up.
+    pub surface: crate::engine::follow_up::Surface,
 }
 
 impl RenderOpts {
@@ -2420,7 +2423,21 @@ impl RenderOpts {
             path_cap: max_paths
                 .unwrap_or(if detail { 3 } else { 1 })
                 .min(PATH_CAP_MAX),
+            surface: crate::engine::follow_up::Surface::Cli,
         }
+    }
+
+    /// The same, for `surface`.
+    #[must_use]
+    pub fn with_surface(mut self, surface: crate::engine::follow_up::Surface) -> RenderOpts {
+        self.surface = surface;
+        self
+    }
+
+    /// `detail` in the surface's words (`--detail` | `detail: true`).
+    #[must_use]
+    pub fn detail_input(&self) -> &'static str {
+        crate::engine::follow_up::input(self.surface, crate::engine::follow_up::Input::Detail)
     }
 }
 
@@ -2515,10 +2532,90 @@ fn crossing_name(c: &CrossingView) -> &str {
     if c.name.is_empty() { &c.id } else { &c.name }
 }
 
+/// One card's header facts (output validation §5.2): its summary block, and
+/// the analysis, limits and scope that the answer's header line prints
+/// (design §3.7, §3.8 rule 3 moved there).
+#[derive(Debug, Clone)]
+pub struct HeaderFacts {
+    /// The `summary — …` block (several lines, `\n    ` between them).
+    pub summary: String,
+    pub analysis: crate::engine::result_header::Analysis,
+    /// Each cap with its count.
+    pub limits: Vec<String>,
+    /// The dependency depth that limits this card: `dependency code: none
+    /// reached`, or what was followed with its counts.
+    pub depth: String,
+}
+
+impl HeaderFacts {
+    /// The summary's first line, after `summary — ` (the answer line).
+    #[must_use]
+    pub fn answer(&self) -> &str {
+        let first = self.summary.lines().next().unwrap_or("");
+        first.strip_prefix("summary — ").unwrap_or(first)
+    }
+
+    /// The summary's lines after the first, each without its indent.
+    #[must_use]
+    pub fn rest(&self) -> Vec<&str> {
+        self.summary.lines().skip(1).map(str::trim_start).collect()
+    }
+}
+
+/// The header facts of one card (`extra_limits`: the caller's own, explain's
+/// gaps).
+#[must_use]
+pub fn header_facts(
+    r: &RoutineRollup,
+    entry: &DigestEntryFull,
+    extra_limits: &[String],
+) -> HeaderFacts {
+    let lines = header_lines(r, entry, extra_limits);
+    let mut reasons = entry.coverage_reasons.clone();
+    // The open-world and dynamic counts the analysis line names.
+    if let Some(i) = lines[1].find(" — ") {
+        reasons.push(lines[1][i + " — ".len()..].to_string());
+    }
+    let analysis =
+        crate::engine::result_header::Analysis::of(entry.coverage_status == "complete", reasons);
+    let limits_line = lines[3].strip_prefix("limits: ").unwrap_or("none");
+    let limits = if limits_line == "none" {
+        Vec::new()
+    } else {
+        limits_line.split("; ").map(str::to_string).collect()
+    };
+    let depth = if r.totals.entry_points == 0 && r.totals.crossing_sites == 0 {
+        "dependency code: none reached".to_string()
+    } else {
+        format!(
+            "dependency code followed through every resolved call with literal arguments \
+             ({}{} entered at {}{})",
+            at_least(r.totals.entry_points_partial),
+            plural(
+                r.totals.entry_points,
+                "dependency routine",
+                "dependency routines"
+            ),
+            at_least(r.totals.entry_points_partial),
+            plural(
+                r.totals.crossing_sites,
+                "dependency call",
+                "dependency calls"
+            )
+        )
+    };
+    HeaderFacts {
+        summary: lines[0].clone(),
+        analysis,
+        limits,
+        depth,
+    }
+}
+
 /// The coverage, assumptions, limits and scope lines (design §3.7, §3.8
 /// rule 3). `extra_limits`: the caller's own (explain's gaps).
 #[must_use]
-pub fn header_lines(
+fn header_lines(
     r: &RoutineRollup,
     entry: &DigestEntryFull,
     extra_limits: &[String],
@@ -2559,10 +2656,10 @@ pub fn header_lines(
         cov.push_str(&format!(" — {}", counts.join(", ")));
     }
     out.push(cov);
-    out.push(
-        "assumptions: loaded program; unloaded implementations/subscribers are not enumerated"
-            .to_string(),
-    );
+    out.push(format!(
+        "assumptions: {}",
+        crate::engine::result_header::LOADED_PROGRAM
+    ));
     let mut limits: Vec<String> = Vec::new();
     if !r.no_path.is_empty() {
         limits.push(format!(
@@ -2658,6 +2755,11 @@ pub fn commit_lines(
 ) -> Vec<String> {
     let bearing: Vec<&CrossingView> = r.crossings.iter().filter(|c| c.commit).collect();
     if r.commit_sites.is_empty() && bearing.is_empty() {
+        // §5.3 (F31): `commits: no (every candidate decided)` is the
+        // summary's own clause; it is not repeated.
+        if complete(entry, r) && r.totals.commits == "none" {
+            return Vec::new();
+        }
         return vec![if complete(entry, r) {
             format!(
                 "commits: {}",
@@ -2740,8 +2842,9 @@ pub fn commit_lines(
     }
     if !rest.is_empty() {
         out.push(format!(
-            "  and {} more (--detail prints their paths): {}",
+            "  and {} more ({} prints their paths): {}",
             rest.len(),
+            o.detail_input(),
             rest.join("; ")
         ));
     }
@@ -2846,9 +2949,10 @@ pub fn workspace_write_lines(
             .map(|t| t.table.clone())
             .collect();
         out.push(format!(
-            "  … +{} in the same form ({}) — --detail lists them",
+            "  … +{} in the same form ({}) — {} lists them",
             plural(folded.hidden, "table", "tables"),
-            names.join(", ")
+            names.join(", "),
+            o.detail_input()
         ));
     }
     if !r.unresolved_own.is_empty() {
@@ -2925,7 +3029,7 @@ pub fn caller_dependent_lines(r: &RoutineRollup, entry: &DigestEntryFull) -> Vec
     }
     let mut out = vec![format!(
         "caller-dependent writes ({}): written only if the caller passes a record that is not \
-         temporary; alsem prove names the caller",
+         temporary",
         plural(r.caller_dependent.len(), "table", "tables")
     )];
     for t in &r.caller_dependent {
@@ -3341,7 +3445,7 @@ pub fn beyond_lines(
     }
     if shown.hidden > 0 {
         out.push(format!(
-            "  … +{} with {} — --detail lists them",
+            "  … +{} with {} — {} lists them",
             plural(
                 shown.hidden,
                 "dependency routine entered",
@@ -3355,7 +3459,8 @@ pub fn beyond_lines(
                     .len(),
                 "table",
                 "tables"
-            )
+            ),
+            o.detail_input()
         ));
     }
     if !others.is_empty() {
@@ -3374,13 +3479,14 @@ pub fn beyond_lines(
             }
         } else {
             out.push(format!(
-                "  {} at {} write only temporary records or no table (--detail lists them)",
+                "  {} at {} write only temporary records or no table ({} lists them)",
                 plural(
                     counts.other.0,
                     "dependency routine entered",
                     "dependency routines entered"
                 ),
-                plural(counts.other.1, "dependency call", "dependency calls")
+                plural(counts.other.1, "dependency call", "dependency calls"),
+                o.detail_input()
             ));
         }
     }
@@ -3512,6 +3618,11 @@ fn publisher_of(event_id: &str) -> &str {
 /// `events:` (design §4.1 section 16).
 #[must_use]
 pub fn event_lines(r: &RoutineRollup, cx: &RollupCx<'_>, o: RenderOpts) -> Vec<String> {
+    // §5.3 (F31): an empty section the summary already states (`events: 0`)
+    // is not printed again.
+    if r.events_ws.is_empty() && r.events_beyond.is_empty() {
+        return Vec::new();
+    }
     let mut by_publisher: BTreeMap<&str, usize> = BTreeMap::new();
     for id in r.events_ws.keys() {
         *by_publisher.entry(publisher_of(id)).or_default() += 1;
@@ -3537,13 +3648,17 @@ pub fn event_lines(r: &RoutineRollup, cx: &RollupCx<'_>, o: RenderOpts) -> Vec<S
     vec![s]
 }
 
-/// One line per present kind family (design §4.1 section 18).
+/// One line per present kind family (design §4.1 section 18). Telemetry
+/// (output validation §5.3, F81) prints as its count in the summary's
+/// `other effects:` only: a section about code nobody asked about is a count,
+/// not a line; `detail` lists its places.
 #[must_use]
-pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, detail: bool) -> Vec<String> {
+pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, o: RenderOpts) -> Vec<String> {
+    let detail = o.detail;
     let mut out = Vec::new();
     for (key, label) in FAMILIES {
         let n = r.totals.kinds.get(key).copied().unwrap_or(0);
-        if n == 0 {
+        if n == 0 || (*key == "telemetry" && !detail) {
             continue;
         }
         let mut places: Vec<String> = r
@@ -3585,7 +3700,11 @@ pub fn kind_lines(r: &RoutineRollup, entry: &DigestEntryFull, detail: bool) -> V
             plural(n, "place", "places"),
             places.shown.join("; "),
             if places.hidden > 0 {
-                format!("; … +{} places (--detail lists them)", places.hidden)
+                format!(
+                    "; … +{} places ({} lists them)",
+                    places.hidden,
+                    o.detail_input()
+                )
             } else {
                 String::new()
             }
@@ -3661,7 +3780,11 @@ pub fn workspace_gap_lines(
     let f = fold(lines, caps::WORKSPACE_GAPS, "gaps", o.detail);
     out.extend(f.shown.iter().cloned());
     if f.hidden > 0 {
-        out.push(format!("  … +{} gaps — --detail lists them", f.hidden));
+        out.push(format!(
+            "  … +{} gaps — {} lists them",
+            f.hidden,
+            o.detail_input()
+        ));
     }
     out
 }

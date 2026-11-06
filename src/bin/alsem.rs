@@ -78,6 +78,7 @@ use al_sem::engine::batch::worker::{
     WorkerBatch, WorkerInput, WorkerJob, Workers, report_peak, run_workers,
 };
 use al_sem::engine::batch::{JobLine, JobStreams, run_batch, run_standalone};
+use al_sem::engine::follow_up::Surface;
 use al_sem::engine::gate::cache_prune::{format_prune_report, prune_cache};
 use al_sem::engine::gate::events::{EventsChainsOptions, EventsFanoutOptions, EventsJob};
 use al_sem::engine::gate::exit_code::{exit, parse_fail_on};
@@ -101,6 +102,11 @@ use clap::{Parser, Subcommand};
 use std::sync::Arc;
 
 const SEVERITY_VALUES: &[&str] = &["critical", "high", "medium", "low", "info"];
+
+/// `--surface` (hidden): `cli` (the default) or `mcp` (output validation §6.1).
+fn parse_surface(s: &str) -> Result<Surface, String> {
+    Surface::parse(s).ok_or_else(|| format!("'{s}' is not a surface (cli | mcp)"))
+}
 
 #[derive(Parser)]
 #[command(
@@ -395,6 +401,10 @@ struct TestsCli {
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
 
+    /// The front end the answer is for (internal; the MCP server passes `mcp`).
+    #[arg(long = "surface", hide = true, default_value = "cli", value_parser = parse_surface)]
+    surface: Surface,
+
     /// Write to a file instead of stdout.
     #[arg(long = "out")]
     out: Option<String>,
@@ -502,6 +512,10 @@ struct ImpactCli {
     /// Resolve in the workspace alone.
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
+
+    /// The front end the answer is for (internal; the MCP server passes `mcp`).
+    #[arg(long = "surface", hide = true, default_value = "cli", value_parser = parse_surface)]
+    surface: Surface,
 
     /// Write to a file instead of stdout.
     #[arg(long = "out")]
@@ -683,6 +697,10 @@ struct QueryTouchesCli {
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
 
+    /// The front end the answer is for (internal; the MCP server passes `mcp`).
+    #[arg(long = "surface", hide = true, default_value = "cli", value_parser = parse_surface)]
+    surface: Surface,
+
     /// Human output: the cited source line ±2 under each location.
     #[arg(long = "show-source", default_value_t = false)]
     show_source: bool,
@@ -715,6 +733,10 @@ struct QueryEffectsCli {
     /// (as `analyze` and `graph` do), so effects on a dependency's tables resolve.
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
+
+    /// The front end the answer is for (internal; the MCP server passes `mcp`).
+    #[arg(long = "surface", hide = true, default_value = "cli", value_parser = parse_surface)]
+    surface: Surface,
 
     /// Every operation in the human output (one line each), every table and
     /// every loaded dependency app; the JSON always holds every row.
@@ -1074,6 +1096,10 @@ struct ProveCli {
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
 
+    /// The front end the answer is for (internal; the MCP server passes `mcp`).
+    #[arg(long = "surface", hide = true, default_value = "cli", value_parser = parse_surface)]
+    surface: Surface,
+
     /// Assume the loaded world is all there is (G24): an interface call
     /// dispatches only to the implementations loaded, which the cone already
     /// follows, so its open-world row stops blocking. A site with an
@@ -1193,6 +1219,10 @@ struct ExplainCli {
     /// (as `analyze` and `graph` do), at more memory and time.
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
+
+    /// The front end the answer is for (internal; the MCP server passes `mcp`).
+    #[arg(long = "surface", hide = true, default_value = "cli", value_parser = parse_surface)]
+    surface: Surface,
 
     /// Every list complete, no fold: every table, entry point, page action,
     /// dependency gap and event-group name; up to 3 paths per item.
@@ -1381,6 +1411,10 @@ struct DigestCli {
     /// at more memory and time.
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
+
+    /// The front end the answer is for (internal; the MCP server passes `mcp`).
+    #[arg(long = "surface", hide = true, default_value = "cli", value_parser = parse_surface)]
+    surface: Surface,
 
     /// Add a testCoverage block: which changed routines a [Test] procedure of
     /// the workspace app reaches. Sibling test apps are named, not loaded:
@@ -2266,6 +2300,8 @@ fn run_tests_cmd(t: TestsCli) -> ExitCode {
         tier,
         max_tests: t.max_tests,
         json: t.format == "json",
+        surface: t.surface,
+        single_app: t.single_app,
     };
     let mut run = |_: al_sem::engine::test_select::run::Target<'_>,
                    argv: Vec<String>|
@@ -2507,7 +2543,9 @@ fn run_impact_cmd(t: ImpactCli) -> ExitCode {
     } else {
         (compare::for_input("routines", ws, None), None)
     };
-    let opts = RenderOpts::new(t.format == "json", t.max_roots, t.detail);
+    let opts = RenderOpts::new(t.format == "json", t.max_roots, t.detail)
+        .with_surface(t.surface)
+        .with_single_app(t.single_app);
     let mut run = |_: al_sem::engine::test_select::run::Target<'_>,
                    argv: Vec<String>|
      -> Result<serde_json::Value, String> {
@@ -2610,6 +2648,7 @@ fn plan_query_touches(t: QueryTouchesCli) -> Planned {
                 .list_callers(t.callers)
                 .field(t.field.as_deref())
                 .show_source(t.show_source)
+                .surface(t.surface)
                 .written(t.format == "json", t.out.as_deref()),
             )
         },
@@ -2637,6 +2676,7 @@ fn plan_query_effects(e: QueryEffectsCli) -> Planned {
                 QueryJob::effects(inputs, &e.routine, version, e.deterministic, e.single_app)
                     .all_rows(e.all)
                     .show_source(e.show_source)
+                    .surface(e.surface)
                     .written(e.format == "json", e.out.as_deref()),
             )
         },
@@ -3051,6 +3091,7 @@ fn plan_digest(d: DigestCli, cx: &PlanCx) -> Planned {
             detail: d.detail,
             compact: d.compact,
             max_paths: d.max_paths,
+            surface: d.surface,
         },
         Some(2) if d.detail || d.compact || d.max_paths.is_some() || !d.writes_table.is_empty() => {
             return failed(
@@ -3060,7 +3101,10 @@ fn plan_digest(d: DigestCli, cx: &PlanCx) -> Planned {
                 1,
             );
         }
-        Some(2) => al_sem::engine::l5::digest_v3::DigestRender::schema2(),
+        Some(2) => al_sem::engine::l5::digest_v3::DigestRender {
+            surface: d.surface,
+            ..al_sem::engine::l5::digest_v3::DigestRender::schema2()
+        },
         Some(n) => {
             return failed(
                 format!("al-sem digest: unknown --schema {n}. Expected: 2 or 3"),
@@ -3263,6 +3307,7 @@ fn plan_prove(p: ProveCli) -> Planned {
                 detail: p.detail,
                 out: p.out.as_deref(),
                 slice,
+                surface: p.surface,
             })
         },
     )
@@ -3384,7 +3429,8 @@ fn plan_explain(e: ExplainCli, cx: &PlanCx) -> Planned {
                     .with_render(e.detail, e.max_paths)
                     .with_show_source(e.show_source)
                     .with_writes_tables(e.writes_table.clone())
-                    .with_callers_context(e.callers_context),
+                    .with_callers_context(e.callers_context)
+                    .with_surface(e.surface),
             )
         },
     )

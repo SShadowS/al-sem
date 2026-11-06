@@ -1,19 +1,17 @@
-computed: current effects of the 1 routine these files touches, in the working tree (every routine in the files); no before/after computed — alsem_impact with base compares two revisions
+digest files src/Rec.Table.al, src/Sender.Codeunit.al → Codeunit "D49 Sender"::ModifyThenRunModal   [cross-app]
+answer: writes: may write 1 table (1 owned by this app, 0 by dependencies): D49 Rec (Modify at :14)
+analysis partial (object-run-unresolved) · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: none reached; no lock facts; dependencies: 0 apps
+more: --detail lists every list complete; --format json for every effect row
+computed: current effects of the 1 routine these files touches, in the working tree (every routine in the files); no before/after computed — alsem impact --base compares two revisions
 --- Codeunit "D49 Sender"::ModifyThenRunModal ---
-  summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): D49 Rec (Modify at :14)
-    transaction, UI and errors: commits: none observed (searched: the cone through every resolved call; not searched: calls not resolved); UI at 1 place; errors at 2 places
-    other effects: events: 0 (0 raised in workspace code)
-    uncertainty: gaps: 1 in workspace code, 0 in dependency code, 0 not placed
-  analysis partial (object-run-unresolved)
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  transaction, UI and errors: commits: none observed (searched: the cone through every resolved call; not searched: calls not resolved); UI at 1 place; errors at 2 places
+  other effects: events: 0 (0 raised in workspace code)
+  uncertainty: gaps: 1 in workspace code, 0 in dependency code, 0 not placed
   commits: none observed (searched: the cone through every resolved call; not searched: object-run-unresolved)
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     D49 Rec: Modify 1 — known persistent
       Modify at ws:src/Sender.Codeunit.al:14
       path: ModifyThenRunModal (in the routine itself)
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
   UI at 1 place: UI_WINDOW_OPEN at ws:src/Sender.Codeunit.al:15 (unconditional on success)
   errors at 2 places: ERROR_IMPLICIT at ws:src/Sender.Codeunit.al:12 (unconditional on success); ERROR_IMPLICIT at ws:src/Sender.Codeunit.al:14 (unconditional on success)
   gaps in workspace code (1 call the engine cannot follow):

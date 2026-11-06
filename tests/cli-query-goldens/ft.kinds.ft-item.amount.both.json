@@ -683,6 +683,18 @@
         "routines": 3
       }
     ],
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "per operation, one routine into dependency code; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "searched": {
       "dependencyRoutineBodies": 0,
       "kinds": [
@@ -728,5 +740,5 @@
       "selector": "FT Item"
     }
   },
-  "schemaVersion": "3.8.0"
+  "schemaVersion": "3.9.0"
 }

@@ -629,6 +629,18 @@
     ],
     "lineBase": 1,
     "pathCap": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "dependency code followed through every resolved call with literal arguments; no lock facts; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "routines": {
       "r:03b944ecefab": {
         "display": "Codeunit \"D35 Demo\"::OnAfterPostDirect",
@@ -674,5 +686,5 @@
     },
     "workspaceFingerprint": "f6926434e3c7c47f07ebe2d627f769e903e898f08ea05d5357827ef685db3a81"
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.2.0"
 }

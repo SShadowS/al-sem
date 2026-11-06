@@ -1,5 +1,7 @@
---- touches unknown — the UNRESOLVED-TABLE bucket, not a table ---
-  transitively: 1 workspace routine touches it (through workspace or dependency sites; per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code is not counted)
+query touches unknown — the UNRESOLVED-TABLE bucket, not a table   [cross-app]
+answer: transitively: 1 workspace routine touches it (through workspace or dependency sites; per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code is not counted)
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependencies: 0 apps
+more: --all lists every witness, no fold; --format json for every row
   directly: 1 workspace site in 1 routine and 0 dependency sites touch it — table not resolved: each such site's table is decided by a value the analysis does not resolve, and an unresolved write can be any table
     [Get] at ws:src/Codeunit.al:20 in Codeunit "R2a Records"::DeclaredVars
   the 1 routine that touch it transitively: --all lists them

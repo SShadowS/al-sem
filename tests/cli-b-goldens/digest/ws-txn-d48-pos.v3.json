@@ -611,6 +611,18 @@
     ],
     "lineBase": 1,
     "pathCap": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "dependency code followed through every resolved call with literal arguments; no lock facts; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "routines": {
       "r:1c088b4fbe9f": {
         "display": "Codeunit \"D48 Sender\"::SendOne",
@@ -656,5 +668,5 @@
     },
     "workspaceFingerprint": "598ae8ef367e11fc639c1b762c08ea95a321cc8e1edb679fbf999289aeeb3770"
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.2.0"
 }

@@ -1604,13 +1604,16 @@ fn resolved_target(
     }
 }
 
-/// prove's document `schemaVersion`.
-pub const PROVE_SCHEMA_VERSION: &str = "2.8.0";
+/// prove's document `schemaVersion`. 2.10.0 (output validation V4,
+/// additive): `payload.result.scope` (F76) and `payload.result.followUps`
+/// (§6.1).
+pub const PROVE_SCHEMA_VERSION: &str = "2.10.0";
 
 /// A filtered prove document's `schemaVersion` (agent-tasks E1, additive:
 /// `payload.filter`, `payload.slice`, slice-shaped evidence rows). An
 /// unfiltered document keeps [`PROVE_SCHEMA_VERSION`], byte for byte (E-5).
-pub const PROVE_SLICE_SCHEMA_VERSION: &str = "2.9.0";
+/// 2.11.0: V4's `result.scope` and `result.followUps`, as unfiltered.
+pub const PROVE_SLICE_SCHEMA_VERSION: &str = "2.11.0";
 
 /// Build the DocumentEnvelope<"prove", ProvePayload> as a serde_json::Value,
 /// then serialize with serialize_document_value (sorted keys, null-drop, trailing \n).
@@ -1861,6 +1864,212 @@ pub struct HumanPaths<'c, 'm> {
     pub pointers: &'c ObligationPointers,
     /// `--detail`: every blocker, not the first few per kind.
     pub detail: bool,
+    /// `--surface` and `--single-app` (output validation §6.1): the words and
+    /// scope of every follow-up.
+    pub fcx: crate::engine::follow_up::Cx,
+}
+
+impl HumanPaths<'_, '_> {
+    /// The root's selector (the follow-ups' `routine`).
+    fn selector(&self) -> String {
+        self.cx.names.selector(self.root)
+    }
+}
+
+/// `detail` in `surface`'s words, for prove's fold notes.
+fn detail_words(fcx: Option<crate::engine::follow_up::Cx>) -> &'static str {
+    crate::engine::follow_up::input(
+        fcx.map(|c| c.surface).unwrap_or_default(),
+        crate::engine::follow_up::Input::Detail,
+    )
+}
+
+/// What prove's four header lines need beyond the answer's own lines
+/// (output validation §5.2).
+pub(crate) struct ProveHeaderCx {
+    pub fcx: crate::engine::follow_up::Cx,
+    /// The loaded dependencies (`dependencies: N apps`).
+    pub deps: usize,
+    pub detail: bool,
+    /// The root's selector, for the follow-ups (`None`: no root resolved).
+    pub selector: Option<String>,
+    pub question: String,
+    /// No routine resolved: `answer: no answer — <why>`, `not analyzed`.
+    pub no_answer: Option<String>,
+}
+
+/// A prove answer as the header's four lines and its body (output
+/// validation §5.2): the renderers (existing effects, filtered, callers'
+/// context) print their routine line, `question:`, `answer:`, analysis,
+/// `assumptions:` and `limits:` lines; those become the header, every other
+/// line stays in the body, in order. The routine line is `--- <display> ---`.
+pub(crate) fn with_header(text: &str, hc: &ProveHeaderCx) -> String {
+    header_and_body(text, hc).0
+}
+
+/// [`with_header`] and the header it printed (`None`: the text had no routine
+/// line), for `result.scope`.
+pub(crate) fn header_and_body(
+    text: &str,
+    hc: &ProveHeaderCx,
+) -> (String, Option<crate::engine::result_header::Header>) {
+    use crate::engine::follow_up::{FollowUp, Input, Tool};
+    use crate::engine::result_header::{Analysis, Header, dependencies_clause};
+    let mut routine = String::new();
+    let mut question = hc.question.clone();
+    let mut scope_words = String::new();
+    let mut answer = String::new();
+    let mut analysis = Analysis::Complete;
+    let mut assumptions: Vec<String> = Vec::new();
+    let mut limits: Vec<String> = Vec::new();
+    let mut body: Vec<String> = Vec::new();
+    let mut gaps_follow_up = false;
+    let mut folded = false;
+    for line in text.lines() {
+        if let Some(r) = line
+            .strip_prefix("--- ")
+            .and_then(|l| l.strip_suffix(" ---"))
+            .filter(|_| routine.is_empty())
+        {
+            routine = r.to_string();
+        } else if let Some(q) = line.strip_prefix("  question: ") {
+            match q.split_once(" — ") {
+                Some((q, s)) => {
+                    question = q.to_string();
+                    scope_words = s.to_string();
+                }
+                None => question = q.to_string(),
+            }
+        } else if let Some(a) = line.strip_prefix("  answer:   ") {
+            answer = a.to_string();
+        } else if let Some(rest) = line
+            .strip_prefix("  analysis complete")
+            .map(|r| (true, r))
+            .or_else(|| line.strip_prefix("  analysis partial").map(|r| (false, r)))
+        {
+            let (complete, rest) = rest;
+            let mut parts = rest.split("; ");
+            let first = parts.next().unwrap_or("");
+            let reasons: Vec<String> = first
+                .strip_prefix(" — ")
+                .map(|p| vec![p.to_string()])
+                .unwrap_or_default();
+            analysis = Analysis::of(complete, reasons);
+            for p in parts {
+                if let Some(top) = p.strip_prefix("top: ") {
+                    body.push(format!("  top callees not resolved: {top}"));
+                } else if p.starts_with("alsem explain lists") {
+                    gaps_follow_up = true;
+                }
+            }
+        } else if let Some(a) = line.strip_prefix("  assumptions: ") {
+            assumptions.push(a.to_string());
+        } else if let Some(l) = line.strip_prefix("  limits: ") {
+            if l != "none" {
+                limits.extend(l.split("; ").map(str::to_string));
+            }
+        } else {
+            if let Some(s) = line.strip_prefix("  stopped: ") {
+                analysis = analysis.and(Analysis::Partial(vec![format!("stopped: {s}")]));
+            }
+            if line.contains(" lists every one") || line.contains(" lists them") {
+                folded = true;
+            }
+            body.push(line.to_string());
+        }
+    }
+    if routine.is_empty() {
+        return (text.to_string(), None);
+    }
+    let mut h = Header::new("prove", format!("{routine} {question}"), hc.fcx.single_app);
+    h.answer = answer;
+    h.analysis = analysis;
+    if let Some(why) = &hc.no_answer {
+        h.answer = format!("no answer — {why}");
+        h.analysis = Analysis::NotAnalyzed("no routine resolved".to_string());
+    }
+    h.assumptions = assumptions;
+    h.limits = limits;
+    let mut scope = Vec::new();
+    if !scope_words.is_empty() {
+        scope.push(scope_words);
+    }
+    scope.push(dependencies_clause(hc.deps));
+    h.scope = scope.join("; ");
+    let s = hc.fcx.surface;
+    if folded && !hc.detail {
+        h.more.push(format!(
+            "{} lists every blocker and row",
+            Input::Detail.on(s)
+        ));
+    }
+    h.more.push(format!(
+        "{} for every evidence row and its hops",
+        Input::FormatJson.on(s)
+    ));
+    // Trailing blank lines of the body are the answer's own end.
+    while body.last().is_some_and(String::is_empty) {
+        body.pop();
+    }
+    if gaps_follow_up && let Some(sel) = &hc.selector {
+        let f = FollowUp::new(Tool::Explain, hc.fcx, "lists the workspace ones under gaps")
+            .arg("routines", vec![sel.clone()]);
+        body.push(format!("  next: {} — {}", f.text(s), f.why));
+    }
+    let mut out = h.human();
+    for l in body {
+        out.push_str(&l);
+        out.push('\n');
+    }
+    (out, Some(h))
+}
+
+/// The follow-ups a prove answer names (§6.1), for its JSON `followUps`:
+/// the `re-analysis under an assumption:` call of an `unknown` (conditional),
+/// and explain for the workspace gaps.
+pub(crate) fn effect_follow_ups(
+    hc: &ProveHeaderCx,
+    result: &ProveResult,
+    pointers: Option<&ObligationPointers>,
+) -> Vec<crate::engine::follow_up::FollowUp> {
+    use crate::engine::follow_up::{FollowUp, Tool};
+    let mut out = Vec::new();
+    let Some(sel) = &hc.selector else {
+        return out;
+    };
+    let blockers = result.blocked_by.as_deref().unwrap_or(&[]);
+    if result.answer == ProveAnswer::Unknown
+        && blockers.iter().any(|b| b.kind == "open-world-dispatch")
+        && result.obligations.world != World::Closed
+    {
+        out.push(closed_world_follow_up(hc.fcx, sel, &hc.question));
+    }
+    if pointers.is_some_and(|p| {
+        !p.top_callees.is_empty() && p.workspace_unresolved + p.workspace_open_world > 0
+    }) {
+        out.push(
+            FollowUp::new(Tool::Explain, hc.fcx, "lists the workspace ones under gaps")
+                .arg("routines", vec![sel.clone()]),
+        );
+    }
+    out
+}
+
+/// The `closedWorld: true` re-analysis of an existing-effects question.
+fn closed_world_follow_up(
+    fcx: crate::engine::follow_up::Cx,
+    selector: &str,
+    question: &str,
+) -> crate::engine::follow_up::FollowUp {
+    crate::engine::follow_up::FollowUp::prove(
+        fcx,
+        selector,
+        question,
+        "removes the open-world interface blockers, only if the deployment has no other \
+         implementations of these interfaces",
+    )
+    .arg("closedWorld", true)
+    .conditional()
 }
 
 pub fn format_prove_human(
@@ -1922,13 +2131,15 @@ pub fn format_prove_human(
     });
     // §4.4 (F19, F21): on `unknown`, the plain reading, what the answer does
     // not establish, and every input that removes a blocker kind.
-    if prove_result.answer == ProveAnswer::Unknown && paths.is_some() {
+    if prove_result.answer == ProveAnswer::Unknown
+        && let Some(p) = paths
+    {
         lines.extend(unknown_lines(
             question,
             &kinds,
             no_evidence,
             &prove_result.obligations,
-            paths.is_some_and(|p| p.detail),
+            p,
         ));
     }
 
@@ -2110,8 +2321,9 @@ pub fn format_prove_human(
                 String::new()
             };
             lines.push(format!(
-                "    also [{t}]: {}{more} (--detail lists every row with its path)",
-                listed.join("; ")
+                "    also [{t}]: {}{more} ({} lists every row with its path)",
+                listed.join("; "),
+                detail_words(paths.map(|p| p.fcx))
             ));
         }
     }
@@ -2120,7 +2332,11 @@ pub fn format_prove_human(
     if let Some(ref blockers) = prove_result.blocked_by
         && !blockers.is_empty()
     {
-        lines.extend(blocker_lines(blockers, paths.is_some_and(|p| p.detail)));
+        lines.extend(blocker_lines(
+            blockers,
+            paths.is_some_and(|p| p.detail),
+            paths.map(|p| p.fcx),
+        ));
     }
 
     // W2-8 (2h, design §3.7, §4.7): coverage, assumptions and limits, always
@@ -2192,8 +2408,9 @@ fn unknown_lines(
     kinds: &[(&'static str, String, usize)],
     no_evidence: bool,
     o: &ProveObligations,
-    detail: bool,
+    p: &HumanPaths<'_, '_>,
 ) -> Vec<String> {
+    let detail = p.detail;
     let mut out = Vec::new();
     if !kinds.is_empty() {
         out.push(format!(
@@ -2239,9 +2456,18 @@ fn unknown_lines(
                 named_kinds(&stay, if detail { stay.len() } else { 3 })
             )
         };
+        // §6.1: at `--surface=mcp` the complete call; on the CLI the flag.
+        let how = match p.fcx.surface {
+            crate::engine::follow_up::Surface::Mcp => {
+                closed_world_follow_up(p.fcx, &p.selector(), question).text(p.fcx.surface)
+            }
+            crate::engine::follow_up::Surface::Cli => crate::engine::follow_up::Input::ClosedWorld
+                .cli()
+                .to_string(),
+        };
         out.push(format!(
-            "  re-analysis under an assumption: closedWorld: true — only if the deployment has no \
-             other implementations of these interfaces; it changes the assumption, not what runs; \
+            "  re-analysis under an assumption: {how} — only if the deployment has no other \
+             implementations of these interfaces; it changes the assumption, not what runs; \
              {removes}"
         ));
     }
@@ -2292,8 +2518,13 @@ fn blocker_item(b: &ProveBlocker) -> String {
 /// `writes-table:Data Exch.` on CDO has 287 blockers: one line each was 294
 /// lines and 47,875 bytes, over the 40 KiB inline cap. The JSON
 /// (`blockedBy`) is unchanged and always complete.
-fn blocker_lines(blockers: &[ProveBlocker], detail: bool) -> Vec<String> {
+fn blocker_lines(
+    blockers: &[ProveBlocker],
+    detail: bool,
+    fcx: Option<crate::engine::follow_up::Cx>,
+) -> Vec<String> {
     use crate::engine::l5::routine_rollup::{fold, plural};
+    let detail_input = detail_words(fcx);
     let mut kinds: Vec<(&str, Vec<&ProveBlocker>)> = Vec::new();
     for b in blockers {
         match kinds.iter_mut().find(|(k, _)| *k == b.kind) {
@@ -2312,7 +2543,8 @@ fn blocker_lines(blockers: &[ProveBlocker], detail: bool) -> Vec<String> {
         plural(kinds.len(), "kind", "kinds"),
         if folds {
             format!(
-                " (at most {BLOCKERS_PER_KIND} each, workspace ones first; --detail lists every one)"
+                " (at most {BLOCKERS_PER_KIND} each, workspace ones first; {detail_input} lists \
+                 every one)"
             )
         } else {
             String::new()
@@ -2361,7 +2593,7 @@ fn blocker_lines(blockers: &[ProveBlocker], detail: bool) -> Vec<String> {
         }
         if f.hidden > 0 {
             out.push(format!(
-                "      … +{} (of {}; --detail lists them)",
+                "      … +{} (of {}; {detail_input} lists them)",
                 plural(f.hidden, "blocker", "blockers"),
                 plural(total, "blocker", "blockers")
             ));
@@ -2511,6 +2743,7 @@ pub(crate) fn prove_pipeline_with(
         detail: false,
         out: None,
         slice: None,
+        surface: Default::default(),
     };
     crate::engine::batch::run_doc(&job)
         .one()
@@ -2601,6 +2834,7 @@ pub(crate) fn prove_on_target(
         detail: false,
         out: None,
         slice: None,
+        surface: Default::default(),
     };
     crate::engine::batch::run_on_target(&job, target)
         .unwrap_or_else(|f| unreachable!("prove fails no side: {f:?}"))
@@ -2640,12 +2874,19 @@ pub struct ProveJob<'a> {
     /// [`crate::engine::l5::prove_slice::SliceRequest::of`]). `None`: the
     /// unfiltered answer, byte-identical to before.
     pub slice: Option<crate::engine::l5::prove_slice::SliceRequest>,
+    /// `--surface` (output validation §6.1): the words of every follow-up.
+    pub surface: crate::engine::follow_up::Surface,
 }
 
 impl ProveJob<'_> {
     /// The callers' context question asked, if it is one.
     fn callers_question(&self) -> Option<crate::engine::l5::callers_context::CallersQuestion> {
         crate::engine::l5::callers_context::CallersQuestion::parse(self.question_text)
+    }
+
+    /// The follow-ups' surface and scope inputs.
+    fn fcx(&self) -> crate::engine::follow_up::Cx {
+        crate::engine::follow_up::Cx::new(self.surface, self.single_app)
     }
 }
 
@@ -2764,7 +3005,9 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     if let Some((answer, header)) = callers {
         cx.release(Cell::L4);
         cx.release(Cell::Effects);
-        let mut doc = callers_document(job, &answer, &header, &workspace_fp, diagnostics_json);
+        let deps = cx.view().target().dependencies().apps.len();
+        let mut doc =
+            callers_document(job, &answer, &header, &workspace_fp, diagnostics_json, deps);
         // F5 (2g): readable dependency locations, as the effects path prints
         // them (the JSON keeps the guid).
         doc.human_text = cx
@@ -2886,6 +3129,21 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
             &dummy_result,
             &[],
             None,
+        );
+        let why = match dummy_result.blocked_by.as_deref() {
+            Some([b, ..]) if b.kind == "routine-ambiguous" => "the selector names several routines",
+            _ => "the selector names no routine",
+        };
+        let human_text = with_header(
+            &human_text,
+            &ProveHeaderCx {
+                fcx: job.fcx(),
+                deps: apps.len(),
+                detail: job.detail,
+                selector: None,
+                question: question_text.to_string(),
+                no_answer: Some(why.to_string()),
+            },
         );
 
         return Ok(ProveRunResult {
@@ -3048,32 +3306,12 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         question_text,
     );
 
-    // Project document
-    cx.view().census_output();
-    let json_text = project_prove_document(ProveDocumentArgs {
-        workspace_fp: &workspace_fp,
-        routine_stable_id: root_id,
-        routine_display: &entry.routine_display,
-        object_display: &entry.object_display,
-        routine_anchor: entry.routine_anchor.as_ref(),
-        question: question_text,
-        prove_result: &prove_result,
-        effects: &entry.effects,
-        via_callers: &via_callers,
-        diagnostics_json,
-        alsem_ver,
-        deterministic,
-        pointers: Some(&pointers),
-        slice: slice.as_ref(),
-        routine_identity,
-        resolved_target,
-    });
-
     let paths = HumanPaths {
         cx: &rollup_cx,
         root: root_id,
         pointers: &pointers,
         detail: job.detail,
+        fcx: job.fcx(),
     };
     let human_text = match &slice {
         Some(s) => format_prove_slice_human(
@@ -3099,8 +3337,52 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
         &format!("  question: {question_human} "),
         1,
     );
+    // Output validation §5.2: the four header lines; JSON `result.scope`
+    // and `result.followUps` (§6.1), additive (2.10.0 / 2.11.0).
+    let hc = ProveHeaderCx {
+        fcx: job.fcx(),
+        deps: dependencies.apps.len(),
+        detail: job.detail,
+        selector: Some(rollup_cx.names.selector(root_id)),
+        question: question_text.to_string(),
+        no_answer: None,
+    };
+    let (human_text, header) = header_and_body(&human_text, &hc);
+    let mut resolved_target = resolved_target;
+    if let Some(h) = &header {
+        resolved_target.insert("scope".into(), h.scope_json(serde_json::Map::new()));
+    }
+    resolved_target.insert(
+        "followUps".into(),
+        crate::engine::follow_up::json_list(&effect_follow_ups(
+            &hc,
+            &prove_result,
+            Some(&pointers),
+        )),
+    );
     // W2-7 (2g): readable dependency locations (the JSON keeps the guid).
     let human_text = dependencies.readable_locations(human_text);
+
+    // Project document
+    cx.view().census_output();
+    let json_text = project_prove_document(ProveDocumentArgs {
+        workspace_fp: &workspace_fp,
+        routine_stable_id: root_id,
+        routine_display: &entry.routine_display,
+        object_display: &entry.object_display,
+        routine_anchor: entry.routine_anchor.as_ref(),
+        question: question_text,
+        prove_result: &prove_result,
+        effects: &entry.effects,
+        via_callers: &via_callers,
+        diagnostics_json,
+        alsem_ver,
+        deterministic,
+        pointers: Some(&pointers),
+        slice: slice.as_ref(),
+        routine_identity,
+        resolved_target,
+    });
 
     let mut summary = serde_json::json!({
         "kind": "prove",
@@ -3263,14 +3545,20 @@ fn format_prove_slice_human(
             &kinds,
             true,
             &result.obligations,
-            paths.detail,
+            paths,
         ));
     }
-    lines.extend(human_lines(slice, paths.cx, paths.root, paths.detail));
+    lines.extend(human_lines(
+        slice,
+        paths.cx,
+        paths.root,
+        paths.detail,
+        paths.fcx.surface,
+    ));
     if let Some(blockers) = &result.blocked_by
         && !blockers.is_empty()
     {
-        lines.extend(blocker_lines(blockers, paths.detail));
+        lines.extend(blocker_lines(blockers, paths.detail, Some(paths.fcx)));
     }
     lines.extend(coverage_lines(&result.obligations, Some(paths.pointers)));
     lines.push(String::new());
@@ -3370,8 +3658,40 @@ fn callers_document(
     header: &RootHeader,
     workspace_fp: &str,
     diagnostics_json: serde_json::Value,
+    deps: usize,
 ) -> ProveRunResult {
-    use crate::engine::l5::callers_context::{format_human, result_value};
+    use crate::engine::l5::callers_context::{
+        HumanCx, format_human, reanalysis_follow_up, result_value,
+    };
+    let selector = header
+        .identity
+        .get("selector")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(&header.stable_id)
+        .to_string();
+    let hcx = HumanCx {
+        fcx: job.fcx(),
+        selector: &selector,
+    };
+    let hc = ProveHeaderCx {
+        fcx: job.fcx(),
+        deps,
+        detail: job.detail,
+        selector: Some(selector.clone()),
+        question: job.question_text.to_string(),
+        no_answer: None,
+    };
+    let (human_text, h) =
+        header_and_body(&format_human(&header.qualified, a, job.detail, &hcx), &hc);
+    let mut result = result_value(a);
+    if let Some(h) = &h {
+        result["scope"] = h.scope_json(serde_json::Map::new());
+    }
+    result["followUps"] = crate::engine::follow_up::json_list(
+        &reanalysis_follow_up(a, &hcx)
+            .into_iter()
+            .collect::<Vec<_>>(),
+    );
     let mut routine_ref = serde_json::Map::new();
     if let Some((file, line)) = &header.anchor {
         routine_ref.insert(
@@ -3392,7 +3712,7 @@ fn callers_document(
         "lineBase".into(),
         crate::engine::line_base::LINE_BASE.into(),
     );
-    payload.insert("result".into(), result_value(a));
+    payload.insert("result".into(), result);
     payload.insert("routine".into(), serde_json::Value::Object(routine_ref));
     payload.insert("workspaceFingerprint".into(), workspace_fp.into());
     let mut env = serde_json::Map::new();
@@ -3408,7 +3728,6 @@ fn callers_document(
     env.insert("schemaVersion".into(), PROVE_SCHEMA_VERSION.into());
     let json_text = serialize_document_value(serde_json::Value::Object(env));
     let routine = header.qualified.clone();
-    let human_text = format_human(&routine, a, job.detail);
     let summary = serde_json::json!({
         "kind": "prove",
         "routine": routine,
@@ -4175,7 +4494,7 @@ mod tests {
             b("open-world-dispatch", "W1 in C", at(Some("ws:src/c.al"), 2)),
             b("open-world-dispatch", "W2 in C", at(Some("ws:src/c.al"), 3)),
         ];
-        let lines = blocker_lines(&blockers, false);
+        let lines = blocker_lines(&blockers, false, None);
         let text = lines.join("\n");
         assert_eq!(
             lines[0],
@@ -4205,7 +4524,7 @@ mod tests {
         );
         assert_eq!(lines.len(), 8, "{text}");
         // --detail: every item, the same grouping.
-        let all = blocker_lines(&blockers, true);
+        let all = blocker_lines(&blockers, true, None);
         assert_eq!(all[0], "  blockedBy: 6 blockers in 2 kinds", "{all:?}");
         assert_eq!(all.len(), 1 + 2 + 1 + 5, "{all:?}");
         assert!(all.iter().all(|l| !l.contains("… +")), "{all:?}");

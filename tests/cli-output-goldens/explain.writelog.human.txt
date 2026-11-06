@@ -1,28 +1,23 @@
-Codeunit "Out Log Mgt"::WriteLog  ws:src/OutIssueDocument.Codeunit.al:53
-  summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): Out Log (Insert at :61)
-    transaction, UI and errors: commits: no (every candidate decided); errors at 1 place
-    other effects: events: 0 (0 raised in workspace code)
-    callers and tests: callers: 3, reached from 1 page action; tests: 1
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+explain Codeunit "Out Log Mgt"::WriteLog   [cross-app]
+answer: writes: may write 1 table (1 owned by this app, 0 by dependencies): Out Log (Insert at :61)
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: none reached; no lock facts; dependencies: 1 app
+more: --detail lists every list complete; --format json for every row
+Codeunit "Out Log Mgt"::WriteLog  defined at ws:src/OutIssueDocument.Codeunit.al:53
+  transaction, UI and errors: commits: no (every candidate decided); errors at 1 place
+  other effects: events: 0 (0 raised in workspace code)
+  callers and tests: callers: 3, reached from 1 page action; tests: 1
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   calls: none (no call to a routine; builtins aside)
-  rules: none of its own; inherited: none
   callers: 3 — Codeunit "Out Issue Document"::IssueDoc, Codeunit "Out Subscribers"::LogIssued, Codeunit "Out Tests"::WriteLogInserts; reached from 1 page action
     caller rule (applied by Codeunit "Out Issue Document"::IssueDoc; skipped by Codeunit "Out Subscribers"::LogIssued, Codeunit "Out Tests"::WriteLogInserts): rejects when Doc.Status <> Doc.Status::Open: (platform message)  [TestField ws:src/OutIssueDocument.Codeunit.al:12]
     reached from page action Page "Out Doc Card".action(Issue "Issue") at ws:src/Pages.al:18
-  commits: no (every candidate decided)
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     Out Log: Insert 1 — known persistent
       Insert at ws:src/OutIssueDocument.Codeunit.al:61
       path: WriteLog (in the routine itself)
       fields WriteLog assigns on this table (not operation-specific): Entry No., Message
   temporary records (writes to them do not directly persist): 1 table in workspace code (1 effect row): Out Log; 0 tables only beyond dependency calls; only temporary: 0 tables
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
-  extension points: none (the routine publishes no event itself)
   errors at 1 place: ERROR_IMPLICIT at ws:src/OutIssueDocument.Codeunit.al:61 (unconditional on success)
   test Codeunit "Out Tests"::WriteLogInserts (0 own assert(s))
-  next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
+  next: alsem explain --callers-context --routine 'Codeunit "Out Log Mgt"::WriteLog' — its callers' pending writes, intercepted errors and non-interactive entries
 

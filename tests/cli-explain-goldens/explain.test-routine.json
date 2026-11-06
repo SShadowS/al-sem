@@ -138,6 +138,17 @@
         ]
       },
       "extensionPoints": [],
+      "followUps": [
+        {
+          "arguments": {
+            "question": "may-commit",
+            "routine": "Codeunit \"Explain Tests\"::PostUnreleasedFails"
+          },
+          "kind": "ordinary",
+          "tool": "alsem_prove",
+          "why": "the witness of a commit, or the blockers of an unknown"
+        }
+      ],
       "gaps": [
         {
           "anchor": {
@@ -262,6 +273,22 @@
   "diagnostics": [],
   "lineBase": 1,
   "mode": "routine",
+  "result": {
+    "scope": {
+      "analysis": "partial",
+      "assumptions": [
+        "loaded program; unloaded implementations and subscribers are not enumerated"
+      ],
+      "limits": [
+        "symbol-only-dependency 2"
+      ],
+      "reasons": [
+        "external-target"
+      ],
+      "scope": "dependency code: none reached; no lock facts; dependencies: 0 apps",
+      "universe": "cross-app"
+    }
+  },
   "schema": "al-sem.explain/4",
   "selector": "PostUnreleasedFails"
 }

@@ -77,6 +77,7 @@
           "viaPathsTruncated": false
         }
       ],
+      "followUps": [],
       "obligations": {
         "analysisGaps": 0,
         "coneTruncated": false,
@@ -88,6 +89,16 @@
           "notResolved": 0,
           "openWorld": 0
         }
+      },
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "none (default world: an interface call may reach an implementation that is not loaded)"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "existing effects (what the routine and its callees already do); dependencies: 0 apps",
+        "universe": "cross-app"
       }
     },
     "routine": {
@@ -106,5 +117,5 @@
     },
     "workspaceFingerprint": "422fd5d79e0d95f73a850372a04ff8ed07ccc5ee82deecc2ee2bcf44aa4ef31f"
   },
-  "schemaVersion": "2.8.0"
+  "schemaVersion": "2.10.0"
 }

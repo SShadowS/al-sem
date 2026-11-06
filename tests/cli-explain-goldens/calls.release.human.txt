@@ -1,16 +1,14 @@
-Codeunit "Calls Post"::Release  ws:src/post.al:52
-  summary — writes: may modify persistent Calls Order records (Modify at :55) when the record its caller passes (parameter 1) is not temporary; otherwise it changes a temporary record; no other write (every candidate decided)
-    transaction, UI and errors: commits: no (every candidate decided); errors at 1 place
-    other effects: events: 0 (0 raised in workspace code)
-    callers and tests: callers: 6; tests: none (no test code loaded)
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
+explain Codeunit "Calls Post"::Release   [cross-app]
+answer: writes: may modify persistent Calls Order records (Modify at :55) when the record its caller passes (parameter 1) is not temporary; otherwise it changes a temporary record; no other write (every candidate decided)
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: none reached; no lock facts; dependencies: 0 apps
+more: --detail lists every list complete; --format json for every row
+Codeunit "Calls Post"::Release  defined at ws:src/post.al:52
+  transaction, UI and errors: commits: no (every candidate decided); errors at 1 place
+  other effects: events: 0 (0 raised in workspace code)
+  callers and tests: callers: 6; tests: none (no test code loaded)
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   notes: table-trigger-rules-skipped 1
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
   calls: none (no call to a routine; builtins aside)
-  rules: none of its own; inherited: none
   callers: 6 — Codeunit "Calls Post"::ReleaseChecked, Codeunit "Calls Post"::ReleaseDirect, Codeunit "Calls Post"::ReleaseBranch, Codeunit "Calls Post"::ReleaseLoop, Codeunit "Calls Post"::ReleaseGuarded, Codeunit "Calls Post"::ReleaseElse
     caller rule (applied by Codeunit "Calls Post"::ReleaseChecked; skipped by Codeunit "Calls Post"::ReleaseDirect, Codeunit "Calls Post"::ReleaseBranch, Codeunit "Calls Post"::ReleaseLoop, Codeunit "Calls Post"::ReleaseGuarded, Codeunit "Calls Post"::ReleaseElse): rejects when Order."No." = '': "The order has no number."  [Error ws:src/checks.al:6]
     caller rule (applied by Codeunit "Calls Post"::ReleaseChecked; skipped by Codeunit "Calls Post"::ReleaseDirect, Codeunit "Calls Post"::ReleaseBranch, Codeunit "Calls Post"::ReleaseLoop, Codeunit "Calls Post"::ReleaseGuarded, Codeunit "Calls Post"::ReleaseElse): rejects when not (Order."No." = '') and Order.Amount is empty: (platform message)  [TestField ws:src/checks.al:8]
@@ -19,15 +17,12 @@ Codeunit "Calls Post"::Release  ws:src/post.al:52
     caller rule (applied by Codeunit "Calls Post"::ReleaseChecked; skipped by Codeunit "Calls Post"::ReleaseDirect, Codeunit "Calls Post"::ReleaseBranch, Codeunit "Calls Post"::ReleaseLoop, Codeunit "Calls Post"::ReleaseGuarded, Codeunit "Calls Post"::ReleaseElse): rejects when Order.Status = Order.Status::Posted: "A posted order cannot be released."  [Error ws:src/post.al:63]
     caller rule (applied by Codeunit "Calls Post"::ReleaseGuarded; skipped by Codeunit "Calls Post"::ReleaseChecked, Codeunit "Calls Post"::ReleaseDirect, Codeunit "Calls Post"::ReleaseBranch, Codeunit "Calls Post"::ReleaseLoop, Codeunit "Calls Post"::ReleaseElse): rejects when Quick and Order.Blocked: "A blocked order cannot be released quickly."  [Error ws:src/post.al:103]
     caller rule (applied by Codeunit "Calls Post"::ReleaseElse; skipped by Codeunit "Calls Post"::ReleaseChecked, Codeunit "Calls Post"::ReleaseDirect, Codeunit "Calls Post"::ReleaseBranch, Codeunit "Calls Post"::ReleaseLoop, Codeunit "Calls Post"::ReleaseGuarded): rejects when Order."No." = '': "An order without a number cannot be released."  [Error ws:src/post.al:112]
-  commits: no (every candidate decided)
-  caller-dependent writes (1 table): written only if the caller passes a record that is not temporary; alsem prove names the caller
+  caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
     Calls Order: Modify — depends on the caller's record argument at ws:src/post.al:55
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
-  extension points: none (the routine publishes no event itself)
   errors at 1 place: ERROR_IMPLICIT at ws:src/post.al:55 (unconditional on success)
   tests: no test code found (0 [Test] procedures in the workspace app; no app under the project folder (its parent holds .al-sem-projects) depends on this one with a test codeunit (searched 0 app.json files)); that is not a reason to skip tests
   gaps in workspace code (1 gap):
     gap: table-trigger-rules-skipped (what modify on Calls Order, table Calls Order) at ws:src/post.al:55
       skips Table "Calls Order"::OnModify: rejects when Blocked  [Error ws:src/order.al:25]
-  next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
+  next: alsem explain --callers-context --routine 'Codeunit "Calls Post"::Release' — its callers' pending writes, intercepted errors and non-interactive entries
 

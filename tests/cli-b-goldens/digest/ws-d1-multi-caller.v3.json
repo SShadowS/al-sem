@@ -659,6 +659,18 @@
     ],
     "lineBase": 1,
     "pathCap": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "dependency code followed through every resolved call with literal arguments; no lock facts; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "routines": {
       "r:1c7f167f4b5f": {
         "display": "Codeunit \"D1 Multi Caller\"::ModifyHelper",
@@ -697,5 +709,5 @@
     },
     "workspaceFingerprint": "7b29099315fe12775912a7c35a4f9c6e730f9fcb4c52790b789fa0629ba09d01"
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.2.0"
 }

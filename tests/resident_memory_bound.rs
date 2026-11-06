@@ -133,6 +133,7 @@ fn job<'a>(kind: &str, inputs: &'a Arc<WorkspaceInputs>) -> Box<dyn Job + 'a> {
             detail: false,
             out: None,
             slice: None,
+            surface: Default::default(),
         }),
         _ => Box::new(DigestJob::new(
             DigestRequest {

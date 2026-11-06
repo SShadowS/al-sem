@@ -748,7 +748,8 @@ fn touches_absence_is_no_only_when_nothing_is_unseen() {
     assert_eq!(leaf["absence"]["answer"], "no", "{leaf}");
     assert_eq!(leaf["absence"]["reasons"], serde_json::json!([]), "{leaf}");
     assert!(
-        human.contains("  down: no (every candidate decided) — "),
+        // Output validation §5.2: the result line is the header's answer.
+        human.contains("\nanswer: down: no (every candidate decided) — "),
         "{human}"
     );
 
@@ -771,7 +772,7 @@ fn touches_absence_is_no_only_when_nothing_is_unseen() {
         "{doc}"
     );
     assert!(
-        human.contains("  down: unknown — no indexed touch observed"),
+        human.contains("\nanswer: down: unknown — no indexed touch observed"),
         "{human}"
     );
     assert!(!human.contains("does not touch the table"), "{human}");

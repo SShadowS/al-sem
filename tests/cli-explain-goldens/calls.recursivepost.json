@@ -79,6 +79,7 @@
         ]
       },
       "extensionPoints": [],
+      "followUps": [],
       "gaps": [
         {
           "anchor": {
@@ -273,6 +274,18 @@
   "diagnostics": [],
   "lineBase": 1,
   "mode": "routine",
+  "result": {
+    "scope": {
+      "analysis": "complete",
+      "assumptions": [
+        "loaded program; unloaded implementations and subscribers are not enumerated"
+      ],
+      "limits": [],
+      "reasons": [],
+      "scope": "dependency code: none reached; no lock facts; dependencies: 0 apps",
+      "universe": "cross-app"
+    }
+  },
   "schema": "al-sem.explain/4",
   "selector": "RecursivePost"
 }

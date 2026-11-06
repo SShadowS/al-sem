@@ -12,6 +12,7 @@
       "assumptions": [
         "loaded-subscribers"
       ],
+      "followUps": [],
       "obligations": {
         "analysisGaps": 0,
         "coneTruncated": false,
@@ -23,6 +24,16 @@
           "notResolved": 0,
           "openWorld": 0
         }
+      },
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded-subscribers"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "existing effects (what the routine and its callees already do); dependencies: 0 apps",
+        "universe": "cross-app"
       }
     },
     "routine": {
@@ -41,5 +52,5 @@
     },
     "workspaceFingerprint": "0d6c610dea8d73d6142bb6b9375463620d7e10a84ead5599d3040ada0008b395"
   },
-  "schemaVersion": "2.8.0"
+  "schemaVersion": "2.10.0"
 }

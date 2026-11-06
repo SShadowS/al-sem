@@ -193,6 +193,18 @@
     ],
     "lineBase": 1,
     "pathCap": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "dependency code: none reached; no lock facts; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "routines": {
       "r:a02cde649a7b": {
         "display": "Codeunit \"D51 NegSender\"::GetThenError",
@@ -210,5 +222,5 @@
     },
     "workspaceFingerprint": "cce9f4a181c0dc8ab6f329a35c9ae37a2adb0432613af167f388719bb9d5bb05"
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.2.0"
 }

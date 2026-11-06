@@ -292,7 +292,16 @@ fn a_platform_table_event_in_the_cone_keeps_the_selection_incomplete() {
     assert!(reasons.contains(&"hidden-callers"), "{reasons:?}");
     assert_eq!(v["hidden"][0]["class"], "platform-table-event");
     let (human, _) = tests(&ws, &["--routine", "TU Core::Logged"]);
-    assert!(human.find("selection incomplete").unwrap() < human.find("this is static").unwrap());
+    // Output validation §5.2: "static reachability, not coverage" is the
+    // header's assumption, said once; the selection line is in the body.
+    assert!(
+        human
+            .find("assumptions: static reachability, not coverage")
+            .unwrap()
+            < human
+                .find("selection incomplete — run the whole suite")
+                .unwrap()
+    );
     let v = json(&ws, &["--routine", "TU Core::Untested"]);
     assert_eq!(v["changed"][0]["status"], "no-known-path");
     assert_eq!(v["selectionComplete"], true, "{v:#}");
@@ -350,7 +359,7 @@ fn explain_names_the_discovered_test_apps_without_analyzing_them() {
     let human = run(&["--routine", "TU Core::Post"]);
     assert!(
         human.contains(
-            "  tests: no [Test] procedure in the workspace app; 1 test app discovered (TU Production Tests); not analyzed in this call — alsem tests (MCP: alsem_tests) selects them"
+            "  tests: no [Test] procedure in the workspace app; 1 test app discovered (TU Production Tests); not analyzed in this call — alsem tests selects them"
         ),
         "{human}"
     );
@@ -363,7 +372,7 @@ fn explain_names_the_discovered_test_apps_without_analyzing_them() {
     };
     assert_eq!(
         summary_tests(&human),
-        "tests: none in the workspace; 1 test app discovered (not analyzed here; alsem tests)",
+        "tests: none in the workspace; 1 test app discovered (not analyzed here; the tests tool selects them)",
         "{human}"
     );
     let v: Value =

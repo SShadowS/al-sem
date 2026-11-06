@@ -46,6 +46,7 @@ use crate::engine::batch::job::{
     ViewNeeds, WorkspaceRead,
 };
 use crate::engine::batch::output::JobOutput;
+use crate::engine::follow_up::{Input, Surface};
 use crate::engine::gate::format_json::{pinned_or_now_iso8601, serialize_document_value};
 use crate::engine::gate::run::AnalysisTarget;
 use crate::engine::l4::effect_lattice::TempStateKind;
@@ -107,7 +108,10 @@ use crate::program::resolve::full::LoadedDependencies;
 /// `beyondDependencyCalls`, each `{depth, inventory, reasons, blockers}`);
 /// `touches --field` splits its inventory (`fieldSummary.confirmed`,
 /// `fieldSummary.numericCandidates`) and adds `filters`.
-const QUERY_SCHEMA_VERSION: &str = "3.8.0";
+/// 3.9.0 (output validation V4, F76, additive): `payload.result.scope` in
+/// every query document (analysis, reasons, assumptions, limits, universe,
+/// scope), beside query effects' `families`.
+const QUERY_SCHEMA_VERSION: &str = "3.9.0";
 
 /// Which direction(s) a `query touches` run reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,9 +285,18 @@ pub struct QueryJob<'a> {
     out: Option<&'a str>,
     /// `--show-source` (W2-7): the cited line ±2 under each human location.
     show_source: bool,
+    /// `--surface` (output validation §6.1): the words of every follow-up.
+    surface: Surface,
 }
 
 impl<'a> QueryJob<'a> {
+    /// `--surface` (output validation §6.1).
+    #[must_use]
+    pub fn surface(mut self, surface: Surface) -> QueryJob<'a> {
+        self.surface = surface;
+        self
+    }
+
     /// `alsem query touches` (see [`run_query_touches_pipeline`]), written as
     /// JSON to stdout until [`QueryJob::written`]. `all` is `--all`: every
     /// witness, the callers' included, and no fold.
@@ -369,6 +382,7 @@ impl<'a> QueryJob<'a> {
             json: true,
             out: None,
             show_source: false,
+            surface: Surface::Cli,
         }
     }
 
@@ -483,6 +497,7 @@ impl Job for QueryJob<'_> {
                 from,
                 direction,
                 all,
+                surface: self.surface,
             };
             let body = if from.is_some() {
                 // `Some(None)`: declared, its build did not finish.
@@ -511,7 +526,8 @@ impl Job for QueryJob<'_> {
             let deps = cx.view().target().dependencies();
             let sources = (self.show_source && !self.json)
                 .then(|| crate::engine::source_excerpt::SourceTexts::read(&workspace));
-            let result = finish_human(body, &deps, sources.as_ref());
+            let hc = QueryHeaderCx::of(&self.ask, self.surface, self.single_app);
+            let result = finish_human(body, &deps, sources.as_ref(), &hc);
             return Ok(SideDoc::new(Ok::<_, String>(result)));
         }
         let root: Option<String> = cx.take_carry();
@@ -553,6 +569,8 @@ impl Job for QueryJob<'_> {
                 self.deterministic,
                 cone,
                 through,
+                self.surface,
+                self.single_app,
             ),
             QueryAsk::Effects { routine, all } => render_query_effects_body(
                 &substrate,
@@ -561,11 +579,14 @@ impl Job for QueryJob<'_> {
                 self.alsem_ver,
                 self.deterministic,
                 cone,
+                self.surface,
+                self.single_app,
             ),
         };
         let sources = (self.show_source && !self.json)
             .then(|| crate::engine::source_excerpt::SourceTexts::read(&workspace));
-        let result = finish_human(body, &substrate.dependencies, sources.as_ref());
+        let hc = QueryHeaderCx::of(&self.ask, self.surface, self.single_app);
+        let result = finish_human(body, &substrate.dependencies, sources.as_ref(), &hc);
         Ok(SideDoc::new(Ok::<_, String>(result)))
     }
 
@@ -1549,9 +1570,24 @@ fn envelope(
     alsem_ver: &str,
     deterministic: bool,
 ) -> String {
+    // Output validation V4 (F76, 3.9.0, additive): `payload.result.scope`, the
+    // header's facts as fields, beside query effects' `families` (V2).
+    let scope = query_scope_json(kind, &payload, deps);
     if let Value::Object(m) = &mut payload {
         m.insert("dependencies".into(), deps.to_json());
         m.insert("lineBase".into(), LINE_BASE.into());
+        let result = m
+            .entry("result")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .map(|r| r.entry("scope").or_insert_with(|| json!({})));
+        if let Some(Value::Object(s)) = result
+            && let Value::Object(add) = scope
+        {
+            for (k, v) in add {
+                s.insert(k, v);
+            }
+        }
     }
     let mut env = Map::new();
     env.insert("alsemVersion".into(), alsem_ver.into());
@@ -1564,6 +1600,36 @@ fn envelope(
     env.insert("payload".into(), payload);
     env.insert("schemaVersion".into(), QUERY_SCHEMA_VERSION.into());
     serialize_document_value(Value::Object(env))
+}
+
+/// `payload.result.scope` of a query document (F76): `analysis`
+/// (`notAnalyzed` for a selector failure or a refused question, `partial`
+/// for a `down` answer of `unknown`), `reasons`, `assumptions`, `limits`,
+/// `universe` and the `scope` clause the human header prints.
+fn query_scope_json(kind: &str, payload: &Value, deps: &LoadedDependencies) -> Value {
+    use crate::engine::result_header::{Analysis, Header, dependencies_clause};
+    let failed = payload.get("error").is_some()
+        || payload.as_object().is_some_and(|m| {
+            m.values().any(|v| {
+                v.get("resolution")
+                    .and_then(Value::as_str)
+                    .is_some_and(|r| r != "resolved")
+            })
+        });
+    let mut h = Header::new("query", String::new(), !deps.cross_app);
+    if failed {
+        h.analysis = Analysis::NotAnalyzed("the input did not resolve".to_string());
+    } else if payload.pointer("/down/answer").and_then(Value::as_str) == Some("unknown") {
+        h.analysis = Analysis::Partial(vec!["the answer names what it could not resolve".into()]);
+    }
+    let depth = if kind == "query.effects" {
+        "reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes \
+         beyond dependency calls: whole cone with literal arguments"
+    } else {
+        "per operation, one routine into dependency code"
+    };
+    h.scope = format!("{depth}; {}", dependencies_clause(deps.apps.len()));
+    h.scope_json(Map::new())
 }
 
 /// Render an unresolved/ambiguous selector as its own (exit-2) document, so a
@@ -1786,6 +1852,8 @@ pub fn render_query_touches(
             deterministic,
             None,
             UpThrough::NotRequested,
+            Surface::Cli,
+            !substrate.dependencies.cross_app,
         ),
         &substrate.dependencies,
     )
@@ -1810,38 +1878,201 @@ enum UpThrough<'g> {
 /// modes). An answer with a `scope:` line states them there instead (W2-2,
 /// design §4.5 Q6: `dependencies_clause`), so it gets no first line.
 fn with_dependencies_line(r: QueryRunResult, deps: &LoadedDependencies) -> QueryRunResult {
-    finish_human(r, deps, None)
+    let hc = QueryHeaderCx {
+        surface: Surface::Cli,
+        single_app: !deps.cross_app,
+        effects: r.json_text.contains("\"kind\": \"query.effects\""),
+        all: false,
+        callers: false,
+        up: false,
+        asked: String::new(),
+    };
+    finish_human(r, deps, None, &hc)
 }
 
-/// [`with_dependencies_line`], then (W2-7, 2g) `--show-source` excerpts
+/// What a query answer's header needs beyond its own lines (output
+/// validation §5.2).
+pub(crate) struct QueryHeaderCx {
+    pub surface: Surface,
+    pub single_app: bool,
+    /// `query effects` (else `query touches`).
+    pub effects: bool,
+    /// `--all`.
+    pub all: bool,
+    /// `--callers`.
+    pub callers: bool,
+    /// Asked up (or both) from a routine.
+    pub up: bool,
+    /// The inputs as given, for an answer with no title (a selector failure).
+    pub asked: String,
+}
+
+impl QueryHeaderCx {
+    fn of(ask: &QueryAsk<'_>, surface: Surface, single_app: bool) -> QueryHeaderCx {
+        match *ask {
+            QueryAsk::Effects { routine, all } => QueryHeaderCx {
+                surface,
+                single_app,
+                effects: true,
+                all,
+                callers: false,
+                up: false,
+                asked: routine.to_string(),
+            },
+            QueryAsk::Touches {
+                table,
+                from,
+                direction,
+                all,
+                callers,
+                field,
+            } => QueryHeaderCx {
+                surface,
+                single_app,
+                effects: false,
+                all,
+                callers,
+                up: from.is_some() && direction.wants_up() && field.is_none(),
+                asked: format!(
+                    "{table}{}{}",
+                    field.map(|f| format!(" field {f}")).unwrap_or_default(),
+                    from.map(|f| format!(" from {f} {}", direction.as_str()))
+                        .unwrap_or_default()
+                ),
+            },
+        }
+    }
+}
+
+/// A query answer as the four header lines and its body (output validation
+/// §5.2): the renderers print a `--- … ---` title, their result line
+/// (`summary:`, `down:`, `up:`, `transitively:`, `consumers:`) and a
+/// `scope:` line; the title is the header's inputs, the first result line
+/// its answer, the scope line its scope clause. Every other line stays, in
+/// order. An answer with no title (a selector failure) is `no answer`.
+fn query_with_header(text: &str, deps: usize, exit: u8, hc: &QueryHeaderCx) -> String {
+    use crate::engine::result_header::{Analysis, Header, dependencies_clause};
+    let tool = if hc.effects {
+        "query effects"
+    } else {
+        "query touches"
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    let title = lines
+        .first()
+        .and_then(|l| l.strip_prefix("--- "))
+        .and_then(|l| l.strip_suffix(" ---"));
+    let mut h = Header::new(tool, String::new(), hc.single_app);
+    let mut body: Vec<String> = Vec::new();
+    let mut scope: Vec<String> = Vec::new();
+    match title {
+        None => {
+            h.inputs = hc.asked.clone();
+            h.answer = format!(
+                "no answer — {}",
+                lines.first().map_or("", |l| l.trim()).trim_end_matches(':')
+            );
+            h.analysis = Analysis::NotAnalyzed(if exit == 0 {
+                "nothing to analyze".to_string()
+            } else {
+                "the input did not resolve".to_string()
+            });
+            body.extend(lines.iter().skip(1).map(|l| (*l).to_string()));
+        }
+        Some(t) => {
+            let t = t
+                .strip_prefix("effects of ")
+                .or_else(|| t.strip_prefix("touches "))
+                .unwrap_or(t);
+            h.inputs = t.to_string();
+            let result_labels: &[&str] = if hc.effects {
+                &["  summary: "]
+            } else {
+                &[
+                    "  down: ",
+                    "  up: ",
+                    "  transitively: ",
+                    "  consumers: ",
+                    "  not answerable: ",
+                ]
+            };
+            let mut answered = false;
+            for (i, l) in lines.iter().enumerate().skip(1) {
+                if let Some(s) = l.strip_prefix("  scope: ") {
+                    scope.push(s.to_string());
+                    continue;
+                }
+                if !answered && let Some(label) = result_labels.iter().find(|p| l.starts_with(**p))
+                {
+                    answered = true;
+                    let rest = &l[label.len()..];
+                    h.answer = if hc.effects {
+                        rest.to_string()
+                    } else {
+                        format!("{}: {rest}", label.trim().trim_end_matches(':'))
+                    };
+                    // A result line with detail lines under it stays.
+                    let next_deeper = lines
+                        .get(i + 1)
+                        .is_some_and(|n| n.starts_with("    ") && !n.starts_with("    ["));
+                    if !next_deeper {
+                        continue;
+                    }
+                }
+                body.push((*l).to_string());
+            }
+            // An `unknown` verdict (`down: unknown — …`), not a count of
+            // unknown callers.
+            if h.answer.split(" — ").next().is_some_and(|a| {
+                a.ends_with(": unknown") || a.starts_with("unknown") || a.contains(": unknown (")
+            }) {
+                h.analysis =
+                    Analysis::Partial(vec!["the answer names what it could not resolve".into()]);
+            }
+        }
+    }
+    scope.push(dependencies_clause(deps));
+    h.scope = scope.join("; ");
+    let s = hc.surface;
+    if title.is_some() && !hc.all {
+        h.more.push(if hc.effects {
+            format!("{} lists every operation", Input::All.on(s))
+        } else {
+            format!("{} lists every witness, no fold", Input::All.on(s))
+        });
+    }
+    if title.is_some() && hc.up && !hc.callers && !hc.all {
+        h.more
+            .push(format!("{} names every caller", Input::Callers.on(s)));
+    }
+    h.more
+        .push(format!("{} for every row", Input::FormatJson.on(s)));
+    while body.last().is_some_and(|l| l.is_empty()) {
+        body.pop();
+    }
+    let mut out = h.human();
+    for l in body {
+        out.push_str(&l);
+        out.push('\n');
+    }
+    out
+}
+
+/// [`query_with_header`], then (W2-7, 2g) `--show-source` excerpts
 /// while the locations still name their app by guid, then readable
 /// dependency locations (the JSON keeps the guid).
 fn finish_human(
     mut r: QueryRunResult,
     deps: &LoadedDependencies,
     sources: Option<&crate::engine::source_excerpt::SourceTexts>,
+    hc: &QueryHeaderCx,
 ) -> QueryRunResult {
-    if !r.human_text.contains("\n  scope: ") {
-        r.human_text = deps.prefix_human(r.human_text);
-    }
+    r.human_text = query_with_header(&r.human_text, deps.apps.len(), r.exit_code, hc);
     if let Some(s) = sources {
         r.human_text = crate::engine::source_excerpt::with_excerpts(&r.human_text, s);
     }
     r.human_text = deps.readable_locations(r.human_text);
     r
-}
-
-/// The scope line's dependencies clause (§4.5 Q6): a count, every app with
-/// `--all`; nothing when none was loaded.
-fn dependencies_clause(deps: &LoadedDependencies, all: bool) -> String {
-    match (deps.apps.len(), all) {
-        (0, _) => String::new(),
-        (n, false) => format!(
-            "; dependencies: {} (--all lists them)",
-            plural(n, "app", "apps")
-        ),
-        (_, true) => format!("; {}", deps.human_line().unwrap_or_default()),
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1856,6 +2087,8 @@ fn render_query_touches_body(
     deterministic: bool,
     cone: Option<&crate::engine::l5::digest_cli::DigestEntryFull>,
     through: UpThrough<'_>,
+    surface: Surface,
+    single_app: bool,
 ) -> QueryRunResult {
     let deps = &substrate.dependencies;
     if from.is_none() && direction == Direction::Down {
@@ -2051,8 +2284,9 @@ fn render_query_touches_body(
             }
             if shown_sites < ws_sites.len() {
                 human.push_str(&format!(
-                    "    … +{} — all: true lists them, and every routine\n",
-                    plural(ws_sites.len() - shown_sites, "site", "sites")
+                    "    … +{} — {} lists them, and every routine\n",
+                    plural(ws_sites.len() - shown_sites, "site", "sites"),
+                    Input::All.on(surface)
                 ));
             }
             let shown_n = if all { routines.len() } else { 0 };
@@ -2076,8 +2310,9 @@ fn render_query_touches_body(
             }
             if shown_n < routines.len() {
                 human.push_str(&format!(
-                    "  the {} that touch it transitively: --all lists them\n",
-                    plural(routines.len(), "routine", "routines")
+                    "  the {} that touch it transitively: {} lists them\n",
+                    plural(routines.len(), "routine", "routines"),
+                    Input::All.on(surface)
                 ));
             }
         }
@@ -2120,16 +2355,11 @@ fn render_query_touches_body(
 
             human.push_str(&format!("--- {} vs {table_label} ---\n", rr.header));
             let beyond = cone.map(|e| Beyond::new(e, substrate.resolved(), deps));
-            human.push_str(&format!(
-                "{}{}\n",
-                if beyond.is_some() {
-                    TOUCHES_SCOPE_LINE_CONE
-                } else {
-                    TOUCHES_SCOPE_LINE
-                }
-                .trim_end(),
-                dependencies_clause(deps, all)
-            ));
+            human.push_str(if beyond.is_some() {
+                TOUCHES_SCOPE_LINE_CONE
+            } else {
+                TOUCHES_SCOPE_LINE
+            });
 
             let cx = TouchCx {
                 query: &query,
@@ -2137,6 +2367,9 @@ fn render_query_touches_body(
                 ops: &ops,
                 hops: FirstHops::new(&query),
                 resolved: substrate.resolved(),
+                surface,
+                single_app,
+                follow: (from.unwrap_or(""), table_selector),
             };
             let touches_down = query.touches_table(rix, &table.id);
             if direction.wants_down() {
@@ -2184,16 +2417,12 @@ fn render_query_touches_body(
 }
 
 /// The scope line every routine-scoped touches answer prints after its title.
-const TOUCHES_SCOPE_LINE: &str = "  scope: per operation, one routine into dependency code; \
-     temporary-record touches persist nothing but use the table's schema and run its triggers; \
-     lines are 1-based\n";
+const TOUCHES_SCOPE_LINE: &str = "  scope: per operation, one routine into dependency code\n";
 
 /// [`TOUCHES_SCOPE_LINE`] when the capability cone was read (wave 3a): the
 /// writes beyond each dependency entry point follow the whole cone.
 const TOUCHES_SCOPE_LINE_CONE: &str = "  scope: dependency code: full cone for physical writes, \
-     grouped per dependency routine entered; per-operation detail one routine deep; \
-     temporary-record touches persist nothing but use the table's schema and run its triggers; \
-     lines are 1-based\n";
+     grouped per dependency routine entered; per-operation detail one routine deep\n";
 
 /// The default human list cap for touches (spec §3.8 rule 4's shape: the cap,
 /// or every item when there are at most a quarter more). `--all` lists all.
@@ -2282,6 +2511,18 @@ struct TouchCx<'q, 'a> {
     /// The model the operations belong to (whose routines are the
     /// workspace's, for the absence reasons).
     resolved: &'q Model,
+    /// `--surface` and `--single-app` (output validation §6.1).
+    surface: Surface,
+    single_app: bool,
+    /// The routine (`--from`, as given) and the table name, for a complete
+    /// follow-up call.
+    follow: (&'q str, &'q str),
+}
+
+impl TouchCx<'_, '_> {
+    fn fcx(&self) -> crate::engine::follow_up::Cx {
+        crate::engine::follow_up::Cx::new(self.surface, self.single_app)
+    }
 }
 
 impl<'a> TouchCx<'_, 'a> {
@@ -2412,6 +2653,7 @@ fn absence_reasons(
     not_resolved: usize,
     not_resolved_ref: usize,
     dependency_ops: usize,
+    surface: Surface,
 ) -> Vec<(Value, String)> {
     let mut out = Vec::new();
     if not_resolved > 0 {
@@ -2424,8 +2666,9 @@ fn absence_reasons(
             json!({"kind": "table-not-resolved", "operations": not_resolved,
                    "recordRef": not_resolved_ref}),
             format!(
-                "{} on a table not resolved may be this table{refs} — --table unknown lists them",
-                plural(not_resolved, "operation", "operations")
+                "{} on a table not resolved may be this table{refs} — {} lists them",
+                plural(not_resolved, "operation", "operations"),
+                Input::TableUnknown.on(surface)
             ),
         ));
     }
@@ -2465,8 +2708,9 @@ fn absence_reasons(
                 out.push((
                     json!({"kind": "calls-not-resolved", "calls": unresolved}),
                     format!(
-                        "{} in the cone not resolved may reach it — alsem explain lists them",
-                        plural(unresolved, "call", "calls")
+                        "{} in the cone not resolved may reach it — {} lists them",
+                        plural(unresolved, "call", "calls"),
+                        crate::engine::follow_up::Tool::Explain.on(surface)
                     ),
                 ));
             }
@@ -2560,7 +2804,7 @@ fn render_touches_down(
         } else {
             (not_resolved, not_resolved_ref)
         };
-        absence_reasons(cone, nr, nr_ref, dependency_ops)
+        absence_reasons(cone, nr, nr_ref, dependency_ops, cx.surface)
     };
     let mut down = json!({
         "answerable": true,
@@ -2621,8 +2865,9 @@ fn render_touches_down(
         }
         if shown_n < listed.len() {
             human.push_str(&format!(
-                "    … +{} on persistent or possibly persistent records — --all lists them\n",
-                plural(listed.len() - shown_n, "touch", "touches")
+                "    … +{} on persistent or possibly persistent records — {} lists them\n",
+                plural(listed.len() - shown_n, "touch", "touches"),
+                Input::All.on(cx.surface)
             ));
         }
         if counts.temporary > 0 {
@@ -2652,7 +2897,11 @@ fn render_touches_down(
                 plural(counts.temporary, "touch", "touches"),
                 plural(ranked.len(), "routine", "routines"),
                 names.join(", "),
-                if all { "" } else { " — --all lists them" }
+                if all {
+                    String::new()
+                } else {
+                    format!(" — {} lists them", Input::All.on(cx.surface))
+                }
             ));
         }
     }
@@ -2664,8 +2913,9 @@ fn render_touches_down(
             String::new()
         };
         human.push_str(&format!(
-            "  table not resolved: {} in this cone{refs} (they may be this table) — --table unknown lists them\n",
-            plural(not_resolved, "operation", "operations")
+            "  table not resolved: {} in this cone{refs} (they may be this table) — {} lists them\n",
+            plural(not_resolved, "operation", "operations"),
+            Input::TableUnknown.on(cx.surface)
         ));
     }
     if beyond_n > 0 {
@@ -2687,22 +2937,31 @@ fn render_touches_down(
         let mut text = points[..shown_n].join("; ");
         if shown_n < points.len() {
             text.push_str(&format!(
-                "; … +{} — --all lists them",
+                "; … +{} — {} lists them",
                 plural(
                     points.len() - shown_n,
                     "dependency routine entered",
                     "dependency routines entered"
-                )
+                ),
+                Input::All.on(cx.surface)
             ));
         }
+        // §6.1: the complete prove call for the path.
+        let prove = crate::engine::follow_up::FollowUp::prove(
+            cx.fcx(),
+            cx.follow.0,
+            &format!("writes-table:{}", cx.follow.1),
+            "gives the path",
+        );
         human.push_str(&format!(
             "  beyond dependency calls (the whole cone, literal arguments followed): may write it \
-             beyond {}: {text} — alsem prove <routine> writes-table:<table> gives the path\n",
+             beyond {}: {text} — {} gives the path\n",
             plural(
                 beyond_n,
                 "dependency routine entered",
                 "dependency routines entered"
-            )
+            ),
+            prove.text(cx.surface)
         ));
     }
 }
@@ -2718,7 +2977,7 @@ fn render_touches_down(
 const UP_RELATION: &str = "code-calls";
 const UP_RELATION_LINE: &str = "  callers: by code calls of workspace code (calls, object runs and \
      the triggers a run runs, record triggers, event dispatch); not what a user starts on a page a \
-     caller opens (alsem tests and impact follow it); paths through dependency code are listed \
+     caller opens (the tests and impact tools follow it); paths through dependency code are listed \
      apart, before the caller list\n";
 
 /// `up`: the solve graph's callers ([`render_touches_up_solve`]), then the
@@ -2951,7 +3210,7 @@ fn render_through_dependency(
         }
         line.push_str(&limited);
         if !list_callers && !all {
-            line.push_str(" — --callers lists them");
+            line.push_str(&format!(" — {} lists them", Input::Callers.on(cx.surface)));
         }
         human.push_str(&line);
         human.push('\n');
@@ -2992,9 +3251,10 @@ fn render_through_dependency(
         }
         if !long.is_empty() {
             human.push_str(&format!(
-                "    … +{} with paths over {} hops — --all lists them\n",
+                "    … +{} with paths over {} hops — {} lists them\n",
                 plural(long.len(), "caller", "callers"),
-                dep_callers::HUMAN_HOP_FOLD
+                dep_callers::HUMAN_HOP_FOLD,
+                Input::All.on(cx.surface)
             ));
         }
     } else {
@@ -3004,8 +3264,9 @@ fn render_through_dependency(
         }
         if shown < code.len() {
             human.push_str(&format!(
-                "    … +{} — --callers lists them\n",
-                plural(code.len() - shown, "caller", "callers")
+                "    … +{} — {} lists them\n",
+                plural(code.len() - shown, "caller", "callers"),
+                Input::Callers.on(cx.surface)
             ));
         }
     }
@@ -3179,10 +3440,11 @@ fn render_touches_up_solve(
         // Step 1b (astra Task 4): the callers are this touch's consumers
         // (they inherit it), not a dismissed non-finding; `--callers` names
         // them without the witness product `--all` builds.
+        let (all_in, callers_in) = (Input::All.on(cx.surface), Input::Callers.on(cx.surface));
         let more = match (list_callers || all, all) {
-            (true, true) => "",
-            (true, false) => " — --all lists their witnesses",
-            (false, _) => " — --callers lists them, --all their witnesses",
+            (true, true) => String::new(),
+            (true, false) => format!(" — {all_in} lists their witnesses"),
+            (false, _) => format!(" — {callers_in} lists them, {all_in} their witnesses"),
         };
         human.push_str(&format!(
             "  up: {}{who} inherit{} this touch through this routine: {} it, {}, {} unknown{anomalies}{more}\n",
@@ -3234,8 +3496,9 @@ fn render_touches_up_solve(
         }
         if shown_n < touchers.len() {
             human.push_str(&format!(
-                "    … +{} — --callers lists them\n",
-                plural(touchers.len() - shown_n, "caller", "callers")
+                "    … +{} — {} lists them\n",
+                plural(touchers.len() - shown_n, "caller", "callers"),
+                Input::Callers.on(cx.surface)
             ));
         }
     }
@@ -3291,6 +3554,8 @@ pub fn render_query_effects(
             alsem_ver,
             deterministic,
             None,
+            Surface::Cli,
+            !substrate.dependencies.cross_app,
         ),
         &substrate.dependencies,
     )
@@ -3380,6 +3645,7 @@ impl<'q, 'a> FirstHops<'q, 'a> {
 }
 
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 fn render_query_effects_body(
     substrate: &QuerySubstrate,
     routine_selector: &str,
@@ -3387,7 +3653,15 @@ fn render_query_effects_body(
     alsem_ver: &str,
     deterministic: bool,
     cone: Option<&crate::engine::l5::digest_cli::DigestEntryFull>,
+    surface: Surface,
+    single_app: bool,
 ) -> QueryRunResult {
+    // §6.1: a fold note in the surface's words.
+    let all_note = if all {
+        String::new()
+    } else {
+        format!(" — {} lists them", Input::All.on(surface))
+    };
     let deps = &substrate.dependencies;
     let beyond = cone.map(|e| Beyond::new(e, substrate.resolved(), deps));
     let join = RoutineJoin::build(substrate.resolved());
@@ -3940,30 +4214,21 @@ fn render_query_effects_body(
     if beyond.is_some() {
         // Wave 3a: the writes beyond each entry point are the cone's, read
         // as explain reads them; the per-operation rows keep L4's depth.
+        // §5.2 (F61): the depth and inventory of each operation family; the
+        // header's scope clause (§5.3: the static prose is in the tool
+        // description).
         human.push_str(
-            "  coverage: per operation, one routine into dependency code; operations and routes \
-             the root's literal arguments rule out are listed and marked (alsem explain and \
-             prove drop them); writes beyond dependency calls follow the whole cone with \
-             literal arguments, as alsem explain does; lines are 1-based\n",
-        );
-        // §5.2 (F61): the depth and inventory of each operation family.
-        human.push_str(&format!(
             "  scope: reads, locks, validate: one dependency routine deep, not exhaustive beyond; \
-             writes beyond dependency calls: whole cone, grouped per dependency routine entered; \
-             writes to temporary records do not directly persist those records{}\n",
-            dependencies_clause(deps, all)
-        ));
+             writes beyond dependency calls: whole cone with literal arguments, grouped per \
+             dependency routine entered; operations and routes the literal arguments rule out \
+             are listed and marked (explain and prove drop them)\n",
+        );
     } else {
         human.push_str(
-            "  coverage: one routine into dependency code; operations ruled out by literal \
-             arguments are listed (alsem explain and prove drop them); lines are 1-based\n",
-        );
-        human.push_str(&format!(
             "  scope: reads, locks, validate, writes: one dependency routine deep, not exhaustive \
-             beyond (alsem explain and prove follow the whole cone); writes to temporary records \
-             do not directly persist those records{}\n",
-            dependencies_clause(deps, all)
-        ));
+             beyond (explain and prove follow the whole cone); operations ruled out by literal \
+             arguments are listed (explain and prove drop them)\n",
+        );
     }
     let ops_text = |m: &BTreeMap<&str, usize>| -> String {
         let mut v: Vec<(&&str, &usize)> = m.iter().collect();
@@ -4058,8 +4323,9 @@ fn render_query_effects_body(
         }
         if n < list.len() {
             human.push_str(&format!(
-                "    … +{} — --all lists them\n",
-                plural(list.len() - n, "table", "tables")
+                "    … +{} — {} lists them\n",
+                plural(list.len() - n, "table", "tables"),
+                Input::All.on(surface)
             ));
         }
     }
@@ -4178,7 +4444,7 @@ fn render_query_effects_body(
                 b.rows.len(),
                 plural(b.tables.len(), "table", "tables"),
                 ops_text(&b.ops),
-                if all { "" } else { " — --all lists them" }
+                all_note
             ));
         }
     }
@@ -4188,7 +4454,7 @@ fn render_query_effects_body(
             plural(b.rows.len(), "operation", "operations"),
             plural(b.tables.len(), "table", "tables"),
             plural(b.owners.len(), "routine", "routines"),
-            if all { "" } else { " — --all lists them" }
+            all_note
         ));
     }
     // Q4: "RecordRef" only where the receiver is one; every other operation
@@ -4203,13 +4469,36 @@ fn render_query_effects_body(
                 plural(b.rows.len(), "operation", "operations"),
                 plural(b.owners.len(), "routine", "routines"),
                 ops_text(&b.ops),
-                if all { "" } else { " — --all lists them" }
+                if all {
+                    String::new()
+                } else {
+                    format!(" — {} lists them", Input::All.on(surface))
+                }
             ));
         }
     }
-    human.push_str(
-        "  next: alsem prove <routine> writes-table:<table> follows the whole cone for one table\n",
-    );
+    // §6.2: the complete prove call for the first table it writes; none when
+    // it writes no table (the summary already says so).
+    if let Some(table) = ["writes", "callerDependent"].iter().find_map(|k| {
+        buckets
+            .get(k)
+            .and_then(|b| b.tables.iter().find(|t| !is_unknown_table(t)))
+    }) {
+        // The resolved routine's own selector (V3 §2.1), else the input.
+        let selector = rr
+            .identity
+            .iter()
+            .find(|(k, _)| k.as_str() == "selector")
+            .and_then(|(_, v)| v.as_str())
+            .unwrap_or(routine_selector);
+        let f = crate::engine::follow_up::FollowUp::prove(
+            crate::engine::follow_up::Cx::new(surface, single_app),
+            selector,
+            &format!("writes-table:{}", table_name(table)),
+            "follows the whole cone for one table, with its witness",
+        );
+        human.push_str(&format!("  next: {} — {}\n", f.text(surface), f.why));
+    }
     if all {
         human.push_str(&format!("  every operation ({}):\n", effects.len()));
     }
@@ -4289,6 +4578,8 @@ struct FieldAsk<'a> {
     from: Option<&'a str>,
     direction: Direction,
     all: bool,
+    /// `--surface` (output validation §6.1).
+    surface: Surface,
 }
 
 /// The human answer lists this many objects, and this many sites per object,
@@ -5053,9 +5344,9 @@ fn render_field_touches(
                 " — a numeric reference does not break on a rename (it may on a renumbering)"
             }
         ));
-        for (_, text) in reasons.iter().skip(1) {
-            human.push_str(&format!("  note: {text}\n"));
-        }
+        // §5.3 (F85): no `note:` that repeats the `searched:` clause (the
+        // not-loaded dependency code and the dynamic field numbers are its
+        // `not searched:` part); the JSON keeps every reason.
     }
     human.push_str(&format!(
         "  filters: {}\n",
@@ -5130,15 +5421,17 @@ fn render_field_touches(
         }
         if shown_sites < ixs.len() {
             human.push_str(&format!(
-                "    … +{} — --all lists them\n",
-                plural(ixs.len() - shown_sites, "site", "sites")
+                "    … +{} — {} lists them\n",
+                plural(ixs.len() - shown_sites, "site", "sites"),
+                Input::All.on(ask.surface)
             ));
         }
     }
     if shown_objects < by_object.len() {
         human.push_str(&format!(
-            "  … +{} — --all lists every site\n",
-            plural(by_object.len() - shown_objects, "object", "objects")
+            "  … +{} — {} lists every site\n",
+            plural(by_object.len() - shown_objects, "object", "objects"),
+            Input::All.on(ask.surface)
         ));
     }
     let summary = touches_summary(&payload);

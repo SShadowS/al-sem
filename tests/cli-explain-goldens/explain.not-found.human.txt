@@ -1,3 +1,7 @@
+explain NoSuchRoutine   [cross-app]
+answer: no answer — explain: no routine in the loaded program is named 'NoSuchRoutine'
+not analyzed (no routine resolved) · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependencies: 0 apps
+more: --format json for every row
 explain: no routine in the loaded program is named 'NoSuchRoutine'
   nearest names: no close match
   selector forms: Object::Routine, Object::Routine(<parameter types>), Object."Field"::Trigger, Object.action(Name)::OnAction, or a stable id

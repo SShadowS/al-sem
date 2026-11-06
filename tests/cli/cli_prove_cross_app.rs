@@ -521,6 +521,61 @@ pub(crate) fn root_ids(ws: &Path) -> Vec<String> {
     ids
 }
 
+/// `text` with the count of the scope clause's `dependencies: N apps` left
+/// out: cross-app loads the symbol apps under `.alpackages` (no dependency
+/// with code), single-app none; the answer is the same.
+pub(crate) fn without_dependency_count(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(i) = rest.find("dependencies: ") {
+        let after = &rest[i + "dependencies: ".len()..];
+        let digits = after.chars().take_while(char::is_ascii_digit).count();
+        let tail = &after[digits..];
+        let unit = if tail.starts_with(" apps") {
+            " apps".len()
+        } else if tail.starts_with(" app") {
+            " app".len()
+        } else {
+            out.push_str(&rest[..i + "dependencies: ".len()]);
+            rest = after;
+            continue;
+        };
+        out.push_str(&rest[..i]);
+        out.push_str("dependencies: <n>");
+        rest = &tail[unit..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// A prove document without the universe it states: `universe` values
+/// read `cross-app`, no follow-up carries `singleApp`, and the scope clause's
+/// dependency count is left out.
+fn universe_free_json(text: &str) -> serde_json::Value {
+    fn walk(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Object(m) => {
+                if m.get("universe").and_then(|u| u.as_str()) == Some("single-app") {
+                    m.insert("universe".into(), "cross-app".into());
+                }
+                if let Some(s) = m.get("scope").and_then(|s| s.as_str()) {
+                    let s = without_dependency_count(s);
+                    m.insert("scope".into(), s.into());
+                }
+                if let Some(a) = m.get_mut("arguments").and_then(|a| a.as_object_mut()) {
+                    a.remove("singleApp");
+                }
+                m.values_mut().for_each(walk);
+            }
+            serde_json::Value::Array(a) => a.iter_mut().for_each(walk),
+            _ => {}
+        }
+    }
+    let mut v: serde_json::Value = serde_json::from_str(text).expect("a prove document");
+    walk(&mut v);
+    v
+}
+
 /// T7 (prove arm, E9), spec §5: over every r0 dir with an `app.json` and no
 /// dependency, for every root (`may-commit`), prove's cross-app output
 /// equals its `--single-app` output byte for byte (json and human, exit
@@ -549,6 +604,11 @@ fn no_dependency_parity_prove() {
                         &crate::fingerprint_needs(),
                     );
                     for root in root_ids(dir) {
+                        // Output validation V4: the universe the answer
+                        // states (`result.scope.universe`, the header's
+                        // `[single-app]`) and the scope input its follow-ups
+                        // carry (`singleApp: true`, `--single-app`) are the
+                        // one difference.
                         let run = |single: bool| {
                             al_sem::engine::l5::prove::run_prove_pipeline(
                                 &inputs,
@@ -558,7 +618,17 @@ fn no_dependency_parity_prove() {
                                 true,
                                 single,
                             )
-                            .map(|r| (r.json_text, r.human_text, r.exit_code))
+                            .map(|r| {
+                                (
+                                    universe_free_json(&r.json_text),
+                                    without_dependency_count(
+                                        &r.human_text
+                                            .replace("   [single-app]\n", "   [cross-app]\n")
+                                            .replace(" --single-app", ""),
+                                    ),
+                                    r.exit_code,
+                                )
+                            })
                         };
                         if run(false) != run(true) {
                             failures
@@ -631,7 +701,10 @@ fn single_app_flag_reaches_prove() {
         // one routine display), then output validation V2 (schema 2.8.0, no
         // JSON field this answer carries; the human `unknown` names its
         // blockers in the §8.1 words, with its plain reading and what it does
-        // not establish, and `analysis partial` replaces `coverage:`).
+        // not establish, and `analysis partial` replaces `coverage:`), then
+        // output validation V4 (schema 2.10.0: `result.scope` and
+        // `result.followUps`, additive; the human answer's four header lines,
+        // the top callees not resolved as their own line).
         let path = t8_golden(file);
         let want = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
         assert_eq!(got, want, "{format}: --single-app != the base's default");

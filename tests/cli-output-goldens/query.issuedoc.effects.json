@@ -229,6 +229,10 @@
     "lineBase": 1,
     "result": {
       "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
         "families": {
           "beyondDependencyCalls": {
             "blockers": {
@@ -285,7 +289,11 @@
               "dependency code deeper than one routine is not inventoried for writes"
             ]
           }
-        }
+        },
+        "limits": [],
+        "reasons": [],
+        "scope": "reads, locks, validate: one dependency routine deep, not exhaustive beyond; writes beyond dependency calls: whole cone with literal arguments; dependencies: 1 app",
+        "universe": "cross-app"
       }
     },
     "routine": {
@@ -548,5 +556,5 @@
       }
     }
   },
-  "schemaVersion": "3.8.0"
+  "schemaVersion": "3.9.0"
 }

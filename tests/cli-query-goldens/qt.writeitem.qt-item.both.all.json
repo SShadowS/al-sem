@@ -75,6 +75,18 @@
       "selector": "WriteItem"
     },
     "lineBase": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "per operation, one routine into dependency code; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "table": {
       "id": "07070707-0000-4000-8000-000000000071/table/50700",
       "isUnknownBucket": false,
@@ -675,5 +687,5 @@
       ]
     }
   },
-  "schemaVersion": "3.8.0"
+  "schemaVersion": "3.9.0"
 }

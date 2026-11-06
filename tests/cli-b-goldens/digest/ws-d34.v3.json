@@ -677,6 +677,18 @@
     ],
     "lineBase": 1,
     "pathCap": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "dependency code followed through every resolved call with literal arguments; no lock facts; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "routines": {
       "r:052a7c9c0b57": {
         "display": "Codeunit \"D34 Demo\"::DoWork",
@@ -729,5 +741,5 @@
     },
     "workspaceFingerprint": "18bd295463f855581d92f3e2f4f696aec9575f2eee33c1469df6c45ca2d35d4e"
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.2.0"
 }

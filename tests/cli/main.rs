@@ -247,6 +247,7 @@ mod mcp_server;
 mod mcp_tests;
 mod output_cdo;
 mod output_fixture;
+mod output_follow_ups;
 mod output_invariants;
 mod output_invariants_w3;
 mod output_vocabulary;

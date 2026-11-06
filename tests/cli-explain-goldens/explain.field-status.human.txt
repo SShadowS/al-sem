@@ -1,3 +1,7 @@
+explain field Explain Order."Status"   [cross-app]
+answer: confirmed writers: 3
+analysis partial (not searched: CalcFormula, TableRelation, page/report/query/XMLport columns (declaration-level); dependency code (none loaded)) · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code followed through every resolved call with literal arguments; no lock facts; dependencies: 0 apps
+more: --detail lists every list complete; --format json for every row
 field: "Explain Order".Status (field 2, caption "Order Status")
   confirmed writers: 3
     Codeunit "Explain Post"::PostOrder — Validate (also runs the field's OnValidate) at ws:src/post.al:17
@@ -12,16 +16,12 @@ field: "Explain Order".Status (field 2, caption "Order Status")
   searched: 10 workspace routine bodies, 0 dependency routine bodies; not searched: CalcFormula, TableRelation, page/report/query/XMLport columns (declaration-level); dependency code (none loaded)
   reads, filters and validations: alsem_query_touches with table and field
 
-Codeunit "Explain Post"::PostOrder  ws:src/post.al:5
+Codeunit "Explain Post"::PostOrder  defined at ws:src/post.al:5
   summary — writes: may modify persistent Explain Order records (Modify at :18) when the record its caller passes (parameter 1) is not temporary; otherwise it changes a temporary record; no other write (every candidate decided)
-    transaction, UI and errors: commits: no (every candidate decided); UI at 1 place; errors at 3 places
-    other effects: events: 1 (1 raised in workspace code)
-    callers and tests: callers: 1, reached from 1 page action; tests: 1
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  transaction, UI and errors: commits: no (every candidate decided); UI at 1 place; errors at 3 places
+  other effects: events: 1 (1 raised in workspace code)
+  callers and tests: callers: 1, reached from 1 page action; tests: 1
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   calls: this object: OnBeforePostOrder (:13)
   doc: Posts a released order. / It marks the order posted.
   rejects when Order.Status <> Order.Status::Released: "Order %1 is not released."  [Error ws:src/post.al:11]
@@ -29,62 +29,42 @@ Codeunit "Explain Post"::PostOrder  ws:src/post.al:5
   inherited rules: none
   callers: 1 — Codeunit "Explain Tests"::PostUnreleasedFails; reached from 1 page action
     reached from page action Page "Explain Order Card".action(Post "P&ost") at ws:src/card.al:19
-  commits: no (every candidate decided)
-  caller-dependent writes (1 table): written only if the caller passes a record that is not temporary; alsem prove names the caller
+  caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
     Explain Order: Modify — depends on the caller's record argument at ws:src/post.al:18
   events: 1 raised in workspace code, by publisher: Codeunit Explain Post 1; 0 more only beyond dependency calls
   extension point OnBeforePostOrder: 1 subscriber(s), IsHandled
   UI at 1 place: UI_MESSAGE at ws:src/post.al:19 (guarded-by-IsHandled)
   errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:12 (unconditional on success); ERROR_IMPLICIT at ws:src/post.al:18 (guarded-by-IsHandled); ERROR_THROW at ws:src/post.al:11 (error-path)
   test Codeunit "Explain Tests"::PostUnreleasedFails (3 own assert(s))
-  next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
+  next: alsem explain --callers-context --routine 'Codeunit "Explain Post"::PostOrder' — its callers' pending writes, intercepted errors and non-interactive entries
 
-Codeunit "Explain Post"::Archive  ws:src/post.al:23
+Codeunit "Explain Post"::Archive  defined at ws:src/post.al:23
   summary — writes: may modify persistent Explain Order records (Modify at :26) when the record its caller passes (parameter 1) is not temporary; otherwise it changes a temporary record; no other write (every candidate decided)
-    transaction, UI and errors: commits: yes (1 site); errors at 1 place
-    other effects: events: 0 (0 raised in workspace code)
-    callers and tests: callers: none; tests: none of 1 loaded
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  transaction, UI and errors: commits: yes (1 site); errors at 1 place
+  other effects: events: 0 (0 raised in workspace code)
+  callers and tests: callers: none; tests: none of 1 loaded
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   calls: none (no call to a routine; builtins aside)
   doc: Archives without any check.
-  rules: none of its own; inherited: none
-  callers: none
   commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/post.al:27 (unconditional on success)
-  caller-dependent writes (1 table): written only if the caller passes a record that is not temporary; alsem prove names the caller
+  caller-dependent writes (1 table): written only if the caller passes a record that is not temporary
     Explain Order: Modify — depends on the caller's record argument at ws:src/post.al:26
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
-  extension points: none (the routine publishes no event itself)
   errors at 1 place: ERROR_IMPLICIT at ws:src/post.al:26 (unconditional on success)
   tests: 1 [Test] procedure loaded; none reaches it (not a reason to skip tests)
-  next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 
-Codeunit "Explain Post"::ReopenAll  ws:src/post.al:31
+Codeunit "Explain Post"::ReopenAll  defined at ws:src/post.al:31
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies): Explain Order (ModifyAll at :35)
-    transaction, UI and errors: commits: no (every candidate decided); UI and errors: none observed
-    other effects: events: 0 (0 raised in workspace code)
-    callers and tests: callers: none; tests: none of 1 loaded
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  transaction, UI and errors: commits: no (every candidate decided); UI and errors: none observed
+  other effects: events: 0 (0 raised in workspace code)
+  callers and tests: callers: none; tests: none of 1 loaded
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   calls: none (no call to a routine; builtins aside)
   doc: A ModifyAll writer of Status: listed by --field since step 6.
-  rules: none of its own; inherited: none
-  callers: none
-  commits: no (every candidate decided)
   writes in workspace code (1 table; operation counts are the cone's retained representative operations, at least that many):
     Explain Order: ModifyAll 1 — known persistent
       ModifyAll at ws:src/post.al:35
       path: ReopenAll (in the routine itself)
       ModifyAll sets: Status (in Codeunit "Explain Post"::ReopenAll)
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
-  extension points: none (the routine publishes no event itself)
   tests: 1 [Test] procedure loaded; none reaches it (not a reason to skip tests)
-  next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

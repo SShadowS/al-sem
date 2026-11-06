@@ -841,6 +841,18 @@
     ],
     "lineBase": 1,
     "pathCap": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "dependency code followed through every resolved call with literal arguments; no lock facts; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "routines": {
       "r:53e646d7d9ee": {
         "display": "Codeunit \"Install Handler\"::OnInstallAppPerCompany",
@@ -879,5 +891,5 @@
     },
     "workspaceFingerprint": "369c4515c708fe7831c9af975d8a55ce0e8d1baf6090a0e083e3d6d8e7f602e8"
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.2.0"
 }

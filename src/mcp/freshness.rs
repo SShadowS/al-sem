@@ -472,8 +472,17 @@ pub fn no_engine_headline(workspace: &str, universe: &str) -> String {
     } else {
         ""
     };
+    // Output validation §6.1 (F37): the call that builds it, not "any
+    // command" (a second status call builds nothing).
+    let single = if universe == "single-app" {
+        ", \"singleApp\": true"
+    } else {
+        ""
+    };
     format!(
-        "no engine is running for {workspace} ({universe}), so nothing was checked. The next command builds it{estimate}."
+        "no engine is running for {workspace} ({universe}), so nothing was checked. An analysis \
+         call builds it{estimate}, for instance alsem_explain {{\"routines\": [\"<routine>\"]{single}}}; \
+         a status call builds nothing."
     )
 }
 
@@ -595,7 +604,9 @@ pub fn status_body(
     if headlines.is_empty() {
         let line = match asked {
             Some((ws, universe)) => no_engine_headline(ws, universe),
-            None => "no engine is running, so nothing was checked. The next command builds one."
+            None => "no engine is running, so nothing was checked. An analysis call (for \
+                     instance alsem_explain {\"routines\": [\"<routine>\"]}) builds one; a status \
+                     call builds nothing."
                 .to_string(),
         };
         body["noEngine"] = json!({
@@ -608,6 +619,93 @@ pub fn status_body(
     }
     body["headline"] = json!(headlines.join("\n"));
     body
+}
+
+/// The status answer's text block (output validation §5.4, F33): one copy,
+/// about 500 bytes. Per engine its headline, then `check` (fresh, strength,
+/// complete, the checked revision and when, the inputs by category, the
+/// residual) and `refresh`; with no engine the headline and `not checked`.
+/// The full document (operator data under `details`) is the
+/// `structuredContent`.
+#[must_use]
+pub fn status_text(body: &Value) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for e in body["engines"].as_array().into_iter().flatten() {
+        out.push(e["headline"].as_str().unwrap_or("").to_string());
+        let c = &e["check"];
+        if c.is_object() {
+            let changes = c["changeCount"].as_u64().unwrap_or(0);
+            let fresh = if c["fresh"] == json!(true) {
+                "fresh".to_string()
+            } else if changes > 0 {
+                format!(
+                    "stale ({} changed: {})",
+                    changes,
+                    c["summary"].as_str().unwrap_or("")
+                )
+            } else {
+                "not established".to_string()
+            };
+            let strength = match c["strength"].as_str() {
+                Some("hashed") => "every input hashed",
+                _ => "size and modification time trusted",
+            };
+            let complete = if c["complete"] == json!(true) {
+                "freshness check complete".to_string()
+            } else {
+                format!(
+                    "freshness check incomplete ({})",
+                    c["incompleteReasons"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )
+            };
+            let when = c["finishedAtUnixMs"]
+                .as_u64()
+                .map(crate::engine::gate::format_json::iso8601_of_unix_ms)
+                .unwrap_or_default();
+            let i = &c["inputs"];
+            out.push(format!(
+                "  check: {fresh}; {strength}; {complete}; generation {} checked at {when}; \
+                 inputs: .al files {}, packages {}, source-dependency files {}; residual: {}",
+                c["checkedRevision"]["generation"],
+                i["alFiles"],
+                i["packages"],
+                i["sourceDependencyFiles"],
+                c["residual"].as_str().unwrap_or("")
+            ));
+        } else {
+            out.push(format!(
+                "  not checked: {}",
+                e["checkNotRun"]
+                    .as_str()
+                    .unwrap_or("no revision is published yet")
+            ));
+        }
+        let r = &e["refresh"];
+        let mut refresh = format!("  refresh: {}", r["state"].as_str().unwrap_or("idle"));
+        if let Some(did) = r["did"].as_str() {
+            refresh.push_str(&format!(" ({did})"));
+        }
+        if let Some(err) = r["error"].as_str() {
+            refresh.push_str(&format!(" — {err}"));
+        }
+        out.push(refresh);
+    }
+    if out.is_empty() {
+        out.push(body["headline"].as_str().unwrap_or("").to_string());
+        out.push(format!(
+            "  not checked: {}",
+            body["noEngine"]["reason"]
+                .as_str()
+                .unwrap_or("no engine is running")
+        ));
+    }
+    out.join("\n") + "\n"
 }
 
 #[cfg(test)]

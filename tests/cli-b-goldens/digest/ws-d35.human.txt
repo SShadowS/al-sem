@@ -1,66 +1,44 @@
-computed: current effects of the 5 routines these files touches, in the working tree (every routine in the files); no before/after computed — alsem_impact with base compares two revisions
+digest files src/Codeunit.al → 5 roots: Codeunit "D35 Demo"::OnBeforePrintSafe, Codeunit "D35 Demo"::OnAfterPostDirect, Codeunit "D35 Demo"::PersistAudit, … +2 routines   [cross-app]
+answer: 5 roots, one card each; each card leads with its summary line
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code followed through every resolved call with literal arguments; no lock facts; dependencies: 0 apps
+more: --detail lists every list complete; --format json for every effect row
+computed: current effects of the 5 routines these files touches, in the working tree (every routine in the files); no before/after computed — alsem impact --base compares two revisions
 --- Codeunit "D35 Demo"::OnBeforePrintSafe ---
   summary — writes: no (every candidate decided)
-    transaction, UI and errors: commits: no (every candidate decided); UI at 1 place
-    other effects: events: 0 (0 raised in workspace code)
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
-  commits: no (every candidate decided)
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
+  transaction, UI and errors: commits: no (every candidate decided); UI at 1 place
+  other effects: events: 0 (0 raised in workspace code)
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   UI at 1 place: UI_MESSAGE at ws:src/Codeunit.al:21 (unconditional on success)
 
 --- Codeunit "D35 Demo"::OnAfterPostDirect ---
   summary — writes: no (every candidate decided)
-    transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
-    other effects: events: 0 (0 raised in workspace code)
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
+  other effects: events: 0 (0 raised in workspace code)
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/Codeunit.al:7 (unconditional on success)
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
 
 --- Codeunit "D35 Demo"::PersistAudit ---
   summary — writes: no (every candidate decided)
-    transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
-    other effects: events: 0 (0 raised in workspace code)
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
+  other effects: events: 0 (0 raised in workspace code)
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/Codeunit.al:32 (unconditional on success)
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
 
 --- Codeunit "D35 Demo"::NonSubscriberCommit ---
   summary — writes: no (every candidate decided)
-    transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
-    other effects: events: 0 (0 raised in workspace code)
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
+  other effects: events: 0 (0 raised in workspace code)
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/Codeunit.al:27 (unconditional on success)
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
 
 --- Codeunit "D35 Demo"::OnAfterValidateTransitive ---
   summary — writes: no (every candidate decided)
-    transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
-    other effects: events: 0 (0 raised in workspace code)
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+  transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
+  other effects: events: 0 (0 raised in workspace code)
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   commits: yes — 1 site in workspace code; 0 dependency routines entered that commit:
     COMMIT at ws:src/Codeunit.al:32 (unconditional on success)
       path: OnAfterValidateTransitive → PersistAudit
-  events: 0 raised in workspace code; 0 more only beyond dependency calls

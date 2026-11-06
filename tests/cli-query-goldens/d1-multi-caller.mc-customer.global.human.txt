@@ -1,5 +1,7 @@
---- touches MC Customer (11111111-0000-0000-0000-00000000d01a/table/50101) ---
-  transitively: 4 workspace routines touch it (through workspace or dependency sites; per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code, or on a table not resolved, is not counted)
+query touches MC Customer (11111111-0000-0000-0000-00000000d01a/table/50101)   [cross-app]
+answer: transitively: 4 workspace routines touch it (through workspace or dependency sites; per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code, or on a table not resolved, is not counted)
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependencies: 0 apps
+more: --all lists every witness, no fold; --format json for every row
   directly: 4 workspace sites in 4 routines and 0 dependency sites touch it
     [Modify] at ws:src/D1MultiCaller.al:19 in Codeunit "D1 Multi Caller"::ModifyHelper
     [FindSet] at ws:src/D1MultiCaller.al:25 in Codeunit "D1 Multi Caller"::CallerA

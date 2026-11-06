@@ -553,9 +553,11 @@ fn anchor_source_check_on_the_fixture() {
         "every anchor's file exists: {per_output:?}"
     );
     eprintln!("{}", per_output.join("\n"));
-    // Precondition: the check looked at enough anchors, `dep:` ones included.
+    // Precondition: the check looked at enough anchors, `dep:` ones included
+    // (23 since output validation V4: the telemetry places print as a count,
+    // §5.3 F81, so two telemetry anchors left the default answers).
     assert!(
-        all.matched >= 25 && all.matched_dep >= 1,
+        all.matched >= 23 && all.matched_dep >= 1,
         "only {} anchors checked ({} in dependency code):\n{}",
         all.matched,
         all.matched_dep,
@@ -952,7 +954,7 @@ fn one_copy_of_each_answer() {
                 "{label}: one copy (stdoutText {as_text}, output {as_output})"
             ));
         }
-        if label == "prove default" && !stdout.starts_with("--- ") {
+        if label == "prove default" && !stdout.starts_with("prove ") {
             failures.push(format!("{label}: human by default: {stdout}"));
         }
     }
@@ -1831,9 +1833,10 @@ fn locks_are_their_own_class_in_query_effects() {
     let (human, err, code) =
         run_alsem(&["query", "effects", &ws, "--routine", "Out Field Ops.RunAll"]);
     assert_eq!(code, 0, "{err}");
+    // Output validation §5.2: the summary is the header's `answer:` line.
     let summary = human.lines().nth(1).unwrap();
     assert!(
-        summary.contains("summary: 9 operations — writes that may persist 5 on 2 tables")
+        summary.contains("answer: 9 operations — writes that may persist 5 on 2 tables")
             && summary.contains("locks 2 on 2 tables")
             && summary.contains("on a RecordRef (table not resolved: RecordRef) 1 in 1 routine")
             && !summary.contains("; table not resolved"),
@@ -2043,14 +2046,20 @@ fn prove_states_coverage_assumptions_and_limits() {
             {"callee": "Handler.Handle", "count": 1}
         ])
     );
+    // Output validation V4 (§5.2): the header's answer line and its third
+    // line (analysis · assumptions · limits · scope).
     let yes = run(ISSUE_DOC, "may-commit", "human");
-    assert!(yes.contains("\n  answer:   yes\n"), "{yes}");
-    for l in ["  analysis partial — ", "  assumptions: ", "  limits: none"] {
+    assert!(yes.contains("\nanswer: yes\n"), "{yes}");
+    for l in [
+        "\nanalysis partial (",
+        " · assumptions: ",
+        " · limits: none",
+    ] {
         assert!(yes.contains(l), "{l}:\n{yes}");
     }
     let unknown = run(ISSUE_DOC, "writes-table:Out Item", "human");
     assert!(
-        unknown.contains("\n  answer:   unknown (blocked by: ")
+        unknown.contains("\nanswer: unknown (blocked by: ")
             && unknown.contains(" — no matching effect was found in the analyzed cone\n"),
         "{unknown}"
     );
@@ -2058,7 +2067,9 @@ fn prove_states_coverage_assumptions_and_limits() {
     assert_eq!(uj["payload"]["result"]["answer"], "unknown");
     let no = run(FIELD_OPS, "may-commit", "human");
     assert!(
-        no.contains("\n  answer:   no\n  analysis complete\n  assumptions: loaded-subscribers\n  limits: none\n"),
+        no.contains(
+            "\nanswer: no\nanalysis complete · assumptions: loaded-subscribers · limits: none · "
+        ),
         "{no}"
     );
 }

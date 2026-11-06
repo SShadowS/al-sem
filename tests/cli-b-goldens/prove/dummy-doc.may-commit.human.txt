@@ -1,11 +1,9 @@
---- NonExistentRoutineXYZ ---
-  question: may-commit — existing effects (what the routine and its callees already do)
-  answer:   unknown
+prove NonExistentRoutineXYZ may-commit   [cross-app]
+answer: no answer — the selector names no routine
+not analyzed (no routine resolved) · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 0 apps
+more: --format json for every evidence row and its hops
   blockedBy: 1 blocker in 1 kind
     routine not found: 1
       no routine in the loaded program is named 'NonExistentRoutineXYZ'
       nearest names: no close match
       selector forms: Object::Routine, Object::Routine(<parameter types>), Object."Field"::Trigger, Object.action(Name)::OnAction, or a stable id
-  analysis partial
-  assumptions: none (default world: an interface call may reach an implementation that is not loaded)
-  limits: none

@@ -78,7 +78,7 @@ fn a_large_answer_is_folded_under_its_budget_with_the_full_count() {
     assert!(text.contains(&format!("first {shown}:")), "{text}");
     assert!(
         text.contains(&format!(
-            "  … +{} routines (the answer is kept under 38 KiB: max-roots N",
+            "  … +{} routines (the answer is kept under 38 KiB: --max-roots N",
             30 - shown
         )),
         "{text}"
@@ -91,7 +91,7 @@ fn a_large_answer_is_folded_under_its_budget_with_the_full_count() {
         .filter(|l| l.starts_with("  Codeunit A::R"))
         .count();
     assert_eq!(shown, 25);
-    assert!(text.contains("  … +5 routines (max-roots N"), "{text}");
+    assert!(text.contains("  … +5 routines (--max-roots N"), "{text}");
 }
 
 /// A count change lists its first two sites and counts the rest; `detail`

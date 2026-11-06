@@ -142,10 +142,12 @@ fn explain() -> String {
 /// Discrimination (2026-11-06): see the commit message.
 #[test]
 fn a_conditional_write_leads_the_summary() {
+    // Output validation V4 (§5.2): one card's summary line is the header's
+    // `answer:` line, as query effects' summary line is.
     let card = explain();
     let writes = card
         .lines()
-        .find(|l| l.trim_start().starts_with("summary — writes: "))
+        .find(|l| l.starts_with("answer: writes: "))
         .unwrap_or_else(|| panic!("{card}"));
     assert!(
         writes.contains(
@@ -158,7 +160,7 @@ fn a_conditional_write_leads_the_summary() {
     let human = effects(&[]);
     let summary = human
         .lines()
-        .find(|l| l.trim_start().starts_with("summary: "))
+        .find(|l| l.starts_with("answer: "))
         .unwrap_or_else(|| panic!("{human}"));
     assert!(
         summary.contains(
@@ -188,5 +190,5 @@ fn locks_and_reads_always_print_with_their_scope() {
     let f = &v["payload"]["result"]["scope"]["families"];
     assert_eq!(f["locks"]["depth"], "oneDependencyRoutine", "{f:#}");
     assert_eq!(f["locks"]["inventory"], "notExhaustive", "{f:#}");
-    assert_eq!(v["schemaVersion"], "3.8.0");
+    assert_eq!(v["schemaVersion"], "3.9.0");
 }

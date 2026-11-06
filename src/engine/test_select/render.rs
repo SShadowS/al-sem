@@ -81,6 +81,10 @@ pub struct RenderOpts {
     pub tier: TierPick,
     pub max_tests: Option<usize>,
     pub json: bool,
+    /// `--surface` (output validation §6.1).
+    pub surface: crate::engine::follow_up::Surface,
+    /// `--single-app` (the header's universe).
+    pub single_app: bool,
 }
 
 /// One test universe's part: the app it is for and its select part's JSON,
@@ -494,6 +498,86 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         )
     };
 
+    // Output validation §5.2: the header's facts (human: the four lines;
+    // JSON: `result.scope` and `result.selection`, F76).
+    let header = {
+        use crate::engine::follow_up::Input;
+        use crate::engine::result_header::{Analysis, Header};
+        let names: Vec<&str> = changed_out.iter().map(|c| s(c, "display")).collect();
+        let inputs = match names.len() {
+            0 => "no routine resolved".to_string(),
+            1 => names[0].to_string(),
+            n => format!(
+                "{n} changed routines: {}{}",
+                names[..3.min(n)].join(", "),
+                if n > 3 {
+                    format!(", … +{}", n - 3)
+                } else {
+                    String::new()
+                }
+            ),
+        };
+        let mut h = Header::new("tests", inputs, opts.single_app);
+        h.answer = if changed.is_empty() {
+            "no answer — no changed routine resolved".to_string()
+        } else {
+            run_line.clone()
+        };
+        let reasons: Vec<String> = fallback
+            .iter()
+            .filter_map(|f| {
+                let n = u(f, "count");
+                Some(match s(f, "reason") {
+                    "walk-limited" => "a walk stopped at its state budget".to_string(),
+                    "root-analysis-incomplete" => {
+                        format!("{} with an incomplete cone", n_of(n, "routine", "routines"))
+                    }
+                    "root-not-loaded" => format!("{} not loaded", n_of(n, "routine", "routines")),
+                    "root-not-in-projection" => {
+                        format!("{} not in projection", n_of(n, "routine", "routines"))
+                    }
+                    "discovery-incomplete" => "test app discovery incomplete".to_string(),
+                    "test-app-not-analyzed" => "a test app not analyzed".to_string(),
+                    _ => return None,
+                })
+            })
+            .collect();
+        h.analysis = if changed.is_empty() {
+            Analysis::NotAnalyzed("no changed routine resolved".to_string())
+        } else {
+            Analysis::of(reasons.is_empty(), reasons)
+        };
+        h.assumptions = vec![
+            "static reachability, not coverage: a reached test may not exercise the changed lines"
+                .to_string(),
+        ];
+        if limited {
+            h.limits = vec!["a walk stopped at its state budget".to_string()];
+        }
+        h.scope = format!("tests on a {}", opts.tier.words());
+        let sf = opts.surface;
+        if opts.tier == TierPick::Local && !changed.is_empty() {
+            h.more.push(format!(
+                "{} adds tests whose path passes dependency code",
+                Input::TierDependency.on(sf)
+            ));
+        }
+        h.more.push(format!(
+            "{} for every selected test and its path",
+            Input::FormatJson.on(sf)
+        ));
+        h
+    };
+    // `result.selection` (§5.2): complete, the cap asked, returned, total,
+    // fallback.
+    let selection = json!({
+        "complete": complete,
+        "capAsked": opts.max_tests,
+        "returned": shown.len(),
+        "total": picked.len(),
+        "fallback": fallback.iter().map(|f| f["reason"].clone()).collect::<Vec<_>>(),
+    });
+
     if opts.json {
         let run_first: Vec<Value> = shown
             .iter()
@@ -545,6 +629,11 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             "hidden": hidden,
             "assumptions": ["static reachability, not coverage: a reached test may not exercise the changed lines"],
             "limits": [],
+            // Output validation V4 (F76, additive): the header's facts.
+            "result": {
+                "scope": header.scope_json(serde_json::Map::new()),
+                "selection": selection,
+            },
         });
         return Rendered {
             text: serde_json::to_string_pretty(&doc).expect("serializes") + "\n",
@@ -552,10 +641,8 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         };
     }
 
-    let mut out: Vec<String> = Vec::new();
-    if !changed.is_empty() {
-        out.push(run_line.clone());
-    }
+    // §5.2: the run line is the header's `answer:`.
+    let mut out: Vec<String> = vec![header.human().trim_end().to_string()];
     out.push(scope_text.replace(
         "tier localApproximate",
         "tier local (projection: approximate)",
@@ -680,6 +767,10 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         }
     }
     let thr = count("throughDependency");
+    let tier_note = format!(
+        " ({} lists them)",
+        crate::engine::follow_up::Input::TierDependency.on(opts.surface)
+    );
     if thr > 0 && opts.tier == TierPick::Local {
         let same = ok_parts.iter().any(|p| {
             p["roots"]
@@ -694,7 +785,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
             if same {
                 " — effectively the suite's posting tests, not specific to this change"
             } else {
-                " (--tier dependency lists them)"
+                tier_note.as_str()
             }
         ));
     }
@@ -713,10 +804,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
     if let Some(n) = &next {
         out.push(n.clone());
     }
-    out.push(
-        "this is static reachability, not coverage: a reached test may not exercise the changed lines"
-            .into(),
-    );
+    // "Static reachability, not coverage" is the header's assumption (§5.2).
     Rendered {
         text: out.join("\n") + "\n",
         exit,
@@ -760,6 +848,8 @@ mod tests {
                 tier: TierPick::All,
                 max_tests: None,
                 json: true,
+                surface: Default::default(),
+                single_app: false,
             },
         );
         let v: Value = serde_json::from_str(&r.text).unwrap();

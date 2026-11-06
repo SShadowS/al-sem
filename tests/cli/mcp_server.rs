@@ -408,7 +408,11 @@ fn a_transcript_answers_what_the_cli_answers() {
     let mut id = 100;
     for (tool, args, argv, stdin) in &cases {
         id += 1;
-        let expected = cli_stdin(argv, *stdin);
+        // Output validation §6.1: the front end passes `--surface=mcp`; the
+        // CLI given the same flag answers the same bytes.
+        let mut argv = argv.clone();
+        argv.push("--surface=mcp");
+        let expected = cli_stdin(&argv, *stdin);
         assert!(
             expected.0.ends_with(b"\n"),
             "{argv:?}: a CLI output ends its line"
@@ -447,7 +451,14 @@ fn a_transcript_answers_what_the_cli_answers() {
     // stay inline or are refused: `the_inline_only_path_delivers_inline`).
     if cfg!(unix) {
         // Digest: always a file in the output folder, with a summary.
-        let argv = ["digest", w, "--routine", "PostOrder", "--deterministic"];
+        let argv = [
+            "digest",
+            w,
+            "--routine",
+            "PostOrder",
+            "--deterministic",
+            "--surface=mcp",
+        ];
         let expected = cli(&argv);
         let env = envelope(&s.call(
             130,
@@ -471,7 +482,15 @@ fn a_transcript_answers_what_the_cli_answers() {
         );
 
         // A stdout over the inline cap: the same bytes, as a file.
-        let argv = ["query", "touches", w, "--table", "50400", "--deterministic"];
+        let argv = [
+            "query",
+            "touches",
+            w,
+            "--table",
+            "50400",
+            "--deterministic",
+            "--surface=mcp",
+        ];
         let expected = cli(&argv);
         let env = envelope(&s.call(
             131,
@@ -491,6 +510,7 @@ fn a_transcript_answers_what_the_cli_answers() {
             "--deterministic",
             "--format",
             "human",
+            "--surface=mcp",
         ];
         let expected = cli(&argv);
         let env = envelope(&s.call(
@@ -547,6 +567,62 @@ fn a_transcript_answers_what_the_cli_answers() {
     assert!(s.finish().success());
 }
 
+/// Output validation §6.1 (F34): the MCP front end appends `--surface=mcp`,
+/// so the renderer-owned follow-up text of an MCP answer (`more:` and
+/// `next:` lines, fold notes, `re-analysis under an assumption:`, `ask:`)
+/// names MCP inputs and tool calls, never a CLI flag or command. Source
+/// excerpts, diffs and `---` headings are not checked (they may hold `--`).
+///
+/// Discrimination (2026-11-06): see the V4 commit message (break: drop the
+/// flag from the front end).
+#[test]
+fn mcp_answers_name_mcp_inputs_not_cli_flags() {
+    let ws = ws_explain();
+    let mut s = Server::ready(&ws, None);
+    let calls = [
+        ("alsem_explain", json!({"routines": ["PostOrder"]})),
+        (
+            "alsem_prove",
+            json!({"routine": "PostOrder", "question": "may-commit"}),
+        ),
+        ("alsem_query_effects", json!({"routine": "PostOrder"})),
+        ("alsem_query_touches", json!({"table": "50400"})),
+        (
+            "alsem_digest",
+            json!({"routines": ["PostOrder"], "format": "human"}),
+        ),
+    ];
+    let follow_up_line = |l: &str| {
+        let t = l.trim_start();
+        t.starts_with("more:")
+            || t.starts_with("next:")
+            || t.starts_with("ask:")
+            || t.starts_with("re-analysis under an assumption:")
+            || l.contains(" lists them")
+            || l.contains(" lists every")
+            || l.contains(" lists up to")
+    };
+    let mut checked = 0usize;
+    let mut failures = Vec::new();
+    for (i, (tool, args)) in calls.iter().enumerate() {
+        let env = envelope(&s.call(300 + i as i64, tool, args.clone()));
+        let (stdout, _, code) = cli_bytes(&env);
+        assert_eq!(code, 0, "{tool}: {env}");
+        let text = String::from_utf8(stdout).unwrap();
+        assert!(text.contains("\nmore: "), "precondition: {tool}: {text}");
+        for l in text.lines().filter(|l| follow_up_line(l)) {
+            checked += 1;
+            let words = al_sem::engine::follow_up::cli_words_in(l);
+            if !words.is_empty() {
+                failures.push(format!("{tool}: {words:?} in: {l}"));
+            }
+        }
+    }
+    assert!(checked >= 5, "precondition: {checked} lines");
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(s.finish().success());
+}
+
 /// Version negotiation: a supported version is echoed, an unsupported or
 /// missing one gets 2025-06-18; an older version gets text blocks only, the
 /// stdout exact in the second block.
@@ -565,7 +641,7 @@ fn versions_are_negotiated_and_older_ones_get_text_only() {
         s.notify("notifications/initialized", json!({}));
         if answered != "2025-06-18" {
             let w = ws.to_str().unwrap();
-            let expected = cli(&["explain", w, "--routine", "Archive"]);
+            let expected = cli(&["explain", w, "--routine", "Archive", "--surface=mcp"]);
             let r = s.call(2, "alsem_explain", json!({"routines": ["Archive"]}));
             assert!(r.get("structuredContent").is_none(), "{answered}: {r}");
             let content = r["content"].as_array().unwrap();
@@ -627,7 +703,15 @@ fn a_semantic_build_failure_stays_a_cli_outcome() {
     std::fs::create_dir_all(broken.path().join("src")).unwrap();
     std::fs::write(broken.path().join("src/a.al"), "codeunit 50100 A { }").unwrap();
     let b = broken.path().to_str().unwrap();
-    let expected = cli(&["explain", b, "--routine", "A", "--format", "json"]);
+    let expected = cli(&[
+        "explain",
+        b,
+        "--routine",
+        "A",
+        "--format",
+        "json",
+        "--surface=mcp",
+    ]);
     assert_ne!(expected.2, 0, "precondition: the CLI fails it");
     let mut s = Server::ready(broken.path(), None);
     let r = s.call(
@@ -685,7 +769,14 @@ fn the_inline_only_path_delivers_inline() {
     let ws = ws_explain();
     let w = ws.to_str().unwrap();
     let mut s = Server::ready(&ws, Some("no-output-dir"));
-    let argv = ["digest", w, "--routine", "PostOrder", "--deterministic"];
+    let argv = [
+        "digest",
+        w,
+        "--routine",
+        "PostOrder",
+        "--deterministic",
+        "--surface=mcp",
+    ];
     let expected = cli(&argv);
     let env = envelope(&s.call(
         1,
@@ -698,7 +789,15 @@ fn the_inline_only_path_delivers_inline() {
     // MCP output plan 1b/1e: a summary goes with a file only; inline, the
     // answer itself is there.
     assert!(env.get("summary").is_none(), "{env}");
-    let argv = ["query", "touches", w, "--table", "50400", "--deterministic"];
+    let argv = [
+        "query",
+        "touches",
+        w,
+        "--table",
+        "50400",
+        "--deterministic",
+        "--surface=mcp",
+    ];
     let expected = cli(&argv);
     let env = envelope(&s.call(
         2,
@@ -949,7 +1048,7 @@ fn status_checks_the_disk_against_the_published_revision() {
     assert_eq!(
         st["headline"],
         format!(
-            "no engine is running for {w} (cross-app), so nothing was checked. The next command builds it (about 25 s cross-app on CDO)."
+            "no engine is running for {w} (cross-app), so nothing was checked. An analysis call builds it (about 25 s cross-app on CDO), for instance alsem_explain {{\"routines\": [\"<routine>\"]}}; a status call builds nothing."
         ),
         "{st}"
     );
@@ -1330,6 +1429,7 @@ mod faults {
             "--deterministic",
             "--format",
             "human",
+            "--surface=mcp",
         ]);
         let env = envelope(&s.call(2, "alsem_prove", args));
         assert_eq!(cli_bytes(&env), expected);

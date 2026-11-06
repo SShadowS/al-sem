@@ -55,6 +55,7 @@ fn prove_both(
         detail: true,
         out: None,
         slice: None,
+        surface: Default::default(),
     };
     let r = crate::engine::batch::run_doc(&job)
         .one::<Result<crate::engine::l5::prove::ProveRunResult, String>>()
@@ -776,15 +777,15 @@ fn an_unknown_names_the_assumption_and_what_it_removes() {
     );
     assert_eq!(answer(&v), "unknown", "{v:#}");
     assert!(
-        human.contains("answer:   unknown (blocked by: external callers 1)"),
+        human.contains("\nanswer: unknown (blocked by: external callers 1)"),
         "{human}"
     );
     assert!(human.contains("  plain reading: no pending write was found in the analyzed callers"));
     assert!(human.contains("  not established: that no caller has a write pending"));
     assert!(
         human.contains(
-            "re-analysis under an assumption: assumeNoDependents: true — assumes no other app \
-             calls this routine; removes every blocker of this answer (external callers 1)"
+            "re-analysis under an assumption: --no-dependents — only if no other app calls this \
+             routine; removes every blocker of this answer (external callers 1)"
         ),
         "{human}"
     );

@@ -1,5 +1,7 @@
---- touches QT Item (07070707-0000-4000-8000-000000000071/table/50700) ---
-  transitively: 8 workspace routines touch it (through workspace or dependency sites; per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code, or on a table not resolved, is not counted)
+query touches QT Item (07070707-0000-4000-8000-000000000071/table/50700)   [cross-app]
+answer: transitively: 8 workspace routines touch it (through workspace or dependency sites; per operation, one routine into dependency code: a routine whose only touch is deeper in dependency code, or on a table not resolved, is not counted)
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependencies: 0 apps
+more: --all lists every witness, no fold; --format json for every row
   directly: 6 workspace sites in 4 routines and 0 dependency sites touch it
     [Insert] at ws:src/QTTouches.al:33 in Codeunit "QT Touches"::WriteItem
     [Insert] at ws:src/QTTouches.al:40 in Codeunit "QT Touches"::TempOnly

@@ -811,6 +811,18 @@
     ],
     "lineBase": 1,
     "pathCap": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "dependency code followed through every resolved call with literal arguments; no lock facts; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "routines": {
       "r:4ea96f4bd333": {
         "display": "Codeunit D8PostingChain::PostSalesDoc",
@@ -842,5 +854,5 @@
     },
     "workspaceFingerprint": "422fd5d79e0d95f73a850372a04ff8ed07ccc5ee82deecc2ee2bcf44aa4ef31f"
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.2.0"
 }

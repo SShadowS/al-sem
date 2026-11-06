@@ -1,0 +1,9 @@
+tests Codeunit "Out Issue Document"::IssueDoc   [cross-app]
+answer: run first: no test with a modeled local path; selection complete
+analysis complete · assumptions: static reachability, not coverage: a reached test may not exercise the changed lines · limits: none · scope: tests on a local path
+more: tier: "dependency" adds tests whose path passes dependency code; format: "json" for every selected test and its path
+test scope: workspace 1 [Test] procedure; no app under the project folder (its parent holds .al-sem-projects) depends on this one with a test codeunit (searched 0 app.json files)
+production bytes: the same in the production and test universes
+changed: 1 routine (Codeunit "Out Issue Document"::IssueDoc — no modeled path)
+tests on a local path: none
+selection complete

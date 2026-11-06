@@ -132,7 +132,9 @@ fn fixture_app_matches_its_sources() {
 pub(crate) fn run_alsem(args: &[&str]) -> (String, String, i32) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_alsem"));
     cmd.args(args);
-    if args.first() != Some(&"explain") {
+    // `tests` and `impact` take no `--deterministic` (their output has no
+    // timestamp either).
+    if !matches!(args.first(), Some(&"explain" | &"tests" | &"impact")) {
         cmd.arg("--deterministic");
     }
     let out = cmd
@@ -324,4 +326,86 @@ fn check_case(c: &Case) -> Option<String> {
 fn output_fixture_goldens() {
     let failures: Vec<String> = cases().iter().filter_map(check_case).collect();
     assert!(failures.is_empty(), "{}", failures.concat());
+}
+
+/// Output validation §6.1: one human answer per tool rendered with
+/// `--surface=mcp` (the argv the MCP front end builds), byte-compared with
+/// its golden in `cli-output-goldens/mcp-surface/`. A byte compare catches a
+/// misspelled input name, which a pattern check does not (Fable).
+pub(crate) fn mcp_surface_cases() -> Vec<Case> {
+    let s = "--surface=mcp";
+    vec![
+        case(
+            "explain",
+            &["explain", "{ws}", "--routine", ISSUE_DOC, s],
+            0,
+        ),
+        case(
+            "prove",
+            &["prove", "{ws}", ISSUE_DOC, "callers-intercept-errors", s],
+            0,
+        ),
+        case("digest", &["digest", "{ws}", "--routine", ISSUE_DOC, s], 0),
+        case(
+            "query-effects",
+            &["query", "effects", "{ws}", "--routine", ISSUE_DOC_Q, s],
+            0,
+        ),
+        case(
+            "query-touches",
+            &[
+                "query",
+                "touches",
+                "{ws}",
+                "--table",
+                "Out Log",
+                "--from",
+                ISSUE_DOC_Q,
+                "--direction",
+                "up",
+                s,
+            ],
+            0,
+        ),
+        case("tests", &["tests", "{ws}", "--routine", ISSUE_DOC, s], 0),
+        case("impact", &["impact", "{ws}", "--routine", ISSUE_DOC, s], 0),
+    ]
+}
+
+#[test]
+fn mcp_surface_fixture_goldens() {
+    let dir = goldens_dir().join("mcp-surface");
+    let mut failures = String::new();
+    for c in mcp_surface_cases() {
+        let mut args: Vec<&str> = c.argv.iter().map(String::as_str).collect();
+        args.extend(["--format", "human"]);
+        let (got, stderr, code) = run_alsem(&args);
+        if code != c.exit_code {
+            failures.push_str(&format!(
+                "[{}] exit {code}, want {} — stderr:\n{stderr}\n",
+                c.slug, c.exit_code
+            ));
+            continue;
+        }
+        let golden = dir.join(format!("{}.human.txt", c.slug));
+        if regen::regen_mode() {
+            std::fs::create_dir_all(&dir).unwrap();
+            regen::write_golden(&golden, &got).unwrap();
+            continue;
+        }
+        match std::fs::read_to_string(&golden) {
+            Ok(want) if want.replace('\r', "") == got => {}
+            Ok(_) => failures.push_str(&format!(
+                "[{}] diverged from {}\n",
+                c.slug,
+                golden.display()
+            )),
+            Err(e) => failures.push_str(&format!(
+                "[{}] read {}: {e} — run scripts/check-goldens --regen\n",
+                c.slug,
+                golden.display()
+            )),
+        }
+    }
+    assert!(failures.is_empty(), "{failures}");
 }

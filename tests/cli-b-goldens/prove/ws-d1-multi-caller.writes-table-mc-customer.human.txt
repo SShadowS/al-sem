@@ -1,10 +1,8 @@
---- Codeunit "D1 Multi Caller"::CallerA ---
-  question: writes-table:MC Customer (table 50101, this app) — existing effects (what the routine and its callees already do)
-  answer:   yes
+prove Codeunit "D1 Multi Caller"::CallerA writes-table:MC Customer (table 50101, this app)   [cross-app]
+answer: yes
+analysis complete · assumptions: none (default world: an interface call may reach an implementation that is not loaded) · limits: none · scope: existing effects (what the routine and its callees already do); dependencies: 0 apps
+more: --format json for every evidence row and its hops
   evidence: 1 effect
     [DB_MODIFY] at ws:src/D1MultiCaller.al:19
       condition: in a loop
       path: CallerA → ModifyHelper
-  analysis complete
-  assumptions: none (default world: an interface call may reach an implementation that is not loaded)
-  limits: none

@@ -116,6 +116,7 @@ fn job(cmd: Cmd, f: &Fixture) -> Box<dyn Job + '_> {
             detail: false,
             out: None,
             slice: None,
+            surface: Default::default(),
         }),
     }
 }

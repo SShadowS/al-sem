@@ -81,11 +81,13 @@ fn alsem_impact_answers_the_clis_bytes() {
     let (stdout, _, exit) = cli_bytes(&env);
     assert_eq!(exit, 0);
     let mcp = String::from_utf8(stdout).unwrap();
-    let want = cli(&ws, &["--routine", "TU Core::Post"]);
+    // Output validation §6.1: the front end passes `--surface=mcp`.
+    let want = cli(&ws, &["--routine", "TU Core::Post", "--surface=mcp"]);
     assert_eq!(without_run(&mcp), without_run(&want), "the CLI's bytes");
+    // The comparison line follows the four header lines (§5.2).
     assert!(
         mcp.lines()
-            .next()
+            .nth(4)
             .unwrap()
             .contains("revision al-sem-manifest-v1:"),
         "{mcp}"
@@ -125,6 +127,7 @@ fn alsem_impact_answers_the_clis_bytes() {
             "--format",
             "json",
             "--no-tests",
+            "--surface=mcp",
         ],
     ))
     .unwrap();

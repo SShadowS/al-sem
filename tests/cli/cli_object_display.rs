@@ -376,8 +376,11 @@ fn human_headers_name_the_owning_object() {
         "human",
     ]);
     assert_eq!(code, 0, "{prove}");
+    // Output validation §5.2: the header's first line names the routine.
     assert!(
-        prove.lines().any(|l| l == format!("--- {v3_header} ---")),
+        prove
+            .lines()
+            .any(|l| l.starts_with(&format!("prove {v3_header} may-commit   ["))),
         "{prove}"
     );
 }
@@ -1113,9 +1116,10 @@ fn assert_query_effects_owner(w: &str, routine: &str, owner: &str) {
         "--deterministic",
     ]);
     assert_eq!(code, 0, "{text}");
+    // Output validation §5.2: the header's first line names the routine.
     assert!(
         text.lines()
-            .any(|l| l == format!("--- effects of {owner}::{routine} ---")),
+            .any(|l| l.starts_with(&format!("query effects {owner}::{routine}   ["))),
         "{text}"
     );
 }

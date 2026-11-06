@@ -841,6 +841,22 @@
     "includeReads": true,
     "lineBase": 1,
     "pathCap": 1,
+    "result": {
+      "scope": {
+        "analysis": "partial",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [
+          "interface-open-world",
+          "object-run-unresolved",
+          "1 interface call open world, 2 dynamic calls not resolved"
+        ],
+        "scope": "dependency code followed through every resolved call with literal arguments (2 dependency routines entered at 2 dependency calls); no lock facts; dependencies: 1 app",
+        "universe": "cross-app"
+      }
+    },
     "routines": {
       "r:06ab280a2dc1": {
         "display": "Codeunit \"Base Poster\" (70100)::OnRun",
@@ -926,5 +942,5 @@
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"
   },
-  "schemaVersion": "3.1.0"
+  "schemaVersion": "3.2.0"
 }

@@ -55,6 +55,8 @@ pub struct DigestRender {
     pub compact: bool,
     /// `--max-paths N`.
     pub max_paths: Option<usize>,
+    /// `--surface` (output validation §6.1).
+    pub surface: crate::engine::follow_up::Surface,
 }
 
 impl DigestRender {
@@ -70,7 +72,7 @@ impl DigestRender {
     /// The path cap and fold of §5.
     #[must_use]
     pub fn opts(&self) -> RenderOpts {
-        RenderOpts::new(self.detail, self.max_paths)
+        RenderOpts::new(self.detail, self.max_paths).with_surface(self.surface)
     }
 }
 

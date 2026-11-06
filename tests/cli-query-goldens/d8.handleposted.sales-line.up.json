@@ -27,6 +27,18 @@
       "selector": "HandlePosted"
     },
     "lineBase": 1,
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "per operation, one routine into dependency code; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    },
     "table": {
       "id": "11111111-0000-0000-0000-00000000d80a/table/37",
       "isUnknownBucket": false,
@@ -122,5 +134,5 @@
       "unknown": []
     }
   },
-  "schemaVersion": "3.8.0"
+  "schemaVersion": "3.9.0"
 }

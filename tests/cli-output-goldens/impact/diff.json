@@ -365,6 +365,27 @@
   },
   "limits": [],
   "lineBase": 1,
+  "result": {
+    "scope": {
+      "analysis": "complete",
+      "assumptions": [
+        "current effects only: no base was built, so there is no before/after and no routine is called added or deleted",
+        "callers and entries are static may-paths over the sited graph (R0's reverse walk)",
+        "tests are static reachability, not coverage"
+      ],
+      "limits": [],
+      "reasons": [],
+      "scope": "callers and entries over the whole program, dependency code in its own tier; effects through every resolved call with literal arguments",
+      "universe": "cross-app"
+    },
+    "selection": {
+      "capAsked": null,
+      "complete": true,
+      "fallback": [],
+      "returned": 2,
+      "total": 2
+    }
+  },
   "revisions": null,
   "roots": [
     {
@@ -554,6 +575,25 @@
     "next": "next: the test app depends on Microsoft's Library Assert, not loaded here. Put their symbols in the test app's .alpackages (in VS Code: open the test app and run \"AL: Download symbols\"; or copy Microsoft_<name>_<version>.app from a BC artifact's Applications folder), then ask again: calls into them then resolve",
     "productionSourceStamp": "prod-v1:cdd0f9df16e015bd87135e0b21d0bfb1",
     "requiredFallback": [],
+    "result": {
+      "scope": {
+        "analysis": "complete",
+        "assumptions": [
+          "static reachability, not coverage: a reached test may not exercise the changed lines"
+        ],
+        "limits": [],
+        "reasons": [],
+        "scope": "tests on a local path",
+        "universe": "cross-app"
+      },
+      "selection": {
+        "capAsked": null,
+        "complete": true,
+        "fallback": [],
+        "returned": 2,
+        "total": 2
+      }
+    },
     "runFirst": [
       {
         "class": "direct",

@@ -455,6 +455,7 @@ mod budget {
             detail: false,
             out: None,
             slice: None,
+            surface: Default::default(),
         }
     }
 

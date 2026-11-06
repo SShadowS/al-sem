@@ -1,13 +1,12 @@
-Codeunit "Rules Checks"::CheckOrder  ws:src/checks.al:8
-  summary — writes: no (every candidate decided)
-    transaction, UI and errors: commits: no (every candidate decided); errors at 5 places
-    other effects: events: 0 (0 raised in workspace code)
-    callers and tests: callers: none; tests: none (no test code loaded)
-    uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
-  analysis complete
-  assumptions: loaded program; unloaded implementations/subscribers are not enumerated
-  limits: none
-  scope: dependency code followed through every resolved call, with literal arguments, grouped per dependency routine entered (0, at 0 dependency calls); writes to temporary records do not directly persist those records; no lock facts (alsem query effects lists locks); counts are distinct tables unless a line says operations; lines are 1-based; --detail lists everything
+explain Codeunit "Rules Checks"::CheckOrder   [cross-app]
+answer: writes: no (every candidate decided)
+analysis complete · assumptions: loaded program; unloaded implementations and subscribers are not enumerated · limits: none · scope: dependency code: none reached; no lock facts; dependencies: 0 apps
+more: --detail lists every list complete; --format json for every row
+Codeunit "Rules Checks"::CheckOrder  defined at ws:src/checks.al:8
+  transaction, UI and errors: commits: no (every candidate decided); errors at 5 places
+  other effects: events: 0 (0 raised in workspace code)
+  callers and tests: callers: none; tests: none (no test code loaded)
+  uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
   calls: none (no call to a routine; builtins aside)
   doc: Checks an order before it is posted.
   rejects when Order.Status <> Order.Status::Released: "You cannot post %1 %2 because it is not released."  [Error ws:src/checks.al:15]
@@ -16,11 +15,6 @@ Codeunit "Rules Checks"::CheckOrder  ws:src/checks.al:8
   rejects when not (Order.Status <> Order.Status::Released) and not (Order.Amount <= 0) and Order.Blocked <> false: (platform message)  [TestField ws:src/checks.al:21]
   rejects when not (Order.Status <> Order.Status::Released) and not (Order.Amount <= 0) and not PostingPreview and Order."Posting Date" = 0D: "Order %1 has no posting date."  [Error ws:src/checks.al:25]
   inherited rules: none
-  callers: none
-  commits: no (every candidate decided)
-  events: 0 raised in workspace code; 0 more only beyond dependency calls
-  extension points: none (the routine publishes no event itself)
   errors at 5 places: ERROR_IMPLICIT at ws:src/checks.al:20 (unconditional on success); ERROR_IMPLICIT at ws:src/checks.al:21 (unconditional on success); ERROR_THROW at ws:src/checks.al:15 (error-path); ERROR_THROW at ws:src/checks.al:17 (error-path); ERROR_THROW at ws:src/checks.al:25 (error-path)
   tests: no test code found (0 [Test] procedures in the workspace app; no app under the project folder (its parent holds .al-sem-projects) depends on this one with a test codeunit (searched 0 app.json files)); that is not a reason to skip tests
-  next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

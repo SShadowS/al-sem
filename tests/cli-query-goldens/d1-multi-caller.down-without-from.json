@@ -10,7 +10,21 @@
     },
     "direction": "down",
     "error": "a `down` query is about one routine's cone — pass --from <routine>, or omit --direction for the workspace-global list",
-    "lineBase": 1
+    "lineBase": 1,
+    "result": {
+      "scope": {
+        "analysis": "notAnalyzed",
+        "assumptions": [
+          "loaded program; unloaded implementations and subscribers are not enumerated"
+        ],
+        "limits": [],
+        "reasons": [
+          "the input did not resolve"
+        ],
+        "scope": "per operation, one routine into dependency code; dependencies: 0 apps",
+        "universe": "cross-app"
+      }
+    }
   },
-  "schemaVersion": "3.8.0"
+  "schemaVersion": "3.9.0"
 }
