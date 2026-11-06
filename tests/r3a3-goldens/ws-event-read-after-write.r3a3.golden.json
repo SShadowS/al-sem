@@ -5,6 +5,15 @@
 			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "call",
+					"witnessOperationId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:Codeunit:50001#db2f7657277cea6b37edaf5291907f053797801512d1c7785b79275a0494c019/op0",
+					"witnessCallsiteId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:Codeunit:50000#6613cb531f8da247f6c76c9438913d0cc6732d441030931febbe346a095713a7/cs0"
+				},
+				{
 					"op": "modify",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -94,6 +103,15 @@
 			],
 			"capabilityFactsInherited": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "event-dispatch",
+					"witnessOperationId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:Codeunit:50001#db2f7657277cea6b37edaf5291907f053797801512d1c7785b79275a0494c019/op0",
+					"witnessFirstHopEventId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:Codeunit:50000::OnAfterAdjust::ed27d554e6d11ba3175fe7fe2009aa2988f48de11a8f60fb84b18baa8c671b40"
+				},
+				{
 					"op": "modify",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -155,6 +173,14 @@
 		{
 			"routineId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:Codeunit:50001#db2f7657277cea6b37edaf5291907f053797801512d1c7785b79275a0494c019",
 			"capabilityFactsDirect": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:Codeunit:50001#db2f7657277cea6b37edaf5291907f053797801512d1c7785b79275a0494c019/op0"
+				},
 				{
 					"op": "modify",
 					"resourceKind": "table",

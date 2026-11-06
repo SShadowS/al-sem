@@ -321,10 +321,18 @@ fn effects_clause(e: &Value) -> String {
     format!("effects: {}", parts.join("; "))
 }
 
-/// A node's short name with its hops (`Page X (3 hops)`).
+/// A node's short name with its hops and, when the path is not local, its
+/// tier in the words `tests` uses (`Page X (3 hops)`, `Page Y (5 hops, only
+/// over open sites)`). An open-site (hub) witness is a possibility, not a
+/// path: round-1 c20 printed a `run:report` hub's witness as a plain one.
 fn node_short(n: &Value) -> String {
+    let tier = match s(n, "tier") {
+        "throughDependency" => ", through dependency code",
+        "onlyOpen" => ", only over open sites",
+        _ => "",
+    };
     format!(
-        "{} ({})",
+        "{} ({}{tier})",
         s(n, "display"),
         plural(u(n, "hops"), "hop", "hops")
     )
@@ -377,10 +385,20 @@ fn reached_clause(up: &Value, detail: bool) -> String {
                 }
             })
             .collect();
-        parts.push(if first.is_empty() {
-            entry_words(kind, n)
+        let open = u(e, "onlyOpen");
+        let words = if open > 0 {
+            format!(
+                "{} ({} only over open sites)",
+                entry_words(kind, n),
+                thousands(open)
+            )
         } else {
-            format!("{} (first: {})", entry_words(kind, n), first.join("; "))
+            entry_words(kind, n)
+        };
+        parts.push(if first.is_empty() {
+            words
+        } else {
+            format!("{words} (first: {})", first.join("; "))
         });
     }
     if parts.is_empty() {
@@ -501,6 +519,25 @@ fn tests_clause(rt: &Value) -> String {
         }
         _ => "tests: not analyzed".into(),
     }
+}
+
+/// The exit rule (output validation F24): an answer with no changed routine
+/// is a complete answer (exit 0) unless the input itself could not be
+/// resolved: a `--routine` selector or a `--file` that matched nothing or
+/// more than one thing, a diff file that names two workspace files, or a
+/// diff that does not parse. Only then is there no answer (exit 2).
+fn input_unresolved(diags: &[Value]) -> bool {
+    diags.iter().any(|d| {
+        matches!(
+            s(d, "kind"),
+            "selector-unmatched"
+                | "selector-ambiguous"
+                | "file-unmatched"
+                | "file-ambiguous"
+                | "diff-file-ambiguous"
+                | "diff-parse-error"
+        )
+    })
 }
 
 /// The ranking key of a root (§8.4 step 5): reached from a user or a job
@@ -712,7 +749,11 @@ pub fn render(
         .iter()
         .map(|k| u(&acc["totals"]["objectDeclaration"]["byKind"], k))
         .sum();
-    let exit = if roots.is_empty() { 2 } else { 0 };
+    let exit = if roots.is_empty() && input_unresolved(&diags) {
+        2
+    } else {
+        0
+    };
     let mut limits: Vec<String> = Vec::new();
     if let Err(e) = up {
         limits.push(format!("callers and entries not computed: {e}"));
@@ -1102,6 +1143,10 @@ fn root_block(r: &Value, opts: RenderOpts) -> Vec<String> {
         let anchor = &r["anchor"];
         let status = match s(r, "status") {
             "signatureChanged" => "signature changed",
+            "addedInDiff" => {
+                "new in this diff (its header is an added line, none of its lines removed)"
+            }
+            "signatureLinesChanged" => "signature lines changed in the diff",
             "positionUncertain" => "position uncertain (the diff does not match the working tree)",
             "added" => "added (new: its current effects are its whole behavior)",
             _ => "changed",

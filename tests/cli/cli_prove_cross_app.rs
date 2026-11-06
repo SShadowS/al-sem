@@ -383,7 +383,12 @@ fn prove_matches_a_group_resource_beyond_ten() {
         .as_array()
         .expect("effects")
         .iter()
-        .filter(|e| e["detail"]["boundary"].is_string())
+        // The write groups (the statement writes' `ERROR_IMPLICIT`, G20, is
+        // a boundary group of its own).
+        .filter(|e| {
+            e["detail"]["boundary"].is_string()
+                && e["type"].as_str().is_some_and(|t| t.starts_with("DB_"))
+        })
         .collect();
     assert_eq!(groups.len(), 1, "precondition: one boundary group: {entry}");
     let g = groups[0];

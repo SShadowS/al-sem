@@ -100,6 +100,37 @@
             "status": "live",
             "transactionContext": "unknown",
             "type": "DB_INSERT"
+          },
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "Log.Insert",
+              "file": "ws:src/OutIssueDocument.Codeunit.al",
+              "line": 61,
+              "sourceKind": "source"
+            },
+            "factId": "01431eb67a3f8e1d",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/OutIssueDocument.Codeunit.al",
+                  "line": 61,
+                  "operationId": "51168e57cf87e49c/1ababa503e96d6ce6ad697dac023022884e6cc512cf11166b2cd5317e1b5d768/op1"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -137,7 +168,9 @@
             "notPlaced": 0,
             "workspace": 0
           },
-          "kinds": {},
+          "kinds": {
+            "errors": 1
+          },
           "literalDeadTables": 0,
           "mayWriteTables": {
             "byDependencies": 0,
@@ -177,7 +210,7 @@
     "summary": {
       "rootsRequested": 1,
       "rootsResolved": 1,
-      "totalEffects": 2,
+      "totalEffects": 3,
       "totalUnresolved": 0
     },
     "workspaceFingerprint": "1792f060b9084d5d4901907b0765d90c25e2721e83ceb487928fd368a5231243"

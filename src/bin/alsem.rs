@@ -1382,7 +1382,9 @@ struct DigestCli {
     #[arg(long = "single-app", default_value_t = false)]
     single_app: bool,
 
-    /// Add a testCoverage block: which changed routines a [Test] procedure reaches.
+    /// Add a testCoverage block: which changed routines a [Test] procedure of
+    /// the workspace app reaches. Sibling test apps are named, not loaded:
+    /// `alsem tests` selects from them.
     #[arg(long, default_value_t = false)]
     tests: bool,
 

@@ -86,6 +86,30 @@
           "provenance": "direct",
           "via": "self",
           "witnessOperationId": "9af645a8fef33e6d/2fb67181c209ce544af4cdb5db74d366c8dfdf47e0b1624561c635d342cf1711/op0"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "9af645a8fef33e6d/2fb67181c209ce544af4cdb5db74d366c8dfdf47e0b1624561c635d342cf1711/op1"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "9af645a8fef33e6d/2fb67181c209ce544af4cdb5db74d366c8dfdf47e0b1624561c635d342cf1711/op2"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "9af645a8fef33e6d/2fb67181c209ce544af4cdb5db74d366c8dfdf47e0b1624561c635d342cf1711/op3"
         }
       ],
       "expectedStatus": "complete",
@@ -102,6 +126,7 @@
         "Modify → op=modify, opSubtype=Modify",
         "Insert → op=insert",
         "Delete → op=delete",
+        "a statement-position Modify / Insert / Delete (its Boolean discarded) → also op=error-implicit (G20)",
         "every table fact carries a witnessOperationId (record-op witness)",
         "status complete (clean extraction)"
       ]
@@ -137,6 +162,14 @@
           "provenance": "direct",
           "via": "self",
           "witnessOperationId": "9af645a8fef33e6d/32ca2a985edfd6dd82022b050b0b9d010db3113853f23b941eef41240de2db1e/op1"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "9af645a8fef33e6d/32ca2a985edfd6dd82022b050b0b9d010db3113853f23b941eef41240de2db1e/op0"
         }
       ],
       "expectedStatus": "complete",

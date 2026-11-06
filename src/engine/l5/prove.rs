@@ -197,7 +197,10 @@ impl ProveObligations {
 /// (`UnresolvedCone::fires_table_events`): a `Validate` is no effect.
 const SUBSCRIBABLE_EFFECTS: &[&str] = &["EVENT_PUBLISH", "UI_WINDOW_OPEN"];
 
-/// Q6: the cone follows the LOADED subscribers of every event it raises, so
+/// Q6: the cone follows the LOADED subscribers of every event it raises (a
+/// table event through its record operation's table-event edges since F1,
+/// spec `2026-11-06-db-event-subscribers.md`; before that it did not, and a
+/// `no` here could hide a loaded subscriber's write), so
 /// an event is closed over them, unlike an interface, which is open. A `yes`
 /// stands on its witness whatever else subscribes; a `no` (MAY: no matching
 /// effect; MUST: not on every success path) could be overturned by a
@@ -694,7 +697,8 @@ fn effect_matches(eff: &DigestEffectFull, question: &ProveQuestion) -> bool {
         }
         ProveQuestion::ReachesUi => UI_TYPES.contains(&eff.effect_type.as_str()),
         // An explicit Error, or an implicit runtime error (G20: an unguarded
-        // Get/FindFirst/FindLast/FindSet, TestField, FieldError).
+        // record op in statement position, TestField, FieldError; the rule is
+        // `ui_events_error::implicit_error_record_op` / `implicit_error_call`).
         ProveQuestion::ThrowsError => {
             eff.effect_type == "ERROR_THROW" || eff.effect_type == "ERROR_IMPLICIT"
         }
@@ -2427,13 +2431,15 @@ fn prove_view(cx: &mut ViewCx<'_>, job: &ProveJob<'_>) -> Result<ProveRunResult,
     if let Some((answer, header)) = callers {
         cx.release(Cell::L4);
         cx.release(Cell::Effects);
-        return Ok(callers_document(
-            job,
-            &answer,
-            &header,
-            &workspace_fp,
-            diagnostics_json,
-        ));
+        let mut doc = callers_document(job, &answer, &header, &workspace_fp, diagnostics_json);
+        // F5 (2g): readable dependency locations, as the effects path prints
+        // them (the JSON keeps the guid).
+        doc.human_text = cx
+            .view()
+            .target()
+            .dependencies()
+            .readable_locations(doc.human_text);
+        return Ok(doc);
     }
 
     // EXIT CODE 2: routine not resolved (zero roots → dummy-doc)

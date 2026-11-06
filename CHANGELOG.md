@@ -56,6 +56,279 @@ validation round 1, calls c06 and c02):
   that names the condition (c02: `:1434`, the condition is at `:1433`). It prints the
   condition's own line now.
 
+### Fixed (impact reach and test selection: four over-claims from output-validation round 1)
+
+Measured on the CDO baseline (`bc3ccb18`, release-fast, before = master `6e577c24`).
+
+- **A declared `Page`/`Report`/`XmlPort`/`Query` variable no longer runs its object (c12).**
+  The may-execute graph's rule 2 gave every routine of an object a `declaredRunnable` run
+  edge to every runnable type its globals (or its own locals) declared. `Document Errors
+  Mgt.` declares `Page "Sales Invoice"` and only calls `RunBackgroundCheck()` on it, so its
+  empty `OnRun` and `GetNothingToPostErrorMsg` were shown as impossible "first" witnesses.
+  Now only a `TestPage`/`TestRequestPage` declaration counts; for the other four kinds the run
+  is a site: a typed `.Run()`/`.RunModal()` was already an engine `run` edge, and a call whose
+  route is a dispatching builtin that runs an object of kind K (`ReportVar.SaveAsPdf()`,
+  `QueryVar.Open()`) on a receiver typed as object X of kind K gets the `declaredRunnable`
+  edge to X, from that routine, at that line (`project::Builder::receiver_run`). c12's
+  ancestors: 27,718 → 21,088; its first codeunit OnRun is now `CDO Open Unhandled Sales
+  Inv.::OnRun`, not `Codeunit 9070::onrun`. `alsem graph` on CDO: 31,099 → 24,872 nodes,
+  78,678 → 56,780 edges, `declaredRunnable` 4,690 → 6 (the rest leave by pruning).
+  **bc-dev-mcp:** no schema change; fewer edges.
+- **An open-site (hub) witness says so in impact's human answer (c20).** `reached from`
+  printed `Report.RunModal(<id from Report Selections>)` → `run:report` hub witnesses (JSON
+  tier `onlyOpen`) beside real paths. Each list now puts witnesses with a real path first
+  (a node reached first over a hub and later by a real path shows the real one), every
+  non-local witness carries its tier in the words `tests` uses (`5 hops, only over open
+  sites`, `through dependency code`), each entry kind counts its open-only nodes
+  (`5,657 page actions (1,046 only over open sites)`), and the JSON entry, external and
+  publisher rows gain `onlyOpen` (additive). c20's `"Print" on Page CDO Customer Card`
+  witness is no longer among the first ten.
+- **A control add-in's event trigger is not reachable from a test (c21).** A page's
+  lifecycle edge into a `usercontrol` event trigger (`EditorInitialized`) now has
+  `via: "clientEvent"`: only the add-in's JavaScript raises it, so `alsem tests` (and
+  impact's test part) does not walk it, while impact keeps it (a real client fires it).
+  c21's ten run-first tests no longer go through `EditorInitialized` (now through the page's
+  Send action, the labelled over-approximation c28 accepted); c28: 369 → 351 tests in
+  34 codeunits. **bc-dev-mcp:** a new, additive `via` value; a test walk over the export
+  should skip it (spec 2026-10-13 rule 1).
+- **`digest --tests` no longer says "complete" / "no-path" with no test considered (c25).**
+  With 0 `[Test]` procedures the block is `partial` (reason `no-test-code`) and each routine
+  reads `no-test-code`. The coverage graph still holds the workspace app's own tests only
+  (the agent-tasks spec names no single test universe for digest); the sibling test apps the
+  same discovery as `alsem tests` finds are named in `testAppsNotLoaded` and add reason
+  `test-apps-not-loaded`, in JSON and in the human line. c25 on CDO: `complete` / 20 ×
+  `no-path` → `partial: no-test-code, test-apps-not-loaded`, naming `Continia Document
+  Output 365 - Test` (1,844 `[Test]` lines).
+
+### Fixed (output validation V1: wrong statements in tool outputs)
+
+Spec `docs/superpowers/specs/2026-11-06-output-validation-r1.md` §1. Each fix has a test
+on a hand-stated fixture and a discrimination proof.
+
+- **`query effects` counted reads as writes (F15).** `bucket()` sent every row of a
+  caller-dependent temp state to "caller-dependent writes", and every row on a temporary
+  record to "temporary records", before it looked at the operation. A `Get` on the
+  caller's record was counted as a write (c11: `caller-dependent writes 2 on 1 table` for
+  one `Get` and one `Modify`). Both classes are now split by operation family the way the
+  physical class is: only a write is a caller-dependent or temporary-record write; a read
+  joins `reads` with a note (`Get 2; 1 caller-dependent, 1 on temporary records`), a lock
+  joins `locks`, and so on. JSON: those rows leave `summary.callerDependent`,
+  `summary.temporary` and `byTable`; query schema 3.6.0.
+- **`query effects` numbered one parameter two ways (F16).** The table rows said
+  `caller-dependent: parameter 3` (1-based) while the `--all` rows said
+  `temp parameter-dependent(2)` (the raw 0-based index). Both now print
+  `caller-dependent: parameter 3 (ToPurchaseHeader)`, 1-based with the parameter's name;
+  each JSON row adds `parameterPosition` (1-based) and `parameterName`, and `tempState`
+  keeps its 0-based form.
+- **`impact` exited 2 on a complete answer (F24).** A change that touched no routine
+  (c13: 25 object headers) got a full, complete accounting, "0 changed routines", and
+  exit code 2, which agents and the MCP envelope read as a failure. It now exits 0. Exit
+  2 stays for no answer: a `--routine` selector or `--file` that matched nothing or more
+  than one thing, a diff file naming two workspace files, or a diff that does not parse.
+- **`impact` without a base called an added routine "signature changed" (F25).** The
+  status came from "a changed line falls on the signature", so a routine the diff adds
+  (c20) read as a changed signature. Without a base the status now says only what the diff
+  shows: `new in this diff` (JSON `addedInDiff`) when the routine's header line is a `+`
+  line and no `-` line sits in or at the edges of its span, else `signature lines changed
+  in the diff` (`signatureLinesChanged`). The rule is not "every line is a `+` line": git
+  aligns a new routine's closing `end;` with the previous routine's old one as context, as
+  in c20. `added` and `signature changed` still come from a base comparison's pairing. The
+  accounting's per-routine row gains its added-line count and the two facts.
+- **`prove`'s callers' context answers printed dependency guids (F5).** Their human text
+  named a dependency location `dep:<guid>:path` (c02); the rule is `dep:<app name>:path`,
+  which the effects path already applied. The callers' context path now applies the same
+  `readable_locations`; the JSON keeps the guid.
+- **Test-selection paths printed two overloads alike (F9).** A path passing two
+  overloads read `Codeunit CDO E-Mail::Send → Codeunit CDO E-Mail::Send` (c28); agent-tasks
+  §12.1 requires each to carry its handle. The sited graph now keeps each local overload's
+  short handle (`/1`, `/2[1: Integer]`, `/0#2`), computed by the rule `RollupCx::handle`
+  uses (factored into `routine_rollup::overload_short`, which both call), and every
+  `alsem tests` / impact test path prints it (`Send/1 → Send/0`), in JSON `path` too.
+- **The touches `callers` input was described wrongly (F39).** Its MCP descriptions said
+  "without their witnesses", but a caller that touches the table through another branch
+  prints its first touch (operation, location, first hop; c17). Both texts now say so.
+
+### Fixed (field writers count bare writes through the implicit record)
+
+`alsem explain --table T --field F` (and d65's writer index, which reads the same
+`l5::field_writers::field_writes`) read only qualified writes (`R.F := …`), `Validate` and
+`ModifyAll`. A bare `F := …` inside the table's own code, a table extension, a page with
+that source table or a `with` body was never a writer, although the body walk records it
+(`implicit_field_accesses`) and `alsem query touches --field` already listed it as an
+`implicit-access` write. On the CDO baseline (`bc3ccb18`), `CDO Setup."Document Folder"`
+answered "0 writer(s)" while its own OnValidate assigns
+`"Document Folder" := "Document Folder" + '\'` (`CDOSetup.Table.al:97`); it now answers
+1 writer, `Table CDO Setup::OnValidate`, assign at `:97`. `CDO E-Mail Template Header."Document
+Folder"` gains its OnValidate (`:363`) beside the two writers it had.
+
+- One definition: `ModelRoutine::field_access_sites()` (qualified then bare accesses) is what
+  both `query touches --field` and `field_writes` iterate, so explain's writers and the
+  touches' `write` sites are the same sites.
+- d65 (opt-in) on CDO: 0 → 2 findings at both `--scope primary` and `--scope all`, both at
+  `CDO Merge Table Field::ImportFromXmlNode` (`CDOMergeTableField.Table.al:611`, a bare
+  `Table := …`): the other five writers set `Table` through `Validate`, whose OnValidate
+  `TestField` rules the import skips. Triaged against source: the skip is real and
+  deliberate (the XML import restores exported values field by field without validation),
+  an exception d65 is meant to surface, not a bug. The default `alsem analyze` findings did
+  not move (2,238 primary, 31,311 all).
+- Test: `tests/cli/cli_field_writers.rs` on the new fixture `tests/fixtures/field-writers-implicit`
+  (a table trigger, a table procedure, a table extension, a page action, a qualified write;
+  a bare read, a shadowing local and another field as controls), through the binary; it also
+  checks explain's writer lines equal `query touches`' write lines (the new fixture dir
+  bumps `FIXTURE_ROOTS`' `fixtures` count, 58 → 59). Discrimination: reading
+  only `field_accesses` again in `field_writes` fails both tests (only `Qualified` is left).
+
+### Fixed (a statement `Insert` / `Modify` / `Delete` / `Rename` / `Find` raises an implicit error)
+
+AL raises a runtime error when a record method declared `[Ok :=] Rec.M(…)` fails and its
+Boolean is not consumed. G20's rule (`implicit_error_record_op`) knew this only for
+`Get` / `FindFirst` / `FindLast` / `FindSet` and `TestField`, so a bare `Modify();` raised
+nothing. On CDO, the digest of a one-line edit adding `Modify();` to `CDO E-Mail Job`'s
+"Table No." OnValidate said "UI and errors: none observed"; it now says "errors at 1 place"
+(`ERROR_IMPLICIT` at `CDOEMailJob.Table.al:24`). The rule now also covers `Find`, `Insert`,
+`Modify`, `Delete` and `Rename` in statement position; `CalcFields` / `CalcSums` stay out
+(they fail only on a non-FlowField, a coding error no data state causes), and `DeleteAll`,
+`ModifyAll`, `Next`, `Count`, `IsEmpty` return no "ok" Boolean. Consumers: digest and
+explain's errors, `prove … throws-error`, impact's error counts, snapshots and
+fingerprints. The detectors read `error-throw`, not `error-implicit`: CDO's default
+`analyze` findings are unchanged at both scopes, and `--program-call-graph-stats` is
+byte-identical.
+
+- **Latent bug fixed with it:** the snapshot's pd arena found a producer's row by
+  `(owner, operation id)` alone, first match. One operation can witness two facts (a
+  statement `Modify();` is a `modify` table fact and an `error-implicit` fact), and the
+  sorted rows put `error-implicit` first, so a parameter-dependent write's states pointed
+  at the error fact and its digest effect lost its proof paths, evidence and ordering
+  labels (`cli_digest_temp_state`, `cli_implicit_trigger_cone`,
+  `cli_event_dispatch_first_hop`, `r3_temp_class_parity_arena` all failed). The same held
+  for a statement `Get` on a parameter record since G20. `snapshot_view::is_producer_row`
+  (a direct TABLE fact witnessing the operation) is now the one rule for
+  `derive_pd_arena` and both view lookups. Discrimination: dropping its `resource_kind ==
+  "table"` test fails `r3_temp_class_parity_arena` and `cli_digest_temp_state::a1a`.
+- Test: `cli_prove_throws_error::throws_error_sees_statement_record_writes` (a table
+  trigger's bare `Modify();`, the c01 shape, and qualified `Insert` / `Modify(true)` /
+  `Delete` / `Rename` / `Find`; `exit(T.Insert())`, `if not T.Modify()`, `Ok := T.Delete()`
+  and statement `DeleteAll` / `ModifyAll` / `Init` as controls). Discrimination: removing
+  the `Modify` arm makes `OnValidate` answer "no" and the test fails.
+- Goldens: 300+ digest, fingerprint, snapshot, explain, output, r1a, r3a3, r4f and batch
+  goldens gain `error-implicit` facts / `ERROR_IMPLICIT` effects and the counts and hashes
+  that follow; where the one-row-per-kind outputs list one site, the new site can become
+  the representative and the old one moves to `moreSites`, and an inherited error's
+  shortest witness can change. The CDO rendering goldens (`tests/cli-output-goldens/cdo/`,
+  re-minted with `CDO_WS` + `REGEN_TEMP_GOLDENS=1`) move the same way: IssueReminder's errors
+  194 → 301 places, `UpdateLastUpload` (a statement `Modify` at `CDOTelemetry.Codeunit.al:48`)
+  "UI and errors: none observed" → "errors at 1 place"; a dependency entry point can gain a
+  real call site its write group had folded into "at least" (`CreateEDocumentLog` at
+  `CDOeDocumentsDispatcher.Codeunit.al:308`), and explain's write lines gain "fields … assigns"
+  from the field-writers fix. Hand-held oracles moved with them: the l2cap vectors (+4
+  facts), the r3a3 vectors (+13), the R3a-3 manifest matrix (+130 direct, +46 inherited),
+  the R3a-5 matrix (`totalCrossAppInheritedFacts` 1 → 2) and the split records
+  (`REMINT_SPLIT_RECORDS=1`, RECORD explains) and the policy facts oracle
+  (`REMINT_POLICY_FACTS_ORACLE=1`: 175 of 455 cases gain facts, none loses one). Hand-written
+  tests whose fixtures have a statement write now expect the new error, or filter to table
+  effects where the test is about tables (`cli_digest_query_dependencies`,
+  `cli_escaped_object_names`, `cli_object_display`, `cli_impact_base`, `cli_prove_cross_app`,
+  `no_path_tests`, `wave2_index_tests`, `digest_rule_b_tests`). Where the extra fact would
+  break a test's stated precondition, its fixture consumes the Boolean instead
+  (`if … then;`): `cli_commit_sites_up_chain` (a crossing with no row), the cone's T3b
+  (the set's one entry is the commit) and T7 (G has one fact).
+- Observed, not changed: in a dependency group, a resource-less kind (now also this
+  error) gets a row at every crossing, also one whose literal argument makes the
+  operation unreachable (`wave2_index_tests`' `PostWith(false)` around `if Flag then
+  L.Insert();`), because `literal_reach` judges a group by its crossing and resources,
+  and a resource-less group has none.
+
+### Fixed (record operations raise their table's platform events: F1)
+
+A record operation raises its table's database trigger events and their subscribers run in
+the caller's transaction: `Insert` (`OnBefore/OnAfterInsertEvent`), `Modify`/`ModifyAll`
+(`…ModifyEvent`), `Delete`/`DeleteAll` (`…DeleteEvent`), `Rename` (`…RenameEvent`) and
+`Validate(F)` (`…ValidateEvent` of `F`), whatever the RunTrigger argument says and on
+temporary records too. The engine never followed them: a record operation reached only the
+table's own triggers, and none at all for `RunTrigger = false`. So on the CDO baseline
+`alsem prove OnAfterCopyPurchaseDocument writes-table:"Purch. Inv. Entity Aggregate"`
+answered `no` with complete coverage, though its `Modify(false)` raises Purchase Header
+`OnAfterModifyEvent` and the Base Application subscriber `PurchInvAggregator` locks and
+writes that table (output validation 2026-11-06, call c11). It was the known gap F1 of the
+call-graph export spec, flagged `unraisedPublisher`, not a choice for cost; `prove`'s
+`loaded-subscribers` label already claimed the cone followed these subscribers. Design note:
+`docs/superpowers/specs/2026-11-06-db-event-subscribers.md`.
+
+- **Program engine**: a record operation on a resolved table gets a second edge at its site,
+  `EdgeKind::TableEvent` under `ObligationId::TableEvent`, to the table's synthetic platform
+  publishers of the events it raises (`resolver::resolve_table_events`); their `EventFlow`
+  edges carry the subscribers. No site rule applies. A table no loaded app subscribes to gets
+  no edge. `Validate` reaches the publisher, which collapses fields; the detector model
+  narrows it to the validated field's subscribers.
+- **Detector model**: one `DispatchKind::TableEvent` (`table-event`) call edge per model
+  subscriber, keyed by the record operation, with the event id and whether the subscription
+  may be skipped. The cone, prove, explain, digest and `query effects/touches` follow it
+  (facts inherited `via: event-dispatch`); a subscriber's `Rec`/`xRec` take the raising
+  operation's temp state. Witness paths show it as an `[event]` hop; a fact's first hop names
+  both the operation and the event, so the operation's trigger edges never pass for it.
+- **Walkers that leave event fan-out to another detector** (d1, d2's evidence walk, d46,
+  d48, d54) skip it as they skip `event-dispatch`; explain's callers and rules do not count a
+  table event's subscriber as called (as for integration events).
+- **Demand** follows it forward; a dependency routine whose record op raises an event a
+  primary routine subscribes to is not a "raiser" for the reverse rule.
+- **`alsem graph`**: an `Event` edge with the new `via: "tableEvent"` (additive). A synthetic
+  table publisher is flagged `unraisedPublisher` only when no non-hub edge raises it, so test
+  selection prints the `platform-table-event` hidden channel only for such a publisher. Holes
+  doc row A12: table events now better than altool.
+- Not done (design note §6): the global triggers (`OnDatabaseInsert`, `OnGlobalModify`, gap
+  F8), table-extension `OnBefore/OnAfter<Op>` triggers (F5), d2/d7 rules for table events, and
+  dependency subscribers in a single-app model (no edge, as for dependency triggers).
+
+**Measured on CDO** (`bc3ccb18`, release-fast, before = master `6e577c24`):
+
+- `aldump --program-call-graph-stats`: 98 new `TableEvent` edges, all `resolvedSource`
+  (primary 20,916 → 21,014; whole program 46,328 → 46,426); `unknown` 0 → 0.
+  `--dependency-bodies-stats`: 431,379 → 437,511 (+6,132, Base Application +5,859);
+  `unknown` 0 → 0.
+- c11 (`query effects OnAfterCopyPurchaseDocument --all`) now lists writes beyond the
+  dependency entry point on 3 tables (Purch. Cr. Memo Entity Buffer, Purch. Inv. Entity
+  Aggregate, Purchase Order Entity Buffer) through the three `OnAfterModifyPurchaseHeader`
+  subscribers entered at `CDOSubscribers.Codeunit.al:953`. `prove … writes-table:"Purch. Inv.
+  Entity Aggregate"`: `yes` (Insert at `PurchInvAggregator.Codeunit.al:519`, Modify at `:517`).
+  `prove --closed-world SetCustomerOutputProfile writes-table:"CDO Output Profile
+  Conflict"`: `yes` through `OnAfterModifyCustomer_SyncConflict` (`:578`); its coverage is now
+  incomplete (the cone reaches Customer's other subscribers and their open calls).
+- `alsem analyze --scope primary`: 2,238 → 2,253. d44 20 → 35 (+15): 14 on `CDO
+  Telemetry::Company Triggers_OnCompanyOpenCompleted`, whose `JobQueueEntry.Restart()` raises
+  Job Queue Entry `OnBeforeModifyEvent`, whose CRM subscriber may start a full sync writing
+  the integration tables another `OnCompanyOpenCompleted` subscriber writes (path checked,
+  true may-path); 1 on Customer `OnAfterModifyEvent` (`OnAfterModifyCustomer_SyncConflict`
+  and Workflow's `RunWorkflowOnCustomerChanged` "both" write CDO Output Profile Conflict,
+  but the workflow side reaches it only by modifying Customer again, which re-enters the CDO
+  subscriber: a false positive for d44's intent, 1 of 15). d9: the same 24 findings with more
+  tables (e.g. `PostAndHandle` 399 → 413 tables before its Commit).
+- `alsem analyze --scope all`: 31,311 → 32,454 (1,189 new, 46 gone). All new findings but the
+  primary ones above are in dependency code the cross-app model now demands (the subscribers
+  of table events the workspace raises and their cones): d14 +615, d44 +186, d43 +171, d35
+  +68, d3 +37, d1 +34, smaller others. The 16 d44 findings gone are displaced by the
+  per-event cap of 32 (`onafterlogin` 26 → 32, `apisetup` 5 → 32, `oncompanyinitialize`
+  2 → 32 findings).
+- One `explain` and one `prove` (OnAfterCopyPurchaseDocument), three alternating rounds on a
+  host at load 30-340 on 22 cores: user CPU median explain 133 → 131 s, prove 141 → 142 s
+  (unchanged within the noise); peak RSS median explain 3.14 → 3.20 GB, prove 2.99 → 3.16 GB;
+  wall times too noisy to compare (explain 38-99 s before, 29-49 s after).
+- **A new `Witness::Platform`**: the route to a synthetic publisher has no declaration to
+  cite; the route-applicability contract (CDO: `route_applicability_zero_violations`, 124
+  violations with `Witness::None`) accepts it with `Source`/`Abi` evidence and a `Routine`
+  target only.
+- **CDO ratchets moved, re-minted through their documented `REGEN_TEMP_GOLDENS=1` path**:
+  the L4 frozen digests (`tests/l4-summary-baseline/cdo-*-digest.txt`: the cone now holds the
+  subscribers' effects); the CDO rendering goldens (`tests/cli-output-goldens/cdo/`: e.g.
+  `IssueReminder` `writes-table:Data Exch.` goes from `unknown` to `yes` through Reminder-Issue
+  → Gen. Journal Line `OnAfterInsertEvent` → Workflow's subscriber → its responses, a may-path
+  through the workflow engine; `RunReportID` may-commit gains a 14th effect through Incoming
+  Document Attachment's subscribers); C-9's "through dependency code" count 301 → 597 tests;
+  `derived_only_matches_raw_fold_on_cdo`'s pinned recursive-member count 784 → 1,027 (the
+  raw-fold oracle agrees; recursive SCCs 70 → 106: subscribers that write the table they
+  subscribe to re-raise its events); the digest size budget (owner's ratchet T-W2-15) raised 1,250,000 / 720,000 →
+  1,310,000 / 760,000 bytes (IssueReminder measured 1,293,230 / 744,546), which needs the
+  owner's confirmation.
+
 ### Fixed (the macOS build compiles again)
 
 `OutputDir::create` (`src/engine/host/output.rs`) compared `fstat`'s mode, a `u32`, with

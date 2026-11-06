@@ -530,6 +530,14 @@
             "kind": "event",
             "eventClass": "Integration"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "16fea16d024d1e8b/e8761aa9b38316cb03701eca9f7d828f325d1357625ad1502a893316243fa928/op1"
         }
       ],
       "capabilityStatus": "complete",

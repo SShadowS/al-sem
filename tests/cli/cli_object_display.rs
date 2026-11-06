@@ -873,7 +873,14 @@ fn escaped_names_are_logical_in_digest() {
         assert_eq!(code, 0, "{doc}");
         for e in entries(&doc) {
             owners.push(e["routine"]["objectDisplay"].as_str().unwrap().to_string());
-            for f in e["effects"].as_array().unwrap() {
+            // The table effects: a statement write also carries a
+            // resource-less `ERROR_IMPLICIT` (G20), which names no object.
+            for f in e["effects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|f| f["type"].as_str().is_some_and(|t| t.starts_with("DB_")))
+            {
                 resources.push((
                     f["detail"]["resourceDisplay"]
                         .as_str()

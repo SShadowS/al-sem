@@ -372,7 +372,9 @@ impl ResolvedProgram {
             ce.edge.from.object.app != ctx.primary_app_ref
                 && matches!(
                     ce.obligation_id,
-                    ObligationId::CallSite { .. } | ObligationId::Background { .. }
+                    ObligationId::CallSite { .. }
+                        | ObligationId::Background { .. }
+                        | ObligationId::TableEvent { .. }
                 )
         }));
         // Nothing reads the dispatch audit or the alias-skip count of this

@@ -16,8 +16,14 @@
 //!
 //! Every changed root counts (minus test code). One the digest query has no entry
 //! for is `uncovered` with reason `not-in-graph`; the other reasons are
-//! `declaration-only`, `platform-event-subscriber`, `dependency-event-subscriber`
-//! and `no-path`.
+//! `declaration-only`, `platform-event-subscriber`, `dependency-event-subscriber`,
+//! `no-test-code` (no `[Test]` procedure was considered: the block is then
+//! `partial`, never `complete`) and `no-path`.
+//!
+//! The test universe is the workspace app's own tests. Sibling test apps (the
+//! ones `alsem tests` loads, found by the same discovery) are named in
+//! `testAppsNotLoaded` and make the block `partial` (`test-apps-not-loaded`):
+//! digest does not build their programs.
 //!
 //! Determinism: the output lists are built from `BTreeMap`/`BTreeSet`s or sorted.
 //! The `HashMap`s are lookups, or are iterated only into order-independent results
@@ -114,7 +120,22 @@ pub enum UncoveredReason {
     NotInGraph,
     PlatformEventSubscriber,
     DependencyEventSubscriber,
+    /// No `[Test]` procedure was considered at all: "no path" would read as
+    /// a finding, and there was nothing to search from (round-1 c25).
+    NoTestCode,
     NoPath,
+}
+
+/// A sibling test app the same discovery `alsem tests` runs finds
+/// (`test_select::scope::discover`), which `digest --tests` does not load:
+/// digest searches the workspace app's own `[Test]` procedures only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnloadedTestApp {
+    /// Its `app.json` `name`.
+    pub name: String,
+    /// Its `[Test]` attribute lines (source text, before `#if`).
+    pub test_attribute_lines: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -170,6 +191,10 @@ pub struct TestCoverage {
     pub test_procedures_considered: usize,
     pub excluded_test_code: usize,
     pub coverage: CoverageStatus,
+    /// Sibling test apps found but not loaded ([`Self::note_unloaded_test_apps`]);
+    /// left out of the JSON when none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub test_apps_not_loaded: Vec<UnloadedTestApp>,
 }
 
 impl TestCoverage {
@@ -179,6 +204,22 @@ impl TestCoverage {
         serde_json::to_value(self).expect("TestCoverage serializes")
     }
 
+    /// Record the sibling test apps digest does not load: the block is then
+    /// `partial` with reason `test-apps-not-loaded`, since a test there may
+    /// reach a routine the workspace's tests do not (round-1 c25: the CDO
+    /// test app reaches 13 of 20 routines digest called `no-path`).
+    pub fn note_unloaded_test_apps(&mut self, apps: Vec<UnloadedTestApp>) {
+        if apps.is_empty() {
+            return;
+        }
+        self.test_apps_not_loaded = apps;
+        let r = &mut self.coverage.reasons;
+        if let Err(i) = r.binary_search(&"test-apps-not-loaded") {
+            r.insert(i, "test-apps-not-loaded");
+        }
+        self.coverage.status = "partial";
+    }
+
     /// The human digest's one summary line (spec §Surface).
     #[must_use]
     pub fn human_line(&self) -> String {
@@ -186,12 +227,27 @@ impl TestCoverage {
             [] => "complete".to_string(),
             r => format!("partial: {}", r.join(", ")),
         };
+        let unloaded = if self.test_apps_not_loaded.is_empty() {
+            String::new()
+        } else {
+            let apps: Vec<String> = self
+                .test_apps_not_loaded
+                .iter()
+                .map(|a| format!("{} ({} [Test] lines)", a.name, a.test_attribute_lines))
+                .collect();
+            format!(
+                "; test apps not loaded by digest: {} (alsem tests, MCP alsem_tests, selects \
+                 from them)",
+                apps.join(", ")
+            )
+        };
         // Output step 1b (astra, fable): say whether test code was loaded at
         // all, and that an unreached routine is no reason to skip tests.
         if self.test_procedures_considered == 0 {
             return format!(
                 "test coverage: no test code loaded (0 [Test] procedures in the workspace app), \
-                 so no changed routine is reached; that is not a reason to skip tests ({status})"
+                 so no changed routine is reached; that is not a reason to skip tests{unloaded} \
+                 ({status})"
             );
         }
         let unreached = if self.covered_changed_routines < self.changed_routines {
@@ -201,7 +257,7 @@ impl TestCoverage {
         };
         format!(
             "test coverage: {} of {} changed routines reached; {} [Test] procedures loaded and \
-             considered ({status}){unreached}",
+             considered ({status}){unreached}{unloaded}",
             self.covered_changed_routines, self.changed_routines, self.test_procedures_considered
         )
     }
@@ -296,6 +352,7 @@ pub fn compute_test_coverage(g: &CoverageGraph, changed: &[ChangedRoutine]) -> T
         let reason = match c.shape {
             ChangedShape::DeclarationOnly => UncoveredReason::DeclarationOnly,
             ChangedShape::NotInGraph => UncoveredReason::NotInGraph,
+            ChangedShape::Routine if g.roots.is_empty() => UncoveredReason::NoTestCode,
             ChangedShape::Routine if facts.is_some_and(|f| f.platform) => {
                 UncoveredReason::PlatformEventSubscriber
             }
@@ -325,6 +382,11 @@ pub fn compute_test_coverage(g: &CoverageGraph, changed: &[ChangedRoutine]) -> T
         });
     }
 
+    // No test was searched from: the block cannot be `complete` (round-1
+    // c25 read "complete" with 0 tests considered).
+    if g.roots.is_empty() {
+        reasons.insert("no-test-code");
+    }
     let changed_routines = covered.len() + uncovered.len();
     TestCoverage {
         changed_routines,
@@ -344,6 +406,7 @@ pub fn compute_test_coverage(g: &CoverageGraph, changed: &[ChangedRoutine]) -> T
             tests_with_unresolved_traversal: unresolved_tests,
             tests_calling_dependency_code: dependency_tests,
         },
+        test_apps_not_loaded: Vec::new(),
     }
 }
 
@@ -563,10 +626,10 @@ impl CoverageGraph {
             let from = e.edge_from();
             match e.edge_to() {
                 Some(to) => {
-                    g.edges
-                        .entry(from.to_string())
-                        .or_default()
-                        .push((to.to_string(), e.edge_kind() == "event-dispatch"));
+                    g.edges.entry(from.to_string()).or_default().push((
+                        to.to_string(),
+                        crate::engine::l4::combined_graph::is_subscriber_edge(e.edge_kind()),
+                    ));
                     if role_of_stable_id(primary, to) == Role::Dependency {
                         flag(&mut g.boundary, to, "dependency-code");
                     }
@@ -684,6 +747,51 @@ mod tests {
             .iter()
             .map(|u| (u.stable_id.as_str(), u.reason))
             .collect()
+    }
+
+    /// Round-1 c25: with no `[Test]` procedure to search from, nothing is
+    /// "complete" and no routine has "no path": the block is `partial`
+    /// (`no-test-code`) and each routine reads `no-test-code`. A declaration
+    /// keeps its own reason. Sibling test apps noted add their reason, sorted.
+    ///
+    /// DISCRIMINATION (2026-11-06): dropping the `g.roots.is_empty()` reason
+    /// insert fails the status assert ("complete"); dropping the
+    /// `NoTestCode` arm fails the items assert (`NoPath`).
+    #[test]
+    fn no_test_code_is_neither_complete_nor_no_path() {
+        let g = graph(&[], &[("a", "b", false)]);
+        let mut c = changed(&["a", "d"]);
+        c[1].shape = ChangedShape::DeclarationOnly;
+        let mut tc = compute_test_coverage(&g, &c);
+        assert_eq!(tc.coverage.status, "partial");
+        assert_eq!(tc.coverage.reasons, vec!["no-test-code"]);
+        assert_eq!(
+            unc(&tc),
+            vec![
+                ("a", UncoveredReason::NoTestCode),
+                ("d", UncoveredReason::DeclarationOnly)
+            ]
+        );
+        tc.note_unloaded_test_apps(vec![UnloadedTestApp {
+            name: "T".into(),
+            test_attribute_lines: 3,
+        }]);
+        assert_eq!(
+            tc.coverage.reasons,
+            vec!["no-test-code", "test-apps-not-loaded"]
+        );
+        // With a test, a complete search is complete until a sibling is noted.
+        let g = graph(&["t"], &[]);
+        let mut tc = compute_test_coverage(&g, &changed(&["a"]));
+        assert_eq!(tc.coverage.status, "complete");
+        assert_eq!(unc(&tc), vec![("a", UncoveredReason::NoPath)]);
+        tc.note_unloaded_test_apps(Vec::new());
+        assert_eq!(tc.coverage.status, "complete", "no sibling, no change");
+        tc.note_unloaded_test_apps(vec![UnloadedTestApp {
+            name: "T".into(),
+            test_attribute_lines: 3,
+        }]);
+        assert_eq!(tc.coverage.status, "partial");
     }
 
     #[test]
@@ -1023,12 +1131,13 @@ mod tests {
         assert_eq!(
             unc(&tc),
             vec![
-                ("a", UncoveredReason::NoPath),
-                ("b", UncoveredReason::NoPath)
+                ("a", UncoveredReason::NoTestCode),
+                ("b", UncoveredReason::NoTestCode)
             ]
         );
         assert_eq!(tc.ratio, Some(0.0));
-        assert_eq!(tc.coverage.status, "complete");
+        // Nothing was searched from: not `complete` (round-1 c25).
+        assert_eq!(tc.coverage.status, "partial");
     }
 
     /// The adapter over `tests/fixtures/test-selection-graph/` (the CLI tests'
@@ -1114,6 +1223,9 @@ mod tests {
                 true,
             ),
             ("InModalHandler", "OpenCardModally", false),
+            // F1: `Ledger.Insert(true)` (Tests.al:88) raises the platform
+            // OnAfterInsertEvent this subscriber handles.
+            ("OnAfterInsertLedger", "InsertLedger", true),
         ];
         want.sort();
         assert_eq!(covered, want);
@@ -1128,10 +1240,6 @@ mod tests {
             uncovered,
             vec![
                 ("ExportLine", UncoveredReason::NoPath),
-                (
-                    "OnAfterInsertLedger",
-                    UncoveredReason::PlatformEventSubscriber
-                ),
                 ("Ping", UncoveredReason::NoPath),
                 ("ReachedOnlyFromNowhere", UncoveredReason::NoPath),
             ]

@@ -9,12 +9,14 @@
 //! - **Forward**: from every primary-app routine, every routine an edge reaches —
 //!   calls, runs, implicit triggers, and the subscribers of an event a reached
 //!   publisher raises (the program report's event-flow edges run publisher ->
-//!   subscriber). Not a background start (F3): its codeunit runs in another
-//!   session, which no detector follows.
+//!   subscriber), the platform table events a record op raises included (F1,
+//!   `EdgeKind::TableEvent`). Not a background start (F3): its codeunit runs in
+//!   another session, which no detector follows.
 //! - **Reverse**: for every dependency publisher a PRIMARY routine subscribes to,
 //!   the publisher and each routine that calls it (the "raiser": d43 reads its
 //!   IsHandled guard and the writes behind it); both then continue forward, so the
-//!   publisher's other subscribers (d44) and the raiser's callees join.
+//!   publisher's other subscribers (d44) and the raiser's callees join. A record op
+//!   raising a platform table event is not such a raiser (see the edge loop).
 
 use std::collections::{HashMap, HashSet};
 
@@ -49,10 +51,15 @@ pub fn cross_app_demand<'a>(
                 continue;
             };
             forward.entry(from).or_default().push(to);
-            if ce.edge.kind == EdgeKind::EventFlow {
-                publishers_of.entry(to).or_default().push(from);
-            } else {
-                callers.entry(to).or_default().push(from);
+            match ce.edge.kind {
+                EdgeKind::EventFlow => publishers_of.entry(to).or_default().push(from),
+                // A record op raising a platform table event (F1) is followed
+                // forward, but is no "raiser" for the reverse rule: a platform
+                // event has no IsHandled for d43 to read, and every routine
+                // that writes the table (most of the Base Application for
+                // `Customer`) would otherwise be demanded with its whole cone.
+                EdgeKind::TableEvent => {}
+                _ => callers.entry(to).or_default().push(from),
             }
         }
     }
@@ -142,6 +149,79 @@ mod tests {
         assert!(
             !demand.contains(&bg_run),
             "a started codeunit is not demanded"
+        );
+    }
+
+    /// F1: a primary record op raising a dependency table's platform event
+    /// demands the event's dependency subscriber (forward, through the
+    /// synthetic publisher's event flow); a dependency routine whose record op
+    /// raises the event a primary routine subscribes to is no raiser for the
+    /// reverse rule, so it is not demanded. Hand-stated: the publisher is
+    /// `PublisherKind::Platform`, the ops' edges are `TableEvent` edges.
+    ///
+    /// DISCRIMINATION (2026-11-06): counting `TableEvent` edges as callers
+    /// (the `_` arm) fails "a dependency writer of the table is no raiser";
+    /// skipping `TableEvent` edges altogether fails "the dependency subscriber
+    /// is demanded".
+    #[test]
+    fn a_table_event_demands_its_subscribers_but_not_other_writers() {
+        let mut w = World::default();
+        let a = w.app("W");
+        let d = w.app("D");
+        w.deps.push((a, d));
+        let cu = w.obj(a, ObjectKind::Codeunit, 1, "Cu", TrustTier::Workspace);
+        let customer = w.obj(
+            d,
+            ObjectKind::Table,
+            18,
+            "Customer",
+            TrustTier::EmbeddedSource,
+        );
+        let vendor = w.obj(
+            d,
+            ObjectKind::Table,
+            23,
+            "Vendor",
+            TrustTier::EmbeddedSource,
+        );
+        let dep_cu = w.obj(d, ObjectKind::Codeunit, 2, "Dep", TrustTier::EmbeddedSource);
+        let platform = |r: &mut crate::program::node_extract::RoutineNode| {
+            r.publisher_kind = Some(crate::program::resolve::event::PublisherKind::Platform)
+        };
+        // Customer's event: only a dependency subscribes; a primary op raises it.
+        let customer_event = w.rtn_with(&customer, "OnAfterModifyEvent", platform);
+        // Vendor's event: a primary routine subscribes; a dependency op raises it.
+        let vendor_event = w.rtn_with(&vendor, "OnAfterModifyEvent", platform);
+        let writer = w.rtn(&cu, "Writer");
+        let primary_sub = w.rtn(&cu, "PrimarySub");
+        let dep_sub = w.rtn(&dep_cu, "DepSub");
+        let dep_writer = w.rtn(&dep_cu, "DepWriter");
+        w.event(&customer_event, &[&dep_sub]);
+        w.event(&vendor_event, &[&primary_sub]);
+        w.edge(
+            &writer,
+            EdgeKind::TableEvent,
+            DispatchShape::Multicast,
+            vec![src(&customer_event)],
+            1,
+        );
+        w.edge(
+            &dep_writer,
+            EdgeKind::TableEvent,
+            DispatchShape::Multicast,
+            vec![src(&vendor_event)],
+            2,
+        );
+        let demand = w.with_inputs(a, |inp| {
+            cross_app_demand(a, inp.graph, inp.edges.all_edges())
+        });
+        assert!(
+            demand.contains(&dep_sub),
+            "the dependency subscriber is demanded"
+        );
+        assert!(
+            !demand.contains(&dep_writer),
+            "a dependency writer of the table is no raiser"
         );
     }
 }

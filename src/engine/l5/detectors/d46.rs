@@ -91,7 +91,7 @@ impl<'a> WalkPolicy for D46Policy<'a> {
             .map(|edges| {
                 edges
                     .iter()
-                    .filter(|e| e.kind != "event-dispatch")
+                    .filter(|e| !crate::engine::l4::combined_graph::is_subscriber_edge(&e.kind))
                     .cloned()
                     .collect()
             })

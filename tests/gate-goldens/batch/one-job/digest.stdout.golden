@@ -72,38 +72,49 @@
             "type": "DB_MODIFY"
           },
           {
-            "conditionality": "unconditional-on-success",
+            "conditionality": "loop-body",
             "confidence": "static",
             "detail": {},
             "evidence": {
               "column": 8,
-              "excerpt": "Cust.FindSet",
+              "excerpt": "Cust.Modify",
               "file": "ws:src/D1MultiCaller.al",
-              "line": 25,
+              "line": 19,
               "sourceKind": "source"
             },
-            "factId": "d47b464bf3ed72e4",
+            "factId": "9ef38d0967e5d920",
             "guarantees": [],
             "paths": [
               {
-                "hops": [],
+                "hops": [
+                  {
+                    "edge": "direct-call",
+                    "line": 27,
+                    "to": "r:1c7f167f4b5f"
+                  }
+                ],
                 "terminal": {
                   "file": "ws:src/D1MultiCaller.al",
-                  "line": 25,
-                  "operationId": "c8d0efe535357e91/1f759718521ad524b9d1bd5f9649038d0d7e94611c736d22d36dd6b87df43ec2/op0"
+                  "line": 19,
+                  "operationId": "c8d0efe535357e91/a3ff9b214a741a8eb3d93cb2eda0a0ddbc4f527530764a955da42312ca95e513/op0"
                 }
               }
             ],
             "pathsKept": 1,
             "pathsOmitted": 0,
             "pathsProducerTruncated": false,
-            "provenance": "direct",
+            "provenance": "transitive",
             "status": "live",
             "transactionContext": "unknown",
             "type": "ERROR_IMPLICIT"
           }
         ],
         "entryDiagnosticCounts": {},
+        "moreSites": {
+          "ERROR_IMPLICIT": {
+            "ws:src/D1MultiCaller.al": "25 unconditional-on-success"
+          }
+        },
         "routine": {
           "anchor": {
             "column": 4,
@@ -139,7 +150,7 @@
             "workspace": 0
           },
           "kinds": {
-            "errors": 1
+            "errors": 2
           },
           "literalDeadTables": 0,
           "mayWriteTables": {
@@ -185,7 +196,7 @@
     "summary": {
       "rootsRequested": 1,
       "rootsResolved": 1,
-      "totalEffects": 2,
+      "totalEffects": 3,
       "totalUnresolved": 0
     },
     "workspaceFingerprint": "450419199dc399835e4930b0b2b8568717dbc88066e20fa77134485d64043dee"

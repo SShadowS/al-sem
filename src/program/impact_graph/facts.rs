@@ -1,6 +1,6 @@
 //! The declaration facts the may-execute rules read (spec §4.4), taken from the
 //! owned IR of every source-bearing app: test and handler attributes, variables
-//! of a runnable type, `RunObject`/`CardPageId`/`LookupPageId`/`DrillDownPageId`
+//! of type `TestPage`/`TestRequestPage`, `RunObject`/`CardPageId`/`LookupPageId`/`DrillDownPageId`
 //! properties and XmlPort table elements. Every object reference is resolved here,
 //! from the declaring object's closure, so the projection works on plain ids and
 //! its tests can state these facts by hand.
@@ -40,16 +40,23 @@ pub struct RoutineFacts {
     pub root_kinds: u16,
     /// `[HandlerFunctions('A,B')]` names, folded.
     pub handlers: Vec<String>,
-    /// Parameters and locals of a runnable type (`Page`, `Report`, `XmlPort`,
-    /// `Query`, `TestPage`, `TestRequestPage`).
-    pub runs: Vec<RunTarget>,
+    /// Parameters and locals of type `TestPage` / `TestRequestPage` (rule 2):
+    /// a test drives such a page through members the engine resolves as
+    /// catalog builtins (`OpenEdit`, a field's `SetValue`, an action's
+    /// `Invoke`), so the declaration stands for the run. A `Page`, `Report`,
+    /// `XmlPort` or `Query` variable is not here: its run is a site (a typed
+    /// `.Run()`/`.RunModal()` is an engine run edge, `SaveAsPdf`/`Open`/… a
+    /// dispatching builtin on its receiver), and a routine that only declares
+    /// one and calls its procedures runs nothing.
+    pub test_pages: Vec<RunTarget>,
 }
 
 /// Facts of one source object.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ObjectFacts {
-    /// Globals of a runnable type: every routine of the object may run them.
-    pub runs: Vec<RunTarget>,
+    /// Globals of type `TestPage` / `TestRequestPage`: every routine of the
+    /// object may drive them (see [`RoutineFacts::test_pages`]).
+    pub test_pages: Vec<RunTarget>,
     /// Objects its members open: `RunObject` and `CardPageId`.
     pub opens: Vec<RunTarget>,
     /// The `RunObject` subset of [`Self::opens`]: what its actions run (an
@@ -96,7 +103,7 @@ pub fn extract_source_facts(
                 let of = object_facts(obj, &obj_id, graph, index);
                 if of != ObjectFacts::default() {
                     let slot = out.objects.entry(obj_id.clone()).or_default();
-                    slot.runs.extend(of.runs);
+                    slot.test_pages.extend(of.test_pages);
                     slot.opens.extend(of.opens);
                     slot.action_runs.extend(of.action_runs);
                     slot.lookup_pages.extend(of.lookup_pages);
@@ -152,12 +159,12 @@ pub fn extract_source_facts(
                             .filter_map(|a| first_string_arg(&pf.file, a))
                             .flat_map(|list| handler_names(&list))
                             .collect(),
-                        runs: routine
+                        test_pages: routine
                             .params
                             .iter()
                             .filter_map(|p| p.ty.as_deref())
                             .chain(routine.locals.iter().filter_map(|v| v.ty.as_deref()))
-                            .filter_map(|t| declared_runnable(t, &obj_id, graph, index))
+                            .filter_map(|t| declared_test_page(t, &obj_id, graph, index))
                             .collect(),
                     };
                     if rf != RoutineFacts::default() {
@@ -166,7 +173,7 @@ pub fn extract_source_facts(
                         slot.test |= rf.test;
                         slot.root_kinds |= rf.root_kinds;
                         slot.handlers.extend(rf.handlers);
-                        slot.runs.extend(rf.runs);
+                        slot.test_pages.extend(rf.test_pages);
                     }
                 }
             }
@@ -175,12 +182,12 @@ pub fn extract_source_facts(
     for f in out.routines.values_mut() {
         f.handlers.sort();
         f.handlers.dedup();
-        f.runs.sort();
-        f.runs.dedup();
+        f.test_pages.sort();
+        f.test_pages.dedup();
     }
     for f in out.objects.values_mut() {
         for v in [
-            &mut f.runs,
+            &mut f.test_pages,
             &mut f.opens,
             &mut f.action_runs,
             &mut f.lookup_pages,
@@ -254,11 +261,11 @@ fn object_facts(
         Vec::new()
     };
     ObjectFacts {
-        runs: obj
+        test_pages: obj
             .globals
             .iter()
             .filter_map(|v| v.ty.as_deref())
-            .filter_map(|t| declared_runnable(t, obj_id, graph, index))
+            .filter_map(|t| declared_test_page(t, obj_id, graph, index))
             .collect(),
         opens,
         action_runs,
@@ -328,20 +335,22 @@ pub(crate) fn property_object_ref(value: &str) -> ObjectRef {
     }
 }
 
-/// A variable's type as a may-run target (rule 2): any [`runnable_type`] but a
-/// codeunit — the engine models `CuVar.Run()` precisely, and codeunit variables
-/// mostly serve procedure calls.
-fn declared_runnable(
+/// A variable's type as a may-run target (rule 2): a `TestPage` /
+/// `TestRequestPage` only. Every other runnable type's run is a site the
+/// projection reads (a typed `.Run()` is an engine run edge; a dispatching
+/// builtin on a typed receiver, `ReportVar.SaveAsPdf()`, is
+/// `project::Builder::receiver_runs`). Before 2026-11-06 a `Page`, `Report`,
+/// `XmlPort` or `Query` declaration counted too, so a routine that only
+/// declared `Page "Sales Invoice"` and called a procedure on it ran the page
+/// (and its object's every routine did, for a global).
+fn declared_test_page(
     text: &str,
     from: &ObjectNodeId,
     graph: &ProgramGraph,
     index: &ResolveIndex,
 ) -> Option<RunTarget> {
-    match runnable_type(text, from, graph, index)? {
-        RunTarget::Object(id) if id.kind == ObjectKind::Codeunit => None,
-        RunTarget::AnyOf(ObjectKind::Codeunit) => None,
-        t => Some(t),
-    }
+    test_page_target(text)?;
+    runnable_type(text, from, graph, index)
 }
 
 /// The run target of a type or `RunObject` text naming a runnable object

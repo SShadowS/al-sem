@@ -23,14 +23,14 @@
   "fixtureCount": 158,
   "matrix": {
     "routineCount": 584,
-    "routinesWithInheritedEffects": 55,
+    "routinesWithInheritedEffects": 57,
     "viaKinds": {
       "direct": 326,
-      "event-subscriber": 12,
+      "event-subscriber": 15,
       "implicit-trigger": 1,
       "inherited": 55
     },
-    "recursiveCycleRoutines": 13,
+    "recursiveCycleRoutines": 15,
     "unresolvedCallRoutines": 30,
     "opaqueCalleeUncertainties": 2,
     "uncertaintyKinds": {
@@ -773,11 +773,12 @@
       "goldenFile": "ws-d29.r3a2.golden.json",
       "matrix": {
         "routineCount": 4,
-        "routinesWithInheritedEffects": 0,
+        "routinesWithInheritedEffects": 2,
         "viaKinds": {
-          "direct": 4
+          "direct": 4,
+          "event-subscriber": 3
         },
-        "recursiveCycleRoutines": 0,
+        "recursiveCycleRoutines": 2,
         "unresolvedCallRoutines": 0,
         "opaqueCalleeUncertainties": 0,
         "uncertaintyKinds": {},

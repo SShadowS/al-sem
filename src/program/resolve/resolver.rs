@@ -2677,6 +2677,71 @@ pub fn resolve_implicit_trigger(
     )
 }
 
+/// The platform table events (database trigger events) record operation `op`
+/// (folded) raises, before and after: `Insert` → `OnBefore/OnAfterInsertEvent`,
+/// `Modify`/`ModifyAll` → `…ModifyEvent`, `Delete`/`DeleteAll` →
+/// `…DeleteEvent`, `Rename` → `…RenameEvent`, `Validate` → `…ValidateEvent`.
+/// `None` for an op that raises none.
+///
+/// BC raises these whatever the RunTrigger argument says: RunTrigger decides
+/// only whether the TABLE's own trigger (`OnModify`, …) runs, and the event
+/// hands it to the subscriber as its `RunTrigger` parameter. `ModifyAll` and
+/// `DeleteAll` fall back to row-by-row work when such an event has a
+/// subscriber, raising it once per row. Temporary records raise them too
+/// (Microsoft's own subscribers guard with `Rec.IsTemporary`). Spec
+/// `docs/superpowers/specs/2026-11-06-db-event-subscribers.md` §2.
+#[must_use]
+pub fn table_event_names(op: &str) -> Option<[&'static str; 2]> {
+    Some(match op {
+        "insert" => ["onbeforeinsertevent", "onafterinsertevent"],
+        "modify" | "modifyall" => ["onbeforemodifyevent", "onaftermodifyevent"],
+        "delete" | "deleteall" => ["onbeforedeleteevent", "onafterdeleteevent"],
+        "rename" => ["onbeforerenameevent", "onafterrenameevent"],
+        "validate" => ["onbeforevalidateevent", "onaftervalidateevent"],
+        _ => return None,
+    })
+}
+
+/// The table-event routes of record operation `op` (folded) on `table_object`:
+/// one route per synthetic [`PublisherKind::Platform`] publisher of an event the
+/// operation raises ([`table_event_names`]). Such a publisher exists only when a
+/// loaded app subscribes to the event (`build::inject_platform_event_publishers`),
+/// and its `EventFlow` edge carries the subscribers, so the record op reaches
+/// them through it, as a call reaches an integration event's publisher. Empty
+/// when nothing loaded subscribes. The publisher has no source span: the route's
+/// evidence is the table's tier and its witness is [`Witness::Platform`].
+///
+/// The publisher collapses a validate event's fields into one (`element`), so a
+/// `Validate(A)` route reaches the subscribers of every field of the table here;
+/// the detector model narrows it to field `A` (`program_calls`).
+pub fn resolve_table_events(
+    op: &str,
+    table_object: &ObjectNode,
+    graph: &dyn GraphReads,
+) -> Vec<Route> {
+    let Some(names) = table_event_names(op) else {
+        return Vec::new();
+    };
+    let mut routes = Vec::new();
+    for name in names {
+        for r in graph.routines_named(&table_object.id, name) {
+            if r.publisher_kind != Some(crate::program::resolve::event::PublisherKind::Platform) {
+                continue;
+            }
+            routes.push(Route {
+                target: RouteTarget::Routine(r.id.clone()),
+                evidence: tier_evidence(table_object.tier),
+                conditions: vec![],
+                witness: Witness::Platform,
+                receiver_tier: None,
+            });
+        }
+    }
+    routes.sort();
+    routes.dedup();
+    routes
+}
+
 // ---------------------------------------------------------------------------
 // Member-call resolution (Phase 3 Task 2)
 // ---------------------------------------------------------------------------

@@ -169,6 +169,8 @@
             "stableId": "a0a00001-0000-4000-8000-0000000000a1:Codeunit:50110#2112499a95bbc81fa4d0308672b9882dffc17f837091a640368b6979e24b8475"
           }
         },
+        "parameterName": "Doc",
+        "parameterPosition": 1,
         "tableId": "a0a00001-0000-4000-8000-0000000000a1/table/50100",
         "tableName": "Out Doc",
         "tempState": "parameter-dependent(0)",
@@ -464,5 +466,5 @@
       }
     }
   },
-  "schemaVersion": "3.5.0"
+  "schemaVersion": "3.6.0"
 }

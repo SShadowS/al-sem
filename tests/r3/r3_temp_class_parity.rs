@@ -146,7 +146,9 @@ pub fn matched_l4(resolved: &Model) -> (SummaryBundle, BTreeMap<String, usize>) 
         let kept: Vec<_> = list
             .iter()
             .filter(|e| {
-                let trigger = e.kind == "implicit-trigger";
+                // Keyed by their record operation, not a call site: an
+                // implicit trigger and (F1) a table event.
+                let trigger = e.kind == "implicit-trigger" || e.kind == "table-event";
                 let key = (
                     e.from.clone(),
                     e.to.clone(),

@@ -216,7 +216,7 @@ fn symbol_only_dependency_table_resolves_and_is_selectable() {
     for sel in ["18", "Customer"] {
         let (q, code) = json(&["query", "touches", &ws, "--table", sel]);
         assert_eq!(code, 0, "--table {sel}: {q}");
-        assert_eq!(q["schemaVersion"], "3.5.0");
+        assert_eq!(q["schemaVersion"], "3.6.0");
         assert_eq!(q["payload"]["table"]["id"], dep_table(), "--table {sel}");
         assert_eq!(q["payload"]["table"]["name"], "Customer");
         assert_eq!(q["payload"]["dependencies"]["mode"], "crossApp");
@@ -617,7 +617,8 @@ fn effects_of(doc: &Value, routine: &str) -> Vec<GroupView> {
 /// reports `DB_MODIFY` and `COMMIT` as two groups through the call into the
 /// dependency's `Outer` (`enters Codeunit Dep Lib::Outer`, the root's own call, so the via
 /// path is empty), Customer (18) in the `DB_MODIFY` group's resources, both
-/// `conditionality: unknown`; the two groups have distinct fact ids.
+/// `conditionality: unknown`; with the statement `Modify`'s `ERROR_IMPLICIT`
+/// (G20) the three groups have distinct fact ids.
 ///
 /// Discrimination: composing the tree over the primary callers' typed edges
 /// only (the cut) loses both effects.
@@ -653,6 +654,9 @@ fn t1_call_chain_reports_the_dependency_modify_and_commit_as_groups() {
             // A COMMIT has no resources: no resourceCount/resources (1d).
             group("COMMIT", "", ""),
             group("DB_MODIFY", "1", "Customer"),
+            // `Cust.Modify();` is a statement: its discarded Boolean makes a
+            // failed Modify raise an error (G20), a group of its own.
+            group("ERROR_IMPLICIT", "", ""),
         ],
         "{doc}"
     );
@@ -662,5 +666,5 @@ fn t1_call_chain_reports_the_dependency_modify_and_commit_as_groups() {
         .iter()
         .filter_map(|f| f["factId"].as_str())
         .collect();
-    assert_eq!(ids.len(), 2, "two groups, two fact ids: {doc}");
+    assert_eq!(ids.len(), 3, "three groups, three fact ids: {doc}");
 }

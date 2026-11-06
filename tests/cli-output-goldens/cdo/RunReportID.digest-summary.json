@@ -10,35 +10,35 @@
         "interface-open-world",
         "object-run-unresolved"
       ],
-      "effects": 623,
+      "effects": 767,
       "effectsByType": {
-        "BACKGROUND_TASK": 4,
-        "COMMIT": 15,
-        "DB_DELETE": 22,
-        "DB_INSERT": 45,
-        "DB_MODIFY": 26,
-        "ERROR_IMPLICIT": 106,
-        "ERROR_THROW": 113,
-        "EVENT_PUBLISH": 91,
-        "FILE": 3,
-        "HTTP": 22,
-        "ISOLATED_STORAGE": 16,
-        "TELEMETRY": 24,
-        "UI_CONFIRM": 5,
-        "UI_ERROR": 113,
-        "UI_FILE_DIALOG": 3,
-        "UI_HYPERLINK": 1,
-        "UI_MESSAGE": 6,
-        "UI_PROGRESS": 1,
-        "UI_WINDOW_OPEN": 7
+        "BACKGROUND_TASK": 5,
+        "COMMIT": 16,
+        "DB_DELETE": 23,
+        "DB_INSERT": 47,
+        "DB_MODIFY": 27,
+        "ERROR_IMPLICIT": 228,
+        "ERROR_THROW": 115,
+        "EVENT_PUBLISH": 93,
+        "FILE": 4,
+        "HTTP": 23,
+        "ISOLATED_STORAGE": 17,
+        "TELEMETRY": 25,
+        "UI_CONFIRM": 6,
+        "UI_ERROR": 115,
+        "UI_FILE_DIALOG": 4,
+        "UI_HYPERLINK": 2,
+        "UI_MESSAGE": 7,
+        "UI_PROGRESS": 2,
+        "UI_WINDOW_OPEN": 8
       },
       "names": {
         "entryPoints": [
+          "Codeunit Import Attachment - Inc. Doc.::CreateNewAttachment",
           "Codeunit Sales-Calc. Discount::OnRun",
           "Codeunit CTS-CDN Network Doc. Mgt.::CreateEDocument",
           "Codeunit CSC Core::IsAppActiveOrAskToActivate",
-          "Codeunit Email::Send",
-          "Codeunit Import Attachment - Inc. Doc.::CreateNewAttachment"
+          "Codeunit Email::Send"
         ],
         "tablesOwnedByApp": [
           "CDO Azure Application Setup",
@@ -49,8 +49,8 @@
           "CDO File Download Document",
           "CDO Html Color",
           "CDO Log Attachment",
-          "CDO Print document",
-          "CDO Queue Entry"
+          "CDO Output Profile Conflict",
+          "CDO Print document"
         ],
         "tablesOwnedByDependencies": [
           "Action Message Entry",
@@ -84,18 +84,18 @@
         "callerDependentTables": 0,
         "commits": {
           "answer": "may",
-          "entryPoints": 7,
+          "entryPoints": 8,
           "ownSites": 6
         },
         "entryPoints": {
           "atLeast": true,
           "count": 44,
-          "sites": 53,
+          "sites": 54,
           "withWrites": 15,
-          "withWritesSites": 16
+          "withWritesSites": 17
         },
         "events": {
-          "distinct": 7393,
+          "distinct": 7478,
           "inWorkspaceCode": 72
         },
         "gaps": {
@@ -104,35 +104,35 @@
           "workspace": 16
         },
         "kinds": {
-          "backgroundTasks": 4,
-          "errors": 196,
-          "file": 3,
-          "http": 20,
-          "isolatedStorage": 16,
-          "telemetry": 22,
-          "ui": 16
+          "backgroundTasks": 5,
+          "errors": 304,
+          "file": 4,
+          "http": 21,
+          "isolatedStorage": 17,
+          "telemetry": 23,
+          "ui": 17
         },
         "literalDeadTables": 0,
         "mayWriteTables": {
-          "byDependencies": 395,
-          "count": 406,
+          "byDependencies": 406,
+          "count": 418,
           "mostBeyond": {
-            "enteredAt": "ws:src/Foundation/CDOFile.Table.al:125",
-            "entryPoint": "Codeunit Sales-Calc. Discount::OnRun",
-            "tables": 357
+            "enteredAt": "ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:179",
+            "entryPoint": "Codeunit Import Attachment - Inc. Doc.::CreateNewAttachment",
+            "tables": 250
           },
-          "ownedByApp": 11
+          "ownedByApp": 12
         },
         "noPathKept": {
           "operations": 0,
           "tables": 0
         },
-        "temporaryOnlyTables": 88,
+        "temporaryOnlyTables": 84,
         "unresolvedTableWrites": 2
       }
     }
   ],
   "routinesListed": 1,
-  "totalEffects": 623,
+  "totalEffects": 767,
   "totalUnresolved": 288
 }

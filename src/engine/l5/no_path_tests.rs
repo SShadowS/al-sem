@@ -289,7 +289,12 @@ fn lattice_rows(layers: usize) -> Vec<String> {
 /// walk's `MAX_STATES` (25 000): there it was an own row with no path.
 #[test]
 fn a_deep_producer_write_beyond_a_crossing_is_its_group_member() {
-    let want = vec!["DB_INSERT Codeunit Dep Rec Lib::Entry Customer".to_string()];
+    let want = vec![
+        "DB_INSERT Codeunit Dep Rec Lib::Entry Customer".to_string(),
+        // The statement insert discards its Boolean (G20): its implicit error
+        // is a member of the same crossing's group.
+        "ERROR_IMPLICIT Codeunit Dep Rec Lib::Entry -".to_string(),
+    ];
     assert_eq!(lattice_rows(10), want);
     // Control: the shallow lattice, which the old walk also witnessed.
     assert_eq!(lattice_rows(2), want);
@@ -375,6 +380,9 @@ fn an_unresolved_write_is_never_witnessed_by_a_typed_one() {
         vec![
             "DB_INSERT group=false resourceId=aaaa1604-0000-0000-0000-000000000160/table/50190;resourceDisplay=Ws Log".to_string(),
             "DB_INSERT group=true boundary=Codeunit Dep Rec Lib::Unresolved;resourceCount=0;resources=;unresolvedResources=1".to_string(),
+            // Both statement inserts discard their Boolean (G20).
+            "ERROR_IMPLICIT group=false ".to_string(),
+            "ERROR_IMPLICIT group=true boundary=Codeunit Dep Rec Lib::Unresolved".to_string(),
         ],
         "{effects:?}"
     );

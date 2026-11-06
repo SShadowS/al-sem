@@ -124,6 +124,45 @@
             "status": "live",
             "transactionContext": "unknown",
             "type": "DB_INSERT"
+          },
+          {
+            "conditionality": "conditional",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 12,
+              "excerpt": "Setup.Insert",
+              "file": "ws:src/InstallCU.al",
+              "line": 33,
+              "sourceKind": "source"
+            },
+            "factId": "bcf6f3743ad07acf",
+            "guarantees": [
+              "COMMIT_REACHABLE"
+            ],
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "edge": "direct-call",
+                    "line": 24,
+                    "to": "r:8d477f67a4a4"
+                  }
+                ],
+                "terminal": {
+                  "file": "ws:src/InstallCU.al",
+                  "line": 33,
+                  "operationId": "5163e6a282c9cd15/891fc7dddd2ae2ecaf276395a3a77ab66421d96eb8ac9732c85570a832a93346/op2"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "transitive",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -138,7 +177,7 @@
           "objectDisplay": "Codeunit Install Handler",
           "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50001#28129d608bb2353d1edc8a881e6073f4f07bc1388ea6d1c4caa0b7c8850cf83d"
         },
-        "scopedGuaranteesFolded": 4,
+        "scopedGuaranteesFolded": 5,
         "summary": {
           "callerDependentTables": 0,
           "commits": {
@@ -161,7 +200,9 @@
             "notPlaced": 0,
             "workspace": 0
           },
-          "kinds": {},
+          "kinds": {
+            "errors": 1
+          },
           "literalDeadTables": 0,
           "mayWriteTables": {
             "byDependencies": 0,
@@ -282,6 +323,39 @@
             "status": "live",
             "transactionContext": "unknown",
             "type": "DB_INSERT"
+          },
+          {
+            "conditionality": "conditional",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 12,
+              "excerpt": "Setup.Insert",
+              "file": "ws:src/InstallCU.al",
+              "line": 33,
+              "sourceKind": "source"
+            },
+            "factId": "99ea124ab78b840c",
+            "guarantees": [
+              "COMMIT_REACHABLE"
+            ],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/InstallCU.al",
+                  "line": 33,
+                  "operationId": "5163e6a282c9cd15/891fc7dddd2ae2ecaf276395a3a77ab66421d96eb8ac9732c85570a832a93346/op2"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -296,7 +370,7 @@
           "objectDisplay": "Codeunit Install Handler",
           "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50001#3aa4ce9cdcf2404292c9b5a110fac303298356eb61d22f471e7ac135ca96f2fb"
         },
-        "scopedGuaranteesFolded": 4,
+        "scopedGuaranteesFolded": 5,
         "summary": {
           "callerDependentTables": 0,
           "commits": {
@@ -319,7 +393,9 @@
             "notPlaced": 0,
             "workspace": 0
           },
-          "kinds": {},
+          "kinds": {
+            "errors": 1
+          },
           "literalDeadTables": 0,
           "mayWriteTables": {
             "byDependencies": 0,
@@ -440,6 +516,39 @@
             "status": "live",
             "transactionContext": "unknown",
             "type": "DB_MODIFY"
+          },
+          {
+            "conditionality": "conditional",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 12,
+              "excerpt": "Setup.Modify",
+              "file": "ws:src/UpgradeCU.al",
+              "line": 16,
+              "sourceKind": "source"
+            },
+            "factId": "82ba042a17a9709a",
+            "guarantees": [
+              "COMMIT_REACHABLE"
+            ],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/UpgradeCU.al",
+                  "line": 16,
+                  "operationId": "5163e6a282c9cd15/742544f8c68d2810d9c9dfd24127da5ab0e6eadbcbd6f6621f9beb2d3bfcca1a/op1"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -454,7 +563,7 @@
           "objectDisplay": "Codeunit Upgrade Handler",
           "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50002#3b39c65aba470dc136b74c8c2123651b7828037b7a1898d1d8e75339cf65056e"
         },
-        "scopedGuaranteesFolded": 4,
+        "scopedGuaranteesFolded": 5,
         "summary": {
           "callerDependentTables": 0,
           "commits": {
@@ -477,7 +586,9 @@
             "notPlaced": 0,
             "workspace": 0
           },
-          "kinds": {},
+          "kinds": {
+            "errors": 1
+          },
           "literalDeadTables": 0,
           "mayWriteTables": {
             "byDependencies": 0,
@@ -610,6 +721,45 @@
             "status": "live",
             "transactionContext": "unknown",
             "type": "DB_MODIFY"
+          },
+          {
+            "conditionality": "conditional",
+            "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 12,
+              "excerpt": "Setup.Modify",
+              "file": "ws:src/UpgradeCU.al",
+              "line": 16,
+              "sourceKind": "source"
+            },
+            "factId": "8a9fbb1c1364bd55",
+            "guarantees": [
+              "COMMIT_REACHABLE"
+            ],
+            "paths": [
+              {
+                "hops": [
+                  {
+                    "edge": "direct-call",
+                    "line": 7,
+                    "to": "r:949a0d11aa24"
+                  }
+                ],
+                "terminal": {
+                  "file": "ws:src/UpgradeCU.al",
+                  "line": 16,
+                  "operationId": "5163e6a282c9cd15/742544f8c68d2810d9c9dfd24127da5ab0e6eadbcbd6f6621f9beb2d3bfcca1a/op1"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "transitive",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT"
           }
         ],
         "entryDiagnosticCounts": {},
@@ -624,7 +774,7 @@
           "objectDisplay": "Codeunit Upgrade Handler",
           "stableId": "11111111-0000-0000-0000-00000000d460:Codeunit:50002#4bede131c948eaabef06c2e6bfbc4f1239c15eb29e7a7e0b64b3cdeed16c79f5"
         },
-        "scopedGuaranteesFolded": 4,
+        "scopedGuaranteesFolded": 5,
         "summary": {
           "callerDependentTables": 0,
           "commits": {
@@ -647,7 +797,9 @@
             "notPlaced": 0,
             "workspace": 0
           },
-          "kinds": {},
+          "kinds": {
+            "errors": 1
+          },
           "literalDeadTables": 0,
           "mayWriteTables": {
             "byDependencies": 0,
@@ -702,7 +854,7 @@
     "summary": {
       "rootsRequested": 4,
       "rootsResolved": 4,
-      "totalEffects": 8,
+      "totalEffects": 12,
       "totalUnresolved": 0
     },
     "workspaceFingerprint": "369c4515c708fe7831c9af975d8a55ce0e8d1baf6090a0e083e3d6d8e7f602e8"

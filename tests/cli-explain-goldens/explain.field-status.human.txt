@@ -9,7 +9,7 @@ field: Explain Order.Status (caption "Order Status"): 3 writer(s)
 
 Codeunit Explain Post::PostOrder  ws:src/post.al:5
   summary — writes: no observed write that may persist; caller-dependent: 1 table
-    transaction, UI and errors: commits: none; UI at 1 place; errors at 2 places
+    transaction, UI and errors: commits: none; UI at 1 place; errors at 3 places
     other effects: events: 1 (1 raised in workspace code)
     callers and tests: callers: 1, reached from 1 page action; tests: 1
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
@@ -29,13 +29,13 @@ Codeunit Explain Post::PostOrder  ws:src/post.al:5
   events: 1 raised in workspace code, by publisher: Codeunit Explain Post 1; 0 more only beyond entry points
   extension point OnBeforePostOrder: 1 subscriber(s), IsHandled
   UI at 1 place: UI_MESSAGE at ws:src/post.al:19 (guarded-by-IsHandled)
-  errors at 2 places: ERROR_IMPLICIT at ws:src/post.al:12 (unconditional-on-success); ERROR_THROW at ws:src/post.al:11 (error-path)
+  errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:12 (unconditional-on-success); ERROR_IMPLICIT at ws:src/post.al:18 (guarded-by-IsHandled); ERROR_THROW at ws:src/post.al:11 (error-path)
   test Codeunit Explain Tests::PostUnreleasedFails (3 own assert(s))
   next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 
 Codeunit Explain Post::Archive  ws:src/post.al:23
   summary — writes: no observed write that may persist; caller-dependent: 1 table
-    transaction, UI and errors: commits: yes (1 site); UI and errors: none observed
+    transaction, UI and errors: commits: yes (1 site); errors at 1 place
     other effects: events: 0 (0 raised in workspace code)
     callers and tests: callers: none; tests: none of 1 loaded
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 0 not placed
@@ -52,6 +52,7 @@ Codeunit Explain Post::Archive  ws:src/post.al:23
     Explain Order: Modify — depends on the caller's record argument at ws:src/post.al:26
   events: 0 raised in workspace code; 0 more only beyond entry points
   extension points: none (the routine publishes no event itself)
+  errors at 1 place: ERROR_IMPLICIT at ws:src/post.al:26 (unconditional-on-success)
   tests: 1 [Test] procedure loaded; none reaches it (not a reason to skip tests)
   next: alsem prove <routine> writes-table:<table> for one table with its witness; may-commit for the commits; alsem query effects for every operation one routine deep
 

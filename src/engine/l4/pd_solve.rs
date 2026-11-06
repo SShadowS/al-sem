@@ -337,6 +337,18 @@ pub(crate) fn cross_edge(
                 (None, Some((BoundSite::Op(op), caller))) => {
                     trigger_receiver_temp_state(caller, op, *i)
                 }
+                // F1: a table-event edge binds the subscriber's record
+                // parameters to the raising op's record.
+                (None, None) if edge.kind == "table-event" => {
+                    match (caller, edge.operation_id.as_deref()) {
+                        (Some(caller), Some(op)) => {
+                            crate::engine::l4::summary_runner::table_event_param_temp_state(
+                                caller, op, callee, *i,
+                            )
+                        }
+                        _ => TempState::Unknown,
+                    }
+                }
                 _ => TempState::Unknown,
             }
         }

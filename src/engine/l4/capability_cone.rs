@@ -1128,8 +1128,8 @@ pub(crate) fn direct_facts_for_routine(
     }
 
     // ── implicit runtime errors (G20) ───────────────────────────────────────
-    // A record lookup in statement position (its Boolean discarded) raises an
-    // error when no record matches; TestField and FieldError may always raise
+    // A record lookup or write in statement position (its Boolean discarded)
+    // raises an error when it fails (`implicit_error_record_op`); TestField and FieldError may always raise
     // one. Their own op, not `error-throw`: the ordering engine and the
     // detectors read `error-throw` as an explicit `Error`, and every unguarded
     // `Get` is not that. `prove … throws-error` counts both. No resource id (a
@@ -1301,7 +1301,8 @@ pub(crate) fn capability_via_for_edge_kind(kind: &str) -> &'static str {
     match kind {
         "direct-call" | "variable-typed-call" | "interface-dispatch" => "call",
         "object-run-resolved" | "object-run-unresolved" => "object-run",
-        "event-dispatch" => "event-dispatch",
+        // F1: a platform table event's subscriber runs by event dispatch.
+        "event-dispatch" | "table-event" => "event-dispatch",
         "implicit-trigger" => "implicit-trigger",
         "dependency-export" => "dependency",
         _ => "call",
@@ -3016,7 +3017,9 @@ fn member_digests(
                 h.str(&e.sort_key);
                 let callee = routines_by_id.get(e.to.as_str()).copied();
                 h.u64(u64::from(callee.is_some()));
-                if e.kind == "event-dispatch"
+                // Both bind by the subscriber's parameters
+                // (`table_event_param_temp_state` reads which are records).
+                if crate::engine::l4::combined_graph::is_subscriber_edge(&e.kind)
                     && let Some(c) = callee
                 {
                     h.debug(&c.parameters);
@@ -7505,7 +7508,7 @@ codeunit 50111 "Cell Calls"
     /// it too).
     pub(crate) const FIXTURE_ROOTS: [(&str, usize); 5] = [
         ("r0-corpus", 221),
-        ("fixtures", 58),
+        ("fixtures", 60),
         ("r3a4-fixtures", 1),
         ("r3a5-fixtures", 1),
         ("r2-5b-fixtures", 1),
@@ -8398,10 +8401,16 @@ codeunit 50100 C
                 // lookup pages and the newly bound overloads add edges, and the
                 // cross-app model demands more dependency code (routines 31,646 ->
                 // 33,287, recursive SCCs 67 -> 70, the largest 492 -> 524).
+                // 784 -> 1027 on 2026-11-06 (F1, record operations raise their
+                // table's platform events; the oracle agreed): a subscriber that
+                // writes the table it subscribes to re-raises the event (65
+                // self-loops now), and the cross-app model demands the subscribers
+                // of the table events the workspace raises (routines 33,287 ->
+                // 34,118, recursive SCCs 70 -> 106, the largest 524 -> 650).
                 assert_eq!(
-                    stats.recursive_members_emitted, 784,
+                    stats.recursive_members_emitted, 1027,
                     "CDO cross-app recursive members emitted: step 0 counted 714 BFS calls, \
-                     784 since the 2026-10-28 engine changes; a \
+                     1027 since F1 (2026-11-06); a \
                      different number means the input moved and the spec's numbers are stale"
                 );
                 // T8' is the only real-code oracle for these classes (T7''s
@@ -8451,12 +8460,15 @@ codeunit 50100 C
 
     /// T3b's source: M1 -> ... -> M8 -> M1; Mi calls `Wi(R)` on a local
     /// physical `Record Ti` and `Commit()`; `Wi` inserts into its parameter.
+    // `if R.Insert() then;`: the Boolean is consumed, so the write raises no
+    // implicit error (G20) and the set's one non-producer entry stays the
+    // commit.
     fn t3b_src() -> String {
         let mut s = String::from("codeunit 50100 C\n{\n");
         for i in 1..=8 {
             let next = i % 8 + 1;
             s += &format!(
-                "    procedure M{i}()\n    var\n        R: Record T{i};\n    begin\n        W{i}(R);\n        Commit();\n        M{next}();\n    end;\n\n    procedure W{i}(var R: Record T{i})\n    begin\n        R.Insert();\n    end;\n\n"
+                "    procedure M{i}()\n    var\n        R: Record T{i};\n    begin\n        W{i}(R);\n        Commit();\n        M{next}();\n    end;\n\n    procedure W{i}(var R: Record T{i})\n    begin\n        if R.Insert() then;\n    end;\n\n"
             );
         }
         s + "}\n"
@@ -9281,7 +9293,9 @@ mod cone_memory_step1_tests {
 
     /// The `scc_set_tests` T4 source: G's write is guarded by `Flag`; M (a
     /// singleton) takes it through G's frame-bound entry (`substitute_entry`),
-    /// the recursive {A, B} through G's cone with the guard dropped.
+    /// the recursive {A, B} through G's cone with the guard dropped. The
+    /// `Modify`'s Boolean is consumed, so it raises no implicit error (G20)
+    /// and G has the one fact the tests below count.
     const GUARD_SRC: &str = r#"
 codeunit 50100 C
 {
@@ -9302,7 +9316,7 @@ codeunit 50100 C
     procedure G(Flag: Boolean)
     begin
         if Flag then
-            Rec2.Modify();
+            if Rec2.Modify() then;
     end;
 
     procedure N()

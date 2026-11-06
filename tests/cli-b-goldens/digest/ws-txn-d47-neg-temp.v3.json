@@ -65,6 +65,37 @@
           {
             "conditionality": "unconditional-on-success",
             "confidence": "static",
+            "detail": {},
+            "evidence": {
+              "column": 8,
+              "excerpt": "TempRec.Insert",
+              "file": "ws:src/Sender.Codeunit.al",
+              "line": 15,
+              "sourceKind": "source"
+            },
+            "factId": "2155c4616d7282e4",
+            "guarantees": [],
+            "paths": [
+              {
+                "hops": [],
+                "terminal": {
+                  "file": "ws:src/Sender.Codeunit.al",
+                  "line": 15,
+                  "operationId": "98bb4b22361c033b/f6e2770015e3f510574833a323941cd801ce31346f858592ee4d2179439ad52f/op1"
+                }
+              }
+            ],
+            "pathsKept": 1,
+            "pathsOmitted": 0,
+            "pathsProducerTruncated": false,
+            "provenance": "direct",
+            "status": "live",
+            "transactionContext": "unknown",
+            "type": "ERROR_IMPLICIT"
+          },
+          {
+            "conditionality": "unconditional-on-success",
+            "confidence": "static",
             "detail": {
               "method": "Get"
             },
@@ -131,6 +162,7 @@
             "workspace": 0
           },
           "kinds": {
+            "errors": 1,
             "http": 1
           },
           "literalDeadTables": 0,
@@ -172,7 +204,7 @@
     "summary": {
       "rootsRequested": 1,
       "rootsResolved": 1,
-      "totalEffects": 2,
+      "totalEffects": 3,
       "totalUnresolved": 0
     },
     "workspaceFingerprint": "d7511a4fe3bcaed11cec5244ebdc7b282e2294c2cf2e3782c9f106718516fe98"

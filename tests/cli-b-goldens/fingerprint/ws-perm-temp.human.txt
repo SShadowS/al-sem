@@ -7,6 +7,10 @@ Codeunit PT Writer::ByParam  [public-procedure]
     TableData "11111111-0000-0000-0000-00000000e130/table/50300" W
 
   witnesses:
+    error-implicit error — 1 path shown
+      Path 1/1 shown:
+        direct R.Insert at ws:src/Writer.Codeunit.al:22:8
+
     insert table "11111111-0000-0000-0000-00000000e130/table/50300" — 1 path shown
       Path 1/1 shown:
         direct R.Insert at ws:src/Writer.Codeunit.al:22:8
@@ -17,6 +21,10 @@ Codeunit PT Writer::TempOnly  [public-procedure]
   reads:      TableData "11111111-0000-0000-0000-00000000e130/table/50300"
 
   witnesses:
+    error-implicit error — 1 path shown
+      Path 1/1 shown:
+        direct TempRec.Modify at ws:src/Writer.Codeunit.al:31:12
+
     modify table "11111111-0000-0000-0000-00000000e130/table/50300" — 1 path shown
       Path 1/1 shown:
         direct TempRec.Modify at ws:src/Writer.Codeunit.al:31:12
@@ -33,6 +41,14 @@ Codeunit PT Writer::Mixed  [public-procedure]
     TableData "11111111-0000-0000-0000-00000000e130/table/50300" W
 
   witnesses:
+    error-implicit error — 1 path shown
+      Path 1/1 shown:
+        direct TempRec.Insert at ws:src/Writer.Codeunit.al:13:8
+
+    error-implicit error — 1 path shown
+      Path 1/1 shown:
+        direct Rec.Insert at ws:src/Writer.Codeunit.al:15:8
+
     insert table "11111111-0000-0000-0000-00000000e130/table/50300" — 1 path shown
       Path 1/1 shown:
         direct TempRec.Insert at ws:src/Writer.Codeunit.al:13:8

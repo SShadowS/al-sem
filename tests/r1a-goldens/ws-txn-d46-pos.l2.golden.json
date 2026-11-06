@@ -395,6 +395,14 @@
           "provenance": "direct",
           "via": "self",
           "witnessOperationId": "5163e6a282c9cd15/891fc7dddd2ae2ecaf276395a3a77ab66421d96eb8ac9732c85570a832a93346/op3"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "5163e6a282c9cd15/891fc7dddd2ae2ecaf276395a3a77ab66421d96eb8ac9732c85570a832a93346/op2"
         }
       ],
       "capabilityStatus": "complete",
@@ -690,6 +698,14 @@
           "provenance": "direct",
           "via": "self",
           "witnessOperationId": "5163e6a282c9cd15/742544f8c68d2810d9c9dfd24127da5ab0e6eadbcbd6f6621f9beb2d3bfcca1a/op2"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "5163e6a282c9cd15/742544f8c68d2810d9c9dfd24127da5ab0e6eadbcbd6f6621f9beb2d3bfcca1a/op1"
         }
       ],
       "capabilityStatus": "complete",

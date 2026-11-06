@@ -1,10 +1,10 @@
 --- Codeunit CDO E-Mail Handler::RunReportID ---
   question: may-commit — existing effects (what the routine and its callees already do)
   answer:   yes
-  evidence: 13 effects
+  evidence: 14 effects
     [COMMIT] beyond Codeunit CSC Core::IsAppActiveOrAskToActivate, entered at ws:src/Features/Email/Templates/CDOEMailTemplateManagement.Codeunit.al:480
       path: RunReportID → CDO E-Mail Template Management::SaveDocToFile/7[2: Record "CDO Document Template Line"] → CreateReports/8[3: Record "CDO Document Template Line"] → CreateReports/9 → CSC Core::IsAppActiveOrAskToActivate → CSC Core Mgt.::StartActivationWizard2 (COMMIT at dep:Continia Core:src/Source/Core/CoreMgt.Codeunit.al:118)
-    also [COMMIT]: beyond Table Incoming Document Attachment::OnInsert, entered at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:182; at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:229; at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:253; … +9 rows; 13 rows of this type in all (--detail lists every row with its path)
+    also [COMMIT]: beyond Codeunit Import Attachment - Inc. Doc.::CreateNewAttachment, entered at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:179; beyond Codeunit Graph Mgt - Inc Doc Attachment::HandleOnAfterInsert, Table Incoming Document Attachment::OnInsert, entered at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:182; at ws:src/Features/EDocuments/CDOLegacyeDocDispatcher.Codeunit.al:229; … +10 rows; 14 rows of this type in all (--detail lists every row with its path)
   (3 overloads named by arity, `Name/n`, or by the parameter types they differ in, `Name/n[position: type]`; --detail prints their signatures)
   coverage: incomplete — 21 calls not resolved (6 in this workspace), 267 interface calls open world (10 in this workspace); top: CurrLineWithPrice.SetLine ×21, Codeunit.Run(<dynamic>) ×16, CurrLineWithPrice.GetLine ×8; alsem explain lists the workspace ones under gaps
   assumptions: none (default world; --closed-world assumes the loaded interface implementations)

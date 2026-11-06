@@ -27,12 +27,13 @@
 //! **selection-relevant** (it can add test callers no edge shows), with one
 //! class the design allows to be covered: a platform-raised table event
 //! (`OnAfterModifyEvent` …), covered when every write of that table in the
-//! program is an edge into the event. The sited graph has no such edge (a
-//! record write routes to the table's declared triggers only; the platform
-//! publishers are reached through the record hub alone), so no table event
-//! can be shown covered, and the owner's rule applies: one that cannot be
-//! shown covered counts as relevant. The class is printed, with that reason,
-//! so the gap is visible rather than folded away.
+//! program is an edge into the event. Since F1 (spec
+//! `2026-11-06-db-event-subscribers.md`) every record operation on the table
+//! raises it through a `tableEvent` edge, so the publisher is flagged only when
+//! no such site raises it (a dynamic record op, `RecordRef`, reaches it through
+//! the record hub only, which does not clear the flag); then the owner's rule
+//! applies: one that cannot be shown covered counts as relevant. The class is printed, with that reason, so the
+//! gap is visible rather than folded away.
 //!
 //! # Dependency-tier sameness (§4.5, Fable f6)
 //!
@@ -51,7 +52,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use serde_json::{Value, json};
 
 use crate::program::impact_graph::reverse::{
-    ConeVisitor, HiddenChannel, NodeIx, Tier, Via, WalkOptions, WalkScratch, WalkState, walk_multi,
+    ConeVisitor, HiddenChannel, NodeIx, SiteIx, Tier, Via, WalkOptions, WalkScratch, WalkState,
+    walk_multi,
 };
 use crate::program::impact_graph::sited::{SitedGraph, flag};
 use crate::program::node::ObjKey;
@@ -115,6 +117,13 @@ impl ConeVisitor for Sel {
                 self.hidden.entry(n).or_default().insert(f);
             }
         }
+    }
+    /// A test cannot raise a control add-in's event: a `TestPage` hosts no
+    /// add-in, and no AL statement raises one (round-1 c21). The page-run
+    /// path into such a trigger (`via: clientEvent`) is a user's client's,
+    /// so a test walk does not follow it; impact's walk does.
+    fn step(&mut self, g: &SitedGraph, from: WalkState, site: SiteIx) -> Option<u8> {
+        (g.sites()[site as usize].via() != "clientEvent").then_some(from.ext)
     }
     fn limit(&mut self, l: crate::program::impact_graph::reverse::Limit) {
         let ours = self.stop_at_test
@@ -185,6 +194,14 @@ pub fn display(g: &SitedGraph, n: NodeIx) -> String {
     }
 }
 
+/// A path hop's name (agent-tasks §12.1, output validation F9): [`display`]
+/// with the routine's overload handle, so two overloads on one path never
+/// print alike.
+fn path_name(g: &SitedGraph, n: NodeIx) -> String {
+    let handle = g.local_name(n).map_or("", |l| &*l.handle);
+    format!("{}{handle}", display(g, n))
+}
+
 fn object_number(g: &SitedGraph, n: NodeIx) -> Option<i64> {
     match g.routine_object(n)?.key {
         ObjKey::Id(i) => Some(i),
@@ -199,9 +216,8 @@ fn hidden_class(g: &SitedGraph, n: NodeIx, ch: &str) -> (&'static str, bool, &'s
         "unraisedPublisher" if g.is_platform_publisher(n) => (
             "platform-table-event",
             true,
-            "a platform-raised table event: covered only when every write of the table is an \
-             edge into it, and the graph has no such edge (writes route to declared triggers \
-             only), so it is not shown covered",
+            "a platform-raised table event no record operation in the graph raises: its \
+             table's writes are outside the loaded code, so it is not shown covered",
         ),
         "unraisedPublisher" => (
             "unraised-publisher",
@@ -657,7 +673,7 @@ pub fn select(g: &SitedGraph, args: &SelectArgs<'_>) -> Value {
                 "class": class_of(&s),
                 "hops": h,
                 "reaches": args.roots[root],
-                "path": path.iter().map(|&p| display(g, p)).collect::<Vec<_>>(),
+                "path": path.iter().map(|&p| path_name(g, p)).collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -680,4 +696,91 @@ pub fn select(g: &SitedGraph, args: &SelectArgs<'_>) -> Value {
         "limits": if stats.limited { vec!["the walk's state budget or cancellation stopped it"] } else { vec![] },
         "probes": args.probes.iter().map(|p| probe(g, p, &opts)).collect::<Vec<_>>(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::program::impact_graph::project::tests::{World, sited_of};
+    use crate::program::impact_graph::{RoutineFacts, RunTarget};
+    use crate::program::node_extract::{ObjectRef, PageControlKind, PageControlNode};
+    use crate::snapshot::TrustTier;
+    use al_syntax::ir::ObjectKind;
+
+    /// A control add-in's event trigger is not reachable from a test (round-1
+    /// c21): a test drives page `Ed` (a `TestPage` variable), whose `Body`
+    /// add-in raises `EditorInitialized`, which calls `GetBody`; a `TestPage`
+    /// hosts no add-in, so the selection walk from `GetBody` reaches no test.
+    /// The page's action trigger, reached over the same page run, still is.
+    /// Every fact is stated by hand.
+    ///
+    /// DISCRIMINATION (2026-11-06): removing `Sel::step` (the default follows
+    /// every site) fails "no test reaches GetBody"; projecting the add-in
+    /// trigger with `via: "lifecycle"` (the `usercontrol_names` check made
+    /// false) fails the precondition.
+    #[test]
+    fn a_test_does_not_reach_a_control_add_in_event() {
+        let mut w = World::default();
+        let a = w.app("A");
+        let mgt = w.obj(a, ObjectKind::Codeunit, 1, "Mgt", TrustTier::Workspace);
+        let page = w.obj(a, ObjectKind::Page, 2, "Ed", TrustTier::Workspace);
+        let tests = w.obj(a, ObjectKind::Codeunit, 3, "Tests", TrustTier::Workspace);
+        w.object_mut(&page).page_controls = vec![PageControlNode {
+            name_lc: "body".into(),
+            kind: PageControlKind::UserControl,
+            target: ObjectRef::Name {
+                raw: "CDO.Editor".into(),
+                normalized_lc: "cdo.editor".into(),
+            },
+        }];
+        let get_body = w.rtn(&mgt, "GetBody");
+        let send = w.rtn(&mgt, "Send");
+        let init = w.rtn_with(&page, "EditorInitialized", |r| {
+            r.is_trigger = true;
+            r.id.enclosing_member_lc = Some("body".into());
+        });
+        let action = w.rtn_with(&page, "OnAction", |r| {
+            r.is_trigger = true;
+            r.id.enclosing_member_lc = Some("send".into());
+        });
+        w.call(&init, &get_body, 1);
+        w.call(&action, &send, 2);
+        let t = w.rtn(&tests, "TestIt");
+        w.facts.routines.insert(
+            t.clone(),
+            RoutineFacts {
+                test: true,
+                test_pages: vec![RunTarget::Object(page.clone())],
+                ..Default::default()
+            },
+        );
+        let g = sited_of(&w, a, &[]);
+        let ix = |r| g.routine_node(r).expect("a node");
+        let into_init: Vec<&str> = g
+            .sites_into(ix(&init))
+            .iter()
+            .map(|&s| g.sites()[s as usize].via())
+            .collect();
+        assert_eq!(
+            into_init,
+            vec!["clientEvent"],
+            "precondition: the page run's site"
+        );
+        let tests_from = |root| {
+            let mut sel = Sel::new(&g, false);
+            walk_multi(
+                &g,
+                &[root],
+                &WalkOptions::default(),
+                &mut WalkScratch::default(),
+                &mut sel,
+            );
+            sel.tests.keys().copied().collect::<Vec<_>>()
+        };
+        assert_eq!(tests_from(ix(&send)), vec![ix(&t)], "the action is reached");
+        assert!(
+            tests_from(ix(&get_body)).is_empty(),
+            "no test reaches GetBody"
+        );
+    }
 }

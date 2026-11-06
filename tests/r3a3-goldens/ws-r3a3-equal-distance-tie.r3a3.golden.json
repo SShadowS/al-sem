@@ -4,6 +4,14 @@
 			"routineId": "3a3e4400-0000-0000-0000-00000000003a:Codeunit:50001#331c9694c5c911c2a1bd603dc7aa9d2d16669cdb6f4084370c97624c1566f97b",
 			"capabilityFactsDirect": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "direct",
+					"via": "self",
+					"witnessOperationId": "3a3e4400-0000-0000-0000-00000000003a:Codeunit:50001#331c9694c5c911c2a1bd603dc7aa9d2d16669cdb6f4084370c97624c1566f97b/op0"
+				},
+				{
 					"op": "insert",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -35,6 +43,15 @@
 			"routineId": "3a3e4400-0000-0000-0000-00000000003a:Codeunit:50002#84cbb2e991002377e68baaed972736805898e90f8e43eca0344e51e44a049599",
 			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "call",
+					"witnessOperationId": "3a3e4400-0000-0000-0000-00000000003a:Codeunit:50001#331c9694c5c911c2a1bd603dc7aa9d2d16669cdb6f4084370c97624c1566f97b/op0",
+					"witnessCallsiteId": "3a3e4400-0000-0000-0000-00000000003a:Codeunit:50002#84cbb2e991002377e68baaed972736805898e90f8e43eca0344e51e44a049599/cs0"
+				},
 				{
 					"op": "insert",
 					"resourceKind": "table",
@@ -68,6 +85,15 @@
 			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "call",
+					"witnessOperationId": "3a3e4400-0000-0000-0000-00000000003a:Codeunit:50001#331c9694c5c911c2a1bd603dc7aa9d2d16669cdb6f4084370c97624c1566f97b/op0",
+					"witnessCallsiteId": "3a3e4400-0000-0000-0000-00000000003a:Codeunit:50003#4220a4d31c94a2b1b867ce22aae44d52fa8511108968dd3b831f8962bdb9a3b4/cs0"
+				},
+				{
 					"op": "insert",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -99,6 +125,15 @@
 			"routineId": "3a3e4400-0000-0000-0000-00000000003a:Codeunit:50004#234129ee000c7de20fad2dc35dbe5676a8ba94802c5c0d9c411bf712350377a6",
 			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "call",
+					"witnessOperationId": "3a3e4400-0000-0000-0000-00000000003a:Codeunit:50001#331c9694c5c911c2a1bd603dc7aa9d2d16669cdb6f4084370c97624c1566f97b/op0",
+					"witnessCallsiteId": "3a3e4400-0000-0000-0000-00000000003a:Codeunit:50004#234129ee000c7de20fad2dc35dbe5676a8ba94802c5c0d9c411bf712350377a6/cs0"
+				},
 				{
 					"op": "insert",
 					"resourceKind": "table",
@@ -132,6 +167,15 @@
 			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [
 				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "call",
+					"witnessOperationId": "3a3e4400-0000-0000-0000-00000000003a:Codeunit:50001#331c9694c5c911c2a1bd603dc7aa9d2d16669cdb6f4084370c97624c1566f97b/op0",
+					"witnessCallsiteId": "3a3e4400-0000-0000-0000-00000000003a:Codeunit:50005#54b2376a58f1af1acb1cca05a2a6784d086f6fd0e20657990914a55f44c0080f/cs0"
+				},
+				{
 					"op": "insert",
 					"resourceKind": "table",
 					"confidence": "static",
@@ -163,6 +207,15 @@
 			"routineId": "3a3e4400-0000-0000-0000-00000000003a:Codeunit:50005#eb597b263b2335f917e714a9f79f795ffdf8557b5df28cc49e514933392a0257",
 			"capabilityFactsDirect": [],
 			"capabilityFactsInherited": [
+				{
+					"op": "error-implicit",
+					"resourceKind": "error",
+					"confidence": "static",
+					"provenance": "inherited",
+					"via": "call",
+					"witnessOperationId": "3a3e4400-0000-0000-0000-00000000003a:Codeunit:50001#331c9694c5c911c2a1bd603dc7aa9d2d16669cdb6f4084370c97624c1566f97b/op0",
+					"witnessCallsiteId": "3a3e4400-0000-0000-0000-00000000003a:Codeunit:50005#eb597b263b2335f917e714a9f79f795ffdf8557b5df28cc49e514933392a0257/cs0"
+				},
 				{
 					"op": "insert",
 					"resourceKind": "table",

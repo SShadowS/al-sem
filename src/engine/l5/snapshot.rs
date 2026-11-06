@@ -848,6 +848,24 @@ pub enum SnapshotGraphEdge {
         #[serde(rename = "edgeId")]
         edge_id: String,
     },
+    /// F1 (spec `2026-11-06-db-event-subscribers.md`): a record operation
+    /// raising a platform table event (`OnAfterModifyEvent`, …) that `to`
+    /// subscribes to. Keyed like [`Self::ImplicitTrigger`] by the raising
+    /// operation (no call site); `event_id` names the event. Kept without an
+    /// anchor for the same reason.
+    TableEvent {
+        kind: &'static str,
+        from: String,
+        to: String,
+        #[serde(rename = "operationId")]
+        operation_id: String,
+        #[serde(rename = "eventId")]
+        event_id: String,
+        #[serde(rename = "sourceAnchor", skip_serializing_if = "Option::is_none")]
+        anchor: Option<SnapshotSourceAnchor>,
+        #[serde(rename = "edgeId")]
+        edge_id: String,
+    },
 }
 
 impl SnapshotGraphEdge {
@@ -895,6 +913,13 @@ impl SnapshotGraphEdge {
                 to,
                 edge_id,
                 ..
+            }
+            | SnapshotGraphEdge::TableEvent {
+                kind,
+                from,
+                to,
+                edge_id,
+                ..
             } => format!("{kind}|{from}|{to}|{edge_id}"),
             SnapshotGraphEdge::ObjectRunUnresolved {
                 kind,
@@ -913,7 +938,8 @@ impl SnapshotGraphEdge {
             | SnapshotGraphEdge::ObjectRunResolved { edge_id, .. }
             | SnapshotGraphEdge::ObjectRunUnresolved { edge_id, .. }
             | SnapshotGraphEdge::EventDispatch { edge_id, .. }
-            | SnapshotGraphEdge::ImplicitTrigger { edge_id, .. } => edge_id,
+            | SnapshotGraphEdge::ImplicitTrigger { edge_id, .. }
+            | SnapshotGraphEdge::TableEvent { edge_id, .. } => edge_id,
         }
     }
 
@@ -925,7 +951,8 @@ impl SnapshotGraphEdge {
             | SnapshotGraphEdge::ObjectRunResolved { kind, .. }
             | SnapshotGraphEdge::ObjectRunUnresolved { kind, .. }
             | SnapshotGraphEdge::EventDispatch { kind, .. }
-            | SnapshotGraphEdge::ImplicitTrigger { kind, .. } => kind,
+            | SnapshotGraphEdge::ImplicitTrigger { kind, .. }
+            | SnapshotGraphEdge::TableEvent { kind, .. } => kind,
         }
     }
 
@@ -939,9 +966,9 @@ impl SnapshotGraphEdge {
             | SnapshotGraphEdge::InterfaceDispatch { callsite_id, .. }
             | SnapshotGraphEdge::ObjectRunResolved { callsite_id, .. }
             | SnapshotGraphEdge::ObjectRunUnresolved { callsite_id, .. } => Some(callsite_id),
-            SnapshotGraphEdge::EventDispatch { .. } | SnapshotGraphEdge::ImplicitTrigger { .. } => {
-                None
-            }
+            SnapshotGraphEdge::EventDispatch { .. }
+            | SnapshotGraphEdge::ImplicitTrigger { .. }
+            | SnapshotGraphEdge::TableEvent { .. } => None,
         }
     }
 
@@ -953,7 +980,8 @@ impl SnapshotGraphEdge {
             | SnapshotGraphEdge::InterfaceDispatch { to, .. }
             | SnapshotGraphEdge::ObjectRunResolved { to, .. }
             | SnapshotGraphEdge::EventDispatch { to, .. }
-            | SnapshotGraphEdge::ImplicitTrigger { to, .. } => Some(to),
+            | SnapshotGraphEdge::ImplicitTrigger { to, .. }
+            | SnapshotGraphEdge::TableEvent { to, .. } => Some(to),
             SnapshotGraphEdge::ObjectRunUnresolved { .. } => None,
         }
     }
@@ -967,25 +995,31 @@ impl SnapshotGraphEdge {
             | SnapshotGraphEdge::ObjectRunResolved { from, .. }
             | SnapshotGraphEdge::ObjectRunUnresolved { from, .. }
             | SnapshotGraphEdge::EventDispatch { from, .. }
-            | SnapshotGraphEdge::ImplicitTrigger { from, .. } => from,
+            | SnapshotGraphEdge::ImplicitTrigger { from, .. }
+            | SnapshotGraphEdge::TableEvent { from, .. } => from,
         }
     }
 
     /// The INTERNAL `eventId` of an event-dispatch edge: digest's first-hop
-    /// selector for an event fact (#98 D2). `None` on every other kind.
+    /// selector for an event fact (#98 D2), and of a table-event edge (F1, the
+    /// platform event its operation raises; part of its `PdEdgeKey`, so one
+    /// operation reaching one subscriber through two events stays two edges).
+    /// `None` on every other kind.
     pub fn edge_event_id(&self) -> Option<&str> {
         match self {
-            SnapshotGraphEdge::EventDispatch { event_id, .. } => Some(event_id),
+            SnapshotGraphEdge::EventDispatch { event_id, .. }
+            | SnapshotGraphEdge::TableEvent { event_id, .. } => Some(event_id),
             _ => None,
         }
     }
 
-    /// The firing record operation of an implicit-trigger edge (#96 D2), the
-    /// `PdEdgeKey`'s last part and digest's first-hop selector (#96 D5). `None`
-    /// on every other kind.
+    /// The firing record operation of an implicit-trigger edge (#96 D2) or of
+    /// a table-event edge (F1), the `PdEdgeKey`'s last part and digest's
+    /// first-hop selector (#96 D5). `None` on every other kind.
     pub fn edge_operation_id(&self) -> Option<&str> {
         match self {
-            SnapshotGraphEdge::ImplicitTrigger { operation_id, .. } => Some(operation_id),
+            SnapshotGraphEdge::ImplicitTrigger { operation_id, .. }
+            | SnapshotGraphEdge::TableEvent { operation_id, .. } => Some(operation_id),
             _ => None,
         }
     }
@@ -2858,6 +2892,21 @@ fn derive_typed_edges(inp: &Ledger<'_>) -> (Vec<SnapshotGraphEdge>, SkippedEdgeK
                         .map(|(a, rid)| anchor_from_panchor(a, rid)),
                     edge_id: edge_id.clone(),
                 },
+                // F1: like an implicit trigger, never dropped for a missing
+                // anchor (the cone follows it).
+                "table-event" => SnapshotGraphEdge::TableEvent {
+                    kind: "table-event",
+                    from: from_stable.clone(),
+                    to: to_stable.clone().unwrap_or_default(),
+                    operation_id: e.operation_id.clone().unwrap_or_default(),
+                    event_id: event_id_internal.clone().unwrap_or_default(),
+                    anchor: e
+                        .operation_id
+                        .as_deref()
+                        .and_then(|op| op_anchor.get(op))
+                        .map(|(a, rid)| anchor_from_panchor(a, rid)),
+                    edge_id: edge_id.clone(),
+                },
                 // Unmodelled kind (dependency-export) - never built by the combined
                 // graph; skip rather than emit a malformed edge.
                 _ => break 'build None,
@@ -2868,7 +2917,7 @@ fn derive_typed_edges(inp: &Ledger<'_>) -> (Vec<SnapshotGraphEdge>, SkippedEdgeK
             // R6-4: the skipped row's pd key, for `derive_pd_arena`'s check.
             None => {
                 let event = match e.kind.as_str() {
-                    "event-dispatch" => e.event_id.clone().unwrap_or_default(),
+                    "event-dispatch" | "table-event" => e.event_id.clone().unwrap_or_default(),
                     _ => String::new(),
                 };
                 skipped.insert((
@@ -2972,10 +3021,14 @@ fn derive_pd_arena(
             "pd arena: snapshot edges {prev:?} and {ix} share the key {key:?}"
         );
     }
-    // (owner stable id, operation id) → the owner's direct fact.
+    // (owner stable id, operation id) → the owner's direct table fact (the
+    // producer row, `view::is_producer_row`: not another kind's fact the same
+    // operation witnesses, such as its `error-implicit`).
     let mut direct_fact_ix: HashMap<(&str, &str), usize> = HashMap::new();
     for (ix, f) in capability_facts.iter().enumerate() {
-        if let ("direct", Some(op)) = (f.provenance(), f.witness_operation_id()) {
+        if let Some(op) = f.witness_operation_id()
+            && view::is_producer_row(f, op)
+        {
             direct_fact_ix.entry((f.subject(), op)).or_insert(ix);
         }
     }
@@ -2998,7 +3051,7 @@ fn derive_pd_arena(
             let edge = &cone.edges[l.edge];
             let to = stable_routine_id(&edge.to, map);
             let event = match edge.kind.as_str() {
-                "event-dispatch" => edge.event_id.as_deref().unwrap_or(""),
+                "event-dispatch" | "table-event" => edge.event_id.as_deref().unwrap_or(""),
                 _ => "",
             };
             let key = (
@@ -3384,7 +3437,11 @@ fn derive_callsite_resolutions(
         BTreeMap::new();
     let mut group_order: Vec<String> = Vec::new();
     for ce in base.calls.iter().chain(base.dependency_calls) {
-        if ce.dispatch_kind == DispatchKind::ImplicitTrigger {
+        // Keyed by a record operation, not a call site (F1: table events too).
+        if matches!(
+            ce.dispatch_kind,
+            DispatchKind::ImplicitTrigger | DispatchKind::TableEvent
+        ) {
             continue;
         }
         let key = ce.callsite_id.clone();

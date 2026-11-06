@@ -415,11 +415,15 @@ fn escaped_reference_binds_a_dependency_table() {
     }
     assert_eq!(
         res,
-        vec![(
-            "DB_INSERT".to_string(),
-            format!("{DEP_GUID}/table/18"),
-            "T \"Q\" X".to_string()
-        )],
+        vec![
+            (
+                "DB_INSERT".to_string(),
+                format!("{DEP_GUID}/table/18"),
+                "T \"Q\" X".to_string()
+            ),
+            // The statement `R.Insert();` discards its Boolean (G20).
+            ("ERROR_IMPLICIT".to_string(), String::new(), String::new()),
+        ],
         "{doc}"
     );
 }

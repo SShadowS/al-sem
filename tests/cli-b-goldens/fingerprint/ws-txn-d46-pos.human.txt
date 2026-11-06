@@ -14,6 +14,11 @@ Codeunit Install Handler::OnInstallAppPerCompany  [install-codeunit]
         DoSetup (via DoSetup at ws:src/InstallCU.al:24:8)
           → direct commit at ws:src/InstallCU.al:35:8
 
+    error-implicit error — 1 path shown
+      Path 1/1 shown:
+        DoSetup (via DoSetup at ws:src/InstallCU.al:24:8)
+          → direct Setup.Insert at ws:src/InstallCU.al:33:12
+
     insert table "11111111-0000-0000-0000-00000000d460/table/50000" — 1 path shown
       Path 1/1 shown:
         DoSetup (via DoSetup at ws:src/InstallCU.al:24:8)
@@ -37,6 +42,11 @@ Codeunit Upgrade Handler::OnUpgradePerCompany  [upgrade-codeunit]
       Path 1/1 shown:
         DoUpgrade (via DoUpgrade at ws:src/UpgradeCU.al:7:8)
           → direct commit at ws:src/UpgradeCU.al:18:8
+
+    error-implicit error — 1 path shown
+      Path 1/1 shown:
+        DoUpgrade (via DoUpgrade at ws:src/UpgradeCU.al:7:8)
+          → direct Setup.Modify at ws:src/UpgradeCU.al:16:12
 
     modify table "11111111-0000-0000-0000-00000000d460/table/50000" — 1 path shown
       Path 1/1 shown:

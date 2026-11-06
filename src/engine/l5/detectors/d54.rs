@@ -61,7 +61,9 @@ pub fn detect_d54(
             for e in edges {
                 // Never cross INTO subscribers (event-dispatch) or through
                 // unresolved dynamic edges.
-                if e.kind == "event-dispatch" || e.kind == "dynamic" {
+                if crate::engine::l4::combined_graph::is_subscriber_edge(&e.kind)
+                    || e.kind == "dynamic"
+                {
                     continue;
                 }
                 if seen.contains(e.to.as_str()) {

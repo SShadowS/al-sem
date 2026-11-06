@@ -129,7 +129,7 @@ impl<'a> WalkPolicy for D2Policy<'a> {
         edges
             .iter()
             .filter(|e| {
-                if e.kind == "event-dispatch" {
+                if crate::engine::l4::combined_graph::is_subscriber_edge(&e.kind) {
                     return false;
                 }
                 match self.summaries.get(&e.to) {

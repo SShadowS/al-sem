@@ -308,6 +308,14 @@
             },
             "opSubtype": "Insert"
           }
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "2a8534acb44f70cf/f58107ca515b8e9c73ae6cb2cc37b42fc59211c71ad1fcfc14dd4ba977457bee/op1"
         }
       ],
       "capabilityStatus": "complete",

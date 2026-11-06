@@ -223,20 +223,36 @@ pub fn extract_events(
 // ─── Error ───────────────────────────────────────────────────────────────────
 
 /// The implicit runtime error a RECORD OPERATION may raise (G20), named for the
-/// fact: `Get` / `FindFirst` / `FindLast` / `FindSet` when the op is a statement
-/// (its Boolean discarded, so a missing record raises an error), `TestField`
-/// always. Record operations are their own list (`PRecordOperation`), not call
-/// sites. With [`implicit_error_call`], the ONE rule: the body extractor and
-/// the L4 cone both call them.
+/// fact. AL's rule: a record method declared `[Ok :=] Rec.M(…)` raises a
+/// runtime error when it fails AND its Boolean is not consumed, that is when
+/// the op is a statement. So in statement position: the lookups `Get` / `Find`
+/// / `FindFirst` / `FindLast` / `FindSet` (no record matches) and the writes
+/// `Insert` / `Modify` / `Delete` / `Rename` (the record exists already, does
+/// not exist, or another session changed it). `TestField` always. Record
+/// operations are their own list (`PRecordOperation`), not call sites. With
+/// [`implicit_error_call`], the ONE rule: the body extractor and the L4 cone
+/// both call them.
+///
+/// Not here, though AL declares them the same way: `CalcFields` / `CalcSums`
+/// fail only when a named field is no FlowField / summable field, a coding
+/// error that no data state causes, so a statement `CalcFields` is no runtime
+/// risk worth a fact (it would mark nearly every routine that reads a
+/// FlowField); `Next` / `Count` / `IsEmpty` return no "ok" Boolean; `DeleteAll` /
+/// `ModifyAll` return none either.
 pub(crate) fn implicit_error_record_op(
     op: &str,
     in_statement_position: bool,
 ) -> Option<&'static str> {
     match op {
         "Get" if in_statement_position => Some("Get"),
+        "Find" if in_statement_position => Some("Find"),
         "FindFirst" if in_statement_position => Some("FindFirst"),
         "FindLast" if in_statement_position => Some("FindLast"),
         "FindSet" if in_statement_position => Some("FindSet"),
+        "Insert" if in_statement_position => Some("Insert"),
+        "Modify" if in_statement_position => Some("Modify"),
+        "Delete" if in_statement_position => Some("Delete"),
+        "Rename" if in_statement_position => Some("Rename"),
         "TestField" => Some("TestField"),
         _ => None,
     }

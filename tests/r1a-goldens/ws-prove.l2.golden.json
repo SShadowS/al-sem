@@ -1602,6 +1602,14 @@
           "provenance": "direct",
           "via": "self",
           "witnessOperationId": "fc1bf13cf814d160/859f2e3f9fffcc8857521a46e87b06f169bedc99ba3f090b8a61f90d3708a3ab/op2"
+        },
+        {
+          "op": "error-implicit",
+          "resourceKind": "error",
+          "confidence": "static",
+          "provenance": "direct",
+          "via": "self",
+          "witnessOperationId": "fc1bf13cf814d160/859f2e3f9fffcc8857521a46e87b06f169bedc99ba3f090b8a61f90d3708a3ab/op1"
         }
       ],
       "capabilityStatus": "complete",

@@ -293,13 +293,35 @@ are exact derivations from parsed declarations, not new dispatch resolution.
    and action triggers and its record's triggers; a report run fires its dataitem and
    request-page triggers. Targeting only the entry trigger would report changes to
    those triggers as uncoverable.
-2. **Declared runnable variables.** A routine that declares a parameter or local of
-   type `Page`, `Report`, `XmlPort`, `Query`, `TestPage` or `TestRequestPage` X (or
-   whose object declares such a global) gets a `Run` edge (`OverApprox`,
+
+   **Control add-in events (2026-11-06, round-1 c21).** A page trigger whose
+   enclosing member is a `usercontrol` of the page or of an extension of it (an
+   add-in event such as `EditorInitialized`) gets its lifecycle edge with
+   `via: "clientEvent"` instead of `"lifecycle"` (same `Trigger` kind, `OverApprox`).
+   Only the add-in's JavaScript raises it, in a real client: a user's page run may
+   fire it, a `TestPage` cannot (it hosts no add-in, and no AL statement raises one).
+   So the edge stays for production reach (impact, callers) and test selection does
+   not walk it (`alsem tests` refuses the site). **Consumer note (bc-dev-mcp):** a
+   test-selection walk over the export should skip `clientEvent` edges too; one that
+   treats it as any edge selects exactly what it selected before.
+2. **Declared test pages, and typed runnable receivers.** A routine that declares a
+   parameter or local of type `TestPage` or `TestRequestPage` X (or whose object
+   declares such a global) gets a `Run` edge (`OverApprox`,
    `via: "declaredRunnable"`) to X's object node; a `TestRequestPage` maps to its
-   report. Why: `TestPage.OpenEdit()`, `TestField.SetValue()`, `TestAction.Invoke()`,
-   `ReportVar.SaveAsPdf()` and `QueryVar.Open()` all resolve as catalog builtins, yet
-   they run X's triggers. Codeunit variables are excluded: the engine already models
+   report. Why: `TestPage.OpenEdit()`, `TestField.SetValue()` and
+   `TestAction.Invoke()` resolve as catalog builtins, yet they run X's triggers.
+   For a `Page`, `Report`, `XmlPort` or `Query` variable the run is a **site**, not
+   the declaration: a typed `.Run()`/`.RunModal()` (XmlPort also `Import`/`Export`) is
+   already an engine `run` edge, and a call site whose route is a dispatching builtin
+   that runs an object of kind K (`member_catalog::DISPATCHING_BUILTINS`, e.g.
+   `ReportVar.SaveAsPdf()`, `QueryVar.Open()`) on a receiver the resolver typed as an
+   object X of kind K gets the same `declaredRunnable` edge to X, from that routine,
+   at that line. **Narrowed 2026-11-06 (round-1 c12):** before, every routine of an
+   object whose globals declared `Page "Sales Invoice"` ran that page, so `Document
+   Errors Mgt.`'s empty `OnRun` "ran" Page 43 because the codeunit calls
+   `GlobalSalesInvoicePage.RunBackgroundCheck()`. **Consumer note (bc-dev-mcp):** no
+   schema change; the export has fewer `declaredRunnable` edges, each one now
+   witnessed by a site. Codeunit variables are excluded: the engine already models
    `CuVar.Run()` precisely, and codeunit variables mostly serve procedure calls.
 3. **Test handlers.** A routine with `[HandlerFunctions('A,B')]` gets an `Event` edge
    (`OverApprox`, `via: "testHandler"`) to each named handler in the same codeunit
@@ -359,7 +381,7 @@ reachability.
 
 | Value | Node | Closed by |
 |---|---|---|
-| `unraisedPublisher` | (a) every synthetic platform **table** event publisher, unconditionally: record operations do not raise it (fact 9), and hub or lifecycle edges into it must not clear the flag; (b) a real publisher with subscribers but no incoming edge after all rules above. Synthetic **page** events are not flagged: a page's events fire exactly when the page runs, which its lifecycle edges show. | F1 removes (a) |
+| `unraisedPublisher` | (a) a synthetic platform **table** event publisher with no incoming edge from a non-hub node (until F1, 2026-11-06: every one, unconditionally, since record operations did not raise it; now each record operation on its table raises it through a `tableEvent` edge, and a page's lifecycle edge counts as raising it; a hub edge still does not clear the flag); (b) a real publisher with subscribers but no incoming edge after all rules above. Synthetic **page** events are not flagged: a page's events fire exactly when the page runs, which its lifecycle edges show. | F1 narrowed (a) |
 | `unboundSubscriber` | an `[EventSubscriber]` with no incoming `Event` edge | (a resolution fix per case) |
 | `unmodeledRecordTrigger` | a table-extension `OnBefore<Op>`/`OnAfter<Op>` trigger or field `OnBeforeValidate`/`OnAfterValidate` | F5 |
 
@@ -491,7 +513,7 @@ arrives with Stage C.
 | `caller`, `callee` | string | node ids |
 | `kind` | `Direct` \| `Event` \| `Interface` \| `Run` \| `Trigger` | 4.3 |
 | `confidence` | `Resolved` \| `OverApprox` \| `Open` | 4.3 |
-| `via` | string | provenance: `call`, `run`, `implicitTrigger`, `eventFlow`, `interface`, `lifecycle`, `declaredRunnable`, `testHandler`, `testRunner`, `opaqueBody`, `unresolved`, `dynamic`, `dispatchingBuiltin`, `parseRecovered`, `hubExpansion`, `backgroundStart` (additive, F3: a `Run` edge from a static background start to the started codeunit's object; the target runs in a new session or task) |
+| `via` | string | provenance: `call`, `run`, `implicitTrigger`, `eventFlow`, `interface`, `lifecycle`, `declaredRunnable`, `testHandler`, `testRunner`, `opaqueBody`, `unresolved`, `dynamic`, `dispatchingBuiltin`, `parseRecovered`, `hubExpansion`, `backgroundStart` (additive, F3: a `Run` edge from a static background start to the started codeunit's object; the target runs in a new session or task), `clientEvent` (additive, 2026-11-06: a `Trigger` edge from a page's object node to an event trigger of one of its `usercontrol` add-ins; only a client's JavaScript raises it, so test selection must not walk it — see rule 1), `tableEvent` (additive, F1: an `Event` edge from a record operation's routine to its table's synthetic platform publisher of an event the operation raises; the publisher's `eventFlow` edges go on to the subscribers) |
 | `line` | number | first call-site line in the caller's file, for engine edges |
 | `conditions` | string[] | `manualBinding`, `ambiguousDispatch`, `runTriggerGuarded`, `onTaskFailure` (additive, F3: `TaskScheduler.CreateTask`'s failure codeunit, which runs only when the task fails; the edge is `OverApprox`), `configuredDispatch` (additive, 2026-11-06: see below), ...; omitted when empty |
 
@@ -681,7 +703,7 @@ sound without them; each one only makes selection more precise.
 
 | Id | Gap | Effect today | v1 signal | Closes when |
 |---|---|---|---|---|
-| F1 | Record operations do not raise platform table events (fact 9) | LSP, detectors and the export miss `OnAfter*Event` subscribers | `unraisedPublisher` on every synthetic table publisher | the resolver adds routes from each record operation on T to T's synthetic publishers for that op (the resolver knows T at `full.rs:700-723`); then rule (a) of `unraisedPublisher` is deleted |
+| F1 | Record operations do not raise platform table events (fact 9) | LSP, detectors and the export miss `OnAfter*Event` subscribers | `unraisedPublisher` on every synthetic table publisher | the resolver adds routes from each record operation on T to T's synthetic publishers for that op (the resolver knows T at `full.rs:700-723`); then rule (a) of `unraisedPublisher` is deleted. **Closed 2026-11-06** (`2026-11-06-db-event-subscribers.md`): `EdgeKind::TableEvent`, `via: "tableEvent"`; rule (a) narrowed to a publisher no non-hub edge raises |
 | F3 | Dispatching builtins with a static target (`Report.SaveAsPdf(Report::X, …)`, `Session.StartSession(…, Codeunit::X)`) are catalog calls | selection is coarse (every object of the kind) | `Run{kind}` hubs | the resolver emits `Run` routes for a static first argument (the T0.3 audit already proves such targets). **Background starts closed 2026-11-05** (see 16.1); `Report.*`/`Page.*` instance builtins with a static target are still open |
 | F5 | Table-extension `OnBefore<Op>`/`OnAfter<Op>` and field `OnBefore/OnAfterValidate` are never reached (fact 9) | silent miss in LSP and detectors | `unmodeledRecordTrigger` | `resolve_implicit_trigger` looks them up too |
 | F6 | Trigger methodIds are unknown (fact 7) | no coverage history for triggers | `methodId: null` | a rule is derived from compiler vectors (altool node ids carry trigger methodIds; `compiler_oracle.rs` already reads altool graphs) and reproduces 100% of them |

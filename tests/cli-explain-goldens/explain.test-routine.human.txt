@@ -1,6 +1,6 @@
 Codeunit Explain Tests::PostUnreleasedFails  ws:src/tests.al:9
   summary — writes: may write 1 table (1 owned by this app, 0 by dependencies); caller-dependent: none
-    transaction, UI and errors: commits: no observed COMMIT; UI at 1 place; errors at 2 places
+    transaction, UI and errors: commits: no observed COMMIT; UI at 1 place; errors at 3 places
     other effects: events: 1 (1 raised in workspace code)
     callers and tests: callers: none; tests: none of 1 loaded
     uncertainty: gaps: 0 in workspace code, 0 in dependency code, 2 not placed
@@ -19,7 +19,7 @@ Codeunit Explain Tests::PostUnreleasedFails  ws:src/tests.al:9
   events: 1 raised in workspace code, by publisher: Codeunit Explain Post 1; 0 more only beyond entry points
   extension points: none (the routine publishes no event itself)
   UI at 1 place: UI_MESSAGE at ws:src/post.al:19 (guarded-by-IsHandled)
-  errors at 2 places: ERROR_IMPLICIT at ws:src/post.al:12 (unconditional-on-success); ERROR_THROW at ws:src/post.al:11 (error-path)
+  errors at 3 places: ERROR_IMPLICIT at ws:src/post.al:12 (unconditional-on-success); ERROR_IMPLICIT at ws:src/post.al:18 (guarded-by-IsHandled); ERROR_THROW at ws:src/post.al:11 (error-path)
   tests: 1 [Test] procedure loaded; none reaches it (not a reason to skip tests)
   gaps in workspace code (2 gaps):
     gap: symbol-only-dependency (callee Assert.ExpectedError, status external) at ws:src/tests.al:15

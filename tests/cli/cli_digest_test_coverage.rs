@@ -234,6 +234,9 @@ fn main_selection_exact_sets() {
             &["BonusAboveThousand", "NightlyRecalcDecays"],
             true,
         ),
+        // F1: Tests.al:88 `Ledger.Insert(true)` raises the table's platform
+        // OnAfterInsertEvent, which Ledger.al:164 subscribes to.
+        cov("OnAfterInsertLedger", &["InsertLedger"], true),
     ];
     want_cov.sort();
     assert_eq!(covered(&b), want_cov, "covered: {b}");
@@ -249,13 +252,6 @@ fn main_selection_exact_sets() {
             "ReachedOnlyFromNowhere",
             "Codeunit Sel Unbound Subscriber",
             "no-path",
-        ),
-        // Ledger.al:164: subscribes to the table's platform OnAfterInsertEvent; no
-        // publisher routine exists.
-        unc(
-            "OnAfterInsertLedger",
-            "Codeunit Sel Ledger Subscriber",
-            "platform-event-subscriber",
         ),
     ];
     want_unc.sort();
@@ -398,8 +394,10 @@ fn diff_input_exact_sets() {
     );
 }
 
-/// Row 7: a workspace with no tests -> 0 tests considered, everything uncovered,
-/// ratio 0, nothing traversed so the block is complete.
+/// Row 7: a workspace with no tests -> 0 tests considered, everything
+/// uncovered, ratio 0. Nothing was searched from, so the block is NOT
+/// complete and no item reads `no-path` (round-1 c25, 2026-11-06: it read
+/// "complete" / "no-path" with 0 tests considered).
 #[test]
 fn no_tests_workspace() {
     let (_, doc) = with_tests(&no_tests_ws(), &routines(&["NetPrice", "Discount"]));
@@ -411,14 +409,15 @@ fn no_tests_workspace() {
     assert_eq!(
         uncovered(&b),
         vec![
-            unc("Discount", "Codeunit Nt Pricing", "no-path"),
-            unc("NetPrice", "Codeunit Nt Pricing", "no-path"),
+            unc("Discount", "Codeunit Nt Pricing", "no-test-code"),
+            unc("NetPrice", "Codeunit Nt Pricing", "no-test-code"),
         ],
         "{b}"
     );
     let c = &b["coverage"];
-    assert_eq!(c["status"], "complete", "{c}");
-    assert_eq!(c["reasons"], serde_json::json!([]), "{c}");
+    assert_eq!(c["status"], "partial", "{c}");
+    assert_eq!(c["reasons"], serde_json::json!(["no-test-code"]), "{c}");
+    assert!(b.get("testAppsNotLoaded").is_none(), "no sibling: {b}");
     assert_eq!(c["testsWithUnresolvedTraversal"].as_u64(), Some(0), "{c}");
     assert_eq!(c["testsCallingDependencyCode"].as_u64(), Some(0), "{c}");
 }
@@ -491,7 +490,7 @@ fn human_line_with_tests() {
     assert_eq!(
         lines,
         vec![
-            "test coverage: 6 of 10 changed routines reached; 11 [Test] procedures \
+            "test coverage: 7 of 10 changed routines reached; 11 [Test] procedures \
              loaded and considered (partial: dynamic-target, object-run-unresolved, test-page, \
              unresolved-receiver-type); an unreached routine is not a reason to skip tests"
         ],
@@ -620,4 +619,73 @@ fn tests_block_with_no_resolved_root_is_the_workspaces() {
         "uncovered": []
     });
     assert_eq!(doc["payload"]["testCoverage"], want, "{doc}");
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap() {
+        let e = e.unwrap();
+        let t = to.join(e.file_name());
+        if e.file_type().unwrap().is_dir() {
+            copy_dir(&e.path(), &t);
+        } else {
+            std::fs::copy(e.path(), &t).unwrap();
+        }
+    }
+}
+
+/// Round-1 c25 (2026-11-06): a production app whose tests live in a sibling
+/// test app. digest loads the workspace's own tests only (none here), so its
+/// block names the sibling `alsem tests` would load (`TU Production Tests`,
+/// 2 `[Test]` lines), is `partial` for both reasons, and calls no routine
+/// `no-path`; the human line says the same. The fixture is copied into a
+/// temporary folder with a `.git` marker, as `cli_tests_selection` does, so
+/// discovery searches only its apps.
+///
+/// DISCRIMINATION (2026-11-06): deleting the `note_unloaded_test_apps` call
+/// in `digest_view` fails the `testAppsNotLoaded` assert (the block keeps
+/// `no-test-code` alone).
+#[test]
+fn sibling_test_apps_are_named_and_make_the_block_partial() {
+    let t = tempfile::tempdir().unwrap();
+    copy_dir(&fixtures().join("test-universe"), t.path());
+    std::fs::create_dir(t.path().join(".git")).unwrap();
+    let ws = t.path().join("App");
+    let (_, doc) = with_tests(&ws, &routines(&["Post", "Calc"]));
+    let b = block(&doc);
+    assert_eq!(b["testProceduresConsidered"].as_u64(), Some(0), "{b}");
+    assert_eq!(
+        b["testAppsNotLoaded"],
+        serde_json::json!([{"name": "TU Production Tests", "testAttributeLines": 2}]),
+        "{b}"
+    );
+    let c = &b["coverage"];
+    assert_eq!(c["status"], "partial", "{c}");
+    assert_eq!(
+        c["reasons"],
+        serde_json::json!(["no-test-code", "test-apps-not-loaded"]),
+        "{c}"
+    );
+    assert_eq!(
+        uncovered(&b),
+        vec![
+            unc("Calc", "Codeunit TU Core", "no-test-code"),
+            unc("Post", "Codeunit TU Core", "no-test-code"),
+        ],
+        "{b}"
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_alsem"))
+        .arg("digest")
+        .arg(&ws)
+        .args(["--routine", "Post", "--tests", "--format", "human"])
+        .output()
+        .expect("spawn alsem");
+    let human = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        human.contains(
+            "test apps not loaded by digest: TU Production Tests (2 [Test] lines) (alsem tests, \
+             MCP alsem_tests, selects from them)"
+        ),
+        "{human}"
+    );
 }

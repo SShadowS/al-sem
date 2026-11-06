@@ -276,6 +276,11 @@ pub(crate) fn witness_contract_holds(route: &crate::program::resolve::edge::Rout
         (EvidenceKind::Abi, Witness::AbiSymbol { .. }) => true,
         (EvidenceKind::Catalog, Witness::CatalogEntry { .. }) => true,
         (EvidenceKind::Opaque, Witness::AbiSymbol { .. }) => true,
+        // F1: a synthetic platform publisher (a raised table event) has no
+        // declaration; its route names the routine and the table's tier.
+        (EvidenceKind::Source | EvidenceKind::Abi, Witness::Platform) => {
+            matches!(route.target, RouteTarget::Routine(_))
+        }
         (EvidenceKind::Unknown, Witness::None) => {
             // Unknown evidence must pair with Unresolved target.
             matches!(route.target, RouteTarget::Unresolved)

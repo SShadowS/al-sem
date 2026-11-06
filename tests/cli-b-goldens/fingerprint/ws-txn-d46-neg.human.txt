@@ -14,6 +14,11 @@ Codeunit Normal Handler::RunSetup  [public-procedure]
         DoSetup (via DoSetup at ws:src/NormalCU.al:25:8)
           → direct commit at ws:src/NormalCU.al:36:8
 
+    error-implicit error — 1 path shown
+      Path 1/1 shown:
+        DoSetup (via DoSetup at ws:src/NormalCU.al:25:8)
+          → direct Setup.Insert at ws:src/NormalCU.al:34:12
+
     insert table "11111111-0000-0000-0000-00000000d461/table/50000" — 1 path shown
       Path 1/1 shown:
         DoSetup (via DoSetup at ws:src/NormalCU.al:25:8)
