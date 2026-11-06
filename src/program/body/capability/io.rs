@@ -9,8 +9,9 @@
 //!     SetEncrypted,Delete}` → store-read/write/delete; key arg0, value arg1,
 //!     scope arg2 (write only).
 //!   - Hyperlink: bare `Hyperlink(url)` → `open`, resourceKind=ui.
-//!   - File/Blob: `File.{Create,WriteAllText,Copy}` / `TempBlob.CreateOutStream`
-//!     on the right receiver type → `write-blob`, resourceKind=file.
+//!   - File: `File.{Create,WriteAllText,Copy}` on a `File` receiver →
+//!     `write-blob`, resourceKind=file ([`is_file_write_call`]; an in-memory
+//!     `Temp Blob` stream is not file I/O).
 
 use super::super::features::PCallee;
 use super::super::features::PRoutine;
@@ -232,24 +233,23 @@ pub fn extract_hyperlink(
 
 // ─── File / TempBlob ─────────────────────────────────────────────────────────
 
-fn is_file_callsite_method(m: &str) -> bool {
-    matches!(m, "create" | "writealltext" | "copy")
-}
-
-/// True when a declared type names the System Application `Temp Blob` codeunit (or
-/// the old `TempBlob` table): the object name EXACTLY, after its kind keyword and
-/// quotes. A substring match took `Codeunit "Temp Blob Impl."` too, so `Temp
-/// Blob`'s own body got a FILE effect (engine-switch S7.6 triage: CDO d47
-/// duplicates once dependency bodies were analysed).
-pub(crate) fn is_temp_blob_type(t: &str) -> bool {
-    let lc = t.trim().to_lowercase();
-    let name = lc
-        .strip_prefix("codeunit")
-        .or_else(|| lc.strip_prefix("record"))
-        .unwrap_or(&lc)
-        .trim()
-        .trim_matches('"');
-    name == "temp blob" || name == "tempblob"
+/// The one rule for a FILE write fact (`write-blob`, resourceKind `file`): a
+/// method of the AL `File` data type that writes the server's file system
+/// (`Create`, `Copy`, `WriteAllText`). Shared by this extractor and the capability
+/// cone's (`engine::l4::capability_cone`), so the two cannot drift.
+///
+/// Not file I/O, so no FILE fact:
+/// - a `Temp Blob` codeunit (or the old `TempBlob` table), a BLOB field, or an
+///   `InStream` / `OutStream`: in-memory streams. `TempBlob.CreateOutStream` was
+///   a FILE write here (ported from al-sem's `file-blob.ts`), so `explain`, `digest`
+///   and the ordering engine reported in-memory streams as file access (r2 fact
+///   check n10, c25);
+/// - `UploadIntoStream` / `DownloadFromStream` / `File.UploadIntoStream`: client
+///   file dialogs, `UI_FILE_DIALOG` (G26);
+/// - a `File Management` call: a call into Base Application, whose body (when
+///   loaded) reaches the `File` methods above, and the cone follows it.
+pub(crate) fn is_file_write_call(receiver_type: &str, method_lc: &str) -> bool {
+    receiver_type == "File" && matches!(method_lc, "create" | "writealltext" | "copy")
 }
 
 pub fn extract_file_blob(
@@ -262,12 +262,7 @@ pub fn extract_file_blob(
         let PCallee::Member { receiver, method } = &cs.callee else {
             continue;
         };
-        let method_lc = method.to_lowercase();
-        let receiver_type = ctx.receiver_type_of(receiver);
-
-        let is_file = receiver_type == "File" && is_file_callsite_method(&method_lc);
-        let is_temp_blob = is_temp_blob_type(&receiver_type) && method_lc == "createoutstream";
-        if !is_file && !is_temp_blob {
+        if !is_file_write_call(&ctx.receiver_type_of(receiver), &method.to_lowercase()) {
             continue;
         }
 
@@ -288,20 +283,4 @@ pub fn extract_file_blob(
     }
 
     (facts, vec![])
-}
-
-#[cfg(test)]
-mod tests {
-    use super::is_temp_blob_type;
-
-    /// The `Temp Blob` codeunit (and the old table) by name, never a type that only
-    /// starts with it. Discrimination (2026-10-06): the old `contains("temp blob")`
-    /// accepts `Temp Blob Impl.` and fails the last assertion.
-    #[test]
-    fn temp_blob_is_matched_by_its_exact_name() {
-        assert!(is_temp_blob_type("Codeunit \"Temp Blob\""));
-        assert!(is_temp_blob_type("Record TempBlob"));
-        assert!(is_temp_blob_type("TempBlob"));
-        assert!(!is_temp_blob_type("Codeunit \"Temp Blob Impl.\""));
-    }
 }

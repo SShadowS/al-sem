@@ -245,6 +245,7 @@ mod cli_stderr_logger;
 mod cli_step5_coverage_fold;
 mod cli_strict_events_policy;
 mod cli_table_event_subscribers;
+mod cli_temp_blob_not_file;
 mod cli_tests_selection;
 mod cli_this_argument;
 mod cli_typed_run_declared_procedure;

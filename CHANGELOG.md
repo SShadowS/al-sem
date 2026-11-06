@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (a Temp Blob stream is not file access)
+
+`TempBlob.CreateOutStream` was a FILE effect (`fileOp: "write-blob"`, ported from al-sem's
+`file-blob.ts`). A `Temp Blob` stream is in memory, so `explain`, `digest`, `query
+effects`, `prove` and the ordering engine reported memory streams as file I/O. Round-2
+fact check n10: `explain --callers-context` on `CDO E-Mail Handler::DocSave` printed "FILE
+at …CDOeDocumentsDispatcher.Codeunit.al:286" for `PdfTempBlob.CreateOutStream(WriteStream)`;
+c25: digest counted `CDOUniversigneSealService.Codeunit.al:218` `TempBlob.CreateOutStream`
+under `kinds.file`.
+
+- One rule, `capability::io::is_file_write_call`, shared by the body's capability
+  extractor and the capability cone's (two hand copies before). A FILE write is a method
+  of the AL `File` type that writes the server's file system (`Create`, `Copy`,
+  `WriteAllText`). Not file I/O: a `Temp Blob` (or the old `TempBlob` table), a BLOB
+  field, an `InStream` / `OutStream`; `UploadIntoStream` / `DownloadFromStream` stay
+  client file dialogs (`UI_FILE_DIALOG`, G26); a `File Management` call is a call into
+  Base Application, whose loaded body reaches the `File` methods. No consumer needs a
+  separate in-memory-stream label, so none was added.
+- Population (static count): `Temp Blob` `CreateOutStream` calls on the CDO baseline,
+  3 in the workspace, 159 in dependency source (Base Application 91, System Application
+  57, Continia Delivery Network 11); each was a FILE effect.
+- Tests: `tests/cli/cli_temp_blob_not_file.rs` (explain and digest through the binary,
+  a `File.Create` as the positive control); `r4_cross_app_program::temp_blob_is_not_file_io`
+  now asserts the workspace's own `Temp Blob` call has no FILE fact either.
+
 ### Fixed (a named return value of a record type is a record variable)
 
 A procedure's named return value (`procedure P() Ret: Record T`) is a variable of that
