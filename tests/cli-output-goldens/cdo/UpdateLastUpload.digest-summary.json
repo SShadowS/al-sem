@@ -1,22 +1,21 @@
 {
   "changedRootsDiagnostics": 0,
+  "index": {
+    "path": "<the server's output folder>",
+    "rows": 1,
+    "sha256": "<per run>"
+  },
   "kind": "digest",
   "rootsRequested": 1,
   "rootsResolved": 1,
   "routines": [
     {
-      "coverage": "complete",
-      "coverageReasons": [],
+      "analysis": "complete",
+      "answer": "writes: may modify persistent CDO Setup records (Modify at :48) when the record its caller passes (parameter 1) is not temporary; otherwise it changes a temporary record; no other write (every candidate decided)",
       "effects": 2,
       "effectsByType": {
         "DB_MODIFY": 1,
         "ERROR_IMPLICIT": 1
-      },
-      "names": {
-        "entryPoints": [],
-        "tablesOwnedByApp": [],
-        "tablesOwnedByDependencies": [],
-        "topCallees": []
       },
       "routine": "Codeunit \"CDO Telemetry\"::UpdateLastUpload",
       "selector": "Codeunit \"CDO Telemetry\"::UpdateLastUpload",
@@ -59,10 +58,12 @@
         },
         "temporaryOnlyTables": 0,
         "unresolvedTableWrites": 0
-      }
+      },
+      "testStatus": "not requested"
     }
   ],
   "routinesListed": 1,
+  "shared": {},
   "totalEffects": 2,
   "totalUnresolved": 0
 }

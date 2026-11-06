@@ -699,12 +699,12 @@ impl<'c> Beyond<'c> {
     }
 
     /// Explain's `writes beyond dependency entry points` section, verbatim.
-    fn lines(&self, all: bool) -> Vec<String> {
+    fn lines(&self, all: bool, surface: Surface) -> Vec<String> {
         crate::engine::l5::routine_rollup::beyond_lines(
             &self.rollup,
             self.entry,
             &self.rcx,
-            crate::engine::l5::routine_rollup::RenderOpts::new(all, None),
+            crate::engine::l5::routine_rollup::RenderOpts::new(all, None).with_surface(surface),
         )
     }
 }
@@ -4371,7 +4371,7 @@ fn render_query_effects_body(
     }
     // Wave 3a: explain's own section, from the same rollup.
     if let Some(b) = &beyond {
-        for l in b.lines(all) {
+        for l in b.lines(all, surface) {
             human.push_str("  ");
             human.push_str(&l);
             human.push('\n');

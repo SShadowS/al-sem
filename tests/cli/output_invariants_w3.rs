@@ -520,8 +520,16 @@ pub(crate) fn kind_failures(label: &str, effects: &[Value], card: &str) -> Vec<S
         let Some(prefix) = kind_line(ty) else {
             continue;
         };
-        let line = card.lines().map(str::trim).find(|l| l.starts_with(prefix));
+        // Output validation V4 (§5.3, F81): telemetry is a count on the
+        // summary's `other effects:` line, not a section.
+        let line = card.lines().map(str::trim).find(|l| {
+            l.starts_with(prefix)
+                || (ty == "TELEMETRY"
+                    && l.starts_with("other effects:")
+                    && l.contains("telemetry at"))
+        });
         let ok = match (ty, line) {
+            ("TELEMETRY", Some(l)) if l.starts_with("other effects:") => true,
             (_, None) => false,
             ("COMMIT", Some(l)) => !l.starts_with("commits: none"),
             ("EVENT_PUBLISH", Some(l)) => !l.starts_with("events: none"),
