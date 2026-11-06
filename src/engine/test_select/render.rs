@@ -99,6 +99,11 @@ pub struct Part {
 pub struct Rendered {
     pub text: String,
     pub exit: u8,
+    /// The envelope summary of a file answer (output validation §5.2): the
+    /// run target, the selected tests (at most `maxTests`), the totals, the
+    /// truncation and `selectionComplete`, with every selected test and
+    /// changed routine as an index row.
+    pub summary: Value,
 }
 
 fn n_of(n: usize, one: &str, many: &str) -> String {
@@ -577,6 +582,40 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         "total": picked.len(),
         "fallback": fallback.iter().map(|f| f["reason"].clone()).collect::<Vec<_>>(),
     });
+    let test_row = |t: &Value| {
+        json!({"row": "test", "test": t["display"], "stableId": t["stableId"],
+               "codeunitId": t["codeunitId"], "codeunit": t["codeunit"],
+               "procedure": t["procedure"],
+               "tier": crate::engine::vocab::tier_key(s(t, "tier")), "hops": t["hops"],
+               "relation": relation(t)})
+    };
+    let mut index_rows: Vec<Value> = changed_out
+        .iter()
+        .map(|c| {
+            json!({"row": "routine", "routine": c["display"], "stableId": c["stableId"],
+                   "testStatus": c["testStatus"], "nearest": c.get("nearest").cloned()})
+        })
+        .collect();
+    index_rows.extend(shown.iter().map(|t| test_row(t)));
+    let summary = crate::engine::result_index::with_index(
+        json!({
+            "kind": "tests",
+            "answer": header.answer,
+            "analysis": header.analysis.human(),
+            "runTarget": {"testApps": test_apps, "codeunits": codeunit_ids},
+            "selectionComplete": complete,
+            "fallback": selection["fallback"],
+            "total": picked.len(),
+            "returned": shown.len(),
+            "capAsked": opts.max_tests,
+            "truncated": shown.len() < picked.len(),
+            "changed": changed_out.len(),
+            "selectedTests": shown.iter().map(|t| test_row(t)).collect::<Vec<_>>(),
+        }),
+        "selectedTests",
+        "test",
+        index_rows,
+    );
 
     if opts.json {
         let run_first: Vec<Value> = shown
@@ -638,6 +677,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         return Rendered {
             text: serde_json::to_string_pretty(&doc).expect("serializes") + "\n",
             exit,
+            summary,
         };
     }
 
@@ -661,6 +701,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
         return Rendered {
             text: out.join("\n") + "\n",
             exit,
+            summary,
         };
     }
     if !ok_parts.is_empty() {
@@ -808,6 +849,7 @@ pub fn render(roots: &Value, parts: &[Part], opts: RenderOpts) -> Rendered {
     Rendered {
         text: out.join("\n") + "\n",
         exit,
+        summary,
     }
 }
 

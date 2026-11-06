@@ -537,6 +537,19 @@ fn a_transcript_answers_what_the_cli_answers() {
     let status = s.call(140, "alsem_status", json!({}));
     let st = &status["structuredContent"];
     assert_eq!(st["kind"], "status", "{status}");
+    // Output validation §5.4 (F33): one copy — the text block is the
+    // compact status (headline, check, refresh), the full document is
+    // structuredContent.
+    let text = status["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.starts_with(st["headline"].as_str().unwrap()) && text.len() < 600,
+        "{} bytes: {text}",
+        text.len()
+    );
+    assert!(
+        text.contains("\n  check: ") && text.contains("\n  refresh: "),
+        "{text}"
+    );
     let engines = st["engines"].as_array().unwrap();
     assert_eq!(engines.len(), 1, "{status}");
     assert_eq!(

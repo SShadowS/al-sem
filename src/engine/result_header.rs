@@ -205,6 +205,39 @@ impl Header {
     }
 }
 
+/// What a CLI answer's exit code means (output validation §6.3, F36): the
+/// envelope's `outcome`. `answered` and `no-routine-changed` exit 0;
+/// `input-not-mapped`, `not-found`, `ambiguous` and `usage-error` exit 2
+/// (no answer). Read off the answer's own words: the header's `answer:`
+/// line (`no answer — …`, impact's `(outcome: …)`), the JSON's resolution
+/// words, or clap's error on stderr with no stdout.
+#[must_use]
+pub fn outcome(exit: u8, stdout: Option<&str>, stderr: &[String]) -> &'static str {
+    let text = stdout.unwrap_or("");
+    let answer = text
+        .lines()
+        .find(|l| l.starts_with("answer: "))
+        .unwrap_or("");
+    match exit {
+        0 if answer.contains("(outcome: no-routine-changed)") => "no-routine-changed",
+        0 => "answered",
+        2 if answer.contains("(outcome: input-not-mapped)") => "input-not-mapped",
+        2 if text.trim().is_empty() && stdout.is_some() => "usage-error",
+        2 if stdout.is_none() && stderr.iter().any(|l| l.starts_with("error:")) => "usage-error",
+        2 => {
+            let lower = text.to_ascii_lowercase();
+            if lower.contains("ambiguous") || answer.contains("names several routines") {
+                "ambiguous"
+            } else if lower.contains("input-not-mapped") {
+                "input-not-mapped"
+            } else {
+                "not-found"
+            }
+        }
+        _ => "usage-error",
+    }
+}
+
 /// `dependencies: N apps` (§5.3, F32): the one form of the dependencies line;
 /// the full list only with `all`/`detail`, and in the envelope's `universe`.
 #[must_use]
@@ -215,6 +248,51 @@ pub fn dependencies_clause(n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// §6.3: each exit-code meaning from the answer's own words.
+    #[test]
+    fn outcomes_follow_the_answer_words() {
+        let h =
+            |answer: &str| format!("tool x   [cross-app]\nanswer: {answer}\nanalysis complete\n");
+        assert_eq!(outcome(0, Some(&h("yes")), &[]), "answered");
+        assert_eq!(
+            outcome(
+                0,
+                Some(&h("no routine changed — … (outcome: no-routine-changed)")),
+                &[]
+            ),
+            "no-routine-changed"
+        );
+        assert_eq!(
+            outcome(
+                2,
+                Some(&h("no answer — … (outcome: input-not-mapped)")),
+                &[]
+            ),
+            "input-not-mapped"
+        );
+        assert_eq!(
+            outcome(
+                2,
+                Some(&h("no answer — the selector names no routine")),
+                &[]
+            ),
+            "not-found"
+        );
+        assert_eq!(
+            outcome(
+                2,
+                Some(&h("no answer — the selector names several routines")),
+                &[]
+            ),
+            "ambiguous"
+        );
+        assert_eq!(
+            outcome(2, Some(""), &["error: unexpected argument".into()]),
+            "usage-error"
+        );
+        assert_eq!(outcome(1, Some(""), &[]), "usage-error");
+    }
 
     #[test]
     fn four_lines_with_the_completeness_subject() {

@@ -3397,31 +3397,24 @@ pub struct DigestRunResult {
     pub json_text: String,
     pub human_text: String,
     pub exit_code: u8, // 0 = OK, 2 = zero roots
-    /// What the document says, in at most [`SUMMARY_CAP_BYTES`] (MCP output plan
+    /// What the document says, in at most 8 KiB (MCP output plan
     /// 1b): [`digest_summary`]. The MCP server sends it beside the file the
     /// document goes to.
     pub summary: serde_json::Value,
 }
 
+#[cfg(test)]
 use crate::engine::batch::output::SUMMARY_CAP_BYTES;
 
-/// How many routines [`digest_summary`] lists, and how many names per list.
-const SUMMARY_ROUTINES: usize = 20;
-const SUMMARY_NAMES: usize = 10;
-
-/// One root's summary (W2-2, design §3.1): the root, its coverage, its
-/// effects by type and the ONE [`RollupTotals`] serialization every reader
-/// prints (`summary`), plus, unless `counts_only`, the first names of each
-/// list (may-persist tables in this app and in dependencies, entry points,
-/// top callees of the dependency gaps).
-///
-/// [`RollupTotals`]: crate::engine::l5::routine_rollup::RollupTotals
+/// One root's summary row (output validation V4, §5.2): its identity (one
+/// row per stable id, overloads apart by signature), its summary line, the
+/// counts a reader decides on, its asked `tableAnswers` and its test status.
 fn digest_entry_summary(
     e: &DigestEntryFull,
     r: &crate::engine::l5::routine_rollup::RoutineRollup,
     cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
-    counts_only: bool,
     answers: Option<&(Vec<serde_json::Value>, Vec<String>)>,
+    test_status: &str,
 ) -> serde_json::Value {
     use serde_json::json;
     let mut by_type: BTreeMap<&str, u64> = BTreeMap::new();
@@ -3430,14 +3423,20 @@ fn digest_entry_summary(
     }
     // V3 §2.1 (3.1.0): the one display, and the stable id, signature,
     // member and selector that tell overloads and member triggers apart.
+    // Output validation V4 (§5.2, F42, F77): one compact row per stable id —
+    // its summary line (`answer`), the counts a reader decides on, its test
+    // status in the §8.1 words.
+    let facts = crate::engine::l5::routine_rollup::header_facts(r, e, &[]);
     let mut v = json!({
         "routine": entry_display(cx, e),
         "stableId": e.routine_id,
-        "coverage": e.coverage_status,
-        "coverageReasons": e.coverage_reasons,
+        "analysis": facts.analysis.key(),
+        "answer": facts.answer(),
         "effects": e.effects.len(),
         "effectsByType": by_type,
+        // W2-2 (T-W2-13): the one RollupTotals serialization.
         "summary": r.totals.to_json(),
+        "testStatus": test_status,
     });
     for (k, x) in cx.names.identity_json(&e.routine_id) {
         if k != "display" {
@@ -3469,36 +3468,14 @@ fn digest_entry_summary(
                 .collect::<Vec<_>>()
         );
     }
-    if !counts_only {
-        let (own, dep) = r.may_write_names(cx);
-        let take = |s: Vec<String>| s.into_iter().take(SUMMARY_NAMES).collect::<Vec<_>>();
-        v["names"] = json!({
-            "tablesOwnedByApp": take(own),
-            "tablesOwnedByDependencies": take(dep),
-            "entryPoints": r
-                .crossings
-                .iter()
-                .filter(|c| c.writes())
-                .take(5)
-                .map(|c| c.name.clone())
-                .collect::<Vec<_>>(),
-            "topCallees": r
-                .gaps
-                .top_callees
-                .iter()
-                .take(3)
-                .map(|(c, n)| json!({"callee": c, "count": n}))
-                .collect::<Vec<_>>(),
-        });
-    }
     v
 }
 
-/// The digest's summary (MCP output plan 1b, D1/D2): the document's totals and,
-/// per root (the first [`SUMMARY_ROUTINES`]), what decides whether to open the
-/// file. Never the unresolved call sites themselves: their counts. Kept under
-/// [`SUMMARY_CAP_BYTES`]: past it every name is dropped (counts only), then
-/// routines are dropped from the end; never a spill.
+/// The digest's summary (MCP output plan 1b, D1/D2; output validation V4
+/// §5.2): the document's totals and one row per root. Never the unresolved
+/// call sites themselves: their counts. Kept under 8 KiB by
+/// [`crate::engine::result_index::with_index`]: rows are dropped from the
+/// end into `summaryTruncated`, and every row is in the result index.
 pub fn digest_summary(
     entries: &[DigestEntryFull],
     rollups: &[crate::engine::l5::routine_rollup::RoutineRollup],
@@ -3526,51 +3503,157 @@ pub(crate) fn digest_summary_with(
     changed_roots_diagnostics: usize,
     table_answers: Option<&crate::engine::l5::prove::TableAnswers>,
 ) -> serde_json::Value {
+    digest_summary_tested(
+        entries,
+        rollups,
+        cx,
+        roots_requested,
+        changed_roots_diagnostics,
+        table_answers,
+        None,
+    )
+}
+
+/// Output validation V4 (§5.2, F42, F77): a root's test status in the §8.1
+/// words, from the `--tests` coverage block (`not requested` without it).
+fn root_test_status(
+    id: &str,
+    tc: Option<&crate::engine::l5::test_coverage::TestCoverage>,
+) -> String {
+    use crate::engine::l5::test_coverage::UncoveredReason as R;
+    let Some(tc) = tc else {
+        return "not requested".to_string();
+    };
+    if let Some(c) = tc.covered.iter().find(|c| c.stable_id == id) {
+        return match c.reached_from.first() {
+            Some(t) => format!("tests with a modeled path (nearest: {t})"),
+            None => "tests with a modeled path".to_string(),
+        };
+    }
+    match tc
+        .uncovered
+        .iter()
+        .find(|u| u.stable_id == id)
+        .map(|u| &u.reason)
+    {
+        Some(R::NotInGraph) => "not in projection",
+        Some(R::NoTestCode | R::DeclarationOnly) => "not loaded",
+        Some(R::PlatformEventSubscriber | R::DependencyEventSubscriber) => "analysis partial",
+        Some(R::NoPath) if tc.coverage.status == "partial" => "analysis partial",
+        Some(R::NoPath) => "no modeled path",
+        None => "not in projection",
+    }
+    .to_string()
+}
+
+/// [`digest_summary_with`] with each row's test status (`--tests`): one
+/// row per stable id (overloads never folded), the values several rows
+/// share factored into `shared` (a row holds `{"shared": "sN"}`), the test
+/// scope once; every row in the result index, as many in the summary as
+/// fit its 8 KiB (`summaryTruncated` says which it left out).
+pub(crate) fn digest_summary_tested(
+    entries: &[DigestEntryFull],
+    rollups: &[crate::engine::l5::routine_rollup::RoutineRollup],
+    cx: &crate::engine::l5::routine_rollup::RollupCx<'_>,
+    roots_requested: usize,
+    changed_roots_diagnostics: usize,
+    table_answers: Option<&crate::engine::l5::prove::TableAnswers>,
+    test_coverage: Option<&crate::engine::l5::test_coverage::TestCoverage>,
+) -> serde_json::Value {
     use serde_json::json;
     let total_unresolved: usize = entries.iter().map(|e| e.unresolved.len()).sum();
-    let build = |counts_only: bool, routines: usize| {
-        let listed: Vec<serde_json::Value> = entries
-            .iter()
-            .zip(rollups)
-            .take(routines)
-            .map(|(e, r)| {
-                digest_entry_summary(
-                    e,
-                    r,
-                    cx,
-                    counts_only,
-                    table_answers.and_then(|t| t.get(&e.routine_id)),
-                )
-            })
-            .collect();
-        let mut v = json!({
-            "kind": "digest",
-            "rootsRequested": roots_requested,
-            "rootsResolved": entries.len(),
-            "totalEffects": entries.iter().map(|e| e.effects.len()).sum::<usize>(),
-            "totalUnresolved": total_unresolved,
-            "changedRootsDiagnostics": changed_roots_diagnostics,
-            "routinesListed": listed.len(),
-            "routines": listed,
+    let rows: Vec<serde_json::Value> = entries
+        .iter()
+        .zip(rollups)
+        .map(|(e, r)| {
+            digest_entry_summary(
+                e,
+                r,
+                cx,
+                table_answers.and_then(|t| t.get(&e.routine_id)),
+                &root_test_status(&e.routine_id, test_coverage),
+            )
+        })
+        .collect();
+    // The values two or more rows share, once.
+    const FACTORED: &[&str] = &["effectsByType", "summary"];
+    let mut seen: Vec<(String, serde_json::Value, usize)> = Vec::new();
+    for r in &rows {
+        for k in FACTORED {
+            let s = r[*k].to_string();
+            match seen.iter_mut().find(|(t, _, _)| *t == s) {
+                Some(x) => x.2 += 1,
+                None => seen.push((s, r[*k].clone(), 1)),
+            }
+        }
+    }
+    let mut shared = serde_json::Map::new();
+    let mut key_of: Vec<(String, String)> = Vec::new();
+    for (s, v, n) in &seen {
+        if *n > 1 {
+            let key = format!("s{}", shared.len() + 1);
+            shared.insert(key.clone(), v.clone());
+            key_of.push((s.clone(), key));
+        }
+    }
+    let listed: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let mut r = r.clone();
+            for k in FACTORED {
+                let s = r[*k].to_string();
+                if let Some((_, key)) = key_of.iter().find(|(t, _)| *t == s) {
+                    r[*k] = json!({"shared": key});
+                }
+            }
+            r
+        })
+        .collect();
+    let index_rows: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let mut x = json!({});
+            for k in [
+                "routine",
+                "stableId",
+                "selector",
+                "signature",
+                "member",
+                "analysis",
+                "answer",
+                "tableAnswers",
+                "testStatus",
+            ] {
+                if let Some(v) = r.get(k) {
+                    x[k] = v.clone();
+                }
+            }
+            x
+        })
+        .collect();
+    let mut v = json!({
+        "kind": "digest",
+        "rootsRequested": roots_requested,
+        "rootsResolved": entries.len(),
+        "totalEffects": entries.iter().map(|e| e.effects.len()).sum::<usize>(),
+        "totalUnresolved": total_unresolved,
+        "changedRootsDiagnostics": changed_roots_diagnostics,
+        "routinesListed": listed.len(),
+        "shared": shared,
+        "routines": listed,
+    });
+    if let Some(tc) = test_coverage {
+        v["testScope"] = json!({
+            "status": tc.coverage.status,
+            "reasons": tc.coverage.reasons,
+            "testProceduresConsidered": tc.test_procedures_considered,
+            "testAppsNotLoaded": tc.test_apps_not_loaded.iter().map(|a| a.name.clone())
+                .collect::<Vec<_>>(),
         });
-        if counts_only {
-            v["countsOnly"] = json!(true);
-        }
-        v
-    };
-    let fits = |v: &serde_json::Value| v.to_string().len() <= SUMMARY_CAP_BYTES;
-    let full = build(false, SUMMARY_ROUTINES);
-    if fits(&full) {
-        return full;
     }
-    let mut routines = SUMMARY_ROUTINES.min(entries.len());
-    loop {
-        let v = build(true, routines);
-        if fits(&v) || routines == 0 {
-            return v;
-        }
-        routines -= 1;
-    }
+    let mut v = crate::engine::result_index::with_index(v, "routines", "stableId", index_rows);
+    v["routinesListed"] = json!(v["routines"].as_array().map_or(0, Vec::len));
+    v
 }
 
 /// Run the full digest pipeline for a workspace.
@@ -3936,14 +4019,7 @@ fn digest_view(
         .map(|e| crate::engine::l5::routine_rollup::RoutineRollup::build(e, &rollup_cx))
         .collect();
     // rootsRequested as `payload.summary` counts it (roots + query diagnostics).
-    let summary = digest_summary_with(
-        &entries,
-        &rollups,
-        &rollup_cx,
-        changed_roots.roots.len() + query_diagnostics.len(),
-        changed_roots.diagnostics.len(),
-        (!writes_tables.is_empty()).then_some(&table_answers),
-    );
+    let roots_requested = changed_roots.roots.len() + query_diagnostics.len();
     // #254: the coverage block reads the graph the effects step built off the
     // tree (#160 step 6: the tree itself is released inside `prepare`). A
     // `--tests` plan always builds the tree, roots or not (`digest_plan`).
@@ -3976,6 +4052,17 @@ fn digest_view(
         );
         tc
     });
+    // Output validation V4 (§5.2, F42, F77): one row per root with its test
+    // status, the rows also in the result index.
+    let summary = digest_summary_tested(
+        &entries,
+        &rollups,
+        &rollup_cx,
+        roots_requested,
+        changed_roots.diagnostics.len(),
+        (!writes_tables.is_empty()).then_some(&table_answers),
+        test_coverage.as_ref(),
+    );
     // #69 D1.4: the query's inputs (the effects, the L4 store's join) are dead
     // here. Free them before the JSON projection. (The cells are released
     // after it: the 3.x projection names routines off the model.)
@@ -4516,13 +4603,13 @@ mod tests {
             !text.contains("callsiteAnchor") && !text.contains("a-very-long-candidate"),
             "no call-site item: {text}"
         );
+        // Output validation V4 (§5.2): one compact row per root.
         let r = &s["routines"][0];
         assert_eq!(r["routine"], "Codeunit Out Issue Document::IssueDoc");
         assert_eq!(r["effectsByType"]["DB_INSERT"], 2, "{s}");
         // W2-2: the one RollupTotals serialization.
         let t = &r["summary"];
         assert_eq!(t["commits"]["answer"], "may", "{s}");
-        assert_eq!(t["commits"]["entryPoints"], 1, "{s}");
         let w = &t["mayWriteTables"];
         assert_eq!(
             (w["ownedByApp"].as_u64(), w["byDependencies"].as_u64()),
@@ -4530,34 +4617,21 @@ mod tests {
             "{s}"
         );
         assert_eq!(w["count"], 13);
-        assert_eq!(
-            r["names"]["tablesOwnedByApp"],
-            serde_json::json!(["Out Log"])
-        );
-        assert_eq!(
-            r["names"]["tablesOwnedByDependencies"]
-                .as_array()
-                .map(Vec::len),
-            Some(SUMMARY_NAMES)
-        );
-        // Out Log's temporary delete: Out Log is also written persistently.
-        assert_eq!(t["temporaryOnlyTables"], 0);
-        assert_eq!(t["entryPoints"]["count"], 1);
         let g = &t["gaps"];
         assert_eq!(
-            (
-                g["workspace"].as_u64(),
-                g["dependency"].as_u64(),
-                g["notPlaced"].as_u64()
-            ),
-            (Some(2), Some(1), Some(0)),
+            (g["workspace"].as_u64(), g["dependency"].as_u64()),
+            (Some(2), Some(1)),
             "{s}"
         );
-        assert_eq!(
-            r["names"]["topCallees"][0],
-            serde_json::json!({"callee": "Codeunit.Run(<dynamic>)", "count": 1})
+        assert_eq!(r["testStatus"], "not requested", "{s}");
+        assert!(
+            r["answer"]
+                .as_str()
+                .is_some_and(|a| a.starts_with("writes: ")),
+            "{s}"
         );
         assert!(s.get("countsOnly").is_none(), "{s}");
+        assert_eq!(s["indexRows"].as_array().map(Vec::len), Some(1), "{s}");
     }
 
     /// W2-2, T-W2-1: a rollup total is a union by identity, never a sum of
@@ -4739,16 +4813,21 @@ mod tests {
             .iter()
             .map(|e| crate::engine::l5::routine_rollup::RoutineRollup::build(e, &cx))
             .collect();
-        let s = digest_summary(&entries, &rollups, &cx, 40, 0);
+        // Output validation V4 (§5.2): the rows past the cap go to the result
+        // index (all 40), the summary says which it left out.
+        let mut s = digest_summary(&entries, &rollups, &cx, 40, 0);
+        let rows = s
+            .as_object_mut()
+            .unwrap()
+            .remove(crate::engine::result_index::ROWS_KEY)
+            .unwrap();
         let text = s.to_string();
         assert!(text.len() <= SUMMARY_CAP_BYTES, "{} bytes", text.len());
-        assert_eq!(s["countsOnly"], true, "{text}");
-        assert!(
-            !text.contains("A Rather Long Dependency"),
-            "no names: {text}"
-        );
+        assert_eq!(rows.as_array().map(Vec::len), Some(40), "{rows}");
         let listed = s["routinesListed"].as_u64().unwrap();
-        assert!((1..=SUMMARY_ROUTINES as u64).contains(&listed), "{text}");
+        assert!((1..40).contains(&listed), "{text}");
+        assert_eq!(s["summaryTruncated"]["rowsListed"], listed, "{text}");
+        assert_eq!(s["summaryTruncated"]["rowsTotal"], 40, "{text}");
         assert_eq!(s["rootsResolved"], 40);
     }
 

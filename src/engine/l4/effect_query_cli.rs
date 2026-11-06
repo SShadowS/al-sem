@@ -1546,7 +1546,34 @@ fn effects_summary(routine: &str, effects: &[TableTouch<'_>], tables: &TableName
             physical_writes += 1;
         }
     }
-    crate::engine::batch::output::capped_summary(
+    // Output validation §5.2 (F43): the writes that may persist by table
+    // (the first ten by operation count, with their counts), the table
+    // total, and the caller-dependent and table-not-resolved writes apart.
+    let mut by_table: BTreeMap<&str, BTreeMap<&str, u64>> = BTreeMap::new();
+    let (mut caller_dependent, mut unresolved_writes) = (0u64, 0u64);
+    for e in effects {
+        match bucket(e) {
+            "writes" => {
+                let name = tables.get(e.table_id).unwrap_or(e.table_id);
+                *by_table.entry(name).or_default().entry(e.op).or_default() += 1;
+            }
+            "callerDependent" => caller_dependent += 1,
+            "tableNotResolved" if op_family(e.op) == "write" => unresolved_writes += 1,
+            _ => {}
+        }
+    }
+    let mut ranked: Vec<(&str, BTreeMap<&str, u64>)> = by_table.into_iter().collect();
+    ranked.sort_by(|a, b| {
+        let n = |m: &BTreeMap<&str, u64>| m.values().sum::<u64>();
+        n(&b.1).cmp(&n(&a.1)).then(a.0.cmp(b.0))
+    });
+    let tables_written = ranked.len();
+    let top: Vec<Value> = ranked
+        .iter()
+        .take(10)
+        .map(|(t, ops)| json!({"table": t, "ops": ops}))
+        .collect();
+    crate::engine::result_index::with_index(
         json!({
             "kind": "query.effects",
             "routine": routine,
@@ -1556,8 +1583,18 @@ fn effects_summary(routine: &str, effects: &[TableTouch<'_>], tables: &TableName
             "notKnownTemporaryWrites": physical_writes,
             "tableCount": table_set.len(),
             "unknownTable": unknown,
+            "writes": {
+                "byTable": top,
+                "tables": tables_written,
+                "truncated": tables_written > 10,
+                "callerDependent": caller_dependent,
+                "tableNotResolved": unresolved_writes,
+            },
         }),
         "",
+        "",
+        vec![json!({"routine": routine, "effectCount": effects.len(),
+                    "tablesWritten": tables_written})],
     )
 }
 

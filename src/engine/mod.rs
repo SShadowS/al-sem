@@ -34,6 +34,8 @@ pub mod perf_trace;
 pub mod resident;
 /// The four-line result header and `result.scope` (output validation §5.2).
 pub mod result_header;
+/// The complete compact result index beside a file answer (§5.2, F42).
+pub mod result_index;
 pub mod return_summary;
 pub mod root_classification;
 /// #160 step 2: `View`, `Plan`, `RunKey` (spec §4.4.3).

@@ -2193,7 +2193,22 @@ fn explain_summary(
             })
         })
         .collect();
-    crate::engine::batch::output::capped_summary(
+    // §5.2 (F42): each card's identity, summary line and asked verdicts are
+    // a result index row, whatever the summary has room for.
+    let rows: Vec<Value> = cards
+        .iter()
+        .map(|(_, rid, j, h, (_, facts))| {
+            json!({
+                "card": h.lines().next().unwrap_or(""),
+                "stableId": rid,
+                "selector": j.pointer("/routine/selector").cloned().unwrap_or(Value::Null),
+                "summary": facts.answer(),
+                "analysis": facts.analysis.human(),
+                "tableAnswers": j.get("tableAnswers").cloned(),
+            })
+        })
+        .collect();
+    crate::engine::result_index::with_index(
         json!({
             "kind": "explain",
             "answer": header.answer,
@@ -2203,6 +2218,8 @@ fn explain_summary(
             "cards": listed,
         }),
         "cards",
+        "selector",
+        rows,
     )
 }
 
