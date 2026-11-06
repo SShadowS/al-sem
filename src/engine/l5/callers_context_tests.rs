@@ -549,14 +549,15 @@ fn gui_allowed_guards_place_the_call() {
     assert_eq!(kinds(&v), ["non-interactive-entry"], "else branch: {v:#}");
     let v = noninteractive(&files, "Pw Gui Target::RShape", true);
     assert_eq!(answer(&v), "yes", "{v:#}");
-    assert_eq!(
-        v["payload"]["result"]["unrecognizedGuards"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1,
-        "{v:#}"
-    );
+    let unrecognized = v["payload"]["result"]["unrecognizedGuards"]
+        .as_array()
+        .unwrap();
+    assert_eq!(unrecognized.len(), 1, "{v:#}");
+    // The place is the condition's line (`if Flag or GuiAllowed() then`,
+    // line 17 of I.al), not the guarded call's (line 18; c02 printed the
+    // call's line as the condition's).
+    let place = unrecognized[0].as_str().unwrap();
+    assert!(place.ends_with("I.al:17"), "{place}");
 }
 
 #[test]

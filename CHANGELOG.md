@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (explain and prove callers: every caller counted, page runs followed, entries and guard lines right)
+
+Four defects found by fact-checking real tool answers on the CDO baseline (output
+validation round 1, calls c06 and c02):
+
+- **`explain` counted page triggers nowhere.** The F16j rule moves a page action's
+  `OnAction` trigger from "callers" to "reached from page actions", but it dropped
+  every Page/PageExtension trigger, so a page's `OnOpenPage`, `OnAfterGetCurrRecord`,
+  `OnAfterGetRecord` or a field's `OnAssistEdit` was in neither number (c06:
+  `SetReportSelectionUsage` showed "callers: 2" against 13 non-action callers). Only an
+  action's trigger (a row that is some action's `OnAction`) is moved now; every other
+  direct caller is a routine caller. `impact`'s `up.callers` (`select::direct_callers`,
+  explain's definition, pinned equal by R0-3) changes the same way.
+- **`explain`'s "reached from page actions" followed `RunObject` into codeunits only.**
+  An action with `RunObject = page X` runs X, so when a run of X reaches the routine (X's
+  `OnOpenPage` or another lifecycle trigger, or that of an extension of X), the action
+  is counted now (c06: 8 role-center "Customer Statement Journal" actions and
+  `CDOUnhandled`'s "Statements" were missing). The trigger set is the resolver's own
+  (`run_triggers`), shared through `impact_graph::reverse::run_reaches_trigger`, the
+  rule the sited graph's `object_run_reaches` already used. An action reached through
+  several triggers counts once.
+- **Every routine of an Install or Upgrade codeunit was an entry.** Only the triggers the
+  platform runs are now: `OnInstallAppPerCompany`/`PerDatabase`, and
+  `OnCheckPreconditions…`, `OnUpgrade…`, `OnValidateUpgrade…` (per company and per
+  database). A helper procedure is reached through the trigger that calls it (c02: a
+  `local procedure` was reported as an "upgrade-codeunit entry").
+- **`prove`'s unrecognized GuiAllowed guard printed the guarded call's line** with wording
+  that names the condition (c02: `:1434`, the condition is at `:1433`). It prints the
+  condition's own line now.
+
 ### Fixed (the macOS build compiles again)
 
 `OutputDir::create` (`src/engine/host/output.rs`) compared `fstat`'s mode, a `u32`, with

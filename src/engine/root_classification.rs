@@ -71,6 +71,21 @@ pub const ROOT_KIND_VALUES: [&str; 13] = [
     "onrun-codeunit",
 ];
 
+/// The triggers the platform runs in a `Subtype = Install` codeunit (folded).
+/// Only these carry `install-codeunit`.
+const INSTALL_TRIGGERS: &[&str] = &["oninstallapppercompany", "oninstallappperdatabase"];
+
+/// The triggers the platform runs in a `Subtype = Upgrade` codeunit (folded).
+/// Only these carry `upgrade-codeunit`.
+const UPGRADE_TRIGGERS: &[&str] = &[
+    "oncheckpreconditionspercompany",
+    "oncheckpreconditionsperdatabase",
+    "onupgradepercompany",
+    "onupgradeperdatabase",
+    "onvalidateupgradepercompany",
+    "onvalidateupgradeperdatabase",
+];
+
 /// All current kinds are externally reachable (al-sem `isExternallyReachableKind`).
 fn is_externally_reachable_kind(kind: &str) -> bool {
     ROOT_KIND_VALUES.contains(&kind)
@@ -278,13 +293,16 @@ pub(crate) fn root_kind_mask(shape: &RootShape<'_>) -> u16 {
         set |= bit("event-subscriber");
     }
 
-    // Codeunit Subtype-based kinds (case-insensitive).
-    if shape.object_type == "Codeunit" {
+    // Codeunit Subtype-based kinds (case-insensitive): only the triggers the
+    // platform runs when the app is installed or upgraded. A helper procedure
+    // of such a codeunit is not an entry; it runs when a trigger calls it.
+    if shape.object_type == "Codeunit" && shape.routine_kind == "trigger" {
         let subtype = shape.object_subtype.map(str::to_lowercase);
-        if subtype.as_deref() == Some("install") {
+        let name = shape.routine_name.to_ascii_lowercase();
+        if subtype.as_deref() == Some("install") && INSTALL_TRIGGERS.contains(&name.as_str()) {
             set |= bit("install-codeunit");
         }
-        if subtype.as_deref() == Some("upgrade") {
+        if subtype.as_deref() == Some("upgrade") && UPGRADE_TRIGGERS.contains(&name.as_str()) {
             set |= bit("upgrade-codeunit");
         }
     }
@@ -1201,13 +1219,17 @@ mod tests {
         let mut install = object("app/Codeunit/5", "Codeunit");
         install.object_subtype = Some("Install".to_string());
         objects.push(install);
-        routines.push(routine("r06", "app/Codeunit/5", "procedure"));
+        let mut install_trigger = routine("r06", "app/Codeunit/5", "trigger");
+        install_trigger.name = "OnInstallAppPerCompany".to_string();
+        routines.push(install_trigger);
 
         // upgrade-codeunit
         let mut upgrade = object("app/Codeunit/6", "Codeunit");
         upgrade.object_subtype = Some("Upgrade".to_string());
         objects.push(upgrade);
-        routines.push(routine("r07", "app/Codeunit/6", "procedure"));
+        let mut upgrade_trigger = routine("r07", "app/Codeunit/6", "trigger");
+        upgrade_trigger.name = "OnUpgradePerDatabase".to_string();
+        routines.push(upgrade_trigger);
 
         // api-page
         let mut api = object("app/Page/7", "Page");
@@ -1339,10 +1361,9 @@ mod tests {
     }
 
     #[test]
-    fn install_codeunit_onrun_carries_both_kinds() {
-        // The subtype rule applies to every routine in the object, triggers
-        // included, so an Install codeunit's OnRun legitimately carries two
-        // kinds -- in ROOT_KIND_VALUES declaration order, install first.
+    fn install_codeunit_onrun_is_only_an_onrun_root() {
+        // The subtype rule marks the install triggers only, so an Install
+        // codeunit's OnRun is an `onrun-codeunit` root and nothing more.
         let mut obj = object("app/Codeunit/50100", "Codeunit");
         obj.object_subtype = Some("Install".to_string());
         let mut r = routine("r1", "app/Codeunit/50100", "trigger");
@@ -1350,10 +1371,84 @@ mod tests {
         let ws = workspace(vec![obj], vec![r]);
         let roots = classify_roots(&ws, &DeclaringObjects::new(&ws.objects));
         assert_eq!(roots.len(), 1);
-        assert_eq!(
-            roots[0].kinds,
-            vec!["install-codeunit".to_string(), "onrun-codeunit".to_string()]
+        assert_eq!(roots[0].kinds, vec!["onrun-codeunit".to_string()]);
+    }
+
+    /// The c02 fact-check: every routine of an Upgrade (or Install) codeunit
+    /// used to be an entry, so a `local procedure` helper was reported as an
+    /// "upgrade-codeunit entry". Only the triggers the platform runs are
+    /// (case-insensitive); a helper procedure, local or public, and a trigger
+    /// of another name are not install/upgrade entries.
+    #[test]
+    fn only_platform_install_and_upgrade_triggers_are_entries() {
+        let mut up = object("app/Codeunit/1", "Codeunit");
+        up.object_subtype = Some("Upgrade".to_string());
+        let mut inst = object("app/Codeunit/2", "Codeunit");
+        inst.object_subtype = Some("install".to_string());
+        let named = |id: &str, obj: &str, kind: &str, name: &str, access: Option<&str>| {
+            let mut r = routine(id, obj, kind);
+            r.name = name.to_string();
+            r.access_modifier = access.map(str::to_string);
+            r
+        };
+        let ws = workspace(
+            vec![up, inst],
+            vec![
+                named(
+                    "u1",
+                    "app/Codeunit/1",
+                    "trigger",
+                    "onupgradepercompany",
+                    None,
+                ),
+                named(
+                    "u2",
+                    "app/Codeunit/1",
+                    "trigger",
+                    "OnValidateUpgradePerDatabase",
+                    None,
+                ),
+                named(
+                    "u3",
+                    "app/Codeunit/1",
+                    "procedure",
+                    "UpgradeHelper",
+                    Some("local"),
+                ),
+                named("u4", "app/Codeunit/1", "procedure", "PublicHelper", None),
+                named(
+                    "i1",
+                    "app/Codeunit/2",
+                    "trigger",
+                    "OnInstallAppPerDatabase",
+                    None,
+                ),
+                named(
+                    "i2",
+                    "app/Codeunit/2",
+                    "procedure",
+                    "InstallHelper",
+                    Some("local"),
+                ),
+            ],
         );
+        let roots = classify_roots(&ws, &DeclaringObjects::new(&ws.objects));
+        let by_id: BTreeMap<&str, &[String]> = roots
+            .iter()
+            .map(|rc| (rc.routine_id.as_str(), rc.kinds.as_slice()))
+            .collect();
+        assert_eq!(by_id["u1"], ["upgrade-codeunit"]);
+        assert_eq!(by_id["u2"], ["upgrade-codeunit"]);
+        assert_eq!(by_id["i1"], ["install-codeunit"]);
+        assert!(
+            !by_id.contains_key("u3"),
+            "a local helper is no entry: {by_id:?}"
+        );
+        assert!(
+            !by_id.contains_key("i2"),
+            "a local helper is no entry: {by_id:?}"
+        );
+        assert_eq!(by_id["u4"], ["public-procedure"]);
     }
 
     // -- A11 ----------------------------------------------------------------
@@ -1456,16 +1551,17 @@ mod tests {
         }
     }
 
-    /// `local procedure R()` with one signature, at lines `from..=from + 2`.
-    fn shared_local(id: &str, object_id: &str, from: u32) -> ModelRoutine {
-        let mut r = routine(id, object_id, "procedure");
-        r.access_modifier = Some("local".to_string());
+    /// `trigger <name>()` with one signature, at lines `from..=from + 2`: an
+    /// install or upgrade trigger, the routines a `Subtype` makes a root.
+    fn shared_local(id: &str, object_id: &str, from: u32, name: &str) -> ModelRoutine {
+        let mut r = routine(id, object_id, "trigger");
+        r.name = name.to_string();
         r.source_anchor = span(from, from + 2);
         r
     }
 
     /// R13a (#279): an `#if`-split codeunit, one arm `Subtype = Install`, the
-    /// other normal, each declaring `local procedure R()` with ONE signature, so
+    /// other normal, each declaring `trigger OnInstallAppPerCompany()` with ONE signature, so
     /// both rows share one routine id BY ASSIGNMENT. Each row classifies against
     /// its own arm: only the Install arm's row is a root. Run in both arm
     /// orders, so the Install row is the LAST row once and a non-root row is
@@ -1489,8 +1585,8 @@ mod tests {
             let ws = workspace(
                 vec![a, b],
                 vec![
-                    shared_local("shared", id, 2),
-                    shared_local("shared", id, 12),
+                    shared_local("shared", id, 2, "OnInstallAppPerCompany"),
+                    shared_local("shared", id, 12, "OnInstallAppPerCompany"),
                 ],
             );
             let roots = classify_roots(&ws, &DeclaringObjects::new(&ws.objects));
@@ -1507,7 +1603,9 @@ mod tests {
     }
 
     /// R13b (#279): three anchored rows share one routine id, in the order
-    /// Upgrade, Install, normal, each declaring the same `local procedure R()`.
+    /// Upgrade, Install, normal, each declaring a trigger by assignment
+    /// (`OnUpgradePerCompany` in the Upgrade arm, `OnInstallAppPerCompany` in
+    /// the others).
     /// `classify_roots` keeps two different copies (Upgrade, Install).
     /// `classification_per_id` must return the copy of the LAST classified row,
     /// Install: it walks the rows and each reads its OWN arm.
@@ -1535,9 +1633,9 @@ mod tests {
         let ws = workspace(
             vec![upgrade, install, normal],
             vec![
-                shared_local("shared", id, 2),
-                shared_local("shared", id, 12),
-                shared_local("shared", id, 22),
+                shared_local("shared", id, 2, "OnUpgradePerCompany"),
+                shared_local("shared", id, 12, "OnInstallAppPerCompany"),
+                shared_local("shared", id, 22, "OnInstallAppPerCompany"),
             ],
         );
         let declaring = DeclaringObjects::new(&ws.objects);
