@@ -275,6 +275,52 @@ pub fn resolve_routine_record_types(
         }
     }
 
+    // --- pass: a LOCAL RecordRef bound to one table only (round-2 c02) --------
+    //
+    // Every binding of the RecordRef in the routine (`Open(<table literal>)`,
+    // `GetTable(<record var>)`) is provable (`recordref_table`, read from the
+    // IR at assembly) and names the same table: its operations are that
+    // table's, as the program resolver's `recordref_constant_table` decides for
+    // the edges. A binding that resolves to no table, or two tables, leaves the
+    // ops unresolved (a write on a table not resolved, as before).
+    if !routine.recordref_bindings.is_empty() {
+        let mut resolved: HashMap<String, String> = HashMap::new();
+        for (var, bindings) in &routine.recordref_bindings {
+            let mut table: Option<String> = None;
+            let mut ok = true;
+            for b in bindings {
+                let t = match b {
+                    crate::program::recordref_table::Binding::Table { reference, .. } => {
+                        resolve_table_ref_to_id(symbols, reference)
+                    }
+                    crate::program::recordref_table::Binding::GetTable(v) => routine
+                        .record_variables
+                        .iter()
+                        .find(|rv| rv.name.eq_fold_identifier(v))
+                        .and_then(|rv| rv.table_id.clone()),
+                };
+                match (t, &table) {
+                    (Some(t), None) => table = Some(t),
+                    (Some(t), Some(x)) if t == *x => {}
+                    _ => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok && let Some(t) = table {
+                resolved.insert(var.clone(), t);
+            }
+        }
+        for op in routine.record_operations.iter_mut() {
+            if op.table_id.is_none()
+                && let Some(t) = resolved.get(&op_variable_lc(&op.record_variable_name))
+            {
+                op.table_id = Some(t.clone());
+            }
+        }
+    }
+
     // --- pass: RecordRef GetTable / OpenTemporary local-only tempState (Task 12 / G6) ----
     //
     // A RecordRef variable (declaredType == "RecordRef") has NO associated table, so passes

@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (table events a temporary record or `RunTrigger = false` cannot run; RecordRef on a literal table)
+
+Found by the round-2 fact check of the 2026-11-06 output validation (calls c02, c12, c20,
+n09, n10; `target/tmp/output-validation/round2/factcheck/`).
+
+- **A table-event subscriber that exits first thing no longer runs where the raising site
+  proves its guard** (`src/program/table_event_guard.rs`). Business Central raises the
+  database trigger events for temporary records and for `RunTrigger = false` too (the
+  evidence: 151 of 515 such subscribers in Base Application test `Rec.IsTemporary`, and
+  subscribers branch on `RunTrigger`; Microsoft Learn "Event types" and "Performance
+  articles for developers": `DeleteAll`/`ModifyAll` raise them once per row). So the edge
+  stays, but a subscriber whose leading statements are `if Rec.IsTemporary() then exit;`
+  or `if not RunTrigger then exit;` (or an `or` of those two tests, nothing else) runs only
+  its guard from a record operation on a record declared `temporary` (a local, a parameter,
+  a global, the `Rec` of a page with `SourceTableTemporary = true`, or a record the model
+  knows is temporary such as a `TableType = Temporary` table), or one that passes
+  `RunTrigger = false` (a literal, or left out). Effects no longer count it (the model's
+  table-event edges, so `prove`, `explain`, `digest`, `query`), and paths no longer use it
+  (the reverse walk carries the subscriber's guard to its publisher and does not cross a
+  raising site that proves it, so `impact`, `tests` and callers' context). Where the site
+  does not decide (the caller's record, a computed RunTrigger), the edge stays and is
+  marked conditional (the subscription may be skipped). A guard beside a call
+  (`if Rec.IsTemporary or Mgt.Disabled() then exit;`) still runs the call (AL evaluates
+  every operand) and keeps its edge; `#if` arms count as dead only when every arm has the
+  guard. On CDO this removes the impossible `Codeunit "Check Gen. Jnl. Line. Backgr."`
+  witness (c12, c20: `TempGenJnlLine.Insert()` into `RunWorkflowOnAfterInsertGeneralJournalLine`),
+  n09's paths through `CustomerTemp.DeleteAll()` (its first page trigger was `Page "CDO
+  E-Mail/Print Statement"::OnOpenPage`; its first page action, `Page "CDO Unhandled"`, now
+  stays only through a user's delete on that `SourceTableTemporary` page, which the page
+  lifecycle still allows although the page says `DeleteAllowed = false`), and n10's Office
+  Document Handler commit witness. The CDO renderings move with it:
+  `IssueReminder`'s `writes-table:Data Exch.` was a false `yes` through `Reminder-Issue`'s
+  `TempGenJnlLine` insert into the same Workflow subscriber and is now `unknown` (its
+  ratchet rises to 3,400 B for the folded blockers), and its cone loses 6 tables only
+  that path wrote. The call-graph JSONL (`alsem graph`)
+  keeps the may-execute edge: one publisher node serves every raising site.
+- **A local RecordRef bound only to one literal table is that table**
+  (`src/program/recordref_table.rs`). `R.Open(Database::"T")` / `R.GetTable(<record of
+  T>)`, with `R` a local never assigned, passed on, copied or re-opened on another table:
+  `R.Modify()` is T's operation, firing T's triggers by its RunTrigger and T's table
+  events, and writing T, instead of the open record hub that reached every table's
+  `OnModify` (c02: `UpgradeBaseApp.Codeunit.al:2100` was printed as a hub into `Table "CAL
+  Test Line"::OnModify`). CDO: 3 more resolved dependency obligations (table events of
+  RecordRef operations now typed), `unknown` stays 0.
+
 ### Changed (size and dedup: query 4.0.0, digest 4.0.0, tests version 2; output validation V5)
 
 Output validation round 1, milestone V5 (spec

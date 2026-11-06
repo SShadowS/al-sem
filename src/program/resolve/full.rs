@@ -210,6 +210,15 @@ pub struct SiteFacts {
     /// OPEN (see [`OpenBound`] and [`site_open_bounds`]). Empty for a site whose
     /// routes name every target. Read only by the call-graph export.
     pub open: Vec<OpenBound>,
+    /// What a record operation that raises platform table events proves about
+    /// the dispatch ([`crate::program::table_event_guard`]): its record is
+    /// declared temporary, or it passes `RunTrigger = false`. `None` when it
+    /// proves neither, or raises no table event. A subscriber that exits on
+    /// such a situation first thing cannot run from this site; the
+    /// `TableEvent` edge keeps it (the publisher is shared by every raising
+    /// site), and its consumers drop it per site: the model's table-event
+    /// edges (`program_calls`) and the sited graph's reverse walk.
+    pub table_event_raise: Option<crate::program::table_event_guard::RaiseContext>,
 }
 
 /// A member call's receiver (engine-switch S6.0): what the adapter used to ask
@@ -599,6 +608,60 @@ fn builtin_dispatch_finding(
     }
 }
 
+/// The one table a local RecordRef receiver holds
+/// ([`crate::program::recordref_table`]): every binding it gets in `routine`
+/// resolves to the same table from the caller's app. `None` when a binding
+/// may be anything else, resolves to no table, or two disagree.
+#[allow(clippy::too_many_arguments)]
+fn recordref_constant_table<'g>(
+    receiver_text: &str,
+    routine: &al_syntax::ir::RoutineDecl,
+    obj: &al_syntax::ir::ObjectDecl,
+    file: &al_syntax::ir::AlFile,
+    obj_node: &ObjectNode,
+    caller_app: AppRef,
+    graph: &'g dyn GraphReads,
+    index: &dyn IndexReads,
+) -> Option<&'g ObjectNode> {
+    use crate::program::recordref_table::{Binding, local_recordref_bindings};
+    let mut table: Option<ObjectNodeId> = None;
+    for b in local_recordref_bindings(file, routine, receiver_text)? {
+        let t = match b {
+            Binding::Table { reference, is_name } => {
+                crate::program::resolve::resolver::object_run_target(
+                    caller_app,
+                    ObjectKind::Table,
+                    &reference,
+                    is_name,
+                    graph,
+                    index,
+                )?
+                .id
+                .clone()
+            }
+            Binding::GetTable(var) => match infer_receiver_type(
+                &var.fold_identifier(),
+                routine,
+                &obj.globals,
+                obj_node,
+                graph,
+                index,
+                None,
+                None,
+            ) {
+                ReceiverType::Record { table: Some(t) } => t,
+                _ => return None,
+            },
+        };
+        match &table {
+            None => table = Some(t),
+            Some(x) if *x == t => {}
+            Some(_) => return None,
+        }
+    }
+    graph.object_first(&table?)
+}
+
 /// Resolve one call-site obligation to `(kind, shape, completeness, routes,
 /// builtin_dispatch_finding)`. The 5th element is the T0.3 audit signal
 /// (`Some` only from the `CalleeShape::Member` arm — see
@@ -977,7 +1040,19 @@ fn resolve_call_site_obligation(
                     ReceiverType::Record {
                         table: Some(ref tid),
                     } => graph.object_first(tid),
-                    _ => None,
+                    // A local RecordRef bound only to one literal table
+                    // (`R.Open(Database::"T")`): that table's operations,
+                    // triggers and events, not the open record hub.
+                    _ => recordref_constant_table(
+                        receiver_text,
+                        routine,
+                        obj,
+                        file,
+                        obj_node,
+                        caller_app,
+                        graph,
+                        index,
+                    ),
                 }
             } else {
                 None
@@ -1011,6 +1086,26 @@ fn resolve_call_site_obligation(
                 *table_events_out = crate::program::resolve::resolver::resolve_table_events(
                     &op_lc, table_node, graph,
                 );
+                // What the site proves about those events' dispatch: a
+                // subscriber exiting first thing on it cannot run from here.
+                if !table_events_out.is_empty() {
+                    let page_temp =
+                        crate::program::table_event_guard::page_source_table_temporary(obj);
+                    let ctx = crate::program::table_event_guard::RaiseContext {
+                        record_temporary:
+                            crate::program::table_event_guard::receiver_declared_temporary(
+                                receiver_text,
+                                routine,
+                                &obj.globals,
+                                page_temp,
+                            ),
+                        run_trigger_false: rule.run_trigger == Some(false),
+                        run_trigger_true: rule.run_trigger == Some(true),
+                    };
+                    if !ctx.is_empty() {
+                        facts_out.table_event_raise = Some(ctx);
+                    }
+                }
                 facts_out.unqualified_record_op = !callee_text.contains('.');
                 (shape, completeness, routes)
             } else {

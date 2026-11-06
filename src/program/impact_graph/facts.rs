@@ -49,6 +49,12 @@ pub struct RoutineFacts {
     /// dispatching builtin on its receiver), and a routine that only declares
     /// one and calls its procedures runs nothing.
     pub test_pages: Vec<RunTarget>,
+    /// What the routine exits on first thing, as a table-event subscriber
+    /// ([`crate::program::table_event_guard::subscriber_entry_exits`], the
+    /// model's `ModelRoutine::table_event_exits` too). Union over `#if` arms
+    /// would be unsound (one arm may not exit), so an arm without the guard
+    /// clears it: the intersection.
+    pub table_event_exits: crate::program::table_event_guard::EntryExits,
 }
 
 /// Facts of one source object.
@@ -66,6 +72,11 @@ pub struct ObjectFacts {
     pub lookup_pages: Vec<RunTarget>,
     /// An XmlPort's table elements: an import inserts their records.
     pub tables: Vec<ObjectNodeId>,
+    /// A page declared `SourceTableTemporary = true` (in every copy of the
+    /// object): the table events of its source table that a user's work in it
+    /// raises come with the record temporary
+    /// ([`crate::program::table_event_guard::page_source_table_temporary`]).
+    pub source_table_temporary: bool,
 }
 
 /// [`RoutineFacts`] and [`ObjectFacts`] of every source routine and object.
@@ -89,6 +100,12 @@ pub fn extract_source_facts(
     units: &[&ParsedUnit],
 ) -> SourceFacts {
     let mut out = SourceFacts::default();
+    // Per event subscriber (every `#if` arm of it): the guard all its arms
+    // share (the intersection; see `RoutineFacts::table_event_exits`).
+    let mut exits: HashMap<RoutineNodeId, crate::program::table_event_guard::EntryExits> =
+        HashMap::new();
+    // Per page (every copy of it): declared `SourceTableTemporary = true`.
+    let mut temp_pages: HashMap<ObjectNodeId, bool> = HashMap::new();
     for unit in units {
         let Some(app) = graph.apps.find(&unit.app) else {
             continue;
@@ -100,6 +117,26 @@ pub fn extract_source_facts(
                     kind: obj.kind,
                     key: ObjKey::from_source(obj),
                 };
+                for routine in obj.routines.iter().filter(|r| {
+                    r.attributes_parsed
+                        .iter()
+                        .any(|a| a.name.eq_ignore_ascii_case("eventsubscriber"))
+                }) {
+                    let e = crate::program::table_event_guard::subscriber_entry_exits(
+                        &pf.file, routine,
+                    );
+                    exits
+                        .entry(source_routine_node_id(obj_id.clone(), routine))
+                        .and_modify(|x| *x = x.intersection(e))
+                        .or_insert(e);
+                }
+                if obj.kind == ObjectKind::Page {
+                    let t = crate::program::table_event_guard::page_source_table_temporary(obj);
+                    temp_pages
+                        .entry(obj_id.clone())
+                        .and_modify(|x| *x &= t)
+                        .or_insert(t);
+                }
                 let of = object_facts(obj, &obj_id, graph, index);
                 if of != ObjectFacts::default() {
                     let slot = out.objects.entry(obj_id.clone()).or_default();
@@ -166,6 +203,8 @@ pub fn extract_source_facts(
                             .chain(routine.locals.iter().filter_map(|v| v.ty.as_deref()))
                             .filter_map(|t| declared_test_page(t, &obj_id, graph, index))
                             .collect(),
+                        // Filled after the walk, from `exits`.
+                        table_event_exits: Default::default(),
                     };
                     if rf != RoutineFacts::default() {
                         let id = source_routine_node_id(obj_id.clone(), routine);
@@ -177,6 +216,16 @@ pub fn extract_source_facts(
                     }
                 }
             }
+        }
+    }
+    for (id, e) in exits {
+        if !e.is_empty() {
+            out.routines.entry(id).or_default().table_event_exits = e;
+        }
+    }
+    for (id, t) in temp_pages {
+        if t {
+            out.objects.entry(id).or_default().source_table_temporary = true;
         }
     }
     for f in out.routines.values_mut() {
@@ -271,6 +320,8 @@ fn object_facts(
         action_runs,
         lookup_pages,
         tables,
+        // Filled after the walk, from every copy of the page.
+        source_table_temporary: false,
     }
 }
 

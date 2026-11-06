@@ -752,7 +752,10 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // Output validation V2: the tier words (`[via-dependency]`,
         // `[via-configuration]` and why a configured caller is a candidate)
         // add ~100 B (4,201 B on 2026-11-06).
-        ("RunReportID", "query touches human") => (20, 4_400),
+        // Round-2 fix, RecordRef on a literal table (2026-11-07): `CDO File`'s
+        // `GetNextEntryNo` read joins the rows (its RecordRef now has a
+        // table): 15 lines, 4,581 B.
+        ("RunReportID", "query touches human") => (20, 4_800),
         // Output validation V4 (§5.2): the four header lines (~450 B) where
         // the removed boilerplate was shorter: IssueReminder's touches 3,030
         // B, RunReportID's may-commit 2,179 B on 2026-11-06.
@@ -765,6 +768,12 @@ fn ratchet(label: &str, call: &str) -> Budget {
         // RunReportID answers `yes` with 5 evidence rows and their paths
         // (17 lines, 7,366 B).
         ("RunReportID", "prove writes-table data-exch human") => (20, 8_200),
+        // Round-2 fix, table events on temporary records (2026-11-07):
+        // IssueReminder's `yes` ran through `Reminder-Issue`'s
+        // `TempGenJnlLine` insert into a subscriber that exits on
+        // `Rec.IsTemporary()`; without it the answer is `unknown` with its
+        // 287 blockers folded by kind (25 lines, 3,199 B).
+        ("IssueReminder", "prove writes-table data-exch human") => (30, 3_400),
         (_, "prove writes-table data-exch human") => (30, 3_000),
         ("IssueReminder", "digest human") => (125, 40_700),
         ("RunReportID", "digest human") => (135, 46_300),

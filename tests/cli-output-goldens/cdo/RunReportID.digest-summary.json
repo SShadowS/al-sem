@@ -11,7 +11,7 @@
   "routines": [
     {
       "analysis": "partial",
-      "answer": "writes: may write 418 tables (12 owned by this app, 406 by dependencies) and 2 writes on a table not resolved; 250 of them beyond Codeunit \"Import Attachment - Inc. Doc.\" (134)::CreateNewAttachment (entered at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:179)",
+      "answer": "writes: may write 415 tables (12 owned by this app, 403 by dependencies) and 2 writes on a table not resolved; 250 of them beyond Codeunit \"Import Attachment - Inc. Doc.\" (134)::CreateNewAttachment (entered at ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:179)",
       "effects": 767,
       "effectsByType": {
         "BACKGROUND_TASK": 5,
@@ -61,7 +61,7 @@
           "withWritesSites": 17
         },
         "events": {
-          "distinct": 7478,
+          "distinct": 7465,
           "inWorkspaceCode": 72
         },
         "gaps": {
@@ -80,8 +80,8 @@
         },
         "literalDeadTables": 0,
         "mayWriteTables": {
-          "byDependencies": 406,
-          "count": 418,
+          "byDependencies": 403,
+          "count": 415,
           "mostBeyond": {
             "enteredAt": "ws:src/Features/EDocuments/CDOElectronicDocumentMgt.Codeunit.al:179",
             "entryPoint": "Codeunit \"Import Attachment - Inc. Doc.\" (134)::CreateNewAttachment",
@@ -93,7 +93,7 @@
           "operations": 0,
           "tables": 0
         },
-        "temporaryOnlyTables": 84,
+        "temporaryOnlyTables": 83,
         "unresolvedTableWrites": 2
       },
       "testStatus": "not requested"
