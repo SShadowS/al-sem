@@ -194,7 +194,9 @@ pub(crate) fn human_anchors(text: &str) -> Vec<Anchor> {
         // …`, `[TYPE] at …`).
         let folded: Option<Vec<String>> = if let Some((_, items)) = t
             .strip_prefix("and ")
-            .and_then(|r| r.split_once(" more (--detail prints their paths): "))
+            // `--detail` on the CLI, `detail: true` at `--surface=mcp` (V4).
+            .and_then(|r| r.split_once(" prints their paths): "))
+            .filter(|(head, _)| head.contains(" more ("))
         {
             Some(items.split("; ").map(str::to_string).collect())
         } else if let Some(rest) = t.strip_prefix("also [")
