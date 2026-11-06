@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (tests no longer fill /tmp: a cached temp folder was never deleted)
+
+`output_cdo::cdo_answers` kept its CDO dependency-source dump (~12,000 files) in a
+`tempfile::TempDir` inside a `static OnceLock`. A `static` is never dropped, so the folder
+was never deleted: every `scripts/cdo-gate` run left one in the system temp folder. On
+2026-11-06 85 of them had used all of /tmp's inodes (a tmpfs, 1,048,576), and every gate
+that created a temp file failed with "No space left on device". `cli_implicit_trigger_cone`
+leaked a small fixture the same way (1,284 left). Both now use `process_scratch` (the `cli`
+test crate's `main.rs`): a folder per process under `CARGO_TARGET_TMPDIR`, which removes
+earlier processes' folders older than six hours. Measured: the CDO anchor check now leaves
+/tmp's entry count unchanged and its dump under `target/tmp/process-scratch/`.
+
 ### Fixed (explain and prove callers: every caller counted, page runs followed, entries and guard lines right)
 
 Four defects found by fact-checking real tool answers on the CDO baseline (output

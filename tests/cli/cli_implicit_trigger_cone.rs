@@ -180,11 +180,14 @@ fn write_workspace() -> tempfile::TempDir {
         .prefix("alsem-96-")
         .tempdir()
         .expect("create scratch ws");
-    let root = tmp.path();
+    write_workspace_at(tmp.path());
+    tmp
+}
+
+fn write_workspace_at(root: &std::path::Path) {
     std::fs::create_dir_all(root.join("src")).expect("create src dir");
     std::fs::write(root.join("app.json"), APP_JSON).expect("write app.json");
     std::fs::write(root.join("src").join("T.al"), SRC).expect("write al source");
-    tmp
 }
 
 /// The fixture literals above are where they say (a fixture self-check, so a
@@ -259,11 +262,13 @@ fn model() -> &'static Model {
 /// L4 `query effects` rows of `Trig Caller.<routine>`, single-app (the store
 /// is the same in both modes here: no dependency).
 fn query_effects(routine: &str) -> Vec<Value> {
-    static WS: OnceLock<(tempfile::TempDir, al_sem::engine::session::View)> = OnceLock::new();
-    let (_, view) = WS.get_or_init(|| {
-        let tmp = write_workspace();
-        let v = query_view(&read(tmp.path()), true).expect("query view");
-        (tmp, v)
+    // A `static` keeps the workspace with its view: never a `TempDir` here (see
+    // `crate::process_scratch`; one leaked per test process before).
+    static WS: OnceLock<al_sem::engine::session::View> = OnceLock::new();
+    let view = WS.get_or_init(|| {
+        let root = crate::process_scratch("implicit-trigger-cone");
+        write_workspace_at(&root);
+        query_view(&read(&root), true).expect("query view")
     });
     let substrate = &QuerySubstrate::of(view);
     let q = render_query_effects(
